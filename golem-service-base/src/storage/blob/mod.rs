@@ -28,6 +28,7 @@ use sha2::{Digest, Sha256};
 use std::fmt::Debug;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use tempfile::NamedTempFile;
 use tokio::io::AsyncWriteExt;
 use typed_path::{Utf8UnixComponent, Utf8UnixPath, Utf8UnixPathBuf};
@@ -183,6 +184,31 @@ pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
         )
         .await
     }
+
+    /// Lists at most `max_keys` blobs below `prefix`, ordered by namespace-relative key.
+    /// `start_after` is exclusive. Directory markers are not returned. The limit is 1..=1000.
+    /// Timestamps come from the listing, with the precision of the backend clock.
+    async fn list_page(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        prefix: &Path,
+        start_after: Option<&Path>,
+        max_keys: u32,
+    ) -> Result<Vec<BlobPageEntry>, Error>;
+
+    /// Makes one conditional write attempt within `timeout`, without retrying an unknown outcome.
+    /// An error or cancellation does not prove that the server did not commit the write.
+    async fn put_raw_if_absent_once(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+        timeout: Duration,
+    ) -> Result<PutIfAbsent, Error>;
 
     /// Gives the bytes of the blob at the path, or nothing if the path has no blob.
     ///
@@ -515,6 +541,34 @@ pub trait BlobStorageBackend: Debug + Send + Sync {
         anyhow::bail!("Published blobs are not supported by this backend")
     }
 
+    /// Backend implementation of [`BlobStorage::list_page`].
+    async fn list_page_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        prefix: &NormalizedBlobPath<'_>,
+        start_after: Option<&NormalizedBlobPath<'_>>,
+        max_keys: u32,
+    ) -> Result<Vec<BlobPageEntry>, Error>;
+
+    /// One conditional attempt. Backends with retrying writes must override this method.
+    async fn put_raw_if_absent_once_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+        timeout: Duration,
+    ) -> Result<PutIfAbsent, Error> {
+        Ok(tokio::time::timeout(
+            timeout,
+            self.put_raw_if_absent_at(target_label, op_label, namespace, path, data),
+        )
+        .await??)
+    }
+
     /// Gives the bytes of the blob at the path, or nothing if the path has no blob.
     async fn get_raw_at(
         &self,
@@ -782,6 +836,49 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         let path = written_blob_path(published_blob_path(&digest)?)?;
         let result = self.put_published_file_if_absent_at(&path, file).await?;
         Ok((StoredPublishedBlob(digest), result))
+    }
+
+    async fn list_page(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        prefix: &Path,
+        start_after: Option<&Path>,
+        max_keys: u32,
+    ) -> Result<Vec<BlobPageEntry>, Error> {
+        anyhow::ensure!(
+            (1..=1000).contains(&max_keys),
+            "blob page limit must be 1..=1000"
+        );
+        let prefix = normalized_blob_path(prefix)?;
+        let start_after = start_after.map(normalized_blob_path).transpose()?;
+        self.list_page_at(
+            target_label,
+            op_label,
+            namespace,
+            &prefix,
+            start_after.as_ref(),
+            max_keys,
+        )
+        .await
+    }
+
+    async fn put_raw_if_absent_once(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+        timeout: Duration,
+    ) -> Result<PutIfAbsent, Error> {
+        let path = written_blob_path(path)?;
+        Ok(tokio::time::timeout(
+            timeout,
+            self.put_raw_if_absent_once_at(target_label, op_label, namespace, &path, data, timeout),
+        )
+        .await??)
     }
 
     async fn get_raw(
@@ -1128,6 +1225,39 @@ pub struct LabelledBlobStorage<'a, S: BlobStorage + ?Sized> {
 }
 
 impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
+    pub async fn list_page(
+        &self,
+        namespace: BlobStorageNamespace,
+        prefix: &Path,
+        start_after: Option<&Path>,
+        max_keys: u32,
+    ) -> Result<Vec<BlobPageEntry>, Error> {
+        self.record("list_page");
+        self.storage
+            .list_page(
+                self.svc_name,
+                self.api_name,
+                namespace,
+                prefix,
+                start_after,
+                max_keys,
+            )
+            .await
+    }
+
+    pub async fn put_raw_if_absent_once(
+        &self,
+        namespace: BlobStorageNamespace,
+        path: &Path,
+        data: &[u8],
+        timeout: Duration,
+    ) -> Result<PutIfAbsent, Error> {
+        self.record("put_if_absent_once");
+        self.storage
+            .put_raw_if_absent_once(self.svc_name, self.api_name, namespace, path, data, timeout)
+            .await
+    }
+
     fn record(&self, operation: &'static str) {
         crate::metrics::storage::record_logical_operation(
             "blob",
@@ -1387,6 +1517,10 @@ pub enum BlobStorageNamespace {
     ComponentUploads {
         account_id: AccountId,
     },
+    SealRecords {
+        environment_id: EnvironmentId,
+        type_tag: u32,
+    },
     PublishedBlobs,
     /// The filesystem snapshots of one incarnation of an agent. Each incarnation has its own
     /// location on each backend. The locations of the incarnations of one agent share the prefix
@@ -1461,6 +1595,14 @@ pub(crate) fn namespace_segments(namespace: &BlobStorageNamespace) -> Vec<String
         BlobStorageNamespace::ComponentUploads { account_id } => {
             vec!["component_uploads".to_string(), account_id.to_string()]
         }
+        BlobStorageNamespace::SealRecords {
+            environment_id,
+            type_tag,
+        } => vec![
+            "seal_records".to_string(),
+            environment_id.to_string(),
+            format!("{type_tag:08x}"),
+        ],
         BlobStorageNamespace::PublishedBlobs => vec!["published_blobs".to_string()],
         BlobStorageNamespace::FilesystemSnapshots {
             environment_id,
@@ -1494,6 +1636,14 @@ pub enum ExistsResult {
 pub struct BlobMetadata {
     pub last_modified_at: Timestamp,
     pub size: u64,
+}
+
+/// One object in an ordered page, with the server timestamp and its resolution.
+#[derive(Debug, Clone)]
+pub struct BlobPageEntry {
+    pub path: Box<Path>,
+    pub last_modified_at: Timestamp,
+    pub timestamp_resolution: Duration,
 }
 
 /// The path and the size of one blob.
@@ -2163,6 +2313,260 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::path::{Path, PathBuf};
     use test_r::test;
+
+    #[test]
+    async fn pages_match_key_order_for_unicode_prefixes_and_missing_cursors() {
+        use super::{BlobStorage, BlobStorageNamespace};
+        use super::{
+            fs::FileSystemBlobStorage, memory::InMemoryBlobStorage, sqlite::SqliteBlobStorage,
+        };
+        use crate::db::sqlite::SqlitePool;
+        use golem_common::config::DbSqliteConfig;
+        use golem_common::model::{Timestamp, environment::EnvironmentId};
+        use std::time::Duration;
+
+        let root = tempfile::tempdir().unwrap();
+        let pool = SqlitePool::configured(&DbSqliteConfig {
+            database: root.path().join("pages.db").to_string_lossy().into_owned(),
+            max_connections: 1,
+            foreign_keys: false,
+        })
+        .await
+        .unwrap();
+        let backends: Vec<Box<dyn BlobStorage>> = vec![
+            Box::new(InMemoryBlobStorage::new()),
+            Box::new(
+                FileSystemBlobStorage::new(&root.path().join("files"))
+                    .await
+                    .unwrap(),
+            ),
+            Box::new(SqliteBlobStorage::new(pool).await.unwrap()),
+        ];
+        let namespace = BlobStorageNamespace::SealRecords {
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            type_tag: u32::MAX,
+        };
+        let mut keys = vec![
+            "a", "a-", "a/z", "a/z/deep", "a0/x", "a_/x", "a%/x", "ab/x", "a/é", "a/中", "a/😀",
+            "é/x", "é-/x", "é/z", "é/😀", "x\\y/z",
+        ];
+        keys.sort();
+        for storage in backends {
+            let before = Timestamp::now_utc().to_millis().saturating_sub(1000);
+            for key in &keys {
+                storage
+                    .put_raw("test", "put", namespace.clone(), Path::new(key), b"data")
+                    .await
+                    .unwrap();
+            }
+            let after_write = Timestamp::now_utc().to_millis() + 1000;
+            storage
+                .create_dir("test", "mkdir", namespace.clone(), Path::new("a/empty"))
+                .await
+                .unwrap();
+            for prefix in ["", "a", "a_", "a%", "é", "missing", "x\\y"] {
+                for cursor in [
+                    None,
+                    Some(""),
+                    Some("a"),
+                    Some("a/y"),
+                    Some("a/z"),
+                    Some("é/é"),
+                    Some("zzzz"),
+                ] {
+                    for limit in [1, 2, 1000] {
+                        let expected: Vec<PathBuf> = keys
+                            .iter()
+                            .copied()
+                            .filter(|key| {
+                                prefix.is_empty() || key.starts_with(&format!("{prefix}/"))
+                            })
+                            .filter(|key| cursor.is_none_or(|cursor| *key > cursor))
+                            .take(limit as usize)
+                            .map(PathBuf::from)
+                            .collect();
+                        let page = storage
+                            .list_page(
+                                "test",
+                                "page",
+                                namespace.clone(),
+                                Path::new(prefix),
+                                cursor.map(Path::new),
+                                limit,
+                            )
+                            .await
+                            .unwrap();
+                        assert_eq!(
+                            page.iter()
+                                .map(|entry| entry.path.to_path_buf())
+                                .collect::<Vec<_>>(),
+                            expected,
+                            "storage={storage:?}, prefix={prefix:?}, cursor={cursor:?}, limit={limit}",
+                        );
+                        for entry in page {
+                            assert!(
+                                (before..=after_write)
+                                    .contains(&entry.last_modified_at.to_millis())
+                            );
+                            assert!(entry.timestamp_resolution >= Duration::from_nanos(1));
+                            let metadata = storage
+                                .get_metadata("test", "metadata", namespace.clone(), &entry.path)
+                                .await
+                                .unwrap()
+                                .unwrap();
+                            assert_eq!(entry.last_modified_at, metadata.last_modified_at);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    async fn blob_pages_preserve_order_bounds_timestamps_and_namespace_isolation() {
+        use super::{BlobStorage, BlobStorageNamespace, PutIfAbsent};
+        use super::{
+            fs::FileSystemBlobStorage, memory::InMemoryBlobStorage, sqlite::SqliteBlobStorage,
+        };
+        use crate::db::sqlite::SqlitePool;
+        use golem_common::config::DbSqliteConfig;
+        use golem_common::model::environment::EnvironmentId;
+        use std::time::Duration;
+        let root = tempfile::tempdir().unwrap();
+        let pool = SqlitePool::configured(&DbSqliteConfig {
+            database: root.path().join("blobs.db").to_string_lossy().into_owned(),
+            max_connections: 1,
+            foreign_keys: false,
+        })
+        .await
+        .unwrap();
+        let backends: Vec<Box<dyn BlobStorage>> = vec![
+            Box::new(InMemoryBlobStorage::new()),
+            Box::new(
+                FileSystemBlobStorage::new(&root.path().join("files"))
+                    .await
+                    .unwrap(),
+            ),
+            Box::new(SqliteBlobStorage::new(pool).await.unwrap()),
+        ];
+        let namespace = BlobStorageNamespace::SealRecords {
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            type_tag: 7,
+        };
+        let other = BlobStorageNamespace::SealRecords {
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            type_tag: 8,
+        };
+        for storage in backends {
+            for path in [
+                "seals/z",
+                "seals/a/z",
+                "seals/a-",
+                "seals/a",
+                "seals/A",
+                "seals2/x",
+            ] {
+                let outcome = storage
+                    .put_raw_if_absent_once(
+                        "test",
+                        "once",
+                        namespace.clone(),
+                        Path::new(path),
+                        b"original",
+                        Duration::from_secs(5),
+                    )
+                    .await
+                    .unwrap();
+                assert_eq!(outcome, PutIfAbsent::Written);
+            }
+            assert_eq!(
+                storage
+                    .put_raw_if_absent_once(
+                        "test",
+                        "once",
+                        namespace.clone(),
+                        Path::new("seals/a"),
+                        b"replacement",
+                        Duration::from_secs(5)
+                    )
+                    .await
+                    .unwrap(),
+                PutIfAbsent::AlreadyExists
+            );
+            assert_eq!(
+                storage
+                    .get_raw("test", "read", namespace.clone(), Path::new("seals/a"))
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                b"original"
+            );
+            storage
+                .put_raw("test", "put", other.clone(), Path::new("seals/B"), b"other")
+                .await
+                .unwrap();
+            storage
+                .create_dir("test", "mkdir", namespace.clone(), Path::new("seals/empty"))
+                .await
+                .unwrap();
+            let mut paths = Vec::new();
+            let mut after: Option<PathBuf> = None;
+            loop {
+                let page = storage
+                    .list_page(
+                        "test",
+                        "page",
+                        namespace.clone(),
+                        Path::new("seals"),
+                        after.as_deref(),
+                        2,
+                    )
+                    .await
+                    .unwrap();
+                assert!(page.len() <= 2);
+                for entry in &page {
+                    assert!(entry.timestamp_resolution > Duration::ZERO);
+                    assert!(entry.last_modified_at.to_millis() > 0);
+                }
+                let len = page.len();
+                after = page.last().map(|entry| entry.path.to_path_buf());
+                paths.extend(page.into_iter().map(|entry| entry.path.to_path_buf()));
+                if len < 2 {
+                    break;
+                }
+            }
+            assert_eq!(
+                paths,
+                ["seals/A", "seals/a", "seals/a-", "seals/a/z", "seals/z"].map(PathBuf::from)
+            );
+            assert!(
+                storage
+                    .list_page(
+                        "test",
+                        "invalid-limit",
+                        namespace.clone(),
+                        Path::new("seals"),
+                        None,
+                        0
+                    )
+                    .await
+                    .is_err()
+            );
+            assert!(
+                storage
+                    .list_page(
+                        "test",
+                        "invalid-limit",
+                        namespace.clone(),
+                        Path::new("seals"),
+                        None,
+                        1001
+                    )
+                    .await
+                    .is_err()
+            );
+        }
+    }
 
     /// A range, a name and a missing blob are permanent, a refusal of the storage is refused, also
     /// under a context, and every other error of the storage is transient.

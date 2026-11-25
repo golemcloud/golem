@@ -320,6 +320,55 @@ impl BlobStorageBackend for FileSystemBlobStorage {
         .await
     }
 
+    async fn list_page_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        prefix: &NormalizedBlobPath<'_>,
+        start_after: Option<&NormalizedBlobPath<'_>>,
+        max_keys: u32,
+    ) -> Result<Vec<super::BlobPageEntry>, Error> {
+        let after = start_after.map(|p| p.text()).transpose()?;
+        let mut blobs = self
+            .list_blobs_below_at(target_label, op_label, namespace.clone(), prefix)
+            .await?
+            .into_vec();
+        blobs.sort_by(|a, b| a.path.as_os_str().cmp(b.path.as_os_str()));
+        let mut result = Vec::new();
+        for blob in blobs {
+            if after
+                .as_deref()
+                .is_some_and(|after| blob.path.to_str().unwrap() <= after)
+            {
+                continue;
+            }
+            let path = super::normalized_blob_path(&blob.path)?;
+            let file = self.blob_of(&namespace, &path)?;
+            let Some(metadata) = filesystem_work(move || listed_entry(std::fs::metadata(file)))
+                .await?
+                .map_err(read_error)?
+                .filter(|metadata| metadata.is_file())
+            else {
+                continue;
+            };
+            result.push(super::BlobPageEntry {
+                path: blob.path,
+                last_modified_at: Timestamp::from(
+                    metadata
+                        .modified()?
+                        .duration_since(SystemTime::UNIX_EPOCH)?
+                        .as_millis() as u64,
+                ),
+                timestamp_resolution: Duration::from_millis(1),
+            });
+            if result.len() == max_keys as usize {
+                break;
+            }
+        }
+        Ok(result)
+    }
+
     async fn get_raw_at(
         &self,
         _target_label: &'static str,

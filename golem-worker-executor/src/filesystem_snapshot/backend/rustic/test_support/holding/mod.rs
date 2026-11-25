@@ -106,9 +106,98 @@ impl Debug for HoldingBlobStorage {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_service_base::storage::blob::BlobStorage;
+    use std::time::Duration;
+    use test_r::test;
+
+    #[test]
+    async fn conditional_put_deadline_includes_the_wrapper_gate() {
+        let inner = Arc::new(InMemoryBlobStorage::new());
+        let (storage, gate, _) = holding_storage(inner.clone(), |_, _| true);
+        let namespace = BlobStorageNamespace::SealRecords {
+            environment_id: EnvironmentId(uuid::Uuid::nil()),
+            type_tag: 9,
+        };
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            storage.put_raw_if_absent_once(
+                "test",
+                "held-put",
+                namespace.clone(),
+                Path::new("seal"),
+                b"seal",
+                Duration::from_millis(20),
+            ),
+        )
+        .await
+        .expect("the client deadline must include time waiting at the gate");
+        assert!(reached_deadline(result.unwrap_err().as_ref()));
+        drop(gate);
+        assert!(
+            inner
+                .get_raw("test", "read", namespace, Path::new("seal"))
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl BlobStorageBackend for HoldingBlobStorage {
+    async fn list_page_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        prefix: &NormalizedBlobPath<'_>,
+        start_after: Option<&NormalizedBlobPath<'_>>,
+        max_keys: u32,
+    ) -> anyhow::Result<Vec<golem_service_base::storage::blob::BlobPageEntry>> {
+        self.answer(
+            op_label,
+            prefix,
+            self.inner.list_page_at(
+                target_label,
+                op_label,
+                namespace,
+                prefix,
+                start_after,
+                max_keys,
+            ),
+        )
+        .await
+    }
+
+    async fn put_raw_if_absent_once_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<PutIfAbsent> {
+        self.answer(
+            op_label,
+            path,
+            self.inner.put_raw_if_absent_once_at(
+                target_label,
+                op_label,
+                namespace,
+                path,
+                data,
+                timeout,
+            ),
+        )
+        .await
+    }
+
     async fn get_raw_at(
         &self,
         target_label: &'static str,

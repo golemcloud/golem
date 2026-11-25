@@ -72,6 +72,34 @@ impl MutationStorage {
 
 #[async_trait]
 impl BlobStorageBackend for MutationStorage {
+    async fn list_page_at(
+        &self,
+        target: &'static str,
+        op: &'static str,
+        ns: BlobStorageNamespace,
+        prefix: &NormalizedBlobPath<'_>,
+        start_after: Option<&NormalizedBlobPath<'_>>,
+        max_keys: u32,
+    ) -> anyhow::Result<Vec<golem_service_base::storage::blob::BlobPageEntry>> {
+        self.inner
+            .list_page_at(target, op, ns, prefix, start_after, max_keys)
+            .await
+    }
+
+    async fn put_raw_if_absent_once_at(
+        &self,
+        target: &'static str,
+        op: &'static str,
+        ns: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<PutIfAbsent> {
+        self.inner
+            .put_raw_if_absent_once_at(target, op, ns, path, data, timeout)
+            .await
+    }
+
     async fn get_raw_at(
         &self,
         target: &'static str,

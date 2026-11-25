@@ -128,6 +128,7 @@ struct Answer {
     frame_bytes: Option<usize>,
     body: String,
     transport_error: Option<ConnectorError>,
+    pending: bool,
 }
 
 impl Answer {
@@ -141,6 +142,7 @@ impl Answer {
             frame_bytes: None,
             body: body.into(),
             transport_error: None,
+            pending: false,
         }
     }
 
@@ -268,7 +270,12 @@ impl HttpConnector for ScriptedTransport {
             requests.push(sent.clone());
             requests.len() - 1
         };
-        HttpConnectorFuture::ready((self.script)(&sent, earlier).into_response())
+        let answer = (self.script)(&sent, earlier);
+        if answer.pending {
+            HttpConnectorFuture::new(futures::future::pending())
+        } else {
+            HttpConnectorFuture::ready(answer.into_response())
+        }
     }
 }
 
@@ -3068,6 +3075,122 @@ async fn put_raw_if_absent_sends_if_none_match_and_writes_where_the_key_has_no_o
 }
 
 #[test]
+async fn conditional_put_once_never_retries_even_with_sdk_retries_enabled() {
+    for status in [200, 412, 409, 503] {
+        let (storage, requests) = scripted_storage_with(
+            RetryConfig::standard().with_max_attempts(3),
+            3,
+            "",
+            move |_, _| Answer::new(status, ""),
+        );
+        let result = storage
+            .put_raw_if_absent_once(
+                "test",
+                "once",
+                namespace(),
+                Path::new("blob"),
+                b"seal",
+                Duration::from_secs(5),
+            )
+            .await;
+        match status {
+            200 => assert_eq!(result.unwrap(), PutIfAbsent::Written),
+            412 => assert_eq!(result.unwrap(), PutIfAbsent::AlreadyExists),
+            _ => assert!(result.is_err()),
+        }
+        let sent = sent(&requests);
+        assert_eq!(sent.len(), 1);
+        assert_eq!(sent[0].if_none_match.as_deref(), Some("*"));
+    }
+    let (storage, requests) = scripted_storage_with(
+        RetryConfig::standard().with_max_attempts(3),
+        3,
+        "",
+        |_, _| Answer::transport_error(ConnectorError::timeout("timed out".into())),
+    );
+    assert!(
+        storage
+            .put_raw_if_absent_once(
+                "test",
+                "once",
+                namespace(),
+                Path::new("blob"),
+                b"seal",
+                Duration::from_secs(5)
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(sent(&requests).len(), 1);
+}
+
+#[test]
+async fn conditional_put_once_times_out_a_pending_response_after_one_request() {
+    let (storage, requests) = scripted_storage_with(
+        RetryConfig::standard().with_max_attempts(3),
+        3,
+        "",
+        |_, _| Answer {
+            pending: true,
+            ..Answer::new(200, "")
+        },
+    );
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        storage.put_raw_if_absent_once(
+            "test",
+            "once",
+            namespace(),
+            Path::new("blob"),
+            b"seal",
+            Duration::from_millis(20),
+        ),
+    )
+    .await
+    .expect("the operation deadline must not wait for a response")
+    .unwrap_err();
+    assert!(error.is::<tokio::time::error::Elapsed>());
+    assert_eq!(sent(&requests).len(), 1);
+}
+
+#[test]
+async fn blob_list_page_uses_one_bounded_listing_and_its_timestamp_without_head() {
+    let (storage, requests) = scripted_storage("", |request, _| {
+        assert!(request.is_list_objects());
+        let key = format!("{}/seals/a", namespace_prefix());
+        Answer::new(
+            200,
+            format!(
+                r#"<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>true</IsTruncated><NextContinuationToken>ignored</NextContinuationToken><Contents><Key>{key}</Key><LastModified>2026-11-25T10:00:00.000Z</LastModified><Size>4</Size></Contents></ListBucketResult>"#
+            ),
+        )
+    });
+    let page = storage
+        .list_page(
+            "test",
+            "page",
+            namespace(),
+            Path::new("seals"),
+            Some(Path::new("seals/0")),
+            1,
+        )
+        .await
+        .unwrap();
+    assert_eq!(page.len(), 1);
+    assert_eq!(&*page[0].path, Path::new("seals/a"));
+    assert_eq!(
+        page[0].last_modified_at,
+        "2026-11-25T10:00:00Z".parse().unwrap()
+    );
+    assert_eq!(page[0].timestamp_resolution, Duration::from_secs(1));
+    let sent = sent(&requests);
+    assert_eq!(sent.len(), 1);
+    assert!(sent[0].uri.contains("max-keys=1"));
+    assert!(sent[0].uri.contains("start-after="));
+    assert!(!sent[0].uri.contains("continuation-token="));
+}
+
+#[test]
 async fn put_raw_if_absent_gives_already_exists_for_a_412_after_one_request_and_logs_no_error() {
     // A 412 is the answer and not a failure: the key has an object. The loop sends no second
     // request for it, records no error and counts no failure. The write that gets a server
@@ -3864,4 +3987,114 @@ async fn a_read_keeps_the_retry_of_an_answer_that_asks_for_one_more_attempt() {
         ],
         [(Some(BlobFailure::Transient), 3); 4]
     );
+}
+
+#[test]
+async fn list_page_does_not_report_eof_when_first_s3_page_is_a_directory_marker() {
+    let (storage, _requests) = scripted_storage("", |request, attempt| {
+        assert!(request.is_list_objects());
+        let (key, truncation) = if attempt == 0 {
+            (
+                format!("{}/seals/__dir_marker", namespace_prefix()),
+                "<IsTruncated>true</IsTruncated><NextContinuationToken>next</NextContinuationToken>",
+            )
+        } else {
+            (
+                format!("{}/seals/a", namespace_prefix()),
+                "<IsTruncated>false</IsTruncated>",
+            )
+        };
+        Answer::new(
+            200,
+            format!(
+                r#"<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/">{truncation}<Contents><Key>{key}</Key><LastModified>2026-11-25T10:00:00.000Z</LastModified><Size>0</Size></Contents></ListBucketResult>"#
+            ),
+        )
+    });
+    // This models create_dir("seals") followed by put_raw("seals/a"). With a
+    // limit of one, S3 legitimately returns the directory marker on its first page.
+    // The public API returns neither a continuation token nor the filtered marker,
+    // so an empty result would leave the caller no way to reach the existing blob.
+    let page = storage
+        .list_page("test", "page", namespace(), Path::new("seals"), None, 1)
+        .await
+        .unwrap();
+    assert_eq!(
+        page.iter()
+            .map(|entry| entry.path.to_path_buf())
+            .collect::<Vec<_>>(),
+        vec![PathBuf::from("seals/a")],
+        "a directory marker must not hide the blob on the following S3 page"
+    );
+}
+
+#[test]
+async fn list_page_excludes_trailing_slash_directory_markers() {
+    let (storage, _requests) = scripted_storage("", |request, _| {
+        assert!(request.is_list_objects());
+        let prefix = namespace_prefix();
+        Answer::new(
+            200,
+            format!(
+                r#"<ListBucketResult xmlns="http://s3.amazonaws.com/doc/2006-03-01/"><IsTruncated>false</IsTruncated><Contents><Key>{prefix}/seals/</Key><LastModified>2026-11-25T10:00:00.000Z</LastModified><Size>0</Size></Contents><Contents><Key>{prefix}/seals/a</Key><LastModified>2026-11-25T10:00:00.000Z</LastModified><Size>4</Size></Contents></ListBucketResult>"#
+            ),
+        )
+    });
+    // The existing list_blobs_below_skips_directory_markers_and_keeps_sizes test
+    // establishes that trailing-slash S3 objects are directory markers, not blobs.
+    let page = storage
+        .list_page("test", "page", namespace(), Path::new("seals"), None, 10)
+        .await
+        .unwrap();
+    assert_eq!(
+        page.iter()
+            .map(|entry| entry.path.to_path_buf())
+            .collect::<Vec<_>>(),
+        vec![PathBuf::from("seals/a")]
+    );
+}
+
+#[test]
+async fn list_page_fills_across_mixed_and_marker_only_pages() {
+    let (storage, requests) = scripted_storage("tenant/prefix", |request, attempt| {
+        assert!(request.is_list_objects());
+        let (names, truncated) = match attempt {
+            0 => (vec!["seals/a", "seals/b/__dir_marker"], true),
+            1 => (vec!["seals/b/c/"], true),
+            2 => (vec!["seals/c", "seals/é"], false),
+            _ => panic!("listing continued after EOF"),
+        };
+        let entries = names.into_iter().map(|name| format!(
+            "<Contents><Key>tenant/prefix/{}/{name}</Key><LastModified>2026-11-25T10:00:00.000Z</LastModified><Size>0</Size></Contents>",
+            namespace_prefix(),
+        )).collect::<String>();
+        Answer::new(
+            200,
+            format!(
+                "<ListBucketResult><IsTruncated>{truncated}</IsTruncated><NextContinuationToken>token{attempt}</NextContinuationToken>{entries}</ListBucketResult>"
+            ),
+        )
+    });
+    let page = storage
+        .list_page(
+            "test",
+            "page",
+            namespace(),
+            Path::new("seals"),
+            Some(Path::new("seals/0")),
+            3,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        page.into_iter()
+            .map(|entry| entry.path.to_path_buf())
+            .collect::<Vec<_>>(),
+        vec![
+            PathBuf::from("seals/a"),
+            PathBuf::from("seals/c"),
+            PathBuf::from("seals/é")
+        ],
+    );
+    assert_eq!(sent(&requests).len(), 3);
 }

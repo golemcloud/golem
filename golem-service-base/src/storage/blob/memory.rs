@@ -255,6 +255,39 @@ impl BlobStorageBackend for InMemoryBlobStorage {
         }
     }
 
+    async fn list_page_at(
+        &self,
+        _target_label: &'static str,
+        _op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        prefix: &NormalizedBlobPath<'_>,
+        start_after: Option<&NormalizedBlobPath<'_>>,
+        max_keys: u32,
+    ) -> Result<Vec<super::BlobPageEntry>, Error> {
+        let prefix = prefix.text()?;
+        let start_after = start_after.map(|p| p.text()).transpose()?;
+        let data = self.data.read().await;
+        let mut result = Self::entries_in_dir(&data, &namespace, &prefix)
+            .filter_map(|(key, entry)| match (&key.file, entry) {
+                (Some(name), Entry::File { metadata, .. }) => {
+                    let path = blob_child_path(&key.dir, name);
+                    (start_after
+                        .as_deref()
+                        .is_none_or(|after| path.to_str().unwrap() > after))
+                    .then(|| super::BlobPageEntry {
+                        path,
+                        last_modified_at: metadata.last_modified_at,
+                        timestamp_resolution: std::time::Duration::from_nanos(1),
+                    })
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        result.sort_by(|a, b| a.path.as_os_str().cmp(b.path.as_os_str()));
+        result.truncate(max_keys as usize);
+        Ok(result)
+    }
+
     async fn get_raw_at(
         &self,
         _target_label: &'static str,

@@ -3088,6 +3088,10 @@ fn in_another_environment(namespace: &BlobStorageNamespace) -> BlobStorageNamesp
             agent_mode,
             level,
         },
+        BlobStorageNamespace::SealRecords { type_tag, .. } => BlobStorageNamespace::SealRecords {
+            environment_id,
+            type_tag,
+        },
         BlobStorageNamespace::ComponentUploads { .. } => BlobStorageNamespace::ComponentUploads {
             account_id: AccountId::new(),
         },
@@ -3151,6 +3155,10 @@ fn namespaces_of_one_environment() -> Vec<BlobStorageNamespace> {
             "5f1d6a2b-0c3e-4a7b-9d1f-6e2a3b4c5d6e",
         ),
     ];
+    namespaces.push(BlobStorageNamespace::SealRecords {
+        environment_id,
+        type_tag,
+    });
     for agent_mode in [AgentMode::Durable, AgentMode::Ephemeral] {
         namespaces.push(BlobStorageNamespace::OplogPayload {
             environment_id,

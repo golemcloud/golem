@@ -318,6 +318,41 @@ struct TerminalReadStorage {
 
 #[async_trait::async_trait]
 impl BlobStorageBackend for TerminalReadStorage {
+    async fn list_page_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        prefix: &NormalizedBlobPath<'_>,
+        start_after: Option<&NormalizedBlobPath<'_>>,
+        max_keys: u32,
+    ) -> anyhow::Result<Vec<golem_service_base::storage::blob::BlobPageEntry>> {
+        self.inner
+            .list_page(
+                target_label,
+                op_label,
+                namespace,
+                prefix,
+                start_after.map(|path| path.as_ref()),
+                max_keys,
+            )
+            .await
+    }
+
+    async fn put_raw_if_absent_once_at(
+        &self,
+        target_label: &'static str,
+        op_label: &'static str,
+        namespace: BlobStorageNamespace,
+        path: &NormalizedBlobPath<'_>,
+        data: &[u8],
+        timeout: std::time::Duration,
+    ) -> anyhow::Result<PutIfAbsent> {
+        self.inner
+            .put_raw_if_absent_once(target_label, op_label, namespace, path, data, timeout)
+            .await
+    }
+
     async fn get_raw_at(
         &self,
         target_label: &'static str,
