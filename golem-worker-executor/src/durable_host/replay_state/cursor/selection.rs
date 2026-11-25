@@ -927,7 +927,8 @@ impl CursorTx<'_> {
             }
             let end = region.end.min(replay_target);
             let mut next = region.start;
-            while let Some(chunk) = OplogRange::within(next, end, CHUNK_SIZE) {
+            let retention = self.cursor.oplog.retention();
+            while let Some(chunk) = retention.chunk(next, end, CHUNK_SIZE) {
                 let entries = self
                     .cursor
                     .oplog

@@ -3327,6 +3327,52 @@ async fn start_claim_reports_matching_deleted_region_while_replay_continues() {
     ));
 }
 
+/// The skipped region of a snapshot starts at index 2 and can hold the retained start. A claim
+/// that misses reads the region from the retained start, so it finds the matching `Start` in the
+/// retained part of the region. The replay recovers from the snapshot at the end of the region,
+/// so its metadata scan starts after the region.
+#[test]
+async fn start_claim_reads_a_skipped_region_from_the_retained_start() {
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, idx};
+
+    let retained = RetainedOplog::new().await;
+    retained
+        .add([
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            OplogEntry::RecoverySucceeded {
+                timestamp: Timestamp::now_utc(),
+            },
+            start_now(),
+            start_with_parent(1),
+        ])
+        .await;
+    retained.advance(3).await;
+    let skipped = DeletedRegions::from_regions([OplogRegion::from_range(2..=3)]);
+    let rs = test_replay_state(
+        retained.owned_agent_id.clone(),
+        retained.open().await,
+        skipped,
+        Some(idx(3)),
+    )
+    .await
+    .unwrap();
+
+    let outcome = rs
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await
+        .unwrap();
+
+    assert!(matches!(
+        outcome,
+        ReplayStartClaimOutcome::DeletedRegion { start_index } if start_index == idx(3)
+    ));
+}
+
 #[test]
 async fn identity_claim_includes_replay_target_after_full_scan_chunk() {
     let mut entries = Vec::with_capacity(CHUNK_SIZE as usize + 2);
