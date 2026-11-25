@@ -1743,8 +1743,9 @@ async fn query_sorted_set(
 }
 
 /// The live status cache is written with an expiry and the status baseline without one, as the
-/// worker service writes them. In every backend the baseline outlives the expiry of the cache.
-/// The Redis backend stores the baseline hash with no TTL (`PTTL` gives -1). Namespace routing
+/// worker service writes them: a first write with no expected core, then a write that expects
+/// the core of the first one. In every backend the baseline outlives the expiry of the cache.
+/// After both writes, the Redis backend stores the baseline hash with no TTL (`PTTL` gives -1). Namespace routing
 /// stores the baseline in its persistent backend, so its Redis backend has no key for it (`PTTL`
 /// gives -2). The SQL and in-memory backends store no expiry, so for them the test shows only
 /// that the hash stays.
@@ -1800,6 +1801,21 @@ async fn the_status_baseline_outlives_the_expiry_of_the_status_cache(
             .await
             .unwrap()
     );
+    assert!(
+        storage
+            .compare_and_set_many(
+                "test",
+                "api",
+                "entity",
+                baseline.clone(),
+                "core",
+                Some(b"baseline"),
+                &[],
+                &[("core", b"baseline-2")],
+            )
+            .await
+            .unwrap()
+    );
     tokio::time::sleep(Duration::from_millis(250)).await;
 
     let cached = storage
@@ -1815,7 +1831,7 @@ async fn the_status_baseline_outlives_the_expiry_of_the_status_cache(
             .into_iter()
             .map(|(field, value)| (field, value.to_vec()))
             .collect::<Vec<_>>(),
-        vec![("core".to_string(), b"baseline".to_vec())]
+        vec![("core".to_string(), b"baseline-2".to_vec())]
     );
     if let Some(redis) = redis {
         let pttl = redis
