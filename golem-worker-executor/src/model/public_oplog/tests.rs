@@ -4398,6 +4398,18 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
         Some(indices[6].as_u64())
     );
 
+    // A read without an allowance has no limit: with a configured allowance of 2 entries and
+    // 1 ms, it still finds the revision at `from` and reads the range to `to`.
+    let configured = ScanBudget {
+        entries: std::num::NonZeroU64::new(2).unwrap(),
+        time: std::time::Duration::from_millis(1),
+    };
+    let unlimited = read(None, from, to, 10, oplog_range_allowance(None, configured))
+        .await
+        .unwrap();
+    assert_eq!(unlimited.entries.len(), 4);
+    assert_eq!((unlimited.next, unlimited.scan.exhausted), (None, false));
+
     // The allowance runs out while the read looks for the revision at `from`: no page, no cursor.
     let before = read(None, from, to, 10, allowance(2)).await.unwrap();
     assert!(before.entries.is_empty());
@@ -4418,7 +4430,8 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
 }
 
 #[test]
-fn a_range_read_never_gets_more_than_the_configured_allowance() {
+fn a_range_read_without_an_allowance_has_no_limit_and_never_gets_more_than_the_configured_allowance()
+ {
     let configured = ScanBudget {
         entries: std::num::NonZeroU64::new(50).unwrap(),
         time: std::time::Duration::from_secs(5),
@@ -4426,8 +4439,8 @@ fn a_range_read_never_gets_more_than_the_configured_allowance() {
     assert_eq!(
         oplog_range_allowance(None, configured),
         OplogScanAllowance {
-            entries: 50,
-            millis: 5000
+            entries: u64::MAX,
+            millis: u64::MAX
         }
     );
     assert_eq!(

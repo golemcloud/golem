@@ -371,7 +371,8 @@ async fn a_search_within_a_range_returns_only_the_matching_entries_in_the_range(
 
 /// The scan budget ends a search page, not a read that follows the cursors: with a budget far
 /// below the length of the oplog, one search page stops at the budget, and the read of the same
-/// range and query returns every match.
+/// range and query returns every match. A range read without an allowance has no budget, also
+/// when its start is after the budget.
 #[test]
 #[timeout("4m")]
 async fn a_read_that_follows_the_cursors_is_not_limited_by_the_scan_budget(
@@ -442,6 +443,14 @@ async fn a_read_that_follows_the_cursors_is_not_limited_by_the_scan_budget(
         .read_oplog(&agent_id, range(1, last), Some(QUERY))
         .await?;
     assert_eq!(indices(&found), started);
+
+    // A range read without an allowance has no budget: it reads the oplog before its start, which
+    // is longer than the budget, and returns every index of its range.
+    let from = 1 + BUDGET + 5;
+    let late = executor
+        .read_oplog(&agent_id, range(from, last), None)
+        .await?;
+    assert_eq!(indices(&late), (from..=last).collect::<Vec<_>>());
     Ok(())
 }
 

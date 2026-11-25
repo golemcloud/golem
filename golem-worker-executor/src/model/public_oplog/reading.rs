@@ -577,6 +577,12 @@ async fn scan_component_revision(
     Ok(Some(initial_component_revision))
 }
 
+/// The allowance of a scan that has no limit.
+const UNLIMITED_SCAN: OplogScanAllowance = OplogScanAllowance {
+    entries: u64::MAX,
+    millis: u64::MAX,
+};
+
 /// The allowance of an oplog range read, and what the read charged to it so far. The time runs
 /// from the creation of the scan.
 struct RangeScan {
@@ -595,10 +601,7 @@ impl RangeScan {
     }
 
     fn unlimited() -> Self {
-        Self::new(OplogScanAllowance {
-            entries: u64::MAX,
-            millis: u64::MAX,
-        })
+        Self::new(UNLIMITED_SCAN)
     }
 
     fn remaining_entries(&self) -> u64 {
@@ -640,10 +643,11 @@ pub struct PublicOplogRangePage {
     pub scan: OplogScan,
 }
 
-/// The allowance of a range read: `requested`, or `configured` without one, clamped to
-/// `configured`. An executor never grants more than its own configured allowance, so a reader
-/// that passes on what is left of its allowance gets no fresh allowance from a retry or another
-/// executor.
+/// The allowance of a range read. A read without an allowance has no limit: each of its pages
+/// is still bounded by its count and its size. A read with an allowance gets `requested`,
+/// clamped to `configured`. An executor never grants more than its own configured allowance, so a
+/// reader that passes on what is left of its allowance gets no fresh allowance from a retry or
+/// another executor.
 pub fn oplog_range_allowance(
     requested: Option<OplogScanAllowance>,
     configured: ScanBudget,
@@ -654,10 +658,7 @@ pub fn oplog_range_allowance(
             entries: requested.entries.min(configured.entries.get()),
             millis: requested.millis.min(configured_millis),
         },
-        None => OplogScanAllowance {
-            entries: configured.entries.get(),
-            millis: configured_millis,
-        },
+        None => UNLIMITED_SCAN,
     }
 }
 

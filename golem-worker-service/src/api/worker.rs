@@ -318,8 +318,10 @@ impl WorkerApi {
     /// at the first entry; without `to`, it goes to the end of the oplog. A `to` after the end of
     /// the oplog ends the read at the end of the oplog. The endpoint refuses a `to` before
     /// `from`. With `query`, the page holds only the entries in the range that match the query.
-    /// Without `query`, a read with `to` is a range read: the response accounts its scan, and
-    /// `scanEntries` and `scanMillis` limit the scan.
+    /// Without `query`, a read with `to` is a range read: the response accounts its scan.
+    /// `scanEntries` and `scanMillis` limit the scan of a range read. Without them, the scan has no
+    /// limit, and `count` still limits each page. Without `query`, `lastIndex` is the last index of
+    /// the oplog. With `query`, it is the last index of the range in the oplog.
     #[oai(
         path = "/:environment_id/agents/:agent_id/oplog",
         method = "get",

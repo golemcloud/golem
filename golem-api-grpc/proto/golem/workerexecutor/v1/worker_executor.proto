@@ -392,8 +392,8 @@ message GetOplogRequest {
   // The last oplog index of a range read, inclusive. A range read reads no entry after it, and
   // the response accounts its scan.
   optional uint64 to_oplog_index = 8;
-  // The scan allowance that a range read may still spend. Without it, the read gets the
-  // configured allowance of the executor. The executor clamps it to its configured allowance.
+  // The scan allowance that a range read may still spend. Without it, the read has no scan limit.
+  // The executor clamps it to its configured allowance.
   optional golem.worker.OplogScanAllowance scan_allowance = 9;
   // Whether the callers in the entries hold the users' verified claims.
   ClaimVisibility claims = 10;

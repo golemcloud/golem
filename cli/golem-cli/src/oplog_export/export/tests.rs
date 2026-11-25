@@ -198,7 +198,8 @@ impl OplogReads for FakeReads {
 
     /// Accounts the scan as the server does: a read without a cursor charges the entries before
     /// `from`, which it reads to find the component revision, and every read charges the entries
-    /// of its page and `millis_per_read`. The allowance is clamped to the configured one.
+    /// of its page and `millis_per_read`. A read without an allowance has no limit, and an
+    /// allowance is clamped to the configured one.
     async fn read_range_page(
         &self,
         from: u64,
@@ -213,10 +214,16 @@ impl OplogReads for FakeReads {
             cursor: cursor.map(|c| c.next_oplog_index),
             allowance,
         });
-        let limit = allowance.map_or(self.scan, |a| OplogScanAllowance {
-            entries: a.entries.min(self.scan.entries),
-            millis: a.millis.min(self.scan.millis),
-        });
+        let limit = allowance.map_or(
+            OplogScanAllowance {
+                entries: u64::MAX,
+                millis: u64::MAX,
+            },
+            |a| OplogScanAllowance {
+                entries: a.entries.min(self.scan.entries),
+                millis: a.millis.min(self.scan.millis),
+            },
+        );
         let start = cursor.map_or(from, |c| c.next_oplog_index);
         let cursor_at = |index: u64| OplogCursor {
             next_oplog_index: index,
@@ -1240,7 +1247,12 @@ async fn small_pages_share_one_allowance_and_completion_at_the_allowance_succeed
         .collect::<Vec<_>>();
     assert_eq!(
         allowances,
-        vec![None, Some((6, 990)), Some((4, 980)), Some((2, 970))]
+        vec![
+            Some((u64::MAX, u64::MAX)),
+            Some((6, 990)),
+            Some((4, 980)),
+            Some((2, 970))
+        ]
     );
 }
 
