@@ -428,9 +428,6 @@ impl VolumeClient for InMemoryVolume {
         version_id: Option<&str>,
     ) -> Result<ObjectMetadata, VolumeError> {
         relative_key(key)?;
-        if key.is_empty() && self.prefix_len == 0 {
-            return Err(VolumeError::NotFound);
-        }
         full_key(self.prefix_len, key)?;
         let state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
         let (key, object) = select(&state, key, version_id)?;
@@ -450,9 +447,6 @@ impl VolumeClient for InMemoryVolume {
     ) -> Result<ObjectRead, VolumeError> {
         relative_key(key)?;
         validate_read(reference, range.as_ref())?;
-        if key.is_empty() && self.prefix_len == 0 {
-            return Err(VolumeError::NotFound);
-        }
         full_key(self.prefix_len, key)?;
         let state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
         let (_, object) = select(&state, key, reference.version_id.as_deref())?;

@@ -24,13 +24,10 @@ pub(super) fn relative_key(key: &str) -> Result<(), VolumeError> {
 }
 
 pub(super) fn full_key(prefix_len: usize, key: &str) -> Result<(), VolumeError> {
-    if prefix_len
-        .checked_add(key.len())
-        .is_none_or(|len| len == 0 || len > 1024)
-    {
-        Err(VolumeError::InvalidRequest)
-    } else {
-        Ok(())
+    match prefix_len.checked_add(key.len()) {
+        Some(0) => Err(VolumeError::NotFound),
+        Some(1..=1024) => Ok(()),
+        _ => Err(VolumeError::InvalidRequest),
     }
 }
 
