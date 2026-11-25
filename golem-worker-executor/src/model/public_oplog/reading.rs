@@ -294,7 +294,7 @@ pub async fn get_public_oplog_entry(
 /// Reads up to `count` oplog entries from `initial_oplog_index` and adds the entries that match
 /// `filter` to the chunk, in the form that `builder` selects. The chunk ends early at the first
 /// matching entry that does not fit; the cursor of the chunk then points to that entry, and the
-/// returned flag is `true`. `retention` decides which entries the read may reach: see
+/// returned flag is `true`. `retention` gives the entries that the read reads: see
 /// [`OplogRetention::page`].
 #[allow(clippy::too_many_arguments)]
 async fn read_public_oplog_chunk<B: ChunkBuilder>(
@@ -640,9 +640,10 @@ pub async fn find_component_revision_at(
     Ok(revision.expect("an unlimited scan finds the component revision"))
 }
 
-/// Scans the oplog entries before `start` for the component revision in effect at `start`, and
-/// charges the entries that it reads to `scan`. Returns `None` when `scan` is spent before the
-/// scan reaches `start`. The scan checks the allowance between batches.
+/// Scans the `Create` entry and the retained entries before `start` for the component revision in
+/// effect at `start`, as [`find_component_revision_at`] gives it, and charges the entries that it
+/// reads to `scan`. Returns `None` when `scan` is spent before the scan reaches `start`. The scan
+/// checks the allowance between batches.
 async fn scan_component_revision(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
@@ -952,7 +953,7 @@ pub async fn get_public_oplog_range_page(
 /// Where a guest search reads next, and the component revision to decode that entry with. A
 /// search that read a page before continues at `next_oplog_index` with `continued`, the revision
 /// that the page gave. A new search starts at `next_oplog_index` moved to the retained start, with
-/// the revision in effect there.
+/// the revision that [`find_component_revision_at`] gives there.
 pub async fn guest_search_start(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
@@ -1100,7 +1101,8 @@ pub fn check_oplog_cursor_query(
 }
 
 /// Where a paged oplog read starts, and the component revision to decode its first entry with:
-/// the cursor of the previous page, or else `from` with the revision in effect there. Without a
+/// the cursor of the previous page, or else `from` with the revision that
+/// [`find_component_revision_at`] gives there. Without a
 /// cursor and `from`, the read starts at the retained start of the oplog. A start below the
 /// retained start fails with the expired error that names the start. The caller checks the
 /// query of the cursor first, with [`check_oplog_cursor_query`].

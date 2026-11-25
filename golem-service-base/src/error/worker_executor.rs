@@ -198,8 +198,8 @@ pub enum OplogFailure {
     /// A source of the oplog failed or gave corrupt data, or an archive layer did not store its
     /// entries. Crosses the wire as `RuntimeError` with the text of the error.
     Failed { details: String },
-    /// The read reaches below the retained start of the oplog: a cut removed those entries. Crosses
-    /// the wire as `OplogExpired`.
+    /// The read reaches below the retained start of the oplog, where the oplog gives no entries.
+    /// Crosses the wire as `OplogExpired`.
     Expired { retained_start: OplogIndex },
 }
 

@@ -14,18 +14,21 @@
 
 //! The retained start of an agent oplog: the first index that the oplog keeps.
 //!
-//! Oplog indexes never renumber. A cut of the oplog removes the entries before the retained start,
-//! and the start only moves forward. The `Create` entry at index 1 is the identity of the agent.
+//! Oplog indexes never renumber. The retained start comes from a record in the
+//! `AgentOplogRetention` key-value namespace, and [`advance_oplog_retention`] only moves it
+//! forward. The oplog gives no entry before the start. The `Create` entry at index 1 is the
+//! identity of the agent.
 //! When the start is above 1, an empty read and a read of the `Create` entry alone are the only
 //! reads below the start that are allowed. A read of more than the `Create` entry from index 1 is
 //! expired.
 //!
-//! The rules here are pure functions over the retained start. Every reader of the retained
-//! entries uses them: a walk in chunks reads with [`OplogRetention::chunk`], a public page reads
-//! with [`OplogRetention::page`], and a walk with a fixed start reads with [`OplogRange::within`].
-//! One read keeps its own count: the refill of the replay buffer (`raw_read_next_oplog_entry` in
-//! `durable_host/replay_state/cursor/io.rs`) reads one entry also when the read position is after
-//! the replay target, where [`OplogRange::within`] gives no range.
+//! The rules here are pure functions over the retained start. A walk in chunks reads with
+//! [`OplogRetention::chunk`], a public page reads with [`OplogRetention::page`], and a walk with a
+//! fixed start reads with [`OplogRange::within`]. Three reads keep their own count: the refill of
+//! the replay buffer (`raw_read_next_oplog_entry` in `durable_host/replay_state/cursor/io.rs`)
+//! reads one entry also when the read position is after the replay target, where
+//! [`OplogRange::within`] gives no range, and the two whole-history walks `max_issued_epoch` and
+//! the creation receipt of a fork export, below, count from their fixed start.
 //! A read that reaches below the start fails with [`OplogReadError::Expired`], which names the
 //! start. A [`OplogReadError::Gap`] that ends below the start becomes the same error. A gap that
 //! ends at or after the start stays a read error, because entries that the oplog keeps are
