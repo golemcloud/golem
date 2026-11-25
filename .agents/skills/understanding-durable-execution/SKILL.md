@@ -86,7 +86,7 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 | Durable-call `Start`/`End`/`Cancelled` and `CompletionDelivered`/`CompletionDiscarded` markers | `DurableCallSession`, `ReplayableOneshot`, spawned store tasks |
 | `PendingUpdate` / `SuccessfulUpdate` / `FailedUpdate`, `Snapshot` hints, snapshot blobs | In-flight update decision, loaded snapshot bytes |
 | Validated operator revert/fork cuts and retained history | Replay cursor and runtime handles |
-| Agent status **folded from the durable status baseline and the oplog after it** (`worker/status.rs`, `AgentStatusCheckpoint`) | Status cache (a disposable start status of the fold) |
+| Agent status **folded from the durable status baseline and the oplog after it** (`worker/status/`, `AgentStatusCheckpoint`) | Status cache (a disposable start status of the fold) |
 | Persisted promises and scheduler actions (`WakeupScheduler`), `RunningWorkers` recovery index | Tokio timers, in-memory wake channels |
 
 The executor resolves metadata by component ID and revision before loading code. It shares loaded code for the same Wasm hash within one engine instance. The executor and compilation service share serialized artifacts by Wasm hash and the Wasmtime artifact fingerprint. Neither cache changes which metadata or deployment a worker uses.

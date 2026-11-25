@@ -444,8 +444,10 @@ pub trait WorkerService: Send + Sync {
     /// Same split layout and delta semantics as [`write_cached_status`](Self::write_cached_status),
     /// but targeting the [`KeyValueStorageNamespace::AgentStatusCheckpoint`] hash. No-op for
     /// ephemeral workers (returning the value unchanged). Returns the reassembled record, the
-    /// delta base of the next write. Returns `Err` when the storage refuses the write, or when the
-    /// catch-up of the durable stream session index before the write fails.
+    /// delta base of the next write. Returns `Err` when a storage call fails, when the status
+    /// cannot be serialized, or when the catch-up of the durable stream session index before the
+    /// write fails. A write that the compare-and-set refuses is reconciled, not returned as an
+    /// error.
     async fn write_status_checkpoint(
         &self,
         owned_agent_id: &OwnedAgentId,

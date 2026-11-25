@@ -61,7 +61,7 @@ rewinding a cursor.
   completion can follow `Finished` without another invocation.
 - Reads that require the completion's fresh status must use the state actor's FIFO status read; it
   waits behind the queued fold. The separately persisted status cache remains asynchronous.
-- Status (`status.rs`) is folded from a start status and the oplog entries after it. A cold read
+- The status fold (`status/`) starts from a start status and folds the oplog entries after it. A cold read
   uses the stored status cache as its start status when it has one; the cache is disposable. The
   state actor folds from its in-memory status. A failed state-actor fold rebuilds from the status
   at the start of the invocation, then from the baseline, then from index 1. The clean

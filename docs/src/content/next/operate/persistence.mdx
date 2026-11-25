@@ -137,7 +137,7 @@ These options have the following meaning:
 
 ## Agent metadata
 
-The **oplog** is the primary source of truth for agent state, but the **key-value store** also caches aggregated agent metadata for performance. This metadata records the oplog index from which it was calculated, and Golem can refresh it by processing newer entries. Once archival is complete, Golem clears the cached status and its checkpoint. If the agent is recovered later, Golem reconstructs the metadata from the archived oplog.
+The **oplog** is the primary source of truth for agent state, but the **key-value store** also caches aggregated agent metadata for performance. This metadata records the oplog index from which it was calculated, and Golem can refresh it by processing newer entries. Once archival is complete, Golem clears the cached status and keeps the status baseline. If the agent is recovered later, Golem folds the metadata from the status baseline and the archived oplog after it.
 
 ## Filesystem snapshots
 

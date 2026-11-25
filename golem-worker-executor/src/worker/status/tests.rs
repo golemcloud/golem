@@ -12345,7 +12345,8 @@ pub(crate) mod status_baseline {
     }
 
     proptest! {
-        /// A status baseline at any index folds the rest of the oplog to the status of a fold
+        /// A status baseline at any index, except one that a later `Jump` covers while a
+        /// snapshot-based update is pending, folds the rest of the oplog to the status of a fold
         /// of the whole oplog, in every field. A fold can refuse a baseline only when a later
         /// `Revert` deletes the index of the baseline, or when a later region uncovers a prefix
         /// that the baseline does not cover. A later `Jump` gives such a region. A baseline is

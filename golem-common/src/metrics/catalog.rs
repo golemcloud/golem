@@ -904,11 +904,12 @@ catalog! {
             "Stale recovery-index members removed by reason");
         metric STATUS_CACHE_PUBLICATION_TOTAL: CounterVec = Metric::new(
             "golem_status_cache_publication_total", NoUnit, &["cache", "event"],
-            "Status cache publication events by cache and reconciliation path; fallback and \
-             eventual reconciliation are separate events");
+            "Publication events of a status cache (`status`) or a status baseline (`checkpoint`) \
+             by reconciliation path; fallback and eventual reconciliation are separate events");
         metric DERIVED_CACHE_PUBLICATION_FAILED_TOTAL: CounterVec = Metric::new(
             "golem_derived_cache_publication_failed_total", NoUnit, &["cache"],
-            "Derived-cache publications that failed while atomically applying expiry");
+            "Publications of a status cache, a status baseline (`checkpoint`) or a derived cache \
+             that failed");
         metric FOREIGN_STREAM_FINGERPRINT_MISMATCH_TOTAL: Counter = Metric::new(
             "golem_foreign_stream_fingerprint_mismatch_total", NoUnit, &[],
             "Foreign durable-stream accesses rejected because the current agent fingerprint \

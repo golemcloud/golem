@@ -4761,7 +4761,8 @@ async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
 }
 
 /// When the removal of the status baseline fails, `WorkerService::remove` fails before the oplog
-/// delete: the agent keeps its oplog, so the next owner folds the status from index 1.
+/// delete: the agent keeps its oplog and its status baseline, so the next owner folds the status
+/// from that baseline.
 #[test]
 async fn a_failed_baseline_removal_keeps_the_oplog() {
     let owned_agent_id = test_owned_agent_id("failed-baseline-removal");
@@ -4820,8 +4821,9 @@ mod status_baseline_round_trip {
         /// every field. The first write is a full write. The second write is a delta write on
         /// the first. The oplogs have no `Revert`: the write of a baseline with stream history
         /// catches up the stream session index, which refuses a revert of stream history with
-        /// no fork-cut marker after it, and the generator writes no such marker. A `Jump` gives
-        /// the deleted regions.
+        /// no fork-cut marker after it, and the generator writes no such marker. Only a `Revert`
+        /// gives deleted regions, so no baseline that this property writes has one.
+        /// `split_status_round_trips_through_fields` writes deleted regions.
         #[test]
         fn a_written_status_baseline_reads_back_unchanged(
             generated in proptest::collection::vec(
