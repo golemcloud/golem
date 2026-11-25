@@ -927,8 +927,8 @@ async fn published_package_blob_is_verified_and_created_once(
     );
     assert_eq!(format!("sha256:{:x}", hash.finalize()), digest);
     let source = Path::new(digest.strip_prefix("sha256:").unwrap());
-    let destination = BlobStorageNamespace::Components {
-        environment_id: EnvironmentId::new(),
+    let destination = BlobStorageNamespace::ComponentUploads {
+        account_id: AccountId::new(),
     };
     let path = Path::new("copied-package");
     storage
