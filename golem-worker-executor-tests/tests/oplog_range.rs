@@ -31,7 +31,7 @@ use golem_common::model::oplog::{
 use golem_common::model::{OwnedAgentId, ShardAssignment, ShardId};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::golem_config::{OplogConfig, ScanBudget};
+use golem_worker_executor::services::golem_config::{OplogConfig, OplogSweepConfig, ScanBudget};
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::{
@@ -101,30 +101,6 @@ async fn get_page(
         .into_inner()
         .result
         .ok_or_else(|| anyhow::anyhow!("the oplog read has no result"))
-}
-
-/// Reads `from..=to` in pages of `count` entries, following the cursors, and gives the entries
-/// of every page in the order of the pages.
-async fn read_pages(
-    executor: &TestWorkerExecutor,
-    agent_id: &OwnedAgentId,
-    from: u64,
-    to: u64,
-    count: u64,
-) -> anyhow::Result<Vec<PublicOplogPageEntry>> {
-    let pages = futures::stream::try_unfold(Some(None), |cursor| async move {
-        let Some(cursor) = cursor else {
-            return Ok(None);
-        };
-        let get_oplog_response::Result::Success(page) =
-            get_page(executor, agent_id, from, Some(to), cursor, count).await?
-        else {
-            anyhow::bail!("the oplog read of {from}..={to} failed");
-        };
-        let next = page.next.clone();
-        Ok(Some((page_entries(page), next.map(Some))))
-    });
-    pages.try_concat().await
 }
 
 fn range(from: u64, to: u64) -> OplogRange {
@@ -197,12 +173,43 @@ async fn wait_until_archived_and_idle(
     .await
 }
 
-/// The history of the agent moves through the compressed layer to the blob layer: when the primary
-/// oplog of an idle agent is empty, the archive moves the whole compressed layer to the blob
-/// layer, so the compressed layer is empty when the agent is archived. After a real restart with
-/// an executor that does not archive, the later entries stay in the primary oplog. Every range
-/// read, across the blob layer, the primary oplog and the pages, returns each index of the range
-/// once, in order, with the entries of a full read.
+/// Reads `from` to `to` in pages of `count` entries, following the cursors, and gives the
+/// entries of every page in the order of the pages. Without `to`, the read goes to the end of the
+/// oplog, and the pages are the pages of a read without an end.
+async fn read_pages_to(
+    executor: &TestWorkerExecutor,
+    agent_id: &OwnedAgentId,
+    from: u64,
+    to: Option<u64>,
+    count: u64,
+) -> anyhow::Result<Vec<PublicOplogPageEntry>> {
+    let pages = futures::stream::try_unfold(Some(None), |cursor| async move {
+        let Some(cursor) = cursor else {
+            return Ok(None);
+        };
+        let get_oplog_response::Result::Success(page) =
+            get_page(executor, agent_id, from, to, cursor, count).await?
+        else {
+            anyhow::bail!("the oplog read from {from} to {to:?} failed");
+        };
+        let next = page.next.clone();
+        Ok(Some((page_entries(page), next.map(Some))))
+    });
+    pages.try_concat().await
+}
+
+/// The count of entries after which the primary oplog of the second executor moves its entries
+/// to the compressed layer. The compressed layer moves its chunks to the blob layer only after
+/// this many chunks, so the second executor never moves entries to the blob layer.
+const TRANSFER_AFTER: u64 = 32;
+
+/// The oplog of the agent is in three layers at once: the blob layer holds the oldest entries,
+/// the compressed layer holds the next entries, and the primary oplog holds the newest entries.
+/// The first executor archives the whole history to the blob layer. After a real restart, the
+/// second executor does not archive idle agents, and moves the primary oplog to the compressed
+/// layer once, after `TRANSFER_AFTER` entries. Every range read, with and without an end, returns
+/// each index of the range once, in order, with the entries of a full read. Its pages end and
+/// start exactly at each layer boundary.
 #[test]
 #[timeout("4m")]
 async fn range_reads_across_the_oplog_layers_return_every_index_once_in_order(
@@ -228,14 +235,13 @@ async fn range_reads_across_the_oplog_layers_return_every_index_once_in_order(
         counter(&archiving, &context, agent_counters, "range-layers").await?;
     increment(&archiving, &component, &agent, 6).await?;
     wait_until_archived_and_idle(deps, &context, &agent_id).await?;
-    let archived_last = archiving.get_oplog_last_index(&agent_id).await?;
-    let compressed = archived_oplog_chunks(deps, &context, &agent_id, 1).await?;
-    let blob = blob_archived_oplog_length(deps, &context, &agent_id, 0).await?;
+    let blob_last = archiving.get_oplog_last_index(&agent_id).await?;
     anyhow::ensure!(
-        compressed.is_empty() && blob > 0,
-        "expected the history in the blob layer only, got {} compressed chunks and a blob layer \
-         of length {blob}",
-        compressed.len()
+        archived_oplog_chunks(deps, &context, &agent_id, 1)
+            .await?
+            .is_empty()
+            && blob_archived_oplog_length(deps, &context, &agent_id, 0).await? > 0,
+        "expected the history from 1 to {blob_last} in the blob layer only"
     );
     archiving.shutdown_and_wait_for_invocation_loops().await?;
     drop(archiving);
@@ -244,36 +250,104 @@ async fn range_reads_across_the_oplog_layers_return_every_index_once_in_order(
         deps,
         &context,
         Some(OplogConfig {
+            indexed_storage_layers: 2,
+            blob_storage_layers: 1,
             archive_interval: Duration::from_secs(3600),
+            entry_count_limit: TRANSFER_AFTER,
+            sweep: OplogSweepConfig {
+                enabled: false,
+                ..Default::default()
+            },
             ..Default::default()
         }),
     )
     .await?;
-    increment(&executor, &component, &agent, 4).await?;
-    let last = executor.get_oplog_last_index(&agent_id).await?;
-    let primary = agent_oplog_length(deps, &context, &agent_id).await?;
+    let (executor, agent_id) = (&executor, &agent_id);
+    // Increments until the oplog has `TRANSFER_AFTER` entries after the blob layer, so that the
+    // primary oplog moves its entries to the compressed layer.
+    let (component, agent) = (&component, &agent);
+    let transferred = futures::stream::iter(0..4 * TRANSFER_AFTER)
+        .then(|_| async move {
+            increment(executor, component, agent, 1).await?;
+            executor.get_oplog_last_index(agent_id).await
+        })
+        .try_skip_while(|last| futures::future::ready(Ok(*last < blob_last + TRANSFER_AFTER)))
+        .boxed()
+        .try_next()
+        .await?;
     anyhow::ensure!(
-        primary > 0 && primary <= last - archived_last,
-        "expected only the entries after the archive in the primary oplog, got {primary} of {last}"
+        transferred.is_some(),
+        "the oplog never reached {} entries",
+        blob_last + TRANSFER_AFTER
+    );
+    // The transfer runs in the background, and the primary oplog then drops what it moved.
+    let compressed_last = || async {
+        Ok::<_, anyhow::Error>(
+            archived_oplog_chunks(deps, &context, agent_id, 1)
+                .await?
+                .iter()
+                .map(|(last, _)| *last)
+                .max(),
+        )
+    };
+    wait_until(
+        Duration::from_secs(60),
+        "the primary oplog moved its entries to the compressed layer",
+        || async {
+            let last = executor.get_oplog_last_index(agent_id).await?;
+            Ok(match compressed_last().await? {
+                Some(compressed) => {
+                    agent_oplog_length(deps, &context, agent_id).await? == last - compressed
+                }
+                None => false,
+            })
+        },
+    )
+    .await?;
+    // Two more invocations add fewer than `TRANSFER_AFTER` entries, which stay in the primary
+    // oplog.
+    increment(executor, component, agent, 2).await?;
+    let last = executor.get_oplog_last_index(agent_id).await?;
+    let compressed_last = compressed_last()
+        .await?
+        .expect("the compressed layer has entries");
+    let primary = agent_oplog_length(deps, &context, agent_id).await?;
+    anyhow::ensure!(
+        blob_last < compressed_last
+            && compressed_last < last
+            && primary == last - compressed_last
+            && blob_archived_oplog_length(deps, &context, agent_id, 0).await? > 0,
+        "expected 1 to {blob_last} in the blob layer, {} to {compressed_last} in the compressed \
+         layer and the {primary} entries to {last} in the primary oplog",
+        blob_last + 1
     );
 
-    let full = executor
-        .read_oplog(&agent_id, OplogRange::ALL, None)
-        .await?;
+    let full = executor.read_oplog(agent_id, OplogRange::ALL, None).await?;
     assert_eq!(indices(&full), (1..=last).collect::<Vec<_>>());
 
-    // Windows of 7 that start at every third index cross the boundary between the archive and
-    // the primary oplog, and pages of 3 entries cross it again.
-    let (executor, agent_id, full) = (&executor, &agent_id, &full);
-    futures::stream::iter((1..=last).step_by(3))
+    // At each layer boundary, pages of `count` entries from `boundary + 1 - count` end exactly at
+    // the boundary, and the next page starts just after it. With an end, the range ends `count`
+    // entries after the boundary; without an end, the pages go on to the end of the oplog.
+    let full = &full;
+    let reads = [blob_last, compressed_last]
+        .into_iter()
+        .flat_map(|boundary| (1..=3).map(move |count| (boundary, count)));
+    futures::stream::iter(reads)
         .map(Ok)
-        .try_for_each(|from| async move {
-            let to = (from + 6).min(last);
-            let paged = read_pages(executor, agent_id, from, to, 3).await?;
+        .try_for_each(|(boundary, count)| async move {
+            let from = boundary + 1 - count;
+            let to = (boundary + count).min(last);
+            let paged = read_pages_to(executor, agent_id, from, Some(to), count).await?;
             assert_eq!(
                 paged.iter().map(page_entry_index).collect::<Vec<_>>(),
                 (from..=to).collect::<Vec<_>>(),
-                "pages of {from}..={to}"
+                "pages of {count} from {from} to {to}"
+            );
+            let open = read_pages_to(executor, agent_id, from, None, count).await?;
+            assert_eq!(
+                open.iter().map(page_entry_index).collect::<Vec<_>>(),
+                (from..=last).collect::<Vec<_>>(),
+                "pages of {count} from {from} without an end"
             );
             let read = executor.read_oplog(agent_id, range(from, to), None).await?;
             assert_eq!(
@@ -489,7 +563,7 @@ async fn a_range_read_returns_the_entries_that_its_pages_omit_in_full(
     .await?;
     let last = full.len() as u64;
     let (from, to) = (2, last - 1);
-    let paged = read_pages(&executor, &agent_id, from, to, 3).await?;
+    let paged = read_pages_to(&executor, &agent_id, from, Some(to), 3).await?;
     assert_eq!(
         paged.iter().map(page_entry_index).collect::<Vec<_>>(),
         (from..=to).collect::<Vec<_>>()
