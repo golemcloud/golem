@@ -279,7 +279,12 @@ trait JsonSnapshotCounter {
     fn initializer_seed_hash(&self) -> u64;
     #[read_only(cache = "no_cache")]
     fn peek(&self) -> u32;
+    /// Panics with `JSON_SNAPSHOT_COUNTER_PANIC`, so the invocation records an `Error` entry.
+    fn fail(&mut self) -> u32;
 }
+
+/// The panic text of `JsonSnapshotCounter::fail`.
+const JSON_SNAPSHOT_COUNTER_PANIC: &str = "the json snapshot counter fails on request";
 
 #[derive(Serialize, Deserialize)]
 struct JsonSnapshotCounterImpl {
@@ -309,5 +314,9 @@ impl JsonSnapshotCounter for JsonSnapshotCounterImpl {
 
     fn peek(&self) -> u32 {
         self.count
+    }
+
+    fn fail(&mut self) -> u32 {
+        panic!("{JSON_SNAPSHOT_COUNTER_PANIC}")
     }
 }

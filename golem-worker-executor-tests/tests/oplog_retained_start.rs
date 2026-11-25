@@ -328,6 +328,79 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
     Ok(())
 }
 
+/// The retry count and the last error of an agent whose oplog starts after index 1 come from the
+/// entries after the start. The agent recovers from its snapshot after a real restart, and a call
+/// of `fail` panics. A panic is a deterministic trap, so the executor does not retry it: the
+/// oplog has one `Error` entry after the start, the retry count is 0 and the last error is the
+/// panic text, not the expired error. Another real restart gives the same answers.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn the_retry_count_and_the_last_error_read_from_the_retained_start(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let policy = SnapshotPolicy::EveryNInvocation { count: 2 };
+    let executor = start_with_snapshot_policy(deps, &context, policy.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let agent = agent_key!("JsonSnapshotCounter", "retained-start-retry");
+    let agent_id = executor.start_agent(&component.id, agent.clone()).await?;
+
+    increment(&executor, &component, &agent, 3).await?;
+    let snapshot = wait_for_snapshot_after(&executor, &agent_id, OplogIndex::NONE).await?;
+    let retained_start = first_start(&executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?)?;
+    assert!(
+        OplogIndex::INITIAL < retained_start && retained_start < snapshot,
+        "start {retained_start}, snapshot {snapshot}"
+    );
+    drop(executor);
+
+    force_oplog_retained_start(deps, &context, &agent_id, retained_start).await?;
+    let executor = start_with_snapshot_policy(deps, &context, policy.clone()).await?;
+    let failure = executor
+        .invoke_and_await_agent(&component, &agent, "fail", data_value!())
+        .await
+        .expect_err("the call panics");
+    let failure = format!("{failure:#}");
+    assert!(
+        failure.contains("the json snapshot counter fails on request"),
+        "{failure}"
+    );
+
+    let errors = executor
+        .get_oplog(&agent_id, retained_start)
+        .await?
+        .iter()
+        .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+        .count();
+    assert_eq!(errors, 1, "the panic records one error and no retry");
+    let check = |metadata: golem_common::model::agent::AgentMetadataDto| {
+        assert_eq!(metadata.status, AgentStatus::Failed);
+        assert_eq!(
+            metadata.retry_count, 0,
+            "the executor does not retry a panic"
+        );
+        let last_error = metadata.last_error.unwrap_or_default();
+        assert!(
+            last_error.contains("the json snapshot counter fails on request")
+                && !names_expired_start(&last_error, retained_start),
+            "{last_error}"
+        );
+    };
+    check(executor.get_worker_metadata(&agent_id).await?);
+    drop(executor);
+
+    let executor = start_with_snapshot_policy(deps, &context, policy).await?;
+    check(executor.get_worker_metadata(&agent_id).await?);
+    Ok(())
+}
+
 /// Runs an agent with `policy`, moves the retained start of its oplog to the index that
 /// `retained_start` picks from its history, and restarts the executor. The recovery has no usable
 /// restore source, so it fails with the expired error that names the start. The oplog is kept:
