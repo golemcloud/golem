@@ -8,14 +8,21 @@
 
 use super::*;
 use crate::panic_watch::{panics_naming, watch_panics_naming};
-use golem_common::model::agent::ParsedAgentKey;
+use chrono::{DateTime, Utc};
+use golem_common::model::agent::{
+    AgentConfigEntryDto, InvocationFreshnessDisposition, ParsedAgentKey,
+};
 use golem_common::model::component::ComponentId;
+use golem_common::model::invocation_context::InvocationContextStack;
+use golem_common::model::{AgentInvocation, ScheduleId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::services::component::ComponentService;
+use golem_worker_executor::services::rpc::{Rpc, RpcDemand};
 use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
 use golem_worker_executor::storage::keyvalue::fault_injecting::{
     FaultInjectingKeyValueStorage, KeyValueStorageFaults,
 };
+use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor::worker::{WorkerDeletionHook, WorkerDeletionStage};
 use pretty_assertions::assert_eq;
 use std::sync::atomic::AtomicBool;
@@ -61,6 +68,7 @@ impl WorkerDeletionHook for GateBeforeStage {
 
 struct RaceGate {
     target: Mutex<Option<ComponentId>>,
+    target_agent: Mutex<Option<OwnedAgentId>>,
     armed: AtomicBool,
     entered: tokio::sync::Semaphore,
     release: tokio::sync::Semaphore,
@@ -148,6 +156,192 @@ impl ComponentService for GatedMetadata {
 
     async fn invalidate_all(&self) {
         self.inner.invalidate_all().await;
+    }
+}
+
+/// Holds the first schedule of the gate's target agent where the caller's schedule enters the
+/// executor's RPC, before the executor acquires the target and reads its status.
+struct GatedSchedule {
+    inner: Arc<dyn Rpc>,
+    gate: Arc<RaceGate>,
+}
+
+#[async_trait]
+impl Rpc for GatedSchedule {
+    async fn create_and_initialize(
+        &self,
+        target: ResolvedTarget,
+        exclusive: bool,
+        self_created_by: AccountId,
+        self_agent_id: &AgentId,
+        self_env: &[(String, String)],
+        self_stack: InvocationContextStack,
+        caller: &Caller,
+        config: Vec<AgentConfigEntryDto>,
+        auth_ctx: &AuthCtx,
+        idempotency_key: IdempotencyKey,
+    ) -> Result<Box<dyn RpcDemand>, golem_service_base::error::worker_executor::WorkerExecutorError>
+    {
+        self.inner
+            .create_and_initialize(
+                target,
+                exclusive,
+                self_created_by,
+                self_agent_id,
+                self_env,
+                self_stack,
+                caller,
+                config,
+                auth_ctx,
+                idempotency_key,
+            )
+            .await
+    }
+
+    async fn cancel_scheduled_invocation(
+        &self,
+        target: &OwnedAgentId,
+        key: golem_common::model::InvocationId,
+        receipt: ScheduleId,
+        canceller: &golem_common::model::caller::Principal,
+        auth: &AuthCtx,
+    ) -> Result<bool, RpcError> {
+        self.inner
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
+            .await
+    }
+
+    async fn schedule_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        expected_fingerprint: golem_common::model::AgentFingerprint,
+        request_key: golem_common::model::InvocationRequestKey,
+        invocation: AgentInvocation,
+        scheduled_at: DateTime<Utc>,
+        self_agent_id: &golem_common::model::AgentId,
+        auth_ctx: &AuthCtx,
+    ) -> Result<ScheduleId, RpcError> {
+        let is_target = self.gate.target_agent.lock().unwrap().as_ref() == Some(owned_agent_id);
+        if is_target && self.gate.armed.swap(false, Ordering::AcqRel) {
+            self.gate.entered.add_permits(1);
+            self.gate.release.acquire().await.unwrap().forget();
+        }
+        self.inner
+            .schedule_invocation(
+                owned_agent_id,
+                expected_fingerprint,
+                request_key,
+                invocation,
+                scheduled_at,
+                self_agent_id,
+                auth_ctx,
+            )
+            .await
+    }
+
+    async fn create_demand(
+        &self,
+        target: ResolvedTarget,
+        method: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
+        created_by: AccountId,
+        caller: &AgentId,
+        env: &[(String, String)],
+        stack: InvocationContextStack,
+        callee_caller: &Caller,
+        config: Vec<AgentConfigEntryDto>,
+        auth: &AuthCtx,
+        key: Option<IdempotencyKey>,
+        freshness: InvocationFreshnessDisposition,
+    ) -> Result<Box<dyn RpcDemand>, RpcError> {
+        self.inner
+            .create_demand(
+                target,
+                method,
+                invocation,
+                created_by,
+                caller,
+                env,
+                stack,
+                callee_caller,
+                config,
+                auth,
+                key,
+                freshness,
+            )
+            .await
+    }
+
+    async fn invoke_and_await(
+        &self,
+        target: ResolvedTarget,
+        key: Option<IdempotencyKey>,
+        freshness: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
+        method: String,
+        input: SchemaValue,
+        created_by: AccountId,
+        caller: &AgentId,
+        env: &[(String, String)],
+        stack: InvocationContextStack,
+        callee_caller: &Caller,
+        config: Vec<AgentConfigEntryDto>,
+        auth: &AuthCtx,
+        card: Option<golem_common::model::card::ScopeCard>,
+    ) -> Result<SchemaValue, RpcError> {
+        self.inner
+            .invoke_and_await(
+                target,
+                key,
+                freshness,
+                expected_callee_fingerprint,
+                method,
+                input,
+                created_by,
+                caller,
+                env,
+                stack,
+                callee_caller,
+                config,
+                auth,
+                card,
+            )
+            .await
+    }
+
+    async fn invoke(
+        &self,
+        target: ResolvedTarget,
+        key: Option<IdempotencyKey>,
+        freshness: InvocationFreshnessDisposition,
+        expected_callee_fingerprint: Option<golem_common::model::AgentFingerprint>,
+        method: String,
+        input: SchemaValue,
+        created_by: AccountId,
+        caller: &AgentId,
+        env: &[(String, String)],
+        stack: InvocationContextStack,
+        callee_caller: &Caller,
+        config: Vec<AgentConfigEntryDto>,
+        auth: &AuthCtx,
+    ) -> Result<(), RpcError> {
+        self.inner
+            .invoke(
+                target,
+                key,
+                freshness,
+                expected_callee_fingerprint,
+                method,
+                input,
+                created_by,
+                caller,
+                env,
+                stack,
+                callee_caller,
+                config,
+                auth,
+            )
+            .await
     }
 }
 
@@ -426,6 +620,7 @@ async fn pinned_call_racing_deletion(
     let context = TestContext::new(last_unique_id);
     let gate = Arc::new(RaceGate {
         target: Mutex::new(None),
+        target_agent: Mutex::new(None),
         armed: AtomicBool::new(false),
         entered: tokio::sync::Semaphore::new(0),
         release: tokio::sync::Semaphore::new(0),
@@ -438,6 +633,15 @@ async fn pinned_call_racing_deletion(
                 let gate = gate.clone();
                 move |inner| {
                     Arc::new(GatedMetadata {
+                        inner,
+                        gate: gate.clone(),
+                    })
+                }
+            })),
+            wrap_rpc: Some(Arc::new({
+                let gate = gate.clone();
+                move |inner| {
+                    Arc::new(GatedSchedule {
                         inner,
                         gate: gate.clone(),
                     })
@@ -477,10 +681,16 @@ async fn pinned_call_racing_deletion(
     let counter_worker = crate::agent::keyed_agent_id(counter_component.environment_id, &counter);
     let owned_counter = counter_worker.clone();
 
-    // The only forced-revision metadata lookup of the child on these paths follows the pin, in
-    // `rpc_target_worker` for a call and in `schedule_invocation` for a schedule, so the call is
-    // held there with the child pinned.
-    *gate.target.lock().unwrap() = Some(counter_component.id);
+    // A call is held at the forced-revision metadata lookup of the child that follows the pin in
+    // `rpc_target_worker`. A schedule makes no component lookup and is validated when it runs, so
+    // it is held where it enters the executor's RPC. After the release it acquires the retired
+    // generation that the cache still holds while the deletion waits before `CacheRemoved`, and
+    // its status read reaches the stopped state actor.
+    if method.contains("schedule") {
+        *gate.target_agent.lock().unwrap() = Some(owned_counter.clone());
+    } else {
+        *gate.target.lock().unwrap() = Some(counter_component.id);
+    }
     gate.armed.store(true, Ordering::Release);
     let call = tokio::spawn({
         let executor = executor.clone();
@@ -501,7 +711,7 @@ async fn pinned_call_racing_deletion(
     });
     tokio::time::timeout(Duration::from_secs(20), gate.entered.acquire())
         .await
-        .map_err(|_| anyhow::anyhow!("the pinned call never reached the metadata lookup"))??
+        .map_err(|_| anyhow::anyhow!("the pinned call never reached its gate"))??
         .forget();
     let hook = Arc::new(GateBeforeStage {
         target: owned_counter.clone(),
@@ -614,8 +824,9 @@ async fn kept_handle_schedule_overtaken_by_the_deletion_is_not_found_without_a_p
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    // The deletion removes the child's durable state while the schedule is held after its pinned
-    // status read. A failed schedule traps the caller, so every attempt the caller makes must fail
+    // The deletion removes the child's durable state and stops its state actor while the schedule
+    // is held before it acquires the child, which the cache still holds. The schedule then reads
+    // the status of the stopped state actor. A failed schedule traps the caller, so every attempt the caller makes must fail
     // as not found, as the pinned calls do above, and none with an internal error from the
     // stopped state actor.
     let answers = pinned_call_racing_deletion(
