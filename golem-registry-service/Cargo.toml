@@ -28,6 +28,7 @@ golem-async-trait = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-mcp-import = { workspace = true }
 golem-native-tool = { workspace = true }
+golem-package = { workspace = true }
 golem-schema = { workspace = true, features = ["protobuf"] }
 golem-service-base = { workspace = true }
 
@@ -112,6 +113,7 @@ futures = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }
 http-body-util = { workspace = true }
 poem = { workspace = true, features = ["rustls"] }
+tar = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }
