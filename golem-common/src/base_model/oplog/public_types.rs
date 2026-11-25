@@ -460,8 +460,9 @@ impl OplogScanAllowance {
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
 pub struct OplogScan {
-    // The allowance that the read applied: the requested allowance, or the configured allowance
-    // of the server without one, clamped to the configured allowance.
+    // The allowance that the read applied: the requested allowance, clamped to the configured
+    // allowance of the server. Without a requested allowance, the read has no scan limit, and
+    // the limit is `u64::MAX` entries and milliseconds.
     pub limit: OplogScanAllowance,
     /// The oplog entries that the read charged: the entries that it read to find the component
     /// revision at the start of the range, and the entries that it read for the page, also those

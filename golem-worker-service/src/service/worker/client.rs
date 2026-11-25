@@ -668,9 +668,9 @@ pub trait WorkerClient: Send + Sync {
 
     /// Reads an oplog page of `range`. When `range` has an end, the read is a range read: it reads
     /// no entry after the end, and the response accounts its scan. `allowance` is the scan
-    /// allowance that a range read may still spend; without it, the executor applies its
-    /// configured allowance. With `ClaimVisibility::Shown`, the callers in the entries hold the
-    /// users' verified claims; the caller asks for it only after its oplog read check.
+    /// allowance that a range read may still spend. Without it, the read has no scan limit.
+    /// With `ClaimVisibility::Shown`, the callers in the entries hold the users' verified claims;
+    /// the caller asks for it only after its oplog read check.
     #[allow(clippy::too_many_arguments)]
     async fn get_oplog(
         &self,

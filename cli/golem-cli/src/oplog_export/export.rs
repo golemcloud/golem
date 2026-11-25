@@ -73,8 +73,8 @@ pub trait OplogReads: Send + Sync {
         query: Option<&str>,
     ) -> anyhow::Result<OplogPage>;
 
-    /// Reads one page of the range from `from` to `to`, inclusive, within `allowance`, or
-    /// within the configured allowance of the server without one. A failed read is not retried,
+    /// Reads one page of the range from `from` to `to`, inclusive, within `allowance`. Without
+    /// an allowance, the read has no scan limit. A failed read with an allowance is not retried,
     /// because the server can have spent allowance on it.
     async fn read_range_page(
         &self,
