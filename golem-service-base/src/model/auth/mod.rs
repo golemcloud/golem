@@ -15,6 +15,9 @@
 #[cfg(test)]
 mod tests;
 
+pub mod denial;
+pub mod surface;
+
 use async_trait::async_trait;
 use axum::http::header;
 use golem_common::SafeDisplay;
@@ -192,9 +195,18 @@ pub enum AuthorizationError {
     AuthContextHasNoCards(String),
 }
 
+/// A response shows no permission target: a 1.6 target holds the account and the names of the
+/// owner (5.3 Rule 21). `Display` keeps the target for logs.
 impl SafeDisplay for AuthorizationError {
     fn to_safe_string(&self) -> String {
-        self.to_string()
+        match self {
+            Self::PermissionNotAllowed(_) | Self::PermissionEvaluationFailed { .. } => {
+                denial::FORBIDDEN_MESSAGE.to_string()
+            }
+            Self::SystemOnlyActionNotAllowed(_) | Self::AuthContextHasNoCards(_) => {
+                self.to_string()
+            }
+        }
     }
 }
 

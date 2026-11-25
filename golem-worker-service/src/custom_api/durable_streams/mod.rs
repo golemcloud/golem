@@ -591,7 +591,7 @@ fn resource_url(
     Ok(url)
 }
 
-fn response(status: StatusCode) -> RouteExecutionResult {
+pub(crate) fn response(status: StatusCode) -> RouteExecutionResult {
     let headers = HeaderMap::from_iter([(
         http::header::CACHE_CONTROL,
         HeaderValue::from_static("no-store"),

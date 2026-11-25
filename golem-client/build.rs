@@ -655,6 +655,10 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ("Empty", "golem_schema::Empty"),
             ("ErrorBody", "golem_common::model::error::ErrorBody"),
             ("ErrorsBody", "golem_common::model::error::ErrorsBody"),
+            (
+                "ForbiddenErrorBody",
+                "golem_common::model::error::ForbiddenErrorBody",
+            ),
             ("ScanCursor", "golem_common::model::ScanCursor"),
             ("UntypedJsonBody", "golem_common::model::UntypedJsonBody"),
             ("VersionInfo", "golem_common::model::VersionInfo"),

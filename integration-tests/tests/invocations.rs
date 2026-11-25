@@ -440,7 +440,8 @@ async fn invocation_api_reads_and_cancels_invocations(
         400
     );
 
-    // Another account without a grant on the environment is forbidden.
+    // Another account without a grant on the environment gets the answer of an unknown agent
+    // (5.3 Rule 21), so it cannot tell that the invocation's agent exists.
     let other = deps.user().await?;
     let other_client = other
         .deps
@@ -452,9 +453,8 @@ async fn invocation_api_reads_and_cancels_invocations(
             other_client
                 .get_invocation(&env_id, &waiting.invocation_id)
                 .await
-        )
-        .0,
-        403
+        ),
+        (404, error_code::AGENT_NOT_FOUND.to_string())
     );
 
     user.complete_promise(&env.id, &promise, Vec::new()).await?;

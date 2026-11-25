@@ -15,7 +15,7 @@
 pub mod agents;
 pub mod common;
 pub mod invocation;
-mod invocation_session;
+pub(crate) mod invocation_session;
 mod worker;
 
 use crate::api::agents::AgentsApi;

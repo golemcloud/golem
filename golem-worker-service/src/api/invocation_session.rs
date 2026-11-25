@@ -2948,7 +2948,7 @@ fn token_bindings(auth: &AuthCtx) -> InvocationSessionTokenBindings {
     }
 }
 
-fn public_start_error(error: PublicAgentSessionStartError) -> (PublicErrorCode, String) {
+pub(crate) fn public_start_error(error: PublicAgentSessionStartError) -> (PublicErrorCode, String) {
     match error {
         PublicAgentSessionStartError::Protocol(error) => (error.code, error.message),
         PublicAgentSessionStartError::Worker(error) => {

@@ -458,7 +458,7 @@ impl DeploymentService {
             .get_deployment_and_environment(environment_id, deployment_revision, auth)
             .await?;
 
-        authorize_get_tool_permission(auth, &environment, tool_name)?;
+        authorize_get_tool_permission(auth, &environment)?;
 
         let registered: RegisteredTool = self
             .deployment_repo
@@ -700,13 +700,14 @@ fn user_invokable_agent_types(
         .collect()
 }
 
+/// A tool is named, not designated by an ID, so a caller without `ViewTools` gets a `403`, and only
+/// an unknown tool is "not found" (4.1 Rule 3; 5.3 Rule 21).
 fn authorize_get_tool_permission(
     auth: &AuthCtx,
     environment: &Environment,
-    tool_name: &ToolName,
 ) -> Result<(), DeploymentError> {
     authorize_environment_permission(auth, environment, EnvironmentVerb::ViewTools)
-        .map_err(|_| DeploymentError::ToolNotFound(tool_name.clone()))
+        .map_err(DeploymentError::Unauthorized)
 }
 
 #[cfg(test)]
@@ -820,8 +821,10 @@ mod tests {
         assert_eq!(visible, vec![regular], "{id}: regular control");
     }
 
+    /// A tool is named, not designated by an ID, so a denied lookup is a `403` (4.1 Rule 3),
+    /// and it names no grant to a caller that may not view the tool.
     #[test]
-    fn get_tool_authorization_failure_is_hidden_as_tool_not_found() {
+    fn get_tool_authorization_failure_is_forbidden() {
         let environment = test_environment();
         let auth = AuthCtx::agent_with_effective_surface(
             environment.owner_account_id,
@@ -838,15 +841,28 @@ mod tests {
                 upper: Vec::new(),
             },
         );
-        let tool_name = ToolName::try_from("grep").unwrap();
 
         assert!(
             authorize_environment_permission(&auth, &environment, EnvironmentVerb::ViewDeployment)
                 .is_ok()
         );
-        assert!(matches!(
-            authorize_get_tool_permission(&auth, &environment, &tool_name),
-            Err(DeploymentError::ToolNotFound(name)) if name == tool_name
-        ));
+        let denied = authorize_get_tool_permission(&auth, &environment).unwrap_err();
+        assert!(
+            matches!(denied, DeploymentError::Unauthorized(_)),
+            "{denied:?}"
+        );
+        match crate::api::error::ApiError::from(denied) {
+            crate::api::error::ApiError::Forbidden(body) => {
+                assert_eq!(
+                    body.0.code,
+                    golem_common::base_model::api::error_code::AUTH_FORBIDDEN
+                );
+                assert_eq!(
+                    body.0.error,
+                    golem_service_base::model::auth::denial::FORBIDDEN_MESSAGE
+                );
+            }
+            other => panic!("expected 403, got {other:?}"),
+        }
     }
 }

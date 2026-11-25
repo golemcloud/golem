@@ -48,6 +48,7 @@ pub mod error_code {
     pub const AGENT_SECRET_NOT_FOUND: &str = "AGENT_SECRET_NOT_FOUND";
     pub const AGENT_TYPE_NOT_FOUND: &str = "AGENT_TYPE_NOT_FOUND";
     pub const APPLICATION_NOT_FOUND: &str = "APPLICATION_NOT_FOUND";
+    pub const ARTIFACT_NOT_FOUND: &str = "ARTIFACT_NOT_FOUND";
     pub const CARD_NOT_FOUND: &str = "CARD_NOT_FOUND";
     pub const COMPONENT_NOT_FOUND: &str = "COMPONENT_NOT_FOUND";
     pub const DEPLOYMENT_NOT_FOUND: &str = "DEPLOYMENT_NOT_FOUND";
@@ -60,6 +61,7 @@ pub mod error_code {
     pub const PLAN_NOT_FOUND: &str = "PLAN_NOT_FOUND";
     pub const PLUGIN_REGISTRATION_NOT_FOUND: &str = "PLUGIN_REGISTRATION_NOT_FOUND";
     pub const PERMISSION_SHARE_NOT_FOUND: &str = "PERMISSION_SHARE_NOT_FOUND";
+    pub const PROMISE_NOT_FOUND: &str = "PROMISE_NOT_FOUND";
     pub const REFERENCED_TOOL_RELEASE_NOT_FOUND: &str = "REFERENCED_TOOL_RELEASE_NOT_FOUND";
     pub const REFERENCED_TOOL_MIDDLEWARE_RELEASE_NOT_FOUND: &str =
         "REFERENCED_TOOL_MIDDLEWARE_RELEASE_NOT_FOUND";
@@ -69,6 +71,8 @@ pub mod error_code {
     pub const INVOCATION_NOT_FOUND: &str = "INVOCATION_NOT_FOUND";
     pub const ROUTE_NOT_FOUND: &str = "ROUTE_NOT_FOUND";
     pub const SECURITY_SCHEME_NOT_FOUND: &str = "SECURITY_SCHEME_NOT_FOUND";
+    pub const STREAM_NOT_FOUND: &str = "STREAM_NOT_FOUND";
+    pub const TASK_NOT_FOUND: &str = "TASK_NOT_FOUND";
     pub const TOKEN_NOT_FOUND: &str = "TOKEN_NOT_FOUND";
     pub const TOOL_NOT_FOUND: &str = "TOOL_NOT_FOUND";
     pub const TOOL_MIDDLEWARE_RELEASE_NOT_FOUND: &str = "TOOL_MIDDLEWARE_RELEASE_NOT_FOUND";
@@ -76,6 +80,7 @@ pub mod error_code {
         "TOOL_MIDDLEWARE_PUBLICATION_MIDDLEWARE_NOT_FOUND";
     pub const TOOL_PUBLICATION_TOOL_NOT_FOUND: &str = "TOOL_PUBLICATION_TOOL_NOT_FOUND";
     pub const TOOL_RELEASE_NOT_FOUND: &str = "TOOL_RELEASE_NOT_FOUND";
+    pub const WEBHOOK_NOT_FOUND: &str = "WEBHOOK_NOT_FOUND";
 
     // --- Already exists / conflicts ---
     pub const IDEMPOTENCY_CONFLICT: &str = "IDEMPOTENCY_CONFLICT";
