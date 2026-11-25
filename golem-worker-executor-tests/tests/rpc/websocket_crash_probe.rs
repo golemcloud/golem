@@ -118,6 +118,7 @@ async fn effect_duplex_websocket_crash_continuation(
         let metadata = executor.get_worker_metadata(&worker).await?;
         let key = IdempotencyKey::fresh();
         let start = InvocationStart {
+            allow_streams: true,
             target: Some(crate::agent::id_target(&worker)),
             constructor: None,
             component_id: None,
