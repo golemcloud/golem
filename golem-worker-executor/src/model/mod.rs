@@ -715,6 +715,16 @@ pub enum LookupResult {
     Complete(Result<AgentInvocationOutput, WorkerExecutorError>),
 }
 
+impl LookupResult {
+    /// The component revision that recorded a successful result.
+    pub fn recorded_revision(&self) -> Option<ComponentRevision> {
+        match self {
+            Self::Complete(Ok(output)) => output.component_revision,
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct InvocationContext {
     pub trace_id: TraceId,

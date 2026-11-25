@@ -275,7 +275,7 @@ With Litestream, the worker executor keeps its key-value storage and its indexed
 - **Turn Litestream on only for a new data directory.** With Litestream, the server does not read the databases per agent in `kv-store` that it writes without Litestream, so the agents of a data directory that started without Litestream are not visible after the switch.
 - **Do not set the worker executor's storage.** The image sets `worker_executor.key_value_storage` and `worker_executor.indexed_storage` itself, and takes the data directory from `GOLEM__DATA_DIR`: do not set them, or `data_dir`, in a `--config` file or in `GOLEM__` variables.
 - **One writer for all oplogs.** One SQLite database holds the oplogs of all agents, and SQLite writes one transaction at a time. That fits a single node; for heavier load, use [managed Postgres](#managed-postgres).
-- The replica can be in the bucket of the blobs, under its own path, such as `litestream`. Do not give it the path of a blob kind, such as `component_store`.
+- The replica can be in the bucket of the blobs, under its own path, such as `litestream`. Do not give it the path of a blob kind, such as `component_uploads`.
 
 #### Litestream limits
 

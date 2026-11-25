@@ -286,8 +286,11 @@ async fn customized_json_routes_apply_aliases_and_route_local_load_limits(
     let base = format!("/durable-stream-agents/ds3-{session}/custom-echo/invocations/{session}");
     let input = format!("{base}/streams/messages");
     let output = format!("{base}/streams/responses");
-    let secondary_base =
-        format!("/durable-stream-agents/ds3-{session}/custom-echo-secondary/invocations/{session}");
+    // An agent runs one invocation at a time, and the primary session's open input keeps its
+    // invocation running, so the secondary session uses an agent of its own to become ready.
+    let secondary_base = format!(
+        "/durable-stream-agents/ds3-{session}-secondary/custom-echo-secondary/invocations/{session}"
+    );
     let secondary_input = format!("{secondary_base}/streams/secondary-messages");
     let secondary_output = format!("{secondary_base}/streams/secondary-responses");
 
@@ -2297,46 +2300,48 @@ async fn websocket_and_http_sessions_have_isolated_identities(
             .await?;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
-    assert_eq!(
-        append_json(agent, &input_path, serde_json::json!("http-only"), true)
-            .await?
-            .status(),
-        StatusCode::NO_CONTENT
-    );
-    send_public_request(
-        &mut socket,
-        &PublicClientMessage::InputStreamItem {
-            channel: input_channel,
-            sequence: DecimalU64(1),
-            value: native_string("ws-last"),
-            version: INVOCATION_SESSION_VERSION,
-        },
-    )
-    .await?;
-    send_public_request(
-        &mut socket,
-        &PublicClientMessage::StreamEnd {
-            channel: input_channel,
-            direction: PublicStreamDirection::Input,
-            outcome: PublicStreamOutcome::Finished,
-            sequence: DecimalU64(2),
-            version: INVOCATION_SESSION_VERSION,
-        },
-    )
-    .await?;
-    loop {
-        match receive_public_response(&mut socket).await? {
-            PublicServerMessage::OutputStreamItem { value, .. } => output.push(value),
-            PublicServerMessage::InvocationFinished { outcome, .. } => {
-                assert!(matches!(outcome, PublicInvocationOutcome::Success));
-                break;
+    // The HTTP session is a second invocation of the same agent, so it stays queued while the
+    // websocket invocation runs, and its append is acknowledged only after it becomes ready.
+    let http_append = append_json(agent, &input_path, serde_json::json!("http-only"), true);
+    let websocket = async {
+        send_public_request(
+            &mut socket,
+            &PublicClientMessage::InputStreamItem {
+                channel: input_channel,
+                sequence: DecimalU64(1),
+                value: native_string("ws-last"),
+                version: INVOCATION_SESSION_VERSION,
+            },
+        )
+        .await?;
+        send_public_request(
+            &mut socket,
+            &PublicClientMessage::StreamEnd {
+                channel: input_channel,
+                direction: PublicStreamDirection::Input,
+                outcome: PublicStreamOutcome::Finished,
+                sequence: DecimalU64(2),
+                version: INVOCATION_SESSION_VERSION,
+            },
+        )
+        .await?;
+        loop {
+            match receive_public_response(&mut socket).await? {
+                PublicServerMessage::OutputStreamItem { value, .. } => output.push(value),
+                PublicServerMessage::InvocationFinished { outcome, .. } => {
+                    assert!(matches!(outcome, PublicInvocationOutcome::Success));
+                    break;
+                }
+                PublicServerMessage::InvocationRejected { code, message, .. } => {
+                    anyhow::bail!("invocation rejected ({code:?}): {message}");
+                }
+                _ => {}
             }
-            PublicServerMessage::InvocationRejected { code, message, .. } => {
-                anyhow::bail!("invocation rejected ({code:?}): {message}");
-            }
-            _ => {}
         }
-    }
+        anyhow::Ok(())
+    };
+    let (http_append, ()) = tokio::try_join!(http_append, websocket)?;
+    assert_eq!(http_append.status(), StatusCode::NO_CONTENT);
     let public_values = serde_json::json!([native_string("ws-first"), native_string("ws-last")]);
     assert_eq!(serde_json::json!(output), public_values);
     let values = serde_json::json!(["http-only"]);

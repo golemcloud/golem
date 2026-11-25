@@ -124,7 +124,9 @@ async fn run_recovery() -> Unit {
 async test "streaming recovery rejects or completes" {
   connect_attempt_timeout_ms.val = 200
   stable_connection_ms.val = __STABLE__
-  if "__MODE__" == "input-failure-replay" || "__MODE__" == "input-eof-replay" {
+  if "__MODE__" == "input-failure-replay" ||
+    "__MODE__" == "input-eof-replay" ||
+    "__MODE__" == "input-queued-ready" {
     run_input_terminal_recovery("__MODE__" == "input-failure-replay")
     return
   }

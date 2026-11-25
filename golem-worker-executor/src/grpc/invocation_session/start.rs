@@ -295,7 +295,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     accepted.component_revision =
                         Some(prepared.attempt.invocation.target_component_revision);
                     accepted.prepared = Some(prepared);
-                    accepted.durable_streams = Some(streams);
+                    // The ready session replaces the queued one, so it keeps the queued
+                    // response's ephemeral lease until the response ends.
+                    let lease = accepted
+                        .durable_streams
+                        .as_ref()
+                        .and_then(StreamSession::response_lease);
+                    accepted.durable_streams = Some(streams.with_response_lease(lease));
                 }
                 Err(error) => {
                     send_worker_failure(&responses, error).await;

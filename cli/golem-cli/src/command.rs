@@ -700,10 +700,10 @@ pub enum GolemCliSubcommand {
         #[command(subcommand)]
         subcommand: PackageSubcommand,
     },
-    /// Install and pin a local package archive without running its code
+    /// Install and pin a package without running its code
     Install {
-        /// Path to the package archive
-        file: PathBuf,
+        /// Archive path, HTTP(S) URL, or oci:// registry reference
+        source: String,
     },
     /// Preview a package's OCI manifest digest and omitted exports without contacting a server
     Publish {

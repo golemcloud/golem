@@ -129,6 +129,9 @@ priv struct LiveStreamSession {
   socket_write : @async.Mutex
   output_space : @cond.Cond
   mut result_seen : Bool
+  /// Whether the current attachment has its stream bindings: its acceptance
+  /// carried mappings, or `invocationReady` followed a queued acceptance.
+  mut execution_ready : Bool
   mut finished : Bool
   mut actor_owner : @io.MemoryReader?
   clock : ReconnectClock
@@ -610,6 +613,8 @@ async fn resume_session(
       .unwrap_or(false)
   })
   install_mappings(session, accepted)
+  // A resume of queued work is accepted without mappings; its readiness follows.
+  session.execution_ready = !expect_array(get_field(accepted, "mappings")).is_empty()
   for input in session.inputs {
     if input.stream_token is Some(_) && input.channel is None {
       raise BridgeError(
@@ -860,7 +865,7 @@ fn validate_message_fields(
   kind : String,
 ) -> Unit raise {
   let required = match kind {
-    "invocationAccepted" =>
+    "invocationAccepted" | "invocationReady" =>
       [
         "version", "type", "attemptId", "agentId", "idempotencyKey", "mappings",
         "sessionToken",
@@ -2016,6 +2021,41 @@ async fn dispatch_server_message(
   message : Map[String, Json],
 ) -> Bool {
   match expect_string(get_field(message, "type")) {
+    "invocationReady" => {
+      // Readiness completes the current attachment of the same accepted
+      // invocation: it installs the stream bindings that a queued acceptance
+      // withheld, but is not a new acceptance.
+      if session.execution_ready {
+        raise BridgeError("protocol-error: unexpected invocation readiness")
+      }
+      ignore(
+        validate_acceptance_identity(
+          message,
+          session.attempt_id,
+          Some((session.agent_id, session.idempotency_key)),
+        ),
+      )
+      install_mappings(session, message)
+      for input in session.inputs {
+        if input.channel is None {
+          raise BridgeError(
+            "invalid-attachment-state: readiness omitted an input mapping",
+          )
+        }
+      }
+      session.output_queues.each((token, _) => {
+        if !session.output_channels.contains(token) {
+          raise BridgeError(
+            "invalid-attachment-state: readiness omitted an output mapping",
+          )
+        }
+      })
+      session.session_token = Some(
+        expect_string(get_field(message, "sessionToken")),
+      )
+      session.execution_ready = true
+      pump_next_input(session)
+    }
     "invocationResult" => {
       if session.result_seen {
         raise BridgeError("protocol-error: duplicate invocation result")
@@ -2369,6 +2409,8 @@ pub async fn invoke_streaming_agent(
     socket_write: @async.Mutex(),
     output_space: @cond.Cond(),
     result_seen: false,
+    // A queued acceptance has no mappings; its readiness follows.
+    execution_ready: !expect_array(get_field(accepted, "mappings")).is_empty(),
     finished: false,
     actor_owner: None,
     clock,

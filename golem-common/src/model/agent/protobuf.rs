@@ -1357,6 +1357,7 @@ impl TryFrom<AgentMetadataDto> for golem_api_grpc::proto::golem::worker::AgentMe
                 .map(|region| region.into())
                 .collect(),
             oplog_idx: u64::from(value.last_oplog_index),
+            state_oplog_idx: 0,
             fingerprint: Some(value.fingerprint.0.into()),
         })
     }

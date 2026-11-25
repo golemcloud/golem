@@ -197,6 +197,25 @@ async fn accepted(
         "attemptId":operation["attemptId"], "idempotencyKey":KEY, "sessionToken":session, "mappings":mappings})).await
 }
 
+async fn ready(
+    conn: &mut TcpStream,
+    operation: &Value,
+    session: &str,
+    mappings: Value,
+) -> Result<()> {
+    send(conn, json!({"type":"invocationReady", "agentId":"00000000-0000-8000-8000-000000000abc",
+        "attemptId":operation["attemptId"], "idempotencyKey":KEY, "sessionToken":session, "mappings":mappings})).await
+}
+
+/// Fails when the client sends a frame within `duration`.
+async fn silent_for(conn: &mut TcpStream, duration: Duration) -> Result<()> {
+    let mut byte = [0];
+    match timeout(duration, conn.peek(&mut byte)).await {
+        Err(_) => Ok(()),
+        Ok(result) => bail!("the client sent a frame before readiness: {result:?}"),
+    }
+}
+
 async fn accept_operation(
     conn: &mut TcpStream,
     operation: &Value,
@@ -520,6 +539,68 @@ impl Peer {
                 "inputHighWater":{"sequence":"1", "terminal":true, "outcome":{"kind":"failed",
                 "error":{"kind":"interrupted", "message":"input item 1 does not satisfy the element schema"}}}}])).await?;
             return Ok(());
+        }
+        if mode == "input-queued-ready" {
+            let mut conn = self.connect().await?;
+            let start = receive(&mut conn).await?;
+            accepted(&mut conn, &start, "queued-session", json!([])).await?;
+            // A queued acceptance withholds the input channel, so nothing may be sent yet.
+            silent_for(&mut conn, Duration::from_millis(500)).await?;
+            ready(&mut conn, &start, "ready-session", json!([{"direction":"input", "channel":1, "streamToken":"input",
+                "provisionalRef":start["methodParameters"]["value"]["provisionalRef"], "inputHighWater":{"sequence":"0", "terminal":false}}])).await?;
+            let item = receive(&mut conn).await?;
+            assert_eq!(item["type"], "inputStreamItem");
+            assert_eq!(item["channel"], 1);
+            assert_eq!(item["sequence"], "0");
+            ack(&mut conn, 1, false).await?;
+            let terminal = receive(&mut conn).await?;
+            assert_eq!(terminal["type"], "stream-end");
+            assert_eq!(terminal["sequence"], "1");
+            assert_eq!(terminal["outcome"], json!({"kind":"finished"}));
+            ack(&mut conn, 1, true).await?;
+            empty_result(&mut conn).await?;
+            return finished(&mut conn).await;
+        }
+        if matches!(mode, "queued-ready" | "ready-twice" | "ready-mismatch") {
+            let mut conn = self.connect().await?;
+            let start = receive(&mut conn).await?;
+            assert_eq!(start["type"], "invocationStart");
+            accepted(&mut conn, &start, "original-session", json!([])).await?;
+            if mode != "queued-ready" {
+                let mut wrong = start.clone();
+                if mode == "ready-mismatch" {
+                    wrong["attemptId"] = json!("wrong-attempt");
+                }
+                ready(&mut conn, &wrong, "ready-session", json!([])).await?;
+                if mode == "ready-twice" {
+                    ready(&mut conn, &start, "ready-session", json!([])).await?;
+                }
+                return self.terminal().await;
+            }
+            // The connection is lost while the invocation is still queued.
+            drop(conn);
+            let mut conn = self.connect().await?;
+            let resume = receive(&mut conn).await?;
+            assert_eq!(resume["type"], "resumeAttach");
+            assert_eq!(resume["operation"], "resume");
+            assert_eq!(resume["sessionToken"], "original-session");
+            assert_eq!(resume["outputCursors"], json!([]));
+            accepted(&mut conn, &resume, "queued-session", json!([])).await?;
+            ready(&mut conn, &resume, "ready-session", json!([])).await?;
+            result(&mut conn, output(2)).await?;
+            item(&mut conn, 2, "0", "cursor-1", 42).await?;
+            self.signal(Some("consumed")).await?;
+            drop(conn);
+            // The resume uses the token of the readiness, not of the queued acceptance.
+            let mut conn = self.connect().await?;
+            let resume = receive(&mut conn).await?;
+            assert_eq!(resume["operation"], "resume");
+            assert_eq!(resume["sessionToken"], "ready-session");
+            assert_eq!(resume["outputCursors"], json!(["cursor-1"]));
+            accepted(&mut conn, &resume, "new-session", output(3)).await?;
+            item(&mut conn, 3, "1", "cursor-2", 43).await?;
+            send(&mut conn, json!({"type":"stream-end", "channel":3, "direction":"output", "sequence":"2", "cursorToken":"cursor-end", "outcome":{"kind":"finished"}})).await?;
+            return finished(&mut conn).await;
         }
         if matches!(mode, "input-failure-replay" | "input-eof-replay") {
             let mut conn = self.connect().await?;

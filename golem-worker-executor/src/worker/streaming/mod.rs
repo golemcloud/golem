@@ -125,7 +125,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 attached.acceptance.expiry_deadline_millis).await?;
             let _ = committed.send(());
             drop(_session);
-            Worker::start_if_needed(worker.clone()).await?;
+            // A replay of a completed invocation observes its recorded result; only pending work
+            // needs a running instance, and a finished ephemeral agent must never start again.
+            if matches!(
+                worker.try_lookup_invocation_result(&key).await?,
+                LookupResult::Pending
+            ) {
+                Worker::start_if_needed(worker.clone()).await?;
+            }
             Ok((attached, replayed))
         })).await.map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
     }
