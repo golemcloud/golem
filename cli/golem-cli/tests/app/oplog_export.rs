@@ -1672,9 +1672,9 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
     assert_eq!(exported_files(), expected_files);
 
     // An export that fails after some pages leaves no file and no temporary file. The proxy holds
-    // the read of the third page until the agent is deleted and created again with more entries
-    // than before. The agent is then another incarnation, so the read of that page fails, and the
-    // export does not mix the entries of two oplogs.
+    // the read of the third page until the agent is deleted and created again with the same
+    // invocation. The agent is then another incarnation, so the read of that page fails. The export
+    // does not mix the entries of two oplogs.
     let failed_path = ctx.cwd_path_join("export/failed.jsonl");
     let (held, release) = proxy.hold(is_oplog_page_after_cursor, 1);
     let failed_export = ctx.cli_with_env(

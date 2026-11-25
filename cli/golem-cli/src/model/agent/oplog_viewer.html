@@ -201,7 +201,7 @@ header .tools { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
   <div id="exportbanner" class="hidden"></div>
   <div id="toolbar">
     <input type="text" id="search" placeholder="Filter loaded entries (text, function, payload…)  /">
-    <span id="sq-wrap" class="hidden" title="Lucene query evaluated by the server over the oplog, from --from when it is given"><input type="text" id="squery" placeholder="Server query (Lucene), Enter to run"><button id="btn-sq-clear" title="Clear the server query and load the oplog from the start">✕</button></span>
+    <span id="sq-wrap" class="hidden" title="Lucene query evaluated by the server over the oplog. The first query starts at --from when it is given; a query typed here reads the whole oplog"><input type="text" id="squery" placeholder="Server query (Lucene), Enter to run"><button id="btn-sq-clear" title="Clear the server query and load the oplog from the start">✕</button></span>
     <div class="chips" id="chips"></div>
     <label><input type="checkbox" id="cb-hints" checked> hints</label>
     <label>min log <select id="loglevel"><option>Stdout</option><option>Stderr</option><option>Trace</option><option>Debug</option><option>Info</option><option>Warn</option><option>Error</option><option>Critical</option></select></label>

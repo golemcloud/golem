@@ -3416,9 +3416,10 @@ pub async fn agent_oplog_length(
         .await?)
 }
 
-/// How many oplog entries the blob archive `level` holds for the durable agent, read without going
-/// through any executor, from the blob storage and the indexed storage of executors started with
-/// the SQLite storage config.
+/// How many oplog chunks the blob archive `level` holds for the durable agent. The function reads
+/// the count without an executor. It reads the blob storage and the indexed storage of executors
+/// that use the SQLite storage config. The count is the length of the blob manifest, which has one
+/// row for each chunk.
 pub async fn blob_archived_oplog_length(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
