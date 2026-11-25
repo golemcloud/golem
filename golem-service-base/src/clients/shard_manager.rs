@@ -25,7 +25,7 @@ use golem_api_grpc::proto::golem::shardmanager::v1::{
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::protobuf::{
-    ip_addr_to_proto, lease_expiry_from_ttl, shard_epochs_from_proto,
+    executor_count_from_proto, ip_addr_to_proto, lease_expiry_from_ttl, shard_epochs_from_proto,
 };
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
 use golem_common::model::{RetryConfig, RoutingTable, ShardEpoch, ShardId, ShardLeaseRevision};
@@ -47,8 +47,8 @@ pub use shard_leases::InMemoryShardLeaseClient;
 /// Registers, renews and releases executor shard leases.
 #[async_trait]
 pub trait ShardLeaseClient: Send + Sync {
-    /// Registers the executor at the endpoint. Repeats failed requests under the configured
-    /// registration retry schedule, including malformed replies.
+    /// Registers the executor at the endpoint. Repeats request and decoder errors under the
+    /// configured registration retry schedule. A zero shard count passes decoding.
     async fn register(
         &self,
         endpoint: ExecutorEndpoint,
@@ -197,8 +197,8 @@ fn shard_lease_from_wire(
     lease: golem_api_grpc::proto::golem::shardmanager::v1::ShardLease,
     sent_at: Instant,
 ) -> Result<ShardLease, String> {
-    let executor_count = NonZeroUsize::new(lease.executor_count as usize)
-        .ok_or_else(|| "ShardLease.executor_count must not be 0".to_string())?;
+    let executor_count =
+        executor_count_from_proto(lease.executor_count, "ShardLease.executor_count")?;
     Ok(ShardLease {
         shard_epochs: shard_epochs_from_proto(lease.shard_epochs)?,
         executor_count,
@@ -212,8 +212,8 @@ fn registration_from_wire(
     success: golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess,
     sent_at: Instant,
 ) -> Result<ShardRegistration, String> {
-    let executor_count = NonZeroUsize::new(success.executor_count as usize)
-        .ok_or_else(|| "RegisterSuccess.executor_count must not be 0".to_string())?;
+    let executor_count =
+        executor_count_from_proto(success.executor_count, "RegisterSuccess.executor_count")?;
     Ok(ShardRegistration {
         number_of_shards: success.number_of_shards,
         lease: ShardLease {

@@ -13,11 +13,14 @@
 // limitations under the License.
 
 use async_trait::async_trait;
+use futures::StreamExt;
+use golem_common::model::sharding::{ShardAssignment, ShardAssignmentState};
 use golem_common::model::{Pod, ShardId};
 use golem_shard_manager::{
-    ExecutorAddr, ExecutorId, ExternalRevision, HealthCheck, HealthCheckError, NO_REVISION,
-    RoutingTablePersistence, ShardAssignmentPush, ShardEpoch, ShardLeaseGrant, ShardLeaseRevision,
-    ShardLeaseState, ShardManagement, ShardManagerError, WorkerExecutorService,
+    ExecutorAddr, ExecutorId, ExternalRevision, HealthCheck, HealthCheckError,
+    InMemoryWorkerExecutorService, NO_REVISION, RegisterAck, RoutingTablePersistence,
+    ShardAssignmentPush, ShardEpoch, ShardLeaseGrant, ShardLeaseRevision, ShardLeaseState,
+    ShardManagement, ShardManagerError, WorkerExecutorService,
 };
 use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -29,6 +32,7 @@ use test_r::test;
 use tokio::sync::{Mutex, oneshot};
 use tokio::task::JoinSet;
 use tokio::time::Instant;
+use tokio_stream::wrappers::IntervalStream;
 use uuid::Uuid;
 
 const LEASE_TTL: Duration = Duration::from_secs(60);
@@ -52,16 +56,17 @@ struct TestPersistence {
     /// Per-write script: a `None` entry lets a write through, a `Some(err)` entry fails it before
     /// it reaches the store. Writes past the end of the script always succeed.
     injected: Arc<Mutex<VecDeque<Option<ShardManagerError>>>>,
-    gate: Arc<Mutex<Option<WriteGate>>>,
+    gate: Arc<Mutex<Option<PersistenceGate>>>,
     /// The `latest` revision of every `compact` call, in order.
     compactions: Arc<Mutex<Vec<ExternalRevision>>>,
+    compaction_gate: Arc<Mutex<Option<PersistenceGate>>>,
     /// While set, every `compact` call is refused.
     fail_compactions: Arc<Mutex<bool>>,
 }
 
-/// Suspends a single write: `entered` fires when it is reached, then it waits for `release`.
+/// Signals entry and suspends one persistence call until release.
 #[derive(Debug)]
-struct WriteGate {
+struct PersistenceGate {
     entered: oneshot::Sender<()>,
     release: oneshot::Receiver<()>,
 }
@@ -84,6 +89,7 @@ impl TestPersistence {
             injected: Arc::new(Mutex::new(VecDeque::new())),
             gate: Arc::new(Mutex::new(None)),
             compactions: Arc::new(Mutex::new(Vec::new())),
+            compaction_gate: Arc::new(Mutex::new(None)),
             fail_compactions: Arc::new(Mutex::new(false)),
         }
     }
@@ -128,7 +134,22 @@ impl TestPersistence {
     async fn block_next_write(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
         let (entered_tx, entered_rx) = oneshot::channel();
         let (release_tx, release_rx) = oneshot::channel();
-        *self.gate.lock().await = Some(WriteGate {
+        *self.gate.lock().await = Some(PersistenceGate {
+            entered: entered_tx,
+            release: release_rx,
+        });
+        (entered_rx, release_tx)
+    }
+
+    async fn block_next_compaction(&self) -> (oneshot::Receiver<()>, oneshot::Sender<()>) {
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (release_tx, release_rx) = oneshot::channel();
+        let mut gate = self.compaction_gate.lock().await;
+        assert!(
+            gate.is_none(),
+            "the preceding compaction gate must be entered"
+        );
+        *gate = Some(PersistenceGate {
             entered: entered_tx,
             release: release_rx,
         });
@@ -183,6 +204,11 @@ impl RoutingTablePersistence for TestPersistence {
 
     async fn compact(&self, latest: ExternalRevision) -> Result<(), ShardManagerError> {
         self.compactions.lock().await.push(latest);
+        let gate = self.compaction_gate.lock().await.take();
+        if let Some(gate) = gate {
+            let _ = gate.entered.send(());
+            let _ = gate.release.await;
+        }
         if *self.fail_compactions.lock().await {
             return Err(ShardManagerError::Internal(
                 "compaction refused by the test".to_string(),
@@ -194,6 +220,7 @@ impl RoutingTablePersistence for TestPersistence {
 
 #[derive(Clone, Default)]
 pub(crate) struct TestWorkerExecutors {
+    receiver: TestExecutorReceiver,
     local_assignments: Arc<Mutex<HashMap<Pod, BTreeSet<ShardId>>>>,
     failed_assignments: Arc<Mutex<HashMap<Pod, usize>>>,
     failed_revocations: Arc<Mutex<HashMap<Pod, usize>>>,
@@ -216,11 +243,34 @@ pub(crate) struct TestWorkerExecutors {
     grant_during_revoke: Arc<Mutex<Option<ShardLeaseGrant>>>,
 }
 
+#[derive(Clone, Default)]
+enum TestExecutorReceiver {
+    #[default]
+    Inherited,
+    ContractTested {
+        receiver: Arc<InMemoryWorkerExecutorService>,
+        setup_delivery_gate: Arc<Mutex<()>>,
+    },
+}
+
 type Claim = BTreeMap<ShardId, ShardEpoch>;
 /// A revoke as received: the pod, shards, revision and executor count.
 type RecordedRevoke = (Pod, BTreeSet<ShardId>, ShardLeaseRevision, usize);
 
 impl TestWorkerExecutors {
+    pub(crate) fn with_receiver(
+        receiver: Arc<InMemoryWorkerExecutorService>,
+        setup_delivery_gate: Arc<Mutex<()>>,
+    ) -> Self {
+        Self {
+            receiver: TestExecutorReceiver::ContractTested {
+                receiver,
+                setup_delivery_gate,
+            },
+            ..Self::default()
+        }
+    }
+
     async fn set_local_assignment(&self, pod: Pod, shard_ids: &[i64]) {
         self.local_assignments
             .lock()
@@ -316,14 +366,28 @@ impl WorkerExecutorService for TestWorkerExecutors {
             return Err(ShardManagerError::Timeout);
         }
 
+        if let TestExecutorReceiver::ContractTested {
+            receiver,
+            setup_delivery_gate,
+        } = &self.receiver
+        {
+            let _delivery = setup_delivery_gate.lock().await;
+            return receiver.assign_shards(pod, assignment).await;
+        }
+
         // A full replace: the executor holds exactly what the push names and drops the rest.
         // Extending instead of inserting is what this stops.
         self.local_assignments.lock().await.insert(*pod, shard_ids);
         Ok(())
     }
 
-    async fn health_check(&self, _pod: &Pod) -> Result<(), HealthCheckError> {
-        Ok(())
+    async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError> {
+        match &self.receiver {
+            TestExecutorReceiver::Inherited => Ok(()),
+            TestExecutorReceiver::ContractTested { receiver, .. } => {
+                receiver.health_check(pod).await
+            }
+        }
     }
 
     async fn revoke_shards(
@@ -352,6 +416,17 @@ impl WorkerExecutorService for TestWorkerExecutors {
 
         if Self::should_fail(&self.failed_revocations, *pod).await {
             return Err(ShardManagerError::Timeout);
+        }
+
+        if let TestExecutorReceiver::ContractTested {
+            receiver,
+            setup_delivery_gate,
+        } = &self.receiver
+        {
+            let _delivery = setup_delivery_gate.lock().await;
+            return receiver
+                .revoke_shards(pod, shard_ids, revision, executor_count)
+                .await;
         }
 
         if let Some(local_assignment) = self.local_assignments.lock().await.get_mut(pod) {
@@ -613,7 +688,366 @@ async fn wait_for_writes(persistence: &TestPersistence, count: usize) {
     }
 }
 
+async fn wait_for_compaction_gate(entered: oneshot::Receiver<()>) {
+    tokio::time::timeout(Duration::from_secs(5), entered)
+        .await
+        .expect("the worker must finish its fan-out and enter compaction")
+        .expect("the worker must not drop the compaction gate before entry");
+}
+
+async fn stop_worker(mut join_set: JoinSet<anyhow::Result<()>>) {
+    assert!(!join_set.is_empty(), "the worker task must still be owned");
+    join_set.abort_all();
+    tokio::time::timeout(
+        Duration::from_secs(5),
+        futures::stream::poll_fn(|cx| join_set.poll_join_next(cx)).for_each(|result| async move {
+            match result {
+                Err(error) if error.is_cancelled() => {}
+                unexpected => panic!("the worker must finish by cancellation, got {unexpected:?}"),
+            }
+        }),
+    )
+    .await
+    .expect("the cancelled worker must drain before another membership request");
+}
+
+fn assert_same_assignment(actual: &ShardAssignment, expected: &ShardAssignment) {
+    assert_eq!(actual.number_of_shards, expected.number_of_shards);
+    assert_eq!(actual.shard_epochs, expected.shard_epochs);
+    assert_eq!(actual.executor_count, expected.executor_count);
+    assert_eq!(actual.revision, expected.revision);
+    assert_eq!(actual.expires_at, expected.expires_at);
+}
+
+async fn settled_and_stopped_pair(
+    initial: ShardLeaseState,
+    lease_ttl: Duration,
+) -> (
+    ShardManagement,
+    TestPersistence,
+    Arc<TestWorkerExecutors>,
+    Arc<InMemoryWorkerExecutorService>,
+) {
+    let pods = [pod(1, 9000), pod(2, 9001), pod(3, 9002)];
+    let receiver = Arc::new(InMemoryWorkerExecutorService::new(
+        pods.map(|pod| (pod, ShardAssignmentState::default())),
+    ));
+    let delivery_gate = Arc::new(Mutex::new(()));
+    let delivery = delivery_gate.clone().lock_owned().await;
+    let worker_executors = Arc::new(TestWorkerExecutors::with_receiver(
+        receiver.clone(),
+        delivery_gate,
+    ));
+    let persistence = TestPersistence::new(initial.clone());
+    let (compaction, release) = persistence.block_next_compaction().await;
+    let mut join_set = JoinSet::new();
+    let local_expiry = std::time::Instant::now() + lease_ttl;
+    let manager = ShardManagement::new(
+        Arc::new(persistence.clone()),
+        worker_executors.clone(),
+        Arc::new(TestHealthCheck::all_healthy()),
+        0.1,
+        lease_ttl,
+        4,
+        &mut join_set,
+    )
+    .await
+    .unwrap();
+    let startup = persistence.latest().await;
+    [(executor(1), pods[0]), (executor(2), pods[1])]
+        .into_iter()
+        .for_each(|(id, pod)| {
+            let ack = RegisterAck {
+                number_of_shards: startup.number_of_shards,
+                grant: startup.lease_grant_for(id).unwrap().stamp(startup.revision),
+            };
+            receiver
+                .install_registration(&pod, &ack, local_expiry)
+                .unwrap();
+        });
+    drop(delivery);
+    wait_for_compaction_gate(compaction).await;
+    assert_eq!(startup.shard_assignments, initial.shard_assignments);
+    assert_eq!(startup.shard_epochs, initial.shard_epochs);
+    let pushes = worker_executors.pushes.lock().await.clone();
+    let accepted = [(executor(1), pods[0]), (executor(2), pods[1])].map(|(id, pod)| {
+        let assignment = receiver.current_assignment(&pod).unwrap();
+        let pushed = &pushes.iter().rev().find(|(to, _)| *to == pod).unwrap().1;
+        let epochs = assignment
+            .shard_epochs
+            .iter()
+            .map(|(shard, epoch)| (*shard, ShardEpoch(epoch.0)))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(assignment.executor_count, 2);
+        assert_eq!(assignment.number_of_shards, 4);
+        assert_eq!(assignment.expires_at, Some(local_expiry));
+        assert_eq!(assignment.revision.unwrap().number, startup.revision.0);
+        assert_eq!(epochs, claim_of(&startup, id));
+        assert_eq!(epochs, pushed.shard_epochs);
+        assert_eq!(pushed.executor_count, 2);
+        assert_eq!(pushed.number_of_shards, 4);
+        assert_eq!(pushed.revision, startup.revision);
+        assignment
+    });
+    assert_eq!(
+        accepted[0].revision.unwrap().incarnation,
+        accepted[1].revision.unwrap().incarnation
+    );
+    assert_eq!(startup.executor_count(), 2);
+    assert!(
+        startup
+            .executor_leases
+            .values()
+            .all(|lease| lease.expires_at > Utc::now())
+    );
+    startup.check_invariants().unwrap();
+    stop_worker(join_set).await;
+    drop(release);
+    (manager, persistence, worker_executors, receiver)
+}
+
+async fn assert_grant_matches_stored(
+    persistence: &TestPersistence,
+    id: ExecutorId,
+    grant: &ShardLeaseGrant,
+) -> ShardLeaseState {
+    let stored = persistence
+        .state_at(grant.revision)
+        .await
+        .expect("the grant must name an accepted write");
+    assert_eq!(stored.executor_count(), grant.executor_count);
+    assert_eq!(grant.shard_epochs, claim_of(&stored, id));
+    assert_eq!(grant.expires_at, expiry_of(&stored, id));
+    stored.check_invariants().unwrap();
+    stored
+}
+
 #[test]
+#[test_r::timeout("30s")]
+async fn the_first_renewals_after_a_shardless_join_use_the_committed_count() {
+    let (manager, persistence, executors, receiver) =
+        settled_and_stopped_pair(balanced_pair(), LEASE_TTL).await;
+    let before = persistence.latest().await;
+    let commands = executors.commands_sent().await;
+    let pushes = executors.pushes.lock().await.clone();
+    let revokes = executors.revokes.lock().await.clone();
+    let accepted =
+        [pod(1, 9000), pod(2, 9001)].map(|pod| (pod, receiver.current_assignment(&pod).unwrap()));
+    let third = pod(3, 9002);
+    let local_expiry = std::time::Instant::now() + LEASE_TTL;
+    let joined = manager
+        .register_executor(executor(3), third.into(), None)
+        .await
+        .unwrap();
+    assert_eq!(joined.grant.executor_count, 3);
+    assert!(joined.grant.shard_epochs.is_empty());
+    receiver
+        .install_registration(&third, &joined, local_expiry)
+        .unwrap();
+    let third_accepted = receiver.current_assignment(&third).unwrap();
+    assert_eq!(third_accepted.executor_count, 3);
+    assert!(third_accepted.shard_epochs.is_empty());
+    assert_eq!(third_accepted.number_of_shards, 4);
+    assert_eq!(
+        third_accepted.revision.unwrap().number,
+        joined.grant.revision.0
+    );
+    assert_eq!(
+        third_accepted.revision.unwrap().incarnation,
+        accepted[0].1.revision.unwrap().incarnation
+    );
+    assert_eq!(third_accepted.expires_at, Some(local_expiry));
+    let joined_state = assert_grant_matches_stored(&persistence, executor(3), &joined.grant).await;
+    assert_eq!(joined_state.executor_count(), 3);
+    assert_eq!(joined_state.shard_assignments, before.shard_assignments);
+    assert_eq!(joined_state.shard_epochs, before.shard_epochs);
+    let members = [executor(1), executor(2), executor(3)]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    futures::stream::iter([executor(1), executor(2), executor(3)])
+        .for_each(|id| {
+            let manager = &manager;
+            let persistence = &persistence;
+            let joined_state = &joined_state;
+            let members = &members;
+            async move {
+                let grant = manager
+                    .renew_shard_lease(id, claim_of(joined_state, id))
+                    .await
+                    .unwrap();
+                assert_eq!(grant.executor_count, 3);
+                let stored = assert_grant_matches_stored(persistence, id, &grant).await;
+                assert_eq!(
+                    &stored
+                        .executor_leases
+                        .keys()
+                        .copied()
+                        .collect::<BTreeSet<_>>(),
+                    members
+                );
+                assert_eq!(stored.shard_assignments, joined_state.shard_assignments);
+                assert_eq!(stored.shard_epochs, joined_state.shard_epochs);
+            }
+        })
+        .await;
+    assert_eq!(executors.commands_sent().await, commands);
+    assert_eq!(*executors.pushes.lock().await, pushes);
+    assert_eq!(*executors.revokes.lock().await, revokes);
+    accepted
+        .iter()
+        .chain(std::iter::once(&(third, third_accepted)))
+        .for_each(|(pod, expected)| {
+            assert_same_assignment(&receiver.current_assignment(pod).unwrap(), expected);
+        });
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn a_renewal_that_reaps_a_peer_returns_the_post_reap_count() {
+    let mut initial = balanced_pair();
+    let survivor_expiry = Utc::now() + Duration::from_secs(3600);
+    initial
+        .executor_leases
+        .values_mut()
+        .for_each(|lease| lease.expires_at = survivor_expiry);
+    let lease_ttl = Duration::from_secs(1);
+    let (manager, persistence, executors, receiver) =
+        settled_and_stopped_pair(initial, lease_ttl).await;
+    let before = persistence.latest().await;
+    let commands = executors.commands_sent().await;
+    let pushes = executors.pushes.lock().await.clone();
+    let revokes = executors.revokes.lock().await.clone();
+    let accepted =
+        [pod(1, 9000), pod(2, 9001)].map(|pod| (pod, receiver.current_assignment(&pod).unwrap()));
+    let third = pod(3, 9002);
+    let local_expiry = std::time::Instant::now() + lease_ttl;
+    let joined = manager
+        .register_executor(executor(3), third.into(), None)
+        .await
+        .unwrap();
+    assert_eq!(joined.grant.executor_count, 3);
+    assert!(joined.grant.shard_epochs.is_empty());
+    receiver
+        .install_registration(&third, &joined, local_expiry)
+        .unwrap();
+    let third_accepted = receiver.current_assignment(&third).unwrap();
+    assert_eq!(third_accepted.executor_count, 3);
+    assert!(third_accepted.shard_epochs.is_empty());
+    assert_eq!(third_accepted.number_of_shards, 4);
+    assert_eq!(
+        third_accepted.revision.unwrap().number,
+        joined.grant.revision.0
+    );
+    assert_eq!(
+        third_accepted.revision.unwrap().incarnation,
+        accepted[0].1.revision.unwrap().incarnation
+    );
+    assert_eq!(third_accepted.expires_at, Some(local_expiry));
+    let joined_state = assert_grant_matches_stored(&persistence, executor(3), &joined.grant).await;
+    assert_eq!(joined_state.executor_count(), 3);
+    assert_eq!(joined_state.shard_assignments, before.shard_assignments);
+    assert_eq!(joined_state.shard_epochs, before.shard_epochs);
+    assert_eq!(expiry_of(&joined_state, executor(1)), survivor_expiry);
+    assert_eq!(expiry_of(&joined_state, executor(2)), survivor_expiry);
+    let peer_expiry = expiry_of(&joined_state, executor(3));
+    assert!(peer_expiry < survivor_expiry);
+
+    let expired = IntervalStream::new(tokio::time::interval(Duration::from_millis(10)))
+        .filter(|_| std::future::ready(Utc::now() >= peer_expiry));
+    tokio::pin!(expired);
+    tokio::time::timeout(Duration::from_secs(5), expired.next())
+        .await
+        .expect("the recorded peer expiry must elapse without another manager request")
+        .unwrap();
+    assert_eq!(persistence.latest().await, joined_state);
+    let now = Utc::now();
+    assert!(peer_expiry <= now);
+    assert!(expiry_of(&joined_state, executor(1)) > now);
+    assert!(expiry_of(&joined_state, executor(2)) > now);
+    let writes_before = persistence.write_count().await;
+
+    let first = manager
+        .renew_shard_lease(executor(1), claim_of(&joined_state, executor(1)))
+        .await
+        .unwrap();
+    assert_eq!(first.executor_count, 2);
+    let first_state = assert_grant_matches_stored(&persistence, executor(1), &first).await;
+    let survivors = [executor(1), executor(2)]
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    assert_eq!(
+        first_state
+            .executor_leases
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        survivors
+    );
+    assert_eq!(
+        first_state.shard_assignments,
+        joined_state.shard_assignments
+    );
+    assert_eq!(first_state.shard_epochs, joined_state.shard_epochs);
+    let writes = persistence.writes.lock().await.clone();
+    let [(_, removed), (_, renewed)] = &writes[writes_before..] else {
+        panic!("the target renewal must persist the reap before its own grant");
+    };
+    assert_eq!(removed.executor_count(), 2);
+    assert_eq!(
+        removed
+            .executor_leases
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        survivors
+    );
+    assert_eq!(
+        removed.executor_leases[&executor(1)],
+        joined_state.executor_leases[&executor(1)]
+    );
+    assert_eq!(
+        removed.executor_leases[&executor(2)],
+        joined_state.executor_leases[&executor(2)]
+    );
+    assert_eq!(removed.shard_assignments, joined_state.shard_assignments);
+    assert_eq!(removed.shard_epochs, joined_state.shard_epochs);
+    removed.check_invariants().unwrap();
+    assert_eq!(removed.revision.0 + 1, renewed.revision.0);
+    assert_eq!(renewed, &first_state);
+    assert_eq!(renewed.revision, first.revision);
+
+    let second = manager
+        .renew_shard_lease(executor(2), claim_of(&first_state, executor(2)))
+        .await
+        .unwrap();
+    assert_eq!(second.executor_count, 2);
+    let second_state = assert_grant_matches_stored(&persistence, executor(2), &second).await;
+    assert_eq!(
+        second_state
+            .executor_leases
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        survivors
+    );
+    assert_eq!(
+        second_state.shard_assignments,
+        joined_state.shard_assignments
+    );
+    assert_eq!(second_state.shard_epochs, joined_state.shard_epochs);
+    assert_eq!(executors.commands_sent().await, commands);
+    assert_eq!(*executors.pushes.lock().await, pushes);
+    assert_eq!(*executors.revokes.lock().await, revokes);
+    accepted
+        .iter()
+        .chain(std::iter::once(&(third, third_accepted)))
+        .for_each(|(pod, expected)| {
+            assert_same_assignment(&receiver.current_assignment(pod).unwrap(), expected);
+        });
+}
+
+#[test]
+#[test_r::timeout("30s")]
 async fn a_third_executor_needs_no_push_to_the_two_existing_shard_owners() {
     const SHARDS: &[i64] = &[0, 1, 2, 3];
     let first = pod(1, 9000);
@@ -623,8 +1057,18 @@ async fn a_third_executor_needs_no_push_to_the_two_existing_shard_owners() {
         SHARDS.len(),
         vec![(executor(1), first, "worker-executor-0", SHARDS)],
     ));
-    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let receiver = Arc::new(InMemoryWorkerExecutorService::new(
+        [first, second, third].map(|pod| (pod, ShardAssignmentState::default())),
+    ));
+    let setup_delivery_gate = Arc::new(Mutex::new(()));
+    let setup_delivery = setup_delivery_gate.clone().lock_owned().await;
+    let worker_executors = Arc::new(TestWorkerExecutors::with_receiver(
+        receiver.clone(),
+        setup_delivery_gate.clone(),
+    ));
+    let (startup_compaction, release_startup) = persistence.block_next_compaction().await;
     let mut join_set = JoinSet::new();
+    let startup_started = std::time::Instant::now();
     let shard_management = ShardManagement::new(
         Arc::new(persistence.clone()),
         worker_executors.clone(),
@@ -637,46 +1081,120 @@ async fn a_third_executor_needs_no_push_to_the_two_existing_shard_owners() {
     .await
     .unwrap();
 
-    // Compaction follows the fan-out, including the full assignment owed at startup.
-    wait_for_compactions_beyond(&persistence, 0).await;
+    let startup = persistence.latest().await;
+    let first_ack = RegisterAck {
+        number_of_shards: startup.number_of_shards,
+        grant: startup
+            .lease_grant_for(executor(1))
+            .unwrap()
+            .stamp(startup.revision),
+    };
+    let first_expiry = startup_started + LEASE_TTL;
+    receiver
+        .install_registration(&first, &first_ack, first_expiry)
+        .unwrap();
+    drop(setup_delivery);
+    wait_for_compaction_gate(startup_compaction).await;
+    let first_accepted = receiver.current_assignment(&first).unwrap();
     assert_eq!(
-        worker_executors.local_assignment(first).await,
-        shard_ids(SHARDS)
+        first_accepted.shard_id_set(),
+        shard_ids(SHARDS).into_iter().collect()
     );
-    let passes = persistence.compactions().await.len();
-    shard_management
+    assert_eq!(first_accepted.number_of_shards, SHARDS.len());
+    assert_eq!(first_accepted.executor_count, 1);
+    assert_eq!(first_accepted.expires_at, Some(first_expiry));
+    assert_eq!(first_accepted.revision.unwrap().number, startup.revision.0);
+    let incarnation = first_accepted.revision.unwrap().incarnation;
+
+    let setup_delivery = setup_delivery_gate.clone().lock_owned().await;
+    let second_started = std::time::Instant::now();
+    let second_ack = shard_management
         .register_executor(executor(2), second.into(), None)
         .await
         .unwrap();
-    wait_for_compactions_beyond(&persistence, passes).await;
+    let second_expiry = second_started + LEASE_TTL;
+    receiver
+        .install_registration(&second, &second_ack, second_expiry)
+        .unwrap();
+    drop(setup_delivery);
+    let (pair_compaction, release_pair) = persistence.block_next_compaction().await;
+    release_startup.send(()).unwrap();
+    wait_for_compaction_gate(pair_compaction).await;
     let before = shard_management.current_snapshot().await;
     assert!(!shards_at(&before, first).is_empty());
     assert!(
         !shards_at(&before, second).is_empty(),
         "the sequential cluster setup must give the second executor a shard"
     );
-    assert_eq!(
-        worker_executors.local_assignment(first).await,
-        shards_at(&before, first)
-    );
-    assert_eq!(
-        worker_executors.local_assignment(second).await,
-        shards_at(&before, second)
-    );
+    assert_eq!(before, persistence.latest().await);
     let commands = worker_executors.commands_sent().await;
-    let pushes = worker_executors.pushes.lock().await.len();
-    let revokes = worker_executors.revokes.lock().await.len();
-    let passes = persistence.compactions().await.len();
+    let pushes = worker_executors.pushes.lock().await.clone();
+    let revokes = worker_executors.revokes.lock().await.clone();
+    let accepted = [
+        (first, executor(1), first_expiry),
+        (second, executor(2), second_expiry),
+    ]
+    .map(|(pod, executor_id, expiry)| {
+        let assignment = receiver.current_assignment(&pod).unwrap();
+        let pushed = &pushes.iter().rev().find(|(to, _)| *to == pod).unwrap().1;
+        assert_eq!(assignment.executor_count, 2);
+        assert_eq!(assignment.number_of_shards, SHARDS.len());
+        assert_eq!(assignment.expires_at, Some(expiry));
+        let revision = assignment.revision.unwrap();
+        assert_eq!(revision.incarnation, incarnation);
+        assert_eq!(revision.number, before.revision.0);
+        assert_eq!(revision.number, pushed.revision.0);
+        let epochs = assignment
+            .shard_epochs
+            .iter()
+            .map(|(shard_id, epoch)| (*shard_id, ShardEpoch(epoch.0)))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(epochs, claim_of(&before, executor_id));
+        assert_eq!(epochs, pushed.shard_epochs);
+        assert_eq!(pushed.executor_count, 2);
+        assert_eq!(pushed.number_of_shards, SHARDS.len());
+        (pod, assignment)
+    });
+    let assert_accepted_unchanged = || {
+        accepted.iter().for_each(|(pod, expected)| {
+            let actual = receiver.current_assignment(pod).unwrap();
+            assert_eq!(actual.number_of_shards, expected.number_of_shards);
+            assert_eq!(actual.shard_epochs, expected.shard_epochs);
+            assert_eq!(actual.executor_count, expected.executor_count);
+            assert_eq!(actual.revision, expected.revision);
+            assert_eq!(actual.expires_at, expected.expires_at);
+        });
+    };
 
+    let setup_delivery = setup_delivery_gate.clone().lock_owned().await;
+    let third_started = std::time::Instant::now();
     let joined = shard_management
         .register_executor(executor(3), third.into(), None)
         .await
         .unwrap();
     assert_eq!(joined.grant.executor_count, 3);
-    wait_for_compactions_beyond(&persistence, passes).await;
+    assert!(joined.grant.shard_epochs.is_empty());
+    let third_expiry = third_started + LEASE_TTL;
+    receiver
+        .install_registration(&third, &joined, third_expiry)
+        .unwrap();
+    drop(setup_delivery);
+    let (third_compaction, release_third) = persistence.block_next_compaction().await;
+    release_pair.send(()).unwrap();
+    wait_for_compaction_gate(third_compaction).await;
     let after = shard_management.current_snapshot().await;
+    assert_eq!(after.executor_count(), 3);
     assert_eq!(after.shard_assignments, before.shard_assignments);
+    assert_eq!(after.shard_epochs, before.shard_epochs);
     assert!(shards_at(&after, third).is_empty());
+    let third_accepted = receiver.current_assignment(&third).unwrap();
+    assert!(third_accepted.shard_epochs.is_empty());
+    assert_eq!(third_accepted.number_of_shards, SHARDS.len());
+    assert_eq!(third_accepted.executor_count, 3);
+    assert_eq!(third_accepted.expires_at, Some(third_expiry));
+    let third_revision = third_accepted.revision.unwrap();
+    assert_eq!(third_revision.incarnation, incarnation);
+    assert_eq!(third_revision.number, joined.grant.revision.0);
     assert_eq!(
         shard_management
             .renew_shard_lease(executor(1), claim_of(&before, executor(1)))
@@ -694,17 +1212,76 @@ async fn a_third_executor_needs_no_push_to_the_two_existing_shard_owners() {
         3
     );
     assert_eq!(worker_executors.commands_sent().await, commands);
-    assert_eq!(worker_executors.pushes.lock().await.len(), pushes);
-    assert_eq!(worker_executors.revokes.lock().await.len(), revokes);
+    assert_eq!(*worker_executors.pushes.lock().await, pushes);
+    assert_eq!(*worker_executors.revokes.lock().await, revokes);
+    // These replies have not been applied to the assignment receiver.
+    assert_accepted_unchanged();
+
+    // Keep the final compaction blocked until cancellation has drained the worker.
+    stop_worker(join_set).await;
+    drop(release_third);
+    let before_leave = persistence.latest().await;
+    assert_eq!(before_leave.executor_count(), 3);
+    shard_management
+        .deregister_executor(executor(3), joined.grant.shard_epochs)
+        .await
+        .unwrap();
+    let after_leave = persistence.latest().await;
+    let survivors = BTreeSet::from([executor(1), executor(2)]);
+    assert_eq!(after_leave.executor_count(), 2);
     assert_eq!(
-        worker_executors.local_assignment(first).await,
-        shards_at(&before, first)
+        after_leave
+            .executor_leases
+            .keys()
+            .copied()
+            .collect::<BTreeSet<_>>(),
+        survivors
     );
     assert_eq!(
-        worker_executors.local_assignment(second).await,
-        shards_at(&before, second)
+        after_leave.shard_assignments,
+        before_leave.shard_assignments
     );
-    join_set.abort_all();
+    assert_eq!(after_leave.shard_epochs, before_leave.shard_epochs);
+    after_leave.check_invariants().unwrap();
+
+    futures::stream::iter([executor(1), executor(2)])
+        .for_each(|executor_id| {
+            let shard_management = &shard_management;
+            let persistence = &persistence;
+            let after_leave = &after_leave;
+            let survivors = &survivors;
+            async move {
+                let grant = shard_management
+                    .renew_shard_lease(executor_id, claim_of(after_leave, executor_id))
+                    .await
+                    .unwrap();
+                assert_eq!(grant.executor_count, 2);
+                let stored = persistence
+                    .state_at(grant.revision)
+                    .await
+                    .expect("the first leave renewal must name a stored state");
+                assert!(grant.revision > after_leave.revision);
+                assert_eq!(stored.executor_count(), 2);
+                assert_eq!(
+                    &stored
+                        .executor_leases
+                        .keys()
+                        .copied()
+                        .collect::<BTreeSet<_>>(),
+                    survivors
+                );
+                assert_eq!(stored.shard_assignments, after_leave.shard_assignments);
+                assert_eq!(stored.shard_epochs, after_leave.shard_epochs);
+                assert_eq!(grant.shard_epochs, claim_of(&stored, executor_id));
+                assert_eq!(grant.expires_at, expiry_of(&stored, executor_id));
+                stored.check_invariants().unwrap();
+            }
+        })
+        .await;
+    assert_eq!(worker_executors.commands_sent().await, commands);
+    assert_eq!(*worker_executors.pushes.lock().await, pushes);
+    assert_eq!(*worker_executors.revokes.lock().await, revokes);
+    assert_accepted_unchanged();
 }
 
 #[test]

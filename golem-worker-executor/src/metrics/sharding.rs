@@ -24,12 +24,6 @@ lazy_static! {
         "Number of executor leases in the last accepted shard assignment"
     )
     .unwrap();
-    static ref SHARD_DELIVERY_ATTEMPTS_TOTAL: IntCounterVec = register_int_counter_vec!(
-        "shard_delivery_attempts_total",
-        "Number of shard deliveries started before applying the assignment transition",
-        &["delivery"]
-    )
-    .unwrap();
     static ref STALE_SHARD_DELIVERY_TOTAL: CounterVec = register_counter_vec!(
         "stale_shard_delivery_total",
         "Number of shard deliveries dropped for naming a revision older than the last applied",
@@ -122,15 +116,12 @@ impl ShardAdmissionRefusal {
     }
 }
 
-/// Exports delivery attempts, renewal outcomes and admission refusals before their first use.
+/// Exports renewal outcomes and admission refusals before their first use.
 /// Repeated initialization preserves existing totals.
 ///
 /// Called when the executor registers with a shard manager, so that a single-shard executor,
 /// which has no lease, exports none of the lease metrics.
 pub fn record_shard_lease_metrics_started() {
-    ShardDelivery::ALL.into_iter().for_each(|delivery| {
-        SHARD_DELIVERY_ATTEMPTS_TOTAL.with_label_values(&[delivery.label()]);
-    });
     for outcome in ShardLeaseRenewalOutcome::ALL {
         SHARD_LEASE_RENEWALS_TOTAL.with_label_values(&[outcome.label()]);
     }
@@ -173,8 +164,6 @@ pub enum ShardDelivery {
 }
 
 impl ShardDelivery {
-    const ALL: [Self; 4] = [Self::Register, Self::Assign, Self::Revoke, Self::Renewal];
-
     fn label(self) -> &'static str {
         match self {
             Self::Register => "register",
@@ -183,13 +172,6 @@ impl ShardDelivery {
             Self::Renewal => "renewal",
         }
     }
-}
-
-/// Records delivery entry before the assignment or its count gauge can change.
-pub fn record_shard_delivery_attempt(delivery: ShardDelivery) {
-    SHARD_DELIVERY_ATTEMPTS_TOTAL
-        .with_label_values(&[delivery.label()])
-        .inc();
 }
 
 /// A delivery was dropped for arriving older than the last one applied.
@@ -212,13 +194,6 @@ pub fn stale_shard_delivery_count(delivery: ShardDelivery) -> f64 {
 }
 
 #[cfg(test)]
-pub fn shard_delivery_attempt_count(delivery: ShardDelivery) -> u64 {
-    SHARD_DELIVERY_ATTEMPTS_TOTAL
-        .with_label_values(&[delivery.label()])
-        .get()
-}
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use test_r::test;
@@ -226,43 +201,13 @@ mod tests {
     #[test]
     // A captured worker has no concurrent test writing the process-global gauges.
     #[test_r::always_capture]
-    fn delivery_metric_initialization_preserves_existing_totals() {
+    fn the_executor_count_gauge_exports_the_recorded_count() {
         record_executor_count(7);
-        record_shard_lease_metrics_started();
         let metrics = prometheus::gather();
         let count = metrics
             .iter()
             .find(|metric| metric.name() == "executor_count")
             .expect("the accepted executor count must be exported");
         assert_eq!(count.get_metric()[0].get_gauge().value(), 7.0);
-        let attempts = metrics
-            .iter()
-            .find(|metric| metric.name() == "shard_delivery_attempts_total")
-            .expect("delivery attempts must be exported before their first use");
-        ShardDelivery::ALL.into_iter().for_each(|delivery| {
-            assert!(attempts.get_metric().iter().any(|metric| {
-                metric
-                    .get_label()
-                    .iter()
-                    .any(|label| label.name() == "delivery" && label.value() == delivery.label())
-            }));
-        });
-        let initial = ShardDelivery::ALL.map(shard_delivery_attempt_count);
-        ShardDelivery::ALL
-            .into_iter()
-            .for_each(record_shard_delivery_attempt);
-        let before = ShardDelivery::ALL.map(shard_delivery_attempt_count);
-        assert_eq!(before, initial.map(|count| count + 1));
-        record_shard_lease_metrics_started();
-        ShardDelivery::ALL
-            .into_iter()
-            .zip(before)
-            .for_each(|(delivery, before)| {
-                assert_eq!(
-                    shard_delivery_attempt_count(delivery),
-                    before,
-                    "re-registration must not reset a delivery total"
-                );
-            });
     }
 }

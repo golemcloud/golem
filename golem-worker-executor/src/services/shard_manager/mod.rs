@@ -106,11 +106,6 @@ pub trait ShardManagerService: Send + Sync {
         pod_name: Option<String>,
     ) -> Result<ShardAssignment, ShardManagerError>;
 
-    /// Reports the held set and applies the manager's grant. Awaits any required recovery
-    /// attempt before returning. Returns the delay before the next pass,
-    /// or `None` to park until shutdown.
-    async fn renew_shard_lease(&self) -> RenewalDelay;
-
     /// Graceful release of the shard lease. Never fails a shutdown.
     async fn deregister(&self);
 
@@ -473,13 +468,9 @@ impl GrpcShardManagerService {
         });
     }
 
-    /// Applies a granted lease and returns the cadence for the next pass, together with whether
-    /// [`Self::announce_assignment_changed`] is owed - the caller decides how to run it, rather
-    /// than this awaiting it inline, so that a caller which must not block on a slow sweep (the
-    /// renewal loop, via `renew_shard_lease_internal`) can hand it to
-    /// [`AnnouncementSingleFlight`] instead. [`ShardManagerService::renew_shard_lease`] awaits it
-    /// right here for every other caller, so nothing outside the loop observes any change: a test
-    /// calling it directly still sees the hook run before it returns.
+    /// Applies a granted lease and returns the cadence for the next pass and whether recovery
+    /// is owed. The renewal loop schedules recovery through [`AnnouncementSingleFlight`], so a
+    /// slow sweep does not delay the next renewal RPC.
     ///
     /// The grant is the shard manager's set for this executor. Normally that
     /// is exactly what was held, and only the lease clock moves. When it is
@@ -574,13 +565,9 @@ impl GrpcShardManagerService {
         Ok((number_of_shards, registration.lease))
     }
 
-    /// [`ShardManagerService::renew_shard_lease`], minus running the announcement it can end up
-    /// owing: returns the delay for the next pass and whether
-    /// [`Self::announce_assignment_changed`] still needs to run. Every caller other than the
-    /// renewal loop goes through the trait method, which awaits it right there - this split exists
-    /// solely so the loop (`start_renewal_loop`) can hand the announcement to
-    /// [`AnnouncementSingleFlight`] instead of awaiting it inline, so a slow sweep cannot stall the
-    /// next renewal RPC.
+    /// Renews and adopts one grant, including re-registration after a lost lease. The one
+    /// renewal loop awaits this pass before it starts another. Recovery is returned as a
+    /// separate obligation and does not delay renewal.
     async fn renew_shard_lease_internal(&self) -> (RenewalDelay, bool) {
         let held = match self.shard_service.current_assignment() {
             Ok(assignment) => assignment.held_epochs(),
@@ -804,18 +791,6 @@ impl ShardManagerService for GrpcShardManagerService {
         })
     }
 
-    /// Drives [`Self::renew_shard_lease_internal`] and, unlike the renewal loop, awaits the
-    /// announcement it may come back owing right here - so every caller other than the loop
-    /// itself (every test in this file included) sees exactly the synchronous behaviour this had
-    /// before the split: the hook has run by the time this returns.
-    async fn renew_shard_lease(&self) -> RenewalDelay {
-        let (delay, announcement_owed) = self.renew_shard_lease_internal().await;
-        if announcement_owed {
-            self.announce_assignment_changed().await;
-        }
-        delay
-    }
-
     async fn deregister(&self) {
         let held = self
             .shard_service
@@ -872,13 +847,19 @@ impl ShardManagerService for ShardManagerServiceSingleShard {
         Ok(ShardAssignment::unexpiring(1, [ShardId::new(0)]))
     }
 
-    /// No lease to renew, and no expiry to poll against: the loop this service
-    /// never starts would park here anyway.
-    async fn renew_shard_lease(&self) -> RenewalDelay {
-        None
-    }
-
     async fn deregister(&self) {}
+}
+
+#[cfg(test)]
+impl GrpcShardManagerService {
+    /// Runs one production renewal pass and waits for its recovery before assertions run.
+    async fn renew_shard_lease(&self) -> RenewalDelay {
+        let (delay, announcement_owed) = self.renew_shard_lease_internal().await;
+        if announcement_owed {
+            self.announce_assignment_changed().await;
+        }
+        delay
+    }
 }
 
 #[cfg(test)]

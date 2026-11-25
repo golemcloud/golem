@@ -94,7 +94,7 @@ pub trait ShardService: Send + Sync {
     fn clear_assignment(&self);
     fn current_assignment(&self) -> Result<ShardAssignment, WorkerExecutorError>;
     fn try_get_current_assignment(&self) -> Option<ShardAssignment>;
-    /// The last accepted executor count, or `None` before registration.
+    /// The last accepted executor count, or `None` when no assignment is installed.
     fn executor_count(&self) -> Option<usize>;
 }
 
@@ -137,11 +137,6 @@ impl ShardServiceDefault {
             ShardAssignmentEvent::Revoke { .. } => Some(ShardDelivery::Revoke),
             ShardAssignmentEvent::Clear { .. } => None,
         };
-        if let Some(delivery) = delivery
-            && !matches!(event, ShardAssignmentEvent::InstallUnexpiring { .. })
-        {
-            record_shard_delivery_attempt(delivery);
-        }
         let (next, outcome) = transition_shard_assignment(std::mem::take(&mut *guard), event);
         *guard = next;
         match (delivery, guard.as_ref(), outcome.as_ref()) {
@@ -502,12 +497,6 @@ mod tests {
     #[test_r::always_capture]
     fn a_delivery_before_registration_is_refused() {
         let service = ShardServiceDefault::new();
-        let deliveries = [
-            ShardDelivery::Assign,
-            ShardDelivery::Renewal,
-            ShardDelivery::Revoke,
-        ];
-        let before = deliveries.map(shard_delivery_attempt_count);
 
         // The variant is the contract, not merely that it failed: the worker service answers
         // `ShardingNotReady` by refreshing its routing table and retrying, and answers an opaque
@@ -536,16 +525,6 @@ mod tests {
                 "a delivery before registration must be refused as ShardingNotReady, got {refused:?}"
             );
         }
-        deliveries
-            .into_iter()
-            .zip(before)
-            .for_each(|(delivery, before)| {
-                assert_eq!(
-                    shard_delivery_attempt_count(delivery),
-                    before + 1,
-                    "a refused delivery still counts as an attempt"
-                );
-            });
         assert!(!service.is_ready());
         assert!(service.try_get_current_assignment().is_none());
         service.clear_assignment();
@@ -561,15 +540,9 @@ mod tests {
             ShardDeliveryOutcome::Applied { set_changed: false }
         );
         let standalone = ShardServiceDefault::new();
-        let register_attempts = shard_delivery_attempt_count(ShardDelivery::Register);
         assert_eq!(
             standalone.install_unexpiring(SHARDS, &epochs([])),
             ShardDeliveryOutcome::Applied { set_changed: true }
-        );
-        assert_eq!(
-            shard_delivery_attempt_count(ShardDelivery::Register),
-            register_attempts,
-            "local standalone installation is not a manager delivery"
         );
         assert_eq!(standalone.executor_count(), Some(1));
         assert_eq!(standalone.current_assignment().unwrap().revision, None);
@@ -644,7 +617,6 @@ mod tests {
         );
 
         let before = stale_shard_delivery_count(ShardDelivery::Renewal);
-        let attempts_before = shard_delivery_attempt_count(ShardDelivery::Renewal);
         let outcome = service
             .update_lease(
                 &epochs([(0, 1)]),
@@ -662,11 +634,6 @@ mod tests {
             stale_shard_delivery_count(ShardDelivery::Renewal),
             before + 1.0,
             "and dropping it moves the counter for its own delivery kind"
-        );
-        assert_eq!(
-            shard_delivery_attempt_count(ShardDelivery::Renewal),
-            attempts_before + 1,
-            "a stale delivery must also count as an attempt"
         );
     }
 
