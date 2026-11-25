@@ -3748,8 +3748,9 @@ async fn a_key_collision_hides_the_other_agents_constructor_failure(
 /// Concurrent upserts of one key and a keyed create racing them make one agent: every upsert
 /// gets its ID, the oplog has one `Create` entry, and the constructor runs once. The keyed create
 /// either wins, and its overrides are the agent's, or conflicts and leaves its overrides out.
+/// The rounds alternate which side starts first, so that both outcomes occur.
 #[test]
-#[timeout("2m")]
+#[timeout("5m")]
 #[tracing::instrument]
 async fn concurrent_upserts_and_a_keyed_create_of_one_key_make_one_agent(
     last_unique_id: &LastUniqueId,
@@ -3767,7 +3768,8 @@ async fn concurrent_upserts_and_a_keyed_create_of_one_key_make_one_agent(
         .store()
         .await?;
 
-    for round in 0..3 {
+    let mut outcomes = Vec::new();
+    for round in 0..10 {
         let key = agent_key!("Counter", format!("concurrent-{round}"));
         let upserts = futures::future::join_all(
             (0..UPSERTS).map(|_| executor.start_agent(&component.id, key.clone())),
@@ -3787,7 +3789,12 @@ async fn concurrent_upserts_and_a_keyed_create_of_one_key_make_one_agent(
                     .into_inner(),
             )
         };
-        let (upserts, keyed_create) = tokio::join!(upserts, keyed_create);
+        let (upserts, keyed_create) = if round % 2 == 0 {
+            let (keyed_create, upserts) = tokio::join!(keyed_create, upserts);
+            (upserts, keyed_create)
+        } else {
+            tokio::join!(upserts, keyed_create)
+        };
         let upserts = upserts.into_iter().collect::<anyhow::Result<Vec<_>>>()?;
         let agent_id = upserts[0].clone();
         assert!(
@@ -3845,6 +3852,11 @@ async fn concurrent_upserts_and_a_keyed_create_of_one_key_make_one_agent(
             create_won.then_some("keyed-create"),
             "round {round}"
         );
+        outcomes.push(create_won);
     }
+    assert!(
+        outcomes.contains(&true) && outcomes.contains(&false),
+        "both outcomes of the race must occur: {outcomes:?}"
+    );
     Ok(())
 }

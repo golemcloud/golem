@@ -5119,6 +5119,78 @@ async fn component_env_variables(
     Ok(())
 }
 
+/// The agent-type env and the create env cannot set the variables that Golem sets, but
+/// `GOLEM_WORKER_NAME` and `GOLEM_COMPONENT_ID` are ordinary variables.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn an_env_cannot_override_the_variables_that_golem_sets(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_env(
+            "Environment",
+            vec![
+                ("GOLEM_WORKER_NAME".to_string(), "from-type-env".to_string()),
+                ("GOLEM_AGENT_ID".to_string(), "forged".to_string()),
+                ("GOLEM_AGENT_TYPE".to_string(), "forged".to_string()),
+            ],
+        )
+        .store()
+        .await?;
+
+    let key = agent_key!("Environment", "env-cannot-override-golem-variables");
+    let agent_id = executor
+        .start_agent_with(
+            &component.id,
+            key.clone(),
+            HashMap::from([
+                (
+                    "GOLEM_COMPONENT_ID".to_string(),
+                    "from-create-env".to_string(),
+                ),
+                ("GOLEM_AGENT_KEY".to_string(), "forged".to_string()),
+                ("GOLEM_COMPONENT_REVISION".to_string(), "forged".to_string()),
+            ]),
+            Vec::<AgentConfigEntryDto>::new(),
+        )
+        .await?;
+    assert_eq!(
+        agent_id,
+        crate::agent::keyed_agent_id(component.environment_id, &key)
+    );
+
+    let mut env = executor
+        .invoke_and_await_agent(&component, &key, "get_environment", data_value!())
+        .await?
+        .into_typed::<Result<Vec<(String, String)>, String>>()?
+        .map_err(anyhow::Error::msg)?;
+    env.sort();
+
+    assert_eq!(
+        env,
+        vec![
+            ("GOLEM_AGENT_ID".to_string(), agent_id.agent_id.to_string()),
+            ("GOLEM_AGENT_KEY".to_string(), key.to_string()),
+            ("GOLEM_AGENT_TYPE".to_string(), "Environment".to_string()),
+            (
+                "GOLEM_COMPONENT_ID".to_string(),
+                "from-create-env".to_string()
+            ),
+            ("GOLEM_COMPONENT_REVISION".to_string(), "0".to_string()),
+            ("GOLEM_WORKER_NAME".to_string(), "from-type-env".to_string()),
+        ]
+    );
+
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
