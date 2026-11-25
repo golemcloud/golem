@@ -29,6 +29,7 @@ use golem_common::schema::schema_value::{
 };
 use golem_common::schema::unstructured::{UnstructuredOutput, decode_unstructured_output};
 use golem_schema::schema::render::json_value::to_json_value_redacted;
+use golem_service_base::model::auth::surface::Surface;
 use rmcp::ErrorData;
 use rmcp::model::{JsonObject, ReadResourceResult, ResourceContents};
 use std::sync::Arc;
@@ -103,6 +104,7 @@ pub async fn invoke_resource(
                 &request_key,
                 &mcp_resource.method.name,
                 &auth_ctx,
+                Surface::Mcp,
             )
             .await?;
         worker_service

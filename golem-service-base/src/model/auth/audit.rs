@@ -21,20 +21,26 @@
 //! control takes effect without its record. A denial stays a denial when its record cannot be
 //! written; the lost record is counted.
 //!
+//! A listing of agents writes its record through `decide` on the listing operation, once for
+//! each agent type that it scans; the rows that the caller may not see are dropped without a
+//! record.
+//!
 //! Calls that never reach `decide` write no record:
 //! - system calls;
-//! - REST calls on an agent that has no type (the hidden owner agent of a standalone tool call,
-//!   an oplog processor), which `authorize_typeless_owner_with_1_6_check` checks with the 1.6
-//!   card model;
+//! - calls on an agent that has no type (the owner agent of a standalone tool call, an oplog
+//!   processor), and the lookup of a standalone tool, which `authorize_typeless_owner_with_1_6_check`
+//!   and the new owner agent's check answer with the 1.6 card model;
 //! - the session-resume and Durable Streams attachment paths behind `AgentAccess::unclassified`,
-//!   which keep today's check until their operations are named.
+//!   which keep today's check until their operations are named;
+//! - the description of a component's baseline tool (`authorize_component_agents`), which names no
+//!   agent, and tool calls whose tool name is not a valid tool name.
 
 #[cfg(test)]
 mod tests;
 
 use crate::metrics::authorization as metrics;
-use crate::model::auth::Authorizer;
 use crate::model::auth::surface::Surface;
+use crate::model::auth::{AuthCtx, Authorizer};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::AgentFingerprint;
@@ -73,9 +79,44 @@ impl AuditContext {
         }
     }
 
+    /// The context of a request that `auth` describes, asked at `surface`.
+    pub fn for_request(auth: &AuthCtx, surface: Surface) -> Self {
+        Self {
+            surface,
+            authenticated_by: auth.authenticated_by(),
+        }
+    }
+
     pub fn authenticated_by(mut self, token: TokenId) -> Self {
         self.authenticated_by = Some(token);
         self
+    }
+}
+
+/// How a service audits its decisions: the sink that stores the records, and how long a client
+/// waits before it retries an operation whose record could not be written.
+#[derive(Clone)]
+pub struct DecisionAudit {
+    sink: Arc<dyn AuditSink>,
+    retry_after: Duration,
+}
+
+impl DecisionAudit {
+    pub fn new(sink: Arc<dyn AuditSink>, retry_after: Duration) -> Self {
+        Self { sink, retry_after }
+    }
+
+    /// `inner`, with every decision audited and counted.
+    pub fn authorizer(&self, inner: Arc<dyn Authorizer>) -> AuditedAuthorizer {
+        AuditedAuthorizer::new(inner, self.sink.clone(), self.retry_after)
+    }
+}
+
+impl std::fmt::Debug for DecisionAudit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("DecisionAudit")
+            .field("retry_after", &self.retry_after)
+            .finish_non_exhaustive()
     }
 }
 

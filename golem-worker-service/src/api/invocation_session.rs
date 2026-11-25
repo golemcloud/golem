@@ -66,6 +66,7 @@ use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::surface::Surface;
 use poem::web::websocket::{CloseCode, Message, WebSocketStream};
 use prost::Message as _;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -1135,6 +1136,7 @@ async fn serve_session_messages(
                             ProvisionalOwner::Initial,
                         )
                     },
+                    Surface::Attach,
                 )
                 .await;
             drop(_admission);
@@ -1147,28 +1149,36 @@ async fn serve_session_messages(
             let token_environment = start.environment.clone();
             let token_idempotency_key = start.idempotency_key.clone();
             let result = worker_service
-                .invoke_public_tool_session_v1(start, Box::pin(tail), auth.clone(), |identity| {
-                    let encoded = encode_session_agent_identity(identity).map_err(|error| {
-                        PublicSchemaValueError::new(error.code, error.to_string())
-                    })?;
-                    keyring
-                        .sign(
-                            &bindings,
-                            &InvocationSessionTokenPayload::Session(SessionTokenPayload {
-                                application: token_application,
-                                environment: token_environment,
-                                agent: encoded,
-                                idempotency_key: token_idempotency_key,
-                                logical_invocation_id: Uuid::nil(),
-                                attachment_id: Uuid::nil(),
-                                expected_attachment_generation: 0,
-                                callee_incarnation: Uuid::nil(),
-                                stream_key_id: keyring.active_key_id().to_string(),
-                            }),
-                        )
-                        .map(|_| ())
-                        .map_err(|error| PublicSchemaValueError::new(error.code, error.to_string()))
-                })
+                .invoke_public_tool_session_v1(
+                    start,
+                    Box::pin(tail),
+                    auth.clone(),
+                    |identity| {
+                        let encoded = encode_session_agent_identity(identity).map_err(|error| {
+                            PublicSchemaValueError::new(error.code, error.to_string())
+                        })?;
+                        keyring
+                            .sign(
+                                &bindings,
+                                &InvocationSessionTokenPayload::Session(SessionTokenPayload {
+                                    application: token_application,
+                                    environment: token_environment,
+                                    agent: encoded,
+                                    idempotency_key: token_idempotency_key,
+                                    logical_invocation_id: Uuid::nil(),
+                                    attachment_id: Uuid::nil(),
+                                    expected_attachment_generation: 0,
+                                    callee_incarnation: Uuid::nil(),
+                                    stream_key_id: keyring.active_key_id().to_string(),
+                                }),
+                            )
+                            .map(|_| ())
+                            .map_err(|error| {
+                                PublicSchemaValueError::new(error.code, error.to_string())
+                            })
+                    },
+                    Surface::Attach,
+                )
                 .await;
             drop(_admission);
             result
@@ -1177,7 +1187,12 @@ async fn serve_session_messages(
             resume, _admission, ..
         } => {
             let result = worker_service
-                .resume_public_agent_session_v1(resume, Box::pin(tail), auth.clone())
+                .resume_public_agent_session_v1(
+                    resume,
+                    Box::pin(tail),
+                    auth.clone(),
+                    Surface::Attach,
+                )
                 .await;
             drop(_admission);
             result

@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::audit::{AuditContext, DecisionAudit};
+use super::surface::Surface;
 use super::{AuthCtx, AuthorizationError, Authorizer};
 use async_trait::async_trait;
 use golem_common::model::agent::AgentTypeName;
@@ -23,6 +25,7 @@ use golem_common::model::card::{
     EffectiveSurface, PermissionTarget, check_belongs_to_part, checks_allow, decide_with_checks,
 };
 use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Answers `decide` from the card checks that the call site makes today, for one authenticated
 /// request, until the switch to the new card model replaces it. Build one for each request: the
@@ -146,20 +149,31 @@ impl Authorizer for CompatibilityAuthorizer {
 /// for each part. A denial is the error that today's checks give, so the response stays the same.
 /// `AuthCtx::System` skips the decision, as today. Every call site that has moved to `decide` in
 /// the worker service and the registry decides through this function.
+///
+/// The decision is audited: its record names `surface`, and an allowed operation whose record
+/// cannot be written fails with [`AuthorizationError::AuditUnavailable`] and must not run.
 pub async fn decide_with_todays_checks(
     auth: &AuthCtx,
     caller: Caller,
     operation: Operation,
     checks: Vec<Vec<PermissionTarget>>,
+    audit: &DecisionAudit,
+    surface: Surface,
 ) -> Result<Grantors, AuthorizationError> {
     if auth.is_system() {
         return Ok(Grantors::default());
     }
     let request = AuthorizationRequest::new(caller, operation);
-    let authorizer = CompatibilityAuthorizer::new(auth.clone(), checks);
-    match authorizer.decide(&request).await {
-        Decision::Allow(grantors) => Ok(grantors),
-        Decision::Deny(_) => Err(authorizer.todays_error(&request)),
+    let authorizer = Arc::new(CompatibilityAuthorizer::new(auth.clone(), checks));
+    let context = AuditContext::for_request(auth, surface);
+    match audit
+        .authorizer(authorizer.clone())
+        .decide(&request, &context)
+        .await
+    {
+        Ok(Decision::Allow(grantors)) => Ok(grantors),
+        Ok(Decision::Deny(_)) => Err(authorizer.todays_error(&request)),
+        Err(unavailable) => Err(AuthorizationError::AuditUnavailable(unavailable)),
     }
 }
 

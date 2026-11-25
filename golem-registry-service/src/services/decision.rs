@@ -18,24 +18,31 @@ use golem_common::model::authority::{
 };
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::golem_issuer::GolemIssuer;
+use golem_service_base::model::auth::audit::DecisionAudit;
+use golem_service_base::model::auth::surface::Surface;
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError, decide_with_todays_checks};
 use tracing::error;
 
 /// Decides the registry's operations that the decision catalog names, from the card check that
-/// each call site makes today, so that the move to `decide` changes no answer.
+/// each call site makes today, so that the move to `decide` changes no answer. Each decision is
+/// audited; the registry decides only for its REST API.
 #[derive(Clone, Debug)]
 pub struct Decisions {
     golem_issuer: GolemIssuer,
+    audit: DecisionAudit,
 }
 
 impl Decisions {
-    pub fn new(golem_issuer: GolemIssuer) -> Self {
-        Self { golem_issuer }
+    pub fn new(golem_issuer: GolemIssuer, audit: DecisionAudit) -> Self {
+        Self {
+            golem_issuer,
+            audit,
+        }
     }
 
     /// Decides `operation` for the caller of `auth` from today's `check`. A denial is the error
     /// that today's check gives. An operation that the catalog refuses is a defect of its call
-    /// site: it is logged, and today's check answers.
+    /// site: it is logged, and today's check answers, without an audit record.
     pub async fn decide(
         &self,
         auth: &AuthCtx,
@@ -45,7 +52,15 @@ impl Decisions {
         match operation {
             Ok(operation) => {
                 let caller = auth.entry_caller(self.golem_issuer.to_string());
-                decide_with_todays_checks(auth, caller, operation, vec![vec![check]]).await
+                decide_with_todays_checks(
+                    auth,
+                    caller,
+                    operation,
+                    vec![vec![check]],
+                    &self.audit,
+                    Surface::Rest,
+                )
+                .await
             }
             Err(shape) => {
                 error!("Registry operation has no valid decision request: {shape}");

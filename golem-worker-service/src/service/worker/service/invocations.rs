@@ -37,6 +37,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::surface::Surface;
 use std::time::SystemTime;
 use tracing::warn;
 
@@ -58,6 +59,7 @@ impl WorkerService {
         environment_id: EnvironmentId,
         invocation_id: &OwnedInvocationId,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<Invocation> {
         let agent_id = invocation_id.agent_id();
         let agent = self
@@ -70,6 +72,7 @@ impl WorkerService {
                     golem_common::model::InvocationId(invocation_id.uuid()),
                     AgentPermission::Agent(AgentVerb::View, AgentResourcePattern::Any),
                 ),
+                surface,
             )
             .await?;
         let summary = self
@@ -79,7 +82,7 @@ impl WorkerService {
             InvocationState::Completed
             | InvocationState::BackgroundFailed
             | InvocationState::Failed => {
-                self.invocation_outcome(&agent, invocation_id, &summary, auth_ctx)
+                self.invocation_outcome(&agent, invocation_id, &summary, auth_ctx, surface)
                     .await?
             }
             _ => None,
@@ -93,6 +96,7 @@ impl WorkerService {
         agent_id: &AgentId,
         query: InvocationListQuery,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<InvocationPage> {
         self.agent_for_invocation_read(
             environment_id,
@@ -106,6 +110,7 @@ impl WorkerService {
                     AgentResourcePattern::Any,
                 )],
             ),
+            surface,
         )
         .await?;
         let request = executor::ListInvocationsRequest {
@@ -147,6 +152,7 @@ impl WorkerService {
         idempotency_key: &IdempotencyKey,
         operation: Option<String>,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<Vec<InvocationSummary>> {
         self.agent_for_invocation_read(
             environment_id,
@@ -160,6 +166,7 @@ impl WorkerService {
                     AgentResourcePattern::Any,
                 )],
             ),
+            surface,
         )
         .await?;
         let invocations = self
@@ -190,6 +197,7 @@ impl WorkerService {
         environment_id: EnvironmentId,
         invocation_id: &OwnedInvocationId,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<InvocationSummary> {
         let agent_id = invocation_id.agent_id();
         let agent = self
@@ -207,6 +215,7 @@ impl WorkerService {
                         )),
                     ),
                 ),
+                surface,
             )
             .await?;
         // The executor rejects an unknown ID as an invalid request, so the ID is resolved first.
@@ -239,6 +248,7 @@ impl WorkerService {
         agent_id: &AgentId,
         auth_ctx: &AuthCtx,
         access: &AgentAccess,
+        surface: Surface,
     ) -> WorkerResult<ManagedAgent> {
         if agent_id.type_tag() == RESERVED_TYPE_TAG {
             return Err(WorkerServiceError::AgentNotFound(*agent_id));
@@ -248,6 +258,7 @@ impl WorkerService {
             None,
             auth_ctx,
             access,
+            surface,
         )
         .await
     }
@@ -274,6 +285,7 @@ impl WorkerService {
         invocation_id: &OwnedInvocationId,
         summary: &InvocationSummary,
         auth_ctx: AuthCtx,
+        surface: Surface,
     ) -> WorkerResult<Option<InvocationOutcome>> {
         let agent_id = invocation_id.agent_id();
         let start = InvocationStart {
@@ -290,7 +302,7 @@ impl WorkerService {
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             ..Default::default()
         };
-        let output = match self.lookup_agent_invocation(start, auth_ctx).await {
+        let output = match self.lookup_agent_invocation(start, auth_ctx, surface).await {
             Ok(output) => output,
             Err(error) => {
                 if summary.state == InvocationState::Failed

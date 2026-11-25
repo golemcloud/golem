@@ -197,6 +197,20 @@ pub enum AuthorizationError {
     },
     #[error("The action {0} requires an auth context with cards")]
     AuthContextHasNoCards(String),
+    #[error("The audit record of this operation cannot be written; retry after {} seconds", .0.retry_after.as_secs())]
+    AuditUnavailable(audit::AuditUnavailable),
+}
+
+impl AuthorizationError {
+    /// `hidden()` for a denial that the caller answers as something else, such as "not found".
+    /// An allowed operation whose audit record cannot be written is not a denial: it stays this
+    /// error, so that the client gets a retryable answer.
+    pub fn hide_denial<E: From<AuthorizationError>>(self, hidden: impl FnOnce() -> E) -> E {
+        match self {
+            Self::AuditUnavailable(_) => self.into(),
+            _ => hidden(),
+        }
+    }
 }
 
 impl SafeDisplay for AuthorizationError {

@@ -111,7 +111,7 @@ impl TokenService {
             Some(token_id),
         )
         .await
-        .map_err(|_| TokenError::TokenNotFound(token_id))?;
+        .map_err(|error| error.hide_denial(|| TokenError::TokenNotFound(token_id)))?;
 
         Ok(token)
     }
@@ -167,7 +167,7 @@ impl TokenService {
             Some(token.id),
         )
         .await
-        .map_err(|_| TokenError::TokenBySecretNotFound)?;
+        .map_err(|error| error.hide_denial(|| TokenError::TokenBySecretNotFound))?;
 
         Ok(token)
     }
@@ -212,7 +212,7 @@ impl TokenService {
 
         let mut visible = Vec::with_capacity(tokens.len());
         for token in tokens {
-            if self
+            match self
                 .authorize_token(
                     auth,
                     account.id,
@@ -222,9 +222,12 @@ impl TokenService {
                     Some(token.id),
                 )
                 .await
-                .is_ok()
             {
-                visible.push(token);
+                Ok(()) => visible.push(token),
+                // A token that the caller may not view is left out; a view whose audit record
+                // cannot be written fails the listing.
+                Err(error @ AuthorizationError::AuditUnavailable(_)) => return Err(error.into()),
+                Err(_) => {}
             }
         }
         Ok(visible)
@@ -363,7 +366,7 @@ impl TokenService {
             Some(token_id),
         )
         .await
-        .map_err(|_| TokenError::TokenNotFound(token_id))?;
+        .map_err(|error| error.hide_denial(|| TokenError::TokenNotFound(token_id)))?;
 
         self.authorize_token(
             auth,

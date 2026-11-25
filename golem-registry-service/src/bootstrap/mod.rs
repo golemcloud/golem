@@ -104,7 +104,7 @@ use golem_service_base::db;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
-use golem_service_base::model::auth::audit::AuditSink;
+use golem_service_base::model::auth::audit::{AuditSink, DecisionAudit};
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
@@ -235,7 +235,12 @@ impl Services {
             config.golem_issuer.clone(),
         )
         .await?;
-        let decisions = crate::services::decision::Decisions::new(golem_issuer.clone());
+        let audit_sink: Arc<dyn AuditSink> =
+            Arc::new(RegistryAuditSink::new(repos.audit_staging_repo.clone()));
+        let decisions = crate::services::decision::Decisions::new(
+            golem_issuer.clone(),
+            DecisionAudit::new(audit_sink.clone(), config.audit.retry_after),
+        );
 
         let blob_storage = make_blob_storage(&config.blob_storage).await?;
 
@@ -644,7 +649,7 @@ impl Services {
 
         Ok(Self {
             golem_issuer,
-            audit_sink: Arc::new(RegistryAuditSink::new(repos.audit_staging_repo.clone())),
+            audit_sink,
             account_service,
             account_usage_service,
             account_resource_override_service,

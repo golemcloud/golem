@@ -25,7 +25,7 @@ use golem_registry_service::repo::account_tree::AccountTreeRepo;
 use golem_registry_service::repo::account_usage::AccountUsageRepo;
 use golem_registry_service::repo::agent_secret::AgentSecretRepo;
 use golem_registry_service::repo::application::ApplicationRepo;
-use golem_registry_service::repo::audit_staging::AuditStagingRepo;
+use golem_registry_service::repo::audit_staging::{AuditStagingRepo, DbAuditStagingRepo};
 use golem_registry_service::repo::component::ComponentRepo;
 use golem_registry_service::repo::deployment::DeploymentRepo;
 use golem_registry_service::repo::environment::EnvironmentRepo;
@@ -57,14 +57,18 @@ use golem_registry_service::repo::tool_middleware_release::ToolMiddlewareRelease
 use golem_registry_service::repo::tool_release::ToolReleaseRepo;
 use golem_registry_service::services::account::AccountService;
 use golem_registry_service::services::account_usage::AccountUsageService;
+use golem_registry_service::services::audit_sink::RegistryAuditSink;
+use golem_registry_service::services::decision::Decisions;
 use golem_registry_service::services::plan::PlanService;
 use golem_registry_service::services::registry_change_notifier::RegistryChangeNotifier;
 use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
+use golem_service_base::model::auth::audit::DecisionAudit;
 use golem_service_base::storage::blob::BlobStorage;
 use std::str::FromStr;
 use std::sync::Arc;
+use std::time::Duration;
 use test_r::{inherit_test_dep, sequential_suite};
 use uuid::Uuid;
 
@@ -257,15 +261,14 @@ impl Deps {
         DBP: Pool + Clone + 'static,
         DbAccountRepo<DBP>: AccountRepo + 'static,
         DbPlanRepo<DBP>: PlanRepo + 'static,
+        DbAuditStagingRepo<DBP>: AuditStagingRepo + 'static,
     {
         Arc::new(AccountService::new(
             Arc::new(DbAccountRepo::new(pool.clone())),
-            Arc::new(PlanService::new(Arc::new(DbPlanRepo::new(pool)))),
+            Arc::new(PlanService::new(Arc::new(DbPlanRepo::new(pool.clone())))),
             golem_common::model::plan::PlanId(self.test_plan_id()),
             self.test_registry_change_notifier(),
-            golem_registry_service::services::decision::Decisions::new(
-                "https://golem.test".parse().unwrap(),
-            ),
+            test_decisions(pool),
         ))
     }
 
@@ -361,6 +364,23 @@ impl Deps {
             .unwrap();
         environment_ext(scoped, app.revision.name, app.account_id, app.account_email)
     }
+}
+
+/// The registry's decision step, with its audit records stored in the test database.
+pub fn test_decisions<DBP>(pool: DBP) -> Decisions
+where
+    DBP: Pool + 'static,
+    DbAuditStagingRepo<DBP>: AuditStagingRepo + 'static,
+{
+    Decisions::new(
+        "https://golem.test".parse().unwrap(),
+        DecisionAudit::new(
+            Arc::new(RegistryAuditSink::new(Arc::new(DbAuditStagingRepo::new(
+                pool,
+            )))),
+            Duration::from_secs(5),
+        ),
+    )
 }
 
 pub fn test_environment_default_card_record(environment_id: Uuid) -> CardRecord {

@@ -28,6 +28,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_service_base::custom_api::MountTarget;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::surface::Surface;
 use serde_json::Value;
 use std::sync::Arc;
 
@@ -127,6 +128,7 @@ impl ProviderInvoker for WorkerProviderInvoker {
                 &call.key,
                 &call.method,
                 &AuthCtx::System,
+                Surface::HttpRoute,
             )
             .await
             .map_err(|_| OpenApiError::new("provider-invocation"))?;

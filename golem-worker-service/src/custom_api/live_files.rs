@@ -17,6 +17,7 @@ use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::filesystem::{FileByteSelection, FileReadHead};
 use golem_service_base::custom_api::MountAgent;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::surface::Surface;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use std::io;
 use tokio::sync::{mpsc, oneshot};
@@ -59,6 +60,7 @@ pub(super) async fn serve(
             selection,
             selected.route.environment_id,
             selected.route.account_id,
+            Surface::HttpRoute,
         )
         .await
     {

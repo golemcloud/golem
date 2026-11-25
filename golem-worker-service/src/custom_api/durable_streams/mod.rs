@@ -32,6 +32,7 @@ use golem_service_base::custom_api::{
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::surface::Surface;
 use http::{HeaderMap, HeaderValue, Method, StatusCode};
 use load::{DurableStreamLoadLimiter, LoadRejection};
 use std::sync::Arc;
@@ -218,6 +219,7 @@ impl DurableStreamsHandler {
                 &request_key,
                 &behaviour.method_name,
                 &AuthCtx::System,
+                Surface::HttpRoute,
             )
             .await?;
         let target = match suffix.fork.as_deref() {

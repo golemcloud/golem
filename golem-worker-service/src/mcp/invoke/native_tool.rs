@@ -29,6 +29,7 @@ use golem_common::schema::{FALLBACK_OUTPUT_FIELD_NAME, SchemaType, SchemaValue, 
 use golem_schema::schema::render::to_json_value_redacted;
 use golem_service_base::mcp::{CompiledMcp, CompiledMcpToolExport};
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::surface::Surface;
 use rmcp::{
     ErrorData,
     model::{CallToolResult, ContentBlock, Tool, ToolAnnotations},
@@ -158,6 +159,7 @@ pub async fn invoke(
             Caller::anonymous(),
             request_key,
             |_| Ok(()),
+            Surface::Mcp,
         )
         .await
         .map_err(|e| invalid(format!("native tool admission failed: {e:?}")))?;

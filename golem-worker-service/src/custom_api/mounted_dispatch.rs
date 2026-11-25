@@ -32,6 +32,7 @@ use std::sync::Arc;
 
 use crate::config::HttpSessionLimits;
 use crate::service::worker::{AgentBinding, WorkerService};
+use golem_service_base::model::auth::surface::Surface;
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -135,6 +136,7 @@ impl MountedDispatch {
                 },
                 key,
                 super::call_agent::caller_from_request(request)?,
+                Surface::HttpRoute,
             )
             .await?;
         let location = create_location(behavior, agent.agent_id)?;

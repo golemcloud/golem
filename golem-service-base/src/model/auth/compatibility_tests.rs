@@ -252,3 +252,184 @@ async fn todays_error_names_a_check_that_does_not_belong_to_its_part() {
         AuthorizationError::PermissionNotAllowed(Box::new(delete)).to_string()
     );
 }
+
+/// Keeps every audit record that it stores.
+#[derive(Default)]
+struct KeepingSink(std::sync::Mutex<Vec<audit::AuditRecord>>);
+
+impl KeepingSink {
+    fn records(&self) -> Vec<audit::AuditRecord> {
+        self.0.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl audit::AuditSink for KeepingSink {
+    async fn record(&self, record: audit::AuditRecord) -> Result<(), audit::AuditSinkError> {
+        self.0.lock().unwrap().push(record);
+        Ok(())
+    }
+}
+
+/// Fails every write.
+struct FailingSink;
+
+#[async_trait::async_trait]
+impl audit::AuditSink for FailingSink {
+    async fn record(&self, _record: audit::AuditRecord) -> Result<(), audit::AuditSinkError> {
+        Err(audit::AuditSinkError::Unavailable("down".to_string()))
+    }
+}
+
+const VIEWER: &str = "agent(acme/shop/prod/cart/*) @ acme : view :";
+
+/// A caller that the API token `token` authenticated, with the cards of `grants`.
+fn token_user(grants: &[&str], token: golem_common::model::auth::TokenId) -> AuthCtx {
+    let AuthCtx::Agent(agent) = user(grants) else {
+        unreachable!()
+    };
+    AuthCtx::User(UserAuthCtx {
+        account_id: agent.account_id,
+        account_email: agent.account_email,
+        account_plan_id: golem_common::model::plan::PlanId(Uuid::from_u128(3)),
+        account_roles: Default::default(),
+        effective_surface: agent.effective_surface,
+        delegation_surface: None,
+        authenticated_by: Some(token),
+    })
+}
+
+fn view_agent() -> Operation {
+    Operation::single(
+        CatalogOperation::ViewAgent,
+        Resource::None,
+        Target::Agent(agent(1)),
+    )
+    .unwrap()
+}
+
+fn view_checks() -> Vec<Vec<PermissionTarget>> {
+    vec![vec![check(1, AgentVerb::View, AgentResourcePattern::Empty)]]
+}
+
+fn decision_audit(
+    sink: std::sync::Arc<dyn audit::AuditSink>,
+    seconds: u64,
+) -> audit::DecisionAudit {
+    audit::DecisionAudit::new(sink, std::time::Duration::from_secs(seconds))
+}
+
+#[test]
+async fn the_decide_step_records_an_allowed_management_read_with_its_surface_and_token() {
+    let sink = std::sync::Arc::new(KeepingSink::default());
+    let token = golem_common::model::auth::TokenId(Uuid::from_u128(0x70));
+
+    decide_with_todays_checks(
+        &token_user(&[VIEWER], token),
+        caller(),
+        view_agent(),
+        view_checks(),
+        &decision_audit(sink.clone(), 5),
+        surface::Surface::Mcp,
+    )
+    .await
+    .unwrap();
+
+    let records = sink.records();
+    assert_eq!(records.len(), 1);
+    assert_eq!(records[0].surface, "mcp");
+    assert_eq!(records[0].authenticated_by, Some(token));
+    assert_eq!(records[0].outcome, audit::AuditOutcome::Allowed);
+}
+
+#[test]
+async fn the_decide_step_refuses_an_allowed_management_read_whose_record_cannot_be_written() {
+    let error = decide_with_todays_checks(
+        &user(&[VIEWER]),
+        caller(),
+        view_agent(),
+        view_checks(),
+        &decision_audit(std::sync::Arc::new(FailingSink), 7),
+        surface::Surface::Rest,
+    )
+    .await
+    .unwrap_err();
+
+    assert!(
+        matches!(
+            &error,
+            AuthorizationError::AuditUnavailable(unavailable)
+                if unavailable.retry_after == std::time::Duration::from_secs(7)
+        ),
+        "{error:?}"
+    );
+}
+
+#[test]
+async fn the_decide_step_keeps_todays_error_for_a_denial_whose_record_cannot_be_written() {
+    let auth = user(&[]);
+    let refused = check(1, AgentVerb::View, AgentResourcePattern::Empty);
+
+    let error = decide_with_todays_checks(
+        &auth,
+        caller(),
+        view_agent(),
+        vec![vec![refused.clone()]],
+        &decision_audit(std::sync::Arc::new(FailingSink), 5),
+        surface::Surface::Rest,
+    )
+    .await
+    .unwrap_err();
+
+    assert_eq!(
+        error.to_string(),
+        auth.authorize_permission(&refused).unwrap_err().to_string()
+    );
+}
+
+#[test]
+async fn the_system_context_writes_no_record() {
+    let sink = std::sync::Arc::new(KeepingSink::default());
+
+    decide_with_todays_checks(
+        &AuthCtx::System,
+        caller(),
+        view_agent(),
+        vec![vec![]],
+        &decision_audit(sink.clone(), 5),
+        surface::Surface::Rest,
+    )
+    .await
+    .unwrap();
+
+    assert!(sink.records().is_empty());
+}
+
+#[derive(Debug)]
+enum Answer {
+    Hidden,
+    Kept(AuthorizationError),
+}
+
+impl From<AuthorizationError> for Answer {
+    fn from(error: AuthorizationError) -> Self {
+        Self::Kept(error)
+    }
+}
+
+#[test]
+fn hide_denial_hides_a_denial_and_keeps_an_unavailable_audit() {
+    let denial = AuthorizationError::SystemOnlyActionNotAllowed("delete".to_string());
+    assert!(matches!(
+        denial.hide_denial(|| Answer::Hidden),
+        Answer::Hidden
+    ));
+
+    let unavailable = AuthorizationError::AuditUnavailable(audit::AuditUnavailable {
+        retry_after: std::time::Duration::from_secs(5),
+    });
+    assert!(matches!(
+        unavailable.hide_denial(|| Answer::Hidden),
+        Answer::Kept(AuthorizationError::AuditUnavailable(_))
+    ));
+}

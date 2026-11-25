@@ -48,6 +48,7 @@ use golem_service_base::custom_api::{
     AgentSelection, CallAgentBehaviour, ConstructorParameter, MethodParameter, RequestBodySchema,
 };
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::surface::Surface;
 use http::{Method, StatusCode};
 use std::sync::Arc;
 use tracing::{debug, warn};
@@ -102,6 +103,7 @@ impl CallAgentHandler {
                 &request_key,
                 &behaviour.method_name,
                 &AuthCtx::System,
+                Surface::HttpRoute,
             )
             .await?;
         let agent_id = OwnedAgentId::new(resolved_route.route.environment_id, &target.agent_id);
@@ -315,7 +317,7 @@ impl CallAgentHandler {
     ) -> Result<Option<(AgentFingerprint, OplogIndex)>, RequestHandlerError> {
         match self
             .worker_service
-            .get_metadata(agent_id, None, AuthCtx::System)
+            .get_metadata(agent_id, None, AuthCtx::System, Surface::HttpRoute)
             .await
         {
             Ok(metadata) => Ok(Some((metadata.fingerprint, metadata.last_oplog_index))),

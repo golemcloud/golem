@@ -69,6 +69,9 @@ pub enum ApiEndpointError {
     UnprocessableEntity(Json<ErrorBody>),
     #[oai(status = 500)]
     InternalError(Json<ErrorBodyWithOptionalWorkerError>),
+    /// The audit record of the operation cannot be written; the operation did not run.
+    #[oai(status = 503)]
+    ServiceUnavailable(Json<ErrorBody>, #[oai(header = "Retry-After")] String),
 }
 
 impl ApiErrorDetails for ApiEndpointError {
@@ -93,6 +96,7 @@ impl ApiErrorDetails for ApiEndpointError {
             }
             Self::UnprocessableEntity(_) => "LimitExceeded",
             Self::InternalError(_) => "InternalError",
+            Self::ServiceUnavailable(..) => "ServiceUnavailable",
         }
     }
 
@@ -104,6 +108,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::PayloadTooLarge(_) => true,
             Self::UnsupportedMediaType(_) => true,
             Self::UnprocessableEntity(_) => true,
+            Self::ServiceUnavailable(..) => false,
             Self::Forbidden(_) => true,
             Self::Unauthorized(_) => true,
             Self::InternalError(_) => false,
@@ -116,6 +121,7 @@ impl ApiErrorDetails for ApiEndpointError {
             Self::NotFound(inner) => inner.cause.take(),
             Self::Unauthorized(inner) => inner.cause.take(),
             Self::InternalError(_) => None,
+            Self::ServiceUnavailable(inner, _) => inner.cause.take(),
             Self::Forbidden(inner) => inner.cause.take(),
             Self::PayloadTooLarge(inner) => inner.cause.take(),
             Self::UnsupportedMediaType(inner) => inner.cause.take(),
@@ -403,6 +409,17 @@ impl From<WorkerExecutorError> for ApiEndpointError {
 
 impl From<AuthorizationError> for ApiEndpointError {
     fn from(value: AuthorizationError) -> Self {
+        if let AuthorizationError::AuditUnavailable(unavailable) = &value {
+            let retry_after = unavailable.retry_after.as_secs().to_string();
+            return Self::ServiceUnavailable(
+                Json(ErrorBody {
+                    error: value.to_string(),
+                    code: api::error_code::AUDIT_UNAVAILABLE.to_string(),
+                    cause: None,
+                }),
+                retry_after,
+            );
+        }
         Self::Forbidden(Json(ErrorBody {
             error: value.to_string(),
             code: api::error_code::AUTH_FORBIDDEN.to_string(),
@@ -736,6 +753,25 @@ mod tests {
                 assert!(body.error.contains(message_too_large_status().message()));
             }
             other => panic!("expected PayloadTooLarge, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn an_unavailable_audit_maps_to_a_retryable_503() {
+        use golem_service_base::model::auth::AuthorizationError;
+        use golem_service_base::model::auth::audit::AuditUnavailable;
+
+        let api_error: ApiEndpointError = AuthorizationError::AuditUnavailable(AuditUnavailable {
+            retry_after: std::time::Duration::from_secs(5),
+        })
+        .into();
+
+        match api_error {
+            ApiEndpointError::ServiceUnavailable(Json(body), retry_after) => {
+                assert_eq!(body.code, api::error_code::AUDIT_UNAVAILABLE);
+                assert_eq!(retry_after, "5");
+            }
+            other => panic!("expected ServiceUnavailable, got: {other:?}"),
         }
     }
 

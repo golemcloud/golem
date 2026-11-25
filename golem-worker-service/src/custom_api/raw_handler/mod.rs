@@ -32,6 +32,7 @@ use golem_schema::schema::protobuf::schema_value_to_proto_with_streams;
 use golem_schema::schema::validation::validate_value;
 use golem_service_base::custom_api::MountAgentMethod;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::surface::Surface;
 use http::StatusCode;
 use std::io;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -197,6 +198,7 @@ impl RawHandler {
                 &request_key,
                 &handler.method_name,
                 &AuthCtx::System,
+                Surface::HttpRoute,
             )
             .await
             .map_err(|error| {

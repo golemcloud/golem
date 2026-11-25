@@ -59,6 +59,7 @@ use golem_common::recorded_grpc_api_request;
 use golem_schema::proto::golem::common::Empty;
 use golem_service_base::grpc::proto_agent_id_string;
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::surface::Surface;
 use std::sync::Arc;
 use tonic::{Request, Response, Status};
 use tracing::Instrument;
@@ -624,12 +625,18 @@ impl GrpcWorkerService for WorkerGrpcApi {
                     }
                 };
                 self.worker_service
-                    .invoke_agent_session(start, tail, trusted_internal_caller, auth)
+                    .invoke_agent_session(
+                        start,
+                        tail,
+                        trusted_internal_caller,
+                        auth,
+                        Surface::Internal,
+                    )
                     .await
             }
             invocation_request::Request::ResumeAttach(resume) => {
                 self.worker_service
-                    .resume_agent_session(resume, tail, auth)
+                    .resume_agent_session(resume, tail, auth, Surface::Internal)
                     .await
             }
             _ => unreachable!("the session validator requires start or resume-attach first"),
@@ -866,6 +873,7 @@ impl WorkerGrpcApi {
                 request.idempotency_key.map(Into::into),
                 freshness_disposition,
                 request.invocation,
+                Surface::Internal,
             )
             .await?;
 
@@ -902,7 +910,13 @@ impl WorkerGrpcApi {
 
         let result = self
             .worker_service
-            .complete_promise(environment_id, promise_id, parameters.data, auth)
+            .complete_promise(
+                environment_id,
+                promise_id,
+                parameters.data,
+                auth,
+                Surface::Internal,
+            )
             .await?;
 
         Ok(result)
@@ -917,7 +931,13 @@ impl WorkerGrpcApi {
         let agent_id = validate_protobuf_owned_agent_id(request.agent_id, request.environment_id)?;
 
         self.worker_service
-            .resume(&agent_id, request.force.unwrap_or(false), None, auth)
+            .resume(
+                &agent_id,
+                request.force.unwrap_or(false),
+                None,
+                auth,
+                Surface::Internal,
+            )
             .await?;
 
         Ok(())
@@ -950,6 +970,7 @@ impl WorkerGrpcApi {
                 None,
                 Some(requester),
                 auth,
+                Surface::Internal,
             )
             .await
             .map_err(Into::into)
@@ -978,6 +999,7 @@ impl WorkerGrpcApi {
                 Some(caller),
                 None,
                 auth,
+                Surface::Internal,
             )
             .await?;
 
@@ -1007,7 +1029,14 @@ impl WorkerGrpcApi {
                 });
 
         self.worker_service
-            .revert_worker_prepared(&agent_id, target, resolved_revert, None, auth)
+            .revert_worker_prepared(
+                &agent_id,
+                target,
+                resolved_revert,
+                None,
+                auth,
+                Surface::Internal,
+            )
             .await?;
 
         Ok(())
@@ -1094,6 +1123,7 @@ impl WorkerGrpcApi {
                         ..Default::default()
                     },
                     auth,
+                    Surface::Internal,
                 )
                 .await?
         } else {
@@ -1130,6 +1160,7 @@ impl WorkerGrpcApi {
                     request
                         .expected_callee_fingerprint
                         .map(|fingerprint| AgentFingerprint(fingerprint.into())),
+                    Surface::Internal,
                 )
                 .await?
         };
@@ -1328,6 +1359,7 @@ impl WorkerGrpcApi {
                 &IdempotencyKey::new(idempotency_key.to_string()),
                 None,
                 auth,
+                Surface::Internal,
             )
             .await?;
 
@@ -1379,6 +1411,7 @@ impl WorkerGrpcApi {
                 expected_consumer_fingerprint,
                 request.payload,
                 auth_ctx,
+                Surface::Internal,
             )
             .await
             .map_err(Into::into)
@@ -1430,6 +1463,7 @@ impl WorkerGrpcApi {
                 expected_consumer_fingerprint,
                 request.payload,
                 auth_ctx,
+                Surface::Internal,
             )
             .await
             .map_err(Into::into)

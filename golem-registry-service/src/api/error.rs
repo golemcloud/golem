@@ -77,6 +77,9 @@ pub enum ApiError {
     /// Internal server error
     #[oai(status = 500)]
     InternalError(Json<ErrorBody>),
+    /// The audit record of the operation cannot be written; the operation did not run.
+    #[oai(status = 503)]
+    ServiceUnavailable(Json<ErrorBody>, #[oai(header = "Retry-After")] String),
 }
 
 impl ApiError {
@@ -299,6 +302,7 @@ impl ApiErrorDetails for ApiError {
             Self::NotFound(_) => "NotFound",
             Self::Unauthorized(_) => "Unauthorized",
             Self::InternalError(_) => "InternalError",
+            Self::ServiceUnavailable(..) => "ServiceUnavailable",
             Self::Conflict(_) => "Conflict",
             Self::Forbidden(_) => "Forbidden",
             Self::LimitExceeded(_) => "LimitExceeded",
@@ -316,6 +320,7 @@ impl ApiErrorDetails for ApiError {
                     | api::error_code::MCP_IMPORT_UPSTREAM_REJECTED
                     | api::error_code::MCP_IMPORT_PROJECTION_FAILED
             ),
+            Self::ServiceUnavailable(..) => false,
             Self::Forbidden(_) => true,
             Self::Conflict(_) => true,
             Self::LimitExceeded(_) => true,
@@ -328,6 +333,7 @@ impl ApiErrorDetails for ApiError {
             Self::NotFound(inner) => inner.cause.take(),
             Self::Unauthorized(inner) => inner.cause.take(),
             Self::InternalError(inner) => inner.cause.take(),
+            Self::ServiceUnavailable(inner, _) => inner.cause.take(),
             Self::Forbidden(inner) => inner.cause.take(),
             Self::Conflict(inner) => inner.cause.take(),
             Self::LimitExceeded(inner) => inner.cause.take(),
@@ -347,6 +353,17 @@ impl From<anyhow::Error> for ApiError {
 
 impl From<AuthorizationError> for ApiError {
     fn from(value: AuthorizationError) -> Self {
+        if let AuthorizationError::AuditUnavailable(unavailable) = &value {
+            let retry_after = unavailable.retry_after.as_secs().to_string();
+            return Self::ServiceUnavailable(
+                Json(ErrorBody {
+                    error: value.to_string(),
+                    code: api::error_code::AUDIT_UNAVAILABLE.to_string(),
+                    cause: None,
+                }),
+                retry_after,
+            );
+        }
         Self::Forbidden(Json(ErrorBody {
             error: value.to_string(),
             code: api::error_code::AUTH_FORBIDDEN.to_string(),
@@ -523,8 +540,10 @@ impl From<CardError> for ApiError {
             CardError::CannotRevokeSystemCard
             | CardError::CannotRevokePermissionShareCard
             | CardError::CannotRevokeEnvironmentDefaultCard
-            | CardError::CardOwnerNotFound(_)
-            | CardError::Unauthorized(_) => Self::forbidden(api::error_code::AUTH_FORBIDDEN, error),
+            | CardError::CardOwnerNotFound(_) => {
+                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            }
+            CardError::Unauthorized(inner) => inner.into(),
             CardError::InternalError(_) => Self::InternalError(Json(ErrorBody {
                 error,
                 code: api::error_code::INTERNAL_UNKNOWN.to_string(),
@@ -1495,6 +1514,7 @@ impl From<McpImportResolverError> for ApiError {
                     | Self::NotFound(body)
                     | Self::Conflict(body)
                     | Self::LimitExceeded(body)
+                    | Self::ServiceUnavailable(body, _)
                     | Self::InternalError(body) => {
                         body.0.error = format!("MCP import {import_index}: {}", body.0.error);
                     }
@@ -1713,6 +1733,54 @@ mod tests {
     use golem_common::base_model::agent_secret::CanonicalAgentSecretPath;
     use golem_common::base_model::quota::ResourceName;
     use test_r::test;
+
+    #[test]
+    fn an_unavailable_audit_maps_to_a_retryable_503() {
+        use golem_service_base::model::auth::AuthorizationError;
+        use golem_service_base::model::auth::audit::AuditUnavailable;
+
+        let api_error: ApiError = AuthorizationError::AuditUnavailable(AuditUnavailable {
+            retry_after: std::time::Duration::from_secs(5),
+        })
+        .into();
+
+        match api_error {
+            ApiError::ServiceUnavailable(Json(body), retry_after) => {
+                assert_eq!(body.code, api::error_code::AUDIT_UNAVAILABLE);
+                assert_eq!(retry_after, "5");
+            }
+            other => panic!("expected ServiceUnavailable, got: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_card_operation_whose_audit_record_cannot_be_written_is_a_retryable_503() {
+        use golem_service_base::model::auth::AuthorizationError;
+        use golem_service_base::model::auth::audit::AuditUnavailable;
+
+        let api_error: ApiError =
+            CardError::Unauthorized(AuthorizationError::AuditUnavailable(AuditUnavailable {
+                retry_after: std::time::Duration::from_secs(5),
+            }))
+            .into();
+
+        assert!(
+            matches!(api_error, ApiError::ServiceUnavailable(..)),
+            "{api_error:?}"
+        );
+    }
+
+    #[test]
+    fn a_card_refusal_stays_a_403() {
+        use golem_service_base::model::auth::AuthorizationError;
+
+        let api_error: ApiError = CardError::Unauthorized(
+            AuthorizationError::SystemOnlyActionNotAllowed("revoke".to_string()),
+        )
+        .into();
+
+        assert!(matches!(api_error, ApiError::Forbidden(_)), "{api_error:?}");
+    }
 
     #[test]
     fn router_index_errors_preserve_failure_categories() {

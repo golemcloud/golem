@@ -25,6 +25,7 @@ use golem_common::model::filesystem::FileReadError;
 use golem_common::model::{AgentId, OwnedInvocationId};
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::model::auth::AuthorizationError;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AcceptedInvocation {
@@ -96,6 +97,12 @@ impl SafeDisplay for WorkerServiceError {
             Self::AuthError(inner) => inner.to_safe_string(),
             Self::RegistryServiceError(inner) => inner.to_safe_string(),
         }
+    }
+}
+
+impl From<AuthorizationError> for WorkerServiceError {
+    fn from(error: AuthorizationError) -> Self {
+        Self::AuthError(AuthServiceError::Unauthorized(error))
     }
 }
 

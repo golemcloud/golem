@@ -22,6 +22,7 @@ use golem_common::schema::SchemaGraph;
 use golem_common::schema::schema_type::{BinaryRestrictions, SchemaType};
 use golem_service_base::custom_api::{AgentWebhookId, CompiledSchema, RequestBodySchema};
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::surface::Surface;
 use http::StatusCode;
 use std::sync::Arc;
 
@@ -92,7 +93,13 @@ impl WebhookCallbackHandler {
 
         tracing::debug!("Completing promise due to webhook_callback: {promise_id}");
         self.worker_service
-            .complete_promise(environment_id, promise_id, body_binary, auth_ctx)
+            .complete_promise(
+                environment_id,
+                promise_id,
+                body_binary,
+                auth_ctx,
+                Surface::HttpRoute,
+            )
             .await?;
 
         Ok(RouteExecutionResult {

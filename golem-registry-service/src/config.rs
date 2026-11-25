@@ -23,7 +23,7 @@ use golem_common::model::tool::BUILTIN_TOOL_OWNER_ACCOUNT_EMAIL;
 use golem_common::tracing::TracingConfig;
 use golem_common::{SafeDisplay, grpc_uri};
 use golem_schema::Empty;
-use golem_service_base::config::BlobStorageConfig;
+use golem_service_base::config::{AuditConfig, BlobStorageConfig};
 use golem_service_base::grpc::client::GrpcClientConfig;
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::http_server::HttpServerConfig;
@@ -292,6 +292,8 @@ pub struct RegistryServiceConfig {
     pub body_limits: RequestBodyLimits,
     #[serde(default)]
     pub durable_stream_routes: DurableStreamRouteLimits,
+    #[serde(default)]
+    pub audit: AuditConfig,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -462,6 +464,8 @@ impl SafeDisplay for RegistryServiceConfig {
             "durable stream route limits: {:?}",
             self.durable_stream_routes
         );
+        let _ = writeln!(&mut result, "audit:");
+        let _ = writeln!(&mut result, "{}", self.audit.to_safe_string_indented());
 
         result
     }
@@ -586,6 +590,7 @@ impl Default for RegistryServiceConfig {
             http_server: HttpServerConfig::default(),
             body_limits: RequestBodyLimits::default(),
             durable_stream_routes: DurableStreamRouteLimits::default(),
+            audit: AuditConfig::default(),
         }
     }
 }

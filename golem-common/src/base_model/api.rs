@@ -25,6 +25,8 @@ pub mod error_code {
     // --- Authentication / Authorization ---
     pub const AUTH_FORBIDDEN: &str = "AUTH_FORBIDDEN";
     pub const AUTH_UNAUTHORIZED: &str = "AUTH_UNAUTHORIZED";
+    /// The audit record of an allowed management read or control cannot be written; retry later.
+    pub const AUDIT_UNAVAILABLE: &str = "AUDIT_UNAVAILABLE";
     pub const BUILTIN_PLUGIN_GRANT_CANNOT_BE_DELETED: &str =
         "BUILTIN_PLUGIN_GRANT_CANNOT_BE_DELETED";
     pub const FEATURE_DISABLED: &str = "FEATURE_DISABLED";
