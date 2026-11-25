@@ -1037,6 +1037,8 @@ pub fn check_oplog_cursor_query(
 /// was deleted and created again since, or the cursor was made up. It is refused as stale, instead
 /// of read as an empty page, which a caller would take for the end of the oplog. The revision of
 /// the cursor is not checked, because that would scan the oplog up to the cursor on every page.
+/// A cursor at index 0 points before the first entry of every oplog, so it is refused as stale
+/// too, before the check of the retained start.
 pub async fn oplog_page_start(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
@@ -1045,6 +1047,15 @@ pub async fn oplog_page_start(
     cursor: Option<OplogCursor>,
     from: Option<OplogIndex>,
 ) -> Result<(OplogIndex, ComponentRevision), WorkerExecutorError> {
+    if let Some(cursor) = &cursor
+        && cursor.next_oplog_index == 0
+    {
+        return Err(WorkerExecutorError::StaleCursor {
+            agent_id: owned_agent_id.agent_id,
+            next_oplog_index: OplogIndex::NONE,
+            reason: StaleCursorReason::BeforeFirstEntry,
+        });
+    }
     let start = cursor.as_ref().map_or_else(
         || from.map_or(retention.start(), |from| from.max(OplogIndex::INITIAL)),
         |cursor| OplogIndex::from_u64(cursor.next_oplog_index),

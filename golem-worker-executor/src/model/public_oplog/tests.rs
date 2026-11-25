@@ -3311,6 +3311,29 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             }
         }
     }
+
+    // A cursor at index 0 never came from a page either. It is stale, not expired, because the
+    // oplog keeps every entry.
+    assert_eq!(
+        oplog_page_start(
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            OplogRetention::FULL,
+            Some(OplogCursor {
+                next_oplog_index: 0,
+                current_component_revision: updated_revision.into(),
+                query_hash: OplogCursor::query_hash(Some("needle")),
+            }),
+            None,
+        )
+        .await,
+        Err(WorkerExecutorError::StaleCursor {
+            agent_id: owned_agent_id.agent_id,
+            next_oplog_index: OplogIndex::NONE,
+            reason: StaleCursorReason::BeforeFirstEntry,
+        })
+    );
 }
 
 /// Component service stub that serves the metadata of one component at every revision, for

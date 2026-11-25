@@ -214,6 +214,9 @@ pub enum StaleCursorReason {
     /// The cursor came from the pages of another query: a search of another query, a search for
     /// a read without a query, or a read without a query for a search.
     QueryMismatch,
+    /// The cursor points to index 0, before the first entry of every oplog. A page never hands
+    /// out such a cursor.
+    BeforeFirstEntry,
 }
 
 /// Why the component service refused a request.
@@ -605,6 +608,15 @@ impl Display for WorkerExecutorError {
                 f,
                 "Stale oplog cursor: the cursor to index {next_oplog_index} of the oplog of \
                  {agent_id} comes from the pages of another query"
+            ),
+            Self::StaleCursor {
+                agent_id,
+                next_oplog_index,
+                reason: StaleCursorReason::BeforeFirstEntry,
+            } => write!(
+                f,
+                "Stale oplog cursor: the cursor to index {next_oplog_index} of the oplog of \
+                 {agent_id} points before the first entry"
             ),
             Self::InvocationCancelled => write!(f, "Invocation was cancelled before execution"),
             Self::CannotCancelRunningInvocation => {
@@ -1288,6 +1300,11 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                                         golem::worker::v1::StaleCursorQueryMismatch {},
                                     )
                                 }
+                                StaleCursorReason::BeforeFirstEntry => {
+                                    golem::worker::v1::stale_cursor::Reason::BeforeFirstEntry(
+                                        golem::worker::v1::StaleCursorBeforeFirstEntry {},
+                                    )
+                                }
                             }),
                         },
                     ),
@@ -1553,6 +1570,9 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                         golem::worker::v1::stale_cursor::Reason::QueryMismatch(_) => {
                             StaleCursorReason::QueryMismatch
                         }
+                        golem::worker::v1::stale_cursor::Reason::BeforeFirstEntry(_) => {
+                            StaleCursorReason::BeforeFirstEntry
+                        }
                     },
                 })
             }
@@ -1753,6 +1773,7 @@ mod read_only_violation_trap_tests {
                 last_oplog_index: OplogIndex::from_u64(17),
             },
             StaleCursorReason::QueryMismatch,
+            StaleCursorReason::BeforeFirstEntry,
         ] {
             let expected = WorkerExecutorError::StaleCursor {
                 agent_id: AgentId::from_parts(7, 3),
