@@ -214,7 +214,14 @@ is unavailable, report that coverage gap explicitly.
 
 Pull requests to `main` run no tests. The continuous `Main validation` workflow validates the latest main commit after merge. Maintenance branches retain full CI.
 
-Before opening or merging a PR, run the smallest local checks that cover the changed behavior and directly affected callers. After revisions, rerun the checks affected by those revisions. Broaden only for a specific affected contract that narrower checks cannot cover, or when the user requests broader validation. Do not run every test merely because PRs no longer run tests. Report the checks run, their outcomes and remaining coverage limits; post-merge validation does not replace affected local checks.
+Before opening or merging a PR, run the smallest local checks that cover the changed behavior and its callers. After revisions, rerun the checks affected by those revisions. Report the checks run, their outcomes and remaining coverage limits; post-merge validation does not replace affected local checks.
+
+Two checks apply to every PR, however small:
+
+- **Lint the whole root workspace.** When a PR changes root-workspace Rust code, run `cargo make check-clippy` on its final head. `Main validation` runs the same check. A change in one crate can raise a lint in another, such as `large_enum_variant` after a shared type grows, and package-scoped clippy does not see it.
+- **Test the callers of a changed shared contract.** A shared contract is anything that code outside the changed crate depends on: a public type, trait or function that another crate uses, a gRPC, HTTP or WebSocket protocol, WIT, a serialized or persisted format, an SDK runtime or generated bridge, CLI commands and output, or a shared test fixture. Find its callers and run their worker executor, integration, CLI integration and SDK tests. Build the test components that those tests need. If a caller test cannot run, name it in the PR description, so the reviewer can decide.
+
+Keep `cargo make test` and the broad suites for changes whose impact cannot be isolated; the absence of PR tests is not a reason to run them.
 
 Load the `pre-pr-checklist` skill for scope-specific commands.
 

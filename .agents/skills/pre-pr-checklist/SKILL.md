@@ -14,7 +14,7 @@ Inspect all files in the PR, including generated files. A change can belong to m
 | Scope | Minimum local verification |
 |---|---|
 | Root Rust crate(s) | Package-scoped format check, clippy, check/build, and affected tests |
-| Shared Rust API, proc macro, or shared type | Verify the producer and directly affected consumers; identify uncovered contracts before choosing broader checks |
+| Shared contract, as `AGENTS.md` defines it under "Before Submitting a PR" | Verify the producer, then run the tests of every caller, including worker executor, integration, CLI integration and SDK tests; build the test components that they need |
 | `dev-tools/` | Use `--manifest-path dev-tools/Cargo.toml`, except the standalone Go generator uses `--manifest-path dev-tools/go-bindgen/Cargo.toml`; do not check the root workspace unless it is also affected |
 | Rust SDK (`sdks/rust/`) | Use that SDK's Cargo workspace checks; do not run root `cargo make fix` or `cargo make build` |
 | TypeScript SDK (`sdks/ts/`) | Check affected packages; rebuild the agent template only when its runtime/WIT inputs changed |
@@ -40,6 +40,12 @@ For a separate workspace, add its manifest path. For example:
 ```shell
 cargo fmt --manifest-path dev-tools/Cargo.toml -p <crate> -- --check
 cargo clippy --manifest-path dev-tools/Cargo.toml -p <crate> --all-targets --no-deps -- -D warnings
+```
+
+Then, for any root-workspace Rust change, lint the whole workspace, as `Main validation` does. Package-scoped clippy does not see a lint that the change raises in another crate:
+
+```shell
+cargo make check-clippy
 ```
 
 Prefer non-mutating checks for final verification. If fixes are needed, use the equivalent scoped `cargo fmt` or `cargo clippy ... --fix` command and inspect the resulting diff.
@@ -68,7 +74,7 @@ Start with the smallest test that exercises the changed behavior:
 cargo test -p <crate> -- <test_name> --report-time
 ```
 
-Broaden only for a specific affected contract that narrower checks cannot cover, or an explicit user request. The absence of PR tests does not justify full suites:
+Broaden for a changed shared contract (step 1), for a specific affected contract that narrower checks cannot cover, or for an explicit user request. A changed shared contract runs the tests of its callers, including the ones that need built test components. The absence of PR tests does not justify full suites:
 
 | Impact | Broader command when needed |
 |---|---|
@@ -115,11 +121,12 @@ git add <specific-files> # Stage only relevant files
 ## Checklist
 
 1. [ ] Every changed area is classified, including generated files and consumers
-2. [ ] Affected code is formatted and linted with native, scope-appropriate checks
+2. [ ] Affected code is formatted and linted with native, scope-appropriate checks, and `cargo make check-clippy` passes for a root-workspace Rust change
 3. [ ] Affected packages build or type-check
 4. [ ] Modified and behaviorally affected tests pass
 5. [ ] Required artifacts are regenerated and their drift checks pass
-6. [ ] Each broader check covers an identified affected contract that narrower checks cannot cover
-7. [ ] Only relevant files are included in the PR
+6. [ ] The callers of each changed shared contract have run their tests, or the PR description names the tests that could not run
+7. [ ] Each other broader check covers an identified affected contract that narrower checks cannot cover
+8. [ ] Only relevant files are included in the PR
 
 In the completion report, name the checks run, their outcomes and remaining coverage limits. Distinguish local verification from post-merge Main validation; do not imply PR tests will cover omitted checks.
