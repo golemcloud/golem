@@ -825,11 +825,11 @@ fn oplog_scan_allowance(
         (Some(entries), Some(millis), Some(_), None) => {
             Ok(Some(OplogScanAllowance { entries, millis }))
         }
-        (Some(_), Some(_), None, _) => Err(invalid(
-            "The 'scanEntries' and 'scanMillis' parameters need the 'to' parameter",
-        )),
-        (Some(_), Some(_), Some(_), Some(_)) => Err(invalid(
+        (Some(_), Some(_), _, Some(_)) => Err(invalid(
             "Cannot specify both the 'scanEntries' and 'scanMillis' parameters and the 'query' parameter",
+        )),
+        (Some(_), Some(_), None, None) => Err(invalid(
+            "The 'scanEntries' and 'scanMillis' parameters need the 'to' parameter",
         )),
         _ => Err(invalid(
             "The 'scanEntries' and 'scanMillis' parameters go together",
@@ -864,7 +864,7 @@ mod tests {
             ((Some("error"), Some(9), None, None), Ok(None)),
             ((None, Some(9), Some(7), Some(9)), Ok(Some(allowance))),
             ((None, None, Some(7), Some(9)), Err(needs_to)),
-            ((Some("error"), None, Some(7), Some(9)), Err(needs_to)),
+            ((Some("error"), None, Some(7), Some(9)), Err(no_query)),
             ((Some("error"), Some(9), Some(7), Some(9)), Err(no_query)),
             ((None, Some(9), Some(7), None), Err(together)),
             ((None, Some(9), None, Some(9)), Err(together)),
