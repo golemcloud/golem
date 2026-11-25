@@ -46,6 +46,18 @@ pub(super) fn write_key(prefix: &str, target: WriteTarget<'_>) -> Result<Box<str
     Ok(key)
 }
 
+pub(super) fn multipart_key(
+    prefix: &str,
+    target: WriteTarget<'_>,
+) -> Result<Box<str>, VolumeError> {
+    let key = write_key(prefix, target)?;
+    if key.ends_with('/') {
+        Err(VolumeError::InvalidRequest)
+    } else {
+        Ok(key)
+    }
+}
+
 pub(super) fn check_not_marker(key: &str, empty: bool) -> Result<(), VolumeError> {
     if empty && key.ends_with('/') {
         Err(VolumeError::InvalidRequest)

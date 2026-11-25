@@ -69,11 +69,30 @@ impl DiscoverInterfaces for SystemInterfaces {
     }
 }
 
+trait Dial: Send + Sync + std::fmt::Debug {
+    fn dial(&self, addresses: Box<[SocketAddr]>) -> BoxFuture<'static, io::Result<TcpStream>>;
+}
+
+#[derive(Debug)]
+struct SystemDial;
+
+impl Dial for SystemDial {
+    fn dial(&self, addresses: Box<[SocketAddr]>) -> BoxFuture<'static, io::Result<TcpStream>> {
+        Box::pin(async move { TcpStream::connect(addresses.as_ref()).await })
+    }
+}
+
+#[cfg(test)]
+tokio::task_local! {
+    static CONSTRUCTION_DIAL: Arc<dyn Dial>;
+}
+
 #[derive(Debug, Clone)]
 struct CheckedConnector {
     policy: Arc<ConnectionPolicy>,
     resolver: Arc<dyn Resolve>,
     interfaces: Arc<dyn DiscoverInterfaces>,
+    dial: Arc<dyn Dial>,
 }
 
 impl Service<Uri> for CheckedConnector {
@@ -89,8 +108,10 @@ impl Service<Uri> for CheckedConnector {
         let policy = self.policy.clone();
         let resolver = self.resolver.clone();
         let interfaces = self.interfaces.clone();
+        let dial = self.dial.clone();
         Box::pin(async move {
-            tokio::time::timeout(Duration::from_secs(10), async {
+            let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+            tokio::time::timeout_at(deadline, async {
                 let (host, port) = destination(&uri)?;
                 check_host(&policy, host, port).map_err(io::Error::other)?;
                 let protected = futures::stream::iter(policy.protected_endpoints.iter())
@@ -124,9 +145,13 @@ impl Service<Uri> for CheckedConnector {
                 })?;
                 // Connect to these addresses directly. A second hostname lookup could change
                 // the destination after the check.
-                TcpStream::connect(addresses.as_ref())
-                    .await
-                    .map(TokioIo::new)
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "volume connection timed out",
+                    ));
+                }
+                dial.dial(addresses).await.map(TokioIo::new)
             })
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "volume connection timed out"))?
@@ -145,6 +170,9 @@ impl Transport {
             .protected_endpoints
             .iter()
             .try_for_each(|uri| destination(uri).map(|_| ()))?;
+        let dial: Arc<dyn Dial> = Arc::new(SystemDial);
+        #[cfg(test)]
+        let dial = CONSTRUCTION_DIAL.try_with(Arc::clone).unwrap_or(dial);
         let connector = hyper_rustls::HttpsConnectorBuilder::new()
             .with_provider_and_webpki_roots(rustls::crypto::ring::default_provider())
             .map_err(io::Error::other)?
@@ -154,6 +182,7 @@ impl Transport {
                 policy: Arc::new(policy),
                 resolver,
                 interfaces: Arc::new(SystemInterfaces),
+                dial,
             });
         let client = Client::builder(TokioExecutor::new())
             .retry_canceled_requests(false)
@@ -198,7 +227,10 @@ impl HttpConnector for Transport {
 #[cfg(test)]
 mod tests {
     use super::super::connection::ConnectionRefusal;
+    use super::super::s3::{S3Volume, S3VolumeConfig};
+    use super::super::{VolumeClient, VolumeError};
     use super::*;
+    use crate::aws::AwsCredentials;
     use golem_common::base_model::address_class::AddressClass;
     use ipnet::IpNet;
     use std::sync::atomic::{AtomicUsize, Ordering};
@@ -206,6 +238,103 @@ mod tests {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     use tokio::net::TcpListener;
     use tokio::sync::{mpsc, oneshot};
+
+    const RECORDING_DIAL_ERROR: &str = "recording volume dial";
+
+    #[derive(Debug)]
+    struct RecordingDial(mpsc::UnboundedSender<Box<[SocketAddr]>>);
+
+    impl Dial for RecordingDial {
+        fn dial(&self, addresses: Box<[SocketAddr]>) -> BoxFuture<'static, io::Result<TcpStream>> {
+            self.0.send(addresses).unwrap();
+            Box::pin(async { Err(io::Error::other(RECORDING_DIAL_ERROR)) })
+        }
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn public_s3_constructor_preserves_private_ranges_and_captures_the_scoped_dial() {
+        let address: SocketAddr = "10.23.45.67:19081".parse().unwrap();
+        assert_eq!(AddressClass::of(address.ip()), AddressClass::Private);
+        let cases: [(Box<[IpNet]>, bool); 5] = [
+            (Box::new([]), false),
+            (["10.23.45.66/32".parse().unwrap()].into(), false),
+            (["10.23.45.67/32".parse().unwrap()].into(), true),
+            (["10.23.46.0/24".parse().unwrap()].into(), false),
+            (["10.23.45.0/24".parse().unwrap()].into(), true),
+        ];
+        let volumes = cases
+            .into_iter()
+            .map(|(allowed_private_ranges, admitted)| {
+                let (dial, entries) = mpsc::unbounded_channel();
+                let dial: Arc<dyn Dial> = Arc::new(RecordingDial(dial));
+                let volume = CONSTRUCTION_DIAL.sync_scope(dial, || {
+                    S3Volume::new(
+                        S3VolumeConfig {
+                            endpoint: Some("http://10.23.45.67:19081".into()),
+                            region: "us-east-1".into(),
+                            bucket: "test-bucket".into(),
+                            prefix: "corpus/".into(),
+                            encryption: None,
+                        },
+                        AwsCredentials::from_record(&serde_json::json!({
+                            "accessKeyId": "volume-access",
+                            "secretAccessKey": "volume-secret",
+                            "sessionToken": "volume-token"
+                        }))
+                        .unwrap(),
+                        ConnectionPolicy {
+                            allowed_private_ranges,
+                            ..ConnectionPolicy::new(Box::new([]))
+                        },
+                    )
+                    .unwrap()
+                });
+                assert!(CONSTRUCTION_DIAL.try_with(|_| ()).is_err());
+                (volume, entries, admitted)
+            })
+            .collect::<Box<[_]>>();
+        futures::stream::iter(volumes)
+            .then(|(volume, mut entries, admitted)| async move {
+                let result = tokio::spawn(async move { volume.stat("key", None).await })
+                    .await
+                    .unwrap();
+                assert_eq!(result.unwrap_err(), VolumeError::RequestFailed);
+                if admitted {
+                    assert_eq!(entries.try_recv().unwrap().as_ref(), &[address]);
+                }
+                assert!(entries.try_recv().is_err());
+            })
+            .collect::<()>()
+            .await;
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let loopback = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buffer = [0; 4096];
+            assert!(socket.read(&mut buffer).await.unwrap() > 0);
+            socket
+                .write_all(b"HTTP/1.1 200 OK\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+                .await
+                .unwrap();
+        });
+        let unscoped = Transport::new(
+            ConnectionPolicy {
+                allow_loopback: true,
+                ..ConnectionPolicy::new(Box::new([]))
+            },
+            Arc::new(SystemResolver),
+        )
+        .unwrap();
+        assert!(
+            unscoped
+                .call(HttpRequest::get(format!("http://{loopback}/key")).unwrap())
+                .await
+                .is_ok()
+        );
+        server.await.unwrap();
+    }
 
     #[derive(Debug)]
     struct DnsLookup {
@@ -254,6 +383,7 @@ mod tests {
 
     fn controlled_connector(
         protected_endpoints: Box<[Uri]>,
+        dial: Arc<dyn Dial>,
     ) -> (
         CheckedConnector,
         mpsc::UnboundedReceiver<DnsLookup>,
@@ -270,6 +400,7 @@ mod tests {
                 }),
                 resolver: Arc::new(ControlledDns(dns)),
                 interfaces: Arc::new(ControlledInterfaces(interfaces)),
+                dial,
             },
             lookups,
             observations,
@@ -287,55 +418,17 @@ mod tests {
         request.answer
     }
 
-    fn non_loopback_listener() -> TcpListener {
-        let listener = if_addrs::get_if_addrs()
-            .expect("interface-observation fixture must enumerate host interfaces")
-            .into_iter()
-            .map(|interface| interface.ip())
-            .filter(|ip| ip.is_ipv4() && matches!(AddressClass::of(*ip), AddressClass::Private | AddressClass::Public))
-            .find_map(|ip| std::net::TcpListener::bind((ip, 0)).ok())
-            .expect("interface-observation fixture requires a bindable non-loopback IPv4 host interface of class Private or Public");
-        listener.set_nonblocking(true).unwrap();
-        TcpListener::from_std(listener).unwrap()
-    }
-
     #[test]
     #[timeout("30s")]
     async fn private_connections_require_the_matching_range_and_check_every_answer() {
-        let listener = if_addrs::get_if_addrs()
-            .expect("private-connection fixture must enumerate host interfaces")
-            .into_iter()
-            .map(|interface| interface.ip())
-            .filter(|ip| ip.is_ipv4() && AddressClass::of(*ip) == AddressClass::Private)
-            .find_map(|ip| std::net::TcpListener::bind((ip, 0)).ok())
-            .expect("private-connection fixture requires a bindable Private IPv4 host interface");
-        listener.set_nonblocking(true).unwrap();
-        let listener = TcpListener::from_std(listener).unwrap();
-        let address = listener.local_addr().unwrap();
-        let IpAddr::V4(ip) = address.ip() else {
-            unreachable!()
-        };
+        let address: SocketAddr = "10.23.45.67:19081".parse().unwrap();
+        let second: SocketAddr = "10.23.45.68:19081".parse().unwrap();
         let port = address.port();
         let loopback = SocketAddr::from(([127, 0, 0, 1], port));
-        let loopback_sink = TcpListener::bind(loopback).await.ok();
-        let exact = IpNet::new(ip.into(), 32).unwrap();
-        let adjacent = IpNet::new(std::net::Ipv4Addr::from(u32::from(ip) ^ 1).into(), 32).unwrap();
-        let subnet = (1..32)
-            .rev()
-            .map(|prefix| IpNet::new(ip.into(), prefix).unwrap().trunc())
-            .find(|network| {
-                network.network() != address.ip()
-                    && AddressClass::of(network.network()) == AddressClass::Private
-            })
-            .expect(
-                "private-connection fixture must have a non-network address in a private subnet",
-            );
-        let disjoint = IpNet::new(
-            std::net::Ipv4Addr::from(u32::from(ip) ^ (1 << (32 - subnet.prefix_len()))).into(),
-            subnet.prefix_len(),
-        )
-        .unwrap()
-        .trunc();
+        let exact: IpNet = "10.23.45.67/32".parse().unwrap();
+        let adjacent: IpNet = "10.23.45.66/32".parse().unwrap();
+        let subnet: IpNet = "10.23.45.0/24".parse().unwrap();
+        let disjoint: IpNet = "10.23.46.0/24".parse().unwrap();
         assert!(subnet.contains(&address.ip()));
         assert_ne!(subnet.network(), address.ip());
         assert!(!disjoint.contains(&address.ip()));
@@ -345,6 +438,7 @@ mod tests {
             (&[exact], &[address], None),
             (&[disjoint], &[address], Some(ConnectionRefusal::Private)),
             (&[subnet], &[address], None),
+            (&[subnet], &[address, second], None),
             (
                 &[subnet],
                 &[address, loopback],
@@ -358,16 +452,13 @@ mod tests {
         ];
         futures::stream::iter(cases)
             .enumerate()
-            .then(|(case, (allowed_private_ranges, answers, refusal))| {
-                let listener = &listener;
-                let loopback_sink = &loopback_sink;
-                async move {
-                    let protected_port = if port == 80 { 81 } else { 80 };
+            .then(
+                |(case, (allowed_private_ranges, answers, refusal))| async move {
+                    let (dial, mut entries) = mpsc::unbounded_channel();
+                    let protected_port = 80;
                     let (mut connector, mut dns, mut observations) = controlled_connector(
-                        [format!("http://registry.invalid:{protected_port}")
-                            .parse()
-                            .unwrap()]
-                        .into(),
+                        ["http://registry.invalid:80".parse().unwrap()].into(),
+                        Arc::new(RecordingDial(dial)),
                     );
                     connector.policy = Arc::new(ConnectionPolicy {
                         allowed_private_ranges: allowed_private_ranges.into(),
@@ -386,44 +477,33 @@ mod tests {
                     lookup(&mut dns, "volume.invalid", port)
                         .send(Ok(answers.into()))
                         .unwrap();
+                    let error = connection.await.unwrap_err();
                     match refusal {
                         Some(refusal) => {
-                            let error = connection.await.unwrap_err();
                             assert_eq!(
                                 error.get_ref().unwrap().downcast_ref::<ConnectionRefusal>(),
                                 Some(&refusal),
                                 "case {case}"
                             );
-                            assert!(
-                                tokio::time::timeout(Duration::from_millis(20), listener.accept())
-                                    .await
-                                    .is_err()
-                            );
                         }
                         None => {
-                            let connected = connection.await.unwrap();
-                            let (accepted, _) =
-                                tokio::time::timeout(Duration::from_secs(1), listener.accept())
-                                    .await
-                                    .unwrap()
-                                    .unwrap();
-                            drop((connected, accepted));
+                            assert_eq!(error.kind(), io::ErrorKind::Other);
+                            assert_eq!(error.to_string(), RECORDING_DIAL_ERROR);
+                            assert_eq!(
+                                entries.try_recv().unwrap().as_ref(),
+                                answers,
+                                "case {case}"
+                            );
                         }
                     }
-                    if let Some(sink) = loopback_sink {
-                        assert!(
-                            tokio::time::timeout(Duration::from_millis(20), sink.accept())
-                                .await
-                                .is_err()
-                        );
-                    }
+                    assert!(entries.try_recv().is_err(), "case {case}");
                     assert!(dns.try_recv().is_err());
                     assert!(
                         observations.try_recv().is_err(),
                         "unrelated protected port must not require interface discovery"
                     );
-                }
-            })
+                },
+            )
             .collect::<()>()
             .await;
     }
@@ -431,71 +511,66 @@ mod tests {
     #[test]
     #[timeout("30s")]
     async fn each_connection_uses_a_fresh_interface_observation_in_both_orders() {
-        let listener = non_loopback_listener();
-        let address = listener.local_addr().unwrap();
+        let address: SocketAddr = "10.23.45.67:19081".parse().unwrap();
+        let protected: SocketAddr = "10.23.45.2:19081".parse().unwrap();
         let port = address.port();
         futures::stream::iter([[true, false], [false, true]])
-            .then(|order| {
-                let listener = &listener;
-                async move {
-                    let (connector, dns, observations) = controlled_connector(
-                        [format!("http://registry.invalid:{port}").parse().unwrap()].into(),
-                    );
-                    let (_, mut dns, mut observations) = futures::stream::iter(order)
-                        .fold(
-                            (connector, dns, observations),
-                            |(mut connector, mut dns, mut observations), refused| async move {
-                                let mut connection = connector.call(
-                                    format!("http://volume.invalid:{port}/key").parse().unwrap(),
+            .then(|order| async move {
+                let (dial, entries) = mpsc::unbounded_channel();
+                let (mut connector, dns, observations) = controlled_connector(
+                    [format!("http://registry.invalid:{port}").parse().unwrap()].into(),
+                    Arc::new(RecordingDial(dial)),
+                );
+                connector.policy = Arc::new(ConnectionPolicy {
+                    allowed_private_ranges: ["10.23.45.0/24".parse().unwrap()].into(),
+                    allow_loopback: false,
+                    protected_endpoints: connector.policy.protected_endpoints.clone(),
+                });
+                let (_, mut dns, mut observations, mut entries) = futures::stream::iter(order)
+                    .fold(
+                        (connector, dns, observations, entries),
+                        |(mut connector, mut dns, mut observations, mut entries), refused| async move {
+                            let mut connection = connector.call(
+                                format!("http://volume.invalid:{port}/key").parse().unwrap(),
+                            );
+                            assert!(futures::poll!(connection.as_mut()).is_pending());
+                            lookup(&mut dns, "registry.invalid", port)
+                                .send(Ok([protected].into()))
+                                .unwrap();
+                            assert!(futures::poll!(connection.as_mut()).is_pending());
+                            lookup(&mut dns, "volume.invalid", port)
+                                .send(Ok([address].into()))
+                                .unwrap();
+                            assert!(futures::poll!(connection.as_mut()).is_pending());
+                            let observation = observations
+                                .try_recv()
+                                .expect("each connection must request a fresh observation");
+                            assert!(entries.try_recv().is_err());
+                            let observed = if refused {
+                                address.ip()
+                            } else {
+                                "10.23.45.99".parse().unwrap()
+                            };
+                            observation.send(Ok([observed].into())).unwrap();
+                            let error = connection.await.unwrap_err();
+                            if refused {
+                                assert_eq!(
+                                    error.get_ref().unwrap().downcast_ref::<ConnectionRefusal>(),
+                                    Some(&ConnectionRefusal::GolemEndpoint)
                                 );
-                                assert!(futures::poll!(connection.as_mut()).is_pending());
-                                lookup(&mut dns, "registry.invalid", port)
-                                    .send(Ok([SocketAddr::from(([127, 0, 0, 1], port))].into()))
-                                    .unwrap();
-                                assert!(futures::poll!(connection.as_mut()).is_pending());
-                                lookup(&mut dns, "volume.invalid", port)
-                                    .send(Ok([address].into()))
-                                    .unwrap();
-                                assert!(futures::poll!(connection.as_mut()).is_pending());
-                                let observation = observations
-                                    .try_recv()
-                                    .expect("each connection must request a fresh observation");
-                                let observed = if refused {
-                                    address.ip()
-                                } else {
-                                    "127.0.0.7".parse().unwrap()
-                                };
-                                observation.send(Ok([observed].into())).unwrap();
-                                let result = connection.await;
-                                if refused {
-                                    let error = result.unwrap_err();
-                                    assert_eq!(
-                                        error
-                                            .get_ref()
-                                            .unwrap()
-                                            .downcast_ref::<ConnectionRefusal>(),
-                                        Some(&ConnectionRefusal::GolemEndpoint)
-                                    );
-                                    assert!(
-                                        tokio::time::timeout(
-                                            Duration::from_millis(20),
-                                            listener.accept()
-                                        )
-                                        .await
-                                        .is_err()
-                                    );
-                                } else {
-                                    let connected = result.unwrap();
-                                    let (accepted, _) = listener.accept().await.unwrap();
-                                    drop((connected, accepted));
-                                }
-                                (connector, dns, observations)
-                            },
-                        )
-                        .await;
-                    assert!(dns.try_recv().is_err());
-                    assert!(observations.try_recv().is_err());
-                }
+                            } else {
+                                assert_eq!(error.kind(), io::ErrorKind::Other);
+                                assert_eq!(error.to_string(), RECORDING_DIAL_ERROR);
+                                assert_eq!(entries.try_recv().unwrap().as_ref(), &[address]);
+                            }
+                            assert!(entries.try_recv().is_err());
+                            (connector, dns, observations, entries)
+                        },
+                    )
+                    .await;
+                assert!(dns.try_recv().is_err());
+                assert!(observations.try_recv().is_err());
+                assert!(entries.try_recv().is_err());
             })
             .collect::<()>()
             .await;
@@ -521,6 +596,7 @@ mod tests {
                 let port = address.port();
                 let (mut connector, mut dns, mut observations) = controlled_connector(
                     [format!("http://registry.invalid:{port}").parse().unwrap()].into(),
+                    Arc::new(SystemDial),
                 );
                 let mut connection =
                     connector.call(format!("http://volume.invalid:{port}/key").parse().unwrap());
@@ -567,6 +643,7 @@ mod tests {
                         format!("http://worker.invalid:{port}").parse().unwrap(),
                     ]
                     .into(),
+                    Arc::new(SystemDial),
                 );
                 let connection =
                     connector.call(format!("http://volume.invalid:{port}/key").parse().unwrap());
@@ -636,6 +713,7 @@ mod tests {
         let port = listener.local_addr().unwrap().port();
         let (mut connector, mut dns, mut observations) = controlled_connector(
             [format!("http://registry.invalid:{port}").parse().unwrap()].into(),
+            Arc::new(SystemDial),
         );
         let error = connector
             .call(
@@ -696,6 +774,7 @@ mod tests {
             }),
             resolver: Arc::new(ControlledDns(resolver)),
             interfaces: interfaces.clone(),
+            dial: Arc::new(SystemDial),
         };
         let uri: Uri = format!("http://volume.invalid:{}/key", address.port())
             .parse()
@@ -742,62 +821,83 @@ mod tests {
     fn discovery_shares_the_dns_deadline_and_cancellation_prevents_a_late_dial() {
         tokio::runtime::Builder::new_current_thread()
             .enable_all()
+            .start_paused(true)
             .build()
             .unwrap()
             .block_on(async {
-                let listener = non_loopback_listener();
-                let address = listener.local_addr().unwrap();
+                let address: SocketAddr = "10.23.45.67:19081".parse().unwrap();
+                let protected_address: SocketAddr = "10.23.45.2:19081".parse().unwrap();
                 let port = address.port();
-                futures::stream::iter([false, true])
-                    .then(|release_before_deadline| {
-                        let listener = &listener;
-                        async move {
-                            let (mut connector, mut dns, mut observations) = controlled_connector(
-                                [format!("http://registry.invalid:{port}").parse().unwrap()].into(),
-                            );
-                            tokio::time::pause();
-                            let started = tokio::time::Instant::now();
-                            let mut connection = connector.call(format!("http://volume.invalid:{port}/key").parse().unwrap());
-                            assert!(futures::poll!(connection.as_mut()).is_pending());
-                            let protected = lookup(&mut dns, "registry.invalid", port);
-                            assert!(observations.try_recv().is_err());
-                            tokio::time::advance(Duration::from_secs(4)).await;
-                            protected.send(Ok([SocketAddr::from(([127, 0, 0, 1], port))].into())).unwrap();
-                            assert!(futures::poll!(connection.as_mut()).is_pending());
-                            let destination = lookup(&mut dns, "volume.invalid", port);
-                            assert!(observations.try_recv().is_err());
-                            tokio::time::advance(Duration::from_secs(5)).await;
-                            destination.send(Ok([address].into())).unwrap();
-                            assert!(futures::poll!(connection.as_mut()).is_pending());
-                            let observation = observations.try_recv().expect("discovery must start at nine seconds");
-                            assert_eq!(started.elapsed(), Duration::from_secs(9));
-                            assert!(!observation.is_closed());
-                            let permitted = Ok(["127.0.0.7".parse().unwrap()].into());
-                            if release_before_deadline {
-                                tokio::time::resume();
+                futures::stream::iter([
+                    None,
+                    Some(Duration::from_millis(9_999)),
+                    Some(Duration::from_secs(10)),
+                    Some(Duration::from_millis(10_001)),
+                ])
+                    .then(|release_at| async move {
+                        let (dial, mut entries) = mpsc::unbounded_channel();
+                        let (mut connector, mut dns, mut observations) = controlled_connector(
+                            [format!("http://registry.invalid:{port}").parse().unwrap()].into(),
+                            Arc::new(RecordingDial(dial)),
+                        );
+                        connector.policy = Arc::new(ConnectionPolicy {
+                            allowed_private_ranges: ["10.23.45.0/24".parse().unwrap()].into(),
+                            allow_loopback: false,
+                            protected_endpoints: connector.policy.protected_endpoints.clone(),
+                        });
+                        let started = tokio::time::Instant::now();
+                        let mut connection = connector.call(format!("http://volume.invalid:{port}/key").parse().unwrap());
+                        assert!(futures::poll!(connection.as_mut()).is_pending());
+                        let protected = lookup(&mut dns, "registry.invalid", port);
+                        assert!(observations.try_recv().is_err());
+                        tokio::time::advance(Duration::from_secs(4)).await;
+                        protected.send(Ok([protected_address].into())).unwrap();
+                        assert!(futures::poll!(connection.as_mut()).is_pending());
+                        let destination = lookup(&mut dns, "volume.invalid", port);
+                        assert!(observations.try_recv().is_err());
+                        tokio::time::advance(Duration::from_secs(5)).await;
+                        destination.send(Ok([address].into())).unwrap();
+                        assert!(futures::poll!(connection.as_mut()).is_pending());
+                        let observation = observations.try_recv().expect("discovery must start at nine seconds");
+                        assert_eq!(started.elapsed(), Duration::from_secs(9));
+                        assert!(!observation.is_closed());
+                        tokio::time::advance(Duration::from_millis(999)).await;
+                        assert!(futures::poll!(connection.as_mut()).is_pending(), "the shared deadline must not expire at 9,999 milliseconds");
+                        assert!(!observation.is_closed());
+                        assert!(entries.try_recv().is_err());
+                        let permitted = Ok(["10.23.45.99".parse().unwrap()].into());
+                        let error = match release_at {
+                            Some(release_at) => {
+                                tokio::time::advance(release_at - Duration::from_millis(9_999)).await;
+                                assert!(!observation.is_closed(), "the connection has not been polled since 9,999 milliseconds");
                                 observation.send(permitted).unwrap();
-                                let connected = connection.await.unwrap();
-                                let (accepted, _) = tokio::time::timeout(Duration::from_secs(1), listener.accept()).await.unwrap().unwrap();
-                                drop((connected, accepted));
-                            } else {
-                                tokio::time::advance(Duration::from_millis(999)).await;
-                                assert!(futures::poll!(connection.as_mut()).is_pending(), "the shared deadline must not expire at 9,999 milliseconds");
-                                assert!(!observation.is_closed());
+                                let Poll::Ready(Err(error)) = futures::poll!(connection.as_mut()) else {
+                                    panic!("a released observation must finish with a dial error or timeout");
+                                };
+                                error
+                            }
+                            None => {
                                 tokio::time::advance(Duration::from_millis(1)).await;
                                 let Poll::Ready(Err(error)) = futures::poll!(connection.as_mut()) else {
                                     panic!("discovery must time out at the total ten-second deadline");
                                 };
-                                assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-                                assert_eq!(error.to_string(), "volume connection timed out");
-                                assert_eq!(started.elapsed(), Duration::from_secs(10));
                                 assert!(observation.is_closed(), "timeout must drop the observation receiver, not detach a dial continuation");
                                 assert!(observation.send(permitted).is_err(), "late observation completion must have no receiver");
-                                tokio::time::resume();
-                                assert!(tokio::time::timeout(Duration::from_millis(20), listener.accept()).await.is_err());
+                                error
                             }
-                            assert!(dns.try_recv().is_err());
-                            assert!(observations.try_recv().is_err());
+                        };
+                        if release_at.is_some_and(|at| at < Duration::from_secs(10)) {
+                            assert_eq!(error.kind(), io::ErrorKind::Other);
+                            assert_eq!(error.to_string(), RECORDING_DIAL_ERROR);
+                            assert_eq!(entries.try_recv().unwrap().as_ref(), &[address]);
+                        } else {
+                            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+                            assert_eq!(error.to_string(), "volume connection timed out");
                         }
+                        assert_eq!(started.elapsed(), release_at.unwrap_or(Duration::from_secs(10)));
+                        assert!(entries.try_recv().is_err());
+                        assert!(dns.try_recv().is_err());
+                        assert!(observations.try_recv().is_err());
                     })
                     .collect::<()>()
                     .await;
@@ -895,6 +995,7 @@ mod tests {
                     policy,
                     resolver: Arc::new(SystemResolver),
                     interfaces: Arc::new(SystemInterfaces),
+                    dial: Arc::new(SystemDial),
                 };
                 let error = connector
                     .call(format!("http://{ip}:{port}").parse().unwrap())
@@ -931,6 +1032,7 @@ mod tests {
                     policy: Arc::new(ConnectionPolicy::new(Box::new([]))),
                     resolver: Arc::new(NeverAnsweringDns),
                     interfaces: Arc::new(SystemInterfaces),
+                    dial: Arc::new(SystemDial),
                 };
                 let started = tokio::time::Instant::now();
                 let mut connection = connector.call("http://volume.invalid/key".parse().unwrap());

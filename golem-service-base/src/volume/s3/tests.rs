@@ -2065,6 +2065,46 @@ async fn nonempty_slash_keys_remain_files_and_empty_slash_keys_are_not_created()
             .await,
         Err(VolumeError::InvalidRequest)
     );
+    stream::iter([
+        WriteTarget::File("nonempty/"),
+        WriteTarget::Probe("nonempty/"),
+    ])
+    .then(|target| {
+        let volume = &volume;
+        async move {
+            assert_eq!(
+                volume.start_multipart(target).await,
+                Err(VolumeError::InvalidRequest)
+            );
+            assert_eq!(
+                volume
+                    .upload_part(target, "upload", 1, Bytes::from_static(b"body"))
+                    .await,
+                Err(VolumeError::InvalidRequest)
+            );
+            assert_eq!(
+                volume
+                    .complete_multipart(
+                        target,
+                        "upload",
+                        &[UploadedPart {
+                            number: 1,
+                            etag: "\"part\"".into(),
+                            size: 1,
+                        }],
+                        WriteCondition::Absent
+                    )
+                    .await,
+                Err(VolumeError::InvalidRequest)
+            );
+            assert_eq!(
+                volume.abort_multipart(target, "upload").await,
+                Err(VolumeError::InvalidRequest)
+            );
+        }
+    })
+    .collect::<()>()
+    .await;
     assert!(requests.try_recv().is_err());
     server.abort();
 }
@@ -3332,7 +3372,6 @@ async fn multipart_completion_is_conditional_and_probe_keys_stay_reserved() {
             uploaded("\"first\""),
             uploaded("\"last\""),
             completed(),
-            completed(),
         ])
         .await;
         let volume = client(&endpoint, None, allowed());
@@ -3529,15 +3568,8 @@ async fn multipart_completion_is_conditional_and_probe_keys_stay_reserved() {
                     &parts,
                     WriteCondition::Absent
                 )
-                .await
-                .unwrap()
-                .etag
-                .as_ref(),
-            "\"complete\""
-        );
-        assert_eq!(
-            requests.try_recv().unwrap().uri().path(),
-            "/test-bucket/corpus/slash/"
+                .await,
+            Err(VolumeError::InvalidRequest)
         );
         assert!(requests.try_recv().is_err());
         server.abort();

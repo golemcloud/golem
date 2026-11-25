@@ -203,6 +203,44 @@ async fn volume_contract(volume: &dyn VolumeClient, versioned: bool) {
     multipart_session_identity(volume).await;
     multipart_part_identity_and_sizes(volume, versioned).await;
     probes_and_invalid_paths(volume, versioned).await;
+    let target = WriteTarget::File("content-identity");
+    let first = volume
+        .put(
+            target,
+            WriteCondition::Absent,
+            Bytes::from_static(b"same-content"),
+        )
+        .await
+        .unwrap();
+    let second = volume
+        .put(
+            target,
+            WriteCondition::Matches(&first.etag),
+            Bytes::from_static(b"same-content"),
+        )
+        .await
+        .unwrap();
+    assert_eq!(first.etag, second.etag);
+    if versioned {
+        assert_ne!(first.version_id, second.version_id);
+    }
+    let changed = volume
+        .put(
+            target,
+            WriteCondition::Matches(&first.etag),
+            Bytes::from_static(b"changed-content"),
+        )
+        .await
+        .unwrap();
+    assert_ne!(changed.etag, first.etag);
+    assert_read(
+        volume,
+        "content-identity",
+        &changed,
+        None,
+        b"changed-content",
+    )
+    .await;
 }
 
 async fn preconditions_versions_and_history(volume: &dyn VolumeClient, versioned: bool) {
@@ -925,123 +963,40 @@ async fn multipart_completion_and_abort(volume: &dyn VolumeClient) {
         Err(VolumeError::NotFound)
     );
 
-    let empty_slash = WriteTarget::File("multipart-marker/");
-    let upload = volume.start_multipart(empty_slash).await.unwrap();
-    let part = volume
-        .upload_part(empty_slash, upload.payload(), 1, Bytes::new())
-        .await
-        .unwrap();
-    assert_eq!(
-        volume
-            .complete_multipart(
-                empty_slash,
-                upload.payload(),
-                &[part],
-                WriteCondition::Absent
-            )
-            .await,
-        Err(VolumeError::InvalidRequest)
-    );
-    volume
-        .abort_multipart(empty_slash, upload.payload())
-        .await
-        .unwrap();
-    assert_eq!(
-        volume.stat("multipart-marker/", None).await,
-        Err(VolumeError::NotFound)
-    );
     stream::iter([
-        ("multipart-marker", "multipart-marker/", Bytes::new()),
-        (
-            "multipart-slash",
-            "multipart-slash/",
-            Bytes::from_static(b"slash-part-a7Z!"),
-        ),
+        WriteTarget::File("multipart-slash/"),
+        WriteTarget::Probe("multipart-slash/"),
     ])
-    .then(|(bare, slash, body)| async move {
-        let target = WriteTarget::File(slash);
-        let upload = volume.start_multipart(target).await.unwrap();
-        let mut part = volume
-            .upload_part(target, upload.payload(), 1, body.clone())
-            .await
-            .unwrap();
-        assert_eq!(part.size, body.len() as u64);
-        if body.is_empty() {
-            part.size = 1;
-        }
-        let reference = volume
-            .complete_multipart(
-                target,
-                upload.payload(),
-                std::slice::from_ref(&part),
-                WriteCondition::Absent,
-            )
-            .await
-            .unwrap();
-        let metadata = volume.stat(bare, None).await.unwrap();
-        assert_eq!(metadata.key.as_ref(), bare);
-        assert_eq!(metadata.size, body.len() as u64);
-        assert_eq!(metadata.version, reference);
-        assert_read(volume, bare, &reference, None, &body).await;
-        assert_read(
-            volume,
-            bare,
-            &reference,
-            Some(body.len() as u64..=u64::MAX),
-            b"",
-        )
-        .await;
-        assert_eq!(volume.stat(slash, None).await, Err(VolumeError::NotFound));
-        stream::iter([None, Some(0..=0)])
-            .then(|range| {
-                let reference = &reference;
-                async move {
-                    assert_eq!(
-                        volume.read(slash, reference, range).await.unwrap_err(),
-                        VolumeError::NotFound
-                    );
-                }
-            })
-            .collect::<()>()
-            .await;
-        let expected = [ListedObject {
-            key: bare.into(),
-            size: body.len() as u64,
-            etag: reference.etag.clone(),
-        }];
-        let page = volume.list(bare, None).await.unwrap();
-        assert!(page.continuation.is_none());
-        assert_eq!(page.objects.as_ref(), expected);
-
-        let rejected = volume.start_multipart(target).await.unwrap();
-        let rejected_body = if body.is_empty() {
-            Bytes::new()
-        } else {
-            Bytes::from_static(b"must-not-replace")
-        };
-        let mut part = volume
-            .upload_part(target, rejected.payload(), 1, rejected_body)
-            .await
-            .unwrap();
-        if body.is_empty() {
-            part.size = 1;
-        }
+    .then(|target| async move {
+        assert_eq!(
+            volume.start_multipart(target).await,
+            Err(VolumeError::InvalidRequest)
+        );
         assert_eq!(
             volume
-                .complete_multipart(target, rejected.payload(), &[part], WriteCondition::Absent)
+                .upload_part(target, "unknown", 1, Bytes::from_static(b"body"))
                 .await,
-            Err(VolumeError::Exists)
+            Err(VolumeError::InvalidRequest)
         );
-        volume
-            .abort_multipart(target, rejected.payload())
-            .await
-            .unwrap();
-        assert_eq!(volume.stat(bare, None).await.unwrap(), metadata);
-        assert_read(volume, bare, &reference, None, &body).await;
-        let page = volume.list(bare, None).await.unwrap();
-        assert!(page.continuation.is_none());
-        assert_eq!(page.objects.as_ref(), expected);
-        assert_eq!(volume.stat(slash, None).await, Err(VolumeError::NotFound));
+        assert_eq!(
+            volume
+                .complete_multipart(
+                    target,
+                    "unknown",
+                    &[golem_service_base::volume::UploadedPart {
+                        number: 1,
+                        etag: "\"part\"".into(),
+                        size: 1,
+                    }],
+                    WriteCondition::Absent
+                )
+                .await,
+            Err(VolumeError::InvalidRequest)
+        );
+        assert_eq!(
+            volume.abort_multipart(target, "unknown").await,
+            Err(VolumeError::InvalidRequest)
+        );
     })
     .collect::<()>()
     .await;

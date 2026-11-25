@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::keys::{
-    check_not_marker, full_key, relative_key, strong_etag, validate_delete, validate_parts,
-    validate_read, write_key,
+    check_not_marker, full_key, multipart_key, relative_key, strong_etag, validate_delete,
+    validate_parts, validate_read, write_key,
 };
 use super::{
     BucketVersioning, LifecycleRule, ListedObject, ObjectBody, ObjectMetadata, ObjectPage,
@@ -25,6 +25,7 @@ use async_trait::async_trait;
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use bytes::{Bytes, BytesMut};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
 use std::ops::RangeInclusive;
@@ -207,15 +208,11 @@ fn selected_body(body: &Bytes, range: Option<RangeInclusive<u64>>) -> Bytes {
     }
 }
 
-fn new_version(versioned: bool, etag: Uuid, version_id: Uuid) -> ObjectVersion {
+fn new_version(versioned: bool, body: &[u8], version_id: Uuid) -> ObjectVersion {
     ObjectVersion {
-        etag: format!("\"{etag}\"").into(),
+        etag: format!("\"{:x}\"", Sha256::digest(body)).into(),
         version_id: versioned.then(|| version_id.to_string().into()),
     }
-}
-
-fn multipart_publication_key(key: &str) -> &str {
-    key.strip_suffix('/').unwrap_or(key)
 }
 
 fn object_transition(
@@ -377,11 +374,13 @@ fn complete_upload(
     upload: &Upload,
     retained: Option<Arc<StoredObject>>,
     parts: &[UploadedPart],
-    version: ObjectVersion,
+    versioned: bool,
+    version_id: Uuid,
 ) -> Result<(Option<Upload>, Arc<StoredObject>), VolumeError> {
     match &upload.phase {
         UploadPhase::Open(stored) => {
             let body = multipart_body(upload, parts)?;
+            let version = new_version(versioned, &body, version_id);
             let selected = parts
                 .iter()
                 .map(|part| {
@@ -488,7 +487,7 @@ impl VolumeClient for InMemoryVolume {
         validate_condition(condition)?;
         let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
         check_condition(state.objects.get(&key).and_then(current_object), condition)?;
-        let version = new_version(self.versioned, Uuid::new_v4(), Uuid::new_v4());
+        let version = new_version(self.versioned, &body, Uuid::new_v4());
         let reference = version.clone();
         apply_object(
             &mut state,
@@ -528,7 +527,7 @@ impl VolumeClient for InMemoryVolume {
         &self,
         target: WriteTarget<'_>,
     ) -> Result<ResponseValue<Arc<str>>, VolumeError> {
-        let key: Arc<str> = write_key("", target)?.into();
+        let key: Arc<str> = multipart_key("", target)?.into();
         full_key(self.prefix_len, &key)?;
         let id: Arc<str> = Uuid::new_v4().to_string().into();
         let result = ResponseValue::new(id.clone());
@@ -550,11 +549,11 @@ impl VolumeClient for InMemoryVolume {
         number: i32,
         body: Bytes,
     ) -> Result<UploadedPart, VolumeError> {
-        let key = write_key("", target)?;
+        let key = multipart_key("", target)?;
         full_key(self.prefix_len, &key)?;
         let metadata = UploadedPart {
             number,
-            etag: format!("\"{}\"", Uuid::new_v4()).into(),
+            etag: format!("\"{:x}\"", Sha256::digest(&body)).into(),
             size: body.len() as u64,
         };
         validate_parts(std::slice::from_ref(&metadata))?;
@@ -579,26 +578,20 @@ impl VolumeClient for InMemoryVolume {
     ) -> Result<ObjectVersion, VolumeError> {
         validate_parts(parts)?;
         validate_condition(condition)?;
-        let key = write_key("", target)?;
+        let key = multipart_key("", target)?;
         full_key(self.prefix_len, &key)?;
-        check_not_marker(&key, parts.iter().all(|part| part.size == 0))?;
-        let publication_key = multipart_publication_key(&key);
         let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
         check_condition(
-            state.objects.get(publication_key).and_then(current_object),
+            state.objects.get(key.as_ref()).and_then(current_object),
             condition,
         )?;
         let upload = upload(&mut state, &key, upload_id)?;
         let retained = retained_object(upload);
-        let version = new_version(self.versioned, Uuid::new_v4(), Uuid::new_v4());
-        let (next, object) = complete_upload(upload, retained, parts, version)?;
+        let (next, object) =
+            complete_upload(upload, retained, parts, self.versioned, Uuid::new_v4())?;
         let reference = object.version.clone();
         if let Some(next) = next {
-            let publication_key = if publication_key == upload.key.as_ref() {
-                upload.key.clone()
-            } else {
-                publication_key.into()
-            };
+            let publication_key = upload.key.clone();
             *upload = next;
             apply_object(
                 &mut state,
@@ -615,7 +608,7 @@ impl VolumeClient for InMemoryVolume {
         target: WriteTarget<'_>,
         upload_id: &str,
     ) -> Result<(), VolumeError> {
-        let key = write_key("", target)?;
+        let key = multipart_key("", target)?;
         full_key(self.prefix_len, &key)?;
         let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
         let upload = upload(&mut state, &key, upload_id)?;

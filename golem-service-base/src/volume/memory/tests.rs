@@ -208,8 +208,8 @@ async fn create(volume: &dyn VolumeClient, key: &str, body: &'static str) -> Obj
 }
 
 #[test]
-async fn same_content_writes_get_distinct_strong_etags_in_memory() {
-    let volume = client(false, 2);
+async fn same_content_writes_keep_strong_etags_and_versions_stay_distinct() {
+    let volume = client(true, 2);
     let first = create(volume.as_ref(), "a", "same").await;
     let second = volume
         .put(
@@ -219,9 +219,19 @@ async fn same_content_writes_get_distinct_strong_etags_in_memory() {
         )
         .await
         .unwrap();
-    assert_ne!(first.etag, second.etag);
+    assert_eq!(first.etag, second.etag);
+    assert_ne!(first.version_id, second.version_id);
     assert!(second.etag.starts_with('"') && second.etag.ends_with('"'));
     assert!(!second.etag.starts_with("W/"));
+    let changed = volume
+        .put(
+            WriteTarget::File("a"),
+            WriteCondition::Matches(&first.etag),
+            Bytes::from("different"),
+        )
+        .await
+        .unwrap();
+    assert_ne!(changed.etag, first.etag);
 }
 
 #[test]
@@ -792,7 +802,7 @@ async fn multipart_ids_are_bound_to_keys_and_completed_parts_stay_immutable() {
 
 #[test]
 async fn repeated_completion_returns_retained_result_without_replacing_current() {
-    futures::stream::iter([(false, "a"), (true, "a"), (false, "a/"), (true, "a/")])
+    futures::stream::iter([(false, "a"), (true, "a")])
         .then(|(versioned, upload_key)| async move {
             let volume = client(versioned, 2);
             let target = WriteTarget::File(upload_key);
@@ -806,25 +816,6 @@ async fn repeated_completion_returns_retained_result_without_replacing_current()
                 )
                 .await
                 .unwrap();
-            if upload_key == "a/" {
-                assert_eq!(
-                    volume
-                        .upload_part(
-                            WriteTarget::File("a"),
-                            upload.payload(),
-                            1,
-                            Bytes::from_static(b"wrong-key")
-                        )
-                        .await,
-                    Err(VolumeError::NotFound)
-                );
-                assert_eq!(
-                    volume
-                        .abort_multipart(WriteTarget::File("a"), upload.payload())
-                        .await,
-                    Err(VolumeError::NotFound)
-                );
-            }
             let original = volume
                 .complete_multipart(
                     target,
@@ -834,19 +825,6 @@ async fn repeated_completion_returns_retained_result_without_replacing_current()
                 )
                 .await
                 .unwrap();
-            if upload_key == "a/" {
-                assert_eq!(
-                    volume
-                        .complete_multipart(
-                            WriteTarget::File("a"),
-                            upload.payload(),
-                            std::slice::from_ref(&part),
-                            WriteCondition::Matches(&original.etag),
-                        )
-                        .await,
-                    Err(VolumeError::NotFound)
-                );
-            }
             let mut resized = part.clone();
             resized.size = 1234567;
             assert_eq!(
@@ -1177,99 +1155,43 @@ async fn replacement_parts_invalidate_old_part_references_without_closing_the_up
 }
 
 #[test]
-async fn empty_slash_multipart_cannot_publish_a_folder_marker() {
+async fn slash_multipart_targets_are_rejected_without_changing_the_bare_key() {
     futures::stream::iter([false, true])
         .then(|versioned| async move {
             let volume = client(versioned, 2);
+            let original = create(volume.as_ref(), "a", "neighbor").await;
             let target = WriteTarget::File("a/");
-            let upload = volume.start_multipart(target).await.unwrap();
-            let empty = volume
-                .upload_part(target, upload.payload(), 1, Bytes::new())
-                .await
-                .unwrap();
+            assert_eq!(
+                volume.start_multipart(target).await,
+                Err(VolumeError::InvalidRequest)
+            );
             assert_eq!(
                 volume
-                    .complete_multipart(target, upload.payload(), &[empty], WriteCondition::Absent)
+                    .upload_part(target, "unknown", 1, Bytes::from_static(b"body"))
                     .await,
                 Err(VolumeError::InvalidRequest)
             );
-            assert_eq!(volume.stat("a/", None).await, Err(VolumeError::NotFound));
-            let part = volume
-                .upload_part(
-                    target,
-                    upload.payload(),
-                    1,
-                    Bytes::from_static(b"slash-part-a7Z!"),
-                )
-                .await
-                .unwrap();
-            assert_eq!(part.size, 15);
-            let version = volume
-                .complete_multipart(target, upload.payload(), &[part], WriteCondition::Absent)
-                .await
-                .unwrap();
-            let metadata = volume.stat("a", None).await.unwrap();
-            assert_eq!(metadata.key.as_ref(), "a");
-            assert_eq!(metadata.size, 15);
-            assert_eq!(metadata.version, version);
-            assert_eq!(version.version_id.is_some(), versioned);
-            let read = volume.read("a", &version, None).await.unwrap();
-            assert_eq!(read.version, version);
-            assert_eq!(read.length, 15);
-            assert_eq!(
-                read.body.collect().await.unwrap(),
-                Bytes::from_static(b"slash-part-a7Z!")
-            );
-            let eof = volume.read("a", &version, Some(15..=19)).await.unwrap();
-            assert_eq!(eof.version, version);
-            assert_eq!(eof.length, 0);
-            assert!(eof.body.collect().await.unwrap().is_empty());
-            assert_eq!(volume.stat("a/", None).await, Err(VolumeError::NotFound));
-            assert_eq!(
-                volume.read("a/", &version, None).await.unwrap_err(),
-                VolumeError::NotFound
-            );
-            let expected = [ListedObject {
-                key: "a".into(),
-                size: 15,
-                etag: version.etag.clone(),
-            }];
-            assert_eq!(
-                volume.list("", None).await.unwrap().objects.as_ref(),
-                expected
-            );
-
-            let rejected = volume.start_multipart(target).await.unwrap();
-            let part = volume
-                .upload_part(
-                    target,
-                    rejected.payload(),
-                    1,
-                    Bytes::from_static(b"must-not-replace"),
-                )
-                .await
-                .unwrap();
             assert_eq!(
                 volume
-                    .complete_multipart(target, rejected.payload(), &[part], WriteCondition::Absent)
+                    .complete_multipart(
+                        target,
+                        "unknown",
+                        &[UploadedPart {
+                            number: 1,
+                            etag: "\"part\"".into(),
+                            size: 1,
+                        }],
+                        WriteCondition::Absent
+                    )
                     .await,
-                Err(VolumeError::Exists)
-            );
-            volume
-                .abort_multipart(target, rejected.payload())
-                .await
-                .unwrap();
-            assert_eq!(volume.stat("a", None).await.unwrap(), metadata);
-            let read = volume.read("a", &version, None).await.unwrap();
-            assert_eq!(read.version, version);
-            assert_eq!(
-                read.body.collect().await.unwrap(),
-                Bytes::from_static(b"slash-part-a7Z!")
+                Err(VolumeError::InvalidRequest)
             );
             assert_eq!(
-                volume.list("", None).await.unwrap().objects.as_ref(),
-                expected
+                volume.abort_multipart(target, "unknown").await,
+                Err(VolumeError::InvalidRequest)
             );
+            assert_eq!(volume.stat("a", None).await.unwrap().version, original);
+            assert_eq!(volume.stat("a/", None).await, Err(VolumeError::NotFound));
         })
         .collect::<()>()
         .await;
@@ -1423,62 +1345,4 @@ async fn invalid_read_references_fail_even_when_the_key_is_missing() {
         volume.list("../invalid", None).await.unwrap_err(),
         VolumeError::InvalidRequest
     );
-}
-
-#[test]
-async fn multipart_descriptor_size_does_not_change_actual_empty_publication() {
-    futures::stream::iter([false, true])
-        .then(|versioned| async move {
-            let volume = client(versioned, 2);
-            let target = WriteTarget::File("marker/");
-            let upload = volume.start_multipart(target).await.unwrap();
-            let mut part = volume
-                .upload_part(target, upload.payload(), 1, Bytes::new())
-                .await
-                .unwrap();
-            part.size = 1;
-            let reference = volume
-                .complete_multipart(target, upload.payload(), &[part], WriteCondition::Absent)
-                .await
-                .unwrap();
-            let metadata = volume.stat("marker", None).await.unwrap();
-            assert_eq!(metadata.key.as_ref(), "marker");
-            assert_eq!(metadata.size, 0);
-            assert_eq!(metadata.version, reference);
-            assert_eq!(reference.version_id.is_some(), versioned);
-            assert_eq!(
-                volume.stat("marker/", None).await,
-                Err(VolumeError::NotFound)
-            );
-            futures::stream::iter([None, Some(0..=0)])
-                .then(|range| {
-                    let volume = &volume;
-                    let reference = &reference;
-                    async move {
-                        let read = volume
-                            .read("marker", reference, range.clone())
-                            .await
-                            .unwrap();
-                        assert_eq!(&read.version, reference);
-                        assert_eq!(read.length, 0);
-                        assert!(read.body.collect().await.unwrap().is_empty());
-                        assert_eq!(
-                            volume.read("marker/", reference, range).await.unwrap_err(),
-                            VolumeError::NotFound
-                        );
-                    }
-                })
-                .collect::<()>()
-                .await;
-            assert_eq!(
-                volume.list("", None).await.unwrap().objects.as_ref(),
-                [ListedObject {
-                    key: "marker".into(),
-                    size: 0,
-                    etag: reference.etag
-                }]
-            );
-        })
-        .collect::<()>()
-        .await;
 }

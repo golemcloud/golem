@@ -14,8 +14,8 @@
 
 use super::connection::ConnectionPolicy;
 use super::keys::{
-    check_not_marker, full_key, relative_key, strong_etag, validate_delete, validate_parts,
-    validate_read, write_key,
+    check_not_marker, full_key, multipart_key, relative_key, strong_etag, validate_delete,
+    validate_parts, validate_read, write_key,
 };
 use super::signing::Signing;
 use super::transport::{SystemResolver, Transport};
@@ -683,7 +683,7 @@ impl VolumeClient for S3Volume {
             .client
             .create_multipart_upload()
             .bucket(self.config.bucket.as_ref())
-            .key(write_key(&self.config.prefix, target)?)
+            .key(multipart_key(&self.config.prefix, target)?)
             .set_server_side_encryption(algorithm)
             .set_ssekms_key_id(kms_key);
         let result = request
@@ -713,7 +713,7 @@ impl VolumeClient for S3Volume {
             .client
             .upload_part()
             .bucket(self.config.bucket.as_ref())
-            .key(write_key(&self.config.prefix, target)?)
+            .key(multipart_key(&self.config.prefix, target)?)
             .upload_id(upload_id)
             .part_number(number)
             .body(ByteStream::from(body))
@@ -740,8 +740,7 @@ impl VolumeClient for S3Volume {
         condition: WriteCondition<'_>,
     ) -> Result<ObjectVersion, VolumeError> {
         validate_parts(parts)?;
-        let key = write_key(&self.config.prefix, target)?;
-        check_not_marker(&key, parts.iter().all(|part| part.size == 0))?;
+        let key = multipart_key(&self.config.prefix, target)?;
         let parts = parts
             .iter()
             .map(|part| {
@@ -780,7 +779,7 @@ impl VolumeClient for S3Volume {
         self.client
             .abort_multipart_upload()
             .bucket(self.config.bucket.as_ref())
-            .key(write_key(&self.config.prefix, target)?)
+            .key(multipart_key(&self.config.prefix, target)?)
             .upload_id(upload_id)
             .send()
             .with_subscriber(NoSubscriber::default())

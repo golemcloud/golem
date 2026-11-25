@@ -247,6 +247,7 @@ pub struct LifecycleRule {
 
 /// Conditional object operations. A read uses the complete reference, with a null version
 /// represented by None. A range starting at or beyond the object size returns no bytes.
+/// Multipart operations reject keys that end in `/`.
 #[async_trait]
 pub trait VolumeClient: Debug + Send + Sync {
     async fn stat(
