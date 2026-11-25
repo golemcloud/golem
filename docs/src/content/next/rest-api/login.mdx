@@ -14,12 +14,13 @@ In the response:
 - `secret` is the secret key to be sent in the Authorization header as a bearer token for all the other endpoints
 
 
-**Query Parameters**
-
-Name|Type|Required|Description
----|---|---|---
-provider|#/components/schemas/OAuth2Provider|Yes|Currently only `github` is supported.
-access-token|string|Yes|OAuth2 access token
+**Example Request JSON**
+```json copy
+{
+  "provider": "github",
+  "accessToken": "string"
+}
+```
 
 **Example Response JSON**
 

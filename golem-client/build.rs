@@ -506,6 +506,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
                 "golem_common::model::permission_share::PermissionShareUpdate",
             ),
             // login
+            ("OAuth2Login", "golem_common::model::login::OAuth2Login"),
             (
                 "OAuth2WebflowData",
                 "golem_common::model::login::OAuth2WebflowData",

@@ -39,6 +39,27 @@ declare_structs! {
     }
 }
 
+/// Signs in with an access token that the OAuth2 provider issued to the user.
+#[derive(Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct OAuth2Login {
+    /// Currently only `github` is supported.
+    pub provider: OAuth2Provider,
+    /// The access token that the provider issued to the user.
+    pub access_token: String,
+}
+
+impl std::fmt::Debug for OAuth2Login {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuth2Login")
+            .field("provider", &self.provider)
+            .field("access_token", &"*******")
+            .finish()
+    }
+}
+
 declare_unions! {
     pub enum OAuth2WebflowStart {
         Browser(OAuth2WebflowStartBrowser),
@@ -77,5 +98,15 @@ mod tests {
             OAuth2Provider::Github
         );
         Ok(())
+    }
+
+    #[test]
+    fn oauth2_login_debug_leaves_out_the_access_token() {
+        let login = OAuth2Login {
+            provider: OAuth2Provider::Github,
+            access_token: "gho_debug_secret".to_string(),
+        };
+
+        assert!(!format!("{login:?}").contains("gho_debug_secret"));
     }
 }
