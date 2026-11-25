@@ -402,17 +402,19 @@ async fn setup_probe_app(ctx: &mut TestContext, server_config: &str) -> Recordin
 }
 
 /// The count of rows of `table` in the SQLite file `path`, or 0 when the file does not exist.
-async fn sqlite_rows(path: &std::path::Path, table_and_filter: &str) -> i64 {
+/// The count is `None` when the read fails. The server deletes the file of an empty layer, so the
+/// file can go away between the check and the read.
+async fn sqlite_rows(path: &std::path::Path, table_and_filter: &str) -> Option<i64> {
     if !path.exists() {
-        return 0;
+        return Some(0);
     }
     let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=ro", path.display()))
         .await
-        .unwrap();
-    let (count,): (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {table_and_filter}"))
+        .ok()?;
+    let count = sqlx::query_scalar::<_, i64>(&format!("SELECT COUNT(*) FROM {table_and_filter}"))
         .fetch_one(&pool)
         .await
-        .unwrap();
+        .ok();
     pool.close().await;
     count
 }
@@ -423,7 +425,9 @@ async fn sqlite_rows(path: &std::path::Path, table_and_filter: &str) -> i64 {
 /// drops them from the layer below. So the entries are then all in the blob layer. The local server
 /// keeps one SQLite file for each agent and layer in `kv-store`. It names the file by the
 /// environment ID and the agent ID. It keeps the blobs in `blobs`, under a path that holds the
-/// environment ID and the agent ID.
+/// environment ID. The blob storage writes each name below the namespace as a directory `d-` with
+/// the name in lowercase hex, so the directory of the agent is `d-` and the agent ID in hex. When
+/// the wait times out, the panic message gives the three values and the paths that it read.
 async fn wait_until_archived(ctx: &TestContext, agent: &str) {
     let metadata = ctx
         .cli([cmd::AGENT, cmd::GET, agent, flag::FORMAT, "json"])
@@ -444,32 +448,53 @@ async fn wait_until_archived(ctx: &TestContext, agent: &str) {
         kv_store.join(format!("durable-compressed-oplog-l1-{key}.db")),
     );
     let chunks = ctx.data_dir.path().join("blobs").join("compressed_oplog");
-    let archived = move || {
+    let agent_directory = format!(
+        "d-{}",
+        agent_id
+            .bytes()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
+    );
+    let state = {
         let (primary, compressed, chunks) = (primary.clone(), compressed.clone(), chunks.clone());
-        let (environment_id, agent_id) = (environment_id.clone(), agent_id.clone());
-        async move {
-            let primary_entries = sqlite_rows(
-                &primary,
-                "index_storage WHERE namespace = 'durable-worker-oplog'",
-            )
-            .await;
-            let compressed_chunks = sqlite_rows(&compressed, "index_storage").await;
-            let blob_chunk = walkdir::WalkDir::new(&chunks)
-                .into_iter()
-                .filter_map(Result::ok)
-                .filter(|entry| entry.file_type().is_file())
-                .any(|entry| {
-                    let path = entry.path().to_string_lossy().into_owned();
-                    path.contains(&environment_id) && path.contains(&agent_id)
-                });
-            primary_entries == 0 && compressed_chunks == 0 && blob_chunk
+        let agent_directory = agent_directory.clone();
+        move || {
+            let (primary, compressed, chunks) =
+                (primary.clone(), compressed.clone(), chunks.clone());
+            let (environment_id, agent_directory) =
+                (environment_id.clone(), agent_directory.clone());
+            async move {
+                let primary_entries = sqlite_rows(
+                    &primary,
+                    "index_storage WHERE namespace = 'durable-worker-oplog'",
+                )
+                .await;
+                let compressed_chunks = sqlite_rows(&compressed, "index_storage").await;
+                let blob_chunk = walkdir::WalkDir::new(&chunks)
+                    .into_iter()
+                    .filter_map(Result::ok)
+                    .filter(|entry| entry.file_type().is_file())
+                    .any(|entry| {
+                        entry.path().to_string_lossy().contains(&environment_id)
+                            && entry
+                                .path()
+                                .components()
+                                .any(|name| name.as_os_str() == agent_directory.as_str())
+                    });
+                (primary_entries, compressed_chunks, blob_chunk)
+            }
         }
     };
+    let archived =
+        |(primary_entries, compressed_chunks, blob_chunk): &(Option<i64>, Option<i64>, bool)| {
+            *primary_entries == Some(0) && *compressed_chunks == Some(0) && *blob_chunk
+        };
+    let read_state = state.clone();
     let done = futures_util::StreamExt::filter(
         futures_util::StreamExt::then(futures_util::stream::repeat(()), move |()| {
-            let archived = archived();
+            let read = read_state();
             async move {
-                let done = archived.await;
+                let done = archived(&read.await);
                 if !done {
                     tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 }
@@ -478,12 +503,24 @@ async fn wait_until_archived(ctx: &TestContext, agent: &str) {
         }),
         |done| futures_util::future::ready(*done),
     );
-    tokio::time::timeout(
+    let timed_out = tokio::time::timeout(
         std::time::Duration::from_secs(120),
         futures_util::StreamExt::next(&mut Box::pin(done)),
     )
     .await
-    .unwrap_or_else(|_| panic!("the oplog of {agent} was not archived"));
+    .is_err();
+    if timed_out {
+        let (primary_entries, compressed_chunks, blob_chunk) = state().await;
+        panic!(
+            "the oplog of {agent} was not archived: the primary oplog {} holds {primary_entries:?} \
+             entries, the compressed layer {} holds {compressed_chunks:?} chunks, and a chunk in a \
+             directory {agent_directory} below {} is {}",
+            primary.display(),
+            compressed.display(),
+            chunks.display(),
+            if blob_chunk { "present" } else { "missing" }
+        );
+    }
 }
 
 /// Texts that must not appear in an obfuscated report of `agent`: the marker as text, as base64
