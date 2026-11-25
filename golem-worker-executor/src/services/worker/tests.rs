@@ -4663,14 +4663,14 @@ impl KeyValueStorage for ExpiryRecordingKeyValueStorage {
 /// The worker service writes and removes the status baseline with no expiry, and the live
 /// status cache with the expiry of a derived cache, on the full write, the delta write and the
 /// removal. The removal is `WorkerService::remove` of an incarnation that is not the current one,
-/// which deletes no oplog. The delta write of the baseline on a matching delta base publishes
-/// the delta: one `compare_and_set_many` that expects the core of the first write, sets only the
-/// changed core and deletes nothing. It reads no snapshot of the hash, which a complete
-/// reconciliation reads.
+/// which deletes no oplog. The removal keeps the baseline of the current incarnation. The delta
+/// write of the baseline on a matching delta base publishes the delta: one `compare_and_set_many`
+/// that expects the core of the first write, sets only the changed core and deletes nothing. It
+/// reads no snapshot of the hash, which a complete reconciliation reads.
 #[test]
 async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
     let storage = Arc::new(ExpiryRecordingKeyValueStorage::default());
-    let (service, owned_agent_id, _) = status_baseline_test_service(storage.clone());
+    let (service, owned_agent_id, current) = status_baseline_test_service(storage.clone());
     let fingerprint = AgentFingerprint(Uuid::new_v4());
     let cache = split_status_target(SplitStatusHash::Cache {
         owned_agent_id: &owned_agent_id,
@@ -4721,6 +4721,10 @@ async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
         )),
         "the delta write of the baseline is not one compare-and-set of the changed core"
     );
+    let current_baseline = service
+        .write_status_checkpoint(&owned_agent_id, current, None, marked_status_baseline())
+        .await
+        .unwrap();
     service
         .remove(
             &mut crate::services::oplog::OpenOplogs::new("delete-test")
@@ -4741,6 +4745,14 @@ async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
             .await
             .unwrap(),
         None
+    );
+    assert_eq!(
+        service
+            .read_status_checkpoint(&owned_agent_id, current, AgentMode::Durable)
+            .await
+            .unwrap(),
+        Some(current_baseline),
+        "the removal of one incarnation removes the baseline of the current incarnation"
     );
     let week = Some(DERIVED_CACHE_EXPIRY);
     assert_eq!(
