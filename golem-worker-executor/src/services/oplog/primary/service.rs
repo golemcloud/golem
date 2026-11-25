@@ -693,7 +693,7 @@ impl OplogService for PrimaryOplogService {
             };
             let key = key.clone();
             async move {
-                is.delete_with_epoch("oplog", "delete", ns, &key, expected_epoch)
+                is.delete_with_epoch("oplog", "delete", ns, &key, expected_epoch, false)
                     .await
             }
         })

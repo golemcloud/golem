@@ -12,9 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -268,6 +269,88 @@ fn scan_prefix_upper_bound(prefix: &str) -> Option<String> {
     None
 }
 
+/// The indexed part of a seal record, with the configured compressed levels needed on unseal.
+#[derive(Debug, Clone)]
+pub struct AgentIndexedState {
+    pub owned_agent_id: OwnedAgentId,
+    pub agent_mode: AgentMode,
+    pub compressed_layers: usize,
+    pub manifests: BTreeMap<usize, Arc<[(u64, Bytes)]>>,
+}
+
+impl AgentIndexedState {
+    pub fn primary_namespace(&self) -> IndexedStorageNamespace {
+        IndexedStorageNamespace::OpLog {
+            owned_agent_id: self.owned_agent_id.clone(),
+            agent_mode: self.agent_mode,
+        }
+    }
+
+    pub fn marker_namespace(&self) -> IndexedStorageNamespace {
+        IndexedStorageNamespace::SealedPresent {
+            owned_agent_id: self.owned_agent_id.clone(),
+            agent_mode: self.agent_mode,
+        }
+    }
+
+    pub fn manifest_namespace(&self, level: usize) -> IndexedStorageNamespace {
+        IndexedStorageNamespace::BlobOplogManifest {
+            owned_agent_id: self.owned_agent_id.clone(),
+            agent_mode: self.agent_mode,
+            level,
+        }
+    }
+
+    pub fn fence_namespace(&self) -> IndexedStorageNamespace {
+        match self.agent_mode {
+            AgentMode::Durable => self.primary_namespace(),
+            AgentMode::Ephemeral if self.compressed_layers > 0 => {
+                IndexedStorageNamespace::CompressedOpLog {
+                    owned_agent_id: self.owned_agent_id.clone(),
+                    agent_mode: self.agent_mode,
+                    level: 1,
+                }
+            }
+            AgentMode::Ephemeral => self.manifest_namespace(0),
+        }
+    }
+
+    pub fn epoch_namespaces(&self) -> Vec<IndexedStorageNamespace> {
+        let mut namespaces: Vec<_> = std::iter::once(self.primary_namespace())
+            .chain((1..=self.compressed_layers).map(|level| {
+                IndexedStorageNamespace::CompressedOpLog {
+                    owned_agent_id: self.owned_agent_id.clone(),
+                    agent_mode: self.agent_mode,
+                    level,
+                }
+            }))
+            .chain(
+                self.manifests
+                    .keys()
+                    .map(|level| self.manifest_namespace(*level)),
+            )
+            .collect();
+        let fence = self.fence_namespace();
+        if !namespaces.contains(&fence) {
+            namespaces.push(fence);
+        }
+        namespaces
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReleaseAgentResult {
+    Released,
+    NotReleased,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UnsealAgentResult {
+    Unsealed,
+    AlreadyPresent,
+    Expired,
+}
+
 /// Generic indexed storage interface
 ///
 /// The storage holds indexes identified by keys. Each index is a sequence of entries,
@@ -283,6 +366,56 @@ fn scan_prefix_upper_bound(prefix: &str) -> Option<String> {
 /// This restriction applies to index keys, not literal scan prefixes or marker bounds.
 #[async_trait]
 pub trait IndexedStorage: Debug + Sync {
+    /// Whether whole-agent transitions are atomic on this backend. Callers skip seal otherwise.
+    fn supports_release(&self) -> bool;
+
+    /// Inserts the marker while atomically checking the agent's fence key at exactly `epoch`.
+    async fn mark_sealed(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError>;
+
+    /// Removes all indexed data and epochs in both modes, including staged keys, in one step.
+    /// The fence must equal `epoch`, every other epoch must be at most it, primary/compressed
+    /// entries must be empty, and the complete manifests must equal `state.manifests`.
+    /// A state mismatch returns `NotReleased`; an epoch mismatch returns `Fenced`. Neither mutates.
+    /// A retry after a successful release returns `Released` when no data or epochs remain.
+    async fn release_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+    ) -> Result<ReleaseAgentResult, IndexedStorageError>;
+
+    /// Restores manifests, the primary presence marker, seal marker and epochs atomically.
+    /// Any data row is presence; epoch rows alone are fences and may be raised. A higher epoch
+    /// or an epoch below `record_epoch` returns `Fenced`, without mutation. The server checks
+    /// `valid_until` in the epoch insertion statement, under a short statement timeout.
+    /// An exact retry of an already committed restoration returns `Unsealed`.
+    async fn unseal_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+        record_epoch: ShardEpoch,
+        valid_until: SystemTime,
+    ) -> Result<UnsealAgentResult, IndexedStorageError>;
+
+    /// Removes only this epoch row, conditional on its epoch and no data anywhere for the agent.
+    async fn remove_key_epoch_if_empty(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<bool, IndexedStorageError>;
+
     /// Gets the number of available replicas in the storage cluster
     async fn number_of_replicas(
         &self,
@@ -487,7 +620,13 @@ pub trait IndexedStorage: Debug + Sync {
 
     /// Records the writer generation for the given key. A monotonic compare-and-set - accepted when
     /// `epoch` is at least the stored one, and refused with [`IndexedStorageError::Fenced`]
-    /// otherwise. Inserts the record if the key has none.
+    /// otherwise. Inserts the record if the key has none. On backends with [`Self::supports_release`],
+    /// returns data presence across the claimed namespace and `presence_namespaces`, checked
+    /// atomically with the claim. Epoch rows do not
+    /// count as presence. When `remove_if_absent` is set, an absent claim removes its epoch in the
+    /// same transaction; observation-only ephemeral opens use this instead of restoring presence.
+    /// Backends without release support retain their namespace-local claim behavior, ignore
+    /// these two lifecycle options, and must not be used to open a sealed agent.
     async fn set_key_epoch(
         &self,
         svc_name: &'static str,
@@ -495,10 +634,14 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: IndexedStorageNamespace,
         key: &str,
         epoch: ShardEpoch,
-    ) -> Result<(), IndexedStorageError>;
+        presence_namespaces: &[IndexedStorageNamespace],
+        remove_if_absent: bool,
+    ) -> Result<bool, IndexedStorageError>;
 
     /// Deletes the index of the given key, as [`Self::delete`] does, together with the writer
-    /// generation recorded for it, in one step.
+    /// generation recorded for it, in one step. When `retain_epoch` is true, keeps the asserted
+    /// epoch instead and removes the seal marker in that same transaction. This is deletion's
+    /// fence against a former owner's unseal until tombstone collection removes it.
     async fn delete_with_epoch(
         &self,
         svc_name: &'static str,
@@ -506,6 +649,7 @@ pub trait IndexedStorage: Debug + Sync {
         namespace: IndexedStorageNamespace,
         key: &str,
         expected_epoch: Option<ShardEpoch>,
+        retain_epoch: bool,
     ) -> Result<(), IndexedStorageError>;
 }
 
@@ -662,10 +806,18 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledIndexedStorage<'a, S> {
         namespace: IndexedStorageNamespace,
         key: &str,
         expected_epoch: Option<ShardEpoch>,
+        retain_epoch: bool,
     ) -> Result<(), IndexedStorageError> {
         self.record("delete");
         self.storage
-            .delete_with_epoch(self.svc_name, self.api_name, namespace, key, expected_epoch)
+            .delete_with_epoch(
+                self.svc_name,
+                self.api_name,
+                namespace,
+                key,
+                expected_epoch,
+                retain_epoch,
+            )
             .await
     }
 
@@ -1053,6 +1205,10 @@ impl<'a, S: ?Sized + IndexedStorage> LabelledEntityIndexedStorage<'a, S> {
 /// Various namespaces for indexed storage
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum IndexedStorageNamespace {
+    SealedPresent {
+        owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
+    },
     OpLog {
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,

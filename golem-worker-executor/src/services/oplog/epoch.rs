@@ -84,8 +84,17 @@ pub(crate) async fn record_owning_epoch(
         let namespace = namespace.clone();
         async move {
             indexed_storage
-                .set_key_epoch(svc_name, "set_key_epoch", namespace, key, shard_epoch)
+                .set_key_epoch(
+                    svc_name,
+                    "set_key_epoch",
+                    namespace,
+                    key,
+                    shard_epoch,
+                    &[],
+                    false,
+                )
                 .await
+                .map(|_| ())
         }
     })
     .await;

@@ -3189,6 +3189,8 @@ pub async fn take_agent_oplog_over_at_epoch(
             },
             &owned_agent_id.storage_key(),
             ShardEpoch(epoch),
+            &[],
+            false,
         )
         .await?;
     Ok(())

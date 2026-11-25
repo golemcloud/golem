@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::{
-    FencedTxError, IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace, ScanResume,
+    AgentIndexedState, FencedTxError, IndexedStorage, IndexedStorageError,
+    IndexedStorageMetaNamespace, IndexedStorageNamespace, ReleaseAgentResult, ScanResume,
+    UnsealAgentResult,
 };
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -28,16 +29,15 @@ use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::repo::RepoError;
 use include_dir::include_dir;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 const DB_TYPE: &str = "sqlite";
-const SCAN_INCLUSIVE_BOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key >= ? AND key < ? ORDER BY key LIMIT ?;";
-const SCAN_EXCLUSIVE_BOUNDED_QUERY: &str = "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key > ? AND key < ? ORDER BY key LIMIT ?;";
-const SCAN_INCLUSIVE_UNBOUNDED_QUERY: &str =
-    "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key >= ? ORDER BY key LIMIT ?;";
-const SCAN_EXCLUSIVE_UNBOUNDED_QUERY: &str =
-    "SELECT DISTINCT key FROM index_storage WHERE namespace = ? AND key > ? ORDER BY key LIMIT ?;";
+const SCAN_INCLUSIVE_BOUNDED_QUERY: &str = "SELECT key FROM index_storage WHERE namespace = ? AND key >= ? AND key < ? UNION SELECT key FROM index_storage WHERE namespace = ? AND key >= ? AND key < ? ORDER BY key LIMIT ?;";
+const SCAN_EXCLUSIVE_BOUNDED_QUERY: &str = "SELECT key FROM index_storage WHERE namespace = ? AND key > ? AND key < ? UNION SELECT key FROM index_storage WHERE namespace = ? AND key > ? AND key < ? ORDER BY key LIMIT ?;";
+const SCAN_INCLUSIVE_UNBOUNDED_QUERY: &str = "SELECT key FROM index_storage WHERE namespace = ? AND key >= ? UNION SELECT key FROM index_storage WHERE namespace = ? AND key >= ? ORDER BY key LIMIT ?;";
+const SCAN_EXCLUSIVE_UNBOUNDED_QUERY: &str = "SELECT key FROM index_storage WHERE namespace = ? AND key > ? UNION SELECT key FROM index_storage WHERE namespace = ? AND key > ? ORDER BY key LIMIT ?;";
 
 static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/migration/indexed");
 
@@ -211,6 +211,12 @@ impl SqliteIndexedStorage {
 
     pub(super) fn namespace(namespace: IndexedStorageNamespace) -> String {
         match namespace {
+            IndexedStorageNamespace::SealedPresent { agent_mode, .. } => {
+                format!(
+                    "{}-worker-sealed-present",
+                    super::agent_mode_prefix(agent_mode)
+                )
+            }
             IndexedStorageNamespace::OpLog {
                 owned_agent_id: _,
                 agent_mode,
@@ -310,6 +316,37 @@ impl SqliteIndexedStorage {
         FencedTxError::check_record(key, expected, stored, Self::negative_epoch_message)
     }
 
+    async fn agent_epochs(
+        tx: &mut SqliteLabelledTransaction,
+        key: &str,
+        expected: ShardEpoch,
+    ) -> Result<(), FencedTxError> {
+        let rows: Vec<(String, i64)> = tx.fetch_all_as(sqlx::query_as(
+            "SELECT key, epoch FROM indexed_key_epoch WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';",
+        ).bind(key).bind(key).bind(key)).await?;
+        for (key, stored) in rows {
+            if stored < 0 || u64::try_from(stored).is_ok_and(|value| value > expected.0) {
+                FencedTxError::check_record(
+                    &key,
+                    expected,
+                    Some(stored),
+                    Self::negative_epoch_message,
+                )?;
+            }
+        }
+        Ok(())
+    }
+
+    async fn agent_has_data(
+        tx: &mut SqliteLabelledTransaction,
+        key: &str,
+    ) -> Result<bool, RepoError> {
+        let (present,): (bool,) = tx.fetch_one_as(sqlx::query_as(
+            "SELECT EXISTS(SELECT 1 FROM index_storage WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#');",
+        ).bind(key).bind(key).bind(key)).await?;
+        Ok(present)
+    }
+
     pub(super) fn classify_repo_error(err: RepoError) -> IndexedStorageError {
         if err.is_transient() {
             IndexedStorageError::Transient(err.to_string())
@@ -350,6 +387,212 @@ impl SqliteIndexedStorage {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl IndexedStorage for SqliteIndexedStorage {
+    fn supports_release(&self) -> bool {
+        true
+    }
+
+    async fn mark_sealed(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        let key = state.owned_agent_id.storage_key();
+        let fence = Self::namespace(state.fence_namespace());
+        let marker = Self::namespace(state.marker_namespace());
+        self.pool.with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
+            Box::pin(async move {
+                Self::check_epoch(tx, &fence, &key, epoch).await?;
+                tx.execute(sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, 0, x'') ON CONFLICT DO NOTHING;")
+                    .bind(marker).bind(key)).await?;
+                Ok(())
+            })
+        }).await.map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
+    }
+
+    async fn release_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+    ) -> Result<ReleaseAgentResult, IndexedStorageError> {
+        let key = state.owned_agent_id.storage_key();
+        let fence = Self::namespace(state.fence_namespace());
+        let mut expected = BTreeMap::new();
+        for (level, pairs) in &state.manifests {
+            let namespace = Self::namespace(state.manifest_namespace(*level));
+            for (id, value) in pairs.iter() {
+                let id = Self::to_i64(*id, "manifest id")?;
+                if expected
+                    .insert((namespace.clone(), id), value.to_vec())
+                    .is_some()
+                {
+                    return Ok(ReleaseAgentResult::NotReleased);
+                }
+            }
+        }
+        self.pool.with_tx_err::<_, FencedTxError, _>(svc_name, api_name, |tx| {
+            Box::pin(async move {
+                if !Self::agent_has_data(tx, &key).await? {
+                    let (has_epochs,): (bool,) = tx.fetch_one_as(sqlx::query_as(
+                        "SELECT EXISTS(SELECT 1 FROM indexed_key_epoch WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#');",
+                    ).bind(&key).bind(&key).bind(&key)).await?;
+                    if !has_epochs {
+                        return Ok(ReleaseAgentResult::Released);
+                    }
+                }
+                Self::check_epoch(tx, &fence, &key, epoch).await?;
+                Self::agent_epochs(tx, &key, epoch).await?;
+                let rows: Vec<(String, String, i64, Vec<u8>)> = tx.fetch_all_as(sqlx::query_as(
+                    "SELECT namespace, key, id, value FROM index_storage WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';",
+                ).bind(&key).bind(&key).bind(&key)).await?;
+                for (namespace, row_key, id, value) in rows {
+                    if namespace.ends_with("-worker-staged-oplog") || namespace.ends_with("-present") {
+                        continue;
+                    }
+                    if row_key != key || expected.remove(&(namespace, id)).as_ref() != Some(&value) {
+                        return Ok(ReleaseAgentResult::NotReleased);
+                    }
+                }
+                if !expected.is_empty() {
+                    return Ok(ReleaseAgentResult::NotReleased);
+                }
+                tx.execute(sqlx::query("DELETE FROM index_storage WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';")
+                    .bind(&key).bind(&key).bind(&key)).await?;
+                tx.execute(sqlx::query("DELETE FROM indexed_key_epoch WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';")
+                    .bind(&key).bind(&key).bind(&key)).await?;
+                Ok(ReleaseAgentResult::Released)
+            })
+        }).await.map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
+    }
+
+    async fn unseal_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+        record_epoch: ShardEpoch,
+        valid_until: SystemTime,
+    ) -> Result<UnsealAgentResult, IndexedStorageError> {
+        let key = state.owned_agent_id.storage_key();
+        if epoch < record_epoch {
+            return Err(IndexedStorageError::Fenced {
+                key,
+                expected: epoch,
+                actual: Some(record_epoch),
+            });
+        }
+        let epoch_value = Self::to_i64(epoch.0, "epoch")?;
+        let Some(deadline) = valid_until
+            .duration_since(UNIX_EPOCH)
+            .ok()
+            .and_then(|duration| i64::try_from(duration.as_millis()).ok())
+        else {
+            return Ok(UnsealAgentResult::Expired);
+        };
+        let fence = Self::namespace(state.fence_namespace());
+        let primary = Self::namespace(state.primary_namespace());
+        let marker = Self::namespace(state.marker_namespace());
+        let namespaces: Vec<_> = state
+            .epoch_namespaces()
+            .into_iter()
+            .map(Self::namespace)
+            .collect();
+        let mut manifests = Vec::new();
+        for (level, pairs) in &state.manifests {
+            for (id, value) in pairs.iter() {
+                manifests.push((
+                    Self::namespace(state.manifest_namespace(*level)),
+                    Self::to_i64(*id, "manifest id")?,
+                    value.clone(),
+                ));
+            }
+        }
+        self.pool.with_tx_err::<_, FencedTxError, _>(svc_name, api_name, |tx| {
+            Box::pin(async move {
+                Self::agent_epochs(tx, &key, epoch).await?;
+                if Self::agent_has_data(tx, &key).await? {
+                    let rows: Vec<(String, String, i64, Vec<u8>)> = tx.fetch_all_as(sqlx::query_as(
+                        "SELECT namespace, key, id, value FROM index_storage WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';",
+                    ).bind(&key).bind(&key).bind(&key)).await?;
+                    let mut expected: BTreeMap<_, _> = manifests.iter().map(|(namespace, id, value)| {
+                        ((namespace.clone(), *id), value.to_vec())
+                    }).collect();
+                    expected.insert((format!("{primary}-present"), 0), Vec::new());
+                    expected.insert((marker.clone(), 0), Vec::new());
+                    let exact_rows = rows.len() == expected.len() && rows.into_iter().all(|(namespace, row_key, id, value)| {
+                        row_key == key && expected.get(&(namespace, id)) == Some(&value)
+                    });
+                    if exact_rows {
+                        let epochs: Vec<(String, String, i64)> = tx.fetch_all_as(sqlx::query_as(
+                            "SELECT namespace, key, epoch FROM indexed_key_epoch WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';",
+                        ).bind(&key).bind(&key).bind(&key)).await?;
+                        let mut required: BTreeSet<_> = namespaces.iter().cloned().collect();
+                        required.insert(fence.clone());
+                        let exact_epochs = epochs.into_iter().all(|(namespace, row_key, stored)| {
+                            if row_key == key {
+                                required.remove(&namespace);
+                            }
+                            stored == epoch_value
+                        });
+                        if exact_epochs && required.is_empty() {
+                            return Ok(UnsealAgentResult::Unsealed);
+                        }
+                    }
+                    return Ok(UnsealAgentResult::AlreadyPresent);
+                }
+                // SQLite's clock has millisecond precision. Compare its next millisecond to
+                // the floored deadline so rounding cannot admit a write after expiry.
+                let inserted = tx.execute(sqlx::query(
+                    "INSERT INTO indexed_key_epoch (namespace, key, epoch) SELECT ?, ?, ? WHERE CAST(strftime('%s', 'now') AS INTEGER) * 1000 + CAST(substr(strftime('%f', 'now'), 4, 3) AS INTEGER) + 1 <= ? ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch;",
+                ).bind(fence).bind(&key).bind(epoch_value).bind(deadline)).await?;
+                if inserted.rows_affected() == 0 {
+                    return Ok(UnsealAgentResult::Expired);
+                }
+                tx.execute(sqlx::query("UPDATE indexed_key_epoch SET epoch = ? WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#';")
+                    .bind(epoch_value).bind(&key).bind(&key).bind(&key)).await?;
+                for namespace in namespaces {
+                    tx.execute(sqlx::query("INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES (?, ?, ?) ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch;")
+                        .bind(namespace).bind(&key).bind(epoch_value)).await?;
+                }
+                for (namespace, id, value) in manifests {
+                    tx.execute(sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, ?, ?);")
+                        .bind(namespace).bind(&key).bind(id).bind(value.as_ref())).await?;
+                }
+                for namespace in [format!("{primary}-present"), marker] {
+                    tx.execute(sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, 0, x'');")
+                        .bind(namespace).bind(&key)).await?;
+                }
+                Ok(UnsealAgentResult::Unsealed)
+            })
+        }).await.map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
+    }
+
+    async fn remove_key_epoch_if_empty(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<bool, IndexedStorageError> {
+        let namespace = Self::namespace(namespace);
+        let epoch = Self::to_i64(epoch.0, "epoch")?;
+        let key = key.to_string();
+        let agent_key = key.split('#').next().unwrap_or(&key).to_string();
+        self.pool.with_tx(svc_name, api_name, |tx| {
+            Box::pin(async move {
+                let removed = tx.execute(sqlx::query(
+                    "DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ? AND epoch = ? AND NOT EXISTS(SELECT 1 FROM index_storage WHERE key = ? OR substr(key, 1, length(?) + 1) = ? || '#');",
+                ).bind(namespace).bind(key).bind(epoch).bind(&agent_key).bind(&agent_key).bind(&agent_key)).await?;
+                Ok(removed.rows_affected() > 0)
+            })
+        }).await.map_err(Self::classify_repo_error)
+    }
+
     async fn number_of_replicas(
         &self,
         _svc_name: &'static str,
@@ -405,21 +648,31 @@ impl IndexedStorage for SqliteIndexedStorage {
         let count_param = sqlx::types::Json(count);
         let query = match (bounds.inclusive, bounds.upper) {
             (true, Some(upper)) => sqlx::query_as(SCAN_INCLUSIVE_BOUNDED_QUERY)
-                .bind(namespace)
+                .bind(namespace.clone())
+                .bind(bounds.lower.clone())
+                .bind(upper.clone())
+                .bind(format!("{namespace}-present"))
                 .bind(bounds.lower)
                 .bind(upper)
                 .bind(count_param),
             (false, Some(upper)) => sqlx::query_as(SCAN_EXCLUSIVE_BOUNDED_QUERY)
-                .bind(namespace)
+                .bind(namespace.clone())
+                .bind(bounds.lower.clone())
+                .bind(upper.clone())
+                .bind(format!("{namespace}-present"))
                 .bind(bounds.lower)
                 .bind(upper)
                 .bind(count_param),
             (true, None) => sqlx::query_as(SCAN_INCLUSIVE_UNBOUNDED_QUERY)
-                .bind(namespace)
+                .bind(namespace.clone())
+                .bind(bounds.lower.clone())
+                .bind(format!("{namespace}-present"))
                 .bind(bounds.lower)
                 .bind(count_param),
             (false, None) => sqlx::query_as(SCAN_EXCLUSIVE_UNBOUNDED_QUERY)
-                .bind(namespace)
+                .bind(namespace.clone())
+                .bind(bounds.lower.clone())
+                .bind(format!("{namespace}-present"))
                 .bind(bounds.lower)
                 .bind(count_param),
         };
@@ -481,7 +734,8 @@ impl IndexedStorage for SqliteIndexedStorage {
             IndexedStorageNamespace::BlobOplogManifest { .. } => {
                 Self::classify_repo_error_manifest_insert
             }
-            IndexedStorageNamespace::CompressedOpLog { .. } => Self::classify_repo_error,
+            IndexedStorageNamespace::CompressedOpLog { .. }
+            | IndexedStorageNamespace::SealedPresent { .. } => Self::classify_repo_error,
         };
         let namespace = Self::namespace((*namespace).clone());
         let key = key.to_string();
@@ -530,55 +784,47 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         new_epoch: ShardEpoch,
-    ) -> Result<(), IndexedStorageError> {
+        presence_namespaces: &[IndexedStorageNamespace],
+        remove_if_absent: bool,
+    ) -> Result<bool, IndexedStorageError> {
         let namespace = Self::namespace(namespace);
         // `i64`, not `u64`: sqlx has no `Encode<Sqlite>` for `u64`, which is why ids elsewhere in
         // this file go through `Json`. That encodes as TEXT, and comparison affinity is applied
         // per operand, so this column stays integer-bound everywhere. Checked (see `to_i64`)
         // rather than `as i64`, which would silently wrap an out-of-range epoch to negative.
         let epoch = Self::to_i64(new_epoch.0, "epoch")?;
-
-        let mut api = self.pool.with_rw(svc_name, api_name);
-        let result = api
-            .execute(
-                sqlx::query(
+        let presence_namespaces: BTreeSet<_> = presence_namespaces
+            .iter()
+            .cloned()
+            .map(Self::namespace)
+            .chain(std::iter::once(namespace.clone()))
+            .collect();
+        let key = key.to_string();
+        self.pool.with_tx_err::<bool, FencedTxError, _>(svc_name, api_name, |tx| {
+            Box::pin(async move {
+                let result = tx.execute(sqlx::query(
                     r#"INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES (?, ?, ?)
                        ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch
                        WHERE epoch <= excluded.epoch;"#,
-                )
-                .bind(namespace.clone())
-                .bind(key)
-                .bind(epoch),
-            )
-            .await
-            .map_err(Self::classify_repo_error)?;
-
-        if result.rows_affected() == 0 {
-            let stored: Option<(i64,)> = api
-                .fetch_optional_as(
-                    sqlx::query_as(
-                        "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
-                    )
-                    .bind(namespace)
-                    .bind(key),
-                )
-                .await
-                .map_err(Self::classify_repo_error)?;
-            let actual = stored
-                .map(|(epoch,)| {
-                    u64::try_from(epoch).map(ShardEpoch).map_err(|_| {
-                        IndexedStorageError::Other(Self::negative_epoch_message(epoch, key))
-                    })
-                })
-                .transpose()?;
-            return Err(IndexedStorageError::Fenced {
-                key: key.to_string(),
-                expected: new_epoch,
-                actual,
-            });
-        }
-
-        Ok(())
+                ).bind(&namespace).bind(&key).bind(epoch)).await?;
+                if result.rows_affected() == 0 {
+                    Self::check_epoch(tx, &namespace, &key, new_epoch).await?;
+                }
+                for presence_namespace in presence_namespaces {
+                    let (present,): (bool,) = tx.fetch_one_as(sqlx::query_as(
+                        "SELECT EXISTS(SELECT 1 FROM index_storage WHERE namespace IN (?, ?) AND key = ?);",
+                    ).bind(format!("{presence_namespace}-present")).bind(presence_namespace).bind(&key)).await?;
+                    if present {
+                        return Ok(true);
+                    }
+                }
+                if remove_if_absent {
+                    tx.execute(sqlx::query("DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ? AND epoch = ?;")
+                        .bind(namespace).bind(key).bind(epoch)).await?;
+                }
+                Ok(false)
+            })
+        }).await.map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
     }
 
     async fn delete_empty_with_epoch(
@@ -631,7 +877,25 @@ impl IndexedStorage for SqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         expected_epoch: Option<ShardEpoch>,
+        retain_epoch: bool,
     ) -> Result<(), IndexedStorageError> {
+        if retain_epoch && expected_epoch.is_none() {
+            return Err(IndexedStorageError::Other(
+                "Retaining a SQLite indexed epoch requires an asserted epoch".into(),
+            ));
+        }
+        let retained_epoch = expected_epoch
+            .filter(|_| retain_epoch)
+            .map(|epoch| Self::to_i64(epoch.0, "epoch"))
+            .transpose()?;
+        let mode = match &namespace {
+            IndexedStorageNamespace::SealedPresent { agent_mode, .. }
+            | IndexedStorageNamespace::OpLog { agent_mode, .. }
+            | IndexedStorageNamespace::StagedOpLog { agent_mode, .. }
+            | IndexedStorageNamespace::CompressedOpLog { agent_mode, .. }
+            | IndexedStorageNamespace::BlobOplogManifest { agent_mode, .. } => *agent_mode,
+        };
+        let seal_marker = format!("{}-worker-sealed-present", super::agent_mode_prefix(mode));
         let namespace = Self::namespace(namespace);
         let key = key.to_string();
         self.pool
@@ -657,15 +921,27 @@ impl IndexedStorage for SqliteIndexedStorage {
                                 )
                                 .await?;
                             if !has_entries {
-                                return Ok(());
+                                if !retain_epoch {
+                                    return Ok(());
+                                }
+                                let agent_key = key.split('#').next().unwrap_or(&key);
+                                Self::agent_epochs(tx, agent_key, expected).await?;
+                            } else {
+                                FencedTxError::check_record(
+                                    &key,
+                                    expected,
+                                    stored,
+                                    Self::negative_epoch_message,
+                                )?;
                             }
+                        } else {
+                            FencedTxError::check_record(
+                                &key,
+                                expected,
+                                stored,
+                                Self::negative_epoch_message,
+                            )?;
                         }
-                        FencedTxError::check_record(
-                            &key,
-                            expected,
-                            stored,
-                            Self::negative_epoch_message,
-                        )?;
                     }
                     tx.execute(
                         sqlx::query(
@@ -676,14 +952,21 @@ impl IndexedStorage for SqliteIndexedStorage {
                         .bind(key.clone()),
                     )
                     .await?;
-                    tx.execute(
-                        sqlx::query(
-                            "DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                    if let Some(epoch) = retained_epoch {
+                        tx.execute(sqlx::query("DELETE FROM index_storage WHERE namespace = ? AND key = ?;")
+                            .bind(seal_marker).bind(key.split('#').next().unwrap_or(&key))).await?;
+                        tx.execute(sqlx::query("INSERT INTO indexed_key_epoch (namespace, key, epoch) VALUES (?, ?, ?) ON CONFLICT(namespace, key) DO UPDATE SET epoch = excluded.epoch;")
+                            .bind(namespace).bind(key).bind(epoch)).await?;
+                    } else {
+                        tx.execute(
+                            sqlx::query(
+                                "DELETE FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                            )
+                            .bind(namespace)
+                            .bind(key),
                         )
-                        .bind(namespace)
-                        .bind(key),
-                    )
-                    .await?;
+                        .await?;
+                    }
                     Ok(())
                 })
             })
@@ -1006,6 +1289,426 @@ mod tests {
         .unwrap()
     }
 
+    fn sealed_state(agent_mode: AgentMode) -> AgentIndexedState {
+        AgentIndexedState {
+            owned_agent_id: OwnedAgentId::new(
+                EnvironmentId(uuid::Uuid::from_u128(1)),
+                &AgentId::from_parts(7, 1),
+            ),
+            agent_mode,
+            compressed_layers: 1,
+            manifests: BTreeMap::from([(2, vec![(9, Bytes::from_static(b"manifest"))].into())]),
+        }
+    }
+
+    #[test]
+    async fn release_checks_all_modes_and_levels_and_removes_crash_left_stages() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage =
+            sqlite_storage(tempdir.path().join("release.db").to_string_lossy().into()).await;
+        let state = sealed_state(AgentMode::Durable);
+        let key = state.owned_agent_id.storage_key();
+        let epoch = ShardEpoch(5);
+        storage
+            .unseal_agent(
+                "test",
+                "restore",
+                &state,
+                epoch,
+                epoch,
+                SystemTime::now() + Duration::from_secs(60),
+            )
+            .await
+            .unwrap();
+        let extra = IndexedStorageNamespace::CompressedOpLog {
+            owned_agent_id: state.owned_agent_id.clone(),
+            agent_mode: AgentMode::Ephemeral,
+            level: 99,
+        };
+        storage
+            .set_key_epoch(
+                "test",
+                "epoch",
+                extra.clone(),
+                &key,
+                ShardEpoch(6),
+                &[],
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            storage
+                .release_agent("test", "release", &state, epoch)
+                .await,
+            Err(IndexedStorageError::Fenced {
+                actual: Some(ShardEpoch(6)),
+                ..
+            })
+        ));
+        assert!(
+            storage
+                .exists("test", "exists", state.marker_namespace(), &key)
+                .await
+                .unwrap()
+        );
+        storage
+            .delete_with_epoch(
+                "test",
+                "delete",
+                extra.clone(),
+                &key,
+                Some(ShardEpoch(6)),
+                false,
+            )
+            .await
+            .unwrap();
+        storage
+            .append(
+                "test",
+                "append",
+                "entry",
+                extra.clone(),
+                &key,
+                1,
+                vec![1],
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .release_agent("test", "release", &state, epoch)
+                .await
+                .unwrap(),
+            ReleaseAgentResult::NotReleased
+        );
+        storage.delete("test", "delete", extra, &key).await.unwrap();
+
+        let extra_manifest = IndexedStorageNamespace::BlobOplogManifest {
+            owned_agent_id: state.owned_agent_id.clone(),
+            agent_mode: AgentMode::Ephemeral,
+            level: 99,
+        };
+        storage
+            .append(
+                "test",
+                "append",
+                "manifest",
+                extra_manifest.clone(),
+                &key,
+                9,
+                b"manifest".to_vec(),
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .release_agent("test", "release", &state, epoch)
+                .await
+                .unwrap(),
+            ReleaseAgentResult::NotReleased
+        );
+        storage
+            .delete("test", "delete", extra_manifest, &key)
+            .await
+            .unwrap();
+
+        let stage = IndexedStorageNamespace::StagedOpLog {
+            owned_agent_id: state.owned_agent_id.clone(),
+            agent_mode: AgentMode::Ephemeral,
+        };
+        let stage_key = format!("{key}#{}", uuid::Uuid::from_u128(55));
+        storage
+            .set_key_epoch(
+                "test",
+                "epoch",
+                stage.clone(),
+                &stage_key,
+                ShardEpoch(4),
+                &[],
+                false,
+            )
+            .await
+            .unwrap();
+        storage
+            .append(
+                "test",
+                "stage",
+                "entry",
+                stage,
+                &stage_key,
+                1,
+                vec![1],
+                Some(ShardEpoch(4)),
+            )
+            .await
+            .unwrap();
+        let mut mismatched = state.clone();
+        mismatched
+            .manifests
+            .insert(2, vec![(9, Bytes::from_static(b"wrong"))].into());
+        assert_eq!(
+            storage
+                .release_agent("test", "release", &mismatched, epoch)
+                .await
+                .unwrap(),
+            ReleaseAgentResult::NotReleased
+        );
+        assert_eq!(
+            storage
+                .release_agent("test", "release", &state, epoch)
+                .await
+                .unwrap(),
+            ReleaseAgentResult::Released
+        );
+        assert_eq!(storage.empty_database_epochs().await.unwrap(), Some(vec![]));
+        assert_eq!(
+            storage
+                .release_agent("test", "retry_release", &state, epoch)
+                .await
+                .unwrap(),
+            ReleaseAgentResult::Released
+        );
+    }
+
+    #[test]
+    async fn unseal_raises_bare_epochs_and_retained_delete_fences_old_owners() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage =
+            sqlite_storage(tempdir.path().join("unseal.db").to_string_lossy().into()).await;
+        let state = sealed_state(AgentMode::Ephemeral);
+        let key = state.owned_agent_id.storage_key();
+        let old_namespace = IndexedStorageNamespace::CompressedOpLog {
+            owned_agent_id: state.owned_agent_id.clone(),
+            agent_mode: AgentMode::Durable,
+            level: 99,
+        };
+        storage
+            .set_key_epoch(
+                "test",
+                "epoch",
+                old_namespace.clone(),
+                &key,
+                ShardEpoch(2),
+                &[],
+                false,
+            )
+            .await
+            .unwrap();
+        let deadline = SystemTime::now() + Duration::from_secs(60);
+        assert_eq!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "restore",
+                    &state,
+                    ShardEpoch(5),
+                    ShardEpoch(4),
+                    deadline
+                )
+                .await
+                .unwrap(),
+            UnsealAgentResult::Unsealed
+        );
+        storage
+            .mark_sealed("test", "mark", &state, ShardEpoch(5))
+            .await
+            .unwrap();
+        let (raised,): (i64,) = storage
+            .pool
+            .with_ro("test", "raised_epoch")
+            .fetch_one_as(
+                sqlx::query_as(
+                    "SELECT epoch FROM indexed_key_epoch WHERE namespace = ? AND key = ?;",
+                )
+                .bind(SqliteIndexedStorage::namespace(old_namespace.clone()))
+                .bind(&key),
+            )
+            .await
+            .unwrap();
+        assert_eq!(raised, 5);
+        assert!(matches!(
+            storage
+                .mark_sealed("test", "mark", &state, ShardEpoch(4))
+                .await,
+            Err(IndexedStorageError::Fenced { .. })
+        ));
+        assert_eq!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "restore",
+                    &state,
+                    ShardEpoch(5),
+                    ShardEpoch(4),
+                    UNIX_EPOCH
+                )
+                .await
+                .unwrap(),
+            UnsealAgentResult::Unsealed
+        );
+        assert!(
+            !storage
+                .remove_key_epoch_if_empty("test", "gc", old_namespace.clone(), &key, ShardEpoch(5))
+                .await
+                .unwrap()
+        );
+        storage
+            .delete_with_epoch(
+                "test",
+                "delete_seal",
+                state.fence_namespace(),
+                &key,
+                Some(ShardEpoch(5)),
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .exists("test", "exists", state.marker_namespace(), &key)
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "changed_rows",
+                    &state,
+                    ShardEpoch(5),
+                    ShardEpoch(4),
+                    deadline
+                )
+                .await
+                .unwrap(),
+            UnsealAgentResult::AlreadyPresent
+        );
+        storage
+            .release_agent("test", "release", &state, ShardEpoch(5))
+            .await
+            .unwrap();
+        storage
+            .delete_with_epoch(
+                "test",
+                "delete",
+                state.fence_namespace(),
+                &key,
+                Some(ShardEpoch(6)),
+                true,
+            )
+            .await
+            .unwrap();
+        storage
+            .delete_with_epoch(
+                "test",
+                "retry",
+                state.fence_namespace(),
+                &key,
+                Some(ShardEpoch(6)),
+                true,
+            )
+            .await
+            .unwrap();
+        assert!(matches!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "restore",
+                    &state,
+                    ShardEpoch(5),
+                    ShardEpoch(4),
+                    deadline
+                )
+                .await,
+            Err(IndexedStorageError::Fenced {
+                actual: Some(ShardEpoch(6)),
+                ..
+            })
+        ));
+        assert!(
+            !storage
+                .remove_key_epoch_if_empty(
+                    "test",
+                    "gc",
+                    state.fence_namespace(),
+                    &key,
+                    ShardEpoch(5)
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            storage
+                .remove_key_epoch_if_empty(
+                    "test",
+                    "gc",
+                    state.fence_namespace(),
+                    &key,
+                    ShardEpoch(6)
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(storage.empty_database_epochs().await.unwrap(), Some(vec![]));
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn unseal_deadline_is_checked_after_waiting_for_the_writer() {
+        use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction};
+
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage =
+            sqlite_storage(tempdir.path().join("deadline.db").to_string_lossy().into()).await;
+        let state = sealed_state(AgentMode::Durable);
+        let key = state.owned_agent_id.storage_key();
+        storage
+            .set_key_epoch(
+                "test",
+                "epoch",
+                state.fence_namespace(),
+                &key,
+                ShardEpoch(2),
+                &[],
+                false,
+            )
+            .await
+            .unwrap();
+        let held = storage
+            .pool
+            .with_rw("test", "hold_writer")
+            .begin()
+            .await
+            .unwrap();
+        let deadline = SystemTime::now() + Duration::from_millis(25);
+        let (result, ()) = tokio::join!(
+            storage.unseal_agent(
+                "test",
+                "restore",
+                &state,
+                ShardEpoch(5),
+                ShardEpoch(4),
+                deadline
+            ),
+            async move {
+                tokio::time::sleep(Duration::from_millis(75)).await;
+                held.rollback().await.unwrap();
+            }
+        );
+        assert_eq!(result.unwrap(), UnsealAgentResult::Expired);
+        assert_eq!(
+            storage.empty_database_epochs().await.unwrap(),
+            Some(vec![(
+                SqliteIndexedStorage::namespace(state.fence_namespace()),
+                key,
+                2
+            )])
+        );
+    }
+
     #[test]
     async fn staged_publication_serializes_independent_sqlite_connections() {
         let tempdir = tempfile::tempdir().unwrap();
@@ -1189,6 +1892,175 @@ mod tests {
     }
 
     #[test]
+    async fn set_key_epoch_checks_explicit_presence_and_removes_absent_claims() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage =
+            sqlite_storage(tempdir.path().join("presence.db").to_string_lossy().into()).await;
+        let namespace = oplog_namespace("unrelated-owner");
+        let extra = sealed_state(AgentMode::Ephemeral).manifest_namespace(99);
+        let key = "portable-test-key";
+        assert!(
+            !storage
+                .set_key_epoch(
+                    "test",
+                    "claim",
+                    namespace.clone(),
+                    key,
+                    ShardEpoch(1),
+                    &[],
+                    true
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(storage.empty_database_epochs().await.unwrap(), Some(vec![]));
+        assert!(
+            !storage
+                .set_key_epoch(
+                    "test",
+                    "claim",
+                    namespace.clone(),
+                    key,
+                    ShardEpoch(2),
+                    &[],
+                    false
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage.empty_database_epochs().await.unwrap(),
+            Some(vec![(
+                SqliteIndexedStorage::namespace(namespace.clone()),
+                key.into(),
+                2
+            )])
+        );
+        storage
+            .append(
+                "test",
+                "append",
+                "entry",
+                extra.clone(),
+                key,
+                1,
+                vec![1],
+                None,
+            )
+            .await
+            .unwrap();
+        assert!(
+            !storage
+                .set_key_epoch(
+                    "test",
+                    "claim",
+                    namespace.clone(),
+                    key,
+                    ShardEpoch(3),
+                    &[],
+                    true
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            storage
+                .set_key_epoch(
+                    "test",
+                    "claim",
+                    namespace.clone(),
+                    key,
+                    ShardEpoch(4),
+                    std::slice::from_ref(&extra),
+                    true
+                )
+                .await
+                .unwrap()
+        );
+        storage
+            .delete("test", "delete", extra.clone(), key)
+            .await
+            .unwrap();
+        storage
+            .pool
+            .with_rw("test", "marker")
+            .execute(
+                sqlx::query(
+                    "INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, 0, x'');",
+                )
+                .bind(format!(
+                    "{}-present",
+                    SqliteIndexedStorage::namespace(extra.clone())
+                ))
+                .bind(key),
+            )
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .set_key_epoch(
+                    "test",
+                    "claim",
+                    namespace.clone(),
+                    key,
+                    ShardEpoch(5),
+                    std::slice::from_ref(&extra),
+                    true
+                )
+                .await
+                .unwrap()
+        );
+        assert!(matches!(
+            storage
+                .set_key_epoch(
+                    "test",
+                    "old_claim",
+                    namespace.clone(),
+                    key,
+                    ShardEpoch(4),
+                    &[],
+                    true
+                )
+                .await,
+            Err(IndexedStorageError::Fenced {
+                actual: Some(ShardEpoch(5)),
+                ..
+            })
+        ));
+        storage
+            .delete("test", "delete", extra.clone(), key)
+            .await
+            .unwrap();
+        storage
+            .append(
+                "test",
+                "append",
+                "entry",
+                namespace.clone(),
+                key,
+                1,
+                vec![1],
+                Some(ShardEpoch(5)),
+            )
+            .await
+            .unwrap();
+        assert!(
+            storage
+                .set_key_epoch(
+                    "test",
+                    "claim",
+                    namespace,
+                    key,
+                    ShardEpoch(6),
+                    &[extra],
+                    true
+                )
+                .await
+                .unwrap()
+        );
+    }
+
+    #[test]
     // The column is `i64`-bound (see `to_i64`'s doc). An epoch that does not fit it must be
     // rejected here rather than silently wrapped to a negative value that a later `epoch as u64`
     // read turns into a spuriously huge one.
@@ -1211,6 +2083,8 @@ mod tests {
                 namespace,
                 "oplog",
                 ShardEpoch(u64::MAX),
+                &[],
+                false,
             )
             .await;
 
@@ -1242,9 +2116,56 @@ mod tests {
                 namespace,
                 "oplog",
                 ShardEpoch(i64::MAX as u64),
+                &[],
+                false,
             )
             .await
             .unwrap();
+    }
+
+    #[test]
+    async fn bounded_scan_merges_presence_and_data_without_duplicates_or_budget_overrun() {
+        let tempdir = tempfile::tempdir().unwrap();
+        let storage = sqlite_storage(tempdir.path().join("scan.db").to_string_lossy().into()).await;
+        for (namespace, key, id) in [
+            ("durable-worker-oplog", "component:a", 1_i64),
+            ("durable-worker-oplog", "component:a", 2),
+            ("durable-worker-oplog-present", "component:a", 0),
+            ("durable-worker-oplog-present", "component:b", 0),
+            ("durable-worker-oplog", "component:c", 1),
+            ("durable-worker-oplog-present", "component:c", 0),
+            ("durable-worker-oplog-present", "component:d", 0),
+            ("durable-worker-oplog-present", "component;outside", 0),
+            ("ephemeral-worker-oplog-present", "component:e", 0),
+        ] {
+            storage.pool.with_rw("test", "seed_scan").execute(sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, ?, x'');")
+                .bind(namespace).bind(key).bind(id)).await.unwrap();
+        }
+        let mut resume = None;
+        let mut keys = Vec::new();
+        for page_index in 0..3 {
+            let (next, page) = storage
+                .scan_stable(
+                    "test",
+                    "scan",
+                    IndexedStorageMetaNamespace::Oplog {
+                        agent_mode: AgentMode::Durable,
+                    },
+                    Some("component:"),
+                    resume,
+                    2,
+                )
+                .await
+                .unwrap();
+            assert!(page.len() <= 2);
+            assert_eq!(next.is_some(), page_index < 2);
+            keys.extend(page);
+            resume = next;
+        }
+        assert_eq!(
+            keys,
+            vec!["component:a", "component:b", "component:c", "component:d"]
+        );
     }
 
     #[test]
@@ -1261,6 +2182,9 @@ mod tests {
         let explain = format!("EXPLAIN QUERY PLAN {SCAN_INCLUSIVE_BOUNDED_QUERY}");
         let query = sqlx::query_as::<_, (i64, i64, i64, String)>(&explain)
             .bind("durable-worker-oplog")
+            .bind("component:")
+            .bind("component;")
+            .bind("durable-worker-oplog-present")
             .bind("component:")
             .bind("component;")
             .bind(sqlx::types::Json(50_u64));
@@ -1326,5 +2250,338 @@ mod tests {
         })
         .await;
         assert!(result.is_err());
+    }
+
+    mod agent_transition_contracts {
+        use super::*;
+        use crate::storage::indexed::memory::InMemoryIndexedStorage;
+        use test_r::test;
+
+        async fn backends(
+            directory: &std::path::Path,
+        ) -> Vec<(&'static str, Box<dyn IndexedStorage + Send + Sync>)> {
+            vec![
+                (
+                    "sqlite",
+                    Box::new(
+                        sqlite_storage(directory.join("probe.db").to_string_lossy().into()).await,
+                    ),
+                ),
+                ("memory", Box::new(InMemoryIndexedStorage::new())),
+            ]
+        }
+
+        #[test]
+        async fn retained_deletion_checks_exact_target_epoch_on_first_attempt_and_retry() {
+            let tempdir = tempfile::tempdir().unwrap();
+            for (backend, storage) in backends(tempdir.path()).await {
+                let state = sealed_state(AgentMode::Durable);
+                let key = state.owned_agent_id.storage_key();
+                let target = state.fence_namespace();
+                let other = state.manifest_namespace(99);
+                storage
+                    .set_key_epoch(
+                        "test",
+                        "claim_target",
+                        target.clone(),
+                        &key,
+                        ShardEpoch(5),
+                        &[],
+                        false,
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .mark_sealed("test", "mark", &state, ShardEpoch(5))
+                    .await
+                    .unwrap();
+                storage
+                    .append(
+                        "test",
+                        "append",
+                        "entry",
+                        target.clone(),
+                        &key,
+                        1,
+                        vec![1],
+                        Some(ShardEpoch(5)),
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .set_key_epoch(
+                        "test",
+                        "claim_other",
+                        other.clone(),
+                        &key,
+                        ShardEpoch(6),
+                        &[],
+                        false,
+                    )
+                    .await
+                    .unwrap();
+                for api in ["delete", "retry"] {
+                    storage
+                        .delete_with_epoch(
+                            "test",
+                            api,
+                            target.clone(),
+                            &key,
+                            Some(ShardEpoch(5)),
+                            true,
+                        )
+                        .await
+                        .unwrap_or_else(|error| {
+                            panic!("{backend}: exact target epoch must permit {api}: {error}")
+                        });
+                    assert!(
+                        !storage
+                            .exists("test", "exists", target.clone(), &key)
+                            .await
+                            .unwrap()
+                    );
+                    assert!(
+                        !storage
+                            .exists("test", "exists", state.marker_namespace(), &key)
+                            .await
+                            .unwrap()
+                    );
+                }
+                assert!(
+                    matches!(
+                        storage
+                            .set_key_epoch(
+                                "test",
+                                "check_other",
+                                other,
+                                &key,
+                                ShardEpoch(5),
+                                &[],
+                                false
+                            )
+                            .await,
+                        Err(IndexedStorageError::Fenced {
+                            actual: Some(ShardEpoch(6)),
+                            ..
+                        })
+                    ),
+                    "{backend}: deletion must preserve other epochs"
+                );
+                storage
+                    .append(
+                        "test",
+                        "append",
+                        "entry",
+                        target.clone(),
+                        &key,
+                        1,
+                        vec![1],
+                        Some(ShardEpoch(5)),
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .delete_with_epoch(
+                        "test",
+                        "remove_target",
+                        target.clone(),
+                        &key,
+                        Some(ShardEpoch(5)),
+                        false,
+                    )
+                    .await
+                    .unwrap();
+                assert!(
+                    matches!(
+                        storage
+                            .delete_with_epoch(
+                                "test",
+                                "recover_missing",
+                                target,
+                                &key,
+                                Some(ShardEpoch(5)),
+                                true
+                            )
+                            .await,
+                        Err(IndexedStorageError::Fenced {
+                            actual: Some(ShardEpoch(6)),
+                            ..
+                        })
+                    ),
+                    "{backend}: missing-row recovery must respect other epochs"
+                );
+            }
+        }
+
+        #[test]
+        async fn staged_epoch_collection_preserves_fence_when_agent_has_primary_data() {
+            // Authority: remove_key_epoch_if_empty requires no data anywhere for the agent.
+            let tempdir = tempfile::tempdir().unwrap();
+            for (backend, storage) in backends(tempdir.path()).await {
+                let state = sealed_state(AgentMode::Durable);
+                let key = state.owned_agent_id.storage_key();
+                let staged_key = format!("{key}#{}", uuid::Uuid::from_u128(123));
+                let staged = IndexedStorageNamespace::StagedOpLog {
+                    owned_agent_id: state.owned_agent_id.clone(),
+                    agent_mode: state.agent_mode,
+                };
+                storage
+                    .set_key_epoch(
+                        "test",
+                        "claim",
+                        staged.clone(),
+                        &staged_key,
+                        ShardEpoch(5),
+                        &[],
+                        false,
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .append(
+                        "test",
+                        "seed",
+                        "entry",
+                        state.primary_namespace(),
+                        &key,
+                        1,
+                        vec![7],
+                        None,
+                    )
+                    .await
+                    .unwrap();
+                let removed = storage
+                    .remove_key_epoch_if_empty(
+                        "test",
+                        "collect",
+                        staged,
+                        &staged_key,
+                        ShardEpoch(5),
+                    )
+                    .await
+                    .unwrap();
+                assert!(
+                    !removed,
+                    "{backend}: agent data must prevent staged epoch collection"
+                );
+            }
+        }
+
+        #[test]
+        async fn retained_staged_deletion_removes_agent_seal_marker() {
+            // Authority: delete_with_epoch(retain_epoch=true) removes the seal marker atomically.
+            let tempdir = tempfile::tempdir().unwrap();
+            for (backend, storage) in backends(tempdir.path()).await {
+                let state = sealed_state(AgentMode::Durable);
+                let key = state.owned_agent_id.storage_key();
+                let staged_key = format!("{key}#{}", uuid::Uuid::from_u128(123));
+                let staged = IndexedStorageNamespace::StagedOpLog {
+                    owned_agent_id: state.owned_agent_id.clone(),
+                    agent_mode: state.agent_mode,
+                };
+                storage
+                    .set_key_epoch(
+                        "test",
+                        "claim",
+                        state.fence_namespace(),
+                        &key,
+                        ShardEpoch(5),
+                        &[],
+                        false,
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .mark_sealed("test", "mark", &state, ShardEpoch(5))
+                    .await
+                    .unwrap();
+                storage
+                    .set_key_epoch(
+                        "test",
+                        "claim",
+                        staged.clone(),
+                        &staged_key,
+                        ShardEpoch(5),
+                        &[],
+                        false,
+                    )
+                    .await
+                    .unwrap();
+                storage
+                    .delete_with_epoch(
+                        "test",
+                        "delete",
+                        staged,
+                        &staged_key,
+                        Some(ShardEpoch(5)),
+                        true,
+                    )
+                    .await
+                    .unwrap();
+                assert!(
+                    !storage
+                        .exists("test", "exists", state.marker_namespace(), &key)
+                        .await
+                        .unwrap(),
+                    "{backend}: retained staged deletion must remove the agent seal marker"
+                );
+            }
+        }
+
+        #[test]
+        async fn unsealed_primary_is_visible_to_stable_scan() {
+            // Authority: scan_stable returns a key present for the whole walk at least once.
+            let tempdir = tempfile::tempdir().unwrap();
+            for (backend, storage) in backends(tempdir.path()).await.into_iter().rev() {
+                let state = sealed_state(AgentMode::Durable);
+                let key = state.owned_agent_id.storage_key();
+                assert_eq!(
+                    storage
+                        .unseal_agent(
+                            "test",
+                            "restore",
+                            &state,
+                            ShardEpoch(5),
+                            ShardEpoch(5),
+                            SystemTime::now() + Duration::from_secs(60)
+                        )
+                        .await
+                        .unwrap(),
+                    UnsealAgentResult::Unsealed
+                );
+                assert!(
+                    storage
+                        .exists("test", "exists", state.primary_namespace(), &key)
+                        .await
+                        .unwrap()
+                );
+                let mut resume = None;
+                let mut keys = Vec::new();
+                loop {
+                    let (next, page) = storage
+                        .scan_stable(
+                            "test",
+                            "scan",
+                            IndexedStorageMetaNamespace::Oplog {
+                                agent_mode: state.agent_mode,
+                            },
+                            None,
+                            resume,
+                            10,
+                        )
+                        .await
+                        .unwrap();
+                    keys.extend(page);
+                    if next.is_none() {
+                        break;
+                    }
+                    resume = next;
+                }
+                assert!(
+                    keys.contains(&key),
+                    "{backend}: the restored primary is present throughout the scan"
+                );
+            }
+        }
     }
 }

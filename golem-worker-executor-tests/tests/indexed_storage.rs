@@ -43,6 +43,92 @@ use uuid::Uuid;
 type OpenIndexedStorage =
     Box<dyn Fn() -> BoxFuture<'static, Arc<dyn IndexedStorage + Send + Sync>> + Send + Sync>;
 
+#[test]
+#[test_r::timeout("120s")]
+async fn absent_lifecycle_claim_removes_epoch(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        return;
+    }
+    let state = sealed_index_state(AgentMode::Ephemeral);
+    let key = state.owned_agent_id.storage_key();
+    let ns = state.primary_namespace();
+    assert!(
+        !storage
+            .set_key_epoch(
+                "test",
+                "observe",
+                ns.clone(),
+                &key,
+                ShardEpoch(8),
+                &[],
+                true
+            )
+            .await
+            .unwrap()
+    );
+    let write = storage
+        .append(
+            "test",
+            "write",
+            "entry",
+            ns,
+            &key,
+            1,
+            vec![9],
+            Some(ShardEpoch(8)),
+        )
+        .await;
+    assert!(
+        matches!(write, Err(IndexedStorageError::Fenced { actual: None, .. })),
+        "an absent observation-only claim must remove its epoch, got {write:?}"
+    );
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn lifecycle_claim_reports_explicit_namespace_presence(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        return;
+    }
+    let state = sealed_index_state(AgentMode::Ephemeral);
+    let key = state.owned_agent_id.storage_key();
+    let extra = state.manifest_namespace(99);
+    storage
+        .append(
+            "test",
+            "seed",
+            "entry",
+            extra.clone(),
+            &key,
+            1,
+            vec![9],
+            None,
+        )
+        .await
+        .unwrap();
+    let present = storage
+        .set_key_epoch(
+            "test",
+            "claim",
+            state.primary_namespace(),
+            &key,
+            ShardEpoch(8),
+            &[extra],
+            true,
+        )
+        .await
+        .unwrap();
+    assert!(present, "the explicit presence namespace contains data");
+}
+
 #[async_trait]
 trait GetIndexedStorage: Debug {
     async fn get_indexed_storage(&self) -> Arc<dyn IndexedStorage + Send + Sync> {
@@ -592,7 +678,15 @@ async fn committed_oplog_records_survive_cold_reopen(
             .unwrap()
     );
     storage
-        .set_key_epoch("test", "owner", visible.clone(), &target_key, ShardEpoch(7))
+        .set_key_epoch(
+            "test",
+            "owner",
+            visible.clone(),
+            &target_key,
+            ShardEpoch(7),
+            &[],
+            false,
+        )
         .await
         .unwrap();
     competitor
@@ -602,6 +696,8 @@ async fn committed_oplog_records_survive_cold_reopen(
             visible.clone(),
             &target_key,
             ShardEpoch(8),
+            &[],
+            false,
         )
         .await
         .unwrap();
@@ -1003,7 +1099,7 @@ async fn postgres_singleton_append_many_preserves_storage_contract(
         for ns in [primary, compressed] {
             if let Some(epoch) = shard_epoch {
                 storage
-                    .set_key_epoch("svc", "api", ns.ns.clone(), key, epoch)
+                    .set_key_epoch("svc", "api", ns.ns.clone(), key, epoch, &[], false)
                     .await
                     .unwrap();
             }
@@ -1120,7 +1216,7 @@ async fn postgres_append_many_rolls_back_across_statement_chunks(
             let key = crate::fresh_owned_agent_id().storage_key();
             if let Some(epoch) = epoch {
                 storage
-                    .set_key_epoch("svc", "api", ns.ns.clone(), &key, epoch)
+                    .set_key_epoch("svc", "api", ns.ns.clone(), &key, epoch, &[], false)
                     .await
                     .unwrap();
             }
@@ -1176,7 +1272,7 @@ async fn postgres_fenced_append_observes_locked_epoch_and_commit_errors(
 
     for (key, actual) in [(KEY1, Some(8i64)), (KEY2, None), (KEY3, Some(-1))] {
         storage
-            .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+            .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7), &[], false)
             .await
             .unwrap();
         assert_fenced(
@@ -1269,6 +1365,8 @@ async fn postgres_fenced_append_observes_locked_epoch_and_commit_errors(
             ns.ns.clone(),
             &commit_error_key,
             ShardEpoch(7),
+            &[],
+            false,
         )
         .await
         .unwrap();
@@ -2401,11 +2499,27 @@ async fn postgres_rejects_noncanonical_keys_and_isolates_staged_epochs(
     let first = format!("{KEY1}#{}", Uuid::new_v4());
     let second = format!("{KEY1}#{}", Uuid::new_v4());
     storage
-        .set_key_epoch("svc", "api", staged.clone(), &first, ShardEpoch(7))
+        .set_key_epoch(
+            "svc",
+            "api",
+            staged.clone(),
+            &first,
+            ShardEpoch(7),
+            &[],
+            false,
+        )
         .await
         .unwrap();
     storage
-        .set_key_epoch("svc", "api", staged.clone(), &second, ShardEpoch(11))
+        .set_key_epoch(
+            "svc",
+            "api",
+            staged.clone(),
+            &second,
+            ShardEpoch(11),
+            &[],
+            false,
+        )
         .await
         .unwrap();
     append_fenced(&storage, &staged, &first, &[1], Some(ShardEpoch(7)))
@@ -2417,7 +2531,14 @@ async fn postgres_rejects_noncanonical_keys_and_isolates_staged_epochs(
         Some(11),
     );
     storage
-        .delete_with_epoch("svc", "api", staged.clone(), &first, Some(ShardEpoch(7)))
+        .delete_with_epoch(
+            "svc",
+            "api",
+            staged.clone(),
+            &first,
+            Some(ShardEpoch(7)),
+            false,
+        )
         .await
         .unwrap();
     append_fenced(&storage, &staged, &second, &[1], Some(ShardEpoch(11)))
@@ -3075,7 +3196,7 @@ async fn append_with_the_recorded_epoch_is_accepted(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7), &[], false)
         .await
         .unwrap();
     is.append_many(
@@ -3110,7 +3231,7 @@ async fn a_stale_epoch_append_is_refused_and_writes_nothing(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8), &[], false)
         .await
         .unwrap();
     let result = is
@@ -3147,10 +3268,10 @@ async fn an_owner_re_opens_at_the_epoch_it_holds(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4), &[], false)
         .await
         .unwrap();
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4), &[], false)
         .await
         .unwrap();
     is.append_many(
@@ -3179,11 +3300,11 @@ async fn a_higher_epoch_takes_the_oplog_over(
     let key = KEY1;
 
     owner
-        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4))
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(4), &[], false)
         .await
         .unwrap();
     newcomer
-        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5), &[], false)
         .await
         .unwrap();
     newcomer
@@ -3228,7 +3349,7 @@ async fn an_append_ahead_of_the_recorded_epoch_is_refused(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5), &[], false)
         .await
         .unwrap();
 
@@ -3314,7 +3435,7 @@ async fn an_unfenced_append_ignores_the_recorded_epoch(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9), &[], false)
         .await
         .unwrap();
     // `None` asserts nothing: it is what the archive layers and generic callers pass.
@@ -3348,23 +3469,23 @@ async fn the_recorded_epoch_only_ever_climbs(
     let key = KEY1;
 
     // Rising and repeated epochs are accepted ...
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5), &[], false)
         .await
         .unwrap();
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5), &[], false)
         .await
         .unwrap();
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9), &[], false)
         .await
         .unwrap();
 
     // ... a falling one is not, or a zombie could re-open at its stale epoch and un-fence itself
     // against the current owner.
     let result = is
-        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8), &[], false)
         .await;
 
-    assert_fenced(result, 8, Some(9));
+    assert_fenced(result.map(|_| ()), 8, Some(9));
     // and the rejected upsert left the record alone
     is.append(
         "svc",
@@ -3405,14 +3526,14 @@ async fn deleting_the_recorded_epoch_fences_later_writes(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(3))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(3), &[], false)
         .await
         .unwrap();
-    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, None)
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, None, false)
         .await
         .unwrap();
     // Idempotent: deleting again is not an error.
-    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, None)
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, None, false)
         .await
         .unwrap();
 
@@ -3442,17 +3563,17 @@ async fn a_deleted_record_does_not_remember_its_epoch(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(9), &[], false)
         .await
         .unwrap();
-    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, None)
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, None, false)
         .await
         .unwrap();
 
     // The documented limit of the fence: the forward-only rule lives on the record, so once the
     // record is gone a lower epoch than the one it held is recorded and written through. Closing
     // this needs the delete to keep the epoch, which changes this test on purpose.
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8), &[], false)
         .await
         .unwrap();
     is.append(
@@ -3499,14 +3620,14 @@ async fn the_recorded_writer_deletes_the_key_and_its_record(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5), &[], false)
         .await
         .unwrap();
     append_fenced(&is, &ns.ns, key, &[1, 2], Some(ShardEpoch(5)))
         .await
         .unwrap();
 
-    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(5)))
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(5)), false)
         .await
         .unwrap();
 
@@ -3535,14 +3656,14 @@ async fn a_delete_by_a_writer_that_lost_the_key_deletes_nothing(
     let key = KEY1;
 
     stale
-        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5), &[], false)
         .await
         .unwrap();
     append_fenced(&stale, &ns.ns, key, &[1], Some(ShardEpoch(5)))
         .await
         .unwrap();
     owner
-        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(6))
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(6), &[], false)
         .await
         .unwrap();
     append_fenced(&owner, &ns.ns, key, &[2], Some(ShardEpoch(6)))
@@ -3551,7 +3672,7 @@ async fn a_delete_by_a_writer_that_lost_the_key_deletes_nothing(
 
     assert_fenced(
         stale
-            .delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(5)))
+            .delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(5)), false)
             .await,
         5,
         Some(6),
@@ -3583,7 +3704,7 @@ async fn a_delete_asserting_an_epoch_on_a_key_without_a_record_deletes_nothing(
     append_fenced(&is, &ns.ns, key, &[1], None).await.unwrap();
 
     assert_fenced(
-        is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(1)))
+        is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(1)), false)
             .await,
         1,
         None,
@@ -3606,21 +3727,28 @@ async fn a_delete_asserting_an_epoch_on_a_key_that_is_already_gone_is_accepted(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(3))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(3), &[], false)
         .await
         .unwrap();
     append_fenced(&is, &ns.ns, key, &[1, 2], Some(ShardEpoch(3)))
         .await
         .unwrap();
-    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(3)))
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(3)), false)
         .await
         .unwrap();
-    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(3)))
+    is.delete_with_epoch("svc", "api", ns.ns.clone(), key, Some(ShardEpoch(3)), false)
         .await
         .expect("a repeated delete of a key that is already gone is accepted");
-    is.delete_with_epoch("svc", "api", ns.ns.clone(), KEY2, Some(ShardEpoch(3)))
-        .await
-        .expect("a delete of a key that was never written is accepted");
+    is.delete_with_epoch(
+        "svc",
+        "api",
+        ns.ns.clone(),
+        KEY2,
+        Some(ShardEpoch(3)),
+        false,
+    )
+    .await
+    .expect("a delete of a key that was never written is accepted");
 
     assert!(!is.exists("svc", "api", ns.ns.clone(), key).await.unwrap());
     // Accepting the delete recorded nothing: the old epoch still writes nothing back.
@@ -3642,7 +3770,7 @@ async fn an_unfenced_delete_removes_the_key_and_its_record(
     let key = KEY1;
 
     first
-        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+        .set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7), &[], false)
         .await
         .unwrap();
     append_fenced(&first, &ns.ns, key, &[1, 2], Some(ShardEpoch(7)))
@@ -3651,7 +3779,7 @@ async fn an_unfenced_delete_removes_the_key_and_its_record(
 
     // Asserting nothing, so it does not matter that another writer holds the record.
     second
-        .delete_with_epoch("svc", "api", ns.ns.clone(), key, None)
+        .delete_with_epoch("svc", "api", ns.ns.clone(), key, None, false)
         .await
         .unwrap();
 
@@ -3680,7 +3808,7 @@ async fn an_empty_batch_is_accepted_whatever_epoch_it_asserts(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(5), &[], false)
         .await
         .unwrap();
 
@@ -3737,9 +3865,17 @@ async fn a_held_index_in_the_blob_manifest_is_a_conflict(
     };
     let key = crate::fresh_owned_agent_id().storage_key();
 
-    is.set_key_epoch("svc", "api", manifest.clone(), &key, ShardEpoch(6))
-        .await
-        .unwrap();
+    is.set_key_epoch(
+        "svc",
+        "api",
+        manifest.clone(),
+        &key,
+        ShardEpoch(6),
+        &[],
+        false,
+    )
+    .await
+    .unwrap();
     append_fenced(&is, &manifest, &key, &[1], Some(ShardEpoch(6)))
         .await
         .unwrap();
@@ -3787,7 +3923,7 @@ async fn a_failed_batch_leaves_no_partial_write(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(1))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(1), &[], false)
         .await
         .unwrap();
     is.append_many(
@@ -3860,7 +3996,7 @@ async fn a_trim_with_the_recorded_epoch_removes_the_prefix(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7), &[], false)
         .await
         .unwrap();
     append_three_fenced(&is, ns, key, 7).await;
@@ -3889,12 +4025,12 @@ async fn a_stale_epoch_trim_is_refused_and_removes_nothing(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7), &[], false)
         .await
         .unwrap();
     append_three_fenced(&is, ns, key, 7).await;
     // Another writer takes the key over.
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8), &[], false)
         .await
         .unwrap();
 
@@ -3956,7 +4092,7 @@ async fn an_unfenced_trim_ignores_the_recorded_epoch(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8), &[], false)
         .await
         .unwrap();
     append_three_fenced(&is, ns, key, 8).await;
@@ -3981,7 +4117,7 @@ async fn deleting_an_emptied_key_keeps_its_recorded_epoch(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7), &[], false)
         .await
         .unwrap();
     append_three_fenced(&is, ns, key, 7).await;
@@ -4034,7 +4170,7 @@ async fn a_key_that_still_holds_entries_is_not_deleted(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7), &[], false)
         .await
         .unwrap();
     append_three_fenced(&is, ns, key, 7).await;
@@ -4061,14 +4197,14 @@ async fn a_stale_epoch_delete_of_an_emptied_key_deletes_nothing(
     let is = is.get_indexed_storage().await;
     let key = KEY1;
 
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(7), &[], false)
         .await
         .unwrap();
     append_three_fenced(&is, ns, key, 7).await;
     is.drop_prefix("svc", "api", ns.ns.clone(), key, 3, Some(ShardEpoch(7)))
         .await
         .unwrap();
-    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8))
+    is.set_key_epoch("svc", "api", ns.ns.clone(), key, ShardEpoch(8), &[], false)
         .await
         .unwrap();
 
@@ -4129,18 +4265,34 @@ async fn the_blob_manifest_is_fenced_apart_from_the_compressed_level(
     let key = crate::fresh_owned_agent_id().storage_key();
 
     // The compressed level's record does not stand in for the manifest's.
-    is.set_key_epoch("svc", "api", compressed.clone(), &key, ShardEpoch(9))
-        .await
-        .unwrap();
+    is.set_key_epoch(
+        "svc",
+        "api",
+        compressed.clone(),
+        &key,
+        ShardEpoch(9),
+        &[],
+        false,
+    )
+    .await
+    .unwrap();
     assert_fenced(
         append_fenced(&is, &manifest, &key, &[1], Some(ShardEpoch(9))).await,
         9,
         None,
     );
 
-    is.set_key_epoch("svc", "api", manifest.clone(), &key, ShardEpoch(6))
-        .await
-        .unwrap();
+    is.set_key_epoch(
+        "svc",
+        "api",
+        manifest.clone(),
+        &key,
+        ShardEpoch(6),
+        &[],
+        false,
+    )
+    .await
+    .unwrap();
     assert_fenced(
         append_fenced(&is, &manifest, &key, &[1], Some(ShardEpoch(5))).await,
         5,
@@ -4182,9 +4334,16 @@ async fn the_blob_manifest_is_fenced_apart_from_the_compressed_level(
     assert!(!compressed_keys.contains(&key), "{compressed_keys:?}");
 
     // The recorded writer's delete takes the record with the entries.
-    is.delete_with_epoch("svc", "api", manifest.clone(), &key, Some(ShardEpoch(6)))
-        .await
-        .unwrap();
+    is.delete_with_epoch(
+        "svc",
+        "api",
+        manifest.clone(),
+        &key,
+        Some(ShardEpoch(6)),
+        false,
+    )
+    .await
+    .unwrap();
     assert_eq!(
         is.length("svc", "api", manifest.clone(), &key)
             .await
@@ -4196,4 +4355,878 @@ async fn the_blob_manifest_is_fenced_apart_from_the_compressed_level(
         6,
         None,
     );
+}
+
+fn sealed_index_state(
+    mode: AgentMode,
+) -> golem_worker_executor::storage::indexed::AgentIndexedState {
+    golem_worker_executor::storage::indexed::AgentIndexedState {
+        owned_agent_id: crate::fresh_owned_agent_id(),
+        agent_mode: mode,
+        compressed_layers: 2,
+        manifests: std::collections::BTreeMap::from([
+            (2, Arc::from([(13, Bytes::from_static(b"chunk-thirteen"))])),
+            (
+                4,
+                Arc::from([(29, Bytes::from_static(b"chunk-twenty-nine"))]),
+            ),
+        ]),
+    }
+}
+
+async fn seed_sealed_index(
+    storage: &Arc<dyn IndexedStorage + Send + Sync>,
+    state: &golem_worker_executor::storage::indexed::AgentIndexedState,
+    epoch: u64,
+) {
+    let key = state.owned_agent_id.storage_key();
+    for namespace in state.epoch_namespaces() {
+        storage
+            .set_key_epoch(
+                "test",
+                "seed",
+                namespace,
+                &key,
+                ShardEpoch(epoch),
+                &[],
+                false,
+            )
+            .await
+            .unwrap();
+    }
+    for (level, entries) in &state.manifests {
+        storage
+            .append_many(
+                "test",
+                "seed",
+                "manifest",
+                &state.manifest_namespace(*level),
+                &key,
+                entries.clone(),
+                Some(ShardEpoch(epoch)),
+            )
+            .await
+            .unwrap();
+    }
+    storage
+        .mark_sealed("test", "seed", state, ShardEpoch(epoch))
+        .await
+        .unwrap();
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    use golem_worker_executor::storage::indexed::{ReleaseAgentResult, UnsealAgentResult};
+    use std::time::{Duration, SystemTime};
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        return;
+    }
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let state = sealed_index_state(mode);
+        let key = state.owned_agent_id.storage_key();
+        seed_sealed_index(&storage, &state, 6).await;
+        let stage = IndexedStorageNamespace::StagedOpLog {
+            owned_agent_id: state.owned_agent_id.clone(),
+            agent_mode: AgentMode::Ephemeral,
+        };
+        let stage_key = format!("{key}#{}", Uuid::new_v4());
+        storage
+            .append(
+                "test",
+                "stage",
+                "entry",
+                stage.clone(),
+                &stage_key,
+                1,
+                vec![71],
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .release_agent("test", "release", &state, ShardEpoch(6))
+                .await
+                .unwrap(),
+            ReleaseAgentResult::Released
+        );
+        assert_eq!(
+            storage
+                .release_agent("test", "release_retry", &state, ShardEpoch(6))
+                .await
+                .unwrap(),
+            ReleaseAgentResult::Released
+        );
+        for namespace in state
+            .epoch_namespaces()
+            .into_iter()
+            .chain([state.marker_namespace(), stage.clone()])
+        {
+            assert!(
+                !storage
+                    .exists("test", "absent", namespace.clone(), &key)
+                    .await
+                    .unwrap()
+            );
+            assert_fenced(
+                storage
+                    .append(
+                        "test",
+                        "old_owner",
+                        "entry",
+                        namespace,
+                        &key,
+                        45,
+                        vec![99],
+                        Some(ShardEpoch(6)),
+                    )
+                    .await,
+                6,
+                None,
+            );
+        }
+        assert!(
+            !storage
+                .exists("test", "stage_absent", stage, &stage_key)
+                .await
+                .unwrap()
+        );
+        assert_fenced(
+            storage
+                .unseal_agent(
+                    "test",
+                    "stale",
+                    &state,
+                    ShardEpoch(5),
+                    ShardEpoch(6),
+                    SystemTime::now() + Duration::from_secs(30),
+                )
+                .await
+                .map(|_| ()),
+            5,
+            Some(6),
+        );
+        assert_eq!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "expired",
+                    &state,
+                    ShardEpoch(7),
+                    ShardEpoch(6),
+                    SystemTime::UNIX_EPOCH
+                )
+                .await
+                .unwrap(),
+            UnsealAgentResult::Expired
+        );
+        assert!(
+            !storage
+                .exists("test", "still_absent", state.primary_namespace(), &key)
+                .await
+                .unwrap()
+        );
+        // A crashed create can leave a bare epoch. It must not count as data presence.
+        assert!(
+            !storage
+                .set_key_epoch(
+                    "test",
+                    "bare_epoch",
+                    state.fence_namespace(),
+                    &key,
+                    ShardEpoch(7),
+                    &state.epoch_namespaces(),
+                    false
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "unseal",
+                    &state,
+                    ShardEpoch(7),
+                    ShardEpoch(6),
+                    SystemTime::now() + Duration::from_secs(30)
+                )
+                .await
+                .unwrap(),
+            UnsealAgentResult::Unsealed
+        );
+        assert_eq!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "unseal_retry",
+                    &state,
+                    ShardEpoch(7),
+                    ShardEpoch(6),
+                    SystemTime::UNIX_EPOCH
+                )
+                .await
+                .unwrap(),
+            UnsealAgentResult::Unsealed
+        );
+        assert!(
+            storage
+                .set_key_epoch(
+                    "test",
+                    "presence",
+                    state.fence_namespace(),
+                    &key,
+                    ShardEpoch(7),
+                    &state.epoch_namespaces(),
+                    false
+                )
+                .await
+                .unwrap()
+        );
+        for (level, entries) in &state.manifests {
+            assert_eq!(
+                storage
+                    .read(
+                        "test",
+                        "restored",
+                        "manifest",
+                        state.manifest_namespace(*level),
+                        &key,
+                        0,
+                        u64::MAX / 2
+                    )
+                    .await
+                    .unwrap(),
+                entries
+                    .iter()
+                    .map(|(id, bytes)| (*id, bytes.to_vec()))
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert!(
+            !storage
+                .remove_key_epoch_if_empty(
+                    "test",
+                    "gc",
+                    state.fence_namespace(),
+                    &key,
+                    ShardEpoch(7)
+                )
+                .await
+                .unwrap()
+        );
+        assert_eq!(
+            storage
+                .release_agent("test", "release_again", &state, ShardEpoch(7))
+                .await
+                .unwrap(),
+            ReleaseAgentResult::Released
+        );
+        assert!(
+            !storage
+                .set_key_epoch(
+                    "test",
+                    "ephemeral_observe",
+                    state.fence_namespace(),
+                    &key,
+                    ShardEpoch(8),
+                    &state.epoch_namespaces(),
+                    true
+                )
+                .await
+                .unwrap()
+        );
+        assert_fenced(
+            storage
+                .append(
+                    "test",
+                    "no_observer_epoch",
+                    "entry",
+                    state.fence_namespace(),
+                    &key,
+                    1,
+                    vec![1],
+                    Some(ShardEpoch(8)),
+                )
+                .await,
+            8,
+            None,
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn indexed_agent_transitions_refuse_without_removing_history(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    use golem_worker_executor::storage::indexed::{ReleaseAgentResult, UnsealAgentResult};
+    use std::time::{Duration, SystemTime};
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        return;
+    }
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let state = sealed_index_state(mode);
+        let key = state.owned_agent_id.storage_key();
+        seed_sealed_index(&storage, &state, 6).await;
+        assert_fenced(
+            storage
+                .release_agent("test", "stale", &state, ShardEpoch(5))
+                .await
+                .map(|_| ()),
+            5,
+            Some(6),
+        );
+        let mut wrong = state.clone();
+        wrong
+            .manifests
+            .insert(2, Arc::from([(13, Bytes::from_static(b"wrong-object"))]));
+        assert_eq!(
+            storage
+                .release_agent("test", "wrong_bytes", &wrong, ShardEpoch(6))
+                .await
+                .unwrap(),
+            ReleaseAgentResult::NotReleased
+        );
+        wrong = state.clone();
+        wrong.manifests.remove(&4);
+        assert_eq!(
+            storage
+                .release_agent("test", "extra_rows", &wrong, ShardEpoch(6))
+                .await
+                .unwrap(),
+            ReleaseAgentResult::NotReleased
+        );
+        let opposite = IndexedStorageNamespace::CompressedOpLog {
+            owned_agent_id: state.owned_agent_id.clone(),
+            agent_mode: if mode == AgentMode::Durable {
+                AgentMode::Ephemeral
+            } else {
+                AgentMode::Durable
+            },
+            level: 91,
+        };
+        storage
+            .set_key_epoch(
+                "test",
+                "opposite",
+                opposite.clone(),
+                &key,
+                ShardEpoch(9),
+                &[],
+                false,
+            )
+            .await
+            .unwrap();
+        assert_fenced(
+            storage
+                .release_agent("test", "higher_other_mode", &state, ShardEpoch(6))
+                .await
+                .map(|_| ()),
+            6,
+            Some(9),
+        );
+        assert_fenced(
+            storage
+                .unseal_agent(
+                    "test",
+                    "higher_other_mode",
+                    &state,
+                    ShardEpoch(8),
+                    ShardEpoch(6),
+                    SystemTime::now() + Duration::from_secs(30),
+                )
+                .await
+                .map(|_| ()),
+            8,
+            Some(9),
+        );
+        storage
+            .delete_with_epoch(
+                "test",
+                "remove_other_epoch",
+                opposite.clone(),
+                &key,
+                Some(ShardEpoch(9)),
+                false,
+            )
+            .await
+            .unwrap();
+        storage
+            .append(
+                "test",
+                "nonempty",
+                "entry",
+                opposite.clone(),
+                &key,
+                3,
+                vec![19],
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .release_agent("test", "nonempty", &state, ShardEpoch(6))
+                .await
+                .unwrap(),
+            ReleaseAgentResult::NotReleased
+        );
+        assert_eq!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "present",
+                    &state,
+                    ShardEpoch(6),
+                    ShardEpoch(6),
+                    SystemTime::now() + Duration::from_secs(30)
+                )
+                .await
+                .unwrap(),
+            UnsealAgentResult::AlreadyPresent
+        );
+        for (level, entries) in &state.manifests {
+            assert_eq!(
+                storage
+                    .read(
+                        "test",
+                        "unchanged",
+                        "manifest",
+                        state.manifest_namespace(*level),
+                        &key,
+                        0,
+                        i64::MAX as u64
+                    )
+                    .await
+                    .unwrap(),
+                entries
+                    .iter()
+                    .map(|(id, bytes)| (*id, bytes.to_vec()))
+                    .collect::<Vec<_>>()
+            );
+        }
+        assert_eq!(
+            storage
+                .read("test", "unchanged", "entry", opposite, &key, 0, 3)
+                .await
+                .unwrap(),
+            vec![(3, vec![19])]
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn indexed_agent_transitions_retained_deletion_and_conditional_collection(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    let storage = is.get_indexed_storage().await;
+    // Retained deletion is valid on unsupported seal backends too.
+    let state = sealed_index_state(AgentMode::Durable);
+    let key = state.owned_agent_id.storage_key();
+    storage
+        .set_key_epoch(
+            "test",
+            "owner",
+            state.primary_namespace(),
+            &key,
+            ShardEpoch(12),
+            &[],
+            false,
+        )
+        .await
+        .unwrap();
+    storage
+        .append(
+            "test",
+            "write",
+            "entry",
+            state.primary_namespace(),
+            &key,
+            1,
+            vec![81],
+            Some(ShardEpoch(12)),
+        )
+        .await
+        .unwrap();
+    storage
+        .delete_with_epoch(
+            "test",
+            "delete",
+            state.primary_namespace(),
+            &key,
+            Some(ShardEpoch(12)),
+            true,
+        )
+        .await
+        .unwrap();
+    let other_epoch = IndexedStorageNamespace::CompressedOpLog {
+        owned_agent_id: state.owned_agent_id.clone(),
+        agent_mode: AgentMode::Ephemeral,
+        level: 41,
+    };
+    storage
+        .set_key_epoch(
+            "test",
+            "other_epoch",
+            other_epoch,
+            &key,
+            ShardEpoch(13),
+            &[],
+            false,
+        )
+        .await
+        .unwrap();
+    storage
+        .delete_with_epoch(
+            "test",
+            "delete_retry",
+            state.primary_namespace(),
+            &key,
+            Some(ShardEpoch(12)),
+            true,
+        )
+        .await
+        .unwrap();
+    assert_fenced(
+        storage
+            .append(
+                "test",
+                "stale",
+                "entry",
+                state.primary_namespace(),
+                &key,
+                1,
+                vec![82],
+                Some(ShardEpoch(11)),
+            )
+            .await,
+        11,
+        Some(12),
+    );
+    if storage.supports_release() {
+        assert!(
+            !storage
+                .remove_key_epoch_if_empty(
+                    "test",
+                    "wrong_collector",
+                    state.primary_namespace(),
+                    &key,
+                    ShardEpoch(11)
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            storage
+                .remove_key_epoch_if_empty(
+                    "test",
+                    "collector",
+                    state.primary_namespace(),
+                    &key,
+                    ShardEpoch(12)
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            !storage
+                .remove_key_epoch_if_empty(
+                    "test",
+                    "collector_retry",
+                    state.primary_namespace(),
+                    &key,
+                    ShardEpoch(12)
+                )
+                .await
+                .unwrap()
+        );
+        assert_fenced(
+            storage
+                .append(
+                    "test",
+                    "collected",
+                    "entry",
+                    state.primary_namespace(),
+                    &key,
+                    1,
+                    vec![83],
+                    Some(ShardEpoch(12)),
+                )
+                .await,
+            12,
+            None,
+        );
+    }
+}
+
+async fn wait_for_indexed_sql_wait(pool: &sqlx::PgPool, query_fragment: &str) {
+    tokio::time::timeout(std::time::Duration::from_secs(10), async {
+        loop {
+            let (blocked,): (bool,) = sqlx::query_as(
+                "SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid() AND query LIKE '%' || $1 || '%' AND cardinality(pg_blocking_pids(pid)) > 0)",
+            ).bind(query_fragment).fetch_one(pool).await.unwrap();
+            if blocked { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }).await.expect("indexed operation did not reach the expected lock wait");
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn postgres_agent_transitions_serialize_fenced_writes_without_blocking_other_agents() {
+    use golem_worker_executor::storage::indexed::ReleaseAgentResult;
+    use std::time::Duration;
+    let wrapper = PostgresIndexedStorageWrapper {
+        postgres: DockerPostgresRdb::new(&Uuid::new_v4().to_string(), false).await,
+    };
+    let config = wrapper.fresh_database().await;
+    let storage: Arc<dyn IndexedStorage + Send + Sync> =
+        Arc::new(PostgresIndexedStorage::configured(&config).await.unwrap());
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(8)
+        .connect_with(config.postgres.connect_options())
+        .await
+        .unwrap();
+    let state = sealed_index_state(AgentMode::Durable);
+    let key = state.owned_agent_id.storage_key();
+    seed_sealed_index(&storage, &state, 6).await;
+
+    // A database trigger pauses the real fenced append after it owns the epoch row.
+    sqlx::raw_sql(&format!(
+        "CREATE TABLE append_gate (id INT PRIMARY KEY); INSERT INTO append_gate VALUES (1);
+         CREATE FUNCTION hold_test_append() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+         IF NEW.agent = '{}'::uuid AND NEW.namespace = 'durable-worker-oplog' THEN
+         PERFORM id FROM append_gate WHERE id = 1 FOR UPDATE; END IF; RETURN NEW; END $$;
+         CREATE TRIGGER hold_test_append BEFORE INSERT ON index_storage FOR EACH ROW EXECUTE FUNCTION hold_test_append();",
+        state.owned_agent_id.agent_id.as_uuid()
+    )).execute(&pool).await.unwrap();
+    let mut gate = pool.begin().await.unwrap();
+    sqlx::query("SELECT id FROM append_gate WHERE id = 1 FOR UPDATE")
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+    let writer = storage.clone();
+    let ns = state.primary_namespace();
+    let append_key = key.clone();
+    let append = tokio::spawn(async move {
+        writer
+            .append(
+                "test",
+                "append",
+                "entry",
+                ns,
+                &append_key,
+                1,
+                vec![42],
+                Some(ShardEpoch(6)),
+            )
+            .await
+    });
+    wait_for_indexed_sql_wait(&pool, "WITH locked_epoch").await;
+    let releaser = storage.clone();
+    let release_state = state.clone();
+    let release = tokio::spawn(async move {
+        releaser
+            .release_agent("test", "release", &release_state, ShardEpoch(6))
+            .await
+    });
+    wait_for_indexed_sql_wait(&pool, "ORDER BY namespace FOR UPDATE").await;
+    // The blocked transition may hold its agent lock, but cannot serialize another agent.
+    let other = sealed_index_state(AgentMode::Durable);
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        seed_sealed_index(&storage, &other, 19),
+    )
+    .await
+    .expect("unrelated agent was blocked");
+    gate.commit().await.unwrap();
+    append.await.unwrap().unwrap();
+    assert_eq!(
+        release.await.unwrap().unwrap(),
+        ReleaseAgentResult::NotReleased
+    );
+    assert_eq!(
+        storage
+            .read(
+                "test",
+                "preserved",
+                "entry",
+                state.primary_namespace(),
+                &key,
+                1,
+                1
+            )
+            .await
+            .unwrap(),
+        vec![(1, vec![42])]
+    );
+    storage
+        .drop_prefix(
+            "test",
+            "archive",
+            state.primary_namespace(),
+            &key,
+            1,
+            Some(ShardEpoch(6)),
+        )
+        .await
+        .unwrap();
+
+    // Lock the last namespace so release locks the primary first, then pauses.
+    sqlx::query("INSERT INTO indexed_key_epoch (namespace, env, agent, epoch) VALUES ('zz-test-gate', $1, $2, 6)")
+        .bind(state.owned_agent_id.environment_id.0).bind(state.owned_agent_id.agent_id.as_uuid()).execute(&pool).await.unwrap();
+    let mut gate = pool.begin().await.unwrap();
+    sqlx::query("SELECT epoch FROM indexed_key_epoch WHERE namespace = 'zz-test-gate' AND env = $1 AND agent = $2 FOR UPDATE")
+        .bind(state.owned_agent_id.environment_id.0).bind(state.owned_agent_id.agent_id.as_uuid()).execute(&mut *gate).await.unwrap();
+    let releaser = storage.clone();
+    let release_state = state.clone();
+    let release = tokio::spawn(async move {
+        releaser
+            .release_agent("test", "release_first", &release_state, ShardEpoch(6))
+            .await
+    });
+    wait_for_indexed_sql_wait(&pool, "ORDER BY namespace FOR UPDATE").await;
+    let writer = storage.clone();
+    let ns = state.primary_namespace();
+    let append_key = key.clone();
+    let append = tokio::spawn(async move {
+        writer
+            .append(
+                "test",
+                "late_append",
+                "entry",
+                ns,
+                &append_key,
+                2,
+                vec![43],
+                Some(ShardEpoch(6)),
+            )
+            .await
+    });
+    wait_for_indexed_sql_wait(&pool, "WITH locked_epoch").await;
+    // An epoch claim on a namespace that does not exist must wait for release, then report absent.
+    let owner = storage.clone();
+    let new_ns = IndexedStorageNamespace::BlobOplogManifest {
+        owned_agent_id: state.owned_agent_id.clone(),
+        agent_mode: AgentMode::Ephemeral,
+        level: 73,
+    };
+    let claim_key = key.clone();
+    let claim_presence = state.epoch_namespaces();
+    let claim = tokio::spawn(async move {
+        owner
+            .set_key_epoch(
+                "test",
+                "new_namespace",
+                new_ns,
+                &claim_key,
+                ShardEpoch(7),
+                &claim_presence,
+                false,
+            )
+            .await
+    });
+    wait_for_indexed_sql_wait(&pool, "pg_advisory_xact_lock").await;
+    gate.commit().await.unwrap();
+    assert_eq!(
+        release.await.unwrap().unwrap(),
+        ReleaseAgentResult::Released
+    );
+    assert_fenced(append.await.unwrap(), 6, None);
+    assert!(
+        !claim.await.unwrap().unwrap(),
+        "the new owner must take the absent/unseal path"
+    );
+    let (rows,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM index_storage WHERE env = $1 AND agent = $2")
+            .bind(state.owned_agent_id.environment_id.0)
+            .bind(state.owned_agent_id.agent_id.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, 0);
+
+    // The deadline is checked on the server after an epoch-lock wait, not at transaction start.
+    let mut gate = pool.begin().await.unwrap();
+    sqlx::query("SELECT epoch FROM indexed_key_epoch WHERE env = $1 AND agent = $2 FOR UPDATE")
+        .bind(state.owned_agent_id.environment_id.0)
+        .bind(state.owned_agent_id.agent_id.as_uuid())
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+    let deadline = std::time::SystemTime::now() + Duration::from_millis(400);
+    let unsealer = storage.clone();
+    let unseal_state = state.clone();
+    let unseal = tokio::spawn(async move {
+        unsealer
+            .unseal_agent(
+                "test",
+                "expired_after_wait",
+                &unseal_state,
+                ShardEpoch(7),
+                ShardEpoch(6),
+                deadline,
+            )
+            .await
+    });
+    wait_for_indexed_sql_wait(&pool, "ORDER BY namespace FOR UPDATE").await;
+    tokio::time::sleep(
+        deadline
+            .duration_since(std::time::SystemTime::now())
+            .unwrap_or_default()
+            + Duration::from_millis(20),
+    )
+    .await;
+    gate.commit().await.unwrap();
+    assert_eq!(
+        unseal.await.unwrap().unwrap(),
+        golem_worker_executor::storage::indexed::UnsealAgentResult::Expired
+    );
+    let (rows,): (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM index_storage WHERE env = $1 AND agent = $2")
+            .bind(state.owned_agent_id.environment_id.0)
+            .bind(state.owned_agent_id.agent_id.as_uuid())
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(rows, 0);
+
+    let mut gate = pool.begin().await.unwrap();
+    sqlx::query("SELECT epoch FROM indexed_key_epoch WHERE env = $1 AND agent = $2 FOR UPDATE")
+        .bind(state.owned_agent_id.environment_id.0)
+        .bind(state.owned_agent_id.agent_id.as_uuid())
+        .execute(&mut *gate)
+        .await
+        .unwrap();
+    let claim_namespace = IndexedStorageNamespace::BlobOplogManifest {
+        owned_agent_id: state.owned_agent_id.clone(),
+        agent_mode: AgentMode::Ephemeral,
+        level: 73,
+    };
+    let timeout_result = storage
+        .set_key_epoch(
+            "test",
+            "lock_timeout",
+            claim_namespace,
+            &key,
+            ShardEpoch(8),
+            &[],
+            false,
+        )
+        .await;
+    assert!(
+        matches!(timeout_result, Err(IndexedStorageError::Transient(_))),
+        "lock contention must retry, got {timeout_result:?}"
+    );
+    gate.rollback().await.unwrap();
 }

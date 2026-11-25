@@ -252,7 +252,15 @@ async fn retirement_wait_includes_earlier_evicted_generation() {
         let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
         let ns = oplog_namespace("retiring");
         storage
-            .set_key_epoch("test", "epoch", ns.clone(), "key", ShardEpoch(11))
+            .set_key_epoch(
+                "test",
+                "epoch",
+                ns.clone(),
+                "key",
+                ShardEpoch(11),
+                &[],
+                false,
+            )
             .await
             .unwrap();
         storage
@@ -285,7 +293,15 @@ async fn retirement_wait_includes_earlier_evicted_generation() {
                         .await
                 }
                 1 => worker
-                    .set_key_epoch("test", "epoch", requested_ns, "key", ShardEpoch(19))
+                    .set_key_epoch(
+                        "test",
+                        "epoch",
+                        requested_ns,
+                        "key",
+                        ShardEpoch(19),
+                        &[],
+                        false,
+                    )
                     .await
                     .map(|_| Vec::new()),
                 2 => worker
@@ -643,7 +659,15 @@ async fn staging_publication_and_fencing_survive_reclamation() {
             .unwrap()
     );
     storage
-        .set_key_epoch("test", "epoch", visible.clone(), "key", ShardEpoch(7))
+        .set_key_epoch(
+            "test",
+            "epoch",
+            visible.clone(),
+            "key",
+            ShardEpoch(7),
+            &[],
+            false,
+        )
         .await
         .unwrap();
     assert!(matches!(
@@ -664,7 +688,7 @@ async fn staging_publication_and_fencing_survive_reclamation() {
     let db = MultiSqliteIndexedStorage::namespace_to_db(&visible);
     assert!(!FileLifetime::get(storage.root.root_dir.join(&db)).is_poisoned());
     storage
-        .delete_with_epoch("test", "delete", visible, "key", Some(ShardEpoch(7)))
+        .delete_with_epoch("test", "delete", visible, "key", Some(ShardEpoch(7)), false)
         .await
         .unwrap();
     assert!(!storage.root.root_dir.join(db).exists());
@@ -773,7 +797,7 @@ async fn reclamation_churn_does_not_retain_empty_epoch_snapshots() {
         let epoch = (agent % 3 == 1).then_some(ShardEpoch(17));
         if let Some(epoch) = epoch {
             storage
-                .set_key_epoch("test", "epoch", ns.clone(), "key", epoch)
+                .set_key_epoch("test", "epoch", ns.clone(), "key", epoch, &[], false)
                 .await
                 .unwrap();
         }
@@ -794,7 +818,7 @@ async fn reclamation_churn_does_not_retain_empty_epoch_snapshots() {
         match agent % 3 {
             0 => storage.delete("test", "drain", ns, "key").await.unwrap(),
             1 => storage
-                .delete_with_epoch("test", "drain", ns, "key", epoch)
+                .delete_with_epoch("test", "drain", ns, "key", epoch, false)
                 .await
                 .unwrap(),
             _ => storage
@@ -872,7 +896,7 @@ async fn deleting_last_snapshot_epoch_cleans_residual_files_before_metadata() {
             std::fs::create_dir(storage.root.root_dir.join(format!("{db}-shm"))).unwrap();
         }
         let result = storage
-            .delete_with_epoch("test", "delete", ns, "key", Some(ShardEpoch(17)))
+            .delete_with_epoch("test", "delete", ns, "key", Some(ShardEpoch(17)), false)
             .await;
         if fail_unlink {
             assert!(result.is_err());
@@ -993,11 +1017,27 @@ async fn reclamation_drains_pools_and_preserves_all_epochs_for_recreation() {
         agent_mode,
     };
     storage
-        .set_key_epoch("test", "epoch", ns.clone(), "visible", ShardEpoch(31))
+        .set_key_epoch(
+            "test",
+            "epoch",
+            ns.clone(),
+            "visible",
+            ShardEpoch(31),
+            &[],
+            false,
+        )
         .await
         .unwrap();
     storage
-        .set_key_epoch("test", "epoch", stage.clone(), "unrelated", ShardEpoch(73))
+        .set_key_epoch(
+            "test",
+            "epoch",
+            stage.clone(),
+            "unrelated",
+            ShardEpoch(73),
+            &[],
+            false,
+        )
         .await
         .unwrap();
     storage
@@ -1087,7 +1127,15 @@ async fn reclamation_drains_pools_and_preserves_all_epochs_for_recreation() {
     ));
     assert!(matches!(
         storage
-            .set_key_epoch("test", "epoch", ns.clone(), "visible", ShardEpoch(30))
+            .set_key_epoch(
+                "test",
+                "epoch",
+                ns.clone(),
+                "visible",
+                ShardEpoch(30),
+                &[],
+                false
+            )
             .await,
         Err(IndexedStorageError::Fenced {
             actual: Some(ShardEpoch(31)),
@@ -1095,7 +1143,15 @@ async fn reclamation_drains_pools_and_preserves_all_epochs_for_recreation() {
         })
     ));
     storage
-        .set_key_epoch("test", "epoch", ns.clone(), "visible", ShardEpoch(41))
+        .set_key_epoch(
+            "test",
+            "epoch",
+            ns.clone(),
+            "visible",
+            ShardEpoch(41),
+            &[],
+            false,
+        )
         .await
         .unwrap();
     assert!(!path.exists());
@@ -1156,7 +1212,7 @@ async fn reclamation_drains_pools_and_preserves_all_epochs_for_recreation() {
             .is_none()
     );
     storage
-        .delete_with_epoch("test", "delete", ns, "visible", Some(ShardEpoch(41)))
+        .delete_with_epoch("test", "delete", ns, "visible", Some(ShardEpoch(41)), false)
         .await
         .unwrap();
     assert!(!path.exists());
@@ -1251,7 +1307,15 @@ async fn compressed_prefix_reclaims_and_retains_writer_epoch() {
         level: 3,
     };
     storage
-        .set_key_epoch("test", "epoch", ns.clone(), "key", ShardEpoch(17))
+        .set_key_epoch(
+            "test",
+            "epoch",
+            ns.clone(),
+            "key",
+            ShardEpoch(17),
+            &[],
+            false,
+        )
         .await
         .unwrap();
     storage
@@ -1415,14 +1479,29 @@ async fn poisoned_successful_delete_leaves_empty_file_and_failed_mutation_never_
     let storage = MultiSqliteIndexedStorage::new(dir.path(), 1, false);
     let ns = oplog_namespace("poisoned-delete");
     storage
-        .set_key_epoch("test", "epoch", ns.clone(), "key", ShardEpoch(29))
+        .set_key_epoch(
+            "test",
+            "epoch",
+            ns.clone(),
+            "key",
+            ShardEpoch(29),
+            &[],
+            false,
+        )
         .await
         .unwrap();
     let db = MultiSqliteIndexedStorage::namespace_to_db(&ns);
     let file = FileLifetime::get(storage.root.root_dir.join(&db));
     assert!(matches!(
         storage
-            .delete_with_epoch("test", "stale", ns.clone(), "key", Some(ShardEpoch(28)))
+            .delete_with_epoch(
+                "test",
+                "stale",
+                ns.clone(),
+                "key",
+                Some(ShardEpoch(28)),
+                false
+            )
             .await,
         Err(IndexedStorageError::Fenced { .. })
     ));
@@ -1441,7 +1520,7 @@ async fn poisoned_successful_delete_leaves_empty_file_and_failed_mutation_never_
     );
     file.poison();
     storage
-        .delete_with_epoch("test", "delete", ns, "key", Some(ShardEpoch(29)))
+        .delete_with_epoch("test", "delete", ns, "key", Some(ShardEpoch(29)), false)
         .await
         .unwrap();
     assert!(file.path.exists());
@@ -1472,7 +1551,14 @@ async fn absent_destructive_access_never_materializes_and_validates_snapshot_epo
         .await
         .unwrap();
     storage
-        .delete_with_epoch("test", "delete", ns.clone(), "key", Some(ShardEpoch(53)))
+        .delete_with_epoch(
+            "test",
+            "delete",
+            ns.clone(),
+            "key",
+            Some(ShardEpoch(53)),
+            false,
+        )
         .await
         .unwrap();
     assert!(
@@ -1523,7 +1609,14 @@ async fn absent_destructive_access_never_materializes_and_validates_snapshot_epo
         .unwrap();
     assert!(matches!(
         storage
-            .delete_with_epoch("test", "delete", ns.clone(), "key", Some(ShardEpoch(52)))
+            .delete_with_epoch(
+                "test",
+                "delete",
+                ns.clone(),
+                "key",
+                Some(ShardEpoch(52)),
+                false
+            )
             .await,
         Err(IndexedStorageError::Fenced {
             actual: Some(ShardEpoch(53)),
@@ -1550,7 +1643,14 @@ async fn absent_destructive_access_never_materializes_and_validates_snapshot_epo
         2
     );
     storage
-        .delete_with_epoch("test", "delete", ns.clone(), "key", Some(ShardEpoch(53)))
+        .delete_with_epoch(
+            "test",
+            "delete",
+            ns.clone(),
+            "key",
+            Some(ShardEpoch(53)),
+            false,
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -1563,7 +1663,15 @@ async fn absent_destructive_access_never_materializes_and_validates_snapshot_epo
     );
     assert!(
         storage
-            .set_key_epoch("test", "epoch", ns, "overflow", ShardEpoch(u64::MAX))
+            .set_key_epoch(
+                "test",
+                "epoch",
+                ns,
+                "overflow",
+                ShardEpoch(u64::MAX),
+                &[],
+                false
+            )
             .await
             .is_err()
     );

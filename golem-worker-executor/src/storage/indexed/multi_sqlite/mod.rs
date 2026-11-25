@@ -13,8 +13,9 @@
 // limitations under the License.
 
 use super::{
-    FencedTxError, IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace, ScanResume,
+    AgentIndexedState, FencedTxError, IndexedStorage, IndexedStorageError,
+    IndexedStorageMetaNamespace, IndexedStorageNamespace, ReleaseAgentResult, ScanResume,
+    UnsealAgentResult,
 };
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use async_trait::async_trait;
@@ -29,7 +30,7 @@ use std::ops::Deref;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, Weak};
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 use tokio::sync::{Mutex, Notify, OnceCell, RwLock};
 
 const LISTING_TTL: Duration = Duration::from_secs(10);
@@ -212,6 +213,7 @@ enum Access {
         namespace: String,
         key: String,
         expected: Option<ShardEpoch>,
+        retain_epoch: bool,
     },
     DropPrefix {
         namespace: String,
@@ -248,6 +250,7 @@ impl Access {
                 namespace,
                 key,
                 expected,
+                ..
             }
             | Self::DropPrefix {
                 namespace,
@@ -310,8 +313,30 @@ impl Access {
                 })?;
             }
         }
-        if matches!(self, Self::Delete { .. }) {
+        if matches!(
+            self,
+            Self::Delete {
+                retain_epoch: false,
+                ..
+            }
+        ) {
             epochs.retain(|(ns, k, _)| ns != namespace || k != key);
+        } else if matches!(
+            self,
+            Self::Delete {
+                retain_epoch: true,
+                ..
+            }
+        ) && stored.is_none()
+        {
+            let epoch = expected.ok_or_else(|| {
+                IndexedStorageError::Other("retaining an epoch requires an asserted epoch".into())
+            })?;
+            epochs.push((
+                namespace.clone(),
+                key.clone(),
+                SqliteIndexedStorage::to_i64(epoch.0, "epoch")?,
+            ));
         }
         Ok(())
     }
@@ -359,6 +384,10 @@ impl MultiSqliteIndexedStorage {
                 agent_mode,
             }
             | IndexedStorageNamespace::StagedOpLog {
+                owned_agent_id,
+                agent_mode,
+            }
+            | IndexedStorageNamespace::SealedPresent {
                 owned_agent_id,
                 agent_mode,
             } => {
@@ -576,7 +605,14 @@ impl MultiSqliteIndexedStorage {
                                 let mut epochs = snapshot.unwrap_or_default();
                                 access.absent(&mut epochs)?;
                                 let empty_snapshot = epochs.is_empty();
-                                if has_snapshot
+                                if (has_snapshot
+                                    || matches!(
+                                        access,
+                                        Access::Delete {
+                                            retain_epoch: true,
+                                            ..
+                                        }
+                                    ))
                                     && matches!(
                                         access,
                                         Access::Delete { .. } | Access::SetEpoch { .. }
@@ -764,6 +800,63 @@ impl Debug for MultiSqliteIndexedStorage {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl IndexedStorage for MultiSqliteIndexedStorage {
+    fn supports_release(&self) -> bool {
+        // File admission and epoch snapshots coordinate one database, not an atomic
+        // whole-agent transition across the primary, compressed, and manifest files.
+        false
+    }
+
+    async fn mark_sealed(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _state: &AgentIndexedState,
+        _epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        Err(IndexedStorageError::Other(
+            "multi-SQLite sealing is unsupported".into(),
+        ))
+    }
+
+    async fn release_agent(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _state: &AgentIndexedState,
+        _epoch: ShardEpoch,
+    ) -> Result<ReleaseAgentResult, IndexedStorageError> {
+        Err(IndexedStorageError::Other(
+            "multi-SQLite agent release is unsupported".into(),
+        ))
+    }
+
+    async fn unseal_agent(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _state: &AgentIndexedState,
+        _epoch: ShardEpoch,
+        _record_epoch: ShardEpoch,
+        _valid_until: SystemTime,
+    ) -> Result<UnsealAgentResult, IndexedStorageError> {
+        Err(IndexedStorageError::Other(
+            "multi-SQLite unsealing is unsupported".into(),
+        ))
+    }
+
+    async fn remove_key_epoch_if_empty(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        _namespace: IndexedStorageNamespace,
+        _key: &str,
+        _epoch: ShardEpoch,
+    ) -> Result<bool, IndexedStorageError> {
+        Err(IndexedStorageError::Other(
+            "multi-SQLite cannot atomically check whole-agent absence".into(),
+        ))
+    }
+
     async fn set_key_epoch(
         &self,
         svc_name: &'static str,
@@ -771,7 +864,9 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         new_epoch: ShardEpoch,
-    ) -> Result<(), IndexedStorageError> {
+        _presence_namespaces: &[IndexedStorageNamespace],
+        _remove_if_absent: bool,
+    ) -> Result<bool, IndexedStorageError> {
         let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         let access = Access::SetEpoch {
@@ -780,11 +875,21 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
             epoch: SqliteIndexedStorage::to_i64(new_epoch.0, "epoch")?,
         };
         self.with_access(db, access, move |s| async move {
-            s.set_key_epoch(svc_name, api_name, namespace, &key, new_epoch)
-                .await
+            // This backend records the fence even for an empty index. Presence is local to
+            // this file; configured whole-agent presence is unsupported across files.
+            s.set_key_epoch(
+                svc_name,
+                api_name,
+                namespace.clone(),
+                &key,
+                new_epoch,
+                std::slice::from_ref(&namespace),
+                false,
+            )
+            .await
         })
         .await
-        .map(|_| ())
+        .map(|present| present.unwrap_or(false))
     }
 
     async fn delete_with_epoch(
@@ -794,17 +899,32 @@ impl IndexedStorage for MultiSqliteIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         expected_epoch: Option<ShardEpoch>,
+        retain_epoch: bool,
     ) -> Result<(), IndexedStorageError> {
+        if retain_epoch {
+            let epoch = expected_epoch.ok_or_else(|| {
+                IndexedStorageError::Other("retaining an epoch requires an asserted epoch".into())
+            })?;
+            SqliteIndexedStorage::to_i64(epoch.0, "epoch")?;
+        }
         let db = Self::namespace_to_db(&namespace);
         let key = key.to_string();
         let access = Access::Delete {
             namespace: SqliteIndexedStorage::namespace(namespace.clone()),
             key: key.clone(),
             expected: expected_epoch,
+            retain_epoch,
         };
         self.with_access(db, access, move |s| async move {
-            s.delete_with_epoch(svc_name, api_name, namespace, &key, expected_epoch)
-                .await
+            s.delete_with_epoch(
+                svc_name,
+                api_name,
+                namespace,
+                &key,
+                expected_epoch,
+                retain_epoch,
+            )
+            .await
         })
         .await
         .map(|_| ())

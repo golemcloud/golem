@@ -13,98 +13,84 @@
 // limitations under the License.
 
 use crate::storage::indexed::{
-    IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace, IndexedStorageNamespace,
-    ScanResume,
+    AgentIndexedState, IndexedStorage, IndexedStorageError, IndexedStorageMetaNamespace,
+    IndexedStorageNamespace, ReleaseAgentResult, ScanResume, UnsealAgentResult,
 };
 use async_trait::async_trait;
 use golem_common::model::ShardEpoch;
 use regex::Regex;
-use std::collections::{BTreeMap, BinaryHeap};
+use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::ops::Bound::Included;
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
+use tokio::sync::Mutex;
 
-#[derive(Debug)]
-pub struct InMemoryIndexedStorage {
-    data: Arc<scc::HashMap<String, BTreeMap<u64, Vec<u8>>>>,
-    /// The writer generation recorded per key. An append that asserts an epoch holds this entry
-    /// while it writes `data`, which is what makes the check and the insert one step.
-    key_epochs: Arc<scc::HashMap<String, ShardEpoch>>,
-    #[cfg(test)]
-    read_count: Arc<AtomicU64>,
+#[derive(Debug, Default)]
+struct MemoryState {
+    data: HashMap<String, BTreeMap<u64, Vec<u8>>>,
+    key_epochs: HashMap<String, ShardEpoch>,
 }
 
-impl Default for InMemoryIndexedStorage {
-    fn default() -> Self {
-        Self::new()
-    }
+#[derive(Debug, Default)]
+pub struct InMemoryIndexedStorage {
+    /// No operation awaits after acquiring this lock. Whole-agent changes, including their
+    /// checks, are indivisible to other operations and to cancellation of the caller.
+    state: Mutex<MemoryState>,
+    #[cfg(test)]
+    read_count: AtomicU64,
 }
 
 impl InMemoryIndexedStorage {
     pub fn new() -> Self {
-        Self {
-            data: Arc::new(scc::HashMap::new()),
-            key_epochs: Arc::new(scc::HashMap::new()),
-            #[cfg(test)]
-            read_count: Arc::new(AtomicU64::new(0)),
-        }
+        Self::default()
     }
 
-    /// Refuses unless `record` holds exactly `expected`; an absent record refuses too. The same
-    /// terms as the SQL backends' check.
-    fn check_record(
-        &self,
+    fn check_epoch(
+        state: &MemoryState,
+        composite_key: &str,
         key: &str,
-        expected: ShardEpoch,
-        record: &scc::hash_map::Entry<'_, String, ShardEpoch>,
+        expected: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let stored = match record {
-            scc::hash_map::Entry::Occupied(occupied) => Some(*occupied.get()),
-            scc::hash_map::Entry::Vacant(_) => None,
-        };
-        match stored {
-            Some(epoch) if epoch == expected => Ok(()),
-            actual => Err(IndexedStorageError::Fenced {
-                key: key.to_string(),
-                expected,
-                actual,
-            }),
-        }
-    }
-
-    /// Inserts `pairs` under `composite_key`, all or nothing, after checking `expected_epoch`
-    /// against the key's record. The record's entry is held until the insert is done.
-    async fn append_checked(
-        &self,
-        composite_key: String,
-        key: &str,
-        pairs: &[(u64, Vec<u8>)],
-        expected_epoch: Option<ShardEpoch>,
-        conflict_on_held_index: bool,
-    ) -> Result<(), IndexedStorageError> {
-        let _record = match expected_epoch {
-            None => None,
-            Some(expected) => {
-                let record = self.key_epochs.entry_async(composite_key.clone()).await;
-                self.check_record(key, expected, &record)?;
-                Some(record)
+        if let Some(expected) = expected {
+            let actual = state.key_epochs.get(composite_key).copied();
+            if actual != Some(expected) {
+                return Err(IndexedStorageError::Fenced {
+                    key: key.to_string(),
+                    expected,
+                    actual,
+                });
             }
-        };
-
-        let mut entry = self.data.entry_async(composite_key).await.or_default();
-        if pairs.iter().any(|(id, _)| entry.contains_key(id)) {
-            return Err(if conflict_on_held_index {
-                IndexedStorageError::Conflict("Key already exists".to_string())
-            } else {
-                IndexedStorageError::Other("Key already exists".to_string())
-            });
-        }
-        for (id, value) in pairs {
-            entry.get_mut().insert(*id, value.clone());
         }
         Ok(())
+    }
+
+    fn check_agent_epochs(
+        state: &MemoryState,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        for (stored_key, stored_epoch) in &state.key_epochs {
+            if Self::belongs_to_agent(stored_key, key) && *stored_epoch > epoch {
+                return Err(IndexedStorageError::Fenced {
+                    key: key.to_string(),
+                    expected: epoch,
+                    actual: Some(*stored_epoch),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn belongs_to_agent(composite_key: &str, key: &str) -> bool {
+        let suffix = format!("/{key}");
+        composite_key.ends_with(&suffix)
+            || (composite_key.starts_with("durable/staged-oplog/")
+                || composite_key.starts_with("ephemeral/staged-oplog/"))
+                && composite_key
+                    .split_once('#')
+                    .is_some_and(|(base, _)| base.ends_with(&suffix))
     }
 
     #[cfg(test)]
@@ -112,12 +98,12 @@ impl InMemoryIndexedStorage {
         self.read_count.load(Ordering::Relaxed)
     }
 
-    /// Gives the key of the map for `key` in `namespace`. The key holds no agent id, because
-    /// `key` already names the agent. The other indexed storage backends do the same. An agent
-    /// name can hold `/`, so with a separate part for the name, a scan cannot find where the name
-    /// stops.
     fn composite_key(namespace: IndexedStorageNamespace, key: &str) -> String {
         match namespace {
+            IndexedStorageNamespace::SealedPresent { agent_mode, .. } => {
+                let mode = super::agent_mode_prefix(agent_mode);
+                format!("{mode}/sealed-present/{key}")
+            }
             IndexedStorageNamespace::OpLog { agent_mode, .. } => {
                 let mode = super::agent_mode_prefix(agent_mode);
                 format!("{mode}/oplog/{key}")
@@ -146,52 +132,262 @@ impl InMemoryIndexedStorage {
         namespace: IndexedStorageMetaNamespace,
         prefix: Option<&str>,
     ) -> Box<dyn Fn(&str) -> Option<String> + Send + Sync> {
-        let prefix = prefix.unwrap_or("");
-        match namespace {
-            IndexedStorageMetaNamespace::Oplog { agent_mode } => {
-                let mode = super::agent_mode_prefix(agent_mode);
-                let pattern: String = format!(r"^{mode}/oplog/({}.*)$", regex::escape(prefix));
-                let regex = Regex::new(&pattern).unwrap();
-
-                Box::new(move |key| {
-                    regex
-                        .captures(key)
-                        .map(|caps| caps.get(1).unwrap().as_str().to_string())
-                })
-            }
+        let prefix = regex::escape(prefix.unwrap_or(""));
+        let (mode, family) = match namespace {
+            IndexedStorageMetaNamespace::Oplog { agent_mode } => (agent_mode, "oplog".to_string()),
             IndexedStorageMetaNamespace::CompressedOplog { agent_mode, level } => {
-                let mode = super::agent_mode_prefix(agent_mode);
-                let pattern: String = format!(
-                    r"^{mode}/compressed-oplog/{level}/({}.*)$",
-                    regex::escape(prefix)
-                );
-                let regex = Regex::new(&pattern).unwrap();
-
-                Box::new(move |key| {
-                    regex
-                        .captures(key)
-                        .map(|caps| caps.get(1).unwrap().as_str().to_string())
-                })
+                (agent_mode, format!("compressed-oplog/{level}"))
             }
             IndexedStorageMetaNamespace::BlobOplogManifest { agent_mode, level } => {
-                let mode = super::agent_mode_prefix(agent_mode);
-                let pattern: String =
-                    format!(r"^{mode}/blob-oplog/{level}/({}.*)$", regex::escape(prefix));
-                let regex = Regex::new(&pattern).unwrap();
-
-                Box::new(move |key| {
-                    regex
-                        .captures(key)
-                        .map(|caps| caps.get(1).unwrap().as_str().to_string())
-                })
+                (agent_mode, format!("blob-oplog/{level}"))
             }
+        };
+        let mode = super::agent_mode_prefix(mode);
+        let regex = Regex::new(&format!(r"^{mode}/{family}/({prefix}.*)$")).unwrap();
+        Box::new(move |key| {
+            regex
+                .captures(key)
+                .map(|caps| caps.get(1).unwrap().as_str().to_string())
+        })
+    }
+
+    fn append_checked(
+        state: &mut MemoryState,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        pairs: &[(u64, Vec<u8>)],
+        expected_epoch: Option<ShardEpoch>,
+    ) -> Result<(), IndexedStorageError> {
+        let conflict_on_held_index = matches!(
+            &namespace,
+            IndexedStorageNamespace::OpLog { .. }
+                | IndexedStorageNamespace::StagedOpLog { .. }
+                | IndexedStorageNamespace::BlobOplogManifest { .. }
+                | IndexedStorageNamespace::SealedPresent { .. }
+        );
+        let composite_key = Self::composite_key(namespace, key);
+        Self::check_epoch(state, &composite_key, key, expected_epoch)?;
+        let entry = state.data.entry(composite_key).or_default();
+        if pairs.iter().any(|(id, _)| entry.contains_key(id)) {
+            return Err(if conflict_on_held_index {
+                IndexedStorageError::Conflict("Key already exists".to_string())
+            } else {
+                IndexedStorageError::Other("Key already exists".to_string())
+            });
         }
+        entry.extend(pairs.iter().cloned());
+        Ok(())
     }
 }
 
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl IndexedStorage for InMemoryIndexedStorage {
+    fn supports_release(&self) -> bool {
+        true
+    }
+
+    async fn mark_sealed(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        agent: &AgentIndexedState,
+        epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        let mut state = self.state.lock().await;
+        let key = agent.owned_agent_id.storage_key();
+        Self::check_epoch(
+            &state,
+            &Self::composite_key(agent.fence_namespace(), &key),
+            &key,
+            Some(epoch),
+        )?;
+        state.data.insert(
+            Self::composite_key(agent.marker_namespace(), &key),
+            BTreeMap::from([(0, Vec::new())]),
+        );
+        Ok(())
+    }
+
+    async fn release_agent(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        agent: &AgentIndexedState,
+        epoch: ShardEpoch,
+    ) -> Result<ReleaseAgentResult, IndexedStorageError> {
+        let mut state = self.state.lock().await;
+        let key = agent.owned_agent_id.storage_key();
+        if !state
+            .data
+            .keys()
+            .chain(state.key_epochs.keys())
+            .any(|stored_key| Self::belongs_to_agent(stored_key, &key))
+        {
+            return Ok(ReleaseAgentResult::Released);
+        }
+        Self::check_epoch(
+            &state,
+            &Self::composite_key(agent.fence_namespace(), &key),
+            &key,
+            Some(epoch),
+        )?;
+        Self::check_agent_epochs(&state, &key, epoch)?;
+        let expected: HashMap<_, BTreeMap<_, _>> = agent
+            .manifests
+            .iter()
+            .map(|(level, entries)| {
+                (
+                    Self::composite_key(agent.manifest_namespace(*level), &key),
+                    entries
+                        .iter()
+                        .map(|(id, bytes)| (*id, bytes.to_vec()))
+                        .collect(),
+                )
+            })
+            .collect();
+        for (stored_key, entries) in &state.data {
+            if !Self::belongs_to_agent(stored_key, &key) || entries.is_empty() {
+                continue;
+            }
+            let family = stored_key.split('/').nth(1);
+            if matches!(family, Some("oplog" | "compressed-oplog"))
+                || family == Some("blob-oplog") && expected.get(stored_key) != Some(entries)
+            {
+                return Ok(ReleaseAgentResult::NotReleased);
+            }
+        }
+        for (manifest_key, entries) in &expected {
+            if state
+                .data
+                .get(manifest_key)
+                .is_none_or(|stored| stored != entries)
+                && !entries.is_empty()
+            {
+                return Ok(ReleaseAgentResult::NotReleased);
+            }
+        }
+        state
+            .data
+            .retain(|stored_key, _| !Self::belongs_to_agent(stored_key, &key));
+        state
+            .key_epochs
+            .retain(|stored_key, _| !Self::belongs_to_agent(stored_key, &key));
+        Ok(ReleaseAgentResult::Released)
+    }
+
+    async fn unseal_agent(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        agent: &AgentIndexedState,
+        epoch: ShardEpoch,
+        record_epoch: ShardEpoch,
+        valid_until: SystemTime,
+    ) -> Result<UnsealAgentResult, IndexedStorageError> {
+        let mut state = self.state.lock().await;
+        let key = agent.owned_agent_id.storage_key();
+        if epoch < record_epoch {
+            return Err(IndexedStorageError::Fenced {
+                key,
+                expected: epoch,
+                actual: Some(record_epoch),
+            });
+        }
+        Self::check_agent_epochs(&state, &key, epoch)?;
+        let mut restored: HashMap<_, BTreeMap<_, _>> = agent
+            .manifests
+            .iter()
+            .filter(|(_, entries)| !entries.is_empty())
+            .map(|(level, entries)| {
+                (
+                    Self::composite_key(agent.manifest_namespace(*level), &key),
+                    entries
+                        .iter()
+                        .map(|(id, bytes)| (*id, bytes.to_vec()))
+                        .collect(),
+                )
+            })
+            .collect();
+        restored.insert(
+            Self::composite_key(agent.primary_namespace(), &key),
+            BTreeMap::new(),
+        );
+        restored.insert(
+            Self::composite_key(agent.marker_namespace(), &key),
+            BTreeMap::from([(0, Vec::new())]),
+        );
+        if state
+            .data
+            .keys()
+            .any(|stored_key| Self::belongs_to_agent(stored_key, &key))
+        {
+            let own_rows = state
+                .data
+                .iter()
+                .filter(|(stored_key, _)| Self::belongs_to_agent(stored_key, &key))
+                .count()
+                == restored.len()
+                && restored
+                    .iter()
+                    .all(|(stored_key, entries)| state.data.get(stored_key) == Some(entries));
+            let own_epochs = state
+                .key_epochs
+                .iter()
+                .filter(|(stored_key, _)| Self::belongs_to_agent(stored_key, &key))
+                .all(|(_, stored_epoch)| *stored_epoch == epoch)
+                && agent.epoch_namespaces().into_iter().all(|namespace| {
+                    state.key_epochs.get(&Self::composite_key(namespace, &key)) == Some(&epoch)
+                });
+            if own_rows && own_epochs {
+                return Ok(UnsealAgentResult::Unsealed);
+            }
+            return Ok(UnsealAgentResult::AlreadyPresent);
+        }
+        if SystemTime::now() > valid_until {
+            return Ok(UnsealAgentResult::Expired);
+        }
+        for (stored_key, stored_epoch) in &mut state.key_epochs {
+            if Self::belongs_to_agent(stored_key, &key) {
+                *stored_epoch = epoch;
+            }
+        }
+        for namespace in agent.epoch_namespaces() {
+            state
+                .key_epochs
+                .insert(Self::composite_key(namespace, &key), epoch);
+        }
+        state.data.extend(restored);
+        Ok(UnsealAgentResult::Unsealed)
+    }
+
+    async fn remove_key_epoch_if_empty(
+        &self,
+        _svc_name: &'static str,
+        _api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<bool, IndexedStorageError> {
+        let mut state = self.state.lock().await;
+        let agent_key = if matches!(&namespace, IndexedStorageNamespace::StagedOpLog { .. }) {
+            key.split('#').next().unwrap_or(key)
+        } else {
+            key
+        };
+        let composite_key = Self::composite_key(namespace, key);
+        if state.key_epochs.get(&composite_key) != Some(&epoch)
+            || state
+                .data
+                .keys()
+                .any(|stored_key| Self::belongs_to_agent(stored_key, agent_key))
+        {
+            return Ok(false);
+        }
+        state.key_epochs.remove(&composite_key);
+        Ok(true)
+    }
+
     async fn number_of_replicas(
         &self,
         _svc_name: &'static str,
@@ -217,8 +413,12 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<bool, IndexedStorageError> {
-        let composite_key = Self::composite_key(namespace, key);
-        Ok(self.data.contains_async(&composite_key).await)
+        Ok(self
+            .state
+            .lock()
+            .await
+            .data
+            .contains_key(&Self::composite_key(namespace, key)))
     }
 
     async fn scan_stable(
@@ -234,30 +434,24 @@ impl IndexedStorage for InMemoryIndexedStorage {
             .map(|resume| resume.into_marker("In-memory"))
             .transpose()?;
         let matcher = Self::match_key(namespace, prefix);
-
-        // The map is unordered, so keep the `count` smallest matching keys in a capped max-heap
-        // rather than sorting every key in the namespace.
+        let state = self.state.lock().await;
         let limit = count as usize;
         let mut page: BinaryHeap<String> = BinaryHeap::new();
-        self.data
-            .iter_async(|key, _| {
-                if let Some(key) = matcher(key)
-                    && after.as_deref().is_none_or(|after| key.as_str() > after)
+        for stored_key in state.data.keys() {
+            if let Some(key) = matcher(stored_key)
+                && after.as_deref().is_none_or(|after| key.as_str() > after)
+            {
+                if page.len() < limit {
+                    page.push(key);
+                } else if let Some(highest) = page.peek()
+                    && key < *highest
                 {
-                    if page.len() < limit {
-                        page.push(key);
-                    } else if let Some(highest) = page.peek()
-                        && key < *highest
-                    {
-                        page.pop();
-                        page.push(key);
-                    }
+                    page.pop();
+                    page.push(key);
                 }
-                true
-            })
-            .await;
+            }
+        }
         let matched = page.into_sorted_vec();
-
         Ok((super::last_key_resume(&matched, count), matched))
     }
 
@@ -272,21 +466,8 @@ impl IndexedStorage for InMemoryIndexedStorage {
         value: Vec<u8>,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        let conflict_on_held_index = matches!(
-            &namespace,
-            IndexedStorageNamespace::OpLog { .. }
-                | IndexedStorageNamespace::StagedOpLog { .. }
-                | IndexedStorageNamespace::BlobOplogManifest { .. }
-        );
-        let composite_key = Self::composite_key(namespace, key);
-        self.append_checked(
-            composite_key,
-            key,
-            &[(id, value)],
-            expected_epoch,
-            conflict_on_held_index,
-        )
-        .await
+        let mut state = self.state.lock().await;
+        Self::append_checked(&mut state, namespace, key, &[(id, value)], expected_epoch)
     }
 
     async fn append_many(
@@ -299,29 +480,15 @@ impl IndexedStorage for InMemoryIndexedStorage {
         pairs: Arc<[(u64, bytes::Bytes)]>,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), IndexedStorageError> {
-        // Nothing to write is nothing to fence, as on every other backend.
         if pairs.is_empty() {
             return Ok(());
         }
-        let conflict_on_held_index = matches!(
-            namespace,
-            IndexedStorageNamespace::OpLog { .. }
-                | IndexedStorageNamespace::StagedOpLog { .. }
-                | IndexedStorageNamespace::BlobOplogManifest { .. }
-        );
-        let composite_key = Self::composite_key(namespace.clone(), key);
-        let pairs: Vec<(u64, Vec<u8>)> = pairs
+        let pairs: Vec<_> = pairs
             .iter()
-            .map(|(id, value)| (*id, value.to_vec()))
+            .map(|(id, bytes)| (*id, bytes.to_vec()))
             .collect();
-        self.append_checked(
-            composite_key,
-            key,
-            &pairs,
-            expected_epoch,
-            conflict_on_held_index,
-        )
-        .await
+        let mut state = self.state.lock().await;
+        Self::append_checked(&mut state, namespace.clone(), key, &pairs, expected_epoch)
     }
 
     async fn set_key_epoch(
@@ -331,27 +498,32 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         epoch: ShardEpoch,
-    ) -> Result<(), IndexedStorageError> {
-        let composite_key = Self::composite_key(namespace, key);
-        match self.key_epochs.entry_async(composite_key).await {
-            scc::hash_map::Entry::Vacant(vacant) => {
-                vacant.insert_entry(epoch);
-                Ok(())
-            }
-            scc::hash_map::Entry::Occupied(mut occupied) => {
-                let stored = *occupied.get();
-                if epoch >= stored {
-                    *occupied.get_mut() = epoch;
-                    Ok(())
-                } else {
-                    Err(IndexedStorageError::Fenced {
-                        key: key.to_string(),
-                        expected: epoch,
-                        actual: Some(stored),
-                    })
-                }
-            }
+        presence_namespaces: &[IndexedStorageNamespace],
+        remove_if_absent: bool,
+    ) -> Result<bool, IndexedStorageError> {
+        let mut state = self.state.lock().await;
+        let composite_key = Self::composite_key(namespace.clone(), key);
+        let stored = state.key_epochs.get(&composite_key).copied();
+        if stored.is_some_and(|stored| stored > epoch) {
+            return Err(IndexedStorageError::Fenced {
+                key: key.to_string(),
+                expected: epoch,
+                actual: stored,
+            });
         }
+        let present = std::iter::once(&namespace)
+            .chain(presence_namespaces)
+            .any(|namespace| {
+                state
+                    .data
+                    .contains_key(&Self::composite_key(namespace.clone(), key))
+            });
+        if present || !remove_if_absent {
+            state.key_epochs.insert(composite_key, epoch);
+        } else {
+            state.key_epochs.remove(&composite_key);
+        }
+        Ok(present)
     }
 
     async fn delete_with_epoch(
@@ -361,24 +533,46 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         expected_epoch: Option<ShardEpoch>,
+        retain_epoch: bool,
     ) -> Result<(), IndexedStorageError> {
-        let composite_key = Self::composite_key(namespace, key);
-        // The record's guard first and held across the data removal, in the order an append takes
-        // them, so nobody can record a new generation between the check and the deletes.
-        let record = self.key_epochs.entry_async(composite_key.clone()).await;
-        if let Some(expected) = expected_epoch {
-            // Neither a record nor entries: already gone, most often by an earlier attempt of
-            // this same deletion (see the trait).
-            if matches!(record, scc::hash_map::Entry::Vacant(_))
-                && !self.data.contains_async(&composite_key).await
-            {
-                return Ok(());
-            }
-            self.check_record(key, expected, &record)?;
+        if retain_epoch && expected_epoch.is_none() {
+            return Err(IndexedStorageError::Other(
+                "retaining a deletion fence requires an asserted epoch".into(),
+            ));
         }
-        self.data.remove_async(&composite_key).await;
-        if let scc::hash_map::Entry::Occupied(occupied) = record {
-            let _ = occupied.remove();
+        let mode = match &namespace {
+            IndexedStorageNamespace::OpLog { agent_mode, .. }
+            | IndexedStorageNamespace::CompressedOpLog { agent_mode, .. }
+            | IndexedStorageNamespace::BlobOplogManifest { agent_mode, .. }
+            | IndexedStorageNamespace::StagedOpLog { agent_mode, .. }
+            | IndexedStorageNamespace::SealedPresent { agent_mode, .. } => *agent_mode,
+        };
+        let mut state = self.state.lock().await;
+        let agent_key = if matches!(&namespace, IndexedStorageNamespace::StagedOpLog { .. }) {
+            key.split('#').next().unwrap_or(key)
+        } else {
+            key
+        };
+        let composite_key = Self::composite_key(namespace, key);
+        let missing = !state.key_epochs.contains_key(&composite_key)
+            && !state.data.contains_key(&composite_key);
+        if missing && retain_epoch {
+            Self::check_agent_epochs(&state, agent_key, expected_epoch.unwrap())?;
+        }
+        if !missing {
+            Self::check_epoch(&state, &composite_key, key, expected_epoch)?;
+        }
+        state.data.remove(&composite_key);
+        if retain_epoch {
+            state
+                .key_epochs
+                .insert(composite_key, expected_epoch.unwrap());
+            let mode = super::agent_mode_prefix(mode);
+            state
+                .data
+                .remove(&format!("{mode}/sealed-present/{agent_key}"));
+        } else {
+            state.key_epochs.remove(&composite_key);
         }
         Ok(())
     }
@@ -395,31 +589,24 @@ impl IndexedStorage for InMemoryIndexedStorage {
     ) -> Result<bool, IndexedStorageError> {
         let source = Self::composite_key(source_namespace, source_key);
         let target = Self::composite_key(target_namespace, target_key);
-        if self.data.contains_async(&target).await {
+        let mut state = self.state.lock().await;
+        if state.data.contains_key(&target) {
             return Ok(false);
         }
-        let source_entries = self
+        let source_entries = state
             .data
-            .read_async(&source, |_, entries| entries.clone())
-            .await
-            .ok_or_else(|| IndexedStorageError::Other("source index is missing".to_string()))?;
+            .get(&source)
+            .ok_or_else(|| IndexedStorageError::Other("source index is missing".into()))?;
         if expected_last_id == 0
             || source_entries.len() as u64 != expected_last_id
             || source_entries.keys().copied().ne(1..=expected_last_id)
         {
             return Err(IndexedStorageError::Other(
-                "source index is empty, gapped, or has an unexpected tip".to_string(),
+                "source index is empty, gapped, or has an unexpected tip".into(),
             ));
         }
-        if self
-            .data
-            .insert_async(target, source_entries)
-            .await
-            .is_err()
-        {
-            return Ok(false);
-        }
-        self.data.remove_async(&source).await;
+        let entries = state.data.remove(&source).unwrap();
+        state.data.insert(target, entries);
         Ok(true)
     }
 
@@ -430,12 +617,13 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<u64, IndexedStorageError> {
-        let composite_key = Self::composite_key(namespace, key);
         Ok(self
-            .data
-            .read_async(&composite_key, |_, entry| entry.len() as u64)
+            .state
+            .lock()
             .await
-            .unwrap_or_default())
+            .data
+            .get(&Self::composite_key(namespace, key))
+            .map_or(0, |entries| entries.len() as u64))
     }
 
     async fn delete(
@@ -445,8 +633,11 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<(), IndexedStorageError> {
-        let composite_key = Self::composite_key(namespace, key);
-        self.data.remove_async(&composite_key).await;
+        self.state
+            .lock()
+            .await
+            .data
+            .remove(&Self::composite_key(namespace, key));
         Ok(())
     }
 
@@ -462,18 +653,18 @@ impl IndexedStorage for InMemoryIndexedStorage {
     ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
         #[cfg(test)]
         self.read_count.fetch_add(1, Ordering::Relaxed);
-
-        let composite_key = Self::composite_key(namespace, key);
         Ok(self
-            .data
-            .read_async(&composite_key, |_, entry| {
-                let mut result = Vec::new();
-                for (id, value) in entry.range((Included(start_id), Included(end_id))) {
-                    result.push((*id, value.clone()));
-                }
-                result
-            })
+            .state
+            .lock()
             .await
+            .data
+            .get(&Self::composite_key(namespace, key))
+            .map(|entries| {
+                entries
+                    .range((Included(start_id), Included(end_id)))
+                    .map(|(id, bytes)| (*id, bytes.clone()))
+                    .collect()
+            })
             .unwrap_or_default())
     }
 
@@ -485,15 +676,17 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
-        let composite_key = Self::composite_key(namespace, key);
         Ok(self
-            .data
-            .read_async(&composite_key, |_, entry| {
-                let first = entry.first_key_value();
-                first.map(|(id, value)| (*id, value.clone()))
-            })
+            .state
+            .lock()
             .await
-            .flatten())
+            .data
+            .get(&Self::composite_key(namespace, key))
+            .and_then(|entries| {
+                entries
+                    .first_key_value()
+                    .map(|(id, bytes)| (*id, bytes.clone()))
+            }))
     }
 
     async fn last(
@@ -504,15 +697,17 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
-        let composite_key = Self::composite_key(namespace, key);
         Ok(self
-            .data
-            .read_async(&composite_key, |_, entry| {
-                let last = entry.last_key_value();
-                last.map(|(id, value)| (*id, value.clone()))
-            })
+            .state
+            .lock()
             .await
-            .flatten())
+            .data
+            .get(&Self::composite_key(namespace, key))
+            .and_then(|entries| {
+                entries
+                    .last_key_value()
+                    .map(|(id, bytes)| (*id, bytes.clone()))
+            }))
     }
 
     async fn last_id(
@@ -523,14 +718,13 @@ impl IndexedStorage for InMemoryIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
     ) -> Result<Option<u64>, IndexedStorageError> {
-        let composite_key = Self::composite_key(namespace, key);
         Ok(self
-            .data
-            .read_async(&composite_key, |_, entry| {
-                entry.last_key_value().map(|(id, _)| *id)
-            })
+            .state
+            .lock()
             .await
-            .flatten())
+            .data
+            .get(&Self::composite_key(namespace, key))
+            .and_then(|entries| entries.last_key_value().map(|(id, _)| *id)))
     }
 
     async fn closest(
@@ -542,17 +736,18 @@ impl IndexedStorage for InMemoryIndexedStorage {
         key: &str,
         id: u64,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
-        let composite_key = Self::composite_key(namespace, key);
         Ok(self
-            .data
-            .read_async(&composite_key, |_, entry| {
-                entry
-                    .keys()
-                    .find(|k| **k >= id)
-                    .map(|key| (*key, entry[key].clone()))
-            })
+            .state
+            .lock()
             .await
-            .flatten())
+            .data
+            .get(&Self::composite_key(namespace, key))
+            .and_then(|entries| {
+                entries
+                    .range(id..)
+                    .next()
+                    .map(|(id, bytes)| (*id, bytes.clone()))
+            }))
     }
 
     async fn drop_prefix(
@@ -570,27 +765,14 @@ impl IndexedStorage for InMemoryIndexedStorage {
                 | IndexedStorageNamespace::BlobOplogManifest { .. }
         );
         let composite_key = Self::composite_key(namespace, key);
-        // The record's guard is held across the trim, in the order an append takes them, so
-        // nobody can record a new generation between the check and the trim.
-        let record = match expected_epoch {
-            Some(expected) => {
-                let record = self.key_epochs.entry_async(composite_key.clone()).await;
-                self.check_record(key, expected, &record)?;
-                Some(record)
+        let mut state = self.state.lock().await;
+        Self::check_epoch(&state, &composite_key, key, expected_epoch)?;
+        if let Some(entries) = state.data.get_mut(&composite_key) {
+            entries.retain(|id, _| *id > last_dropped_id);
+            if delete_if_empty && entries.is_empty() {
+                state.data.remove(&composite_key);
             }
-            None => None,
-        };
-        self.data
-            .update_async(&composite_key, |_, entry| {
-                entry.retain(|k, _| *k > last_dropped_id);
-            })
-            .await;
-        if delete_if_empty {
-            self.data
-                .remove_if_async(&composite_key, |entry| entry.is_empty())
-                .await;
         }
-        drop(record);
         Ok(())
     }
 
@@ -603,23 +785,17 @@ impl IndexedStorage for InMemoryIndexedStorage {
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<bool, IndexedStorageError> {
         let composite_key = Self::composite_key(namespace, key);
-        // The record's guard and then the key's entry are held across the emptiness test and the
-        // removal, in the order a fenced append takes them, so no writer can add an entry in
-        // between: a fenced one waits on the record, an unfenced one on the entry.
-        let record = self.key_epochs.entry_async(composite_key.clone()).await;
-        if let Some(expected) = expected_epoch {
-            self.check_record(key, expected, &record)?;
+        let mut state = self.state.lock().await;
+        Self::check_epoch(&state, &composite_key, key, expected_epoch)?;
+        if state
+            .data
+            .get(&composite_key)
+            .is_some_and(|entries| !entries.is_empty())
+        {
+            return Ok(false);
         }
-        let empty = match self.data.entry_async(composite_key).await {
-            scc::hash_map::Entry::Occupied(entries) if entries.get().is_empty() => {
-                let _ = entries.remove_entry();
-                true
-            }
-            scc::hash_map::Entry::Occupied(_) => false,
-            scc::hash_map::Entry::Vacant(_) => true,
-        };
-        drop(record);
-        Ok(empty)
+        state.data.remove(&composite_key);
+        Ok(true)
     }
 }
 

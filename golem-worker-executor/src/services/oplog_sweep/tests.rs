@@ -25,7 +25,10 @@ use crate::services::oplog::{
 };
 use crate::services::shard::ShardServiceDefault;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
-use crate::storage::indexed::{IndexedStorageError, IndexedStorageNamespace};
+use crate::storage::indexed::{
+    AgentIndexedState, IndexedStorageError, IndexedStorageNamespace, ReleaseAgentResult,
+    UnsealAgentResult,
+};
 use async_trait::async_trait;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::OwnerKind;
@@ -524,6 +527,61 @@ struct FixedPages {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl IndexedStorage for FixedPages {
+    fn supports_release(&self) -> bool {
+        self.inner.supports_release()
+    }
+
+    async fn mark_sealed(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .mark_sealed(svc_name, api_name, state, epoch)
+            .await
+    }
+
+    async fn release_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+    ) -> Result<ReleaseAgentResult, IndexedStorageError> {
+        self.inner
+            .release_agent(svc_name, api_name, state, epoch)
+            .await
+    }
+
+    async fn unseal_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+        record_epoch: ShardEpoch,
+        valid_until: std::time::SystemTime,
+    ) -> Result<UnsealAgentResult, IndexedStorageError> {
+        self.inner
+            .unseal_agent(svc_name, api_name, state, epoch, record_epoch, valid_until)
+            .await
+    }
+
+    async fn remove_key_epoch_if_empty(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<bool, IndexedStorageError> {
+        self.inner
+            .remove_key_epoch_if_empty(svc_name, api_name, namespace, key, epoch)
+            .await
+    }
+
     async fn number_of_replicas(
         &self,
         svc_name: &'static str,
@@ -650,9 +708,19 @@ impl IndexedStorage for FixedPages {
         namespace: IndexedStorageNamespace,
         key: &str,
         epoch: golem_common::model::ShardEpoch,
-    ) -> Result<(), IndexedStorageError> {
+        presence_namespaces: &[IndexedStorageNamespace],
+        remove_if_absent: bool,
+    ) -> Result<bool, IndexedStorageError> {
         self.inner
-            .set_key_epoch(svc_name, api_name, namespace, key, epoch)
+            .set_key_epoch(
+                svc_name,
+                api_name,
+                namespace,
+                key,
+                epoch,
+                presence_namespaces,
+                remove_if_absent,
+            )
             .await
     }
 
@@ -663,9 +731,17 @@ impl IndexedStorage for FixedPages {
         namespace: IndexedStorageNamespace,
         key: &str,
         expected_epoch: Option<ShardEpoch>,
+        retain_epoch: bool,
     ) -> Result<(), IndexedStorageError> {
         self.inner
-            .delete_with_epoch(svc_name, api_name, namespace, key, expected_epoch)
+            .delete_with_epoch(
+                svc_name,
+                api_name,
+                namespace,
+                key,
+                expected_epoch,
+                retain_epoch,
+            )
             .await
     }
 

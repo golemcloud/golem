@@ -27,8 +27,8 @@ use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::indexed::redis::RedisIndexedStorage;
 use crate::storage::indexed::sqlite::SqliteIndexedStorage;
 use crate::storage::indexed::{
-    IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace,
+    AgentIndexedState, IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi,
+    IndexedStorageMetaNamespace, IndexedStorageNamespace, ReleaseAgentResult, UnsealAgentResult,
 };
 use assert2::check;
 use bytes::Bytes;
@@ -873,6 +873,61 @@ impl ReadCountingIndexedStorage {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl IndexedStorage for ReadCountingIndexedStorage {
+    fn supports_release(&self) -> bool {
+        self.inner.supports_release()
+    }
+
+    async fn mark_sealed(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+    ) -> Result<(), IndexedStorageError> {
+        self.inner
+            .mark_sealed(svc_name, api_name, state, epoch)
+            .await
+    }
+
+    async fn release_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+    ) -> Result<ReleaseAgentResult, IndexedStorageError> {
+        self.inner
+            .release_agent(svc_name, api_name, state, epoch)
+            .await
+    }
+
+    async fn unseal_agent(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        state: &AgentIndexedState,
+        epoch: ShardEpoch,
+        record_epoch: ShardEpoch,
+        valid_until: std::time::SystemTime,
+    ) -> Result<UnsealAgentResult, IndexedStorageError> {
+        self.inner
+            .unseal_agent(svc_name, api_name, state, epoch, record_epoch, valid_until)
+            .await
+    }
+
+    async fn remove_key_epoch_if_empty(
+        &self,
+        svc_name: &'static str,
+        api_name: &'static str,
+        namespace: IndexedStorageNamespace,
+        key: &str,
+        epoch: ShardEpoch,
+    ) -> Result<bool, IndexedStorageError> {
+        self.inner
+            .remove_key_epoch_if_empty(svc_name, api_name, namespace, key, epoch)
+            .await
+    }
+
     async fn set_key_epoch(
         &self,
         svc_name: &'static str,
@@ -880,7 +935,9 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         shard_epoch: ShardEpoch,
-    ) -> Result<(), IndexedStorageError> {
+        presence_namespaces: &[IndexedStorageNamespace],
+        remove_if_absent: bool,
+    ) -> Result<bool, IndexedStorageError> {
         if let (
             Some(error),
             IndexedStorageNamespace::CompressedOpLog { .. }
@@ -890,7 +947,15 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             return Err(error.clone());
         }
         self.inner
-            .set_key_epoch(svc_name, api_name, namespace, key, shard_epoch)
+            .set_key_epoch(
+                svc_name,
+                api_name,
+                namespace,
+                key,
+                shard_epoch,
+                presence_namespaces,
+                remove_if_absent,
+            )
             .await
     }
 
@@ -901,6 +966,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         namespace: IndexedStorageNamespace,
         key: &str,
         expected_epoch: Option<ShardEpoch>,
+        retain_epoch: bool,
     ) -> Result<(), IndexedStorageError> {
         // A whole-key delete, as `delete` is: an archive level deletes its key with its record.
         if self.fail_delete_once.swap(false, Ordering::Relaxed) {
@@ -909,7 +975,14 @@ impl IndexedStorage for ReadCountingIndexedStorage {
             ));
         }
         self.inner
-            .delete_with_epoch(svc_name, api_name, namespace, key, expected_epoch)
+            .delete_with_epoch(
+                svc_name,
+                api_name,
+                namespace,
+                key,
+                expected_epoch,
+                retain_epoch,
+            )
             .await
     }
 
@@ -1013,6 +1086,8 @@ impl IndexedStorage for ReadCountingIndexedStorage {
                         namespace.clone(),
                         key,
                         ShardEpoch(epoch.0 + 1),
+                        &[],
+                        false,
                     )
                     .await?;
                 return self
@@ -3587,6 +3662,8 @@ async fn a_delete_that_outlived_the_shard_leaves_the_oplog_to_its_new_owner(_tra
             },
             &owned_agent_id.storage_key(),
             ShardEpoch(6),
+            &[],
+            false,
         )
         .await
         .unwrap();

@@ -162,8 +162,17 @@ impl FencedIndexedStream {
             let key = stream.key.clone();
             async move {
                 storage
-                    .set_key_epoch(svc_name, "set_key_epoch", namespace, &key, shard_epoch)
+                    .set_key_epoch(
+                        svc_name,
+                        "set_key_epoch",
+                        namespace,
+                        &key,
+                        shard_epoch,
+                        &[],
+                        false,
+                    )
                     .await
+                    .map(|_| ())
             }
         })
         .await;
@@ -453,7 +462,7 @@ impl FencedIndexedStream {
                 let key = self.key.clone();
                 async move {
                     is.with(labels.svc, "delete")
-                        .delete_with_epoch(ns, &key, None)
+                        .delete_with_epoch(ns, &key, None, false)
                         .await
                 }
             },
