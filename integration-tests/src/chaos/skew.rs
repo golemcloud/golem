@@ -591,7 +591,7 @@ pub async fn probe_clock(ctx: &WorkloadContext, agent: &str, group: Group) -> Cl
 fn entry_timestamp(entry: &PublicOplogEntry) -> Option<jiff::Timestamp> {
     let value = serde_json::to_value(entry).ok()?;
     let raw = value.get("timestamp")?.as_str()?;
-    str::parse::<jiff::Timestamp>(raw).ok().map(|at| at)
+    str::parse::<jiff::Timestamp>(raw).ok()
 }
 
 /// Takes a round of readings, `per_group` from each side of the split.
