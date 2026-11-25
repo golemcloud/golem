@@ -130,14 +130,9 @@ fn foreign_value_types_round_trip() {
     round_trip(bit_vec::BitVec::from_elem(13, true));
     round_trip(bit_vec::BitVec::new());
 
-    round_trip(chrono::NaiveDate::from_ymd_opt(2026, 6, 10).unwrap());
-    round_trip(
-        chrono::NaiveDate::from_ymd_opt(1999, 12, 31)
-            .unwrap()
-            .and_hms_nano_opt(23, 59, 59, 123_456_789)
-            .unwrap(),
-    );
-    round_trip(chrono::NaiveTime::from_hms_nano_opt(13, 45, 30, 987_654_321).unwrap());
+    round_trip(jiff::civil::Date::new(2026, 6, 10).unwrap());
+    round_trip(jiff::civil::DateTime::new(1999, 12, 31, 23, 59, 59, 123_456_789).unwrap());
+    round_trip(jiff::civil::Time::new(13, 45, 30, 987_654_321).unwrap());
 }
 
 /// Round-trip the foreign / wrapper "leaf" types (A2 schema-native shapes) used

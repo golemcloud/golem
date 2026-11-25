@@ -231,6 +231,6 @@ full-suite isolation, the native metadata-Pending gap or managed-XFS validation.
 - `golem-worker-executor/Cargo.toml`: harness-free integration binary.
 - `.agents/skills/testing/SKILL.md`: exact-filter syntax, stack size and fixture prerequisites.
 - `Makefile.toml`: existing worker-test environment and explicit limits for selected suites.
-- Installed `test-r-core` 11.0.1, `src/args.rs::Arguments::test_threads`: CPU-based test default.
-- Installed `test-r-core` 11.0.1, `src/tokio.rs::test_runner`: separate multi-thread Tokio runtime.
+- Installed `test-r-core` 13.0.1, `src/args.rs::Arguments::test_threads`: CPU-based test default.
+- Installed `test-r-core` 13.0.1, `src/tokio.rs::test_runner`: separate multi-thread Tokio runtime.
 - `golem-common/src/tracing.rs::init_tracing_returning_provider`: independently filtered layers.

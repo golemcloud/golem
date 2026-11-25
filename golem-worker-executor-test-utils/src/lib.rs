@@ -30,7 +30,7 @@ use self::component_writer::FileSystemComponentWriter;
 use crate::component_service::ComponentServiceLocalFileSystem;
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
-use chrono::DateTime;
+
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataRequest, get_running_workers_metadata_response,
@@ -9617,7 +9617,7 @@ impl Rpc for RecordingRpc {
         expected_fingerprint: golem_common::model::AgentFingerprint,
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
-        scheduled_at: chrono::DateTime<chrono::Utc>,
+        scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
@@ -9797,7 +9797,7 @@ impl Rpc for FailingRpc {
         expected_fingerprint: golem_common::model::AgentFingerprint,
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
-        scheduled_at: chrono::DateTime<chrono::Utc>,
+        scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
@@ -9940,7 +9940,7 @@ pub fn registry_test_card() -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp_nanos(0),
+        created_at: jiff::Timestamp::UNIX_EPOCH,
         expires_at: None,
         system_card: false,
         managed_by: None,

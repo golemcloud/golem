@@ -38,7 +38,6 @@ async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 blake3 = { workspace = true }
 bytes = { workspace = true }
-chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
 desert_rust.workspace = true
 fd-lock = { workspace = true }
@@ -50,6 +49,7 @@ humantime-serde = { workspace = true }
 include_dir = { workspace = true }
 itertools = { workspace = true }
 indoc = { workspace = true }
+jiff = { workspace = true }
 lazy_static = { workspace = true }
 mime = { workspace = true }
 oauth2 = { workspace = true }
@@ -80,7 +80,7 @@ sqlx = { workspace = true, features = [
     "uuid",
     "migrate",
     "bigdecimal",
-    "chrono",
+    "time",
 ] }
 strum = { workspace = true }
 strum_macros = { workspace = true }

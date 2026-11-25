@@ -12210,7 +12210,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
             managed_by: None,
@@ -22027,7 +22027,7 @@ async fn builtin_git_remote_secrets_redirects_and_discovery(
             secret_id: secret_id.0,
             config_key: Some(secret_path),
             version: 0,
-            resolved_at: chrono::Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         }))),
     };
@@ -23970,7 +23970,7 @@ async fn native_tool_secret_permissions_and_completed_replay(
             secret_id: secret_id.0,
             config_key: Some(path),
             version: 0,
-            resolved_at: chrono::Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         });
         for fail in [false, true] {

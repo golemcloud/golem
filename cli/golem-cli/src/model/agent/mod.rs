@@ -31,7 +31,6 @@ use crate::model::environment::{
 };
 use crate::model::masking::{Masked, MaskingConfig, mask_agent_config_entries, mask_sensitive_map};
 use crate::model::text_format::*;
-use chrono::DateTime;
 use clap::ValueEnum;
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
@@ -49,6 +48,7 @@ use golem_common::model::{
     Timestamp,
 };
 use itertools::Itertools;
+use jiff::Timestamp as JiffTimestamp;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::{Display, Formatter, Write};
@@ -1143,8 +1143,8 @@ fn format_agent_id_in(agent_id: &str, colorize: bool, width: usize) -> String {
 
 // Helper function to convert Unix timestamp to human-readable format
 pub fn format_timestamp(timestamp: u64) -> String {
-    if let Some(datetime) = DateTime::from_timestamp(timestamp as i64, 0) {
-        datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+    if let Ok(datetime) = JiffTimestamp::from_second(timestamp as i64) {
+        datetime.strftime("%Y-%m-%d %H:%M:%S").to_string()
     } else {
         format!("{timestamp}") // Fallback to raw timestamp if conversion fails
     }

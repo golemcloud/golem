@@ -18,7 +18,6 @@ use crate::repo::security_scheme::SecuritySchemeRepo;
 use crate::services::account_usage::AccountUsageService;
 use crate::services::account_usage::error::AccountUsageError;
 use crate::services::security_scheme::authorize_security_scheme_permission;
-use chrono::{DateTime, Utc};
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::mcp_import::{
@@ -31,6 +30,7 @@ use golem_mcp_import::transport::sender::HttpSender;
 use golem_mcp_import::transport::{HttpSend, TransportError};
 use golem_service_base::model::auth::{AuthCtx, AuthorizationError};
 use golem_service_base::repo::RepoError;
+use jiff::Timestamp;
 use oauth2::{AuthorizationCode, PkceCodeVerifier, RefreshToken, TokenResponse};
 use std::sync::Arc;
 use std::time::Duration;
@@ -507,7 +507,7 @@ impl McpOAuthService {
             .begin_authorization(
                 key,
                 state_hash(request.state.secret()),
-                (Utc::now() + chrono::Duration::minutes(10)).into(),
+                (Timestamp::now() + jiff::SignedDuration::from_mins(10)).into(),
                 McpOAuthFlowSecrets {
                     pkce_verifier: request.verifier.secret().clone(),
                     session: McpOAuthSession {
@@ -537,7 +537,7 @@ impl McpOAuthService {
             .claim_callback(
                 expected_target.environment_id().0,
                 &state_hash(&callback.state),
-                Utc::now().into(),
+                Timestamp::now().into(),
             )
             .await?
             .ok_or(McpOAuthError::InvalidCallback)?;
@@ -567,7 +567,7 @@ impl McpOAuthService {
                 (None, Some(_)) => return Err(McpOAuthError::ConsentDenied),
                 _ => return Err(McpOAuthError::InvalidCallback),
             };
-            let issued_at = Utc::now();
+            let issued_at = Timestamp::now();
             let token = client(&server, scheme, &key.resource_url)?
                 .exchange_code(
                     sender,
@@ -662,7 +662,7 @@ impl McpOAuthService {
             return Ok(());
         };
         self.grants
-            .expire_access_token(&key, used_generation, Utc::now().into())
+            .expire_access_token(&key, used_generation, Timestamp::now().into())
             .await?;
         Ok(())
     }
@@ -690,7 +690,7 @@ impl McpOAuthService {
                         resource_url: resource_url.clone(),
                     },
                     *generation,
-                    Utc::now().into(),
+                    Timestamp::now().into(),
                 )
                 .await?;
         }
@@ -755,7 +755,10 @@ impl McpOAuthService {
                     let stored = grant
                         .tokens
                         .ok_or_else(|| anyhow::anyhow!("granted MCP OAuth token missing"))?;
-                    if stored.expires_at.is_none_or(|expiry| expiry > Utc::now()) {
+                    if stored
+                        .expires_at
+                        .is_none_or(|expiry| expiry > Timestamp::now())
+                    {
                         if waited && self.resolve_target(target).await?.oauth()?.1 != key {
                             return Err(McpOAuthError::ContextChanged);
                         }
@@ -789,7 +792,7 @@ impl McpOAuthService {
                             session.server.clone(),
                             &session.server.issuer,
                         )?;
-                        let issued_at = Utc::now();
+                        let issued_at = Timestamp::now();
                         // Waiting for a peer and exchanging a token share one
                         // budget; taking over must not restart the deadline.
                         let timeout =
@@ -904,20 +907,20 @@ fn client(
 
 fn tokens(
     response: oauth2::basic::BasicTokenResponse,
-    issued_at: DateTime<Utc>,
+    issued_at: Timestamp,
     session: McpOAuthSession,
     previous: Option<&McpOAuthTokens>,
 ) -> Result<McpOAuthTokens, McpOAuthError> {
     let expires_at = response
         .expires_in()
         .map(|duration| {
-            chrono::Duration::from_std(duration)
+            jiff::SignedDuration::try_from(duration)
                 .ok()
-                .and_then(|duration| issued_at.checked_add_signed(duration))
+                .and_then(|duration| issued_at.checked_add(duration).ok())
                 .ok_or_else(|| TransportError::Protocol("invalid OAuth token expiry".into()))
         })
         .transpose()?;
-    if expires_at.is_some_and(|expiry| expiry <= Utc::now()) {
+    if expires_at.is_some_and(|expiry| expiry <= Timestamp::now()) {
         return Err(
             TransportError::Protocol("OAuth provider issued an expired token".into()).into(),
         );

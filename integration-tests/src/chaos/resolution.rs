@@ -426,7 +426,7 @@ fn findings(report: &ResolutionReport) -> Vec<ResolutionFinding> {
 mod tests {
     use super::*;
     use crate::chaos::history::{Outcome, Phase};
-    use chrono::{DateTime, Utc};
+
     use std::collections::BTreeMap;
     use test_r::test;
 
@@ -434,8 +434,8 @@ mod tests {
     const FLOOR: f64 = 150.0;
     const NAME: &str = "shard-manager.golem-release.svc.cluster.local";
 
-    fn at(offset_secs: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(1_800_000_000 + offset_secs, 0).unwrap()
+    fn at(offset_secs: i64) -> jiff::Timestamp {
+        jiff::Timestamp::new(1_800_000_000 + offset_secs, 0).unwrap()
     }
 
     fn fault() -> FaultWindow {

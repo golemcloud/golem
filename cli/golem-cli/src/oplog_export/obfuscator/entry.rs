@@ -497,11 +497,11 @@ impl Walker<'_, '_> {
     /// A time chosen by the guest, such as when a scheduled invocation may start: a datetime
     /// token that `--keep-scalars` shows.
     fn datetime(&mut self, value: &Timestamp) -> ReportNode {
-        match chrono::DateTime::from_timestamp_millis(value.to_millis() as i64) {
-            Some(datetime) => {
+        match jiff::Timestamp::from_millisecond(value.to_millis() as i64) {
+            Ok(datetime) => {
                 self.schemaless(&SchemaValue::Datetime { value: datetime }, Region::Customer)
             }
-            None => self.tok(value),
+            Err(_) => self.tok(value),
         }
     }
 

@@ -140,7 +140,7 @@ async fn wait_until_archive_actions_finish(
     let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
     while scheduler
-        .count_due(chrono::DateTime::<chrono::Utc>::MAX_UTC, &assignment)
+        .count_due(jiff::Timestamp::MAX, &assignment)
         .await?
         > 0
     {

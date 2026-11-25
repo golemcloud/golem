@@ -2134,7 +2134,7 @@ fn agent_invocation_result_redacted_debug_hides_capability_material() {
                     secret_id: uuid::Uuid::nil(),
                     config_key: None,
                     version: 0,
-                    resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                    resolved_at: jiff::Timestamp::new(0, 0).unwrap(),
                     category: None,
                 }),
             ],

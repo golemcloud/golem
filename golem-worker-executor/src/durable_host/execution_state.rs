@@ -30,7 +30,6 @@ use super::{InvocationStrictness, authority_snapshot_is_current_at};
 use crate::model::InvocationContext;
 use crate::services::card_interest::CardInterestContribution;
 use crate::worker::owner_lane::OwnerInvocationId;
-use chrono::{DateTime, Utc};
 use golem_common::model::OwnedInvocationId;
 use golem_common::model::caller::Caller;
 use golem_common::model::card::{CardId, EffectiveSurface, ScopeCard, StoredCard};
@@ -60,7 +59,7 @@ pub struct InvocationAuthority {
     admitted_surface: Option<EffectiveSurface>,
     synchronization: Synchronization,
     /// The earliest expiry among the cards `surface` was derived from.
-    next_expiration: Option<DateTime<Utc>>,
+    next_expiration: Option<jiff::Timestamp>,
 }
 
 /// Whether the scope card the invocation was admitted with bounds its calls.
@@ -171,7 +170,7 @@ impl<'a> AuthorityView<'a> {
         self.authority.scope_interest()
     }
 
-    pub fn next_expiration(&self) -> Option<DateTime<Utc>> {
+    pub fn next_expiration(&self) -> Option<jiff::Timestamp> {
         self.authority.next_expiration()
     }
 
@@ -183,7 +182,7 @@ impl<'a> AuthorityView<'a> {
         &self,
         authority_open: bool,
         published_generation: u64,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
     ) -> bool {
         self.authority
             .is_current_at(authority_open, published_generation, now)
@@ -237,7 +236,7 @@ impl InvocationAuthority {
         self.interest.as_ref()
     }
 
-    pub fn next_expiration(&self) -> Option<DateTime<Utc>> {
+    pub fn next_expiration(&self) -> Option<jiff::Timestamp> {
         self.next_expiration
     }
 
@@ -257,7 +256,7 @@ impl InvocationAuthority {
         &self,
         authority_open: bool,
         published_generation: u64,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
     ) -> bool {
         authority_snapshot_is_current_at(
             matches!(self.synchronization, Synchronization::Synchronized { .. }),
@@ -290,7 +289,7 @@ impl InvocationAuthority {
         self.admitted_surface = admitted_surface;
     }
 
-    pub fn set_next_expiration(&mut self, next_expiration: Option<DateTime<Utc>>) {
+    pub fn set_next_expiration(&mut self, next_expiration: Option<jiff::Timestamp>) {
         self.next_expiration = next_expiration;
     }
 
@@ -728,7 +727,7 @@ mod tests {
         invocations.begin(invocation());
         let authority = &invocations.get(None).authority;
         assert!(authority.bound_scope_card().is_none());
-        assert!(!authority.is_current_at(true, 4, Utc::now()));
+        assert!(!authority.is_current_at(true, 4, jiff::Timestamp::now()));
     }
 
     #[test]
@@ -747,7 +746,7 @@ mod tests {
         let authority = &invocations.get(None).authority;
         assert_eq!(authority.bound_scope_card(), Some(&card));
         assert!(
-            !authority.is_current_at(true, 4, Utc::now()),
+            !authority.is_current_at(true, 4, jiff::Timestamp::now()),
             "the surface was derived without the card"
         );
         assert_eq!(authority.synchronized_generation(), 4);

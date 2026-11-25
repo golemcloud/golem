@@ -1165,7 +1165,7 @@ async fn oidc_create_dispatch_does_not_turn_a_session_into_an_idempotency_scope(
         let (store, _db) =
             crate::custom_api::oidc::session_store::sqlite_test_session_store().await;
         let session_id = SessionId(uuid::Uuid::new_v4());
-        let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+        let expires_at = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
         store
             .store_authenticated_session(
                 &session_id,
@@ -1182,8 +1182,8 @@ async fn oidc_create_dispatch_does_not_turn_a_session_into_an_idempotency_scope(
                     claims: openidconnect::IdTokenClaims::new(
                         openidconnect::IssuerUrl::new("https://idp.example".into()).unwrap(),
                         vec![],
-                        expires_at,
-                        chrono::Utc::now(),
+                        std::time::SystemTime::try_from(expires_at).unwrap().into(),
+                        std::time::SystemTime::now().into(),
                         openidconnect::StandardClaims::new(openidconnect::SubjectIdentifier::new(
                             "create-user".into(),
                         )),

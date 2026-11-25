@@ -16,7 +16,6 @@ use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields};
 use crate::repo::model::card::CardRepoError;
 use crate::repo::model::hash::SqlBlake3Hash;
 use anyhow::anyhow;
-use chrono::{DateTime, Utc};
 use golem_common::error_forwarding;
 use golem_common::model::account::AccountSummary;
 use golem_common::model::account::{AccountEmail, AccountId};
@@ -31,6 +30,7 @@ use golem_common::model::environment::{
     EnvironmentName, EnvironmentRevision, EnvironmentSummary, EnvironmentWithDetails,
 };
 use golem_service_base::repo::{RepoError, SqlDateTime};
+use jiff::Timestamp;
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -129,8 +129,8 @@ pub struct EnvironmentDefaultCardRef {
     pub account_email: AccountEmail,
     pub application_name: ApplicationName,
     pub environment_name: EnvironmentName,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: Option<DateTime<Utc>>,
+    pub created_at: Timestamp,
+    pub expires_at: Option<Timestamp>,
     pub system_card: bool,
 }
 

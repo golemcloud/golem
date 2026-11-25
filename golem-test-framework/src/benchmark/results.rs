@@ -14,7 +14,7 @@
 
 use crate::benchmark::BenchmarkRecorder;
 use crate::benchmark::config::RunConfig;
-use chrono::{DateTime, Utc};
+
 use colored::Colorize;
 use comfy_table::presets::NOTHING;
 use comfy_table::{Attribute, Cell, CellAlignment, ContentArrangement, Table};
@@ -791,7 +791,7 @@ pub struct BenchmarkSuiteResult {
     pub suite: String,
     pub environment: String,
     pub version: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: jiff::Timestamp,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub runner: Option<BenchmarkRunner>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -845,7 +845,7 @@ impl BenchmarkSuiteResult {
             suite: suite.to_string(),
             environment,
             version: golem_common::golem_version().to_string(),
-            timestamp: Utc::now(),
+            timestamp: jiff::Timestamp::now(),
             runner: None,
             source: None,
             artifacts: None,
@@ -905,7 +905,7 @@ impl BenchmarkSuiteResult {
 pub struct BenchmarkSuiteResultView {
     pub suite: String,
     pub environment: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: jiff::Timestamp,
     pub results: Vec<BenchmarkResultView>,
 }
 
@@ -1178,7 +1178,7 @@ mod tests {
             suite: "CI".to_string(),
             environment: "test environment".to_string(),
             version: "0.0.0".to_string(),
-            timestamp: Utc::now(),
+            timestamp: jiff::Timestamp::now(),
             runner: None,
             source: None,
             artifacts: None,

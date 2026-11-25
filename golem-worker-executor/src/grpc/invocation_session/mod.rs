@@ -22,7 +22,7 @@ use crate::services::oplog::OplogError;
 use crate::services::{HasAll, HasComponentService, UsesAllDeps};
 use crate::worker::{DurableStreamingInvocationRequest, Worker};
 use crate::workerctx::WorkerCtx;
-use chrono::{DateTime, Utc};
+
 use futures::Stream;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem;

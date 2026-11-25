@@ -362,7 +362,7 @@ mod tests {
             account_id: AccountId::new(),
             component_size: 0,
             metadata: metadata.into(),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             wasm_hash,
             package_metadata: None,
         };
