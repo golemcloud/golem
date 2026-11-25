@@ -107,6 +107,7 @@ mod dropped_waits;
 mod durable_entity_blob;
 mod gol40_k1_audit_acceptance;
 mod held_http_crash_recovery;
+mod live_cancellation_open_calls;
 mod matrix_client_resource_acceptance;
 mod matrix_conformance;
 mod middleware_acceptance;

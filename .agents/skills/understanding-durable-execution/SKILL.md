@@ -2093,6 +2093,9 @@ Its source may still be an unconsumed resource retained by the guest, even after
 is consumed. Cancelling and dropping or retaining the recipient reader must not prevent the
 invocation from finishing so a later invocation can release that source. An underlying outgoing
 transmission keeps its own network I/O active; the recipient does not duplicate that ownership.
+The live wait of a sent request's transmission ends on entity cancellation: a tool body can hold
+the request body open, so the result may arrive only after the body's Store unwinds. The
+transmission `Start` then stays incomplete under the body's `Cancelled`, like an open receive.
 Both constructors keep pending wiring in the resident registry until the resource
 is consumed or dropped. Polling and cancelling a response's transmission read cannot start
 active tail work while the unconsumed response remains guest-owned, even when the reader also
