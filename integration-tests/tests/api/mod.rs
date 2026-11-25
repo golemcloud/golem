@@ -17,6 +17,7 @@ mod account_usage;
 mod agent_identity;
 mod agent_secret;
 mod application;
+mod audit;
 mod auth;
 mod component;
 mod deployment;
