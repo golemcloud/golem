@@ -4160,6 +4160,8 @@ Completed replay performs no HTTP or secret fetch. Golem forks retain external U
 identities; they do not issue DS-level forks. See `reference/streams.md` for protocol, auth and
 memory boundaries.
 
+Secret handles pin an environment-owned secret revision. A new reveal reads that fixed revision in `Live` mode, so a handle held across secret or environment deletion returns `VersionNotFound` on its next reveal. The durable reveal records the error without plaintext. Replay returns a recorded error without a registry read; a recorded success re-materializes its fixed revision in `Historical` mode and traps if that revision is gone. Rotation does not change a held handle's revision. External durable-stream authentication also uses `Historical` reads. Owners, revision selectors and read modes pass explicitly through `EnvironmentStateService` to the registry; the environment catalog contains only environment-owned secrets. The held-handle deletion/reconstruction regression runs in `integration-tests/tests/agent_config/shared_agent_config_live_mutation.rs` for both SDKs and databases.
+
 The custom Durable Streams HTTP surface maps an opaque public session ID to a concrete invocation
 key through `DurableStreamPublicBinding::{Live, Retired}` in the independently persisted session
 index. A durable session creation uses a fresh UUID invocation key, so an expired public ID can be

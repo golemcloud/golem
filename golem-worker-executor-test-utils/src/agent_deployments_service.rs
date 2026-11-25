@@ -15,7 +15,8 @@
 use async_trait::async_trait;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent_secret::{
-    AgentSecretId, AgentSecretRevision, CanonicalAgentSecretPath,
+    AgentSecretId, AgentSecretOwner, AgentSecretReadMode, AgentSecretRevisionSelector,
+    CanonicalAgentSecretPath,
 };
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::deployment::DeploymentRevision;
@@ -61,9 +62,11 @@ impl EnvironmentStateService for DisabledEnvironmentStateService {
     async fn get_agent_secret_revision(
         &self,
         _environment_id: EnvironmentId,
+        _owner: AgentSecretOwner,
         _agent_secret_id: AgentSecretId,
         _path: CanonicalAgentSecretPath,
-        _revision: AgentSecretRevision,
+        _selector: AgentSecretRevisionSelector,
+        _mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, WorkerExecutorError> {
         Ok(None)
     }
@@ -104,9 +107,11 @@ impl EnvironmentStateService for ConfiguredRetryPoliciesEnvironmentStateService 
     async fn get_agent_secret_revision(
         &self,
         _environment_id: EnvironmentId,
+        _owner: AgentSecretOwner,
         _agent_secret_id: AgentSecretId,
         _path: CanonicalAgentSecretPath,
-        _revision: AgentSecretRevision,
+        _selector: AgentSecretRevisionSelector,
+        _mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, WorkerExecutorError> {
         Ok(None)
     }
@@ -360,9 +365,11 @@ impl EnvironmentStateService for TestEnvironmentStateService {
     async fn get_agent_secret_revision(
         &self,
         environment_id: EnvironmentId,
+        owner: AgentSecretOwner,
         agent_secret_id: AgentSecretId,
         path: CanonicalAgentSecretPath,
-        revision: AgentSecretRevision,
+        selector: AgentSecretRevisionSelector,
+        _mode: AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, WorkerExecutorError> {
         self.agent_secret_revision_calls
             .fetch_add(1, Ordering::SeqCst);
@@ -372,7 +379,14 @@ impl EnvironmentStateService for TestEnvironmentStateService {
             .unwrap()
             .get(&environment_id)
             .and_then(|secrets| secrets.get(&path))
-            .filter(|secret| secret.id == agent_secret_id && secret.revision == revision)
+            .filter(|secret| {
+                secret.id == agent_secret_id
+                    && secret.owner == owner
+                    && match selector {
+                        AgentSecretRevisionSelector::Current => true,
+                        AgentSecretRevisionSelector::Fixed(revision) => secret.revision == revision,
+                    }
+            })
             .cloned())
     }
 

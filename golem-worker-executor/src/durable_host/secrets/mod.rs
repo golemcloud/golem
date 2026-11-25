@@ -28,8 +28,10 @@ use crate::preview2::golem::secrets::types::{
 };
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-
-use golem_common::model::agent_secret::{AgentSecretRevision, CanonicalAgentSecretPath};
+use golem_common::model::agent_secret::{
+    AgentSecretOwner, AgentSecretReadMode, AgentSecretRevision, AgentSecretRevisionSelector,
+    CanonicalAgentSecretPath,
+};
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::card::SecretVerb;
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
@@ -517,9 +519,11 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                     .environment_state_service
                     .get_agent_secret_revision(
                         self.owner_component_metadata().environment_id,
+                        AgentSecretOwner::Environment,
                         entry.secret_id,
                         config_key.clone(),
-                        entry.pinned_revision,
+                        AgentSecretRevisionSelector::Fixed(entry.pinned_revision),
+                        AgentSecretReadMode::Live,
                     )
                     .await;
                 match handle
@@ -601,12 +605,14 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                 .environment_state_service
                 .get_agent_secret_revision(
                     self.owner_component_metadata().environment_id,
+                    AgentSecretOwner::Environment,
                     entry.secret_id,
                     match canonical_config_key(&entry) {
                         Ok(path) => path,
                         Err(error) => return Ok(Err(reveal_error_to_wit(error))),
                     },
-                    entry.pinned_revision,
+                    AgentSecretRevisionSelector::Fixed(entry.pinned_revision),
+                    AgentSecretReadMode::Historical,
                 )
                 .await
             {

@@ -2110,15 +2110,17 @@ impl EnvironmentStateService for ReorderedToolActivationService {
     async fn get_agent_secret_revision(
         &self,
         environment_id: golem_common::model::environment::EnvironmentId,
+        owner: golem_common::model::agent_secret::AgentSecretOwner,
         agent_secret_id: golem_common::model::agent_secret::AgentSecretId,
         path: golem_common::model::agent_secret::CanonicalAgentSecretPath,
-        revision: golem_common::model::agent_secret::AgentSecretRevision,
+        selector: golem_common::model::agent_secret::AgentSecretRevisionSelector,
+        mode: golem_common::model::agent_secret::AgentSecretReadMode,
     ) -> Result<
         Option<golem_service_base::model::agent_secret::AgentSecret>,
         golem_service_base::error::worker_executor::WorkerExecutorError,
     > {
         self.inner
-            .get_agent_secret_revision(environment_id, agent_secret_id, path, revision)
+            .get_agent_secret_revision(environment_id, owner, agent_secret_id, path, selector, mode)
             .await
     }
 

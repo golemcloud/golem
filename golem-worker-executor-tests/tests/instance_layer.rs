@@ -143,14 +143,27 @@ impl EnvironmentStateService for FixedSecretsEnvironmentStateService {
     async fn get_agent_secret_revision(
         &self,
         _environment: golem_common::model::environment::EnvironmentId,
+        owner: golem_common::model::agent_secret::AgentSecretOwner,
         secret_id: AgentSecretId,
         path: CanonicalAgentSecretPath,
-        revision: AgentSecretRevision,
+        selector: golem_common::model::agent_secret::AgentSecretRevisionSelector,
+        _mode: golem_common::model::agent_secret::AgentSecretReadMode,
     ) -> Result<Option<AgentSecret>, WorkerExecutorError> {
         Ok(self
             .secrets
             .get(&path)
-            .filter(|secret| secret.id == secret_id && secret.revision == revision)
+            .filter(|secret| {
+                secret.id == secret_id
+                    && secret.owner == owner
+                    && match selector {
+                        golem_common::model::agent_secret::AgentSecretRevisionSelector::Current => {
+                            true
+                        }
+                        golem_common::model::agent_secret::AgentSecretRevisionSelector::Fixed(
+                            revision,
+                        ) => secret.revision == revision,
+                    }
+            })
             .cloned())
     }
 
