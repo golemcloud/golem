@@ -84,7 +84,7 @@ export const bind = (
     if (registered.agentType.mode === "ephemeral")
       return yield* Effect.fail(
         new ClientBindingError(
-          `Cannot bind agent ID '${id.uuid}' to ephemeral agent type '${registered.agentType.typeName}'`,
+          `Cannot bind agent ID '${id}' to ephemeral agent type '${registered.agentType.typeName}'`,
         ),
       )
     const rpc = yield* connectById(registered.agentType.typeName, raw)

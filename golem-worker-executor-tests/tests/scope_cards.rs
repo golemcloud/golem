@@ -9867,3 +9867,92 @@ async fn template_transfer_repaired_after_its_derived_child_reuses_the_child(
     assert_eq!(installed.len(), 1);
     Ok(())
 }
+
+/// A type-wide owner grant matches the agent's type from its `Create` entry, never from its ID or
+/// its key: it covers an agent of the type created without a key and a fork of it, and a grant
+/// for another type covers neither.
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn a_type_wide_grant_covers_an_unkeyed_agent_and_its_fork_and_no_other_type(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let card_authority = authority.clone();
+    let executor = crate::fork::start_with_local_resume_and(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            create_card_service: Some(Arc::new(move || {
+                Arc::new(ScopeCardService {
+                    authority: card_authority.clone(),
+                })
+            })),
+            ..TestExecutorOverrides::agent_sockets_enabled()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .without_default_host_permissions("FileSystem")
+        .try_update_agent_provision_config("FileSystem", |config| {
+            for grant in [
+                "filesystem(?component/FileSystem(*)) @ * : write : /typed.txt",
+                "filesystem(?component/GolemHostApi(*)) @ * : write : /other-type.txt",
+            ] {
+                config
+                    .initial_permissions
+                    .lower_bound
+                    .positive
+                    .push(parse_polymorphic_permission(grant)?);
+            }
+            Ok::<_, golem_common::model::card::CardParseError>(())
+        })?
+        .store()
+        .await?;
+    let constructor = agent_key!("FileSystem", "type-wide");
+    configure_scope_card_root(&authority, &component, &constructor)?;
+    let unkeyed = crate::agent::create_unkeyed_agent(&executor, &component, &constructor).await?;
+    let write = async |agent: &OwnedAgentId, path: &str| -> anyhow::Result<Result<(), String>> {
+        crate::agent::invoke_and_await_agent_by_id(
+            &executor,
+            &component,
+            agent,
+            None,
+            "write_file",
+            data_value!(path, "written"),
+        )
+        .await?
+        .into_typed::<Result<(), String>>()
+    };
+
+    assert_eq!(write(&unkeyed, "/typed.txt").await?, Ok(()));
+    let cutoff = executor.oplog_max_index(&unkeyed).await?;
+    let fork = executor.fork_worker(&unkeyed, cutoff).await?;
+    assert_eq!(
+        executor.get_worker_metadata(&fork).await?.canonical_key,
+        None
+    );
+    for agent in [&unkeyed, &fork] {
+        assert_eq!(write(agent, "/typed.txt").await?, Ok(()), "{agent}");
+        let denied = write(agent, "/other-type.txt").await?;
+        assert!(
+            denied
+                .as_ref()
+                .is_err_and(|error| error.contains("not permitted")),
+            "{agent}: {denied:?}"
+        );
+        assert!(
+            executor
+                .get_file_contents(agent, "/other-type.txt")
+                .await
+                .is_err(),
+            "{agent}"
+        );
+    }
+    Ok(())
+}

@@ -9,6 +9,7 @@ import {
 } from "../src/Agent.js"
 import { method } from "../src/Method.js"
 import * as Snapshot from "../src/Snapshot.js"
+import type { AgentId } from "../src/AgentId.js"
 import * as Ids from "../src/Ids.js"
 import { guest } from "../src/internal/guest.js"
 import { decodeMultipart, encodeMultipart } from "../src/internal/multipart.js"
@@ -184,7 +185,7 @@ describe("explicit multipart snapshots", () => {
     })
     const initial: typeof schema.Type = {
       promise: {
-        agentId: { uuid: "ffffffff-ffff-ffff-0000-000000000002" as Ids.Uuid },
+        agentId: "ffffffff-ffff-ffff-0000-000000000002" as AgentId,
         fingerprint: "00000000-0000-0007-ffff-ffffffffffff" as Ids.Uuid,
         oplogIdx: 9007199254740993n,
       },

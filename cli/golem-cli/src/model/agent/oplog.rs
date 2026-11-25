@@ -1818,6 +1818,7 @@ mod tests {
                 golem_common::model::agent::AgentTypeName(agent_type.to_string())
             }),
             agent_key: Some(agent_key.to_string()),
+            origin: golem_common::model::agent::AgentOrigin::Keyed,
             fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
             created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
             environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),

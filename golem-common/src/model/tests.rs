@@ -1885,6 +1885,7 @@ fn agent_metadata_dto_keeps_the_underlying_status_through_the_proto() {
         agent_id: AgentId::from_parts(1, 1),
         agent_type_name: None,
         canonical_key: None,
+        origin: crate::model::agent::AgentOrigin::Forked,
         constructor_parameters: None,
         owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         environment_id: EnvironmentId::new(),
@@ -1920,6 +1921,7 @@ fn agent_metadata_dto_keeps_the_underlying_status_through_the_proto() {
     let json = serde_json::to_value(&sandbox).unwrap();
     assert_eq!(json["status"], "Sandboxed");
     assert_eq!(json["underlyingStatus"], "Interrupted");
+    assert_eq!(json["origin"], "forked");
 
     let live = dto(AgentStatus::Idle, None);
     let proto = ProtoAgentMetadata::try_from(live.clone()).unwrap();

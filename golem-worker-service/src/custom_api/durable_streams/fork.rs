@@ -71,12 +71,9 @@ impl DurableStreamsHandler {
             Err(_) => return Ok(response(StatusCode::BAD_REQUEST)),
         };
         let source_agent_id = match parsed.source_fork.as_deref() {
-            Some(fork) => AgentId::durable_stream_fork(
-                route.route.environment_id,
-                *root_agent_id,
-                &super::route_scope(route),
-                fork,
-            ),
+            Some(fork) => {
+                AgentId::durable_stream_fork(route.route.environment_id, *root_agent_id, fork)
+            }
             None => *root_agent_id,
         };
         let fork_offset = match header!("stream-fork-offset") {

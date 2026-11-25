@@ -19,6 +19,7 @@ import {
   TokenProvenance as HostTokenProvenance,
 } from 'golem:agent/common@2.0.0';
 import { caller as hostCaller } from 'golem:agent/invocation-context@2.0.0';
+import { AgentId } from './agentId';
 import { AccountId, EnvironmentId } from './ids';
 import { Uuid } from './uuid';
 
@@ -277,14 +278,14 @@ export class AccountPrincipal extends BasePrincipal {
 export class AgentPrincipal extends BasePrincipal {
   readonly kind = 'agent' as const;
   readonly ref: PrincipalRef;
-  readonly agentId: Extract<HostPrincipal, { tag: 'agent' }>['val']['agentId'];
+  readonly agentId: AgentId;
   readonly agentType: string;
   readonly environmentId: EnvironmentId;
 
   constructor(inner: Extract<HostPrincipal, { tag: 'agent' }>['val']) {
     super();
     this.ref = fromHostRef(inner.pair);
-    this.agentId = inner.agentId;
+    this.agentId = AgentId.fromWit(inner.agentId);
     this.agentType = inner.agentType;
     this.environmentId = EnvironmentId.from(inner.environmentId);
   }

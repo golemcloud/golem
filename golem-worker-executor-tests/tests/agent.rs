@@ -3836,3 +3836,119 @@ async fn a_key_collision_hides_the_other_agents_constructor_failure(
     executor.shutdown_and_wait_for_invocation_loops().await?;
     Ok(())
 }
+
+/// Concurrent upserts of one key and a keyed create racing them make one agent: every upsert
+/// gets its ID, the oplog has one `Create` entry, and the constructor runs once. The keyed create
+/// either wins, and its overrides are the agent's, or conflicts and leaves its overrides out.
+/// The rounds alternate which side starts first, so that both outcomes occur.
+#[test]
+#[timeout("5m")]
+#[tracing::instrument]
+async fn concurrent_upserts_and_a_keyed_create_of_one_key_make_one_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+    const UPSERTS: usize = 8;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let mut outcomes = Vec::new();
+    for round in 0..10 {
+        let key = agent_key!("Counter", format!("concurrent-{round}"));
+        let upserts = futures::future::join_all(
+            (0..UPSERTS).map(|_| executor.start_agent(&component.id, key.clone())),
+        );
+        let keyed_create = async {
+            let request = CreateWorkerRequest {
+                ignore_already_existing: false,
+                env: [("OWNER".to_string(), "keyed-create".to_string())].into(),
+                ..executor.create_keyed_worker_request(&component.id, &key)?
+            };
+            Ok::<_, anyhow::Error>(
+                executor
+                    .client
+                    .clone()
+                    .create_worker(request)
+                    .await?
+                    .into_inner(),
+            )
+        };
+        let (upserts, keyed_create) = if round % 2 == 0 {
+            let (keyed_create, upserts) = tokio::join!(keyed_create, upserts);
+            (upserts, keyed_create)
+        } else {
+            tokio::join!(upserts, keyed_create)
+        };
+        let upserts = upserts.into_iter().collect::<anyhow::Result<Vec<_>>>()?;
+        let agent_id = upserts[0].clone();
+        assert!(
+            upserts.iter().all(|id| *id == agent_id),
+            "round {round}: {upserts:?}"
+        );
+        let create_won = match keyed_create?.result {
+            Some(create_worker_response::Result::Success(success)) => {
+                let created: AgentId = success
+                    .agent_id
+                    .ok_or_else(|| anyhow::anyhow!("the create response has no agent ID"))?
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?;
+                assert_eq!(created, agent_id.agent_id, "round {round}");
+                true
+            }
+            Some(create_worker_response::Result::Failure(error)) => {
+                let error = WorkerExecutorError::try_from(error).map_err(anyhow::Error::msg)?;
+                assert!(
+                    matches!(error, WorkerExecutorError::AgentAlreadyExists { .. }),
+                    "round {round}: {error:?}"
+                );
+                false
+            }
+            None => anyhow::bail!("round {round}: missing create result"),
+        };
+
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &key, "increment", data_value!())
+                .await?
+                .into_typed::<u32>()?,
+            1,
+            "round {round}"
+        );
+        let oplog = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
+        let creates = oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::Create(_)))
+            .count();
+        let constructor_runs = oplog
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::AgentInvocationStarted(start)
+                        if matches!(start.invocation, PublicAgentInvocation::AgentInitialization(_))
+                )
+            })
+            .count();
+        assert_eq!((creates, constructor_runs), (1, 1), "round {round}");
+        let env = executor.get_worker_metadata(&agent_id).await?.env;
+        assert_eq!(
+            env.get("OWNER").map(String::as_str),
+            create_won.then_some("keyed-create"),
+            "round {round}"
+        );
+        outcomes.push(create_won);
+    }
+    assert!(
+        outcomes.contains(&true) && outcomes.contains(&false),
+        "both outcomes of the race must occur: {outcomes:?}"
+    );
+    Ok(())
+}

@@ -262,7 +262,7 @@ fn agents_of_type(agent_type: &str, type_tag: u32) -> Vec<(&'static str, AgentOw
         ),
         (
             "forked",
-            AgentId::durable_stream_fork(environment, keyed, "route:api/stream", "fork"),
+            AgentId::durable_stream_fork(environment, keyed, "fork"),
         ),
         (
             "imported 1.6 phantom",

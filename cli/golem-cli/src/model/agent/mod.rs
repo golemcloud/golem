@@ -37,7 +37,7 @@ use colored::control::SHOULD_COLORIZE;
 use comfy_table::Color as ComfyColor;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentConfigEntryDto, UpdateRecord};
+use golem_common::model::agent::{AgentConfigEntryDto, AgentOrigin, UpdateRecord};
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentKey};
 use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
@@ -231,6 +231,8 @@ pub struct AgentMetadataView {
     pub agent_type: Option<AgentTypeName>,
     /// The key of a keyed agent, rendered as `Type(parameters)`. An agent without a key has none.
     pub agent_key: Option<String>,
+    /// How the agent came to exist: keyed, created without a key, or forked.
+    pub origin: AgentOrigin,
     pub fingerprint: AgentFingerprint,
     pub created_by: AccountId,
     pub environment_id: EnvironmentId,
@@ -266,6 +268,7 @@ impl From<AgentMetadata> for AgentMetadataView {
             agent_id: value.agent_id,
             agent_type: value.agent_type_name,
             agent_key,
+            origin: value.origin,
             fingerprint: value.fingerprint,
             created_by: value.created_by,
             environment_id: value.environment_id,
@@ -346,6 +349,7 @@ pub struct AgentMetadata {
     pub agent_id: AgentId,
     pub agent_type_name: Option<AgentTypeName>,
     pub canonical_key: Option<String>,
+    pub origin: AgentOrigin,
     /// The canonical constructor parameter text, without the agent type name.
     pub constructor_parameters: Option<String>,
     pub fingerprint: AgentFingerprint,
@@ -390,6 +394,7 @@ impl AgentMetadata {
             agent_id: value.agent_id,
             agent_type_name: value.agent_type_name,
             canonical_key: value.canonical_key,
+            origin: value.origin,
             constructor_parameters: value.constructor_parameters,
             fingerprint: value.fingerprint,
             component_name,
@@ -872,6 +877,7 @@ impl MessageWithFields for AgentGetView {
                     field_value_width::<Self>(),
                 )
             })
+            .fmt_field("Origin", &self.metadata.origin, format_id)
             .fmt_field("Fingerprint", &self.metadata.fingerprint, format_id)
             .field("Created at", &self.metadata.created_at)
             .fmt_field(

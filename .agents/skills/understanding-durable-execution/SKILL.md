@@ -290,6 +290,53 @@ unbounded auto-flushed tail and adds neither oplog entries nor a protocol change
 conservatively invalidates authority snapshots after the fold. This is status reconstruction, not
 replay tolerance.
 
+## Agent identity and addressing
+
+An `AgentId` is an RFC 9562 UUIDv8 (`golem-common/src/base_model/agent_id.rs`): the leading 32
+bits are the type tag, the per-environment type ID of the agent type (tag 0 is reserved), and the
+other 90 bits are H. Every ID comes from one derivation in
+`golem-common/src/model/agent/agent_uuid.rs`; a derived H is a SHA-256 prefix over the
+derivation's domain tag and its inputs, each variable-length input with a length prefix, and
+golden tests pin each one.
+
+| Derivation | H from | Used for |
+|---|---|---|
+| `AgentId::keyed` | environment, type ID, canonical key text | upsert and keyed create |
+| `AgentId::idempotent_create` | environment, type ID, caller scope, idempotency key | external create without a key, from a caller with a scope |
+| `AgentId::random` | random | other external creates without a key; forks through the worker service |
+| `AgentId::allocated` | environment, type tag, caller ID and fingerprint, call key | create without a key or fork inside an agent; replay allocates the same ID |
+| `AgentId::durable_stream_fork` | environment, root ID, fork name (root's tag) | Durable Streams forks |
+| `AgentId::imported_phantom` | environment, type ID, stored 1.6 name | reserved for the 1.6 import of agents without a key; no caller yet |
+| `AgentId::ephemeral_invocation` / `ephemeral_proxy` / `durable_stream_session` | owner key, constructor, route session | ephemeral instances and `phantomAgent` route sessions only |
+| `AgentId::external_tool_owner` / `random_reserved` | reserved tag | native tool owners on a component; oplog processors |
+
+Rules that follow from it:
+
+- **The ID is the address.** Every storage layer addresses the agent by its environment and agent
+  ID (the indexed oplog by `OwnedAgentId::storage_key`, `{environment}/{agent}`; the blob archive
+  by a namespace with the environment and type tag, and a directory per agent ID). The shard comes
+  from `AgentId::routing_hash` (top 63 bits of H, never the tag). No key → ID table exists, and
+  resolving an agent needs no record outside the oplog: the agent-mode hint only picks which mode's
+  oplog to read first. Do not add a record that resolution needs.
+- **Resolution** (`worker/target.rs::resolve_target`). A key target canonicalizes the key against
+  the implementing component's constructor schema and derives the keyed ID; upsert records
+  `CreateRequestKind::GetOrCreate`, keyed create `Exclusive`. An ID target with a constructor
+  creates an agent without a key at that pre-allocated ID (`Unkeyed`). An ID target alone only
+  reaches an existing agent (`get_exact_existing_suspended`, `get_existing_with_fingerprint`).
+  Every key path compares the canonical key stored in `Create` (`ensure_owns_key`) and fails with
+  `AgentKeyCollision` rather than act on another key's agent.
+- **Incarnations.** A delete frees the address; the next upsert of the same key creates a new
+  incarnation at the same ID with a new `AgentFingerprint`. Every stored reference that must not
+  reach the successor carries the fingerprint: expected callee fingerprints, `PromiseId` and
+  webhook IDs, pinned RPC, scheduled actions, stream sessions, export forks, ETags and session
+  tokens.
+- **Derived caches are disposable.** The cached status, its checkpoint and the invocation-result
+  index are scoped by fingerprint; the agent-mode hint has one key per agent and carries the
+  fingerprint in its value. Archiving removes all four once the whole oplog is in the last layer
+  (`worker/persistence.rs` → `WorkerService::remove_cached_status`). The next load folds the status
+  caches from the oplog, and the next resolution writes the hint again. Test:
+  `oplog_unreadable.rs::archived_keyed_agents_resolve_by_key_and_by_id_from_their_oplog`.
+
 ## Component map
 
 | Area | Files | Responsibility |
@@ -303,7 +350,7 @@ replay tolerance.
 | Per-invocation state | `durable_host/execution_state.rs` | `Invocations` entries keyed by `InvocationKey`, `InvocationAuthority`, the loop-key fallback |
 | Tail work | `durable_host/tail_work.rs` | Keeps store tasks running until no durable work is active before the invocation settles: before `AgentInvocationSettled` after a result recorded at the return, before `AgentInvocationFinished` on the settled path |
 | Settlement | `worker/invocation.rs` | `record_at_return_and_drain`, `ReturnRecorder`, `SettlementDeadline::AfterResult`: the result at the export's return, then the unbounded drain and `AgentInvocationSettled` |
-| RPC | `durable_host/rpc/mod.rs` | Key derivation, first dispatch vs `MayExist`, replay claims, ephemeral phantom identity |
+| RPC | `durable_host/rpc/mod.rs` | Key derivation, first dispatch vs `MayExist`, replay claims, ephemeral target identity |
 | Worker | `worker/{mod.rs,invocation_loop.rs,lifecycle.rs,instance/mod.rs,status.rs}` | Queue persistence, dedupe, interrupt/resume/update decisions, eviction, retry decisions |
 | Owner wallet | `worker/owner_wallet.rs`, `worker/instance/mod.rs` | Generation-bound live wallet, recorded replay baseline and shared cursor installation |
 | Cut points | `worker/cut_point.rs` | Validates operator cuts; calls recover from the exact retained prefix |
@@ -1440,13 +1487,12 @@ holds that write until Create returns.
 
 The `Create` entry records the request that created the agent in `CreateParameters.create_request`,
 and `AgentMetadata.create_request` carries it after every load. `CreateRequest` holds the kind
-(`GetOrCreate`, `Exclusive`, `Phantom` or `Fork`), the creating request's idempotency key, its
+(`GetOrCreate`, `Exclusive`, `Unkeyed` or `Fork`), the creating request's idempotency key, its
 caller and its invocation context. Callers pass a `CreateIntent`. An explicit create
 (`CreateIntent::Create`) records its key. An invocation that creates its target
-(`CreateIntent::Invocation`) records its key only when the key identifies the agent, that is, when
-the phantom ID is `ephemeral_invocation_phantom_id(key)`; a durable target created this way records
-no key. An invocation session passes the owner key of its `request_key`, from which clients derive
-an ephemeral target's phantom ID. The recorded `wasm-rpc` activation call sends the key derived
+(`CreateIntent::Invocation`) records its idempotency key only when its owner has no key
+(`Unkeyed`); a keyed target created this way records `GetOrCreate` and no idempotency key. An invocation session passes the owner key of its `request_key`, from which clients
+derive an ephemeral target's ID. The recorded `wasm-rpc` activation call sends the key derived
 from its own `Start`, so a repaired activation sends the same key. A re-activation of a recorded
 target sends no create request: it builds a `ReplayedDemand` with the recorded fingerprint. A fork
 target records `Fork`, no key and the forking agent as its caller. A self fork also records the forking
@@ -2486,8 +2532,8 @@ without re-executing.
 ## Invocation identity
 
 An invocation's owner-qualified identity is `OwnedInvocationId`: the owner agent and an
-`InvocationId`, the UUID-backed unique part. The server prints the owner-qualified identity as
-`<component>/<agent>.<uuid>`; guests and the CLI print `<agent>.<uuid>`. The oplog stores only `InvocationId`, in
+`InvocationId`, the UUID-backed unique part. The owner-qualified identity prints as
+`<agent>.<uuid>` on the server, in guests and in the CLI. The oplog stores only `InvocationId`, in
 the `invocation_id` field of `PendingAgentInvocation`, `AgentInvocationStarted`,
 `AgentInvocationFinished` and the invocation `Error`. Status (`InvocationResultMembership`),
 dedupe and `lookup_invocation_result` use the same value. A caller's idempotency key is only an
@@ -2508,7 +2554,7 @@ A request carries an `InvocationRequestKey`, and admission finalizes it with
 `InvocationRequestKey::external` turns a key from a caller without a scope into `Unkeyed`: such a
 key is ignored, never rejected or deduped. The operation is the method name, or
 `tool:<tool-name>/<command path>` for an agent-hosted tool. Every field is length-prefixed. The
-fingerprint makes an old ID unresolvable on a successor incarnation. An ephemeral or phantom owner
+fingerprint makes an old ID unresolvable on a successor incarnation. An ephemeral owner
 has no fingerprint before it exists, so its owner ID comes from `owner_key(operation)`; the CLI
 derives the same owner to subscribe to its events. Keep the prepared request key, not the final ID,
 when a request is retried or forwarded: every retry finalizes it again against the same target.
@@ -2938,7 +2984,7 @@ Start and key. Completed replay returns the recorded success or failure without 
 child; a reconstructed successful handle retains that fingerprint for existing-only reactivation.
 `wasm-rpc.bind-self()` binds the current durable incarnation without creating, starting or waiting for it. It takes no type argument: the host derives self from the owner context and records a separate local binding call. Its Start records the ID, environment and fingerprint. Completed replay and incomplete repair reconstruct that same binding without target contact, even when a fork changes the current owner.
 
-Typed clients in every SDK validate the type parsed from the returned recorded ID before constructing the client. They reuse the returned connection rather than creating another target. Rust and MoonBit expose fallible `bind_self()`, TypeScript and Effect expose `bindSelf()`, Go exposes `BindSelf()`, and Scala generates `bindSelf()`. Use these for constructor self-scheduling. Do not replace the returned recorded ID with a separate current-environment read. Later scheduling still checks the exact method authority. Phantom-less ephemeral clients remain
+Typed clients in every SDK validate the type parsed from the returned recorded ID before constructing the client. They reuse the returned connection rather than creating another target. Rust and MoonBit expose fallible `bind_self()`, TypeScript and Effect expose `bindSelf()`, Go exposes `BindSelf()`, and Scala generates `bindSelf()`. Use these for constructor self-scheduling. Do not replace the returned recorded ID with a separate current-environment read. Later scheduling still checks the exact method authority. Ephemeral clients without a fixed target remain
 logical per-invocation proxies. Fixed ephemeral handles remain observation/control identities,
 and `create_demand` remains non-running preparation.
 
@@ -2964,9 +3010,9 @@ repairs, retain admission without re-authorizing.
    (`durable_host/rpc/`), after a `DurableOnly` commit makes the caller's `Start` durable.
    Streaming RPC consumes this hint during target preparation, before it builds stream mappings
    with the returned fingerprint; the subsequent invocation uses `MayExist`.
-   Every repair, retry, and replay dispatch uses `MayExist`. Ephemeral phantom
-   identity is `ephemeral_invocation_phantom_id` = UUIDv5 of the request key's
-   `owner_key(operation)` — deterministic, never random.
+   Every repair, retry, and replay dispatch uses `MayExist`. An ephemeral target's
+   ID is `AgentId::ephemeral_invocation` of the request key's `owner_key(operation)`
+   — deterministic, never random.
 7. A durable call is pinned to the incarnation its activation recorded. The recorded activation
    (`golem::rpc::wasm-rpc.activate`, live or repaired) is the only step that may create the
    target. Re-activating a replayed `ReplayPending` target (`activate_rpc_target` with the
@@ -2974,7 +3020,7 @@ repairs, retain admission without re-authorizing.
    `invoke` / `invoke-and-await` dispatch then carries `expected_callee_fingerprint`; ephemeral
    targets carry none. Pinned local dispatch (`services/rpc/direct.rs`) resolves the callee only
    through `get_existing_with_fingerprint` and never creates it, and the local streaming path uses
-   the exact-existing lookup too. An unpinned ephemeral call may still create its phantom, keyed by
+   the exact-existing lookup too. An unpinned ephemeral call may still create its instance, keyed by
    the owner key of its `request_key`. Pinned local dispatch holds no task-scope bind, so a deletion
    can still finish between the lookup and the enqueue; a refusal before admission is therefore
    answered with `Worker::deleted_incarnation_as_not_found`, which applies the same
@@ -4272,7 +4318,7 @@ Detailed mechanics, including scheduling and memory admission: `reference/tools.
 | Peer | Guarantee | Who enforces it |
 |---|---|---|
 | Durable Golem agent (RPC) | Exactly-once logical invocation and result | Target's durable queue + shared key |
-| Ephemeral Golem agent (RPC) | At-most-once per accepted invocation; no resumption after target loss | Fail-stop target, deterministic phantom id |
+| Ephemeral Golem agent (RPC) | At-most-once per accepted invocation; no resumption after target loss | Fail-stop target, deterministic target ID (`AgentId::ephemeral_invocation`) |
 | Oplog-processor plugin | Exactly-once delivery of each oplog batch | `services/oplog/plugin.rs`: deterministic batch key (`oplog_processor_idempotency_key`: source agent, grant id, first/last index → UUIDv5) and per-plugin `confirmed_up_to`/`sending_up_to` checkpoints persisted in `AgentStatusRecord.oplog_processor_checkpoints` |
 | External HTTP/TCP/DB/etc. | Exactly-once only if the peer honours an idempotency key; otherwise retries in the ambiguous crash window are visible | Golem attaches an `idempotency-key` header to outgoing HTTP from `derive_idempotency_key(start_index)` (`http/policy.rs`, unless the guest set one) and offers `golem:api/host.generate-idempotency-key`; the peer must deduplicate |
 
@@ -4287,7 +4333,7 @@ satisfies one does not imply the others.
 
 Oplog processors have the explicit persisted `OwnerKind::OplogProcessor` and resolved
 `ResolvedOwnerContext::OplogProcessor`. Their Create records durable mode and the owner component,
-but no agent type, canonical key or phantom identity. Internal local delivery and system-only
+but no agent type or canonical key. Internal local delivery and system-only
 remote delivery use dedicated processor admission; the reserved processor namespace is a
 consistency check, not authority. The selected component revision must export the processor
 interface, whether or not it also declares agents. Ordinary agent creation rejects processor

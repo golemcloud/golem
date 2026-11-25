@@ -1141,6 +1141,7 @@ impl InvocationHarness {
                 owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
                 agent_type_name: Some(key.agent_type().clone()),
                 canonical_key: Some(key.to_string()),
+                origin: golem_common::model::agent::AgentOrigin::Keyed,
                 constructor_parameters: Some(key.canonical_params().to_string()),
                 environment_id: self.environment_id,
                 created_by: self.account_id,
