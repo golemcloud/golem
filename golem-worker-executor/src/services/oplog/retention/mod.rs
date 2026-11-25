@@ -86,7 +86,7 @@ impl OplogRange {
     /// `None` when `from` is after `last`, which ends the walk. Unlike
     /// [`OplogRetention::chunk`], the range keeps `from`: a walk that must not skip an entry reads
     /// from where it is, and the oplog refuses a read below the retained start. The count is exact
-    /// only while `last` is below `u64::MAX`; oplog indexes stay far below it.
+    /// unless `from` is 0 and `last` is `u64::MAX`.
     pub fn within(from: OplogIndex, last: OplogIndex, max: u64) -> Option<Self> {
         (from <= last).then(|| Self {
             start: from,
