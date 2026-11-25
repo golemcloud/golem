@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use futures::future::BoxFuture;
 use golem_common::base_model::shard_lease;
 use golem_common::model::{
-    ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision,
+    ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseClock, ShardLeaseRevision,
 };
 use golem_service_base::clients::shard_manager::{
     ExecutorEndpoint, ShardLease, ShardLeaseError, ShardManagerError,
@@ -490,14 +490,15 @@ impl GrpcShardManagerService {
     fn adopt_lease(
         &self,
         shard_epochs: BTreeMap<ShardId, ShardEpoch>,
-        expires_at: Instant,
+        lease: ShardLeaseClock,
         revision: ShardLeaseRevision,
         executor_count: NonZeroUsize,
     ) -> (RenewalDelay, bool) {
+        let lease = self.shard_service.clamp_lease(lease);
         let shard_epochs: HashMap<ShardId, ShardEpoch> = shard_epochs.into_iter().collect();
         let announcement_owed = match self.shard_service.update_lease(
             &shard_epochs,
-            expires_at,
+            lease,
             revision,
             executor_count,
         ) {
@@ -531,7 +532,7 @@ impl GrpcShardManagerService {
                 false
             }
         };
-        let cadence = renewal_interval_for(Some(expires_at), Instant::now());
+        let cadence = renewal_interval_for(Some(lease.expires_at()), Instant::now());
         self.record_granted(cadence);
         (cadence, announcement_owed)
     }
@@ -545,10 +546,11 @@ impl GrpcShardManagerService {
     ) -> Result<(usize, ShardLease), ShardManagerError> {
         *self.registration.write().unwrap() = Some((endpoint, pod_name.clone()));
 
-        let registration = self
+        let mut registration = self
             .client
             .register(endpoint, pod_name, self.executor_id())
             .await?;
+        registration.lease.clock = self.shard_service.clamp_lease(registration.lease.clock);
 
         let number_of_shards: usize = registration.number_of_shards.try_into().map_err(|_| {
             ShardManagerError::ConversionError(format!(
@@ -571,7 +573,8 @@ impl GrpcShardManagerService {
         // graceful shutdown always deregisters (a termination signal trips the
         // same token). A grant with no expiry parks the loop on its shutdown arm
         // and issues no RPCs at all.
-        let cadence = renewal_interval_for(Some(registration.lease.expires_at), Instant::now());
+        let cadence =
+            renewal_interval_for(Some(registration.lease.clock.expires_at()), Instant::now());
         record_shard_lease_metrics_started();
         self.record_granted(cadence);
         self.start_renewal_loop(cadence);
@@ -617,7 +620,7 @@ impl GrpcShardManagerService {
                 record_shard_lease_renewal(ShardLeaseRenewalOutcome::Granted);
                 self.adopt_lease(
                     lease.shard_epochs,
-                    lease.expires_at,
+                    lease.clock,
                     lease.revision,
                     lease.executor_count,
                 )
@@ -662,7 +665,7 @@ impl GrpcShardManagerService {
                             let outcome = self.shard_service.register(
                                 number_of_shards,
                                 &lease.shard_epochs.into_iter().collect(),
-                                Some(lease.expires_at),
+                                Some(lease.clock),
                                 lease.revision,
                                 lease.executor_count,
                             );
@@ -682,8 +685,10 @@ impl GrpcShardManagerService {
                             // The same announcement the initial
                             // registration and `assign_shards_internal` make - owed to the
                             // caller, exactly like a set-changing grant.
-                            let delay =
-                                renewal_interval_for(Some(lease.expires_at), Instant::now());
+                            let delay = renewal_interval_for(
+                                Some(lease.clock.expires_at()),
+                                Instant::now(),
+                            );
                             (delay, true)
                         }
                         Ok(Err(error)) => {
@@ -734,7 +739,7 @@ impl ShardManagerService for GrpcShardManagerService {
             number_of_shards,
             executor_count: lease.executor_count,
             shard_epochs: lease.shard_epochs.into_iter().collect(),
-            expires_at: Some(lease.expires_at),
+            lease: Some(lease.clock),
             revision: Some(lease.revision),
         })
     }

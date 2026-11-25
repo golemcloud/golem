@@ -71,7 +71,7 @@ use golem_common::model::tool::ToolName;
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, AgentInvocationOutput, AgentStatusRecord,
     IdempotencyKey, OplogIndex, OwnedAgentId, RdbmsPoolKey, RetryConfig, ShardAssignment,
-    ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision, TransactionId,
+    ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseClock, ShardLeaseRevision, TransactionId,
 };
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
@@ -4783,8 +4783,10 @@ impl Bootstrap<TestWorkerCtx> for TestServerBootstrap {
         ))
     }
 
-    fn create_shard_service(&self) -> Arc<dyn ShardService> {
-        let shard_service: Arc<dyn ShardService> = Arc::new(ShardServiceDefault::new());
+    fn create_shard_service(&self, config: &OplogConfig) -> Arc<dyn ShardService> {
+        let shard_service: Arc<dyn ShardService> = Arc::new(
+            ShardServiceDefault::with_max_lease_ttl(config.shard_lease_max_ttl),
+        );
 
         if let Some(wrap) = &self.overrides.wrap_shard_service {
             wrap(shard_service)
@@ -5084,8 +5086,10 @@ impl Bootstrap<golem_worker_executor::workerctx::default::Context>
         ))
     }
 
-    fn create_shard_service(&self) -> Arc<dyn ShardService> {
-        let shard_service: Arc<dyn ShardService> = Arc::new(ShardServiceDefault::new());
+    fn create_shard_service(&self, config: &OplogConfig) -> Arc<dyn ShardService> {
+        let shard_service: Arc<dyn ShardService> = Arc::new(
+            ShardServiceDefault::with_max_lease_ttl(config.shard_lease_max_ttl),
+        );
 
         if let Some(wrap) = &self.wrap_shard_service {
             wrap(shard_service)
@@ -8912,6 +8916,19 @@ impl ShardService for FakeOwnership {
         self.inner.check_admission(agent_id)
     }
 
+    fn clamp_lease(&self, lease: ShardLeaseClock) -> ShardLeaseClock {
+        self.inner.clamp_lease(lease)
+    }
+
+    fn lease_valid_until(
+        &self,
+        agent_id: &AgentId,
+        epoch: ShardEpoch,
+        skew_margin: Duration,
+    ) -> Option<std::time::SystemTime> {
+        self.inner.lease_valid_until(agent_id, epoch, skew_margin)
+    }
+
     fn assign_shards(
         &self,
         number_of_shards: usize,
@@ -8927,14 +8944,14 @@ impl ShardService for FakeOwnership {
         &self,
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Option<std::time::Instant>,
+        lease: Option<ShardLeaseClock>,
         revision: ShardLeaseRevision,
         executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome {
         self.inner.register(
             number_of_shards,
             shard_epochs,
-            expires_at,
+            lease,
             revision,
             executor_count,
         )
@@ -8962,12 +8979,12 @@ impl ShardService for FakeOwnership {
     fn update_lease(
         &self,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: std::time::Instant,
+        clock: ShardLeaseClock,
         revision: ShardLeaseRevision,
         executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.inner
-            .update_lease(shard_epochs, expires_at, revision, executor_count)
+            .update_lease(shard_epochs, clock, revision, executor_count)
     }
 
     fn clear_assignment(&self) {

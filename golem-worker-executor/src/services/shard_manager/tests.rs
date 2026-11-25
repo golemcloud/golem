@@ -16,7 +16,7 @@ use super::*;
 use crate::services::shard::ShardServiceDefault;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
-use golem_common::model::{AgentId, RoutingTable};
+use golem_common::model::{AgentId, RoutingTable, ShardLeaseClock};
 use golem_service_base::clients::shard_manager::{
     BatchRenewalEntry, QuotaError, ShardLease, ShardManager, ShardRegistration,
 };
@@ -25,10 +25,20 @@ use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
 use std::collections::HashSet;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicUsize;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use test_r::test;
 
 test_r::enable!();
+
+fn clock(expires_at: Instant) -> ShardLeaseClock {
+    let wall_anchor = SystemTime::now();
+    let now = Instant::now();
+    ShardLeaseClock {
+        sent_at: now.min(expires_at),
+        wall_anchor,
+        ttl: expires_at.saturating_duration_since(now),
+    }
+}
 
 const SHARDS: usize = 8;
 const ENDPOINT: ExecutorEndpoint = ExecutorEndpoint {
@@ -72,7 +82,7 @@ fn registration(
         lease: ShardLease {
             executor_count: NonZeroUsize::new(executor_count).unwrap(),
             shard_epochs: epoch_map(shard_epochs),
-            expires_at,
+            clock: clock(expires_at),
             revision: revision_of(MANAGER, 1),
         },
     }
@@ -322,7 +332,7 @@ fn make_service(
     mock: Arc<MockShardManager>,
     shutdown: Shutdown,
 ) -> (Arc<GrpcShardManagerService>, Arc<ShardServiceDefault>) {
-    let shard_service = Arc::new(ShardServiceDefault::new());
+    let shard_service = Arc::new(ShardServiceDefault::with_max_lease_ttl(Duration::MAX));
     let service = GrpcShardManagerService::new(mock, shard_service.clone(), shutdown);
     (service, shard_service)
 }
@@ -334,7 +344,7 @@ fn make_service_with_rpc_deadline_floor(
     shutdown: Shutdown,
     floor: Duration,
 ) -> (Arc<GrpcShardManagerService>, Arc<ShardServiceDefault>) {
-    let shard_service = Arc::new(ShardServiceDefault::new());
+    let shard_service = Arc::new(ShardServiceDefault::with_max_lease_ttl(Duration::MAX));
     let service = GrpcShardManagerService::new_with_rpc_deadline_floor(
         mock,
         shard_service.clone(),
@@ -392,7 +402,7 @@ async fn a_shutdown_during_an_in_flight_renewal_still_deregisters() {
                 Ok(ShardLease {
                     executor_count: NonZeroUsize::MIN,
                     shard_epochs: held,
-                    expires_at: expiry,
+                    clock: clock(expiry),
                     revision: revision_of(MANAGER, 1),
                 })
             })
@@ -405,7 +415,7 @@ async fn a_shutdown_during_an_in_flight_renewal_still_deregisters() {
     shard_service.register(
         assignment.number_of_shards,
         &assignment.shard_epochs,
-        assignment.expires_at,
+        assignment.lease,
         assignment.revision.expect("a grant names its revision"),
         assignment.executor_count,
     );
@@ -451,7 +461,7 @@ async fn a_registration_granting_zero_shards_is_refused() {
             lease: ShardLease {
                 executor_count: NonZeroUsize::MIN,
                 shard_epochs: BTreeMap::new(),
-                expires_at: expiry,
+                clock: clock(expiry),
                 revision: revision_of(MANAGER, 1),
             },
         })
@@ -486,7 +496,7 @@ async fn a_renewal_that_never_answers_times_out_and_the_loop_keeps_going() {
                 Ok(ShardLease {
                     executor_count: NonZeroUsize::MIN,
                     shard_epochs: held,
-                    expires_at: expiry,
+                    clock: clock(expiry),
                     revision: revision_of(MANAGER, 1),
                 })
             })
@@ -505,7 +515,7 @@ async fn a_renewal_that_never_answers_times_out_and_the_loop_keeps_going() {
     shard_service.register(
         assignment.number_of_shards,
         &assignment.shard_epochs,
-        assignment.expires_at,
+        assignment.lease,
         assignment.revision.expect("a grant names its revision"),
         assignment.executor_count,
     );
@@ -547,14 +557,14 @@ async fn a_reply_that_arrives_after_its_renewal_was_given_up_on_is_never_applied
                         ShardLease {
                             executor_count: NonZeroUsize::MIN,
                             shard_epochs: epoch_map([(1, 7)]),
-                            expires_at: Instant::now() + Duration::from_secs(3),
+                            clock: clock(Instant::now() + Duration::from_secs(3)),
                             revision: revision_of(old_manager, 11),
                         }
                     } else {
                         ShardLease {
                             executor_count: NonZeroUsize::MIN,
                             shard_epochs: epoch_map([(0, 2)]),
-                            expires_at: Instant::now() + Duration::from_secs(3),
+                            clock: clock(Instant::now() + Duration::from_secs(3)),
                             revision: revision_of(new_manager, 1),
                         }
                     };
@@ -572,7 +582,7 @@ async fn a_reply_that_arrives_after_its_renewal_was_given_up_on_is_never_applied
     shard_service.register(
         assignment.number_of_shards,
         &assignment.shard_epochs,
-        assignment.expires_at,
+        assignment.lease,
         assignment.revision.expect("a grant names its revision"),
         assignment.executor_count,
     );
@@ -628,7 +638,7 @@ async fn a_re_registration_that_never_answers_times_out_and_is_tried_again() {
     shard_service.register(
         assignment.number_of_shards,
         &assignment.shard_epochs,
-        assignment.expires_at,
+        assignment.lease,
         assignment.revision.expect("a grant names its revision"),
         assignment.executor_count,
     );
@@ -671,7 +681,7 @@ async fn a_slow_assignment_changed_hook_does_not_stall_the_renewal_loop() {
                     // and every later one only echoes it back (it now matches what was
                     // held), so only the first renewal ever owes an announcement.
                     shard_epochs: epoch_map([(0, 1), (1, 1)]),
-                    expires_at: Instant::now() + ttl,
+                    clock: clock(Instant::now() + ttl),
                     revision: revision_of(MANAGER, 1),
                 })
             }),
@@ -699,7 +709,7 @@ async fn a_slow_assignment_changed_hook_does_not_stall_the_renewal_loop() {
     shard_service.register(
         assignment.number_of_shards,
         &assignment.shard_epochs,
-        assignment.expires_at,
+        assignment.lease,
         assignment.revision.expect("a grant names its revision"),
         assignment.executor_count,
     );
@@ -846,7 +856,7 @@ async fn a_deregister_that_never_answers_gives_up_inside_the_shutdown_grace() {
                 Ok(ShardLease {
                     executor_count: NonZeroUsize::MIN,
                     shard_epochs: held,
-                    expires_at: expiry,
+                    clock: clock(expiry),
                     revision: revision_of(MANAGER, 1),
                 })
             })
@@ -856,7 +866,7 @@ async fn a_deregister_that_never_answers_gives_up_inside_the_shutdown_grace() {
     shard_service.register(
         SHARDS,
         &epochs([(0, 1)]),
-        Some(expiry),
+        Some(clock(expiry)),
         revision_of(MANAGER, 1),
         NonZeroUsize::MIN,
     );
@@ -895,7 +905,7 @@ async fn a_push_that_recovers_agents_clears_a_failed_renewal_recovery() {
         Ok(ShardLease {
             executor_count: NonZeroUsize::MIN,
             shard_epochs: epoch_map([(0, 1), (1, 1)]),
-            expires_at: expiry,
+            clock: clock(expiry),
             revision: revision_of(MANAGER, 2),
         })
     }));
@@ -903,7 +913,7 @@ async fn a_push_that_recovers_agents_clears_a_failed_renewal_recovery() {
     shard_service.register(
         SHARDS,
         &epochs([(0, 1)]),
-        Some(expiry),
+        Some(clock(expiry)),
         revision_of(MANAGER, 1),
         NonZeroUsize::MIN,
     );
@@ -946,7 +956,7 @@ async fn a_failed_recovery_is_retried_on_the_next_grant_even_if_the_set_is_uncha
         Ok(ShardLease {
             executor_count: NonZeroUsize::MIN,
             shard_epochs: epoch_map([(0, 1), (1, 1)]),
-            expires_at: expiry,
+            clock: clock(expiry),
             revision: revision_of(MANAGER, 2),
         })
     }));
@@ -954,7 +964,7 @@ async fn a_failed_recovery_is_retried_on_the_next_grant_even_if_the_set_is_uncha
     shard_service.register(
         SHARDS,
         &epochs([(0, 1)]),
-        Some(expiry),
+        Some(clock(expiry)),
         revision_of(MANAGER, 1),
         NonZeroUsize::MIN,
     );
@@ -999,7 +1009,7 @@ async fn a_deferred_recovery_runs_on_the_grant_that_revives_the_lease() {
         Ok(ShardLease {
             executor_count: NonZeroUsize::MIN,
             shard_epochs: held,
-            expires_at: expiry,
+            clock: clock(expiry),
             revision: revision_of(MANAGER, 2),
         })
     }));
@@ -1008,7 +1018,7 @@ async fn a_deferred_recovery_runs_on_the_grant_that_revives_the_lease() {
     shard_service.register(
         SHARDS,
         &epochs([(0, 1)]),
-        Some(Instant::now()),
+        Some(clock(Instant::now())),
         revision_of(MANAGER, 1),
         NonZeroUsize::MIN,
     );
@@ -1060,7 +1070,7 @@ async fn a_registration_whose_lease_arrived_lapsed_is_recovered_by_the_renewal_t
                 Ok(ShardLease {
                     executor_count: NonZeroUsize::MIN,
                     shard_epochs: held,
-                    expires_at: live,
+                    clock: clock(live),
                     revision: revision_of(MANAGER, 2),
                 })
             }),
@@ -1082,7 +1092,7 @@ async fn a_registration_whose_lease_arrived_lapsed_is_recovered_by_the_renewal_t
     shard_service.register(
         assignment.number_of_shards,
         &assignment.shard_epochs,
-        assignment.expires_at,
+        assignment.lease,
         assignment.revision.expect("a grant names its revision"),
         assignment.executor_count,
     );
@@ -1116,7 +1126,7 @@ async fn a_recovery_that_finishes_after_a_newer_deferral_leaves_that_one_owed() 
         Ok(ShardLease {
             executor_count: NonZeroUsize::MIN,
             shard_epochs: held,
-            expires_at: expiry,
+            clock: clock(expiry),
             revision: revision_of(MANAGER, 2),
         })
     }));
@@ -1124,7 +1134,7 @@ async fn a_recovery_that_finishes_after_a_newer_deferral_leaves_that_one_owed() 
     shard_service.register(
         SHARDS,
         &epochs([(0, 1)]),
-        Some(expiry),
+        Some(clock(expiry)),
         revision_of(MANAGER, 1),
         NonZeroUsize::MIN,
     );
@@ -1164,7 +1174,7 @@ async fn a_recovery_the_hook_deferred_is_run_again_on_the_next_grant() {
         Ok(ShardLease {
             executor_count: NonZeroUsize::MIN,
             shard_epochs: epoch_map([(0, 1), (1, 1)]),
-            expires_at: expiry,
+            clock: clock(expiry),
             revision: revision_of(MANAGER, 2),
         })
     }));
@@ -1172,7 +1182,7 @@ async fn a_recovery_the_hook_deferred_is_run_again_on_the_next_grant() {
     shard_service.register(
         SHARDS,
         &epochs([(0, 1)]),
-        Some(expiry),
+        Some(clock(expiry)),
         revision_of(MANAGER, 1),
         NonZeroUsize::MIN,
     );
@@ -1230,7 +1240,7 @@ async fn a_renewal_sends_the_last_received_set_and_adopts_the_granted_expiry() {
         Ok(ShardLease {
             executor_count: NonZeroUsize::MIN,
             shard_epochs: held,
-            expires_at: granted_expiry,
+            clock: clock(granted_expiry),
             revision: revision_of(MANAGER, 1),
         })
     }));
@@ -1238,7 +1248,7 @@ async fn a_renewal_sends_the_last_received_set_and_adopts_the_granted_expiry() {
     shard_service.register(
         SHARDS,
         &epochs([(0, 7), (3, 2)]),
-        Some(Instant::now() + Duration::from_secs(10)),
+        Some(clock(Instant::now() + Duration::from_secs(10))),
         revision_of(MANAGER, 1),
         NonZeroUsize::MIN,
     );
@@ -1253,7 +1263,7 @@ async fn a_renewal_sends_the_last_received_set_and_adopts_the_granted_expiry() {
         "the held epochs must be exactly the set last received, epochs included"
     );
     let assignment = shard_service.current_assignment().unwrap();
-    assert_eq!(assignment.expires_at, Some(granted_expiry));
+    assert_eq!(assignment.expires_at(), Some(granted_expiry));
     assert_eq!(assignment.shard_epochs, epochs([(0, 7), (3, 2)]));
     let delay = delay.expect("a granted lease has a cadence");
     assert!(
@@ -1299,7 +1309,7 @@ async fn a_lost_lease_re_registers_with_a_fresh_uuid_and_announces_the_new_assig
     shard_service.register(
         assignment.number_of_shards,
         &assignment.shard_epochs,
-        assignment.expires_at,
+        assignment.lease,
         assignment.revision.expect("a grant names its revision"),
         assignment.executor_count,
     );
@@ -1319,7 +1329,7 @@ async fn a_lost_lease_re_registers_with_a_fresh_uuid_and_announces_the_new_assig
     );
     let assignment = shard_service.current_assignment().unwrap();
     assert_eq!(assignment.shard_epochs, epochs([(2, 5)]));
-    assert_eq!(assignment.expires_at, Some(fresh_expiry));
+    assert_eq!(assignment.expires_at(), Some(fresh_expiry));
     assert_eq!(assignment.executor_count.get(), 4);
 }
 
@@ -1343,7 +1353,7 @@ async fn a_re_registration_keeps_the_advertised_endpoint() {
     shard_service.register(
         assignment.number_of_shards,
         &assignment.shard_epochs,
-        assignment.expires_at,
+        assignment.lease,
         assignment.revision.expect("a grant names its revision"),
         assignment.executor_count,
     );
@@ -1376,7 +1386,7 @@ async fn a_re_registration_with_a_manager_that_lost_its_history_adopts_its_low_r
     shard_service.register(
         assignment.number_of_shards,
         &assignment.shard_epochs,
-        assignment.expires_at,
+        assignment.lease,
         assignment.revision.expect("a grant names its revision"),
         assignment.executor_count,
     );
@@ -1407,7 +1417,7 @@ async fn a_renewal_answered_by_a_manager_restored_from_a_backup_adopts_its_low_r
                 Ok(ShardLease {
                     executor_count: NonZeroUsize::MIN,
                     shard_epochs: epoch_map([(2, 6)]),
-                    expires_at: expiry,
+                    clock: clock(expiry),
                     revision: revision_of(new_manager, 3),
                 })
             }),
@@ -1417,7 +1427,7 @@ async fn a_renewal_answered_by_a_manager_restored_from_a_backup_adopts_its_low_r
     shard_service.register(
         assignment.number_of_shards,
         &assignment.shard_epochs,
-        assignment.expires_at,
+        assignment.lease,
         assignment.revision.expect("a grant names its revision"),
         assignment.executor_count,
     );
@@ -1463,7 +1473,7 @@ async fn renew_now_runs_a_renewal_ahead_of_its_timer() {
                 Ok(ShardLease {
                     executor_count: NonZeroUsize::MIN,
                     shard_epochs: held,
-                    expires_at: expiry,
+                    clock: clock(expiry),
                     revision: revision_of(MANAGER, 1),
                 })
             }),
@@ -1474,7 +1484,7 @@ async fn renew_now_runs_a_renewal_ahead_of_its_timer() {
     shard_service.register(
         assignment.number_of_shards,
         &assignment.shard_epochs,
-        assignment.expires_at,
+        assignment.lease,
         assignment.revision.expect("a grant names its revision"),
         assignment.executor_count,
     );
@@ -1512,7 +1522,7 @@ async fn a_renewal_that_changes_the_set_announces_it_and_an_unchanged_one_does_n
         Ok(ShardLease {
             shard_epochs,
             executor_count: NonZeroUsize::new(granted_count.load(Ordering::SeqCst)).unwrap(),
-            expires_at: granted_expiry,
+            clock: clock(granted_expiry),
             revision: revision_of(MANAGER, next_revision.fetch_add(1, Ordering::SeqCst)),
         })
     }));
@@ -1520,7 +1530,7 @@ async fn a_renewal_that_changes_the_set_announces_it_and_an_unchanged_one_does_n
     shard_service.register(
         SHARDS,
         &epochs([(0, 7), (3, 2)]),
-        Some(Instant::now() + Duration::from_secs(30)),
+        Some(clock(Instant::now() + Duration::from_secs(30))),
         revision_of(MANAGER, 1),
         NonZeroUsize::MIN,
     );
@@ -1606,7 +1616,7 @@ async fn a_stale_renewal_keeps_the_pushed_set_and_moves_the_lease_clock() {
         Ok(ShardLease {
             executor_count: NonZeroUsize::MIN,
             shard_epochs: epoch_map([(0, 7)]),
-            expires_at: granted_expiry,
+            clock: clock(granted_expiry),
             revision: revision_of(MANAGER, 4),
         })
     }));
@@ -1615,7 +1625,7 @@ async fn a_stale_renewal_keeps_the_pushed_set_and_moves_the_lease_clock() {
     shard_service.register(
         SHARDS,
         &epochs([(0, 7), (4, 9)]),
-        Some(Instant::now() + Duration::from_secs(30)),
+        Some(clock(Instant::now() + Duration::from_secs(30))),
         revision_of(MANAGER, 5),
         NonZeroUsize::MIN,
     );
@@ -1640,7 +1650,7 @@ async fn a_stale_renewal_keeps_the_pushed_set_and_moves_the_lease_clock() {
         "the older renewal narrowed the set the newer push had just widened"
     );
     assert_eq!(
-        assignment.expires_at,
+        assignment.expires_at(),
         Some(granted_expiry),
         "the set is stale; the lease is not, and it answers this executor's own request"
     );
@@ -1672,7 +1682,7 @@ async fn a_lost_lease_leaves_the_assignment_lapsed_until_a_grant_replaces_it() {
     shard_service.register(
         SHARDS,
         &epochs([(0, 1)]),
-        Some(Instant::now() + Duration::from_secs(60)),
+        Some(clock(Instant::now() + Duration::from_secs(60))),
         revision_of(MANAGER, 1),
         NonZeroUsize::MIN,
     );
@@ -1682,7 +1692,7 @@ async fn a_lost_lease_leaves_the_assignment_lapsed_until_a_grant_replaces_it() {
     let assignment = shard_service.current_assignment().unwrap();
     assert!(assignment.is_empty(), "every shard is dropped");
     assert!(
-        assignment.expires_at.is_some(),
+        assignment.expires_at().is_some(),
         "cleared means lapsed, never 'never expires'"
     );
     assert!(!shard_service.is_ready());
@@ -1709,7 +1719,7 @@ async fn a_transport_failure_serves_until_the_local_expiry_and_then_fences() {
     shard_service.register(
         SHARDS,
         &epochs([(0, 1)]),
-        Some(Instant::now() + Duration::from_secs(1)),
+        Some(clock(Instant::now() + Duration::from_secs(1))),
         revision_of(MANAGER, 1),
         NonZeroUsize::MIN,
     );
@@ -1756,7 +1766,7 @@ async fn failed_renewals_back_off_exponentially_and_reset_on_a_grant() {
             Ok(ShardLease {
                 executor_count: NonZeroUsize::MIN,
                 shard_epochs: held,
-                expires_at: Instant::now() + Duration::from_secs(30),
+                clock: clock(Instant::now() + Duration::from_secs(30)),
                 revision: revision_of(MANAGER, 1),
             })
         } else {
@@ -1767,7 +1777,7 @@ async fn failed_renewals_back_off_exponentially_and_reset_on_a_grant() {
     shard_service.register(
         SHARDS,
         &epochs([(0, 1)]),
-        Some(Instant::now() + Duration::from_secs(300)),
+        Some(clock(Instant::now() + Duration::from_secs(300))),
         revision_of(MANAGER, 1),
         NonZeroUsize::MIN,
     );
@@ -1813,4 +1823,54 @@ async fn failed_renewals_back_off_exponentially_and_reset_on_a_grant() {
         after_grant[4]
     );
     assert_eq!(after_grant[5], after_grant[4], "where it stays");
+}
+
+#[test]
+async fn delayed_oversized_renewal_cannot_refresh_a_clamped_lease() {
+    let wall_anchor = SystemTime::now() - Duration::from_secs(61);
+    let lease = ShardLeaseClock {
+        sent_at: Instant::now() - Duration::from_secs(61),
+        wall_anchor,
+        ttl: Duration::from_secs(300),
+    };
+    let calls = AtomicUsize::new(0);
+    let mock = Arc::new(MockShardManager::new().with_renew(move |_, _| {
+        let call = calls.fetch_add(1, Ordering::SeqCst);
+        let clock = if call == 0 {
+            lease
+        } else {
+            let wall_anchor = SystemTime::now();
+            ShardLeaseClock {
+                sent_at: Instant::now(),
+                wall_anchor,
+                ttl: Duration::from_secs(300),
+            }
+        };
+        Ok(ShardLease {
+            shard_epochs: epoch_map([(0, 7)]),
+            executor_count: NonZeroUsize::MIN,
+            clock,
+            revision: revision_of(MANAGER, call as u64 + 1),
+        })
+    }));
+    let shard_service = Arc::new(ShardServiceDefault::with_max_lease_ttl(
+        Duration::from_secs(60),
+    ));
+    let service = GrpcShardManagerService::new(mock, shard_service.clone(), Shutdown::new());
+    shard_service.install_unexpiring(SHARDS, &epochs([(0, 7)]));
+    let delay = service.renew_shard_lease().await;
+    assert!(
+        !shard_service.is_ready(),
+        "clamping must retain send-time age"
+    );
+    assert_eq!(delay, Some(MIN_RENEWAL_INTERVAL));
+    assert_eq!(
+        shard_service.current_assignment().unwrap().expires_at(),
+        Some(lease.sent_at + Duration::from_secs(60)),
+    );
+
+    let delay = service.renew_shard_lease().await;
+    assert!(shard_service.is_ready());
+    let delay = delay.unwrap();
+    assert!(delay > Duration::from_secs(19) && delay <= Duration::from_secs(20));
 }

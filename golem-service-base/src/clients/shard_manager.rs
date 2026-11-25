@@ -31,7 +31,9 @@ use golem_common::model::protobuf::{
     shard_epochs_to_proto,
 };
 use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
-use golem_common::model::{RetryConfig, RoutingTable, ShardEpoch, ShardId, ShardLeaseRevision};
+use golem_common::model::{
+    RetryConfig, RoutingTable, ShardEpoch, ShardId, ShardLeaseClock, ShardLeaseRevision,
+};
 use golem_common::retriable_error::IsRetriableError;
 use golem_common::retries::with_retries;
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
@@ -42,7 +44,7 @@ use std::fmt::Write;
 use std::future::Future;
 use std::net::IpAddr;
 use std::num::NonZeroUsize;
-use std::time::Instant;
+use std::time::{Instant, SystemTime};
 use uuid::Uuid;
 
 /// Client for the shard manager service.
@@ -185,9 +187,8 @@ pub struct ShardLease {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     /// The number of executors with a lease in the state at `revision`.
     pub executor_count: NonZeroUsize,
-    /// On this executor's own monotonic clock, anchored at the moment the
-    /// request this lease answers was sent - see [`shard_lease_from_wire`].
-    pub expires_at: Instant,
+    /// Both clocks are anchored before the request is sent; see [`shard_lease_from_wire`].
+    pub clock: ShardLeaseClock,
     /// The revision of the shard manager's persisted state this set was read
     /// from; the executor applies a delivery only if it is at least the last
     /// one applied, so a renewal and a push that cross cannot leave the older
@@ -202,24 +203,29 @@ pub struct ShardLease {
 /// never compared.
 fn shard_lease_from_wire(
     lease: golem_api_grpc::proto::golem::shardmanager::v1::ShardLease,
-    sent_at: Instant,
+    sent_at: (Instant, SystemTime),
 ) -> Result<ShardLease, String> {
     let executor_count =
         executor_count_from_proto(lease.executor_count, "ShardLease.executor_count")?;
     Ok(ShardLease {
         shard_epochs: shard_epochs_from_proto(lease.shard_epochs)?,
         executor_count,
-        expires_at: expires_at_from_ttl(lease.lease_ttl, sent_at)?,
+        clock: clock_from_ttl(lease.lease_ttl, sent_at)?,
         revision: ShardLeaseRevision::from_wire(&lease.incarnation_id, lease.revision)
             .map_err(|error| format!("ShardLease.{error}"))?,
     })
 }
 
-fn expires_at_from_ttl(
+fn clock_from_ttl(
     lease_ttl: Option<prost_types::Duration>,
-    sent_at: Instant,
-) -> Result<Instant, String> {
-    lease_expiry_from_ttl(lease_ttl, sent_at, "lease_ttl")
+    sent_at: (Instant, SystemTime),
+) -> Result<ShardLeaseClock, String> {
+    let expires_at = lease_expiry_from_ttl(lease_ttl, sent_at.0, "lease_ttl")?;
+    Ok(ShardLeaseClock {
+        sent_at: sent_at.0,
+        wall_anchor: sent_at.1,
+        ttl: expires_at.duration_since(sent_at.0),
+    })
 }
 
 /// Awaits one lease RPC and returns the instant it was issued alongside its answer.
@@ -228,8 +234,9 @@ fn expires_at_from_ttl(
 /// the request is first polled - a tonic call sends nothing until then - and never by a caller
 /// after the answer is back. Inside the per-attempt closure rather than around the whole call, so
 /// that the client's own connection retries do not age the anchor.
-async fn issued<R>(rpc: impl Future<Output = R>) -> (Instant, R) {
-    let sent_at = Instant::now();
+async fn issued<R>(rpc: impl Future<Output = R>) -> ((Instant, SystemTime), R) {
+    let wall_anchor = SystemTime::now();
+    let sent_at = (Instant::now(), wall_anchor);
     (sent_at, rpc.await)
 }
 
@@ -377,7 +384,7 @@ impl ShardManager for GrpcShardManager {
                                         "RegisterSuccess.executor_count",
                                     )
                                     .map_err(ShardManagerError::ConversionError)?,
-                                    expires_at: expires_at_from_ttl(success.lease_ttl, sent_at)
+                                    clock: clock_from_ttl(success.lease_ttl, sent_at)
                                         .map_err(ShardManagerError::ConversionError)?,
                                     revision: ShardLeaseRevision::from_wire(
                                         &success.incarnation_id,
@@ -879,9 +886,10 @@ mod tests {
         }));
 
         assert!(
-            sent_at.elapsed() >= Duration::from_millis(20),
+            sent_at.0.elapsed() >= Duration::from_millis(20),
             "the instant must precede the request, not follow its answer"
         );
+        assert!(sent_at.1.elapsed().unwrap() >= Duration::from_millis(20));
     }
 
     /// The decode is handed the send instant, so an answer that took its time yields an expiry
@@ -899,16 +907,18 @@ mod tests {
             revision: 3,
             incarnation_id: incarnation.to_string(),
         };
+        let wall_anchor = SystemTime::now();
         let sent_at = Instant::now();
         // the answer took its time
         std::thread::sleep(Duration::from_millis(20));
 
-        let lease = shard_lease_from_wire(on_the_wire, sent_at).unwrap();
+        let lease = shard_lease_from_wire(on_the_wire, (sent_at, wall_anchor)).unwrap();
 
         assert_eq!(lease.executor_count.get(), 7);
-        assert_eq!(lease.expires_at, sent_at + Duration::from_secs(60));
+        assert_eq!(lease.clock.expires_at(), sent_at + Duration::from_secs(60));
+        assert_eq!(lease.clock.wall_anchor, wall_anchor);
         assert!(
-            lease.expires_at < Instant::now() + Duration::from_secs(60),
+            lease.clock.expires_at() < Instant::now() + Duration::from_secs(60),
             "time the answer spent in flight must come off the lease, never on to it"
         );
         assert_eq!(
@@ -934,7 +944,8 @@ mod tests {
             incarnation_id: String::new(),
         };
 
-        let error = shard_lease_from_wire(on_the_wire, Instant::now()).unwrap_err();
+        let error =
+            shard_lease_from_wire(on_the_wire, (Instant::now(), SystemTime::now())).unwrap_err();
 
         assert!(
             error.starts_with("ShardLease.incarnation_id"),

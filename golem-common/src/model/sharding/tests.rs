@@ -13,12 +13,14 @@
 // limitations under the License.
 use std::collections::{HashMap, HashSet};
 use std::num::NonZeroUsize;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use test_r::test;
 use uuid::Uuid;
 
-use super::{ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision};
+use super::{
+    ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseClock, ShardLeaseRevision,
+};
 
 test_r::enable!();
 
@@ -31,6 +33,16 @@ fn epochs(entries: impl IntoIterator<Item = (i64, u64)>) -> HashMap<ShardId, Sha
 
 fn in_secs(seconds: u64) -> Instant {
     Instant::now() + Duration::from_secs(seconds)
+}
+
+fn clock(expires_at: Instant) -> ShardLeaseClock {
+    let wall_anchor = SystemTime::now();
+    let now = Instant::now();
+    ShardLeaseClock {
+        sent_at: now.min(expires_at),
+        wall_anchor,
+        ttl: expires_at.saturating_duration_since(now),
+    }
 }
 
 /// The manager process behind every delivery in the tests that do not care which one sent it.
@@ -75,7 +87,7 @@ fn a_stale_grant_keeps_the_set_but_still_moves_the_lease_clock() {
     let outcome = assignment.adopt_grant(
         None,
         &epochs([(0, 1)]),
-        granted,
+        clock(granted),
         revision_of(MANAGER, 6),
         NonZeroUsize::MIN,
     );
@@ -94,7 +106,7 @@ fn a_stale_grant_keeps_the_set_but_still_moves_the_lease_clock() {
     );
     assert_eq!(assignment.revision, Some(revision_of(MANAGER, 7)));
     assert_eq!(
-        assignment.expires_at,
+        assignment.expires_at(),
         Some(granted),
         "a grant's lease is about time, not about the set; a stale set must not cost the lease"
     );
@@ -117,7 +129,7 @@ fn a_delivery_at_the_same_revision_is_applied() {
     let outcome = assignment.adopt_grant(
         None,
         &epochs([(0, 1)]),
-        refreshed,
+        clock(refreshed),
         revision_of(MANAGER, 7),
         NonZeroUsize::MIN,
     );
@@ -126,7 +138,7 @@ fn a_delivery_at_the_same_revision_is_applied() {
         outcome,
         ShardDeliveryOutcome::Applied { set_changed: false }
     );
-    assert_eq!(assignment.expires_at, Some(refreshed));
+    assert_eq!(assignment.expires_at(), Some(refreshed));
 }
 
 /// A push has no request of this executor's to anchor a lease to, so it
@@ -139,7 +151,7 @@ fn a_push_never_moves_the_lease_clock() {
     assignment.adopt_grant(
         Some(8),
         &epochs([(0, 1), (1, 1)]),
-        granted,
+        clock(granted),
         revision_of(MANAGER, 1),
         NonZeroUsize::MIN,
     );
@@ -151,7 +163,7 @@ fn a_push_never_moves_the_lease_clock() {
         NonZeroUsize::MIN,
     );
     assert_eq!(
-        assignment.expires_at,
+        assignment.expires_at(),
         Some(granted),
         "a full-replace push must leave the lease where the grant put it"
     );
@@ -162,7 +174,7 @@ fn a_push_never_moves_the_lease_clock() {
         NonZeroUsize::MIN,
     );
     assert_eq!(
-        assignment.expires_at,
+        assignment.expires_at(),
         Some(granted),
         "a revoke must leave the lease where the grant put it"
     );
@@ -179,7 +191,7 @@ fn a_grant_with_a_shorter_lease_shortens_it() {
     assignment.adopt_grant(
         Some(8),
         &epochs([(0, 1)]),
-        now + Duration::from_secs(60),
+        clock(now + Duration::from_secs(60)),
         revision_of(MANAGER, 1),
         NonZeroUsize::MIN,
     );
@@ -187,12 +199,12 @@ fn a_grant_with_a_shorter_lease_shortens_it() {
     assignment.adopt_grant(
         None,
         &epochs([(0, 1)]),
-        now + Duration::from_secs(30),
+        clock(now + Duration::from_secs(30)),
         revision_of(MANAGER, 2),
         NonZeroUsize::MIN,
     );
 
-    assert_eq!(assignment.expires_at, Some(now + Duration::from_secs(30)));
+    assert_eq!(assignment.expires_at(), Some(now + Duration::from_secs(30)));
 }
 
 /// A revoke is a delta rather than a full set, but it is gated the same
@@ -205,7 +217,7 @@ fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
     assignment.adopt_grant(
         Some(8),
         &epochs([(0, 1), (1, 1)]),
-        expiry,
+        clock(expiry),
         revision_of(MANAGER, 3),
         NonZeroUsize::MIN,
     );
@@ -233,7 +245,7 @@ fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
         "the revoke's revision is recorded like any other delivery's"
     );
     assert_eq!(
-        assignment.expires_at,
+        assignment.expires_at(),
         Some(expiry),
         "a revoke drops shards; it does not touch the lease"
     );
@@ -241,7 +253,7 @@ fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
     let late_grant = assignment.adopt_grant(
         None,
         &epochs([(0, 1), (1, 1)]),
-        in_secs(60),
+        clock(in_secs(60)),
         revision_of(MANAGER, 4),
         NonZeroUsize::MIN,
     );
@@ -268,7 +280,7 @@ fn a_renewal_that_changes_the_set_reports_it() {
     let outcome = assignment.adopt_grant(
         None,
         &epochs([(1, 1), (2, 5)]),
-        in_secs(60),
+        clock(in_secs(60)),
         revision_of(MANAGER, 4),
         NonZeroUsize::MIN,
     );
@@ -298,7 +310,7 @@ fn a_reply_from_another_manager_process_starts_the_revisions_over() {
     assignment.adopt_grant(
         Some(8),
         &epochs([(0, 4)]),
-        in_secs(60),
+        clock(in_secs(60)),
         revision_of(old_manager, 10_000),
         NonZeroUsize::MIN,
     );
@@ -308,7 +320,7 @@ fn a_reply_from_another_manager_process_starts_the_revisions_over() {
     let outcome = assignment.adopt_grant(
         Some(8),
         &epochs([(0, 5)]),
-        in_secs(60),
+        clock(in_secs(60)),
         revision_of(new_manager, 3),
         NonZeroUsize::MIN,
     );
@@ -327,7 +339,7 @@ fn a_push_from_a_manager_process_that_is_not_followed_is_ignored() {
     assignment.adopt_grant(
         Some(8),
         &epochs([(0, 4)]),
-        in_secs(60),
+        clock(in_secs(60)),
         revision_of(old_manager, 10_000),
         NonZeroUsize::MIN,
     );
@@ -352,7 +364,7 @@ fn a_push_from_a_manager_process_that_is_not_followed_is_ignored() {
     assignment.adopt_grant(
         None,
         &epochs([(0, 5)]),
-        in_secs(60),
+        clock(in_secs(60)),
         revision_of(new_manager, 3),
         NonZeroUsize::MIN,
     );
@@ -415,7 +427,7 @@ fn clear_lapses_the_lease_instead_of_making_it_unexpiring() {
     assignment.clear(now);
 
     assert!(assignment.is_empty());
-    assert_eq!(assignment.expires_at, Some(now));
+    assert_eq!(assignment.expires_at(), Some(now));
     assert!(
         !assignment.lease_is_live(now),
         "a cleared assignment is lapsed, not never-expiring"
@@ -431,4 +443,99 @@ fn a_lease_without_an_expiry_is_always_live() {
 
     assert!(assignment.lease_is_live(Instant::now()));
     assert!(assignment.lease_is_live(in_secs(365 * 24 * 3600)));
+}
+
+#[test]
+fn lease_deadlines_bound_both_clocks_and_clamp_at_send_time() {
+    let sent_at = Instant::now();
+    let wall_anchor = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000);
+    let lease = ShardLeaseClock {
+        sent_at,
+        wall_anchor,
+        ttl: Duration::from_secs(100),
+    };
+    let skew = Duration::from_secs(5);
+    for (elapsed, wall_now, margin, expected) in [
+        // Both clocks advance together: the 1,100 deadline loses five seconds of skew.
+        (20, 1_020, skew, Some(1_095)),
+        // Suspend advances wall time further; the original wall deadline still caps the lease.
+        (20, 1_080, skew, Some(1_095)),
+        (20, 1_101, Duration::ZERO, None),
+        // A backward wall step uses wall_now plus the 80 seconds left, minus skew.
+        (20, 990, skew, Some(1_065)),
+        // Equality at either clock's expiry or either skew boundary refuses authority.
+        (100, 990, Duration::ZERO, None),
+        (20, 1_100, Duration::ZERO, None),
+        (20, 1_095, skew, None),
+        (95, 990, skew, None),
+    ] {
+        assert_eq!(
+            lease.valid_until(
+                sent_at + Duration::from_secs(elapsed),
+                SystemTime::UNIX_EPOCH + Duration::from_secs(wall_now),
+                margin,
+            ),
+            expected.map(|seconds| SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)),
+            "monotonic elapsed {elapsed}, wall time {wall_now}, skew {margin:?}"
+        );
+    }
+
+    let clamped = lease.clamped(Duration::from_secs(30));
+    assert_eq!(clamped.expires_at(), sent_at + Duration::from_secs(30));
+    assert_eq!(
+        clamped.valid_until(
+            sent_at + Duration::from_secs(20),
+            SystemTime::UNIX_EPOCH + Duration::from_secs(1_020),
+            skew,
+        ),
+        Some(SystemTime::UNIX_EPOCH + Duration::from_secs(1_025)),
+        "receipt twenty seconds after send leaves ten seconds, not a fresh thirty"
+    );
+}
+
+#[test]
+fn deadline_matches_bounded_clock_contract_at_nanosecond_boundaries() {
+    let sent_at = Instant::now();
+    let wall_anchor = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000);
+    for ttl in [0u64, 1, 2, 10, 1_000, 60_000_000_000] {
+        for ceiling in [0u64, 1, 5, 60_000_000_000] {
+            let bounded = ttl.min(ceiling);
+            let lease = ShardLeaseClock {
+                sent_at,
+                wall_anchor,
+                ttl: Duration::from_nanos(ttl),
+            }
+            .clamped(Duration::from_nanos(ceiling));
+            for elapsed in [0, 1, bounded.saturating_sub(1), bounded, bounded + 1] {
+                for wall_offset in [-120_000_000_000i128, -1, 0, 1, bounded as i128] {
+                    for skew in [0, 1, bounded.saturating_sub(1), bounded, bounded + 1] {
+                        let wall_now = if wall_offset < 0 {
+                            wall_anchor - Duration::from_nanos((-wall_offset) as u64)
+                        } else {
+                            wall_anchor + Duration::from_nanos(wall_offset as u64)
+                        };
+                        let deadline_offset = (bounded as i128)
+                            .min(wall_offset + bounded as i128 - elapsed as i128)
+                            - skew as i128;
+                        let expected = if elapsed >= bounded || deadline_offset <= wall_offset {
+                            None
+                        } else if deadline_offset < 0 {
+                            Some(wall_anchor - Duration::from_nanos((-deadline_offset) as u64))
+                        } else {
+                            Some(wall_anchor + Duration::from_nanos(deadline_offset as u64))
+                        };
+                        assert_eq!(
+                            lease.valid_until(
+                                sent_at + Duration::from_nanos(elapsed),
+                                wall_now,
+                                Duration::from_nanos(skew),
+                            ),
+                            expected,
+                            "ttl={ttl} ceiling={ceiling} elapsed={elapsed} wall_offset={wall_offset} skew={skew}"
+                        );
+                    }
+                }
+            }
+        }
+    }
 }

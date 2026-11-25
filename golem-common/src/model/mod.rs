@@ -98,7 +98,7 @@ pub use retry_policy::{
 };
 pub use sharding::{
     NumberOfShards, Pod, RoutingTable, RoutingTableEntry, ShardAssignment, ShardDeliveryOutcome,
-    ShardEpoch, ShardLeaseRevision,
+    ShardEpoch, ShardLeaseClock, ShardLeaseRevision,
 };
 use url::Url;
 

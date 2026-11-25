@@ -14,8 +14,10 @@
 
 use crate::metrics::sharding::*;
 use crate::model::ShardAssignmentCheck;
+use crate::services::golem_config::OplogConfig;
 use golem_common::model::{
-    AgentId, ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseRevision,
+    AgentId, ShardAssignment, ShardDeliveryOutcome, ShardEpoch, ShardId, ShardLeaseClock,
+    ShardLeaseRevision,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use itertools::Itertools;
@@ -23,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::identity;
 use std::num::NonZeroUsize;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 use tracing::debug;
 
 /// Service for assigning shards to worker executors.
@@ -51,6 +53,16 @@ pub trait ShardService: Send + Sync {
     /// only — a lapsed lease refuses new work but never interrupts work that
     /// is already running.
     fn check_admission(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError>;
+    /// A fixed deadline for writes that have no indexed presence to fence them. Refuses an
+    /// unexpiring lease or a shard no longer held at the open handle's epoch.
+    fn lease_valid_until(
+        &self,
+        agent_id: &AgentId,
+        epoch: ShardEpoch,
+        skew_margin: Duration,
+    ) -> Option<SystemTime>;
+    /// Uses the same TTL ceiling for assignment expiry and the renewal cadence.
+    fn clamp_lease(&self, lease: ShardLeaseClock) -> ShardLeaseClock;
     /// Installs the first assignment, from a registration's grant. Creates the
     /// assignment if none exists yet. The set gates on `revision` like every
     /// delivery; the lease clock always moves. `None` never expires.
@@ -58,7 +70,7 @@ pub trait ShardService: Send + Sync {
         &self,
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Option<Instant>,
+        lease: Option<ShardLeaseClock>,
         revision: ShardLeaseRevision,
         executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome;
@@ -89,7 +101,7 @@ pub trait ShardService: Send + Sync {
     fn update_lease(
         &self,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Instant,
+        lease: ShardLeaseClock,
         revision: ShardLeaseRevision,
         executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError>;
@@ -105,6 +117,7 @@ pub trait ShardService: Send + Sync {
 
 pub struct ShardServiceDefault {
     shard_assignment: Arc<RwLock<Option<ShardAssignment>>>,
+    max_lease_ttl: Duration,
 }
 
 impl Default for ShardServiceDefault {
@@ -115,8 +128,13 @@ impl Default for ShardServiceDefault {
 
 impl ShardServiceDefault {
     pub fn new() -> Self {
+        Self::with_max_lease_ttl(OplogConfig::default().shard_lease_max_ttl)
+    }
+
+    pub fn with_max_lease_ttl(max_lease_ttl: Duration) -> Self {
         Self {
             shard_assignment: Arc::new(RwLock::new(None)),
+            max_lease_ttl,
         }
     }
 
@@ -206,11 +224,32 @@ impl ShardService for ShardServiceDefault {
         self.with_read_shard_assignment(|shard_assignment| shard_assignment.clone())
     }
 
+    fn clamp_lease(&self, lease: ShardLeaseClock) -> ShardLeaseClock {
+        lease.clamped(self.max_lease_ttl)
+    }
+
+    fn lease_valid_until(
+        &self,
+        agent_id: &AgentId,
+        epoch: ShardEpoch,
+        skew_margin: Duration,
+    ) -> Option<SystemTime> {
+        let guard = self.shard_assignment.read().unwrap();
+        let assignment = guard.as_ref()?;
+        let lease = assignment.lease?;
+        let shard = ShardId::from_agent_id(agent_id, assignment.number_of_shards);
+        if assignment.epoch_of(&shard) != Some(epoch) {
+            return None;
+        }
+        let wall_now = SystemTime::now();
+        lease.valid_until(Instant::now(), wall_now, skew_margin)
+    }
+
     fn register(
         &self,
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Option<Instant>,
+        lease: Option<ShardLeaseClock>,
         revision: ShardLeaseRevision,
         executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome {
@@ -229,17 +268,17 @@ impl ShardService for ShardServiceDefault {
                 shard_ids_to_assign = shard_epochs.keys().join(", "),
                 "ShardService.register"
             );
-            let outcome = match expires_at {
-                Some(expires_at) => shard_assignment.adopt_grant(
+            let outcome = match lease {
+                Some(lease) => shard_assignment.adopt_grant(
                     Some(number_of_shards),
                     shard_epochs,
-                    expires_at,
+                    self.clamp_lease(lease),
                     revision,
                     executor_count,
                 ),
                 // The never-expires door, which no wire decode can open.
                 None => {
-                    shard_assignment.expires_at = None;
+                    shard_assignment.lease = None;
                     shard_assignment.set_shards(
                         number_of_shards,
                         shard_epochs,
@@ -271,7 +310,7 @@ impl ShardService for ShardServiceDefault {
                 number_of_shards,
                 executor_count: NonZeroUsize::MIN,
                 shard_epochs: shard_epochs.clone(),
-                expires_at: None,
+                lease: None,
                 revision: None,
             });
             let outcome = ShardDeliveryOutcome::Applied { set_changed };
@@ -305,7 +344,7 @@ impl ShardService for ShardServiceDefault {
     fn update_lease(
         &self,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
-        expires_at: Instant,
+        lease: ShardLeaseClock,
         revision: ShardLeaseRevision,
         executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
@@ -320,7 +359,7 @@ impl ShardService for ShardServiceDefault {
                 let outcome = shard_assignment.adopt_grant(
                     None,
                     shard_epochs,
-                    expires_at,
+                    self.clamp_lease(lease),
                     revision,
                     executor_count,
                 );
@@ -373,7 +412,7 @@ fn record_delivery(
 ) {
     record_assigned_shard_count(shard_assignment.len());
     record_executor_count(shard_assignment.executor_count.get());
-    if let Some(expires_at) = shard_assignment.expires_at {
+    if let Some(expires_at) = shard_assignment.expires_at() {
         record_shard_lease_expiry(expires_at);
     }
     if matches!(outcome, ShardDeliveryOutcome::Stale { .. }) {

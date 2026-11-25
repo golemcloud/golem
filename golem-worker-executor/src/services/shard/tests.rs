@@ -54,13 +54,13 @@ fn agent_on_shard(shard: i64) -> AgentId {
 
 fn service_holding(
     shard_epochs: &HashMap<ShardId, ShardEpoch>,
-    expires_at: Option<Instant>,
+    lease: Option<ShardLeaseClock>,
 ) -> ShardServiceDefault {
     let service = ShardServiceDefault::new();
     service.register(
         SHARDS,
         shard_epochs,
-        expires_at,
+        lease,
         revision_of(MANAGER, 0),
         NonZeroUsize::MIN,
     );
@@ -68,12 +68,20 @@ fn service_holding(
 }
 
 /// A lease that expires now is not live at any later check: `lease_is_live` is strict.
-fn lapsed() -> Instant {
-    Instant::now()
+fn lapsed() -> ShardLeaseClock {
+    let wall_anchor = SystemTime::now();
+    ShardLeaseClock {
+        sent_at: Instant::now(),
+        wall_anchor,
+        ttl: Duration::ZERO,
+    }
 }
 
-fn live() -> Instant {
-    Instant::now() + Duration::from_secs(60)
+fn live() -> ShardLeaseClock {
+    ShardLeaseClock {
+        ttl: Duration::from_secs(60),
+        ..lapsed()
+    }
 }
 
 #[test]
@@ -126,8 +134,8 @@ fn executor_count_follows_the_revision_not_delivery_order() {
         .unwrap();
     assert_eq!(service.executor_count(), Some(4));
     assert_eq!(
-        service.current_assignment().unwrap().expires_at,
-        Some(expiry)
+        service.current_assignment().unwrap().expires_at(),
+        Some(expiry.expires_at())
     );
 
     service
@@ -416,7 +424,7 @@ fn clearing_the_assignment_leaves_the_lease_lapsed() {
     let assignment = service.current_assignment().unwrap();
     assert!(assignment.is_empty(), "every shard is dropped");
     assert!(
-        assignment.expires_at.is_some(),
+        assignment.expires_at().is_some(),
         "a cleared lease is lapsed, never 'never expires'"
     );
     assert!(!service.is_ready());
@@ -463,4 +471,59 @@ fn a_stale_renewal_still_moves_the_lease_clock() {
         "the stale set is not adopted"
     );
     assert!(service.is_ready(), "but the lease it granted is");
+}
+
+#[test]
+fn write_deadlines_require_the_held_epoch_and_a_bounded_expiring_lease() {
+    let service = ShardServiceDefault::with_max_lease_ttl(Duration::from_secs(60));
+    let agent = agent_on_shard(0);
+    let margin = Duration::from_secs(3);
+    assert_eq!(
+        service.lease_valid_until(&agent, ShardEpoch(5), margin),
+        None
+    );
+
+    let wall_anchor = SystemTime::now() - Duration::from_secs(1);
+    let lease = ShardLeaseClock {
+        sent_at: Instant::now(),
+        wall_anchor,
+        ttl: Duration::from_secs(300),
+    };
+    service.register(
+        SHARDS,
+        &epochs([(0, 5), (1, 8)]),
+        Some(lease),
+        revision_of(MANAGER, 1),
+        NonZeroUsize::MIN,
+    );
+    assert_eq!(
+        service.current_assignment().unwrap().expires_at(),
+        Some(lease.sent_at + Duration::from_secs(60))
+    );
+    assert_eq!(
+        service.lease_valid_until(&agent, ShardEpoch(5), margin),
+        Some(wall_anchor + Duration::from_secs(57))
+    );
+    assert_eq!(
+        service.lease_valid_until(&agent, ShardEpoch(4), margin),
+        None
+    );
+
+    service
+        .update_lease(
+            &epochs([(1, 8)]),
+            lease,
+            revision_of(MANAGER, 2),
+            NonZeroUsize::MIN,
+        )
+        .unwrap();
+    assert_eq!(
+        service.lease_valid_until(&agent, ShardEpoch(5), margin),
+        None
+    );
+    service.install_unexpiring(SHARDS, &epochs([(0, 5)]));
+    assert_eq!(
+        service.lease_valid_until(&agent, ShardEpoch(5), margin),
+        None
+    );
 }

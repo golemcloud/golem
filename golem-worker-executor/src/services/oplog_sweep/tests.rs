@@ -2488,10 +2488,15 @@ async fn a_sweep_holding_a_lapsed_lease_does_nothing() {
 
     // Expires as it is granted, so the lease has lapsed by the time a tick reads it.
     let shards = Arc::new(ShardServiceDefault::new());
+    let wall_anchor = std::time::SystemTime::now();
     shards.register(
         1,
         &HashMap::from([(ShardId::new(0), ShardEpoch(0))]),
-        Some(Instant::now()),
+        Some(golem_common::model::ShardLeaseClock {
+            sent_at: Instant::now(),
+            wall_anchor,
+            ttl: Duration::ZERO,
+        }),
         revision_of(MANAGER, 0),
         NonZeroUsize::MIN,
     );
