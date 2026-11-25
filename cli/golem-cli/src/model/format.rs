@@ -24,6 +24,9 @@ use strum_macros::EnumIter;
 #[clap(rename_all = "kebab-case")]
 pub enum Format {
     Json,
+    // JSON Lines: one compact JSON document on each line, as `json` prints. `agent oplog
+    // --output` needs this format, so that the format of the file is explicit.
+    Jsonl,
     #[serde(alias = "pretty")]
     #[clap(alias = "pretty")]
     PrettyJson,
@@ -38,6 +41,7 @@ impl Display for Format {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         let s = match self {
             Self::Json => "json",
+            Self::Jsonl => "jsonl",
             Self::PrettyJson => "pretty-json",
             Self::Yaml => "yaml",
             Self::PrettyYaml => "pretty-yaml",

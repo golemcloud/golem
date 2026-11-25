@@ -179,9 +179,25 @@ With the optional `--from` parameter it is possible to only get oplog entries _a
 golem agent oplog --from 100 'CounterAgent("my-counter")'
 ```
 
+The optional `--to` parameter sets the last oplog index of the read. A `--to` after the end of the oplog ends the read at the end of the oplog:
+
+```shell copy
+golem agent oplog --from 100 --to 200 'CounterAgent("my-counter")'
+```
+
 Oplog entries are indexed from 1, and the first entry is always a **create** entry that defines the initial state of the agent.
 
 Each invocation entry shows its caller in three lines: `original caller:` is the principal that started the chain of calls, `immediate caller:` is the principal that made this call, and `tokens:` lists the tokens that the call carried. The verified claims of a signed-in user are hidden by default. Add `--show-claims` to show them, in a `claims:` line under the user. In the JSON, YAML and TOON formats, `claims` is an object. The server shows the claims only to a reader who may read the oplog. `--show-claims` cannot be combined with `--obfuscate`, because an obfuscated export never shows claims.
+
+### Exporting the oplog to a file
+
+The `--output` parameter exports the oplog to a file as [JSON Lines](https://jsonlines.org/): one `agent.oplog` document per line, in index order, as `--format json` prints them. The export needs `--format jsonl`, and refuses the other formats:
+
+```shell copy
+golem agent oplog 'CounterAgent("my-counter")' --format jsonl --output oplog.jsonl
+```
+
+The export reads the oplog one page at a time, and writes each page before it reads the next page. So the export works for an oplog of any size. The export writes each entry in full, and reads in full the entries that oplog pages omit for their size. If a read fails, the export fails and does not write the file. `--from`, `--to` and `--query` select the entries that the export writes.
 
 ### Viewing the oplog in a browser
 
@@ -208,7 +224,7 @@ The generated file has no external dependencies, so it can be opened directly fr
 The `--obfuscate` parameter exports a report of the oplog that you can attach to a bug report. The CLI replaces the customer values with tokens on your machine:
 
 ```shell
-golem agent oplog <agent> --obfuscate [--keep-scalars] [--keep-shape] [--keep-error-text] [--max-entry-bytes N] [--query Q | --from N] [--html FILE | --serve]
+golem agent oplog <agent> --obfuscate [--keep-scalars] [--keep-shape] [--keep-error-text] [--max-entry-bytes N] [--from N] [--query Q] [--html FILE | --serve]
 ```
 
 Write the report into a self-contained HTML file:
@@ -227,7 +243,7 @@ In the structured formats, the export emits a sequence of documents in place of 
 
 ### Searching for oplog entries
 
-Use `golem agent oplog --query` to return matching entries. `--query` cannot be combined with `--from`. The query language supports a subset of Lucene syntax:
+Use `golem agent oplog --query` to return matching entries. With `--from` and `--to`, the search returns only the matching entries in the range. The query language supports a subset of Lucene syntax:
 
 - `search terms` requires both terms. Unquoted terms are case-insensitive substring matches.
 - Uppercase `AND`, `OR`, and `NOT` combine or exclude matches. Each condition applies to the same entry, but can match a different value within it.

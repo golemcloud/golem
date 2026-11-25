@@ -2194,7 +2194,9 @@ fn every_structured_format_prints_the_claims_as_an_object() {
     // What a reader of the format gets from the rendered document.
     fn read(format: Format, rendered: &str) -> Value {
         match format {
-            Format::Json | Format::PrettyJson => serde_json::from_str(rendered).unwrap(),
+            Format::Json | Format::Jsonl | Format::PrettyJson => {
+                serde_json::from_str(rendered).unwrap()
+            }
             Format::Yaml | Format::PrettyYaml => serde_yaml::from_str(rendered).unwrap(),
             Format::Toon => {
                 let document = rendered
@@ -2212,6 +2214,7 @@ fn every_structured_format_prints_the_claims_as_an_object() {
     let page_pointer = format!("/entries/0{CLAIMS_POINTER}");
     for format in [
         Format::Json,
+        Format::Jsonl,
         Format::PrettyJson,
         Format::Yaml,
         Format::PrettyYaml,
@@ -9372,6 +9375,7 @@ fn arb_json_value(depth: u32) -> OutputDocumentStrategy {
 fn arb_format_string() -> BoxedStrategy<&'static str> {
     prop_oneof![
         Just("json"),
+        Just("jsonl"),
         Just("pretty-json"),
         Just("yaml"),
         Just("pretty-yaml"),
@@ -9384,6 +9388,7 @@ fn arb_format_string() -> BoxedStrategy<&'static str> {
 fn arb_format() -> BoxedStrategy<crate::model::format::Format> {
     prop_oneof![
         Just(crate::model::format::Format::Json),
+        Just(crate::model::format::Format::Jsonl),
         Just(crate::model::format::Format::PrettyJson),
         Just(crate::model::format::Format::Yaml),
         Just(crate::model::format::Format::PrettyYaml),

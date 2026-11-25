@@ -64,7 +64,7 @@ pub struct OplogRangePage {
 /// The two oplog reads of the export.
 #[async_trait]
 pub trait OplogReads: Send + Sync {
-    /// Reads one page. A read with a query never sends `from`.
+    /// Reads one page.
     async fn read_page(
         &self,
         from: Option<u64>,
@@ -435,8 +435,8 @@ async fn read_create<R: OplogReads>(
     }
 }
 
-/// Exports the oplog of one agent into the sink: the header, every entry from `options.from`
-/// or of `options.query` in index order, then, after a final root check, the coverage.
+/// Exports the oplog of one agent into the sink: the header, every entry from `options.from` that
+/// matches `options.query` in index order, then, after a final root check, the coverage.
 pub async fn export_oplog<R: OplogReads>(
     reads: R,
     key: &'static TokenKey,

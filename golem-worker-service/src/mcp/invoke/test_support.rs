@@ -42,7 +42,7 @@ use golem_common::model::component_metadata::ComponentMetadata;
 use golem_common::model::diff::Hash;
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::filesystem::FileByteSelection;
-use golem_common::model::oplog::{OplogCursor, OplogIndex};
+use golem_common::model::oplog::{OplogCursor, OplogIndex, OplogRange};
 use golem_common::model::type_id::{TypeId, TypeIdKind};
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, PromiseId, ScanCursor,
@@ -511,6 +511,24 @@ struct RecordingWorkerClient {
     file_reads: Arc<FileReadMock>,
     creates: Arc<CreateMock>,
     native_sessions: Arc<Mutex<NativeSessionLog>>,
+    oplog_reads: Arc<Mutex<Vec<OplogRead>>>,
+}
+
+/// An oplog page read that the worker client received.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct OplogRead {
+    pub range: OplogRange,
+    pub query: Option<String>,
+}
+
+fn empty_oplog_page() -> GetOplogResponse {
+    GetOplogResponse {
+        entries: Vec::new(),
+        next: None,
+        first_index_in_chunk: 0,
+        last_index: 0,
+        scan: None,
+    }
 }
 
 #[async_trait]
@@ -683,28 +701,37 @@ impl WorkerClient for RecordingWorkerClient {
     async fn get_oplog(
         &self,
         _: &AgentId,
-        _: OplogIndex,
+        range: OplogRange,
         _: Option<OplogCursor>,
         _: u64,
-        _: Option<crate::service::worker::OplogRangeRead>,
+        _: Option<golem_common::model::oplog::OplogScanAllowance>,
         _: golem_common::model::caller::ClaimVisibility,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> Result<GetOplogResponse, crate::service::worker::WorkerServiceError> {
-        unimplemented!()
+        self.oplog_reads
+            .lock()
+            .unwrap()
+            .push(OplogRead { range, query: None });
+        Ok(empty_oplog_page())
     }
 
     async fn search_oplog(
         &self,
         _: &AgentId,
+        range: OplogRange,
         _: Option<OplogCursor>,
         _: u64,
-        _: String,
+        query: String,
         _: golem_common::model::caller::ClaimVisibility,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> Result<GetOplogResponse, crate::service::worker::WorkerServiceError> {
-        unimplemented!()
+        self.oplog_reads.lock().unwrap().push(OplogRead {
+            range,
+            query: Some(query),
+        });
+        Ok(empty_oplog_page())
     }
 
     async fn get_oplog_entry(
@@ -1126,6 +1153,7 @@ pub(crate) struct InvocationHarness {
     >>>,
     pub(crate) contexts: Arc<Mutex<Vec<RecordedInvocationContext>>>,
     pub(crate) native_sessions: Arc<Mutex<NativeSessionLog>>,
+    pub(crate) oplog_reads: Arc<Mutex<Vec<OplogRead>>>,
     pub(crate) agent_type: AgentTypeSchema,
     /// The type ID that the registry assigns to the harness's agent type.
     pub(crate) type_id: TypeId,
@@ -1287,6 +1315,7 @@ impl InvocationHarness {
         let file_reads = Arc::new(FileReadMock::default());
         let creates = Arc::new(CreateMock::default());
         let contexts = Arc::new(Mutex::new(Vec::new()));
+        let oplog_reads = Arc::new(Mutex::new(Vec::new()));
         let native_sessions = Arc::new(Mutex::new(NativeSessionLog {
             mode: NativeSessions::Refuse,
             keys: Vec::new(),
@@ -1315,8 +1344,8 @@ impl InvocationHarness {
             file_reads: file_reads.clone(),
             creates: creates.clone(),
             native_sessions: native_sessions.clone(),
+            oplog_reads: oplog_reads.clone(),
         });
-
         let type_id = TypeId::try_from(42u32).unwrap();
         let registry = Arc::new(HarnessRegistryService {
             environment_id,
@@ -1382,10 +1411,17 @@ impl InvocationHarness {
             durable_stream_creations,
             contexts,
             native_sessions,
+            oplog_reads,
             agent_type,
             type_id,
             targets,
         }
+    }
+
+    /// The services that a REST API over the harness's worker service needs: the worker service
+    /// and an authentication service.
+    pub(crate) fn rest_api_services(&self) -> (Arc<WorkerService>, Arc<dyn AuthService>) {
+        (self.worker_service.clone(), Arc::new(AllowAllAuthService))
     }
 
     /// An MCP deployment of `domain` at `revision` that exports the harness's agent type and,

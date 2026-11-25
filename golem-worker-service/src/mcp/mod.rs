@@ -3,7 +3,7 @@ pub use auth::{McpBearerAuth, oauth_proxy_routes};
 pub use deployment::{McpCapabilities, McpDeployment};
 pub use endpoint::*;
 #[cfg(test)]
-pub(crate) use invoke::test_support::InvocationHarness;
+pub(crate) use invoke::test_support::{InvocationHarness, OplogRead};
 pub use mcp_capabilities_lookup::*;
 
 mod agent_mcp_capability;

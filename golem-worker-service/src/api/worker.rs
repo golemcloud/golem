@@ -17,7 +17,7 @@ use crate::config::WebSocketTransportLimits;
 use crate::metrics::{ActiveHttpApiStream, HttpApiStreamKind};
 use crate::service::auth::AuthService;
 use crate::service::worker::ConnectWorkerStream;
-use crate::service::worker::{OplogRangeRead, WorkerService, proxy_worker_connection};
+use crate::service::worker::{WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
@@ -27,8 +27,7 @@ use golem_common::model::caller::ClaimVisibility;
 use golem_common::model::card::StoredCard;
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision, PluginPriority};
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::OplogIndex;
-use golem_common::model::oplog::{OplogCursor, OplogScanAllowance};
+use golem_common::model::oplog::{OplogCursor, OplogIndex, OplogRange, OplogScanAllowance};
 use golem_common::model::oplog::{OplogInclude, PublicOplogEntryWithIndex, PublicOplogPageEntry};
 use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId, PromiseId};
 use golem_common::recorded_http_api_request;
@@ -314,6 +313,13 @@ impl WorkerApi {
     /// Each recorded invocation shows its caller: the principal that started the chain, the
     /// principal that made the call, and the tokens presented at the entry point. With
     /// `include=claims`, the users among the callers also show their verified claims.
+    ///
+    /// Reads the oplog entries from `from` to `to`, both included. Without `from`, the read starts
+    /// at the first entry; without `to`, it goes to the end of the oplog. A `to` after the end of
+    /// the oplog ends the read at the end of the oplog. The endpoint refuses a `to` before
+    /// `from`. With `query`, the page holds only the entries in the range that match the query.
+    /// Without `query`, a read with `to` is a range read: the response accounts its scan, and
+    /// `scanEntries` and `scanMillis` limit the scan.
     #[oai(
         path = "/:environment_id/agents/:agent_id/oplog",
         method = "get",
@@ -330,7 +336,7 @@ impl WorkerApi {
         query: Query<Option<String>>,
         include: Query<Option<OplogInclude>>,
         #[oai(name = "expectedFingerprint")] expected_fingerprint: Query<Option<AgentFingerprint>>,
-        /// The inclusive last index of a range read. Requires `from` and no `query`.
+        /// The inclusive last index of the read. Without `query`, the read is a range read.
         to: Query<Option<u64>>,
         /// The remaining entry allowance of a range read. Goes with `scanMillis`.
         #[oai(name = "scanEntries")]
@@ -345,21 +351,17 @@ impl WorkerApi {
         let record = recorded_http_api_request!("get_oplog", agent_id = agent_id.to_string());
 
         let response = async {
-            let range = oplog_range_read(
-                from.0,
-                query.0.as_deref(),
-                to.0,
-                scan_entries.0,
-                scan_millis.0,
-            )?;
+            let allowance =
+                oplog_scan_allowance(query.0.as_deref(), to.0, scan_entries.0, scan_millis.0)?;
             self.get_oplog_internal(
                 agent_id,
                 from.0,
+                to.0,
                 count.0,
                 cursor.0,
                 query.0,
                 expected_fingerprint.0,
-                range,
+                allowance,
                 ClaimVisibility::from_include(include.0),
                 auth,
             )
@@ -376,27 +378,27 @@ impl WorkerApi {
         &self,
         agent_id: OwnedAgentId,
         from: Option<u64>,
+        to: Option<u64>,
         count: u64,
         cursor: Option<OplogCursor>,
         query: Option<String>,
         expected_fingerprint: Option<AgentFingerprint>,
-        range: Option<OplogRangeRead>,
+        allowance: Option<OplogScanAllowance>,
         claims: ClaimVisibility,
         auth: AuthCtx,
     ) -> Result<SerdeJson<GetOplogResponse>> {
-        let mut response = match (from, query) {
-            (Some(_), Some(_)) => {
-                return Err(ApiEndpointError::bad_request(
-                    api::error_code::INVALID_OPLOG_QUERY_PARAMS,
-                    golem_common::safe(
-                        "Cannot specify both the 'from' and the 'query' parameters".to_string(),
-                    ),
-                ));
-            }
-            (None, Some(query)) => {
+        let range = OplogRange::from_indices(from, to).map_err(|error| {
+            ApiEndpointError::bad_request(
+                api::error_code::INVALID_OPLOG_QUERY_PARAMS,
+                golem_common::safe(format!("Invalid oplog range: {error}")),
+            )
+        })?;
+        let mut response = match query {
+            Some(query) => {
                 self.worker_service
                     .search_oplog(
                         &agent_id,
+                        range,
                         cursor,
                         count,
                         query,
@@ -406,16 +408,15 @@ impl WorkerApi {
                     )
                     .await?
             }
-            (from, None) => {
+            None => {
                 self.worker_service
                     .get_oplog(
                         &agent_id,
-                        from.map(OplogIndex::from_u64)
-                            .unwrap_or(OplogIndex::INITIAL),
+                        range,
                         cursor,
                         count,
                         expected_fingerprint,
-                        range,
+                        allowance,
                         claims,
                         auth,
                     )
@@ -803,50 +804,127 @@ fn make_component_file_path(name: String) -> Result<CanonicalFilePath> {
     })
 }
 
-/// The range selected by `to`, with optional paired entry and time allowances.
-fn oplog_range_read(
-    from: Option<u64>,
+/// The scan allowance of a range read, from the paired `scanEntries` and `scanMillis` parameters.
+/// Only a range read, a read with `to` and without `query`, takes an allowance.
+fn oplog_scan_allowance(
     query: Option<&str>,
     to: Option<u64>,
     scan_entries: Option<u64>,
     scan_millis: Option<u64>,
-) -> Result<Option<OplogRangeRead>> {
+) -> Result<Option<OplogScanAllowance>> {
     let invalid = |message: &str| {
         ApiEndpointError::bad_request(
             api::error_code::INVALID_OPLOG_QUERY_PARAMS,
             golem_common::safe(message.to_string()),
         )
     };
-    let allowance = match (scan_entries, scan_millis) {
-        (Some(entries), Some(millis)) => Some(OplogScanAllowance { entries, millis }),
-        (None, None) => None,
-        _ => {
-            return Err(invalid(
-                "The 'scanEntries' and 'scanMillis' parameters go together",
-            ));
+    match (scan_entries, scan_millis, to, query) {
+        (None, None, _, _) => Ok(None),
+        (Some(entries), Some(millis), Some(_), None) => {
+            Ok(Some(OplogScanAllowance { entries, millis }))
         }
-    };
-    let Some(to) = to else {
-        if allowance.is_some() {
-            return Err(invalid(
-                "The 'scanEntries' and 'scanMillis' parameters need the 'to' parameter",
-            ));
-        }
-        return Ok(None);
-    };
-    if query.is_some() {
-        return Err(invalid(
-            "Cannot specify both the 'to' and the 'query' parameters",
-        ));
-    }
-    match from {
-        Some(from) if from >= 1 && from <= to => Ok(Some(OplogRangeRead {
-            to: OplogIndex::from_u64(to),
-            allowance,
-        })),
-        Some(_) => Err(invalid(
-            "The 'from' parameter of a range read must be at least 1 and at most 'to'",
+        (Some(_), Some(_), None, _) => Err(invalid(
+            "The 'scanEntries' and 'scanMillis' parameters need the 'to' parameter",
         )),
-        None => Err(invalid("The 'to' parameter needs the 'from' parameter")),
+        (Some(_), Some(_), Some(_), Some(_)) => Err(invalid(
+            "Cannot specify both the 'scanEntries' and 'scanMillis' parameters and the 'query' parameter",
+        )),
+        _ => Err(invalid(
+            "The 'scanEntries' and 'scanMillis' parameters go together",
+        )),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{WorkerApi, oplog_scan_allowance};
+    use crate::mcp::OplogRead;
+    use golem_common::model::OwnedAgentId;
+    use golem_common::model::agent::{AgentKey, AgentMode};
+    use golem_common::model::oplog::{OplogIndex, OplogRange, OplogScanAllowance};
+    use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+    use golem_service_base::model::auth::AuthCtx;
+    use test_r::test;
+
+    #[test]
+    fn a_scan_allowance_needs_both_parameters_and_a_range_read() {
+        let allowance = OplogScanAllowance {
+            entries: 7,
+            millis: 9,
+        };
+        [
+            ((None, None, None, None), Some(None)),
+            ((None, Some(9), None, None), Some(None)),
+            ((Some("error"), Some(9), None, None), Some(None)),
+            ((None, Some(9), Some(7), Some(9)), Some(Some(allowance))),
+            ((None, None, Some(7), Some(9)), None),
+            ((Some("error"), Some(9), Some(7), Some(9)), None),
+            ((None, Some(9), Some(7), None), None),
+            ((None, Some(9), None, Some(9)), None),
+        ]
+        .into_iter()
+        .for_each(|((query, to, entries, millis), expected)| {
+            assert_eq!(
+                oplog_scan_allowance(query, to, entries, millis).ok(),
+                expected,
+                "query {query:?}, to {to:?}, scanEntries {entries:?}, scanMillis {millis:?}"
+            )
+        });
+    }
+
+    #[test]
+    async fn an_oplog_query_reads_its_range_and_a_read_without_a_query_reads_its_range() {
+        let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
+        let (worker_service, auth_service) = harness.rest_api_services();
+        let api = WorkerApi::new(worker_service, auth_service, Default::default());
+        let key = AgentKey::new(
+            harness.agent_type.type_name.clone(),
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(vec![])),
+                SchemaValue::Record { fields: vec![] },
+            ),
+        )
+        .unwrap();
+        let agent_id = OwnedAgentId::new(harness.environment_id, &harness.add_keyed_agent(&key));
+        let index = OplogIndex::from_u64;
+        let read = |from, to, query: Option<&str>| {
+            api.get_oplog_internal(
+                agent_id.clone(),
+                from,
+                to,
+                50,
+                None,
+                query.map(str::to_string),
+                None,
+                None,
+                Default::default(),
+                AuthCtx::system(),
+            )
+        };
+
+        read(Some(3), Some(9), Some("error")).await.unwrap();
+        read(Some(4), None, None).await.unwrap();
+        // A read without `from` keeps its start open, so that the executor starts it at the first
+        // entry that the oplog holds.
+        read(None, Some(9), None).await.unwrap();
+        assert!(read(Some(5), Some(4), Some("error")).await.is_err());
+
+        assert_eq!(
+            *harness.oplog_reads.lock().unwrap(),
+            vec![
+                OplogRead {
+                    range: OplogRange::new(Some(index(3)), Some(index(9))).unwrap(),
+                    query: Some("error".to_string()),
+                },
+                OplogRead {
+                    range: OplogRange::new(Some(index(4)), None).unwrap(),
+                    query: None,
+                },
+                OplogRead {
+                    range: OplogRange::new(None, Some(index(9))).unwrap(),
+                    query: None,
+                },
+            ]
+        );
     }
 }

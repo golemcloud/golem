@@ -16,6 +16,7 @@ pub mod matcher;
 pub mod payload;
 mod protobuf;
 mod public_types;
+mod range;
 pub(crate) mod raw_types;
 
 #[cfg(test)]
@@ -29,6 +30,7 @@ pub use crate::base_model::oplog::{
 };
 pub use payload::*;
 pub use public_types::*;
+pub use range::{OplogCursorOutsideRange, OplogRange, OplogRangeEndsBeforeStart};
 pub use raw_types::*;
 
 use crate::model::component::ComponentRevision;

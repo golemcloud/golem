@@ -22,6 +22,7 @@ use super::{
     oplog_range_allowance, search_public_oplog_page,
 };
 use golem_common::base_model::caller::ClaimVisibility;
+use golem_common::model::oplog::OplogRange;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -59,6 +60,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         let cursor = request.cursor.map(Into::into);
         check_oplog_cursor_query(&owned_agent_id, cursor.as_ref(), None)?;
+        let range = OplogRange::from_indices(request.from_oplog_index, request.to_oplog_index)
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
 
         let component_service = self.component_service();
         let identity = self
@@ -76,6 +79,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let limits = self.oplog_query_limits(request.count)?;
         let claims = ClaimVisibility::from_protobuf(request.claims)
             .map_err(WorkerExecutorError::invalid_request)?;
+        // The first entry that the oplog holds, where a range without a start starts.
+        let oplog_first = OplogIndex::INITIAL;
         if let Some(to) = request.to_oplog_index {
             let allowance = oplog_range_allowance(
                 request.scan_allowance.map(Into::into),
@@ -90,7 +95,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 identity.create_parameters().owner_kind,
                 agent_type_name.as_ref(),
                 cursor,
-                OplogIndex::from_u64(request.from_oplog_index),
+                range.first_index_in(oplog_first),
                 OplogIndex::from_u64(to),
                 limits,
                 allowance,
@@ -111,12 +116,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 ),
             });
         }
-        let (start, start_component_revision) = oplog_page_start(
+        let (range, start_component_revision) = oplog_page_start(
             self.oplog_service(),
             &owned_agent_id,
             agent_mode,
             cursor,
-            OplogIndex::from_u64(request.from_oplog_index),
+            range,
+            oplog_first,
         )
         .await?;
         let chunk = get_public_oplog_page(
@@ -128,7 +134,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             identity.create_parameters().owner_kind,
             agent_type_name.as_ref(),
             start_component_revision,
-            start,
+            range,
+            oplog_first,
             limits,
             claims,
         )
@@ -220,6 +227,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(&owned_agent_id)?;
         let cursor = request.cursor.map(Into::into);
         check_oplog_cursor_query(&owned_agent_id, cursor.as_ref(), Some(&request.query))?;
+        let range = OplogRange::from_indices(request.from_oplog_index, request.to_oplog_index)
+            .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?;
 
         let component_service = self.component_service();
         let identity = self
@@ -235,12 +244,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let agent_type_name = &identity.create_parameters().agent_type_name;
 
         let limits = self.oplog_query_limits(request.count)?;
-        let (start, start_component_revision) = oplog_page_start(
+        // The first entry that the oplog holds, where a range without a start starts.
+        let oplog_first = OplogIndex::INITIAL;
+        let (range, start_component_revision) = oplog_page_start(
             self.oplog_service(),
             &owned_agent_id,
             agent_mode,
             cursor,
-            OplogIndex::INITIAL,
+            range,
+            oplog_first,
         )
         .await?;
         let chunk = search_public_oplog_page(
@@ -252,7 +264,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             identity.create_parameters().owner_kind,
             agent_type_name.as_ref(),
             start_component_revision,
-            start,
+            range,
+            oplog_first,
             limits,
             &request.query,
             self.services.config().limits.scan_budget,

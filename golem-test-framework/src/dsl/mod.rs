@@ -52,7 +52,7 @@ use golem_common::model::deployment::{CurrentDeployment, DeploymentCreation, Dep
 use golem_common::model::domain_registration::{Domain, DomainRegistrationCreation};
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
-use golem_common::model::oplog::PublicOplogEntryWithIndex;
+use golem_common::model::oplog::{OplogRange, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::{AgentFilter, AgentStatus, IdempotencyKey, OplogIndex, ScanCursor};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
@@ -259,7 +259,7 @@ impl AgentResult {
 
 #[async_trait]
 // TestDsl for everything needed by the worker-executor tests
-pub trait TestDsl {
+pub trait TestDsl: Sync {
     type WorkerError: std::error::Error + Sync + Send + 'static;
 
     fn redis(&self) -> Arc<dyn Redis>;
@@ -551,11 +551,25 @@ pub trait TestDsl {
         target: RevertWorkerTarget,
     ) -> anyhow::Result<()>;
 
+    /// Reads the oplog entries of `range` that match `query`, in full and in index order. The
+    /// read follows the cursor of each page to the end of the range, so neither the page size nor
+    /// the scan budget of a search page limits it. Without `query`, the read returns every entry
+    /// of the range.
+    async fn read_oplog(
+        &self,
+        agent_id: &OwnedAgentId,
+        range: OplogRange,
+        query: Option<&str>,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
+
     async fn get_oplog(
         &self,
         agent_id: &OwnedAgentId,
         from: OplogIndex,
-    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        let range = OplogRange::new(Some(from), None)?;
+        self.read_oplog(agent_id, range, None).await
+    }
 
     /// Reads the oplog like [`TestDsl::get_oplog`], and asks for the verified claims of the users
     /// among the callers.
@@ -571,7 +585,10 @@ pub trait TestDsl {
         &self,
         agent_id: &OwnedAgentId,
         query: &str,
-    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+        self.read_oplog(agent_id, OplogRange::ALL, Some(query))
+            .await
+    }
 
     async fn check_oplog_is_queryable(&self, agent_id: &OwnedAgentId) -> crate::Result<()> {
         let entries = self.get_oplog(agent_id, OplogIndex::INITIAL).await?;

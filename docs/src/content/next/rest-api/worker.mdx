@@ -286,11 +286,17 @@ Each recorded invocation shows its caller: the principal that started the chain,
 principal that made the call, and the tokens presented at the entry point. With
 `include=claims`, the users among the callers also show their verified claims.
 
+Reads the oplog entries from `from` to `to`, both included. Without `from`, the read starts
+at the first entry; without `to`, it goes to the end of the oplog. A `to` after the end of
+the oplog ends the read at the end of the oplog. The endpoint refuses a `to` before
+`from`. With `query`, the page holds only the entries in the range that match the query.
+
 **Query Parameters**
 
 Name|Type|Required|Description
 ---|---|---|---
 from|integer|No|-
+to|integer|No|-
 count|integer|Yes|-
 cursor|#/components/schemas/OplogCursor|No|-
 query|string|No|-

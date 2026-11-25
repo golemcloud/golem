@@ -3416,6 +3416,77 @@ pub async fn agent_oplog_length(
         .await?)
 }
 
+/// How many oplog entries the blob archive `level` holds for the durable agent, read without going
+/// through any executor, from the blob storage and the indexed storage of executors started with
+/// the SQLite storage config.
+pub async fn blob_archived_oplog_length(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+    level: usize,
+) -> anyhow::Result<u64> {
+    use golem_worker_executor::services::oplog::{BlobOplogArchiveService, OplogArchiveService};
+
+    let blob_storage = FileSystemBlobStorage::new(&deps.data_dir.path().join("blobs"))
+        .await
+        .map_err(|err| anyhow!(err))?;
+    let service = BlobOplogArchiveService::new(
+        Arc::new(blob_storage),
+        Arc::new(sqlite_indexed_storage(deps, context).await?),
+        level,
+        RetryConfig::default(),
+    );
+    let archive = service
+        .open(owned_agent_id, AgentMode::Durable, None)
+        .await
+        .map_err(|err| anyhow!(err))?;
+    archive.length().await.map_err(|err| anyhow!(err))
+}
+
+/// Calls `check` every 200 ms until it gives `true`. After `timeout`, the wait fails with an
+/// error that names `what`.
+pub async fn wait_until<F, Fut>(
+    timeout: Duration,
+    what: impl std::fmt::Display,
+    check: F,
+) -> anyhow::Result<()>
+where
+    F: Fn() -> Fut,
+    Fut: std::future::Future<Output = anyhow::Result<bool>>,
+{
+    use futures::{StreamExt, TryStreamExt};
+    let check = &check;
+    let done = futures::stream::iter(std::iter::repeat(()))
+        .then(move |()| async move {
+            let done = check().await?;
+            if !done {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+            }
+            anyhow::Ok(done)
+        })
+        .try_skip_while(|done| futures::future::ok(!done));
+    futures::pin_mut!(done);
+    tokio::time::timeout(timeout, done.try_next())
+        .await
+        .map_err(|_| anyhow!("timed out waiting until {what}"))?
+        .map(|_| ())
+}
+
+/// Waits until the primary oplog of the agent is empty, so its whole history, `Create` included,
+/// is in the archive.
+pub async fn wait_until_archived(
+    deps: &WorkerExecutorTestDependencies,
+    context: &TestContext,
+    owned_agent_id: &OwnedAgentId,
+) -> anyhow::Result<()> {
+    wait_until(
+        Duration::from_secs(60),
+        format!("the oplog of {owned_agent_id} is archived"),
+        || async { Ok(agent_oplog_length(deps, context, owned_agent_id).await? == 0) },
+    )
+    .await
+}
+
 fn apply_sqlite_storage_config(
     config: &mut GolemConfig,
     deps: &WorkerExecutorTestDependencies,

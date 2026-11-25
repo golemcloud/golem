@@ -394,7 +394,7 @@ For full lists see each provider's docs, e.g.:
 // ── agent oplog --query ──────────────────────────────────────────────────────
 
 pub const OPLOG_QUERY_SHORT: &str = "Lucene-style query against oplog entries (case-insensitive terms, AND/OR/NOT, phrases, regex). \
-     Mutually exclusive with --from. See --help for matchable terms.";
+     Combines with --from and --to. See --help for matchable terms.";
 
 pub const OPLOG_QUERY_LONG: &str = "Lucene-style query against the agent's oplog.
 
@@ -479,5 +479,5 @@ Concepts:
 
   Non-interactive use (for agents and CI)
     Pass `-Y`/`--yes` to auto-confirm destructive prompts and
-    `-F json`/`--format json` (or `pretty-json`, `yaml`, `pretty-yaml`, `toon`)
+    `-F json`/`--format json` (or `jsonl`, `pretty-json`, `yaml`, `pretty-yaml`, `toon`)
     to get machine-readable output. Both are global flags.";

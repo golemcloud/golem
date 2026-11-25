@@ -64,7 +64,7 @@ struct Agents {
 
 impl Agents {
     async fn new(
-        executor: &(impl TestDsl + Sync),
+        executor: &impl TestDsl,
         component: ComponentDto,
         context: &TestContext,
         case: &str,
@@ -88,11 +88,7 @@ impl Agents {
     }
 
     /// Completes `promise`, which an agent of the component created.
-    async fn complete(
-        &self,
-        executor: &(impl TestDsl + Sync),
-        promise: &PromiseId,
-    ) -> anyhow::Result<()> {
+    async fn complete(&self, executor: &impl TestDsl, promise: &PromiseId) -> anyhow::Result<()> {
         executor
             .complete_promise(&self.component.environment_id, promise, vec![1])
             .await
@@ -100,7 +96,7 @@ impl Agents {
 
     async fn create_release(
         &self,
-        executor: &(impl TestDsl + Sync),
+        executor: &impl TestDsl,
         agent: &ParsedAgentKey,
     ) -> anyhow::Result<PromiseId> {
         executor
@@ -114,7 +110,7 @@ impl Agents {
     /// background work.
     async fn add_after_release(
         &self,
-        executor: &(impl TestDsl + Sync),
+        executor: &impl TestDsl,
         key: &IdempotencyKey,
         release: &PromiseId,
         tally_release: Option<PromiseId>,
@@ -149,7 +145,7 @@ impl Agents {
     /// [`RESULT_WAIT`].
     async fn add_after_http(
         &self,
-        executor: &(impl TestDsl + Sync),
+        executor: &impl TestDsl,
         key: &IdempotencyKey,
         release: &PromiseId,
         url: &str,
@@ -175,7 +171,7 @@ impl Agents {
     }
 
     /// Waits until an invocation is queued on the worker.
-    async fn await_queued(&self, executor: &(impl TestDsl + Sync)) -> anyhow::Result<()> {
+    async fn await_queued(&self, executor: &impl TestDsl) -> anyhow::Result<()> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
         while executor
             .get_worker_metadata(&self.worker_id)
@@ -194,7 +190,7 @@ impl Agents {
     /// Checks that `method` ran once and keeps its recorded result: nothing fails or cancels it.
     async fn assert_result_kept(
         &self,
-        executor: &(impl TestDsl + Sync),
+        executor: &impl TestDsl,
         method: &str,
     ) -> anyhow::Result<()> {
         let oplog = executor
@@ -228,7 +224,7 @@ impl Agents {
     /// Invokes `add_after_timer` and returns its result within [`RESULT_WAIT`].
     async fn add_after_timer(
         &self,
-        executor: &(impl TestDsl + Sync),
+        executor: &impl TestDsl,
         timer: Duration,
         amount: u64,
     ) -> anyhow::Result<String> {
@@ -256,7 +252,7 @@ impl Agents {
     /// returns the worker's oplog.
     async fn await_settled(
         &self,
-        executor: &(impl TestDsl + Sync),
+        executor: &impl TestDsl,
         method: &str,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
         let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
@@ -280,7 +276,7 @@ impl Agents {
     /// Invokes `trap_after_release` with `key` and returns its result within [`RESULT_WAIT`].
     async fn trap_after_release(
         &self,
-        executor: &(impl TestDsl + Sync),
+        executor: &impl TestDsl,
         key: &IdempotencyKey,
         release: &PromiseId,
     ) -> anyhow::Result<AgentResult> {
@@ -305,14 +301,14 @@ impl Agents {
 
     /// The number of completed background runs. The worker admits this invocation only after
     /// the background work of the earlier invocations ended.
-    async fn completions(&self, executor: &(impl TestDsl + Sync)) -> anyhow::Result<u64> {
+    async fn completions(&self, executor: &impl TestDsl) -> anyhow::Result<u64> {
         executor
             .invoke_and_await_agent(&self.component, &self.worker, "completions", data_value!())
             .await?
             .into_typed::<u64>()
     }
 
-    async fn total(&self, executor: &(impl TestDsl + Sync)) -> anyhow::Result<u64> {
+    async fn total(&self, executor: &impl TestDsl) -> anyhow::Result<u64> {
         executor
             .invoke_and_await_agent(&self.component, &self.tally, "total", data_value!())
             .await?
@@ -324,7 +320,7 @@ impl Agents {
     /// agents settled once, after its result.
     async fn assert_executed_once(
         &self,
-        executor: &(impl TestDsl + Sync),
+        executor: &impl TestDsl,
         method: &str,
     ) -> anyhow::Result<()> {
         let oplog = executor
@@ -361,7 +357,7 @@ impl Agents {
     /// ends with that result: the background work waits, and its first call is not committed.
     async fn assert_nothing_committed_after_result(
         &self,
-        executor: &(impl TestDsl + Sync),
+        executor: &impl TestDsl,
         method: &str,
     ) -> anyhow::Result<()> {
         let oplog = executor
@@ -385,7 +381,7 @@ impl Agents {
     /// starts after the result.
     async fn assert_unsettled_after_result(
         &self,
-        executor: &(impl TestDsl + Sync),
+        executor: &impl TestDsl,
         method: &str,
         open_call: &str,
         open_after_result: bool,
@@ -477,7 +473,7 @@ fn open_starts(oplog: &[PublicOplogEntryWithIndex], function: &str) -> Vec<Oplog
 /// checks that each one settled exactly once, after its own result. The last invocation can
 /// settle after its caller got the result, so the check waits for it.
 async fn assert_each_settled_once(
-    executor: &(impl TestDsl + Sync),
+    executor: &impl TestDsl,
     agent_id: &OwnedAgentId,
 ) -> anyhow::Result<()> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
@@ -539,7 +535,7 @@ fn method_starts(
 
 /// Waits until `agent_id`'s oplog records a started `method` invocation.
 async fn await_method_start(
-    executor: &(impl TestDsl + Sync),
+    executor: &impl TestDsl,
     agent_id: &OwnedAgentId,
     method: &str,
 ) -> anyhow::Result<()> {

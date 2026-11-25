@@ -1038,7 +1038,7 @@ async fn wait_for_invocations(
 }
 
 async fn wait_for_oplog_completions(
-    user: &(impl TestDsl + Send + Sync + ?Sized),
+    user: &(impl TestDsl + Send + ?Sized),
     worker_id: &golem_common::model::agent::OwnedAgentId,
     expected_count: usize,
     timeout: Duration,

@@ -32,7 +32,7 @@ use golem_common::model::caller::{PublicCaller, PublicPrincipal};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams;
-use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::{OplogIndex, OplogRange, PublicOplogEntry};
 use golem_common::model::{
     AgentFilter, AgentId, AgentStatus, FilterComparator, IdempotencyKey, IdempotencyScope,
     InvocationRequestKey, PromiseId, ScanCursor, StringFilterComparator,
@@ -1820,6 +1820,33 @@ async fn search_oplog_1(deps: &EnvBasedTestDependencies, _tracing: &Tracing) -> 
     // Includes the core initializer's monotonic clock call.
     assert_eq!(result2.len(), 3, "imported-function");
     assert_eq!(result3.len(), 2, "id:G1001 OR id:G1000");
+
+    // A query combines with a range: only the matches in the range are returned.
+    let (first, second) = (result1[0].oplog_index, result1[1].oplog_index);
+    let last = OplogIndex::from_u64(user.get_oplog_last_index(&agent_id).await?);
+    let range = |from: OplogIndex, to: OplogIndex| OplogRange::new(Some(from), Some(to)).unwrap();
+    let from_after_the_first_match = user
+        .read_oplog(&agent_id, range(first.next(), last), Some("G1002"))
+        .await?;
+    assert_eq!(from_after_the_first_match, vec![result1[1].clone()]);
+    let to_before_the_second_match = user
+        .read_oplog(
+            &agent_id,
+            range(first, OplogIndex::from_u64(second.as_u64() - 1)),
+            Some("G1002"),
+        )
+        .await?;
+    assert_eq!(to_before_the_second_match, vec![result1[0].clone()]);
+    let between_the_matches = user
+        .read_oplog(&agent_id, range(first, second), None)
+        .await?;
+    assert_eq!(
+        between_the_matches
+            .iter()
+            .map(|entry| entry.oplog_index.as_u64())
+            .collect::<Vec<_>>(),
+        (first.as_u64()..=second.as_u64()).collect::<Vec<_>>()
+    );
 
     Ok(())
 }

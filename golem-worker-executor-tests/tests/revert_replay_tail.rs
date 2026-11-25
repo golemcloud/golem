@@ -358,7 +358,7 @@ async fn revert_resolution_errors_survive_replay_tail_and_reconstruction(
 /// The oplog of `agent_id` once every invocation with a recorded result settled. An invocation
 /// can settle after its caller got the result.
 pub(crate) async fn settled_oplog(
-    executor: &(impl TestDsl + Sync),
+    executor: &impl TestDsl,
     agent_id: &golem_common::model::OwnedAgentId,
 ) -> anyhow::Result<Vec<golem_common::model::oplog::PublicOplogEntryWithIndex>> {
     tokio::time::timeout(Duration::from_secs(30), async {

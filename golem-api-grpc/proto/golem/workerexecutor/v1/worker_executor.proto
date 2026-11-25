@@ -383,7 +383,8 @@ enum ClaimVisibility {
 
 message GetOplogRequest {
   golem.worker.AgentId agent_id = 1;
-  uint64 from_oplog_index = 3;
+  // Without a value, the read starts at the first entry that the oplog holds.
+  optional uint64 from_oplog_index = 3;
   optional golem.worker.OplogCursor cursor = 4;
   uint64 count = 5;
   golem.common.EnvironmentId environment_id = 6;
@@ -445,6 +446,11 @@ message SearchOplogRequest {
   golem.auth.AuthCtx auth_ctx = 6;
   // Whether the callers in the entries hold the users' verified claims.
   ClaimVisibility claims = 7;
+  // Without a value, the search starts at the first entry that the oplog holds.
+  optional uint64 from_oplog_index = 8;
+  // The last oplog index of the search, inclusive. Without a value, the search goes to the end
+  // of the oplog.
+  optional uint64 to_oplog_index = 9;
 }
 
 message SearchOplogResponse {

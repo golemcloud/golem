@@ -15,11 +15,15 @@
 use anyhow::anyhow;
 use axum::Router;
 use axum::routing::post;
+use futures::{StreamExt, TryStreamExt};
 use golem_client::api::RegistryServiceClient;
-use golem_common::model::{AgentStatus, PromiseId};
+use golem_common::model::oplog::{OplogIndex, OplogRange};
+use golem_common::model::{AgentStatus, OwnedAgentId, PromiseId};
 use golem_common::schema::FromSchema;
 use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
 use golem_common::{agent_key, data_value};
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, agent_path_segment};
 use golem_test_framework::config::{
     DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
 };
@@ -472,5 +476,143 @@ async fn complete_promise_in_deleted_environment_results_in_404(
         golem_client::Error::Item(golem_client::api::WorkerError::Error404(_))
     );
 
+    Ok(())
+}
+
+/// Waits until the blob layer of the archive holds a chunk of the durable agent that ends at
+/// `last`, so the archive moved the whole history of the agent to the blob layer. The spawned
+/// executors keep their blobs in the local blob storage below the temporary directory.
+async fn wait_until_archived_to_the_blob_layer(
+    agent_id: &OwnedAgentId,
+    last: u64,
+) -> anyhow::Result<()> {
+    let root = std::env::temp_dir().join("ittest-local-object-store/golem");
+    let namespace = BlobStorageNamespace::CompressedOplog {
+        environment_id: agent_id.environment_id,
+        type_tag: agent_id.agent_id.type_tag(),
+        agent_mode: golem_common::model::agent::AgentMode::Durable,
+        level: 0,
+    };
+    let segment = agent_path_segment(&agent_id.agent_id);
+    let archived = move || {
+        let (root, namespace, segment) = (root.clone(), namespace.clone(), segment.clone());
+        async move {
+            let Ok(storage) = FileSystemBlobStorage::attach_existing(&root) else {
+                return false;
+            };
+            storage
+                .list_blobs_below(
+                    "integration_test",
+                    "wait_until_archived",
+                    namespace,
+                    std::path::Path::new(&segment),
+                )
+                .await
+                .is_ok_and(|blobs| {
+                    blobs.iter().any(|blob| {
+                        blob.path
+                            .file_name()
+                            .and_then(|name| name.to_str())
+                            .and_then(|name| name.split('-').next())
+                            .and_then(|index| index.parse::<u64>().ok())
+                            == Some(last)
+                    })
+                })
+        }
+    };
+    let done = StreamExt::filter(
+        StreamExt::then(futures::stream::repeat(()), move |()| {
+            let archived = archived();
+            async move {
+                let done = archived.await;
+                if !done {
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
+                done
+            }
+        }),
+        |done| futures::future::ready(*done),
+    );
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        StreamExt::next(&mut Box::pin(done)),
+    )
+    .await
+    .map_err(|_| anyhow!("the oplog of {agent_id} did not move to the blob layer"))?;
+    Ok(())
+}
+
+/// Over REST, range reads and range searches of an agent whose whole oplog the archive moved to
+/// the blob layer give the same entries as the reads before the archive.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn oplog_range_reads_of_an_archived_agent(
+    #[dimension(db)] deps: &EnvBasedTestDependencies,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let component = user
+        .component(&env.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let repository = agent_key!("Repository", "archived-range");
+    let agent_id = user.start_agent(&component.id, repository.clone()).await?;
+    let (user, component, repository) = (&user, &component, &repository);
+    futures::stream::iter([
+        ("G1000", "Golem T-Shirt M"),
+        ("G1002", "Mud Golem"),
+        ("G1001", "Golem Cloud Subscription 1y"),
+        ("G1002", "Mud Golem"),
+    ])
+    .map(anyhow::Ok)
+    .try_for_each(|(id, name)| async move {
+        user.invoke_and_await_agent(component, repository, "add", data_value!(id, name))
+            .await
+            .map(|_| ())
+    })
+    .await?;
+
+    let full = user.read_oplog(&agent_id, OplogRange::ALL, None).await?;
+    let matches = user.search_oplog(&agent_id, "G1002").await?;
+    assert_eq!(matches.len(), 2, "G1002");
+    let last = user.get_oplog_last_index(&agent_id).await?;
+    // The read of the whole oplog holds every index from 1 to the last index, so the range reads
+    // below can take their entries from it by position.
+    assert_eq!(
+        full.iter()
+            .map(|entry| entry.oplog_index.as_u64())
+            .collect::<Vec<_>>(),
+        (1..=last).collect::<Vec<_>>()
+    );
+    wait_until_archived_to_the_blob_layer(&agent_id, last).await?;
+
+    let index = OplogIndex::from_u64;
+    let range = |from: u64, to: u64| OplogRange::new(Some(index(from)), Some(index(to))).unwrap();
+    let (first, second) = (
+        matches[0].oplog_index.as_u64(),
+        matches[1].oplog_index.as_u64(),
+    );
+    assert_eq!(
+        user.read_oplog(&agent_id, OplogRange::ALL, None).await?,
+        full
+    );
+    assert_eq!(
+        user.read_oplog(&agent_id, range(first + 1, last), Some("G1002"))
+            .await?,
+        vec![matches[1].clone()]
+    );
+    assert_eq!(
+        user.read_oplog(&agent_id, range(first, second - 1), Some("G1002"))
+            .await?,
+        vec![matches[0].clone()]
+    );
+    assert_eq!(
+        user.read_oplog(&agent_id, range(first, second), None)
+            .await?,
+        full[(first - 1) as usize..second as usize].to_vec()
+    );
     Ok(())
 }

@@ -361,6 +361,7 @@ impl Context {
             if enabled!(Level::ERROR) {
                 match format {
                     Format::Json
+                    | Format::Jsonl
                     | Format::PrettyJson
                     | Format::Yaml
                     | Format::PrettyYaml

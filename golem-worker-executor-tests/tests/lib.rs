@@ -66,6 +66,7 @@ pub mod oplog_archive_schedule;
 pub mod oplog_blob_archive;
 pub mod oplog_metrics;
 pub mod oplog_processor;
+pub mod oplog_range;
 pub mod oplog_sweep;
 pub mod oplog_unreadable;
 pub mod owner_tool_isolation;
@@ -157,6 +158,7 @@ tag_suite!(active_agents, group2);
 tag_suite!(transactions, group2);
 tag_suite!(observability, group2);
 tag_suite!(scan_budget, group2);
+tag_suite!(oplog_range, group2);
 tag_suite!(retry_policies, group2);
 tag_suite!(scope_cards, group2);
 
