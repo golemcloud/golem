@@ -190,8 +190,7 @@ object OplogApi {
     final case class Account(pair: PublicPrincipalRef, accountId: UUID, authentication: String) extends PublicPrincipal
     final case class Agent(
       pair: PublicPrincipalRef,
-      componentId: UUID,
-      agentId: String,
+      agentId: AgentId,
       agentType: String,
       environmentId: UUID
     ) extends PublicPrincipal
@@ -767,8 +766,7 @@ object OplogApi {
         val p = value[JsPublicAgentPrincipal]
         PublicPrincipal.Agent(
           pair = parsePublicPrincipalRef(p.pair),
-          componentId = JsUuid.toUuid(p.agentId.componentId.uuid),
-          agentId = p.agentId.agentId,
+          agentId = JsAgentId.toAgentId(p.agentId),
           agentType = p.agentType,
           environmentId = JsUuid.toUuid(p.environmentId.uuid)
         )

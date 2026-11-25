@@ -2103,7 +2103,7 @@ impl Target {
         CreateIntent::Invocation {
             owner: self.owner.clone(),
             idempotency_key: None,
-            invocation: Some(increment_invocation()),
+            invocation: Some(Box::new(increment_invocation())),
         }
     }
 
@@ -2194,7 +2194,7 @@ async fn rejected_fresh_initializer_does_not_reject_its_valid_follower(
                     CreateIntent::Invocation {
                         owner: id.owner.clone(),
                         idempotency_key: None,
-                        invocation: Some(invocation),
+                        invocation: Some(Box::new(invocation)),
                     },
                 )
                 .await
