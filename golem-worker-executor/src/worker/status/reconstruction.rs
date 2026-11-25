@@ -241,18 +241,31 @@ where
         _ => horizon == baseline.oplog_idx,
     };
     if contiguous {
-        // Live appends keep the decoded lookup payloads; only a payload without one downloads.
+        // Live appends keep the decoded payloads; only a payload without one downloads.
         let deleted = deleted_regions(baseline.deleted_regions.clone(), &entries);
-        let status = match hydrate_lookup_payloads(
+        let hydrated = match hydrate_stream_session_payloads(
             this,
             owned_agent_id,
             agent_mode,
-            &baseline,
             &deleted,
             &mut entries,
         )
         .await
         {
+            Ok(()) => {
+                hydrate_lookup_payloads(
+                    this,
+                    owned_agent_id,
+                    agent_mode,
+                    &baseline,
+                    &deleted,
+                    &mut entries,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        };
+        let status = match hydrated {
             Ok(()) => {
                 let reader =
                     StatusOplogReader::new(this, owned_agent_id, agent_mode, Some(oplog), horizon);

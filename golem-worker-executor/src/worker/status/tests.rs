@@ -5423,6 +5423,149 @@ async fn committed_acceptance_retains_attachment_authority_before_and_after_prep
     }
 }
 
+/// A live append keeps a stream session record in its cached form (`SerializedInline` or
+/// `External` with the decoded value), not `Inline`. The fold of the commit receipt reads these
+/// records as a fold of the stored entries reads them: the consumer cancel intent is pending,
+/// and the `Attached` record validates its `PendingAgentInvocation`.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_committed_fold_reads_cached_stream_session_records_as_a_fold_of_the_stored_entries() {
+    use crate::services::oplog::{CommitLevel, OplogOps, gated_ephemeral_fixture};
+    use futures::{StreamExt, TryStreamExt};
+    use golem_common::model::durable_stream::{
+        LocalStreamId, SessionStreamRole, StreamCancellationRequest,
+        StreamConsumerCancelIntentRecord, StreamEndpointSide, StreamError, StreamRecordReference,
+        StreamRegistrationInvocation, StreamTerminal, StreamTerminalAuthor,
+    };
+
+    let test_case = TestCase::builder(0)
+        .agent_mode(AgentMode::Ephemeral)
+        .build();
+    let fixture = gated_ephemeral_fixture(100).await;
+    let key = StreamInvocationId {
+        callee_environment_id: test_case.owned_agent_id.environment_id,
+        callee: test_case.owned_agent_id.agent_id(),
+        callee_fingerprint: AgentFingerprint::new(),
+        idempotency_key: InvocationId(Uuid::new_v4()),
+    };
+    let prepared = crate::services::worker_fork::lineage::tests::prepared(&key);
+    let pending_invocation_index = OplogIndex::from_u64(2);
+    let attached = StreamSessionRecord::Attached(StreamSessionAttachedRecord {
+        format_version: 1,
+        session_key: key.idempotency_key,
+        attachment_id: prepared.attempt.attachment_id,
+        attempt_id: prepared.attempt.attempt_id,
+        epoch: 7,
+        pending_invocation_oplog_index: pending_invocation_index,
+        acceptance: prepared.acceptance(),
+    });
+    let intent = StreamConsumerCancelIntentRecord {
+        format_version: 1,
+        session_key: StreamRegistrationInvocation::Remote(key.clone()),
+        consumer_invocation: InvocationId(Uuid::from_u128(3)),
+        source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(29))),
+        epoch: 11,
+        cancellation: StreamCancellationRequest {
+            direction: SessionStreamRole::Output,
+            side: StreamEndpointSide::Consumer,
+            authored_by: StreamTerminalAuthor::Host,
+            terminal: StreamTerminal::Failed(StreamError::Interrupted("stream cancelled".into())),
+        },
+    };
+    fixture
+        .oplog
+        .add(test_case.entries[0].oplog_entry.clone())
+        .await
+        .unwrap();
+    fixture
+        .oplog
+        .add(pending_invocation_entry(&key.idempotency_key))
+        .await
+        .unwrap();
+    let records = [
+        attached,
+        StreamSessionRecord::ConsumerCancelIntent(intent.clone()),
+    ];
+    let payloads = futures::future::try_join_all(
+        records
+            .iter()
+            .map(|record| fixture.oplog.upload_payload(record)),
+    )
+    .await
+    .unwrap();
+    assert!(payloads.iter().all(|payload| matches!(
+        payload,
+        OplogPayload::SerializedInline {
+            cached: Some(_),
+            ..
+        } | OplogPayload::External {
+            cached: Some(_),
+            ..
+        }
+    )));
+    let appended: Vec<OplogIndex> = futures::stream::iter(payloads)
+        .then(|record| {
+            fixture.oplog.add(OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                record,
+                summary: None,
+            })
+        })
+        .try_collect()
+        .await
+        .unwrap();
+    assert_eq!(
+        appended,
+        vec![OplogIndex::from_u64(3), OplogIndex::from_u64(4)]
+    );
+    let receipt = fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
+    let horizon = *receipt.last_key_value().unwrap().0;
+    assert_eq!(horizon, OplogIndex::from_u64(4));
+
+    let (committed, gap, _) = fold_committed_status(
+        &test_case,
+        &test_case.owned_agent_id,
+        fixture.oplog.as_ref(),
+        AgentMode::Ephemeral,
+        CommitLevel::Deferred,
+        horizon,
+        AgentStatusRecord::default(),
+        receipt,
+    )
+    .await;
+    let committed = committed.unwrap().unwrap();
+    assert!(!gap);
+    let reader = StatusOplogReader::new(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Ephemeral,
+        Some(fixture.oplog.as_ref()),
+        horizon,
+    );
+    let stored = try_fold_status_from_reader(&test_case, &reader, AgentStatusRecord::default())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert_eq!(
+        stored.pending_durable_stream_cancellations,
+        HashMap::from([((intent.source.clone(), intent.epoch), vec![intent])])
+    );
+    assert_eq!(
+        stored
+            .durable_stream_sessions
+            .get(&key.idempotency_key)
+            .unwrap()
+            .validated_initial_pending_invocation,
+        Some(pending_invocation_index)
+    );
+    assert_eq!(committed, stored);
+    fixture.archive.release(1);
+    fixture.oplog.retire();
+    fixture.oplog.closed().await.unwrap();
+}
+
 #[test]
 #[test_r::timeout("30s")]
 async fn bounded_reconstruction_reads_handoff_without_flushing_newer_buffer() {
