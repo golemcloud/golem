@@ -561,7 +561,11 @@ async fn a_range_read_returns_the_entries_that_its_pages_omit_in_full(
         },
     )
     .await?;
-    let last = full.len() as u64;
+    let last = full
+        .last()
+        .map(|entry| entry.oplog_index.as_u64())
+        .expect("the oplog has entries");
+    assert_eq!(indices(&full), (1..=last).collect::<Vec<_>>());
     let (from, to) = (2, last - 1);
     let paged = read_pages_to(&executor, &agent_id, from, Some(to), 3).await?;
     assert_eq!(
@@ -577,6 +581,11 @@ async fn a_range_read_returns_the_entries_that_its_pages_omit_in_full(
     let read = executor
         .read_oplog(&agent_id, range(from, to), None)
         .await?;
-    assert_eq!(read, full[(from - 1) as usize..to as usize].to_vec());
+    let expected = full
+        .iter()
+        .filter(|entry| (from..=to).contains(&entry.oplog_index.as_u64()))
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(read, expected);
     Ok(())
 }

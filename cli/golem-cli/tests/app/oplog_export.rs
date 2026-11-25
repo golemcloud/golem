@@ -1396,8 +1396,23 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
 
     // The long probe has more entries than one page of the HTTP batch size (50).
     let plain = plain_dump(&ctx, LONG_PROBE).await;
-    let last = plain.len() as u64;
+    let index_of = |document: &Value| document["index"].as_u64().unwrap();
+    let last = plain
+        .last()
+        .map(index_of)
+        .expect("the long probe has entries");
+    assert_eq!(
+        plain.iter().map(index_of).collect::<Vec<_>>(),
+        (1..=last).collect::<Vec<_>>()
+    );
     assert!(last > 120, "the long probe has only {last} entries");
+    let entries_between = |from: u64, to: u64| {
+        plain
+            .iter()
+            .filter(|document| (from..=to).contains(&index_of(document)))
+            .cloned()
+            .collect::<Vec<_>>()
+    };
 
     // `--format json` reads the oplog page by page and prints one document per entry: with
     // pages of 2 entries, it prints the same documents.
@@ -1454,7 +1469,7 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .collect::<Vec<_>>();
     assert_eq!(lines.len() as u64, to);
-    assert_eq!(lines, plain[..to as usize].to_vec());
+    assert_eq!(lines, entries_between(1, to));
     // A new file gets the mode of a plain write, not the mode of a temporary file.
     #[cfg(unix)]
     {
@@ -1491,7 +1506,7 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         .lines()
         .map(|line| serde_json::from_str::<Value>(line).unwrap())
         .collect::<Vec<_>>();
-    assert_eq!(late, plain[9..20].to_vec());
+    assert_eq!(late, entries_between(10, 20));
 
     // A `--to` after the end of the oplog ends the export at the end of the oplog.
     let past_path = ctx.cwd_path_join("export/past.jsonl");
