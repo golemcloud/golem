@@ -66,8 +66,8 @@ its own timeout still bounds execution, including nested local children. Hard
 
 ## Releases and builds
 
-The source tool coordinates are `node@0.1.11`, `npm@10.9.9+golem.10`,
-`npx@10.9.9+golem.10`, and `tsc@5.9.2+golem.10`. These require new immutable
+The source tool coordinates are `node@0.1.12`, `npm@10.9.9+golem.11`,
+`npx@10.9.9+golem.11`, and `tsc@5.9.2+golem.11`. These require new immutable
 component releases. The artifact lock still pins the previous releases until
 authorized publication. Source builds do not publish them.
 
