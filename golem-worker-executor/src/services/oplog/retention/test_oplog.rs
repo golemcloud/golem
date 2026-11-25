@@ -18,18 +18,18 @@
 use super::{OplogRetention, RetentionOplogService, advance_oplog_retention};
 use crate::model::ExecutionStatus;
 use crate::services::oplog::{
-    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, Oplog,
-    OplogAddPairReceipt, OplogAddReceipt, OplogError, OplogFence, OplogLifecycleGuard,
-    OplogReadError, OplogService, OrderedOplogStart, PrimaryOplogService,
-    RawOplogPayloadDownloadError, ReservedRawStartBuilder, ScanPage, StagePublication,
-    UnreadableOplog, WorkerTasks,
+    CommitLevel, DurableStreamBatchBuilder, IndexedReservedStartBuilder, OpenOplogs, Oplog,
+    OplogAddPairReceipt, OplogAddReceipt, OplogCloseCompletion, OplogError, OplogFence,
+    OplogLifecycleGuard, OplogReadError, OplogService, OrderedOplogStart, PendingUpload,
+    PrimaryOplogService, RawDurableStreamSessionStatus, RawOplogPayloadDownloadError,
+    ReservedRawStartBuilder, ScanPage, StagePublication, UnreadableOplog, WorkerTasks,
 };
 use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::indexed::memory::InMemoryIndexedStorage;
 use crate::storage::keyvalue::KeyValueStorage;
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use async_trait::async_trait;
-use futures::{StreamExt, TryStreamExt};
+use futures::{FutureExt, StreamExt, TryStreamExt};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, OwnerKind};
 use golem_common::model::caller::Caller;
@@ -117,13 +117,13 @@ pub(crate) fn expired(start: u64) -> OplogReadError {
     }
 }
 
-fn last_known_status() -> read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord> {
+pub(crate) fn last_known_status() -> read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord> {
     read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(arc_swap::ArcSwap::from_pointee(
         AgentStatusRecord::default(),
     )))
 }
 
-fn execution_status() -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
+pub(crate) fn execution_status() -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
     read_only_lock::std::ReadOnlyLock::new(Arc::new(RwLock::new(ExecutionStatus::Suspended {
         agent_mode: AgentMode::Durable,
         timestamp: Timestamp::now_utc(),
@@ -165,7 +165,7 @@ impl RetainedOplog {
         &self.owned_agent_id.agent_id
     }
 
-    fn metadata(&self) -> AgentMetadata {
+    pub fn metadata(&self) -> AgentMetadata {
         AgentMetadata {
             component_id: self.component_id,
             agent_type_name: None,
@@ -326,8 +326,8 @@ impl RetainedOplog {
 
 /// An open oplog that records each call that reaches it, with its arguments, and answers from the
 /// arguments. A test of a wrapper sees from it whether a call reached the inner oplog with the
-/// same arguments, and whether the answer came back unchanged. The calls that no test makes are
-/// unreachable.
+/// same arguments, and whether the answer came back unchanged. Each call gives an answer that no
+/// other call gives. The calls that the retention layer checks itself are unreachable.
 #[derive(Default)]
 pub(crate) struct RecordingOplog {
     calls: std::sync::Mutex<Vec<String>>,
@@ -363,12 +363,20 @@ impl Oplog for RecordingOplog {
         self.retired.load(Ordering::SeqCst)
     }
 
+    fn closed(&self) -> OplogCloseCompletion {
+        self.record("closed".to_string());
+        futures::future::ready(Err("the recording oplog is closed".to_string()))
+            .boxed()
+            .shared()
+    }
+
     fn task_owner(&self) -> Option<&WorkerTasks> {
         Some(&self.tasks)
     }
 
-    fn enqueue_add(&self, _entry: OplogEntry) -> OplogAddReceipt {
-        unreachable!()
+    fn enqueue_add(&self, entry: OplogEntry) -> OplogAddReceipt {
+        self.record(format!("enqueue_add({entry:?})"));
+        futures::future::ready(Ok(idx(14))).boxed()
     }
 
     async fn add_durable_stream_batch(
@@ -380,8 +388,9 @@ impl Oplog for RecordingOplog {
         Ok(vec![(idx(21), jump(21))])
     }
 
-    async fn drop_prefix(&self, _last_dropped_id: OplogIndex) -> u64 {
-        unreachable!()
+    async fn drop_prefix(&self, last_dropped_id: OplogIndex) -> u64 {
+        self.record(format!("drop_prefix({last_dropped_id})"));
+        last_dropped_id.as_u64() * 2
     }
 
     async fn try_drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<u64, String> {
@@ -398,12 +407,27 @@ impl Oplog for RecordingOplog {
     }
 
     async fn current_oplog_index(&self) -> OplogIndex {
-        unreachable!()
+        self.record("current_oplog_index".to_string());
+        idx(13)
     }
 
     async fn try_current_oplog_index(&self) -> Result<OplogIndex, String> {
         self.record("try_current_oplog_index".to_string());
         Ok(idx(12))
+    }
+
+    async fn raw_durable_stream_session_status(
+        &self,
+        session_key: &golem_common::model::durable_stream::StreamSessionKey,
+    ) -> RawDurableStreamSessionStatus {
+        self.record(format!(
+            "raw_durable_stream_session_status({})",
+            session_key.idempotency_key
+        ));
+        RawDurableStreamSessionStatus {
+            watermark: idx(15),
+            status: Ok(None),
+        }
     }
 
     async fn last_added_non_hint_entry(&self) -> Option<OplogIndex> {
@@ -428,8 +452,9 @@ impl Oplog for RecordingOplog {
         unreachable!()
     }
 
-    async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
-        unreachable!()
+    async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
+        self.record(format!("upload_raw_payload({data:?})"));
+        Ok(RawOplogPayload::SerializedInline(data))
     }
 
     async fn download_raw_payload(
@@ -454,37 +479,61 @@ impl Oplog for RecordingOplog {
         Ok(md5_hash)
     }
 
+    /// Builds the `Start` from the request as an inline payload, at index 16.
     async fn add_start_with_reserved_raw_payload(
         &self,
-        _serialized_request: Vec<u8>,
-        _build_start: ReservedRawStartBuilder,
+        serialized_request: Vec<u8>,
+        build_start: ReservedRawStartBuilder,
     ) -> Result<OrderedOplogStart, OplogError> {
-        unreachable!()
+        self.record(format!(
+            "add_start_with_reserved_raw_payload({serialized_request:?})"
+        ));
+        Ok(OrderedOplogStart {
+            index: idx(16),
+            entry: build_start(RawOplogPayload::SerializedInline(serialized_request)).unwrap(),
+            pending_upload: PendingUpload::already_durable(),
+        })
     }
 
+    /// Builds the request for index 17, then the `Start` from it as an inline payload.
     async fn add_start_with_indexed_reserved_raw_payload(
         &self,
-        _build_request: IndexedReservedStartBuilder,
+        build_request: IndexedReservedStartBuilder,
     ) -> Result<OrderedOplogStart, OplogError> {
-        unreachable!()
+        let (request, build_start) = build_request(idx(17)).unwrap();
+        self.record(format!(
+            "add_start_with_indexed_reserved_raw_payload({request:?})"
+        ));
+        Ok(OrderedOplogStart {
+            index: idx(17),
+            entry: build_start(RawOplogPayload::SerializedInline(request)).unwrap(),
+            pending_upload: PendingUpload::already_durable(),
+        })
     }
 
+    /// Builds the second entry for index 19.
     fn enqueue_add_pair(
         &self,
-        _start: OplogEntry,
-        _make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
+        start: OplogEntry,
+        make_second: Box<dyn FnOnce(OplogIndex) -> OplogEntry + Send>,
     ) -> OplogAddPairReceipt {
-        unreachable!()
+        self.record(format!(
+            "enqueue_add_pair({start:?}, {:?})",
+            make_second(idx(19))
+        ));
+        futures::future::ready(Ok((idx(18), idx(19)))).boxed()
     }
 }
 
 /// An oplog service that records each call that reaches it, with its arguments, and answers
 /// from the arguments, as [`RecordingOplog`] does for an open oplog. Its oplog of the agent
-/// `owner` is at the shard epoch 5.
+/// `owner` is at the shard epoch 5. Each call that opens an oplog gives `oplog`.
 pub(crate) struct RecordingOplogService {
     calls: std::sync::Mutex<Vec<String>>,
     stream_session_index: std::sync::Mutex<Option<Arc<StreamSessionIndexService>>>,
     owner: OwnedAgentId,
+    open_oplogs: OpenOplogs,
+    pub oplog: Arc<RecordingOplog>,
 }
 
 impl RecordingOplogService {
@@ -493,7 +542,25 @@ impl RecordingOplogService {
             calls: Default::default(),
             stream_session_index: Default::default(),
             owner,
+            open_oplogs: OpenOplogs::new("recording oplogs"),
+            oplog: Default::default(),
         }
+    }
+
+    fn opened(
+        &self,
+        call: &str,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        entry: String,
+        initial_worker_metadata: AgentMetadata,
+        shard_epoch: Option<ShardEpoch>,
+    ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
+        self.record(format!(
+            "{call}({owned_agent_id}, {agent_mode:?}, {entry}, {}, {shard_epoch:?})",
+            initial_worker_metadata.agent_id
+        ));
+        Ok(self.oplog.clone())
     }
 
     fn record(&self, call: String) {
@@ -514,8 +581,9 @@ impl Debug for RecordingOplogService {
 
 #[async_trait]
 impl OplogService for RecordingOplogService {
-    async fn lock_lifecycle(&self, _agent_id: &AgentId) -> OplogLifecycleGuard {
-        unreachable!()
+    async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
+        self.record(format!("lock_lifecycle({agent_id})"));
+        self.open_oplogs.lock_lifecycle(agent_id).await
     }
 
     fn set_stream_session_index(&self, index: Arc<StreamSessionIndexService>) {
@@ -525,6 +593,20 @@ impl OplogService for RecordingOplogService {
 
     fn stream_session_index(&self) -> Option<Arc<StreamSessionIndexService>> {
         self.stream_session_index.lock().unwrap().clone()
+    }
+
+    async fn create_staged(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        stage_id: uuid::Uuid,
+        initial_worker_metadata: AgentMetadata,
+    ) -> Result<Arc<dyn Oplog>, String> {
+        self.record(format!(
+            "create_staged({owned_agent_id}, {agent_mode:?}, {stage_id}, {})",
+            initial_worker_metadata.agent_id
+        ));
+        Ok(self.oplog.clone())
     }
 
     async fn staged_exists(
@@ -567,52 +649,77 @@ impl OplogService for RecordingOplogService {
 
     async fn create(
         &self,
-        _lifecycle: &mut OplogLifecycleGuard,
-        _owned_agent_id: &OwnedAgentId,
-        _agent_mode: AgentMode,
-        _initial_entry: OplogEntry,
-        _initial_worker_metadata: AgentMetadata,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        initial_entry: OplogEntry,
+        initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
-        _shard_epoch: Option<ShardEpoch>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
-        unreachable!()
+        lifecycle.assert_agent(&owned_agent_id.agent_id);
+        self.opened(
+            "create",
+            owned_agent_id,
+            agent_mode,
+            format!("{initial_entry:?}"),
+            initial_worker_metadata,
+            shard_epoch,
+        )
     }
 
     async fn create_fresh(
         &self,
-        _lifecycle: &mut OplogLifecycleGuard,
-        _owned_agent_id: &OwnedAgentId,
-        _agent_mode: AgentMode,
-        _initial_entry: OplogEntry,
-        _initial_worker_metadata: AgentMetadata,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        initial_entry: OplogEntry,
+        initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
-        _shard_epoch: Option<ShardEpoch>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
-        unreachable!()
+        lifecycle.assert_agent(&owned_agent_id.agent_id);
+        self.opened(
+            "create_fresh",
+            owned_agent_id,
+            agent_mode,
+            format!("{initial_entry:?}"),
+            initial_worker_metadata,
+            shard_epoch,
+        )
     }
 
     async fn open(
         &self,
-        _lifecycle: &mut OplogLifecycleGuard,
-        _owned_agent_id: &OwnedAgentId,
-        _agent_mode: AgentMode,
-        _last_oplog_index: Option<OplogIndex>,
-        _initial_worker_metadata: AgentMetadata,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        last_oplog_index: Option<OplogIndex>,
+        initial_worker_metadata: AgentMetadata,
         _last_known_status: read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord>,
         _execution_status: read_only_lock::std::ReadOnlyLock<ExecutionStatus>,
-        _shard_epoch: Option<ShardEpoch>,
+        shard_epoch: Option<ShardEpoch>,
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
-        unreachable!()
+        lifecycle.assert_agent(&owned_agent_id.agent_id);
+        self.opened(
+            "open",
+            owned_agent_id,
+            agent_mode,
+            format!("{last_oplog_index:?}"),
+            initial_worker_metadata,
+            shard_epoch,
+        )
     }
 
     async fn get_last_index(
         &self,
-        _owned_agent_id: &OwnedAgentId,
-        _agent_mode: AgentMode,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
     ) -> Result<OplogIndex, UnreadableOplog> {
-        unreachable!()
+        self.record(format!("get_last_index({owned_agent_id}, {agent_mode:?})"));
+        Ok(idx(14))
     }
 
     async fn try_get_last_index(
@@ -636,12 +743,16 @@ impl OplogService for RecordingOplogService {
 
     async fn delete(
         &self,
-        _lifecycle: &mut OplogLifecycleGuard,
-        _owned_agent_id: &OwnedAgentId,
-        _agent_mode: AgentMode,
-        _expected_epoch: Option<ShardEpoch>,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), OplogError> {
-        unreachable!()
+        lifecycle.assert_agent(&owned_agent_id.agent_id);
+        self.record(format!(
+            "delete({owned_agent_id}, {agent_mode:?}, {expected_epoch:?})"
+        ));
+        Ok(())
     }
 
     async fn assert_owning_epoch(
@@ -691,10 +802,11 @@ impl OplogService for RecordingOplogService {
 
     async fn exists(
         &self,
-        _owned_agent_id: &OwnedAgentId,
-        _agent_mode: AgentMode,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
     ) -> Result<bool, UnreadableOplog> {
-        unreachable!()
+        self.record(format!("exists({owned_agent_id}, {agent_mode:?})"));
+        Ok(agent_mode == AgentMode::Ephemeral)
     }
 
     async fn try_exists(
@@ -727,11 +839,14 @@ impl OplogService for RecordingOplogService {
 
     async fn upload_raw_payload(
         &self,
-        _owned_agent_id: &OwnedAgentId,
-        _agent_mode: AgentMode,
-        _data: Vec<u8>,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        data: Vec<u8>,
     ) -> Result<RawOplogPayload, String> {
-        unreachable!()
+        self.record(format!(
+            "upload_raw_payload({owned_agent_id}, {agent_mode:?}, {data:?})"
+        ));
+        Ok(RawOplogPayload::SerializedInline(data))
     }
 
     async fn download_raw_payload(

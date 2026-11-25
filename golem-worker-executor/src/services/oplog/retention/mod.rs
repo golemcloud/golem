@@ -24,11 +24,13 @@
 //!
 //! The rules here are pure functions over the retained start. A walk in chunks reads with
 //! [`OplogRetention::chunk`], a public page reads with [`OplogRetention::page`], and a walk with a
-//! fixed start reads with [`OplogRange::within`]. Three reads keep their own count: the refill of
+//! fixed start reads with [`OplogRange::within`]. Four reads keep their own count: the refill of
 //! the replay buffer (`raw_read_next_oplog_entry` in `durable_host/replay_state/cursor/io.rs`)
 //! reads one entry also when the read position is after the replay target, where
-//! [`OplogRange::within`] gives no range, and the two whole-history walks `max_issued_epoch` and
-//! the creation receipt of a fork export, below, count from their fixed start.
+//! [`OplogRange::within`] gives no range; the lookup of the component revision of a public read
+//! (`scan_component_revision` in `model/public_oplog/reading.rs`) charges each batch to its
+//! allowance; and the two whole-history walks `max_issued_epoch` and the creation receipt of a
+//! fork export, below, count from their fixed start.
 //! A read that reaches below the start fails with [`OplogReadError::Expired`], which names the
 //! start. A [`OplogReadError::Gap`] that ends below the start becomes the same error. A gap that
 //! ends at or after the start stays a read error, because entries that the oplog keeps are
@@ -37,7 +39,9 @@
 //! Some walks need the whole history, because a walk from the start gives a wrong result: the
 //! full status rebuild, the revert preflight, the epoch fence of a stream fork revert
 //! (`max_issued_epoch`) and the creation receipt of a fork export. They read from index 1 or from
-//! a fixed index, so the layer gives the expired error when the start is above 1.
+//! a fixed index, so the layer gives the expired error when such a walk needs an entry from index
+//! 2 to the index before the start. At a start of 2 no such entry exists: the walk reads the
+//! `Create` entry alone and then the retained entries, with no error.
 
 mod layer;
 #[cfg(test)]
@@ -95,12 +99,6 @@ impl OplogRange {
     /// because the index after it does not exist otherwise.
     pub fn end(self) -> OplogIndex {
         OplogIndex::from_u64(self.start.as_u64() + self.count)
-    }
-}
-
-impl Default for OplogRetention {
-    fn default() -> Self {
-        Self::FULL
     }
 }
 
@@ -420,7 +418,6 @@ mod tests {
         assert_eq!(at(5).advanced_to(idx(4)).start(), idx(5));
         assert_eq!(at(5).advanced_to(idx(5)).start(), idx(5));
         assert_eq!(at(5).advanced_to(idx(6)).start(), idx(6));
-        assert_eq!(OplogRetention::default(), OplogRetention::FULL);
         assert_eq!(OplogRetention::FULL.start(), OplogIndex::INITIAL);
     }
 
@@ -656,18 +653,16 @@ mod tests {
         assert_eq!(classify(at(4), corrupt.clone()), corrupt);
     }
 
+    /// A record that does not decode, and a record with a start of 0, are corrupt. A record with
+    /// a start of 1 is the full retention.
     #[test]
-    async fn a_record_with_a_start_of_0_is_corrupt() {
+    async fn a_record_that_does_not_decode_or_has_a_start_of_0_is_corrupt() {
         let storage = InMemoryKeyValueStorage::new();
         let owned_agent_id = OwnedAgentId::new(
             golem_common::model::environment::EnvironmentId::new(),
             &AgentId::from_parts(7, 3),
         );
-        let write = |start: u64| {
-            let encoded = serialize(&OplogRetention {
-                retained_start: idx(start),
-            })
-            .unwrap();
+        let write = |encoded: Vec<u8>| {
             let storage = &storage;
             let owned_agent_id = &owned_agent_id;
             async move {
@@ -684,19 +679,172 @@ mod tests {
                     .unwrap()
             }
         };
-        write(0).await;
-        let error = read_oplog_retention(&storage, &owned_agent_id, AgentMode::Durable)
-            .await
-            .unwrap_err();
-        assert!(
-            matches!(error.error, OplogReadError::Corruption { .. }),
-            "{error:?}"
-        );
-        write(1).await;
+        let encoded = |start: u64| {
+            serialize(&OplogRetention {
+                retained_start: idx(start),
+            })
+            .unwrap()
+        };
+        let corrupt = |encoded: Vec<u8>| async {
+            write(encoded).await;
+            let error = read_oplog_retention(&storage, &owned_agent_id, AgentMode::Durable)
+                .await
+                .unwrap_err();
+            assert!(
+                matches!(error.error, OplogReadError::Corruption { .. }),
+                "{error:?}"
+            );
+        };
+        // The version byte of the encoding without the data that follows it.
+        corrupt(encoded(1)[..1].to_vec()).await;
+        corrupt(encoded(0)).await;
+        write(encoded(1)).await;
         assert_eq!(
             read_oplog_retention(&storage, &owned_agent_id, AgentMode::Durable).await,
             Ok(OplogRetention::FULL)
         );
+    }
+
+    /// One race of two writers that advance the start to 3 and to 5. `order` gives the order of
+    /// the first record read (`false`) and the first compare-and-set (`true`) of each writer. Each
+    /// step waits until the storage call of the step before it is done. `lost` names the writer
+    /// whose first compare-and-set reaches the storage and then loses its answer. The race starts
+    /// from the stored start `initial`, or from an absent record.
+    async fn race(initial: Option<u64>, order: [(usize, bool); 4], lost: Option<usize>) {
+        const TARGETS: [u64; 2] = [3, 5];
+        let inner: Arc<dyn KeyValueStorage + Send + Sync> =
+            Arc::new(InMemoryKeyValueStorage::new());
+        let owned_agent_id = &OwnedAgentId::new(
+            golem_common::model::environment::EnvironmentId::new(),
+            &AgentId::from_parts(7, 3),
+        );
+        if let Some(initial) = initial {
+            advance_oplog_retention(
+                inner.as_ref(),
+                owned_agent_id,
+                AgentMode::Durable,
+                idx(initial),
+            )
+            .await
+            .unwrap();
+        }
+        let faults: [KeyValueStorageFaults; 2] = Default::default();
+        let storages = faults
+            .clone()
+            .map(|faults| FaultInjectingKeyValueStorage::new(inner.clone(), faults));
+        let reads = faults
+            .each_ref()
+            .map(|faults| faults.pause_next("read_retention"));
+        let writes: [_; 2] = std::array::from_fn(|writer| {
+            if lost == Some(writer) {
+                faults[writer].apply_before_failing();
+                faults[writer].gate_next(
+                    "advance_retention",
+                    KeyValueStorageError::other("the answer is lost"),
+                )
+            } else {
+                faults[writer].pause_next("advance_retention")
+            }
+        });
+        let done: [tokio::sync::Notify; 2] = Default::default();
+        let (reads, writes, done) = (&reads, &writes, &done);
+        let writer = |writer: usize| {
+            let storage = &storages[writer];
+            async move {
+                let result = advance_oplog_retention(
+                    storage,
+                    owned_agent_id,
+                    AgentMode::Durable,
+                    idx(TARGETS[writer]),
+                )
+                .await;
+                done[writer].notify_one();
+                result
+            }
+        };
+        // `parked` holds, for each writer, whether its first compare-and-set waits at its gate.
+        // A writer that read a start at or after its target writes nothing and is done.
+        let driver = futures::stream::iter(order).fold(
+            [false; 2],
+            |mut parked, (writer, write)| async move {
+                if write {
+                    if parked[writer] {
+                        writes[writer].release();
+                        done[writer].notified().await;
+                    }
+                } else {
+                    reads[writer].entered().await;
+                    reads[writer].release();
+                    parked[writer] = matches!(
+                        futures::future::select(
+                            std::pin::pin!(writes[writer].entered()),
+                            std::pin::pin!(done[writer].notified()),
+                        )
+                        .await,
+                        futures::future::Either::Left(_)
+                    );
+                }
+                parked
+            },
+        );
+        let (first, second, _) = futures::join!(writer(0), writer(1), driver);
+        let stored = read_oplog_retention(inner.as_ref(), owned_agent_id, AgentMode::Durable)
+            .await
+            .unwrap();
+        let case = format!("initial {initial:?}, order {order:?}, lost answer {lost:?}");
+        [&first, &second]
+            .into_iter()
+            .zip(TARGETS)
+            .enumerate()
+            .for_each(|(writer, (result, target))| match result {
+                Ok(given) => {
+                    assert!(given.start() >= idx(target), "{case}: {given:?}");
+                    assert!(stored.start() >= given.start(), "{case}: {stored:?}");
+                }
+                Err(error) => assert_eq!(lost, Some(writer), "{case}: {error:?}"),
+            });
+        assert!(
+            stored.start() >= idx(initial.unwrap_or(1)),
+            "{case}: {stored:?}"
+        );
+        if lost.is_none() {
+            assert_eq!(stored, at(5), "{case}");
+        }
+    }
+
+    /// Two writers advance the start at the same time, in each order of their record reads and
+    /// compare-and-set writes, from an absent record and from a stored start of 2. In each order
+    /// the first compare-and-set of either writer can also lose its answer after the storage
+    /// applied it. The stored start never moves back: it is at or after the start that each
+    /// writer gave, and each writer that gave a start gave one at or after its target. The space
+    /// is small, so the test runs every case.
+    #[test]
+    async fn two_writers_never_move_the_start_back_in_any_order() {
+        let orders = (0..4)
+            .flat_map(|read| (read + 1..4).map(move |write| (read, write)))
+            .map(|(read, write)| {
+                let other_read = (0..4)
+                    .find(|position| *position != read && *position != write)
+                    .unwrap();
+                std::array::from_fn(|position| match position {
+                    position if position == read => (0, false),
+                    position if position == write => (0, true),
+                    position if position == other_read => (1, false),
+                    _ => (1, true),
+                })
+            })
+            .collect::<Vec<[(usize, bool); 4]>>();
+        assert_eq!(orders.len(), 6);
+        let cases = orders.into_iter().flat_map(|order| {
+            [None, Some(2)].into_iter().flat_map(move |initial| {
+                [None, Some(0), Some(1)]
+                    .into_iter()
+                    .map(move |lost| (initial, order, lost))
+            })
+        });
+        futures::stream::iter(cases)
+            .for_each(|(initial, order, lost)| race(initial, order, lost))
+            .await;
     }
 
     /// The record holds a start of 2. A writer that read it before another writer moved the start
