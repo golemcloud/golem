@@ -18,7 +18,7 @@ use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep
 use golem_common::model::quota::{ResourceLimit, ResourceRateLimit, TimePeriod};
 use golem_common::model::{Pod, RoutingTable, ShardEpoch, ShardId};
 use golem_service_base::clients::shard_manager::{
-    ShardLease, ShardLeaseError, ShardManagerError, ShardRegistration,
+    ShardLease, ShardLeaseClient, ShardLeaseError, ShardManagerError, ShardRegistration,
 };
 use pretty_assertions::assert_eq;
 use pretty_assertions::assert_matches;
@@ -223,11 +223,7 @@ impl MockShardManager {
 
 #[async_trait]
 #[golem_async_trait::region_simple]
-impl ShardManager for MockShardManager {
-    async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
-        unimplemented!()
-    }
-
+impl ShardLeaseClient for MockShardManager {
     async fn register(
         &self,
         _endpoint: ExecutorEndpoint,
@@ -250,6 +246,14 @@ impl ShardManager for MockShardManager {
         _executor_id: Uuid,
         _shard_epochs: BTreeMap<ShardId, ShardEpoch>,
     ) -> Result<(), ShardLeaseError> {
+        unimplemented!()
+    }
+}
+
+#[async_trait]
+#[golem_async_trait::region_simple]
+impl ShardManager for MockShardManager {
+    async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
         unimplemented!()
     }
 

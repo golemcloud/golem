@@ -26,7 +26,7 @@ use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::model::RetryConfig;
 use golem_service_base::clients::shard_manager::{
-    GrpcShardManager, GrpcShardManagerConfig, ShardManager,
+    GrpcShardManager, GrpcShardManagerConfig, ShardLeaseClient, ShardManager,
 };
 use golem_service_base::clients::shard_manager_leader::{
     LeaderAddress, leader_of, refused_before_running,

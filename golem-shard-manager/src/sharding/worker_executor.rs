@@ -12,6 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod in_memory;
+
+pub use in_memory::InMemoryWorkerExecutorService;
+
+#[cfg(test)]
+mod contract_tests;
+
 use super::error::{HealthCheckError, ShardManagerError};
 use super::model::{
     ExecutorAddrs, ExecutorId, ShardAssignmentPush, ShardLeaseRevision, Unassignments,
@@ -42,9 +49,9 @@ use tracing::{info, warn};
 
 #[async_trait]
 pub trait WorkerExecutorService: Send + Sync {
-    /// Tells an executor the complete set of shards it holds. This is a full replace: the executor
-    /// drops every shard the payload does not name, which is what makes this one call enough for
-    /// the initial delivery, a rebalance and a repair alike.
+    /// Replaces the complete shard set and executor count at an accepted revision. Older
+    /// revisions and pushes from another manager leave the assignment unchanged and succeed.
+    /// A zero shard count or executor count returns a worker execution error before mutation.
     async fn assign_shards(
         &self,
         pod: &Pod,
@@ -53,9 +60,11 @@ pub trait WorkerExecutorService: Send + Sync {
 
     async fn health_check(&self, pod: &Pod) -> Result<(), HealthCheckError>;
 
-    /// Takes shards away from an executor. A delta, unlike `assign_shards`, and gated on
-    /// `revision` like one: it is only ever sent for shards the store has already moved away, at
-    /// the revision that move was stored under. `execute_rebalance` revokes before it assigns.
+    /// Removes the named shards and adopts the executor count at an accepted revision.
+    /// The revision identifies the stored move away from this executor. Older revisions and
+    /// pushes from another manager leave the assignment unchanged and succeed. A zero
+    /// executor count returns a worker execution error before mutation. Success for an accepted
+    /// revoke means that agents on the removed shards have been given up.
     async fn revoke_shards(
         &self,
         pod: &Pod,

@@ -22,6 +22,7 @@ use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor_test_utils::start_with_concurrent_agent_limit_and_overrides;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
+use std::num::NonZeroUsize;
 use std::sync::mpsc;
 use test_r::test;
 
@@ -620,7 +621,7 @@ impl ShardService for StartupAdmissionGate {
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         revision: ShardLeaseRevision,
-        executor_count: usize,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.inner
             .assign_shards(number_of_shards, shard_epochs, revision, executor_count)
@@ -631,7 +632,7 @@ impl ShardService for StartupAdmissionGate {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Option<Instant>,
         revision: ShardLeaseRevision,
-        executor_count: usize,
+        executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome {
         self.inner.register(
             number_of_shards,
@@ -653,7 +654,7 @@ impl ShardService for StartupAdmissionGate {
         &self,
         shard_ids: &HashSet<ShardId>,
         revision: ShardLeaseRevision,
-        executor_count: usize,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.inner
             .revoke_shards(shard_ids, revision, executor_count)
@@ -663,7 +664,7 @@ impl ShardService for StartupAdmissionGate {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Instant,
         revision: ShardLeaseRevision,
-        executor_count: usize,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.inner
             .update_lease(shard_epochs, expires_at, revision, executor_count)

@@ -1030,9 +1030,12 @@ impl From<crate::model::type_id::TypeIdKind>
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::sharding::{ShardAssignmentEvent, transition_shard_assignment};
-    use crate::model::{ShardAssignment, ShardEpoch, ShardId, ShardLeaseRevision};
+    use crate::model::sharding::{
+        ShardAssignmentEvent, ShardAssignmentState, transition_shard_assignment,
+    };
+    use crate::model::{ShardEpoch, ShardId, ShardLeaseRevision};
     use std::collections::HashMap;
+    use std::num::NonZeroUsize;
     use std::time::Instant;
     use test_r::test;
 
@@ -1175,8 +1178,15 @@ mod tests {
         assert_eq!(received, pushed);
 
         let manager = uuid::Uuid::new_v4();
+        let (state, _) = transition_shard_assignment(
+            ShardAssignmentState::default(),
+            ShardAssignmentEvent::InstallUnexpiring {
+                number_of_shards: 1024,
+                shard_epochs: &HashMap::new(),
+            },
+        );
         let (assignment, outcome) = transition_shard_assignment(
-            Some(ShardAssignment::unexpiring(1024, [])),
+            state,
             ShardAssignmentEvent::Assign {
                 number_of_shards: 1024,
                 shard_epochs: &received,
@@ -1184,11 +1194,11 @@ mod tests {
                     incarnation: manager,
                     number: 1,
                 },
-                executor_count: 3,
+                executor_count: NonZeroUsize::new(3).unwrap(),
             },
         );
         assert!(outcome.is_some());
-        let assignment = assignment.unwrap();
+        let assignment = assignment.as_ref().unwrap();
 
         assert_eq!(assignment.executor_count, 3);
         assert_eq!(assignment.epoch_of(&ShardId::new(0)), Some(ShardEpoch(1)));

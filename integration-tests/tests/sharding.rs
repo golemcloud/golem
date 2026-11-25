@@ -43,7 +43,7 @@ mod executor_count {
         executors: &[Arc<dyn WorkerExecutor>],
         expected: usize,
         deadline: tokio::time::Instant,
-    ) -> anyhow::Result<Box<[[u64; 3]]>> {
+    ) -> anyhow::Result<()> {
         let client = reqwest::Client::new();
         let last_scrape_error = std::sync::Mutex::new(None);
         let observed = IntervalStream::new(tokio::time::interval(Duration::from_millis(100)))
@@ -93,6 +93,9 @@ mod executor_count {
             .context("the observation stream ended")?
     }
 
+    /// Both earlier executors report two, then three within one lease from the third launch, with unchanged shard ownership.
+    /// This test does not distinguish a renewal from a push or a re-registration.
+    /// `a_third_executor_needs_no_push_to_the_two_existing_shard_owners` proves the no-push property at the manager level.
     #[test]
     #[timeout("600s")]
     async fn a_third_executor_refreshes_both_existing_counts_within_one_lease() {
@@ -128,8 +131,14 @@ mod executor_count {
             .load()
             .expect("the effective shard manager configuration must load")
             .shard_lease_duration;
-        let third_http_port = config.executor_base_http_port + 2;
-        let third_grpc_port = config.executor_base_grpc_port + 2;
+        let third_http_port = config
+            .executor_base_http_port
+            .checked_add(2)
+            .expect("the third executor's HTTP port exceeds 65535");
+        let third_grpc_port = config
+            .executor_base_grpc_port
+            .checked_add(2)
+            .expect("the third executor's gRPC port exceeds 65535");
         let deps = EnvBasedTestDependencies::new(config).await.unwrap();
         let executors = deps.worker_executor_cluster().to_vec().into_boxed_slice();
 
@@ -143,14 +152,14 @@ mod executor_count {
             .await
             .expect("both initial executors must own shards")
             .unwrap();
-        // Finish the count-two observation and its attempt baseline before the third starts.
-        let attempts_before = reports_count(
+        reports_count(
             &executors,
             2,
             tokio::time::Instant::now() + Duration::from_secs(60),
         )
         .await
-        .expect("both executors must first receive an assignment and report two");
+        .expect("both earlier executors must first report two");
+        let deadline = tokio::time::Instant::now() + lease_duration;
         let third = SpawnedWorkerExecutor::new(
             &executable,
             &working_directory,
@@ -169,23 +178,18 @@ mod executor_count {
             false,
         )
         .await;
-        let attempts_after = reports_count(
-            &executors,
-            3,
-            tokio::time::Instant::now() + lease_duration,
-        )
-        .await
-        .expect("both earlier executors must report three and finish the follow-up within one lease period");
-        assert_eq!(
-            attempts_after, attempts_before,
-            "only renewals may refresh the counts"
-        );
+        reports_count(&executors, 3, deadline)
+            .await
+            .expect("both earlier executors must report three within one lease period from starting the third executor");
         let after = deps.shard_manager().get_routing_table().await.unwrap();
-        assert_eq!(
-            before.shards_per_pod(),
-            after.shards_per_pod(),
-            "the join must not move any shard"
-        );
+        let [before, after] = [before, after].map(|table| {
+            let mut table: golem_api_grpc::proto::golem::shardmanager::RoutingTable = table.into();
+            table
+                .shard_assignments
+                .sort_unstable_by_key(|entry| entry.shard_id.as_ref().unwrap().value);
+            table
+        });
+        assert_eq!(before, after, "the join must not move any shard");
         third
             .kill_and_wait(tokio::time::Instant::now() + Duration::from_secs(30))
             .await
