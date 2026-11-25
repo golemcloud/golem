@@ -354,6 +354,7 @@ async fn mcp_serve_offers_one_tool_per_management_command() {
                 "omit_payloads",
                 "query",
                 "show_claims",
+                "to",
             ],
         ),
         (

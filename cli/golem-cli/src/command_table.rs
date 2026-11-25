@@ -302,8 +302,8 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         stdin_marker_args: &[],
         destructive: true,
     },
-    // `--html` writes a host file; the viewer flags serve or open it locally. The obfuscated
-    // export reads the whole oplog, and `--page` cannot be combined with `--obfuscate`.
+    // `--html` and `--output` write a host file; the viewer flags serve or open it locally. The
+    // obfuscated export reads the whole oplog, and `--page` cannot be combined with `--obfuscate`.
     CommandRow {
         path: &["agent", "oplog"],
         class: ManagementRead,
@@ -320,6 +320,7 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
             "keep_shape",
             "keep_error_text",
             "max_entry_bytes",
+            "output",
         ],
         cli_only_output_types: &[
             "agent.oplog-export-header",
