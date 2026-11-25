@@ -154,6 +154,17 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
             stderr: recover_stderr_logs(this, owned_agent_id, agent_mode, last_error_index).await,
             retry_from: first_retry_from,
         }),
+        None if !retention.retains(window_end)
+            && matches!(
+                latest_worker_status.status,
+                AgentStatus::Failed | AgentStatus::Retrying
+            ) =>
+        {
+            retention
+                .check_agent_from(&owned_agent_id.agent_id, OplogIndex::INITIAL)
+                .err()
+                .map(unreadable_last_error)
+        }
         None => None,
     }
 }
@@ -286,6 +297,7 @@ mod tests {
     use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
     use golem_common::model::invocation_context::TraceId;
     use golem_common::model::oplog::payload::OplogPayload;
+    use golem_common::model::retry_policy::RetryPolicyState;
     use golem_common::model::{
         InvocationRequestOperation, StoredAgentInvocationPayload, Timestamp,
     };
@@ -386,9 +398,10 @@ mod tests {
         }
     }
 
-    /// The last error walks back to the retained start. An error below the start is not found,
-    /// and the walk reads no entry below the start: a read below it reports the expired error
-    /// as the last error.
+    /// The last error walks back to the retained start and reads no entry below it. When a
+    /// failed agent has no error and no invocation boundary at or after the start, its error is
+    /// below the start, and the last error is the expired error with the start. When the start is
+    /// at index 1, the walk reads the whole oplog and finds the error.
     #[test]
     async fn the_last_error_walk_stops_at_the_retained_start() {
         let retained = Retained::new(vec![
@@ -426,7 +439,67 @@ mod tests {
             Some(AgentError::Unknown("below".to_string()))
         );
         retained.oplog.advance(3).await;
-        assert_eq!(last().await.map(|last| last.error), None);
+        let expired = last().await.expect("a failed agent has a last error");
+        assert!(
+            matches!(
+                &expired.error,
+                AgentError::InternalError(text)
+                    if text.ends_with("expired: it starts at index 3")
+            ),
+            "{:?}",
+            expired.error
+        );
+        assert_eq!(expired.retry_from, OplogIndex::NONE);
+        assert_eq!(expired.stderr, "");
+    }
+
+    /// A walk that ends at an invocation boundary at or after the start gives no last error, also
+    /// when the start is above 1: the error of the agent is not in the current invocation.
+    #[test]
+    async fn a_boundary_after_the_retained_start_gives_no_last_error() {
+        let retained = Retained::new(vec![jump(1), error(2, 1), jump(3), started(), jump(5)]).await;
+        retained.oplog.advance(3).await;
+        let failed = AgentStatusRecord {
+            status: AgentStatus::Failed,
+            ..Default::default()
+        };
+        assert_eq!(
+            last_error(
+                &retained,
+                &retained.oplog.owned_agent_id,
+                AgentMode::Durable,
+                &failed,
+            )
+            .await
+            .map(|last| last.error),
+            None
+        );
+    }
+
+    /// An agent that is not failed or retrying, but has a retry state, gives no expired error
+    /// when the walk reaches the start: it has no error to report.
+    #[test]
+    async fn a_running_agent_with_a_retry_state_gives_no_expired_error() {
+        let retained = Retained::new(vec![jump(1), error(2, 1), jump(3), jump(4)]).await;
+        retained.oplog.advance(3).await;
+        let running = AgentStatusRecord {
+            status: AgentStatus::Running,
+            current_retry_state: [(idx(2), RetryPolicyState::Counter(1))]
+                .into_iter()
+                .collect(),
+            ..Default::default()
+        };
+        assert_eq!(
+            last_error(
+                &retained,
+                &retained.oplog.owned_agent_id,
+                AgentMode::Durable,
+                &running,
+            )
+            .await
+            .map(|last| last.error),
+            None
+        );
     }
 
     /// The stderr walk collects the logs of the last invocation back to the retained start. The
