@@ -201,8 +201,8 @@ async fn read_pages_to(
     pages.try_concat().await
 }
 
-/// The read of the pages of a range: the first page, a later page from the cursor of the page
-/// before it, or the end of the read after a page without a cursor.
+/// The read of the pages of a range. It reads the first page, then each later page from the cursor
+/// of the page before it. It ends after a page without a cursor.
 enum PageRead {
     First,
     Next(OplogCursor),

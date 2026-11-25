@@ -480,9 +480,9 @@ async fn complete_promise_in_deleted_environment_results_in_404(
     Ok(())
 }
 
-/// The count of the entries that the primary oplog and the compressed layer of the durable agent
-/// hold in the indexed storage of the spawned executors. The count is `None` when the read fails,
-/// for example while an executor creates the storage.
+/// The count of the entries of the durable agent in the primary oplog and in the compressed layer.
+/// The function reads the count from the indexed storage of the spawned executors. The count is
+/// `None` when the read fails, for example while an executor creates the storage.
 async fn indexed_oplog_rows(rdb: &DbInfo, agent_id: &OwnedAgentId) -> Option<i64> {
     const ROWS: &str = "SELECT COUNT(*) FROM {table} \
          WHERE namespace IN ('durable-worker-oplog', 'durable-worker-c1-oplog') AND {key}";
@@ -523,11 +523,11 @@ async fn indexed_oplog_rows(rdb: &DbInfo, agent_id: &OwnedAgentId) -> Option<i64
     }
 }
 
-/// Waits until the archive moved the whole history of the durable agent to the blob layer. Then
-/// the blob layer holds a chunk of the agent that ends at `last`. The primary oplog and the
-/// compressed layer hold no entry of the agent, because the archive drops the entries of a layer
-/// only after it wrote them to the next layer. The spawned executors keep their blobs in the local
-/// blob storage below the temporary directory.
+/// Waits until the archive moved the whole history of the durable agent to the blob layer. Then the
+/// blob layer holds a chunk of the agent that ends at `last`. The primary oplog and the compressed
+/// layer hold no entry of the agent. The archive drops the entries of a layer only after it wrote
+/// them to the next layer. The spawned executors keep their blobs in the local blob storage below
+/// the temporary directory.
 async fn wait_until_archived_to_the_blob_layer(
     deps: &EnvBasedTestDependencies,
     agent_id: &OwnedAgentId,

@@ -6989,9 +6989,9 @@ async fn test_agent_oplog_served_viewer() {
 }
 
 /// `--show-claims` shows the verified claims of a signed-in user on every output of the oplog
-/// that is not obfuscated: the text output, the JSON output, the JSON Lines export, one page, the
-/// HTML export, the live viewer and the MCP `agent_oplog` tool. Each structured output gives the claims as a JSON
-/// object. Without the flag, no output shows claims.
+/// that is not obfuscated. These outputs are text, JSON, the JSON Lines export, one page, the HTML
+/// export, the live viewer and the MCP `agent_oplog` tool. Each structured output gives the claims
+/// as a JSON object. Without the flag, no output shows claims.
 #[test]
 #[timeout("20 minutes")]
 async fn test_agent_oplog_shows_claims_on_request_on_every_output() {
