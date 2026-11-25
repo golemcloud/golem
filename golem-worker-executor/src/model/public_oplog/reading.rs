@@ -20,6 +20,7 @@ use golem_common::model::oplog::{OplogCursor, OplogScan, OplogScanAllowance};
 use golem_service_base::error::worker_executor::StaleCursorReason;
 use std::collections::BTreeMap;
 use std::fmt::{Display, Formatter};
+use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
 
 /// Why a read of public oplog entries failed.
@@ -945,6 +946,21 @@ pub async fn guest_search_start(
             Ok((start, revision))
         }
     }
+}
+
+/// The entries that a guest search batch reads from `start`, the start that
+/// [`guest_search_start`] gives. The grant of the batch covers `page_size` indexes from
+/// `window_start`, the cursor of the search. A new search starts at the retained start, which can
+/// be inside the window or after it, so the batch reads only the indexes of the window at or after
+/// `start`. `None` when `start` is after the window: the batch reads no entry.
+pub fn guest_search_window(
+    window_start: OplogIndex,
+    page_size: NonZeroU64,
+    start: OplogIndex,
+) -> Option<OplogRange> {
+    let window_last =
+        OplogIndex::from_u64(window_start.as_u64().saturating_add(page_size.get() - 1));
+    OplogRange::within(start, window_last, page_size.get())
 }
 
 /// The cursor of an oplog page of `query` whose next unread entry is `next_oplog_index`. A page has

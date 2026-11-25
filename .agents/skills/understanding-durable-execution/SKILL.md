@@ -1394,7 +1394,11 @@ expired error when the start is above 1. A read below the start returns
 than the `Create` entry from index 1 is expired. This includes a page and a guest chunk, because a
 page has no fixed end. `range` and `chunk` do not refuse such a start: they move it to the retained
 start. A range page (a request with a `to`) is a page too, and without a `from` it starts at the
-retained start. The single entry read of the public oplog serves the `Create` entry. A `Gap` that ends below
+retained start. A new guest search starts at the retained start too; its batch reads only the part
+of the authorized window at or after that start (`guest_search_window`), and a start after the
+window moves the cursor with no read. The count-based revert walk
+(`cut_point::cut_before_last_invocations`) takes the retention and ends at the retained start. The
+single entry read of the public oplog serves the `Create` entry. A `Gap` that ends below
 the start becomes the same error, and a gap that ends at or after the start stays a read error.
 `length` counts the retained entries, and the last index does not change. The expired error becomes
 `WorkerExecutorError::OplogFailed` with the cause `OplogFailure::Expired`. It crosses gRPC as

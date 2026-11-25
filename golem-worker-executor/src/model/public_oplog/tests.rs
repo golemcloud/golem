@@ -4279,6 +4279,45 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
     assert_eq!(none.scan.charged_entries, charged_before);
 }
 
+/// The grant of a guest search batch covers `page_size` indexes from the cursor. A batch whose
+/// start the retained start moved reads only the indexes of the window at or after its start, and
+/// a start after the window reads nothing.
+#[test]
+fn a_guest_search_batch_reads_only_the_part_of_its_window_from_its_start() {
+    let page_size = std::num::NonZeroU64::new(100).unwrap();
+    let window = |window_start: u64, start: u64| {
+        guest_search_window(
+            OplogIndex::from_u64(window_start),
+            page_size,
+            OplogIndex::from_u64(start),
+        )
+        .map(|range| (range.start.as_u64(), range.count))
+    };
+    assert_eq!(window(1, 1), Some((1, 100)));
+    assert_eq!(window(1, 50), Some((50, 51)));
+    assert_eq!(window(1, 100), Some((100, 1)));
+    assert_eq!(window(1, 101), None);
+    assert_eq!(window(201, 300), Some((300, 1)));
+    assert_eq!(window(201, 301), None);
+    assert_eq!(
+        guest_search_window(
+            OplogIndex::from_u64(5),
+            std::num::NonZeroU64::MIN,
+            OplogIndex::from_u64(5)
+        )
+        .map(|range| (range.start.as_u64(), range.count)),
+        Some((5, 1))
+    );
+    assert_eq!(
+        guest_search_window(
+            OplogIndex::from_u64(5),
+            std::num::NonZeroU64::MIN,
+            OplogIndex::from_u64(6)
+        ),
+        None
+    );
+}
+
 #[test]
 fn a_range_read_never_gets_more_than_the_configured_allowance() {
     let configured = ScanBudget {
