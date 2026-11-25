@@ -118,12 +118,12 @@ struct MockShardManager {
     renew_gate: StdMutex<Option<Arc<tokio::sync::Notify>>>,
     /// The same for a deregistration.
     deregister_gate: StdMutex<Option<Arc<tokio::sync::Notify>>>,
-    /// Each registration's executor id and the previous epochs it carried.
+    /// Each registration's executor ID, in registration order.
     register_calls: StdMutex<Vec<Uuid>>,
     /// The endpoint each registration named, in the order of `register_calls`.
     register_endpoints: StdMutex<Vec<ExecutorEndpoint>>,
     renew_calls: StdMutex<Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)>>,
-    /// The fenced epochs each renewal reported, in the order of `renew_calls`.
+    /// The executor ID and claimed epochs at each deregistration, in deregistration order.
     deregister_calls: StdMutex<Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)>>,
     /// How many of the next registrations never answer.
     hanging_registrations: std::sync::atomic::AtomicUsize,
@@ -631,9 +631,9 @@ async fn a_slow_assignment_changed_hook_does_not_stall_the_renewal_loop() {
             .with_renew(move |_, _held| {
                 Ok(ShardLease {
                     executor_count: NonZeroUsize::MIN,
-                    // Always the widened set: the first grant is a real assignment change,
-                    // and every later one only echoes it back (it now matches what was
-                    // held), so only the first renewal ever owes an announcement.
+                    // Only the first grant changes the set. Later accepted grants can still
+                    // request recovery while the hook is blocked and recovery remains owed.
+                    // The single-flight scheduler coalesces those requests into one rerun.
                     shard_epochs: epoch_map([(0, 1), (1, 1)]),
                     expires_at: Instant::now() + ttl,
                     revision: revision_of(MANAGER, 1),
@@ -1327,9 +1327,9 @@ async fn a_re_registration_keeps_the_advertised_endpoint() {
 }
 
 /// A shard manager that came back on a wiped store no longer lists this executor, so the
-/// renewal is refused and the re-registration carries the epochs for it to repair. Its answer
-/// is read off a store that counts from the beginning again, far below the last revision this
-/// executor applied, and must be adopted all the same.
+/// renewal is refused. Re-registration sends the endpoint, name and fresh executor ID,
+/// without epochs. Its answer supplies the replacement set at a revision far below the
+/// last one this executor applied, and must be adopted all the same.
 #[test]
 async fn a_re_registration_with_a_manager_that_lost_its_history_adopts_its_low_revision() {
     let expiry = Instant::now() + Duration::from_secs(120);

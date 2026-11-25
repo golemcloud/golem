@@ -187,7 +187,8 @@ pub enum ShardDeliveryOutcome {
     /// whether agents on dropped shards are swept and agents on gained shards
     /// recovered.
     Applied { set_changed: bool },
-    /// Older than a delivery already applied, so ignored whole.
+    /// Older than a delivery already applied. The shard set, count and revision
+    /// stay unchanged. A registration or renewal still adopts its lease expiry.
     Stale {
         delivered: ShardLeaseRevision,
         applied: ShardLeaseRevision,
@@ -212,10 +213,10 @@ pub struct ShardAssignment {
     /// complete set; anything absent from it has been dropped.
     pub shard_epochs: HashMap<ShardId, ShardEpoch>,
     /// When the shard lease lapses, on this executor's own monotonic clock.
-    /// Only a grant moves it - the answer to this executor's own registration
-    /// or renewal - and the grant is anchored where that request was sent, so
-    /// the shard manager's copy of the lease is never earlier than this one.
-    /// A push carries no lease. `None` means the lease never expires.
+    /// A registration or renewal grant anchors it where the request was sent,
+    /// so the shard manager's copy of the lease is never earlier than this one.
+    /// A push leaves it unchanged. Clearing the assignment lapses it.
+    /// `None` means the lease never expires.
     pub expires_at: Option<Instant>,
     /// The revision of the delivery this set came from, and the shard manager
     /// process this executor follows. A delivery older than this, or pushed
