@@ -176,9 +176,8 @@ pub trait KeyValueStorage: Debug {
     /// `None` requires absence, not an empty value. A mismatch changes nothing.
     /// Redis supports this operation only for namespaces stored as a single hash.
     ///
-    /// When accessed through the retry decorator, `false` reports that the final attempt did not
-    /// match. An earlier attempt may already have applied before its response was lost, so callers
-    /// must not interpret `false` as proof that no mutation occurred.
+    /// Through the retry decorator, `false` reports that the final attempt did not match. It can
+    /// come after an earlier attempt that applied the change and lost its response.
     async fn compare_and_set_many(
         &self,
         svc_name: &'static str,

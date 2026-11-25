@@ -1518,9 +1518,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         }
 
         // Compared without the indexes, which move on nearly every fold, to tell a fold that changed
-        // other fields. An empty fold still applies the start-status filter of the plugin fold,
-        // as the old `finalize` did on a fold with no entries, so do not bypass an empty fold on
-        // an empty receipt.
+        // other fields. An empty fold still applies the start-status filter of the plugin fold, so
+        // do not bypass an empty fold on an empty receipt.
         let mut updated_status = updated_status;
         let updated_index = updated_status.oplog_idx;
         let updated_state_index = updated_status.state_oplog_idx;
