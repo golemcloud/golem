@@ -448,8 +448,8 @@ fn oplog_returned_page_resource(
     count: u64,
     first_index_in_chunk: OplogIndex,
 ) -> Option<OplogResourcePattern> {
-    match (cursor, range.to_indices()) {
-        (None, (None, _)) => {
+    match cursor {
+        None if !range.has_start() => {
             let oplog_first = first_index_in_chunk.max(OplogIndex::INITIAL);
             range
                 .page_in(oplog_first, count)

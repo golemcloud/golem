@@ -1638,7 +1638,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let agent_id = *agent_id;
-        let range_read = range.to_indices().1.is_some();
+        let range_read = range.has_end();
         // A range read is sent at most once: an attempt that failed after it was sent can have
         // spent scan allowance that no response reports, and a replay would spend it again.
         let target = AgentCall {

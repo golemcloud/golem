@@ -158,13 +158,14 @@ fn check_oplog_export_order(
     index: OplogIndex,
 ) -> anyhow::Result<()> {
     match (selection, previous) {
-        (OplogExportSelection::EveryEntry(range), None) => match range.to_indices() {
-            (Some(start), _) if index.as_u64() != start => anyhow::bail!(
+        (OplogExportSelection::EveryEntry(range), None) if !range.can_start_at(index) => {
+            anyhow::bail!(
                 "the oplog read started at the entry at index {index}, not at the start of the \
-                 range at index {start}"
-            ),
-            _ => Ok(()),
-        },
+                 range at index {}",
+                range.first_index_in(index)
+            )
+        }
+        (OplogExportSelection::EveryEntry(_), None) => Ok(()),
         (OplogExportSelection::Matches, None) => Ok(()),
         (_, Some(previous)) if index <= previous => anyhow::bail!(
             "the oplog read returned the entry at index {index} after the entry at index {previous}"
