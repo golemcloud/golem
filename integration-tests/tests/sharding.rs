@@ -33,65 +33,10 @@ mod executor_count {
         DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestDependencies,
     };
     use integration_tests::sharding::observe_executor_count;
-    use std::sync::Arc;
     use std::time::Duration;
     use test_r::{test, timeout};
     use tokio_stream::wrappers::IntervalStream;
     use tracing::Level;
-
-    async fn reports_count(
-        executors: &[Arc<dyn WorkerExecutor>],
-        expected: usize,
-        deadline: tokio::time::Instant,
-    ) -> anyhow::Result<()> {
-        let client = reqwest::Client::new();
-        let last_scrape_error = std::sync::Mutex::new(None);
-        let observed = IntervalStream::new(tokio::time::interval(Duration::from_millis(100)))
-            .then(|_| {
-                let client = &client;
-                observe_executor_count(expected, move || async move {
-                    let metrics = join_all(executors.iter().map(|executor| async move {
-                        let (url, _) = executor
-                            .metrics_endpoint()
-                            .context("executor has no metrics endpoint")?;
-                        anyhow::Ok(
-                            client
-                                .get(url)
-                                .send()
-                                .await?
-                                .error_for_status()?
-                                .text()
-                                .await?,
-                        )
-                    }))
-                    .await
-                    .into_iter()
-                    .collect::<anyhow::Result<Vec<_>>>()?
-                    .into_boxed_slice();
-                    Ok(metrics)
-                })
-            })
-            .filter_map(|reported| {
-                let result = match reported {
-                    Err(error) if error.downcast_ref::<reqwest::Error>().is_some() => {
-                        *last_scrape_error.lock().unwrap() = Some(error);
-                        None
-                    }
-                    result => result.transpose(),
-                };
-                std::future::ready(result)
-            });
-        tokio::pin!(observed);
-        tokio::time::timeout_at(deadline, observed.next())
-            .await
-            .with_context(|| {
-                format!(
-                    "count {expected} was not observed by the deadline; latest scrape error: {:?}",
-                    last_scrape_error.lock().unwrap()
-                )
-            })?
-            .context("the observation stream ended")?
-    }
 
     /// Both earlier executors report two, then three within one lease from the third launch, with unchanged shard ownership.
     /// This test does not distinguish a renewal from a push or a re-registration.
@@ -99,10 +44,17 @@ mod executor_count {
     #[test]
     #[timeout("600s")]
     async fn a_third_executor_refreshes_both_existing_counts_within_one_lease() {
+        if let Some(variable) = ["REDIS_PORT", "REGISTRY_HTTP_PORT"]
+            .into_iter()
+            .find(|variable| std::env::var_os(variable).is_some())
+        {
+            panic!("{variable} is not supported by this fixture; use GOLEM_TEST_PORT_OFFSET");
+        }
         super::tests::Tracing::init();
         let config = EnvBasedTestDependenciesConfig {
             worker_executor_cluster_size: 2,
             number_of_shards_override: Some(4),
+            rebalance_threshold_override: Some(0.1),
             db_type: DbType::Sqlite,
             redis_port: 23100,
             registry_http_port: 23101,
@@ -120,17 +72,6 @@ mod executor_count {
             ..EnvBasedTestDependenciesConfig::default()
         }
         .with_env_overrides();
-        let executable = config.service_binaries_dir().join("worker-executor");
-        let working_directory = config.golem_repo_root.join("golem-worker-executor");
-        let manager_config = config
-            .golem_repo_root
-            .join("golem-shard-manager/config/shard-manager.toml")
-            .canonicalize()
-            .unwrap();
-        let lease_duration = ConfigLoader::<ShardManagerConfig>::new(&manager_config)
-            .load()
-            .expect("the effective shard manager configuration must load")
-            .shard_lease_duration;
         let third_http_port = config
             .executor_base_http_port
             .checked_add(2)
@@ -139,8 +80,54 @@ mod executor_count {
             .executor_base_grpc_port
             .checked_add(2)
             .expect("the third executor's gRPC port exceeds 65535");
+        assert!(
+            !golem_test_framework::components::redis::check_if_running(
+                &config.redis_host,
+                config.redis_port
+            ),
+            "refusing to reuse existing Redis at {}:{}; use a distinct GOLEM_TEST_PORT_OFFSET",
+            config.redis_host,
+            config.redis_port
+        );
+        let executable = config.service_binaries_dir().join("worker-executor");
+        let working_directory = config.golem_repo_root.join("golem-worker-executor");
+        let manager_config = config
+            .golem_repo_root
+            .join("golem-shard-manager/config/shard-manager.toml")
+            .canonicalize()
+            .unwrap();
+        let lease_duration = ConfigLoader::<ShardManagerConfig>::new(&manager_config)
+            .figment()
+            .merge(("number_of_shards", 4usize))
+            .merge(("rebalance_threshold", 0.1))
+            .extract::<ShardManagerConfig>()
+            .expect("the effective shard manager configuration must load")
+            .shard_lease_duration;
         let deps = EnvBasedTestDependencies::new(config).await.unwrap();
         let executors = deps.worker_executor_cluster().to_vec().into_boxed_slice();
+        let client = reqwest::Client::new();
+        let scrape = || async {
+            join_all(executors.iter().map(|executor| {
+                let client = &client;
+                async move {
+                    let (url, _) = executor
+                        .metrics_endpoint()
+                        .context("executor has no metrics endpoint")?;
+                    anyhow::Ok(
+                        client
+                            .get(url)
+                            .send()
+                            .await?
+                            .error_for_status()?
+                            .text()
+                            .await?,
+                    )
+                }
+            }))
+            .await
+            .into_iter()
+            .collect::<anyhow::Result<Box<[_]>>>()
+        };
 
         // At the 10% threshold, four shards give both initial executors shards.
         // A third executor can remain empty. Its join moves no shards.
@@ -152,36 +139,46 @@ mod executor_count {
             .await
             .expect("both initial executors must own shards")
             .unwrap();
-        reports_count(
-            &executors,
-            2,
-            tokio::time::Instant::now() + Duration::from_secs(60),
-        )
-        .await
-        .expect("both earlier executors must first report two");
-        let deadline = tokio::time::Instant::now() + lease_duration;
-        let third = SpawnedWorkerExecutor::new(
-            &executable,
-            &working_directory,
-            third_http_port,
-            third_grpc_port,
-            deps.rdb(),
-            deps.shard_manager(),
-            deps.worker_service(),
-            Level::WARN,
-            Level::WARN,
-            Level::WARN,
-            deps.registry_service(),
-            None,
-            None,
-            false,
-            false,
+        let (_, initial_count) =
+            observe_executor_count(2, Duration::from_secs(60), std::future::ready(()), &scrape)
+                .await;
+        initial_count.expect("both earlier executors must first report two");
+        let (third, count_result) = observe_executor_count(
+            3,
+            lease_duration,
+            SpawnedWorkerExecutor::new(
+                &executable,
+                &working_directory,
+                third_http_port,
+                third_grpc_port,
+                deps.rdb(),
+                deps.shard_manager(),
+                deps.worker_service(),
+                Level::WARN,
+                Level::WARN,
+                Level::WARN,
+                deps.registry_service(),
+                None,
+                None,
+                false,
+                false,
+            ),
+            scrape,
         )
         .await;
-        reports_count(&executors, 3, deadline)
-            .await
-            .expect("both earlier executors must report three within one lease period from starting the third executor");
-        let after = deps.shard_manager().get_routing_table().await.unwrap();
+        let after = tokio::time::timeout(
+            Duration::from_secs(30),
+            deps.shard_manager().get_routing_table(),
+        )
+        .await;
+        let shutdown = third
+            .kill_and_wait(tokio::time::Instant::now() + Duration::from_secs(30))
+            .await;
+        count_result.expect("both earlier executors must report three within one lease period from starting the third executor");
+        let after = after
+            .expect("the after-join routing table must arrive within 30 seconds")
+            .unwrap();
+        shutdown.expect("the third executor must stop and be reaped");
         let [before, after] = [before, after].map(|table| {
             let mut table: golem_api_grpc::proto::golem::shardmanager::RoutingTable = table.into();
             table
@@ -190,10 +187,6 @@ mod executor_count {
             table
         });
         assert_eq!(before, after, "the join must not move any shard");
-        third
-            .kill_and_wait(tokio::time::Instant::now() + Duration::from_secs(30))
-            .await
-            .unwrap();
     }
 }
 

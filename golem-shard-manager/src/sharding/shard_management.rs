@@ -931,10 +931,9 @@ impl ShardManagement {
 /// The full-replace payloads for `executor_ids`, read off `shard_state`.
 ///
 /// The one place a push is built, so the never-zero `number_of_shards` guard has a single home.
-/// An executor's `set_shards` divides by that count, so a push that latched zero would make it
-/// divide by zero on its next routing decision. The count is validated against the configuration
-/// at startup, which makes a zero here an impossible state rather than a bad request - hence an
-/// error that stops the loop rather than a skipped push.
+/// The executor stores this count in its assignment. Routing uses it as a divisor, so a stored
+/// zero would make the next routing decision divide by zero. Startup validates the count against
+/// the configuration. A zero here stops the loop instead of skipping the push.
 fn pushes_for(
     shard_state: &ShardLeaseState,
     executor_ids: impl Iterator<Item = ExecutorId>,

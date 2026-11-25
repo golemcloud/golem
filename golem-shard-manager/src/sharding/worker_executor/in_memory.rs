@@ -12,22 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::super::model::RegisterAck;
 use super::{
     HealthCheckError, Pod, ShardAssignmentPush, ShardId, ShardLeaseRevision, ShardManagerError,
-    WorkerExecutorError, WorkerExecutorService,
+    WorkerExecutorError, WorkerExecutorService, invalid_delivery, revoke_request,
 };
 use async_trait::async_trait;
+use golem_common::model::protobuf::{shard_assignment_from_proto, shard_revocation_from_proto};
 use golem_common::model::sharding::{
     ShardAssignmentEvent, ShardAssignmentState, transition_shard_assignment,
 };
 use golem_common::model::{ShardAssignment, ShardDeliveryOutcome};
-use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
-use std::num::NonZeroUsize;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::RwLock;
+use std::time::Instant;
 
 /// In-process executors with the same assignment validation and revision gate as remote
 /// executors. Each supplied pod is reachable and healthy. Its initial state can be absent,
-/// standalone, or registered. Deliveries never extend its lease.
+/// standalone, or registered. An omitted pod is unreachable. Assignment and revoke leave the
+/// lease expiry unchanged. Registration adopts the supplied local expiry.
 pub struct InMemoryWorkerExecutorService {
     assignments: RwLock<BTreeMap<Pod, ShardAssignmentState>>,
 }
@@ -39,13 +42,44 @@ impl InMemoryWorkerExecutorService {
         }
     }
 
-    /// A copy of the accepted assignment. Unreachable and unregistered pods have no snapshot.
+    /// Returns a copy of the installed assignment. Returns `None` if the pod was omitted
+    /// or has no installed assignment.
     pub fn current_assignment(&self, pod: &Pod) -> Option<ShardAssignment> {
         self.assignments
             .read()
             .unwrap()
             .get(pod)
             .and_then(|state| state.as_ref().cloned())
+    }
+
+    /// Installs a registration with this manager process's incarnation and the supplied local
+    /// expiry. A stale registration changes only the expiry. An omitted pod stays unreachable.
+    pub fn install_registration(
+        &self,
+        pod: &Pod,
+        registration: &RegisterAck,
+        expires_at: Instant,
+    ) -> Result<(), ShardManagerError> {
+        let assignment = ShardAssignmentPush {
+            number_of_shards: registration.number_of_shards,
+            shard_epochs: registration.grant.shard_epochs.clone(),
+            executor_count: registration.grant.executor_count,
+            revision: registration.grant.revision,
+        };
+        let request = assignment
+            .to_proto(super::super::model::incarnation_id())
+            .map_err(invalid_delivery)?;
+        let decoded = shard_assignment_from_proto(request).map_err(invalid_delivery)?;
+        self.apply(
+            pod,
+            ShardAssignmentEvent::Register {
+                number_of_shards: decoded.number_of_shards,
+                shard_epochs: &decoded.shard_epochs,
+                revision: decoded.revision,
+                executor_count: decoded.executor_count,
+                expires_at: Some(expires_at),
+            },
+        )
     }
 
     fn apply(&self, pod: &Pod, event: ShardAssignmentEvent<'_>) -> Result<(), ShardManagerError> {
@@ -66,23 +100,17 @@ impl WorkerExecutorService for InMemoryWorkerExecutorService {
         pod: &Pod,
         assignment: &ShardAssignmentPush,
     ) -> Result<(), ShardManagerError> {
-        let (number_of_shards, executor_count) =
-            assignment_counts(assignment).map_err(ShardManagerError::WorkerExecutionError)?;
-        let shard_epochs: HashMap<_, _> = assignment
-            .shard_epochs
-            .iter()
-            .map(|(shard_id, epoch)| (*shard_id, golem_common::model::ShardEpoch(epoch.0)))
-            .collect();
+        let request = assignment
+            .to_proto(super::super::model::incarnation_id())
+            .map_err(invalid_delivery)?;
+        let decoded = shard_assignment_from_proto(request).map_err(invalid_delivery)?;
         self.apply(
             pod,
             ShardAssignmentEvent::Assign {
-                number_of_shards,
-                shard_epochs: &shard_epochs,
-                revision: delivery_revision(
-                    &super::super::model::incarnation_id(),
-                    assignment.revision,
-                ),
-                executor_count,
+                number_of_shards: decoded.number_of_shards,
+                shard_epochs: &decoded.shard_epochs,
+                revision: decoded.revision,
+                executor_count: decoded.executor_count,
             },
         )
     }
@@ -105,45 +133,23 @@ impl WorkerExecutorService for InMemoryWorkerExecutorService {
         revision: ShardLeaseRevision,
         executor_count: usize,
     ) -> Result<(), ShardManagerError> {
-        let executor_count = delivered_count(executor_count, "RevokeShardsRequest")
-            .map_err(ShardManagerError::WorkerExecutionError)?;
-        let shard_ids: HashSet<_> = shard_ids.iter().copied().collect();
+        let request = revoke_request(
+            shard_ids,
+            revision,
+            executor_count,
+            super::super::model::incarnation_id(),
+        )
+        .map_err(invalid_delivery)?;
+        let decoded = shard_revocation_from_proto(request).map_err(invalid_delivery)?;
         self.apply(
             pod,
             ShardAssignmentEvent::Revoke {
-                shard_ids: &shard_ids,
-                revision: delivery_revision(&super::super::model::incarnation_id(), revision),
-                executor_count,
+                shard_ids: &decoded.shard_ids,
+                revision: decoded.revision,
+                executor_count: decoded.executor_count,
             },
         )
     }
-}
-
-fn assignment_counts(
-    assignment: &ShardAssignmentPush,
-) -> Result<(usize, NonZeroUsize), WorkerExecutorError> {
-    let number_of_shards = assignment.number_of_shards as u32 as usize;
-    if number_of_shards == 0 {
-        return Err(WorkerExecutorError::invalid_request(
-            "AssignShardsRequest.number_of_shards must not be 0",
-        ));
-    }
-    delivered_count(assignment.executor_count, "AssignShardsRequest")
-        .map(|count| (number_of_shards, count))
-}
-
-fn delivered_count(count: usize, request: &str) -> Result<NonZeroUsize, WorkerExecutorError> {
-    NonZeroUsize::new(count as u32 as usize).ok_or_else(|| {
-        WorkerExecutorError::invalid_request(format!("{request}.executor_count must not be 0"))
-    })
-}
-
-fn delivery_revision(
-    incarnation_id: &str,
-    revision: ShardLeaseRevision,
-) -> golem_common::model::ShardLeaseRevision {
-    golem_common::model::ShardLeaseRevision::from_wire(incarnation_id, revision.0)
-        .expect("the manager incarnation is a UUID")
 }
 
 fn delivery_result(outcome: Option<ShardDeliveryOutcome>) -> Result<(), WorkerExecutorError> {

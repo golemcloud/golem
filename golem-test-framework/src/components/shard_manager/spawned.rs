@@ -30,6 +30,7 @@ pub struct SpawnedShardManager {
     grpc_port: u16,
     number_of_shards_override: Arc<RwLock<Option<usize>>>,
     state_write_timeout_override: Option<Duration>,
+    rebalance_threshold_override: Option<f64>,
     process: Arc<Mutex<ProcessState>>,
     lifecycle: Arc<tokio::sync::Mutex<()>>,
     executable: PathBuf,
@@ -98,6 +99,7 @@ impl SpawnedShardManager {
         working_directory: &Path,
         number_of_shards_override: Option<usize>,
         state_write_timeout_override: Option<Duration>,
+        rebalance_threshold_override: Option<f64>,
         automatic_restart: bool,
         http_port: u16,
         grpc_port: u16,
@@ -119,6 +121,7 @@ impl SpawnedShardManager {
             working_directory,
             number_of_shards_override,
             state_write_timeout_override,
+            rebalance_threshold_override,
             http_port,
             grpc_port,
             &rdb,
@@ -137,6 +140,7 @@ impl SpawnedShardManager {
             grpc_port,
             number_of_shards_override: Arc::new(RwLock::new(number_of_shards_override)),
             state_write_timeout_override,
+            rebalance_threshold_override,
             process: Arc::new(Mutex::new(ProcessState {
                 supervision: Supervision::Active,
                 interrupt_restart: tokio::sync::watch::channel(false).0,
@@ -166,6 +170,7 @@ impl SpawnedShardManager {
         working_directory: &Path,
         number_of_shards_override: Option<usize>,
         state_write_timeout_override: Option<Duration>,
+        rebalance_threshold_override: Option<f64>,
         http_port: u16,
         grpc_port: u16,
         rdb: &Arc<dyn Rdb>,
@@ -183,6 +188,7 @@ impl SpawnedShardManager {
                     super::env_vars(
                         number_of_shards_override,
                         state_write_timeout_override,
+                        rebalance_threshold_override,
                         http_port,
                         grpc_port,
                         rdb,
@@ -276,6 +282,7 @@ impl SpawnedShardManager {
         let working_directory = self.working_directory.clone();
         let number_of_shards_override = self.number_of_shards_override.clone();
         let state_write_timeout_override = self.state_write_timeout_override;
+        let rebalance_threshold_override = self.rebalance_threshold_override;
         let http_port = self.http_port;
         let grpc_port = self.grpc_port;
         let rdb = self.rdb.clone();
@@ -328,6 +335,7 @@ impl SpawnedShardManager {
                         &working_directory,
                         current_number_of_shards_override,
                         state_write_timeout_override,
+                        rebalance_threshold_override,
                         http_port,
                         grpc_port,
                         &rdb,
@@ -416,6 +424,7 @@ impl ShardManager for SpawnedShardManager {
             &self.working_directory,
             number_of_shards_override,
             self.state_write_timeout_override,
+            self.rebalance_threshold_override,
             self.http_port,
             self.grpc_port,
             &self.rdb,

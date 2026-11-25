@@ -16,6 +16,7 @@ use super::error::ShardManagerError;
 use super::rebalancing::Rebalance;
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
+use golem_common::model::protobuf::executor_count_to_proto;
 use golem_common::model::{Pod, ShardId};
 use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
@@ -234,8 +235,10 @@ impl ShardAssignmentPush {
     pub fn to_proto(
         &self,
         incarnation_id: String,
-    ) -> golem::workerexecutor::v1::AssignShardsRequest {
-        golem::workerexecutor::v1::AssignShardsRequest {
+    ) -> Result<golem::workerexecutor::v1::AssignShardsRequest, String> {
+        let executor_count =
+            executor_count_to_proto(self.executor_count, "AssignShardsRequest.executor_count")?;
+        Ok(golem::workerexecutor::v1::AssignShardsRequest {
             shard_epochs: self
                 .shard_epochs
                 .iter()
@@ -246,9 +249,9 @@ impl ShardAssignmentPush {
                 .collect(),
             revision: self.revision.0,
             number_of_shards: self.number_of_shards as u32,
-            executor_count: self.executor_count as u32,
+            executor_count,
             incarnation_id,
-        }
+        })
     }
 }
 
@@ -989,7 +992,7 @@ mod tests {
                 let push = state.assignment_push_for(*executor_id).unwrap();
                 assert_eq!(grant.executor_count, expected);
                 assert_eq!(push.executor_count, expected);
-                let wire = push.to_proto(Uuid::nil().to_string());
+                let wire = push.to_proto(Uuid::nil().to_string()).unwrap();
                 assert_eq!(wire.executor_count, expected as u32);
                 assert_eq!(wire.incarnation_id, Uuid::nil().to_string());
             });
@@ -1485,7 +1488,7 @@ mod tests {
             assert_eq!(grant.executor_count, expected);
             assert_eq!(push.executor_count, expected);
             assert_eq!(
-                push.to_proto(incarnation_id()).executor_count,
+                push.to_proto(incarnation_id()).unwrap().executor_count,
                 expected as u32
             );
         };

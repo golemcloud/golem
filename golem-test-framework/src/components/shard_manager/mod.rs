@@ -90,6 +90,7 @@ async fn try_get_routing_table(client: &GrpcShardManager) -> crate::Result<Routi
 async fn env_vars(
     number_of_shards_override: Option<usize>,
     state_write_timeout_override: Option<Duration>,
+    rebalance_threshold_override: Option<f64>,
     http_port: u16,
     grpc_port: u16,
     rdb: &Arc<dyn Rdb>,
@@ -129,6 +130,12 @@ async fn env_vars(
     if let Some(number_of_shards) = number_of_shards_override {
         builder = builder.with("GOLEM__NUMBER_OF_SHARDS", number_of_shards.to_string());
     }
+    if let Some(rebalance_threshold) = rebalance_threshold_override {
+        builder = builder.with(
+            "GOLEM__REBALANCE_THRESHOLD",
+            rebalance_threshold.to_string(),
+        );
+    }
     if let Some(state_write_timeout) = state_write_timeout_override {
         builder = builder.with(
             "GOLEM__STATE_WRITE_TIMEOUT",
@@ -137,4 +144,78 @@ async fn env_vars(
     }
 
     builder.build()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::components::rdb::borrowed_sqlite::BorrowedSqliteRdb;
+    use crate::components::registry_service::provided::ProvidedRegistryService;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::auth::TokenSecret;
+    use golem_common::model::plan::PlanId;
+    use std::path::Path;
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[test]
+    async fn child_environment_preserves_the_exact_rebalance_threshold_override() {
+        let rdb: Arc<dyn Rdb> = Arc::new(BorrowedSqliteRdb::new(Path::new("observer-env-test")));
+        let registry: Arc<dyn RegistryService> = Arc::new(
+            ProvidedRegistryService::new(
+                "registry.example".to_owned(),
+                18101,
+                19101,
+                AccountId::SYSTEM,
+                AccountEmail::new("observer@example.com"),
+                TokenSecret::trusted("test-token".to_owned()),
+                AccountId::SYSTEM,
+                PlanId(Uuid::nil()),
+                PlanId(Uuid::nil()),
+                PlanId(Uuid::nil()),
+                PlanId(Uuid::nil()),
+                PlanId(Uuid::nil()),
+            )
+            .await,
+        );
+        futures::future::join_all(
+            [
+                (None, None),
+                (Some(0.1), Some("0.1")),
+                (Some(0.25), Some("0.25")),
+            ]
+            .into_iter()
+            .map(|(threshold, expected)| {
+                let rdb = &rdb;
+                let registry = &registry;
+                async move {
+                    let vars = env_vars(
+                        Some(4),
+                        Some(Duration::from_millis(1750)),
+                        threshold,
+                        18021,
+                        19020,
+                        rdb,
+                        false,
+                        registry,
+                        Level::WARN,
+                        false,
+                    )
+                    .await;
+                    assert_eq!(
+                        vars.get("GOLEM__REBALANCE_THRESHOLD").map(String::as_str),
+                        expected
+                    );
+                    assert_eq!(vars["GOLEM__NUMBER_OF_SHARDS"], "4");
+                    assert_eq!(vars["GOLEM__STATE_WRITE_TIMEOUT"], "1750ms");
+                    assert_eq!(vars["GOLEM__HTTP_PORT"], "18021");
+                    assert_eq!(vars["GOLEM__GRPC__PORT"], "19020");
+                    assert_eq!(vars["GOLEM__REGISTRY_SERVICE__HOST"], "registry.example");
+                    assert_eq!(vars["GOLEM__REGISTRY_SERVICE__PORT"], "19101");
+                    assert_eq!(vars["GOLEM__PERSISTENCE__TYPE"], "Sqlite");
+                }
+            }),
+        )
+        .await;
+    }
 }

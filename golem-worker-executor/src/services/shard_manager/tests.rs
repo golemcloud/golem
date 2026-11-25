@@ -273,9 +273,8 @@ impl ShardLeaseClient for MockShardManager {
     }
 }
 
-/// A service wired to the mock, with no renewal loop running: every test
-/// drives `renew_shard_lease()` itself, exactly as the quota tests drive
-/// `renew_all()`.
+/// A service with no renewal loop at construction. Registration starts the loop; tests that
+/// install an assignment directly can instead drive one pass through the private test helper.
 fn make_service(
     mock: Arc<dyn ShardLeaseClient>,
     shutdown: Shutdown,

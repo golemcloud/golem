@@ -20,7 +20,9 @@ use crate::sharding::shard_management::ShardManagement;
 use crate::sharding::{ExecutorAddr, ExecutorId, RegisterAck, ShardEpoch, ShardLeaseGrant};
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerService;
-use golem_common::model::protobuf::{ip_addr_from_proto, lease_ttl_to_proto};
+use golem_common::model::protobuf::{
+    executor_count_to_proto, ip_addr_from_proto, lease_ttl_to_proto,
+};
 use golem_common::model::{Pod, ShardId};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::clients::shard_manager::canonical_advertised_ip;
@@ -116,12 +118,13 @@ impl ShardManagerService for ShardManagerServiceImpl {
         let response = self
             .register_internal(executor_id, pod, request.pod_name)
             .instrument(record.span.clone())
-            .await;
+            .await
+            .and_then(|ack| registration_to_proto(ack, Timestamp::now()));
 
         let result = match response {
-            Ok(ack) => record.succeed(golem::shardmanager::v1::register_response::Result::Success(
-                registration_to_proto(ack, Timestamp::now()),
-            )),
+            Ok(registration) => record.succeed(
+                golem::shardmanager::v1::register_response::Result::Success(registration),
+            ),
             Err(error) => {
                 let error: golem::shardmanager::v1::ShardManagerError = error.into();
                 record.fail(
@@ -154,13 +157,12 @@ impl ShardManagerService for ShardManagerServiceImpl {
             .shard_management
             .renew_shard_lease(executor_id, claimed)
             .instrument(record.span.clone())
-            .await;
+            .await
+            .and_then(|grant| lease_to_proto(grant, Timestamp::now()));
 
         let result = match response {
-            Ok(grant) => record.succeed(
-                golem::shardmanager::v1::renew_shard_lease_response::Result::Success(
-                    lease_to_proto(grant, Timestamp::now()),
-                ),
+            Ok(lease) => record.succeed(
+                golem::shardmanager::v1::renew_shard_lease_response::Result::Success(lease),
             ),
             Err(error) => {
                 let error: golem::shardmanager::v1::ShardLeaseError = error.into();
@@ -506,28 +508,33 @@ fn resolve_pod(
 fn registration_to_proto(
     ack: RegisterAck,
     now: Timestamp,
-) -> golem::shardmanager::v1::RegisterSuccess {
-    golem::shardmanager::v1::RegisterSuccess {
+) -> Result<golem::shardmanager::v1::RegisterSuccess, ShardManagerError> {
+    Ok(golem::shardmanager::v1::RegisterSuccess {
         number_of_shards: ack.number_of_shards as u32,
         shard_epochs: shard_epoch_entries(&ack.grant.shard_epochs),
-        executor_count: ack.grant.executor_count as u32,
+        executor_count: executor_count_to_proto(
+            ack.grant.executor_count,
+            "RegisterSuccess.executor_count",
+        )
+        .map_err(ShardManagerError::Internal)?,
         lease_ttl: Some(lease_ttl_to_proto(ack.grant.expires_at, now)),
         revision: ack.grant.revision.0,
         incarnation_id: crate::sharding::incarnation_id(),
-    }
+    })
 }
 
 fn lease_to_proto(
     grant: ShardLeaseGrant,
     now: Timestamp,
-) -> golem::shardmanager::v1::ShardLease {
-    golem::shardmanager::v1::ShardLease {
+) -> Result<golem::shardmanager::v1::ShardLease, ShardManagerError> {
+    Ok(golem::shardmanager::v1::ShardLease {
         shard_epochs: shard_epoch_entries(&grant.shard_epochs),
-        executor_count: grant.executor_count as u32,
+        executor_count: executor_count_to_proto(grant.executor_count, "ShardLease.executor_count")
+            .map_err(ShardManagerError::Internal)?,
         lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, now)),
         revision: grant.revision.0,
         incarnation_id: crate::sharding::incarnation_id(),
-    }
+    })
 }
 
 #[cfg(test)]
@@ -548,44 +555,107 @@ mod tests {
     #[test]
     fn registration_and_renewal_encode_the_granted_executor_count() {
         let now = Timestamp::new(1_700_000_000, 0).unwrap();
-        let grant = ShardLeaseGrant {
-            shard_epochs: BTreeMap::from([(golem_common::model::ShardId::new(2), ShardEpoch(9))]),
-            expires_at: now + jiff::SignedDuration::from_secs(45),
-            executor_count: 4,
-            revision: ShardLeaseRevision(7),
-        };
-        let registration = registration_to_proto(
-            RegisterAck {
-                number_of_shards: 8,
-                grant: grant.clone(),
-            },
-            now,
-        );
-        let bytes = registration.encode_to_vec();
-        let decoded = golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess::decode(
-            bytes.as_slice(),
-        )
-        .unwrap();
-        assert_eq!(decoded.executor_count, 4);
-        assert_eq!(decoded.number_of_shards, 8);
-        assert_eq!(decoded.revision, 7);
-        assert_eq!(decoded.lease_ttl.unwrap().seconds, 45);
-
-        let renewal = lease_to_proto(
-            ShardLeaseGrant {
-                executor_count: 3,
-                revision: ShardLeaseRevision(8),
-                ..grant
-            },
-            now,
-        );
-        let bytes = renewal.encode_to_vec();
-        let decoded =
-            golem_api_grpc::proto::golem::shardmanager::v1::ShardLease::decode(bytes.as_slice())
+        [(4_u32, 2_u32), (7, 5), (u32::MAX, u32::MAX - 1)]
+            .into_iter()
+            .for_each(|(registration_count, renewal_count)| {
+                let grant = ShardLeaseGrant {
+                    shard_epochs: BTreeMap::from([(
+                        golem_common::model::ShardId::new(2),
+                        ShardEpoch(9),
+                    )]),
+                    expires_at: now + jiff::SignedDuration::from_secs(45),
+                    executor_count: registration_count as usize,
+                    revision: ShardLeaseRevision(7),
+                };
+                let registration = registration_to_proto(
+                    RegisterAck {
+                        number_of_shards: 8,
+                        grant: grant.clone(),
+                    },
+                    now,
+                )
                 .unwrap();
-        assert_eq!(decoded.executor_count, 3);
-        assert_eq!(decoded.revision, 8);
-        assert_eq!(decoded.lease_ttl.unwrap().seconds, 45);
+                let bytes = registration.encode_to_vec();
+                let decoded =
+                    golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess::decode(
+                        bytes.as_slice(),
+                    )
+                    .unwrap();
+                assert_eq!(decoded.executor_count, registration_count);
+                assert_eq!(decoded.number_of_shards, 8);
+                assert_eq!(decoded.revision, 7);
+                assert_eq!(decoded.lease_ttl.unwrap().seconds, 45);
+
+                let renewal = lease_to_proto(
+                    ShardLeaseGrant {
+                        executor_count: renewal_count as usize,
+                        revision: ShardLeaseRevision(8),
+                        ..grant
+                    },
+                    now,
+                )
+                .unwrap();
+                let bytes = renewal.encode_to_vec();
+                let decoded = golem_api_grpc::proto::golem::shardmanager::v1::ShardLease::decode(
+                    bytes.as_slice(),
+                )
+                .unwrap();
+                assert_eq!(decoded.executor_count, renewal_count);
+                assert_eq!(decoded.revision, 8);
+                assert_eq!(decoded.lease_ttl.unwrap().seconds, 45);
+            });
+    }
+
+    #[test]
+    fn registration_and_renewal_refuse_invalid_executor_counts_as_internal_errors() {
+        use golem_api_grpc::proto::golem::shardmanager::v1::{
+            ShardLeaseError, ShardManagerError, shard_lease_error, shard_manager_error,
+        };
+        use golem_common::base_model::api::error_code::INTERNAL_UNKNOWN;
+
+        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let invalid_counts = std::iter::once((0_usize, "must not be 0"));
+        #[cfg(target_pointer_width = "64")]
+        let invalid_counts = invalid_counts.chain([
+            (4_294_967_296, "4294967296 does not fit a u32"),
+            (4_294_967_299, "4294967299 does not fit a u32"),
+        ]);
+
+        invalid_counts.for_each(|(executor_count, detail)| {
+            let grant = ShardLeaseGrant {
+                shard_epochs: BTreeMap::from([(
+                    golem_common::model::ShardId::new(2),
+                    ShardEpoch(9),
+                )]),
+                expires_at: now + chrono::Duration::seconds(45),
+                executor_count,
+                revision: ShardLeaseRevision(7),
+            };
+            let registration_error: ShardManagerError = registration_to_proto(
+                RegisterAck {
+                    number_of_shards: 8,
+                    grant: grant.clone(),
+                },
+                now,
+            )
+            .unwrap_err()
+            .into();
+            let Some(shard_manager_error::Error::Unknown(body)) = registration_error.error else {
+                panic!("invalid registration count must be an internal error");
+            };
+            assert_eq!(body.code, INTERNAL_UNKNOWN);
+            assert_eq!(
+                body.error,
+                format!("RegisterSuccess.executor_count {detail}")
+            );
+
+            let renewal_error: ShardLeaseError = lease_to_proto(grant, now).unwrap_err().into();
+            let Some(shard_lease_error::Error::Internal(body)) = renewal_error.error else {
+                panic!("invalid renewal count must not become LeaseNotFound");
+            };
+            assert_eq!(body.code, INTERNAL_UNKNOWN);
+            assert_eq!(body.error, format!("ShardLease.executor_count {detail}"));
+        });
     }
 
     fn endpoint(port: i32, advertised_ip: Option<IpAddr>) -> Option<ExecutorEndpoint> {

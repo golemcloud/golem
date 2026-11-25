@@ -32,16 +32,18 @@ use crate::etcd_backed::persistence::{
 use crate::shard_management::{TestHealthCheck, TestWorkerExecutors, executor, pod, shard_ids};
 use futures::StreamExt;
 use golem_common::base_model::shard_lease;
+use golem_common::model::sharding::ShardAssignmentState;
 use golem_common::model::{Pod, ShardId};
 use golem_shard_manager::{
-    ExecutorAddr, ExecutorId, RoutingTablePersistence, ShardEpoch, ShardLeaseState,
-    ShardManagement, ShardManagerError,
+    ExecutorAddr, ExecutorId, InMemoryWorkerExecutorService, RoutingTablePersistence,
+    ShardAssignmentPush, ShardEpoch, ShardLeaseState, ShardManagement, ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::Duration;
 use test_r::{define_matrix_dimension, inherit_test_dep, test};
+use tokio::sync::Mutex;
 use tokio::task::{JoinHandle, JoinSet};
 use tokio::time::Instant;
 use tokio_stream::wrappers::IntervalStream;
@@ -125,27 +127,62 @@ fn holds_every_shard(shard_state: &ShardLeaseState) -> bool {
     shard_state.shards_for_executor(executor(1)) == Some(all_shards())
 }
 
-async fn wait_for_pushed_count(executors: Arc<TestWorkerExecutors>, pod: Pod, expected: usize) {
+async fn wait_for_accepted_push(
+    executors: &TestWorkerExecutors,
+    receiver: &InMemoryWorkerExecutorService,
+    pod: Pod,
+    expected: usize,
+) -> ShardAssignmentPush {
+    let registered = receiver.current_assignment(&pod).unwrap();
+    let incarnation = registered.revision.unwrap().incarnation;
     let reported = IntervalStream::new(tokio::time::interval(Duration::from_millis(10)))
-        .then(move |_| {
-            let executors = executors.clone();
-            async move { executors.pushes_to(pod).await }
+        .then(move |_| async move {
+            let pushes = executors.pushes_to(pod).await;
+            let accepted = receiver.current_assignment(&pod).unwrap();
+            let epochs = accepted
+                .shard_epochs
+                .iter()
+                .map(|(id, epoch)| (*id, ShardEpoch(epoch.0)))
+                .collect::<BTreeMap<_, _>>();
+            pushes.into_iter().rev().find(|push| {
+                push.executor_count == expected
+                    && accepted.executor_count == expected
+                    && accepted.number_of_shards == push.number_of_shards
+                    && epochs == push.shard_epochs
+                    && accepted.revision.is_some_and(|revision| {
+                        revision.incarnation == incarnation && revision.number == push.revision.0
+                    })
+                    && accepted.expires_at == registered.expires_at
+            })
         })
-        .filter(|pushes| {
-            std::future::ready(
-                pushes
-                    .last()
-                    .is_some_and(|push| push.executor_count == expected),
-            )
-        });
+        .filter_map(std::future::ready);
     tokio::pin!(reported);
     tokio::time::timeout(
         shard_lease::renewal_interval(LEASE_TTL) + Duration::from_secs(10),
         reported.next(),
     )
     .await
-    .expect("each executor must receive the current count")
-    .unwrap();
+    .expect("a recorded full push must match the public receiver's accepted state")
+    .unwrap()
+}
+
+fn assert_push_matches_stored(
+    push: &ShardAssignmentPush,
+    stored: &ShardLeaseState,
+    id: ExecutorId,
+) {
+    assert_eq!(push.number_of_shards, stored.number_of_shards);
+    assert_eq!(push.executor_count, stored.executor_count());
+    assert!(push.revision <= stored.revision);
+    assert_eq!(
+        push.shard_epochs,
+        stored
+            .shard_assignments
+            .iter()
+            .filter(|(_, entry)| entry.executor_id == id)
+            .map(|(shard, entry)| (*shard, entry.epoch))
+            .collect()
+    );
 }
 
 /// Executors 1 and 2 both hold shards, and none is unassigned or waiting to move.
@@ -186,11 +223,21 @@ async fn a_registration_is_durable(
 ) {
     let store = persistence.new_store().await;
     let reader = client(&store).await;
-    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let registering = pod(1, 9000);
+    let receiver = Arc::new(InMemoryWorkerExecutorService::new([(
+        registering,
+        ShardAssignmentState::default(),
+    )]));
+    let setup_gate = Arc::new(Mutex::new(()));
+    let delivery = setup_gate.clone().lock_owned().await;
+    let worker_executors = Arc::new(TestWorkerExecutors::with_receiver(
+        receiver.clone(),
+        setup_gate,
+    ));
     let (shard_management, mut join_set) =
         start(client(&store).await, worker_executors.clone(), LEASE_TTL).await;
 
-    let registering = pod(1, 9000);
+    let local_expiry = std::time::Instant::now() + LEASE_TTL;
     let ack = shard_management
         .register_executor(
             executor(1),
@@ -201,6 +248,10 @@ async fn a_registration_is_durable(
         .expect("the registration should have been persisted");
     assert_eq!(ack.number_of_shards, NUMBER_OF_SHARDS);
     assert_eq!(ack.grant.executor_count, 1);
+    receiver
+        .install_registration(&registering, &ack, local_expiry)
+        .unwrap();
+    drop(delivery);
 
     // The whole cluster is one executor, so the rebalance that follows gives it every shard.
     let shard_state = wait_for_stored(
@@ -210,6 +261,8 @@ async fn a_registration_is_durable(
     )
     .await;
 
+    let pushed = wait_for_accepted_push(&worker_executors, &receiver, registering, 1).await;
+    assert_push_matches_stored(&pushed, &shard_state, executor(1));
     assert_eq!(shard_state.executor_count(), 1);
     assert_eq!(
         shard_state.executor_for_addr(registering.into()),
@@ -235,15 +288,33 @@ async fn a_renewal_extends_the_stored_lease(
 ) {
     let store = persistence.new_store().await;
     let reader = client(&store).await;
-    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let first = pod(1, 9000);
+    let second = pod(2, 9000);
+    let receiver = Arc::new(InMemoryWorkerExecutorService::new(
+        [first, second].map(|pod| (pod, ShardAssignmentState::default())),
+    ));
+    let setup_gate = Arc::new(Mutex::new(()));
+    let delivery = setup_gate.clone().lock_owned().await;
+    let worker_executors = Arc::new(TestWorkerExecutors::with_receiver(
+        receiver.clone(),
+        setup_gate.clone(),
+    ));
     let (shard_management, mut join_set) =
         start(client(&store).await, worker_executors.clone(), LEASE_TTL).await;
 
-    shard_management
-        .register_executor(executor(1), ExecutorAddr::from(pod(1, 9000)), None)
+    let first_expiry = std::time::Instant::now() + LEASE_TTL;
+    let registered = shard_management
+        .register_executor(executor(1), ExecutorAddr::from(first), None)
         .await
         .expect("the registration should have been persisted");
+    assert_eq!(registered.grant.executor_count, 1);
+    receiver
+        .install_registration(&first, &registered, first_expiry)
+        .unwrap();
+    drop(delivery);
     let before = wait_for_stored(&reader, "the initial assignment", holds_every_shard).await;
+    let initial_push = wait_for_accepted_push(&worker_executors, &receiver, first, 1).await;
+    assert_push_matches_stored(&initial_push, &before, executor(1));
     let claimed: BTreeMap<ShardId, ShardEpoch> = before
         .shard_assignments
         .iter()
@@ -270,13 +341,22 @@ async fn a_renewal_extends_the_stored_lease(
     );
     assert_eq!(after.shards_for_executor(executor(1)), Some(all_shards()));
 
+    let delivery = setup_gate.lock_owned().await;
+    let second_expiry = std::time::Instant::now() + LEASE_TTL;
     let joined = shard_management
-        .register_executor(executor(2), ExecutorAddr::from(pod(2, 9000)), None)
+        .register_executor(executor(2), ExecutorAddr::from(second), None)
         .await
         .unwrap();
     assert_eq!(joined.grant.executor_count, 2);
-    wait_for_pushed_count(worker_executors.clone(), pod(1, 9000), 2).await;
-    wait_for_pushed_count(worker_executors.clone(), pod(2, 9000), 2).await;
+    receiver
+        .install_registration(&second, &joined, second_expiry)
+        .unwrap();
+    drop(delivery);
+    let first_push = wait_for_accepted_push(&worker_executors, &receiver, first, 2).await;
+    let second_push = wait_for_accepted_push(&worker_executors, &receiver, second, 2).await;
+    let joined_state = stored(&reader).await;
+    assert_push_matches_stored(&first_push, &joined_state, executor(1));
+    assert_push_matches_stored(&second_push, &joined_state, executor(2));
     let renewed = shard_management
         .renew_shard_lease(executor(1), claimed)
         .await
@@ -287,7 +367,9 @@ async fn a_renewal_extends_the_stored_lease(
         .deregister_executor(executor(2), BTreeMap::new())
         .await
         .unwrap();
-    wait_for_pushed_count(worker_executors, pod(1, 9000), 1).await;
+    let survivor_push = wait_for_accepted_push(&worker_executors, &receiver, first, 1).await;
+    let left_state = stored(&reader).await;
+    assert_push_matches_stored(&survivor_push, &left_state, executor(1));
     let renewed = shard_management
         .renew_shard_lease(executor(1), renewed.shard_epochs)
         .await
@@ -363,7 +445,17 @@ async fn a_lapsed_lease_is_re_homed_to_a_live_executor(
 ) {
     let store = persistence.new_store().await;
     let reader = client(&store).await;
-    let worker_executors = Arc::new(TestWorkerExecutors::default());
+    let first = pod(1, 9000);
+    let second = pod(2, 9001);
+    let receiver = Arc::new(InMemoryWorkerExecutorService::new(
+        [first, second].map(|pod| (pod, ShardAssignmentState::default())),
+    ));
+    let setup_gate = Arc::new(Mutex::new(()));
+    let delivery = setup_gate.clone().lock_owned().await;
+    let worker_executors = Arc::new(TestWorkerExecutors::with_receiver(
+        receiver.clone(),
+        setup_gate,
+    ));
     let (shard_management, mut join_set) = start(
         client(&store).await,
         worker_executors.clone(),
@@ -371,12 +463,24 @@ async fn a_lapsed_lease_is_re_homed_to_a_live_executor(
     )
     .await;
 
-    for (idx, registering) in [(1, pod(1, 9000)), (2, pod(2, 9001))] {
-        shard_management
-            .register_executor(executor(idx), ExecutorAddr::from(registering), None)
-            .await
-            .expect("the registration should have been persisted");
-    }
+    futures::stream::iter([(1, first), (2, second)])
+        .for_each(|(idx, registering)| {
+            let manager = &shard_management;
+            let receiver = &receiver;
+            async move {
+                let local_expiry = std::time::Instant::now() + RECLAIM_LEASE_TTL;
+                let ack = manager
+                    .register_executor(executor(idx), ExecutorAddr::from(registering), None)
+                    .await
+                    .expect("the registration should have been persisted");
+                assert_eq!(ack.grant.executor_count, idx as usize);
+                receiver
+                    .install_registration(&registering, &ack, local_expiry)
+                    .unwrap();
+            }
+        })
+        .await;
+    drop(delivery);
 
     // Both stay alive until the rebalance has settled, so what follows is decided by the lapse
     // alone and not by how quickly this machine got through the registrations.
@@ -384,6 +488,12 @@ async fn a_lapsed_lease_is_re_homed_to_a_live_executor(
     let surviving = keep_renewing(shard_management.clone(), executor(2));
 
     let settled = wait_for_stored(&reader, "the shards to be split", split_between_both).await;
+    let first_push = wait_for_accepted_push(&worker_executors, &receiver, first, 2).await;
+    let second_push = wait_for_accepted_push(&worker_executors, &receiver, second, 2).await;
+    let delivered_state = stored(&reader).await;
+    assert_push_matches_stored(&first_push, &delivered_state, executor(1));
+    assert_push_matches_stored(&second_push, &delivered_state, executor(2));
+    assert_eq!(delivered_state.shard_assignments, settled.shard_assignments);
     let lapsed_epochs: BTreeMap<ShardId, ShardEpoch> = settled
         .shard_assignments
         .iter()
@@ -416,7 +526,13 @@ async fn a_lapsed_lease_is_re_homed_to_a_live_executor(
         "the stored state broke its own invariants: {re_homed}"
     );
 
-    wait_for_pushed_count(worker_executors.clone(), pod(2, 9001), 1).await;
+    let survivor_push = wait_for_accepted_push(&worker_executors, &receiver, second, 1).await;
+    let delivered_state = stored(&reader).await;
+    assert_push_matches_stored(&survivor_push, &delivered_state, executor(2));
+    assert_eq!(
+        delivered_state.shard_assignments,
+        re_homed.shard_assignments
+    );
     let grant = shard_management
         .renew_shard_lease(
             executor(2),

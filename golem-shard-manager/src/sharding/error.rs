@@ -334,8 +334,6 @@ impl IsRetriableError for ShardManagerError {
 pub enum HealthCheckError {
     #[error("gRPC: error status: {0}")]
     GrpcError(tonic::Status),
-    #[error("gRPC: transport error: {0}")]
-    GrpcTransportError(#[source] tonic::transport::Error),
     #[error("gRPC: {0}")]
     GrpcOther(&'static str),
     #[cfg(feature = "kubernetes")]
@@ -362,7 +360,6 @@ impl IsRetriableError for HealthCheckError {
     fn is_retriable(&self) -> bool {
         match self {
             HealthCheckError::GrpcError(status) => status.is_retriable(),
-            HealthCheckError::GrpcTransportError(_) => true,
             HealthCheckError::GrpcOther(_) => true,
             #[cfg(feature = "kubernetes")]
             HealthCheckError::K8sConnectError(_) => true,
