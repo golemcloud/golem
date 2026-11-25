@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::attachment::{AttachmentCleanup, CleanupEvent, CleanupPhase, cleanup_transition};
 use super::*;
 use crate::durable_host::durable_stream::tests::TestOplog;
 use crate::services::oplog::{OplogReadError, UnreadableOplog};
@@ -517,7 +518,7 @@ async fn an_unreadable_oplog_ends_observation_with_an_open_output() {
             "oplog entry 43 has unknown serialization version 255",
         ),
     };
-    let mut detach = Some(streams.clone());
+    let mut detach = AttachmentCleanup::new(Some(streams.clone()));
     let (responses, mut received) = mpsc::channel(2);
     end_attachment_on_failure(
         &streams,
@@ -543,7 +544,7 @@ async fn an_unreadable_oplog_ends_observation_with_an_open_output() {
     assert_eq!(failure.message, expected.to_string());
     assert_eq!(failure.worker_error, Some(expected.into()));
     assert!(received.recv().await.is_none());
-    assert!(detach.is_none());
+    assert_eq!(detach.phase(), CleanupPhase::Unsettled);
     assert_eq!(streams.persisted_finished().await.unwrap(), None);
 }
 
@@ -583,7 +584,7 @@ async fn end_attachment(
     bool,
 ) {
     let streams = local_session(Arc::default()).await;
-    let mut detach = Some(streams.clone());
+    let mut detach = AttachmentCleanup::new(Some(streams.clone()));
     let (responses, mut received) = mpsc::channel(8);
     let drained = std::sync::atomic::AtomicBool::new(false);
     end_attachment_on_failure(
@@ -594,6 +595,7 @@ async fn end_attachment(
         error,
         async {
             drained.store(true, std::sync::atomic::Ordering::SeqCst);
+            Ok(())
         },
     )
     .await;
@@ -606,7 +608,7 @@ async fn end_attachment(
         sent,
         drained.into_inner(),
         streams.persisted_finished().await.unwrap(),
-        detach.is_some(),
+        detach.phase() == CleanupPhase::Held,
     )
 }
 
@@ -742,4 +744,170 @@ async fn a_result_and_terminal_committed_between_the_reads_are_both_read() {
         ))
     );
     assert_eq!(finished, Some(Ok(())));
+}
+
+#[test]
+async fn an_undecodable_output_value_fails_its_agent_at_its_entry_without_a_terminal() {
+    use crate::services::oplog::OplogReadSource;
+
+    let (streams, _state, handle) = routed_stream_session(SessionStreamRole::Output).await;
+    let offsets = streams
+        .producer
+        .write_items(
+            None,
+            handle.stream_id,
+            0,
+            StreamItemsPayload::Values(vec![vec![0xff]]),
+        )
+        .await
+        .unwrap()
+        .value;
+    let entry = offsets[0].producer_oplog_index();
+    assert!(entry > OplogIndex::from_u64(3));
+    let tail = streams.oplog.current_oplog_index().await;
+    let (responses, mut received) = mpsc::channel(8);
+
+    let error = streams
+        .pump_output_streams(&responses)
+        .await
+        .expect_err("an undecodable stored value must not be sent");
+    let SessionError::Unreadable(unreadable) = error.clone() else {
+        panic!("the stored value must fail its agent, got {error:?}");
+    };
+    assert_eq!(unreadable.agent_id, handle.producer);
+    let OplogReadError::Corruption { source, detail } = &unreadable.error else {
+        panic!("an undecodable value is corrupt history, got {unreadable:?}");
+    };
+    assert_eq!(*source, OplogReadSource::Other("durable output value"));
+    assert!(
+        detail.starts_with(&format!(
+            "invalid durable output value at oplog index {entry}: "
+        )),
+        "{detail}"
+    );
+
+    let mut detach = AttachmentCleanup::new(Some(streams.clone()));
+    end_attachment_on_failure(
+        &streams,
+        &responses,
+        &HashMap::new(),
+        &mut detach,
+        error,
+        async { panic!("a read failure must not drain the output") },
+    )
+    .await;
+    drop(responses);
+    let mut sent = Vec::new();
+    while let Some(response) = received.recv().await {
+        sent.push(response);
+    }
+    assert_eq!(
+        failure_of(&sent).worker_error,
+        Some(WorkerExecutorError::from(unreadable.clone()).into())
+    );
+    assert_eq!(detach.phase(), CleanupPhase::Unsettled);
+    detach.finish().await;
+    assert_eq!(streams.persisted_finished().await.unwrap(), None);
+    assert_eq!(streams.oplog.current_oplog_index().await, tail);
+}
+
+#[test]
+fn only_a_held_attachment_changes_its_cleanup_phase() {
+    use CleanupEvent::{AuthorityEnded, OtherFailure, ReadFailed};
+    use CleanupPhase::{Held, Released, Unsettled};
+    let table = [
+        (Held, ReadFailed, Unsettled),
+        (Held, AuthorityEnded, Released),
+        (Held, OtherFailure, Held),
+        (Unsettled, ReadFailed, Unsettled),
+        (Unsettled, AuthorityEnded, Unsettled),
+        (Unsettled, OtherFailure, Unsettled),
+        (Released, ReadFailed, Released),
+        (Released, AuthorityEnded, Released),
+        (Released, OtherFailure, Released),
+    ];
+    table.iter().for_each(|(phase, event, expected)| {
+        assert_eq!(
+            cleanup_transition(*phase, *event),
+            *expected,
+            "{phase:?} after {event:?}"
+        );
+    });
+    assert_eq!(
+        CleanupEvent::of_session_error(&SessionError::Unreadable(unreadable())),
+        ReadFailed
+    );
+    assert_eq!(
+        CleanupEvent::of_session_error(&SessionError::from("boom")),
+        OtherFailure
+    );
+    assert_eq!(
+        CleanupEvent::of_observation_failure(&WorkerExecutorError::from(unreadable())),
+        ReadFailed
+    );
+    assert_eq!(
+        CleanupEvent::of_observation_failure(&WorkerExecutorError::recovery_required("later")),
+        ReadFailed
+    );
+    assert_eq!(
+        CleanupEvent::of_observation_failure(&WorkerExecutorError::ShardingNotReady),
+        AuthorityEnded
+    );
+    assert_eq!(
+        CleanupEvent::of_observation_failure(&WorkerExecutorError::runtime("boom")),
+        OtherFailure
+    );
+}
+
+#[test]
+async fn an_undecodable_stored_result_leaves_the_attachment_without_a_detach() {
+    use crate::services::oplog::OplogReadSource;
+    use golem_common::base_model::durable_stream::{
+        StreamSessionInvocationResultRecord, StreamSessionRecord,
+    };
+
+    let (streams, _state, _handle) = routed_stream_session(SessionStreamRole::Output).await;
+    streams
+        .producer
+        .append_session_record(
+            None,
+            StreamSessionRecord::InvocationResult(StreamSessionInvocationResultRecord {
+                format_version: DURABLE_STREAM_FORMAT_VERSION,
+                session_key: streams.session_reference.clone(),
+                result: vec![0xff],
+                stream_mappings: vec![],
+            }),
+        )
+        .await
+        .unwrap();
+    let entry = streams.oplog.current_oplog_index().await;
+    assert!(entry > OplogIndex::from_u64(3));
+    let tail = entry;
+
+    let error = persisted_invocation_result(&streams, false)
+        .await
+        .expect_err("an undecodable stored result must not be read as a result");
+    let SessionError::Unreadable(unreadable) = &error else {
+        panic!("the stored result must fail its agent, got {error:?}");
+    };
+    assert_eq!(unreadable.agent_id, *streams.producer.agent_id());
+    let OplogReadError::Corruption { source, detail } = &unreadable.error else {
+        panic!("an undecodable result is corrupt history, got {unreadable:?}");
+    };
+    assert_eq!(*source, OplogReadSource::Other("durable invocation result"));
+    assert!(
+        detail.starts_with(&format!(
+            "invalid durable invocation result at oplog index {entry}: "
+        )),
+        "{detail}"
+    );
+
+    let mut cleanup = AttachmentCleanup::new(Some(streams.clone()));
+    cleanup.observe_error(&error);
+    cleanup.finish().await;
+    assert_eq!(streams.oplog.current_oplog_index().await, tail);
+
+    // Control: a held attachment writes its detach.
+    AttachmentCleanup::new(Some(streams.clone())).finish().await;
+    assert!(streams.oplog.current_oplog_index().await > tail);
 }

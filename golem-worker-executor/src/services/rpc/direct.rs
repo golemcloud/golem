@@ -152,14 +152,14 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     /// Authorizes a local call to `target` against the component and agent type of the agent's
     /// Create entry, or, when the agent does not exist yet, of the owner the call creates. A call
     /// that neither finds nor creates the agent fails with not found only after it is authorized.
-    async fn authorize(
+    async fn authorize<E: From<RpcError> + From<WorkerExecutorError>>(
         &self,
         caller_account_id: AccountId,
         target: &ResolvedTarget,
         verb: AgentVerb,
         resource: AgentResourcePattern,
         auth_ctx: &AuthCtx,
-    ) -> Result<EnvironmentOwnerAccountId, RpcError> {
+    ) -> Result<EnvironmentOwnerAccountId, E> {
         let owned_agent_id = &target.owned_agent_id;
         // Every denial carries the same text, so it tells an unauthorized caller nothing about
         // whether the agent exists or which agent types are deployed.
@@ -224,13 +224,13 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         Ok(owner_account_id)
     }
 
-    async fn validate_method_invocation(
+    async fn validate_method_invocation<E: From<RpcError> + From<WorkerExecutorError>>(
         &self,
         target: &ResolvedTarget,
         method_name: &str,
         method_parameters: &SchemaValue,
         freshness_disposition: InvocationFreshnessDisposition,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<bool, E> {
         let owned_agent_id = &target.owned_agent_id;
         let mut existing_metadata = None;
         let component_revision = method_validation_revision(freshness_disposition, || async {
@@ -262,13 +262,12 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
             (None, Some(owner)) => owner.constructor.clone(),
             (None, None) => None,
         };
-        validate_agent_method_invocation(
+        Ok(validate_agent_method_invocation(
             &component.metadata,
             parsed_agent_id.as_ref(),
             method_name,
             method_parameters,
-        )
-        .map_err(Into::into)
+        )?)
     }
 
     /// Resolves the target of a scalar call and validates the method against it; a method with
@@ -276,7 +275,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
     /// existing incarnation is accepted, and a missing or different one fails as not found before
     /// the method is validated against its revision; without one, the method is validated against
     /// the latest metadata and the target is created when it does not exist.
-    async fn rpc_target_worker(
+    async fn rpc_target_worker<E: From<RpcError> + From<WorkerExecutorError>>(
         &self,
         target: &ResolvedTarget,
         expected_fingerprint: Option<AgentFingerprint>,
@@ -290,7 +289,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         caller: Caller,
         freshness_disposition: InvocationFreshnessDisposition,
         live_streams_details: &str,
-    ) -> Result<Arc<Worker<Ctx>>, RpcError> {
+    ) -> Result<Arc<Worker<Ctx>>, E> {
         let owned_agent_id = &target.owned_agent_id;
         // The exact-existing lookup also refuses a generation that a deletion retires, before
         // its status is read: once the durable state is removed its state actor is gone.
@@ -327,7 +326,7 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
                 )?
             }
             None => {
-                self.validate_method_invocation(
+                self.validate_method_invocation::<E>(
                     target,
                     method_name,
                     method_parameters,
@@ -339,7 +338,8 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
         if uses_live_streams {
             return Err(RpcError::ProtocolError {
                 details: live_streams_details.to_string(),
-            });
+            }
+            .into());
         }
         Worker::<Ctx>::validate_invocation_freshness(
             self,
@@ -447,7 +447,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 details: "guest scheduling requires an agent method invocation".to_string(),
             });
         };
-        self.authorize(
+        self.authorize::<RpcError>(
             auth_ctx.actor_account_id(),
             &ResolvedTarget::existing(owned_agent_id.clone()),
             AgentVerb::Invoke,
@@ -523,7 +523,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         let new_owner = target.new_owner.clone().ok_or_else(|| {
             WorkerExecutorError::invalid_request("An explicit create needs a constructor")
         })?;
-        self.authorize(
+        self.authorize::<RpcError>(
             self_created_by,
             &target,
             AgentVerb::Invoke,
@@ -593,7 +593,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             debug!(target_agent_id = %owned_agent_id, "Ensuring local target worker exists");
 
-            self.authorize(
+            self.authorize::<RpcError>(
                 self_created_by,
                 &target,
                 AgentVerb::Invoke,
@@ -677,7 +677,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
-    ) -> Result<SchemaValue, RpcError> {
+    ) -> Result<SchemaValue, RpcAwaitError> {
         let owned_agent_id = &target.owned_agent_id;
 
         if freshness_disposition == InvocationFreshnessDisposition::KnownFresh
@@ -685,7 +685,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             return Err(RpcError::ProtocolError {
                 details: "KnownFresh requires an idempotency key".to_string(),
-            });
+            }
+            .into());
         }
 
         if self
@@ -695,7 +696,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             debug!(target_agent_id = %owned_agent_id, "Local direct agent invoke_and_await");
 
-            self.authorize(
+            self.authorize::<RpcAwaitError>(
                 self_created_by,
                 &target,
                 AgentVerb::Invoke,
@@ -709,7 +710,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map(InvocationRequestKey::Internal)
                 .unwrap_or_else(|| InvocationRequestKey::external(None, None));
             let worker = self
-                .rpc_target_worker(
+                .rpc_target_worker::<RpcAwaitError>(
                     &target,
                     expected_callee_fingerprint,
                     &method_name,
@@ -751,7 +752,8 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     details:
                         "Expected a result from agent invoke_and_await but got a non-method result"
                             .to_string(),
-                }),
+                }
+                .into()),
             }
         } else {
             self.remote_rpc
@@ -794,7 +796,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
-    ) -> Result<DurableRpcInvocationResult, RpcError> {
+    ) -> Result<DurableRpcInvocationResult, RpcAwaitError> {
         let owned_agent_id = &target.owned_agent_id;
         if self
             .shard_service()
@@ -825,7 +827,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .await;
         }
 
-        self.authorize(
+        self.authorize::<RpcAwaitError>(
             self_created_by,
             &target,
             AgentVerb::Invoke,
@@ -947,9 +949,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .await?
             .materialize_bindings(&acceptance.prepared.stream_mappings)
             .await
-            .map_err(|error| RpcError::RemoteInternalError {
-                details: error.to_string(),
-            })?;
+            .map_err(target_store_failure)?;
         let _ = accepted_inputs.send(InvocationAccepted {
             agent_id: Some(owned_agent_id.agent_id().into()),
             idempotency_key: Some(idempotency_key.into()),
@@ -1001,9 +1001,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
             .streams
             .recover_nested_input_mappings()
             .await
-            .map_err(|error| RpcError::RemoteInternalError {
-                details: error.to_string(),
-            })?;
+            .map_err(target_session_failure)?;
         let result = acceptance.streams.wait_persisted_result();
         let completion = async {
             let output = worker
@@ -1017,24 +1015,20 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         tokio::pin!(result);
         tokio::pin!(completion);
         let result = tokio::select! {
-            result = &mut result => result
-                .map_err(|error| RpcError::RemoteInternalError {
-                details: error.to_string(),
-            })?,
+            result = &mut result => result.map_err(target_session_failure)?,
             output = &mut completion => {
                 let output = output?;
                 if !matches!(output.result, AgentInvocationResult::AgentMethod { .. }) {
                     return Err(RpcError::RemoteInternalError {
                         details: "durable streaming invocation returned a non-method result".to_string(),
-                    });
+                    }
+                    .into());
                 }
                 acceptance
                     .streams
                     .persisted_result()
                     .await
-                    .map_err(|error| RpcError::RemoteInternalError {
-                details: error.to_string(),
-            })?
+                    .map_err(target_session_failure)?
                     .ok_or_else(|| RpcError::RemoteInternalError {
                         details: "durable streaming invocation completed without a persisted result".to_string(),
                     })?
@@ -1067,7 +1061,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
         debug!(target = %target, "Routing durable stream attachment control within the local shard");
 
-        self.authorize(
+        self.authorize::<RpcError>(
             auth_ctx.actor_account_id(),
             &ResolvedTarget::existing(target.clone()),
             AgentVerb::Invoke,
@@ -1117,7 +1111,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
 
         match &request {
             DurableStreamReadRequest::AttachedConsumer(_) => {
-                self.authorize(
+                self.authorize::<RpcError>(
                     auth_ctx.actor_account_id(),
                     &ResolvedTarget::existing(producer.clone()),
                     AgentVerb::View,
@@ -1188,7 +1182,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         {
             debug!(target_agent_id = %owned_agent_id, "Local direct agent invoke (fire-and-forget)");
 
-            self.authorize(
+            self.authorize::<RpcError>(
                 self_created_by,
                 &target,
                 AgentVerb::Invoke,
@@ -1202,7 +1196,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 .map(InvocationRequestKey::Internal)
                 .unwrap_or_else(|| InvocationRequestKey::external(None, None));
             let worker = self
-                .rpc_target_worker(
+                .rpc_target_worker::<RpcError>(
                     &target,
                     expected_callee_fingerprint,
                     &method_name,
@@ -1262,5 +1256,37 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 )
                 .await
         }
+    }
+}
+
+/// A session read of the target whose oplog did not read is [`RpcAwaitError::Unobserved`]; any
+/// other session failure is an internal error of the target.
+fn target_session_failure(
+    error: crate::durable_host::durable_stream::SessionError,
+) -> RpcAwaitError {
+    match error {
+        crate::durable_host::durable_stream::SessionError::Unreadable(unreadable) => {
+            WorkerExecutorError::from(unreadable).into()
+        }
+        error => RpcError::RemoteInternalError {
+            details: error.to_string(),
+        }
+        .into(),
+    }
+}
+
+/// A stream store read of the target whose oplog did not read is [`RpcAwaitError::Unobserved`];
+/// any other store failure is an internal error of the target.
+fn target_store_failure(
+    error: crate::durable_host::durable_stream::StreamStoreError,
+) -> RpcAwaitError {
+    match error {
+        crate::durable_host::durable_stream::StreamStoreError::Unreadable(unreadable) => {
+            WorkerExecutorError::from(unreadable).into()
+        }
+        error => RpcError::RemoteInternalError {
+            details: error.to_string(),
+        }
+        .into(),
     }
 }

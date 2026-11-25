@@ -174,7 +174,22 @@ message UnexpectedOplogEntry {
 
 message RuntimeError {
   string details = 1;
+  // Set only when a failed oplog read caused the error. A failed read is not an outcome of the
+  // invocation.
+  OplogReadFailure oplog_read = 2;
 }
+
+// An oplog read that failed.
+message OplogReadFailure {
+  oneof kind {
+    // The oplog of this agent failed for good.
+    AgentId failed = 1;
+    // The read failed for a time. A later read can pass.
+    OplogReadUnavailable unavailable = 2;
+  }
+}
+
+message OplogReadUnavailable {}
 
 message InvalidShardId {
   golem.shardmanager.ShardId shard_id = 1;

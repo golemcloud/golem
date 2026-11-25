@@ -36,6 +36,7 @@ use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
 use crate::services::rpc::Rpc;
 use crate::services::rpc::RpcError as InternalRpcError;
+use crate::services::rpc::{RpcAwaitError, rpc_await_outcome};
 use crate::worker::target::ResolvedTarget;
 use crate::workerctx::InvocationContextManagement;
 use crate::workerctx::WorkerCtx;
@@ -267,7 +268,12 @@ pub(super) async fn run_invoke_and_await<Ctx: WorkerCtx>(
                 )
                 .await;
                 match either_result {
-                    Either::Left((result, _)) => result,
+                    // A target history that did not read gives the call no result: the call
+                    // keeps its `Start` without an `End`, and is not retried here.
+                    Either::Left((result, _)) => match rpc_await_outcome(&agent_id, result) {
+                        Ok(result) => result,
+                        Err(error) => return Err(handle.trap(error)),
+                    },
                     Either::Right((error, _)) => {
                         return Err(handle.trap(error));
                     }
@@ -569,9 +575,14 @@ pub(super) fn spawn_rpc_task_with_retry<Ctx: WorkerCtx>(
             let result = match &remote {
                 Some(remote) => remote.remote_wait(invocation).await,
                 None => invocation.await,
+            };
+            // A target history that did not read is a host failure, which the retry loop does
+            // not retry and the call does not record: it traps with its `Start` open.
+            match rpc_await_outcome(&agent_id, result) {
+                Ok(Ok(result)) => Ok(result),
+                Ok(Err(error)) => Err(RpcTaskError::Rpc(error)),
+                Err(recovery) => Err(RpcTaskError::Host(Error::from(recovery))),
             }
-            .map_err(RpcTaskError::Rpc)?;
-            Ok(result)
         }
     };
 
@@ -706,7 +717,8 @@ pub(super) fn spawn_invoke_and_await_task<Ctx: WorkerCtx>(
 
 /// Awaits a streaming RPC and settles the inputs it did not bind. The outer error is this caller's
 /// own session write refused by the fence, or its own oplog unreadable, which traps rather than
-/// reaching the guest as an RPC failure; the inner result is the RPC's.
+/// reaching the guest as an RPC failure; the inner result is the RPC's, which can be
+/// [`crate::services::rpc::RpcAwaitError::Unobserved`].
 pub(super) async fn await_streaming_rpc_acceptance(
     streams: &StreamSession,
     activity: Option<&crate::worker::suspension::RpcActivityRevoker>,
@@ -714,10 +726,9 @@ pub(super) async fn await_streaming_rpc_acceptance(
         golem_api_grpc::proto::golem::worker::InvocationAccepted,
     >,
     invocation: impl std::future::Future<
-        Output = Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError>,
+        Output = Result<crate::services::rpc::DurableRpcInvocationResult, RpcAwaitError>,
     >,
-) -> Result<Result<crate::services::rpc::DurableRpcInvocationResult, InternalRpcError>, SessionError>
-{
+) -> Result<Result<crate::services::rpc::DurableRpcInvocationResult, RpcAwaitError>, SessionError> {
     tokio::pin!(invocation);
     let (accepted, result) = tokio::select! {
         biased;
@@ -737,7 +748,7 @@ pub(super) async fn await_streaming_rpc_acceptance(
             .collect::<Result<Vec<_>, _>>()
         {
             Ok(mappings) => mappings,
-            Err(details) => return Ok(Err(InternalRpcError::ProtocolError { details })),
+            Err(details) => return Ok(Err(InternalRpcError::ProtocolError { details }.into())),
         };
         match streams.cancel_unbound_rpc_inputs(&mappings).await {
             Ok(()) => {}
@@ -749,7 +760,7 @@ pub(super) async fn await_streaming_rpc_acceptance(
                 return Err(error);
             }
             Err(SessionError::Failed(details)) => {
-                return Ok(Err(InternalRpcError::ProtocolError { details }));
+                return Ok(Err(InternalRpcError::ProtocolError { details }.into()));
             }
         }
     }
@@ -843,6 +854,9 @@ pub(super) fn spawn_streaming_invoke_and_await_task<Ctx: WorkerCtx>(
                 )
                 .await
                 .map_err(SessionError::into_trap)?;
+                // A target history that did not read gives the call no result: the task fails, so
+                // the call keeps its `Start` without an `End`.
+                let result = rpc_await_outcome(&agent_id, result)?;
                 let result = match result {
                     Ok(result) => {
                         let mappings = result

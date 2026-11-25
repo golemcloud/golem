@@ -159,10 +159,7 @@ fn target_load_executor_errors_preserve_every_pending_update() {
         WorkerExecutorError::Interrupted {
             kind: InterruptKind::ShardLost,
         },
-        WorkerExecutorError::RecoveryRequired {
-            retry_from: Some(OplogIndex::from_u64(5)),
-            details: "retry target load".to_string(),
-        },
+        WorkerExecutorError::recovery_required_from("retry target load", OplogIndex::from_u64(5)),
         WorkerExecutorError::runtime("compile task panic"),
     ];
     let automatic = automatic_head();
@@ -674,10 +671,7 @@ fn each_raw_error_has_its_problem() {
         start_index: OplogIndex::from_u64(4),
     };
     let runtime = WorkerExecutorError::runtime("boom");
-    let recovery = WorkerExecutorError::RecoveryRequired {
-        retry_from: None,
-        details: "again".to_string(),
-    };
+    let recovery = WorkerExecutorError::recovery_required("again");
     let interrupted = WorkerExecutorError::Interrupted {
         kind: InterruptKind::Restart,
     };
@@ -1116,10 +1110,7 @@ fn a_retried_failure_and_a_lost_shard_write_no_failed_update() {
     let role = BaselineRole::AssistedPending(Arc::new(head.clone()));
     let transient = restore(RestoreClass::Transient);
     let quota = FilesystemError::AgentQuota(storage());
-    let recovery = WorkerExecutorError::RecoveryRequired {
-        retry_from: None,
-        details: "again".to_string(),
-    };
+    let recovery = WorkerExecutorError::recovery_required("again");
     let interrupted = WorkerExecutorError::Interrupted {
         kind: InterruptKind::Restart,
     };

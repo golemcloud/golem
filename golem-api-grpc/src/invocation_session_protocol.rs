@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use crate::proto::golem::worker::input_stream_item::Payload;
-use crate::proto::golem::worker::v1::worker_execution_error;
+use crate::proto::golem::worker::v1::{
+    OplogReadFailure, RuntimeError, oplog_read_failure, worker_execution_error,
+};
 use crate::proto::golem::worker::{
     AgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey, InputStreamAck,
     InputStreamItem, InvocationAccepted, InvocationFailureKind, InvocationRejectionReason,
@@ -1623,12 +1625,15 @@ impl InvocationSessionState {
                             .worker_error
                             .as_ref()
                             .and_then(|error| error.error.as_ref()),
-                        Some(worker_execution_error::Error::RuntimeError(_))
+                        Some(worker_execution_error::Error::RuntimeError(RuntimeError {
+                            oplog_read: Some(OplogReadFailure {
+                                kind: Some(oplog_read_failure::Kind::Failed(_)),
+                            }),
+                            ..
+                        }))
                     )
                 {
-                    return Err(
-                        "an unreadable oplog failure requires worker execution details".into(),
-                    );
+                    return Err("an unreadable oplog failure requires a failed oplog read".into());
                 }
                 oplog_unreadable
             }
@@ -4668,7 +4673,10 @@ mod tests {
 
     #[test]
     fn an_unreadable_oplog_can_end_an_attachment_with_open_streams() {
-        use crate::proto::golem::worker::v1::{RuntimeError, WorkerExecutionError};
+        use crate::proto::golem::worker::v1::{
+            OplogReadFailure, OplogReadUnavailable, RuntimeError, WorkerExecutionError,
+            oplog_read_failure,
+        };
 
         let failure_frame = |code: &str, kind: InvocationFailureKind, worker_error| {
             response(invocation_response::Response::Finished(
@@ -4705,11 +4713,20 @@ mod tests {
                 state.validate_response(&result(scalar(1))).unwrap();
                 assert!(state.validate_response(&success()).is_err());
 
-                let worker_error = Some(WorkerExecutionError {
-                    error: Some(worker_execution_error::Error::RuntimeError(RuntimeError {
-                        details: "oplog entry 43 has unknown serialization version 255".to_string(),
-                    })),
-                });
+                let runtime_error = |oplog_read| {
+                    Some(WorkerExecutionError {
+                        error: Some(worker_execution_error::Error::RuntimeError(RuntimeError {
+                            details: "oplog entry 43 has unknown serialization version 255"
+                                .to_string(),
+                            oplog_read,
+                        })),
+                    })
+                };
+                let worker_error = runtime_error(Some(OplogReadFailure {
+                    kind: Some(oplog_read_failure::Kind::Failed(
+                        crate::proto::golem::worker::AgentId::default(),
+                    )),
+                }));
                 [
                     failure_frame(
                         "worker-execution",
@@ -4725,6 +4742,20 @@ mod tests {
                         OPLOG_UNREADABLE_FAILURE_CODE,
                         InvocationFailureKind::Execution,
                         Some(WorkerExecutionError::default()),
+                    ),
+                    failure_frame(
+                        OPLOG_UNREADABLE_FAILURE_CODE,
+                        InvocationFailureKind::Execution,
+                        runtime_error(None),
+                    ),
+                    failure_frame(
+                        OPLOG_UNREADABLE_FAILURE_CODE,
+                        InvocationFailureKind::Execution,
+                        runtime_error(Some(OplogReadFailure {
+                            kind: Some(oplog_read_failure::Kind::Unavailable(
+                                OplogReadUnavailable {},
+                            )),
+                        })),
                     ),
                     failure_frame(
                         OPLOG_UNREADABLE_FAILURE_CODE,

@@ -21,13 +21,37 @@ use super::{
     PendingSourceCardTransferRetry, PendingSourceTransferProgress, PermissionCardDeriveError,
     QueuedCardEvent, QueuedCardEventTransfer, RecipientOwnerContext, RecipientPattern,
     RuntimeCardCreation, SourceTransferProgress, StoredCard, Timestamp, Uuid, WorkerCtx,
-    WorkerExecutorError, anyhow, card_matches_agent_recipient, deserialize,
+    WorkerExecutorError, anyhow, card_matches_agent_recipient,
     ensure_install_permission_in_surface, permissions_types, refused_runtime_card_parent,
     serialize, worker_error_to_permission_error,
 };
 use golem_common::model::AgentStatusRecord;
 use golem_common::model::card::{SourceCardTransferRecords, SourceCardTransferState};
 use golem_common::model::oplog::HostPayloadPair;
+
+/// Decodes a value that the durable call whose `Start` is at `start_index` recorded in the oplog of
+/// `agent_id`. A value that does not decode is corrupt history: the error is `OplogFailed` for
+/// that agent, and names `what`, the `Start` and the decoder reason.
+pub(super) fn decode_recorded_value<T: desert_rust::BinaryDeserializer>(
+    agent_id: &AgentId,
+    start_index: OplogIndex,
+    what: &str,
+    bytes: &[u8],
+) -> Result<T, WorkerExecutorError> {
+    use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
+
+    golem_common::serialization::decode(bytes).map_err(|error| {
+        WorkerExecutorError::from(UnreadableOplog::new(
+            agent_id,
+            OplogReadError::corruption(
+                OplogReadSource::Other("permission card"),
+                format!(
+                    "failed to decode the recorded {what} of the durable call at oplog index {start_index}: {error}"
+                ),
+            ),
+        ))
+    })
+}
 
 pub(super) fn agent_recipient_pattern(
     context: &AgentPermissionMonomorphizationContext,
@@ -200,28 +224,33 @@ impl CardTransferData {
         })
     }
 
+    /// The transfer that the request recorded at `start_index` in the oplog of `agent_id` holds.
     pub(super) fn from_request(
+        agent_id: &AgentId,
         start_index: OplogIndex,
         request: HostRequestPermissionCardTransfer,
     ) -> Result<Self, WorkerExecutorError> {
-        let source_card: StoredCard = deserialize(&request.source_card).map_err(|error| {
-            WorkerExecutorError::runtime(format!(
-                "failed to deserialize durable source permission card: {error}"
-            ))
-        })?;
-        let installed_card: StoredCard = deserialize(&request.installed_card).map_err(|error| {
-            WorkerExecutorError::runtime(format!(
-                "failed to deserialize durable installed permission card: {error}"
-            ))
-        })?;
+        let source_card: StoredCard = decode_recorded_value(
+            agent_id,
+            start_index,
+            "source permission card",
+            &request.source_card,
+        )?;
+        let installed_card: StoredCard = decode_recorded_value(
+            agent_id,
+            start_index,
+            "installed permission card",
+            &request.installed_card,
+        )?;
         let installed_card_provenance = request
             .installed_card_provenance
             .map(|provenance| {
-                deserialize(&provenance).map_err(|error| {
-                    WorkerExecutorError::runtime(format!(
-                        "failed to deserialize durable installed permission-card provenance: {error}"
-                    ))
-                })
+                decode_recorded_value(
+                    agent_id,
+                    start_index,
+                    "installed permission-card provenance",
+                    &provenance,
+                )
             })
             .transpose()?;
 
@@ -941,4 +970,42 @@ pub(crate) fn prepare_pending_source_card_transfer_retry(
         pending: pending.clone(),
         transfer: transfer.clone(),
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    /// A recorded transfer whose source card does not decode is corrupt history at the `Start`
+    /// of the transfer: `OplogFailed` with the index and the version byte.
+    #[test]
+    fn an_undecodable_recorded_source_card_is_unreadable_at_its_call() {
+        let request = HostRequestPermissionCardTransfer {
+            transfer_id: Uuid::from_u128(0x7a),
+            source_card: vec![255, 7, 7],
+            installed_card: vec![255, 7, 7],
+            installed_card_provenance: None,
+            target_agent_id: AgentId::from_parts(3, 5),
+        };
+
+        let agent_id = AgentId::from_parts(4, 6);
+
+        let error = CardTransferData::from_request(&agent_id, OplogIndex::from_u64(9), request)
+            .expect_err("an undecodable card must fail");
+
+        let WorkerExecutorError::OplogFailed {
+            agent_id: failed,
+            details,
+        } = &error
+        else {
+            panic!("expected an unreadable oplog, got {error:?}");
+        };
+        assert_eq!(*failed, agent_id);
+        assert!(details.contains("oplog index 9:"), "{details}");
+        assert!(
+            details.contains("unknown serialization version: 255"),
+            "{details}"
+        );
+    }
 }

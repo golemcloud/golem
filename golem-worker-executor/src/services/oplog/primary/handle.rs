@@ -47,14 +47,14 @@ impl PrimaryOplog {
     ) -> Self {
         let account_id_label = account_id.to_string();
         let environment_id_label = owned_agent_id.environment_id().to_string();
-        let fence = Arc::new(match fence {
-            Some(fence) => std::sync::OnceLock::from(fence),
+        let latch = Arc::new(match fence {
+            Some(fence) => std::sync::OnceLock::from(WriteLatch::Fenced(fence)),
             None => std::sync::OnceLock::new(),
         });
         let auto_commit_listener = AutoCommitListener::default();
         let mut state = PrimaryOplogState {
             shard_epoch,
-            fence: fence.clone(),
+            latch: latch.clone(),
             indexed_storage,
             blob_storage,
             replicas,
@@ -92,7 +92,7 @@ impl PrimaryOplog {
                     OplogJob::Close => break,
                     OplogJob::Add { entry, done } => {
                         record_oplog_call("add");
-                        if let Err(error) = state.refuse_if_fenced() {
+                        if let Err(error) = state.refuse_if_latched() {
                             let _ = done.send(Err(error));
                             continue;
                         }
@@ -108,7 +108,7 @@ impl PrimaryOplog {
                     }
                     OplogJob::AddDurableStreamBatch { make_batch, done } => {
                         record_oplog_call("add_durable_stream_batch");
-                        if let Err(error) = state.refuse_if_fenced() {
+                        if let Err(error) = state.refuse_if_latched() {
                             let _ = done.send(Err(error));
                             continue;
                         }
@@ -149,7 +149,7 @@ impl PrimaryOplog {
                         done,
                     } => {
                         record_oplog_call("add_pair");
-                        if let Err(error) = state.refuse_if_fenced() {
+                        if let Err(error) = state.refuse_if_latched() {
                             let _ = done.send(Err(error));
                             continue;
                         }
@@ -184,7 +184,7 @@ impl PrimaryOplog {
                         //
                         // A fenced oplog refuses before reserving, so no upload is started for a
                         // `Start` that can never be written.
-                        if let Err(error) = state.refuse_if_fenced() {
+                        if let Err(error) = state.refuse_if_latched() {
                             let _ = done.send(Err(error));
                             continue;
                         }
@@ -219,7 +219,7 @@ impl PrimaryOplog {
                         done,
                     } => {
                         record_oplog_call("add_start_with_indexed_reserved_raw_payload");
-                        if let Err(error) = state.refuse_if_fenced() {
+                        if let Err(error) = state.refuse_if_latched() {
                             let _ = done.send(Err(error));
                             continue;
                         }
@@ -267,13 +267,13 @@ impl PrimaryOplog {
                         let _ = done.send(result);
                     }
                     OplogJob::Flush { done } => {
-                        // The job has no error to reply with. A fence is latched on the state,
-                        // where `wait_for_replicas` reads it after this job, so a fenced flush is
-                        // reported as not durable rather than lost; every subsequent write fails on
-                        // it without asking the storage again. A transient storage failure is fatal
-                        // here as everywhere else.
+                        // The job has no error to reply with. A fence and an unconfirmed append
+                        // are latched on the state, where `wait_for_replicas` reads them after this
+                        // job, so the flush is reported with the typed error rather than lost;
+                        // every subsequent write fails on the latch without asking the storage
+                        // again.
                         match state.auto_commit().await {
-                            Ok(()) | Err(OplogError::Fenced(_)) => {}
+                            Ok(()) | Err(OplogError::Fenced(_) | OplogError::Unreadable(_)) => {}
                             Err(error) => panic!("oplog write: {error}"),
                         }
                         let _ = done.send(());
@@ -391,7 +391,7 @@ impl PrimaryOplog {
             fingerprint,
             shard_epoch,
             max_payload_size,
-            fence,
+            latch,
             stream_session_index,
             auto_commit_listener,
             close: Mutex::new(Some(close)),
@@ -593,10 +593,11 @@ impl Oplog for PrimaryOplog {
         record_oplog_call("wait_for_replicas");
 
         self.run_job(|done| OplogJob::Flush { done }).await;
-        // A refused flush reached no replica. The storage would still answer with its replica
-        // count, and passing that on would tell the caller that entries it turned away are durable.
-        if let Some(fence) = self.fence.get() {
-            return Err(OplogError::Fenced(fence.clone()));
+        // A refused or unconfirmed flush reached no replica. The storage would still answer with
+        // its replica count, and passing that on would tell the caller that entries it turned
+        // away are durable.
+        if let Some(latch) = self.latch.get() {
+            return Err(latch.error());
         }
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
         let replicas = replicas.min(reader.replicas);
@@ -762,6 +763,6 @@ impl Oplog for PrimaryOplog {
     }
 
     fn fence(&self) -> Option<OplogFence> {
-        self.fence.get().cloned()
+        self.latch.get().and_then(WriteLatch::fence).cloned()
     }
 }

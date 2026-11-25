@@ -20,6 +20,7 @@ use crate::durable_host::concurrent::CallReplayOutcome;
 use crate::durable_host::concurrent::DurableCallSession;
 use crate::durable_host::concurrent::NotCancellable;
 use crate::durable_host::concurrent::ResolvedCall;
+use crate::model::public_oplog::PublicEntryError;
 use crate::model::public_oplog::PublicOplogEntryOps;
 use crate::model::public_oplog::find_component_revision_at;
 use crate::model::public_oplog::get_public_oplog_chunk;
@@ -31,6 +32,7 @@ use crate::preview2::golem_api_1_x::oplog::HostSearchOplog;
 use crate::preview2::golem_api_1_x::oplog::OplogReadError;
 use crate::preview2::golem_api_1_x::oplog::SearchOplog;
 use crate::services::HasOplogService;
+use crate::services::rpc::{is_unread_history, observation_recovery};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::base_model::caller::ClaimVisibility;
@@ -212,70 +214,122 @@ fn prepare_oplog_enrichment_entries<Ctx: WorkerCtx>(
 /// claims in a chunk would reach every reader of that oplog without being asked for.
 const GUEST_CLAIM_VISIBILITY: ClaimVisibility = ClaimVisibility::Hidden;
 
+/// The result of a stored read for a guest call: a failed oplog read is the outer error, which
+/// stops the call without its `End`; any other error is the text that the call records.
+fn stored_read<T>(
+    result: Result<T, WorkerExecutorError>,
+) -> Result<Result<T, String>, WorkerExecutorError> {
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(error) if is_unread_history(&error) => Err(error),
+        Err(error) => Ok(Err(error.to_string())),
+    }
+}
+
+/// The result of a public oplog read for a guest call. An entry that does not read goes through
+/// [`stored_read`], so it stops the call without its `End`; an entry that has no public form is the
+/// text that the call records.
+fn public_read<T>(
+    result: Result<T, PublicEntryError>,
+) -> Result<Result<T, String>, WorkerExecutorError> {
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(PublicEntryError::Other(error)) => Ok(Err(error)),
+        Err(error) => stored_read(Err(error.into())),
+    }
+}
+
 async fn get_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &GetOplogEntry,
-) -> Result<crate::model::public_oplog::PublicOplogChunk, String> {
-    let identity = ctx
-        .state
-        .worker_service
-        .resolve_agent_identity(&entry.owned_agent_id)
-        .await
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
+) -> Result<Result<crate::model::public_oplog::PublicOplogChunk, String>, WorkerExecutorError> {
+    let identity = match stored_read(
+        ctx.state
+            .worker_service
+            .resolve_agent_identity(&entry.owned_agent_id)
+            .await,
+    )? {
+        Ok(Some(identity)) => identity,
+        Ok(None) => {
+            return Ok(Err(format!(
+                "agent {} does not exist",
+                entry.owned_agent_id
+            )));
+        }
+        Err(error) => return Ok(Err(error)),
+    };
     let agent_mode = identity.agent_mode;
     let current_component_revision = if entry.initialized {
         entry.current_component_revision
     } else {
-        find_component_revision_at(
+        match stored_read(
+            find_component_revision_at(
+                ctx.state.oplog_service(),
+                &entry.owned_agent_id,
+                agent_mode,
+                entry.next_oplog_index,
+            )
+            .await,
+        )? {
+            Ok(revision) => revision,
+            Err(error) => return Ok(Err(error)),
+        }
+    };
+    let agent_type = &identity.create_parameters().agent_type_name;
+    public_read(
+        get_public_oplog_chunk(
+            ctx.state.component_service.clone(),
             ctx.state.oplog_service(),
             &entry.owned_agent_id,
             agent_mode,
+            identity.create_parameters().component_id,
+            identity.create_parameters().owner_kind,
+            agent_type.as_ref(),
+            current_component_revision,
             entry.next_oplog_index,
+            entry.page_size,
+            GUEST_CLAIM_VISIBILITY,
         )
-        .await
-        .map_err(|error| error.to_string())?
-    };
-    let agent_type = &identity.create_parameters().agent_type_name;
-    get_public_oplog_chunk(
-        ctx.state.component_service.clone(),
-        ctx.state.oplog_service(),
-        &entry.owned_agent_id,
-        agent_mode,
-        identity.create_parameters().component_id,
-        identity.create_parameters().owner_kind,
-        agent_type.as_ref(),
-        current_component_revision,
-        entry.next_oplog_index,
-        entry.page_size,
-        GUEST_CLAIM_VISIBILITY,
+        .await,
     )
-    .await
 }
 
 async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     entry: &SearchOplogEntry,
-) -> Result<crate::model::public_oplog::PublicOplogSearchResult, String> {
-    let identity = ctx
-        .state
-        .worker_service
-        .resolve_agent_identity(&entry.owned_agent_id)
-        .await
-        .map_err(|err| err.to_string())?
-        .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
+) -> Result<Result<crate::model::public_oplog::PublicOplogSearchResult, String>, WorkerExecutorError>
+{
+    let identity = match stored_read(
+        ctx.state
+            .worker_service
+            .resolve_agent_identity(&entry.owned_agent_id)
+            .await,
+    )? {
+        Ok(Some(identity)) => identity,
+        Ok(None) => {
+            return Ok(Err(format!(
+                "agent {} does not exist",
+                entry.owned_agent_id
+            )));
+        }
+        Err(error) => return Ok(Err(error)),
+    };
     let agent_mode = identity.agent_mode;
     let current_component_revision = if entry.initialized {
         entry.current_component_revision
     } else {
-        find_component_revision_at(
-            ctx.state.oplog_service(),
-            &entry.owned_agent_id,
-            agent_mode,
-            entry.next_oplog_index,
-        )
-        .await
-        .map_err(|error| error.to_string())?
+        match stored_read(
+            find_component_revision_at(
+                ctx.state.oplog_service(),
+                &entry.owned_agent_id,
+                agent_mode,
+                entry.next_oplog_index,
+            )
+            .await,
+        )? {
+            Ok(revision) => revision,
+            Err(error) => return Ok(Err(error)),
+        }
     };
     let agent_type = &identity.create_parameters().agent_type_name;
     // The grant covers page_size indexes, not page_size matches. The scanner caps each
@@ -284,23 +338,25 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
     budget.entries = budget
         .entries
         .min(NonZeroU64::new(entry.page_size as u64).expect("search page size is nonzero"));
-    search_public_oplog(
-        ctx.state.component_service.clone(),
-        ctx.state.oplog_service(),
-        &entry.owned_agent_id,
-        agent_mode,
-        identity.create_parameters().component_id,
-        identity.create_parameters().owner_kind,
-        agent_type.as_ref(),
-        current_component_revision,
-        entry.next_oplog_index,
-        entry.last_oplog_index,
-        entry.page_size,
-        &entry.query,
-        budget,
-        GUEST_CLAIM_VISIBILITY,
+    public_read(
+        search_public_oplog(
+            ctx.state.component_service.clone(),
+            ctx.state.oplog_service(),
+            &entry.owned_agent_id,
+            agent_mode,
+            identity.create_parameters().component_id,
+            identity.create_parameters().owner_kind,
+            agent_type.as_ref(),
+            current_component_revision,
+            entry.next_oplog_index,
+            entry.last_oplog_index,
+            entry.page_size,
+            &entry.query,
+            budget,
+            GUEST_CLAIM_VISIBILITY,
+        )
+        .await,
     )
-    .await
 }
 
 impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
@@ -338,7 +394,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
         )
         .await?;
         let response = 'response: {
-            let (handle, entry) = match begun.resolve(self).await? {
+            let (mut handle, entry) = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
                     let entry = self.as_wasi_view().table().get(&self_)?.clone();
                     let denied = oplog_read_denied(
@@ -374,7 +430,12 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
                 }
             };
 
-            let result = get_oplog_chunk(self, &entry).await;
+            let result = match get_oplog_chunk(self, &entry).await {
+                Ok(result) => result,
+                Err(error) => {
+                    return Err(handle.trap(observation_recovery(self.agent_id(), error)));
+                }
+            };
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
                     let entries = chunk
@@ -527,7 +588,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
         )
         .await?;
         let response = 'response: {
-            let (handle, entry) = match begun.resolve(self).await? {
+            let (mut handle, entry) = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
                     let entry = self.as_wasi_view().table().get(&self_)?.clone();
                     let denied = oplog_read_denied(
@@ -563,7 +624,12 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
                 }
             };
 
-            let result = get_search_oplog_chunk(self, &entry).await;
+            let result = match get_search_oplog_chunk(self, &entry).await {
+                Ok(result) => result,
+                Err(error) => {
+                    return Err(handle.trap(observation_recovery(self.agent_id(), error)));
+                }
+            };
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
                     let entries = chunk
@@ -710,7 +776,7 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
 
         let response = 'response: {
             let mut raw_entries = Some(entries);
-            let (handle, owned_agent_id, prepared_entries) = match begun.resolve(self).await? {
+            let (mut handle, owned_agent_id, prepared_entries) = match begun.resolve(self).await? {
                 ResolvedCall::Live(begun) => {
                     let environment_id =
                         golem_common::model::environment::EnvironmentId::from(Uuid::from_u64_pair(
@@ -806,17 +872,25 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                 }
             };
 
+            let identity = match stored_read(
+                self.state
+                    .worker_service
+                    .resolve_agent_identity(&owned_agent_id)
+                    .await,
+            ) {
+                Ok(identity) => identity,
+                Err(error) => {
+                    return Err(handle.trap(observation_recovery(self.agent_id(), error)));
+                }
+            };
             let result = async {
                 let component_service = self.state.component_service.clone();
                 let oplog_service = self.state.oplog_service();
-                let mut current_revision = ComponentRevision::try_from(component_revision)?;
-                let identity = self
-                    .state
-                    .worker_service
-                    .resolve_agent_identity(&owned_agent_id)
-                    .await
-                    .map_err(|err| err.to_string())?
-                    .ok_or_else(|| format!("agent {owned_agent_id} does not exist"))?;
+                let mut current_revision = ComponentRevision::try_from(component_revision)
+                    .map_err(PublicEntryError::Other)?;
+                let identity = identity.map_err(PublicEntryError::Other)?.ok_or_else(|| {
+                    PublicEntryError::Other(format!("agent {owned_agent_id} does not exist"))
+                })?;
                 let agent_mode = identity.agent_mode;
                 let agent_type = &identity.create_parameters().agent_type_name;
 
@@ -847,9 +921,16 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
                         .await?,
                     );
                 }
-                serde_json::to_vec(&result).map_err(|error| error.to_string())
+                serde_json::to_vec(&result)
+                    .map_err(|error| PublicEntryError::Other(error.to_string()))
             }
             .await;
+            let result = match public_read(result) {
+                Ok(result) => result,
+                Err(error) => {
+                    return Err(handle.trap(observation_recovery(self.agent_id(), error)));
+                }
+            };
 
             handle
                 .complete(self, HostResponseGolemApiOplogEntries { result })
@@ -879,6 +960,10 @@ impl<Ctx: WorkerCtx> OplogHost for DurableWorkerCtx<Ctx> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::services::oplog::{
+        OplogPayloadDownloadError, OplogReadError as StoredReadError, OplogReadSource,
+        UnreadableOplog,
+    };
     use golem_common::model::Timestamp;
     use test_r::test;
 
@@ -899,6 +984,66 @@ mod tests {
                 replay_start: None,
             }),
         })
+    }
+
+    fn unreadable_entry(payload_error: OplogPayloadDownloadError) -> PublicEntryError {
+        PublicEntryError::Unreadable(UnreadableOplog::new(
+            &AgentId::from_parts(9, 2),
+            StoredReadError::of_payload(
+                OplogReadSource::Other("public oplog entry"),
+                OplogIndex::from_u64(6),
+                payload_error,
+            ),
+        ))
+    }
+
+    /// An entry whose stored payload does not decode stops the call as `OplogFailed`, with the
+    /// entry index and the version byte, instead of a text that the call records.
+    #[test]
+    fn an_undecodable_public_entry_is_not_a_recorded_result() {
+        let decode_error =
+            golem_common::serialization::decode::<String>(&[255, 7, 7]).expect_err("version 255");
+        let result = public_read::<()>(Err(unreadable_entry(OplogPayloadDownloadError::Corrupt(
+            decode_error.into(),
+        ))));
+
+        let Err(WorkerExecutorError::OplogFailed { agent_id, details }) = &result else {
+            panic!("expected an unreadable oplog, got {result:?}");
+        };
+        assert_eq!(*agent_id, AgentId::from_parts(9, 2));
+        assert!(details.contains("at oplog index 6:"), "{details}");
+        assert!(
+            details.contains("unknown serialization version: 255"),
+            "{details}"
+        );
+    }
+
+    /// A payload whose storage did not answer stops the call as a read that a later attempt can
+    /// pass.
+    #[test]
+    fn an_unavailable_public_entry_is_not_a_recorded_result() {
+        let result = public_read::<()>(Err(unreadable_entry(OplogPayloadDownloadError::Backend(
+            anyhow!("injected backend outage"),
+        ))));
+
+        assert!(
+            matches!(
+                &result,
+                Err(error @ WorkerExecutorError::RecoveryRequired { .. }) if is_unread_history(error)
+            ),
+            "{result:?}"
+        );
+    }
+
+    /// An entry that has no public form is the text that the call records.
+    #[test]
+    fn a_public_entry_without_a_public_form_is_a_recorded_result() {
+        let result = public_read::<()>(Err(PublicEntryError::Other("no public form".to_string())));
+
+        assert!(
+            matches!(&result, Ok(Err(text)) if text == "no public form"),
+            "{result:?}"
+        );
     }
 
     /// The enrichment of a failed update reads the recorded `Start` at the index of its

@@ -171,29 +171,35 @@ impl StreamForkLineage {
         oplog: &dyn Oplog,
         owner: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, UnreadableOplog> {
         let horizon = oplog.current_oplog_index().await;
         Self::load_at_horizon(oplog, owner, fingerprint, horizon).await
     }
 
+    /// Loads the lineage of the open oplog of `owner` up to `horizon`. An entry that does not read
+    /// or a lineage that is not valid makes the oplog of `owner` unreadable.
     pub(crate) async fn load_at_horizon(
         oplog: &dyn Oplog,
-        _owner: &OwnedAgentId,
+        owner: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
         horizon: OplogIndex,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, UnreadableOplog> {
         Self::load_from_source(LineageSource::Open(oplog), horizon, None)
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| UnreadableOplog::new(&owner.agent_id, error))
     }
 
+    /// Validates `cut` against the lineage of the open oplog of `owner` up to its cut index. An
+    /// entry that does not read or a lineage that is not valid with `cut` makes the oplog of
+    /// `owner` unreadable.
     pub(crate) async fn validate_fork_cut(
         oplog: &dyn Oplog,
+        owner: &OwnedAgentId,
         cut: StreamForkCutRecord,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, UnreadableOplog> {
         Self::load_from_source(LineageSource::Open(oplog), cut.cut_index, Some(cut))
             .await
-            .map_err(|error| error.to_string())
+            .map_err(|error| UnreadableOplog::new(&owner.agent_id, error))
     }
 
     pub async fn load_from_service(

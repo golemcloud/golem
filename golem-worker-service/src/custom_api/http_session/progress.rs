@@ -6,7 +6,7 @@
 //
 //     http://license.golem.cloud/LICENSE
 
-use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
+use golem_api_grpc::proto::golem::worker::v1::{RuntimeError, worker_execution_error};
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InputStreamItem, InvocationAccepted, InvocationRequest, ResumeAttach,
     StreamDirection, StreamEnd, StreamMappingRole, StreamTerminalAuthor, invocation_request,
@@ -304,17 +304,20 @@ pub(super) enum ExecutorEnd {
 
 impl ExecutorEnd {
     /// The end that `rejected` reports. The executor reports a refused oplog read as an
-    /// internal rejection with a runtime worker error; the worker service cannot tell it apart
-    /// from other runtime errors, so it treats all of them as refused reads.
+    /// internal rejection with a runtime worker error that names the failed read, for good or
+    /// for a time. Other rejections do not end the right to clean up.
     pub(super) fn of_rejection(rejected: &InvocationRejected) -> Option<Self> {
-        let runtime_error = matches!(
+        let read_refused = matches!(
             rejected
                 .worker_error
                 .as_ref()
                 .and_then(|error| error.error.as_ref()),
-            Some(worker_execution_error::Error::RuntimeError(_))
+            Some(worker_execution_error::Error::RuntimeError(RuntimeError {
+                oplog_read: Some(_),
+                ..
+            }))
         );
-        (rejected.reason() == InvocationRejectionReason::Internal && runtime_error)
+        (rejected.reason() == InvocationRejectionReason::Internal && read_refused)
             .then_some(Self::ReadRefused)
     }
 }

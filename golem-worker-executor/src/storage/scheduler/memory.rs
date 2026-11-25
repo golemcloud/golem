@@ -19,7 +19,7 @@ use super::{
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
-use golem_common::serialization::deserialize;
+use golem_common::serialization::decode;
 use std::collections::HashMap;
 use std::sync::Mutex;
 use std::time::Duration;
@@ -111,7 +111,9 @@ impl SchedulerStorage for InMemorySchedulerStorage {
                 entry.attempt_count += 1;
                 result.push(ClaimedScheduledAction {
                     schedule_id: ScheduleId { id },
-                    action: deserialize(&entry.action)?,
+                    action: decode(&entry.action).map_err(|error| {
+                        SchedulerStorageError::unreadable(ScheduleId { id }, error)
+                    })?,
                     due_at: millis_to_datetime(entry.due_at_ms)?,
                     lease_owner,
                     attempt_count: entry.attempt_count,
@@ -178,5 +180,53 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         } else {
             Ok(false)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::scheduler::UnreadableScheduledAction;
+    use test_r::test;
+
+    #[test]
+    async fn claim_due_names_the_schedule_with_an_unreadable_action() {
+        let storage = InMemorySchedulerStorage::default();
+        let now = Utc::now();
+        let schedule_id = ScheduleId::fresh();
+        let shard_id = ShardId::new(3);
+        storage
+            .insert(schedule_id, now, shard_id, b"\xffprivate payload")
+            .await
+            .unwrap();
+
+        let error = storage
+            .claim_due(
+                now,
+                &ShardAssignment::unexpiring(4, [shard_id]),
+                1,
+                Duration::from_secs(30),
+            )
+            .await
+            .unwrap_err();
+
+        let SchedulerStorageError::Unreadable(unreadable) = &error else {
+            panic!("the failed decode must be an unreadable action: {error}");
+        };
+        assert_eq!(
+            **unreadable,
+            UnreadableScheduledAction {
+                schedule_id,
+                error: golem_common::serialization::DecodeError::UnknownVersion(255),
+            }
+        );
+        let text = error.to_string();
+        assert!(
+            text.contains(&format!(
+                "failed to decode scheduled action {schedule_id}: unknown serialization version: 255"
+            )),
+            "{text}"
+        );
+        assert!(!text.contains("private payload"), "{text}");
     }
 }

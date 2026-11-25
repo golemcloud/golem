@@ -385,7 +385,7 @@ impl Rpc for HoldReportAnswerRpc {
         config: Vec<golem_common::model::agent::AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
-    ) -> Result<SchemaValue, RpcError> {
+    ) -> Result<SchemaValue, golem_worker_executor::services::rpc::RpcAwaitError> {
         let hold = method_name == "report_and_bump" && {
             let mut dispatches = self.dispatches.lock().unwrap();
             dispatches.push((idempotency_key.clone(), caller.clone()));

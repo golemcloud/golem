@@ -1043,3 +1043,37 @@ async fn a_required_claim_of_a_deleted_start_keeps_its_index() {
         );
     }
 }
+
+#[test]
+async fn an_undecodable_recorded_request_is_unreadable_at_its_start() {
+    use crate::durable_host::durable_stream::tests::TestOplog;
+
+    let agent_id = crate::test_agent_id("durable-call-request-unreadable");
+    let oplog = TestOplog::default();
+
+    let error = download_recorded_request(
+        &oplog,
+        &agent_id,
+        OplogIndex::from_u64(9),
+        OplogPayload::SerializedInline {
+            bytes: vec![255, 7, 7],
+            cached: None,
+        },
+    )
+    .await
+    .expect_err("an undecodable request must fail");
+
+    let WorkerExecutorError::OplogFailed {
+        agent_id: failed,
+        details,
+    } = &error
+    else {
+        panic!("expected an unreadable oplog, got {error:?}");
+    };
+    assert_eq!(*failed, agent_id);
+    assert!(details.contains("at oplog index 9:"), "{details}");
+    assert!(
+        details.contains("unknown serialization version: 255"),
+        "{details}"
+    );
+}

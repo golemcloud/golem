@@ -73,7 +73,7 @@ use golem_common::model::{
 };
 use golem_common::schema::SchemaValue;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{RecoveryCause, WorkerExecutorError};
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -175,7 +175,8 @@ pub trait Rpc: Send + Sync {
     /// `expected_callee_fingerprint` pins the call to one incarnation of the target: when that
     /// incarnation no longer exists, the call fails with [`RpcError::NotFound`] and the method
     /// never runs on another incarnation. Durable targets always pass the fingerprint of their
-    /// activation; ephemeral targets pass none.
+    /// activation; ephemeral targets pass none. Fails with [`RpcAwaitError::Unobserved`], not
+    /// with an outcome, when the stored history of the target does not read.
     async fn invoke_and_await(
         &self,
         target: ResolvedTarget,
@@ -192,8 +193,10 @@ pub trait Rpc: Send + Sync {
         config: Vec<AgentConfigEntryDto>,
         auth_ctx: &AuthCtx,
         scope_card: Option<ScopeCard>,
-    ) -> Result<SchemaValue, RpcError>;
+    ) -> Result<SchemaValue, RpcAwaitError>;
 
+    /// Fails with [`RpcAwaitError::Unobserved`], not with an outcome, when the stored history of
+    /// the target does not read.
     async fn invoke_and_await_streaming(
         &self,
         _target: ResolvedTarget,
@@ -213,11 +216,12 @@ pub trait Rpc: Send + Sync {
         _config: Vec<AgentConfigEntryDto>,
         _auth_ctx: &AuthCtx,
         _scope_card: Option<ScopeCard>,
-    ) -> Result<DurableRpcInvocationResult, RpcError> {
+    ) -> Result<DurableRpcInvocationResult, RpcAwaitError> {
         Err(RpcError::ProtocolError {
             details: "durable streaming invocation is not supported by this RPC implementation"
                 .to_string(),
-        })
+        }
+        .into())
     }
 
     async fn control_durable_stream_attachment(
@@ -350,6 +354,94 @@ pub enum RpcError {
     Conflict {
         details: String,
     },
+}
+
+/// The failure of an awaited call. Only an [`RpcAwaitError::Outcome`] is a result of
+/// the call, which a caller can record.
+#[derive(Debug, Clone, PartialEq)]
+pub enum RpcAwaitError {
+    /// The target gave this failure as the result of the call.
+    Outcome(RpcError),
+    /// The stored history of the target did not read, so the call has no result. The error is
+    /// the failed read as the target gave it.
+    Unobserved(Box<WorkerExecutorError>),
+}
+
+impl From<RpcError> for RpcAwaitError {
+    fn from(value: RpcError) -> Self {
+        Self::Outcome(value)
+    }
+}
+
+/// An error that a failed oplog read caused is [`RpcAwaitError::Unobserved`]. Every other error
+/// is the outcome that [`RpcError`] gives for it.
+impl From<WorkerExecutorError> for RpcAwaitError {
+    fn from(value: WorkerExecutorError) -> Self {
+        if is_unread_history(&value) {
+            Self::Unobserved(Box::new(value))
+        } else {
+            Self::Outcome(value.into())
+        }
+    }
+}
+
+/// Separates the result of an awaited call, which `observer` records, from the error that leaves
+/// the call without a result. That error is the recovery of `observer` that
+/// [`observation_recovery`] gives.
+pub fn rpc_await_outcome<T>(
+    observer: &AgentId,
+    result: Result<T, RpcAwaitError>,
+) -> Result<Result<T, RpcError>, WorkerExecutorError> {
+    match result {
+        Ok(value) => Ok(Ok(value)),
+        Err(RpcAwaitError::Outcome(error)) => Ok(Err(error)),
+        Err(RpcAwaitError::Unobserved(error)) => Err(observation_recovery(observer, *error)),
+    }
+}
+
+/// Whether a failed oplog read caused `error`, for good or for a time.
+pub(crate) fn is_unread_history(error: &WorkerExecutorError) -> bool {
+    match error {
+        WorkerExecutorError::OplogFailed { .. }
+        | WorkerExecutorError::RecoveryRequired {
+            cause: RecoveryCause::OplogReadUnavailable,
+            ..
+        } => true,
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => is_unread_history(reason),
+        _ => false,
+    }
+}
+
+/// The error with which `observer` stops a host call when the read of a stored history gave
+/// `error`. A failed oplog of `observer` stays as it is, so `observer` fails. A failed oplog of
+/// another agent fails only that agent: for `observer` it is a read that failed for a time, so
+/// `observer` recovers and reads again. The error makes no oplog entry of `observer`.
+pub(crate) fn observation_recovery(
+    observer: &AgentId,
+    error: WorkerExecutorError,
+) -> WorkerExecutorError {
+    match error {
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => {
+            observation_recovery(observer, *reason)
+        }
+        WorkerExecutorError::OplogFailed { agent_id, details } if agent_id != *observer => {
+            WorkerExecutorError::oplog_read_unavailable(format!(
+                "the oplog of agent {agent_id} failed: {details}"
+            ))
+        }
+        error => error,
+    }
+}
+
+/// A worker error that the proxy forwards keeps its read kind; any other proxy error is the
+/// outcome that [`RpcError`] gives for it.
+impl From<WorkerProxyError> for RpcAwaitError {
+    fn from(value: WorkerProxyError) -> Self {
+        match value {
+            WorkerProxyError::InternalError(error) => error.into(),
+            error => RpcError::from(error).into(),
+        }
+    }
 }
 
 impl From<SerializableRpcError> for RpcError {

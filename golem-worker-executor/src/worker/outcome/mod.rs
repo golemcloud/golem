@@ -21,7 +21,9 @@ use crate::workerctx::WorkerCtx;
 use golem_common::model::OplogIndex;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, EphemeralCannotSuspendError};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::{
+    InterruptKind, RecoveryCause, WorkerExecutorError,
+};
 
 #[cfg(test)]
 mod tests;
@@ -313,10 +315,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub(crate) async fn record_recovery_failure(&self, error: &WorkerExecutorError) {
-        // An oplog that failed for good stays as it is: an error entry would record a read
-        // error as the outcome of the agent. The caller stops the worker and tells the waiters.
-        // A lost shard also retires the worker.
-        if self.retire_if_shard_lost(error) || is_failed_oplog(error) {
+        // A failed oplog read adds no entry: an error entry would record a read error as the
+        // outcome of the agent. For an oplog that failed for good, the caller stops the worker
+        // and tells the waiters; for a read that failed for a time, the caller recovers the
+        // worker again with the same delay. A lost shard also retires the worker.
+        if self.retire_if_shard_lost(error) || is_failed_oplog_read(error) {
             return;
         }
 
@@ -1006,10 +1009,15 @@ pub(in crate::worker) fn invocation_result_index_unavailable(
 }
 
 /// Whether `error` is an oplog that failed for good, also when a failed resume carries it.
-fn is_failed_oplog(error: &WorkerExecutorError) -> bool {
+/// Whether a failed oplog read caused `error`, for good or for a time.
+fn is_failed_oplog_read(error: &WorkerExecutorError) -> bool {
     match error {
-        WorkerExecutorError::OplogFailed { .. } => true,
-        WorkerExecutorError::FailedToResumeAgent { reason, .. } => is_failed_oplog(reason),
+        WorkerExecutorError::OplogFailed { .. }
+        | WorkerExecutorError::RecoveryRequired {
+            cause: RecoveryCause::OplogReadUnavailable,
+            ..
+        } => true,
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => is_failed_oplog_read(reason),
         _ => false,
     }
 }

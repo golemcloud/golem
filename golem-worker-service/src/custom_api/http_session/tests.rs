@@ -1148,22 +1148,54 @@ async fn session_with_refused_resume(refusal: InvocationResponse) -> (HttpSessio
     (session, h)
 }
 
+fn refused_with_runtime_error(
+    oplog_read: Option<golem_api_grpc::proto::golem::worker::v1::oplog_read_failure::Kind>,
+) -> InvocationResponse {
+    use golem_api_grpc::proto::golem::worker::v1::{
+        OplogReadFailure, RuntimeError, WorkerExecutionError, worker_execution_error,
+    };
+    rejected_resume(Some(WorkerExecutionError {
+        error: Some(worker_execution_error::Error::RuntimeError(RuntimeError {
+            details: "oplog entry 43 has unknown serialization version 255".into(),
+            oplog_read: oplog_read.map(|kind| OplogReadFailure { kind: Some(kind) }),
+        })),
+    }))
+}
+
+/// A Resume refused because the oplog did not read, for good or for a time, is not an outcome:
+/// the session does not cancel the invocation or interrupt the agent.
 #[test]
 #[test_timeout("10s")]
 async fn resume_refused_on_an_unreadable_oplog_neither_cancels_nor_interrupts() {
-    use golem_api_grpc::proto::golem::worker::v1::{
-        RuntimeError, WorkerExecutionError, worker_execution_error,
-    };
-    let refusal = rejected_resume(Some(WorkerExecutionError {
-        error: Some(worker_execution_error::Error::RuntimeError(RuntimeError {
-            details: "The oplog of agent-7 failed: oplog entry 43 has unknown serialization \
-                      version 255"
-                .into(),
-        })),
-    }));
-    let (_session, mut h) = session_with_refused_resume(refusal).await;
+    use golem_api_grpc::proto::golem::worker::v1::{OplogReadUnavailable, oplog_read_failure};
+    for kind in [
+        oplog_read_failure::Kind::Failed(proto_agent()),
+        oplog_read_failure::Kind::Unavailable(OplogReadUnavailable {}),
+    ] {
+        let (_session, mut h) =
+            session_with_refused_resume(refused_with_runtime_error(Some(kind))).await;
+        assert!(
+            timeout(Duration::from_millis(150), h.cleanups.recv())
+                .await
+                .is_err(),
+            "{kind:?} must not clean up"
+        );
+    }
+}
+
+/// A Resume refused with a runtime error that no oplog read caused, for example an incomplete
+/// output, keeps the right to clean up: the session cleans up once.
+#[test]
+#[test_timeout("10s")]
+async fn resume_refused_on_another_runtime_error_still_cleans_up_exactly_once() {
+    let (_session, mut h) = session_with_refused_resume(refused_with_runtime_error(None)).await;
+    let (agent, _) = timeout(Duration::from_secs(1), h.cleanups.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(agent, owned_agent());
     assert!(
-        timeout(Duration::from_millis(150), h.cleanups.recv())
+        timeout(Duration::from_millis(50), h.cleanups.recv())
             .await
             .is_err()
     );

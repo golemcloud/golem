@@ -30,7 +30,7 @@ use crate::services::oplog::{
     OplogFence, OplogLifecycleGuard, OplogService, OrderedOplogStart, PendingUpload,
     RawOplogPayloadDownloadError, ReservedPayload, ReservedRawStartBuilder, ScanPage,
     StagePublication, decode_scan_cursor, next_scan_cursor, record_epoch_verdict,
-    record_owning_epoch, refuse_if_fenced, retry_scan_storage_op,
+    record_owning_epoch, retry_scan_storage_op,
 };
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::storage::indexed::{
@@ -180,7 +180,7 @@ struct PrimaryOplog {
     /// does not wait behind the actor's queued commits. Fixed for the oplog's lifetime.
     max_payload_size: usize,
     /// The refusal the actor's state has latched, shared so the handle can report it.
-    fence: Arc<std::sync::OnceLock<OplogFence>>,
+    latch: Arc<std::sync::OnceLock<WriteLatch>>,
     stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
     /// Shared with the actor's state, which calls it after a commit outside an explicit one.
     auto_commit_listener: AutoCommitListener,
@@ -319,9 +319,49 @@ struct PrimaryOplogState {
     /// this is the value its metadata row was written with. A renewal never changes it - an epoch
     /// only moves when the shard changes owner, and then this oplog is the losing side.
     shard_epoch: Option<ShardEpoch>,
-    /// Set once a write has been refused, or at open when the epoch record already belonged to a
-    /// newer owner. Every later write fails on it immediately: the oplog is another executor's
-    /// now, so there is nothing to be gained by asking the storage again. Shared with the handle,
-    /// which answers [`Oplog::fence`] from it without a round trip through the actor.
-    fence: Arc<std::sync::OnceLock<OplogFence>>,
+    /// Set once a write has been refused or its outcome stays unknown, or at open when the epoch
+    /// record already belonged to a newer owner. Every later write fails on it immediately, so
+    /// nothing is buffered or sent to the storage again. Shared with the handle, which answers
+    /// [`Oplog::fence`] from it without a round trip through the actor.
+    latch: Arc<std::sync::OnceLock<WriteLatch>>,
+}
+
+/// Why an oplog handle accepts no more writes. The latch is set once and never cleared; a new
+/// handle, opened after the agent stopped, reads the storage again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum WriteLatch {
+    /// The storage refused a write: the shard has a new owner.
+    Fenced(OplogFence),
+    /// An append whose outcome stays unknown, because its read-back failed. Its entries can be
+    /// stored or absent, so a new append of the same indices could only conflict.
+    Unconfirmed(UnreadableOplog),
+}
+
+impl WriteLatch {
+    /// The latch that the failed append `error` sets, if any.
+    fn of_append(error: &OplogError) -> Option<Self> {
+        match error {
+            OplogError::Fenced(fence) => Some(Self::Fenced(fence.clone())),
+            OplogError::Unreadable(unreadable) => Some(Self::Unconfirmed(unreadable.clone())),
+            OplogError::Payload(_) | OplogError::Maintenance(_) | OplogError::ArchiveWrite(_) => {
+                None
+            }
+        }
+    }
+
+    /// The fence, when the latch means that the shard has a new owner.
+    fn fence(&self) -> Option<&OplogFence> {
+        match self {
+            Self::Fenced(fence) => Some(fence),
+            Self::Unconfirmed(_) => None,
+        }
+    }
+
+    /// The error with which every later write fails.
+    fn error(&self) -> OplogError {
+        match self {
+            Self::Fenced(fence) => OplogError::Fenced(fence.clone()),
+            Self::Unconfirmed(unreadable) => OplogError::Unreadable(unreadable.clone()),
+        }
+    }
 }

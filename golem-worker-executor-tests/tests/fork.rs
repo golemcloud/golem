@@ -41,8 +41,8 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor::services::rpc::{
-    DurableRpcInvocationResult, DurableStreamRemoteError, RemoteInvocationRpc, Rpc, RpcDemand,
-    RpcError,
+    DurableRpcInvocationResult, DurableStreamRemoteError, RemoteInvocationRpc, Rpc, RpcAwaitError,
+    RpcDemand, RpcError,
 };
 use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::worker_proxy::{WorkerProxy, WorkerProxyError};
@@ -400,7 +400,7 @@ impl Rpc for StreamingRemoteRpc {
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         card: Option<ScopeCard>,
-    ) -> Result<SchemaValue, RpcError> {
+    ) -> Result<SchemaValue, RpcAwaitError> {
         self.inner
             .invoke_and_await(
                 agent,
@@ -440,7 +440,7 @@ impl Rpc for StreamingRemoteRpc {
         config: Vec<AgentConfigEntryDto>,
         auth: &AuthCtx,
         card: Option<ScopeCard>,
-    ) -> Result<DurableRpcInvocationResult, RpcError> {
+    ) -> Result<DurableRpcInvocationResult, RpcAwaitError> {
         self.remote
             .invoke_and_await_streaming(
                 agent,

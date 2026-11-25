@@ -5434,6 +5434,7 @@ mod tests {
         let Err(GuestCallSettlementError::Infrastructure(WorkerExecutorError::RecoveryRequired {
             details,
             retry_from,
+            ..
         })) = result
         else {
             panic!("retryable recovery failure must remain infrastructure recovery");
@@ -5460,6 +5461,7 @@ mod tests {
         let Err(GuestCallSettlementError::Infrastructure(WorkerExecutorError::RecoveryRequired {
             details,
             retry_from,
+            ..
         })) = result
         else {
             panic!("bare recovery requirement must remain typed infrastructure recovery");

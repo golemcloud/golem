@@ -32,7 +32,7 @@ pub(super) fn host_response_to_public_value(
 
 /// Why an oplog entry has no public form.
 #[derive(Debug)]
-pub(super) enum PublicEntryError {
+pub(crate) enum PublicEntryError {
     /// A stored value of the entry does not read. It keeps the entry index and the read class.
     Unreadable(UnreadableOplog),
     /// The entry has no public form.
@@ -99,7 +99,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         agent_type_name: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
         claims: ClaimVisibility,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, PublicEntryError> {
         public_entry(
             oplog_index,
             value,
@@ -114,7 +114,6 @@ impl PublicOplogEntryOps for PublicOplogEntry {
             claims,
         )
         .await
-        .map_err(|error| error.to_string())
     }
 }
 

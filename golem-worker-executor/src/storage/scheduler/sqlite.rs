@@ -21,7 +21,7 @@ use chrono::{DateTime, Utc};
 use futures::FutureExt;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
-use golem_common::serialization::{DecodeError, decode};
+use golem_common::serialization::decode;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -170,12 +170,13 @@ impl SchedulerStorage for SqliteSchedulerStorage {
 
         rows.into_iter()
             .map(|row| {
+                let schedule_id = ScheduleId {
+                    id: Uuid::parse_str(&row.schedule_id).map_err(|err| err.to_string())?,
+                };
                 Ok(ClaimedScheduledAction {
-                    schedule_id: ScheduleId {
-                        id: Uuid::parse_str(&row.schedule_id).map_err(|err| err.to_string())?,
-                    },
+                    schedule_id,
                     action: decode(&row.action)
-                        .map_err(|error| unreadable_action(&row.schedule_id, &error))?,
+                        .map_err(|error| SchedulerStorageError::unreadable(schedule_id, error))?,
                     due_at: millis_to_datetime(row.due_at_ms)?,
                     lease_owner,
                     attempt_count: row.attempt_count as u32 + 1,
@@ -265,20 +266,10 @@ impl SchedulerStorage for SqliteSchedulerStorage {
     }
 }
 
-/// A stored action that does not decode. The error names the schedule and the decoder reason,
-/// not the stored bytes.
-fn unreadable_action(
-    schedule_id: &impl std::fmt::Display,
-    error: &DecodeError,
-) -> SchedulerStorageError {
-    SchedulerStorageError::Other(format!(
-        "failed to decode scheduled action {schedule_id}: {error}"
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::scheduler::UnreadableScheduledAction;
     use test_r::test;
 
     #[test]
@@ -308,11 +299,18 @@ mod tests {
             )
             .await
             .unwrap_err();
-        let SchedulerStorageError::Other(detail) = error else {
-            panic!("the failed decode must not be a transient error: {error}");
+        let SchedulerStorageError::Unreadable(unreadable) = &error else {
+            panic!("the failed decode must be an unreadable action: {error}");
         };
         assert_eq!(
-            detail,
+            **unreadable,
+            UnreadableScheduledAction {
+                schedule_id,
+                error: golem_common::serialization::DecodeError::UnknownVersion(255),
+            }
+        );
+        assert_eq!(
+            error.to_string(),
             format!(
                 "failed to decode scheduled action {schedule_id}: unknown serialization version: 255"
             )

@@ -19,12 +19,35 @@ use super::{
     HostRequestPermissionCardDerive, HostResponsePermissionCardDerived, NotCancellable, OplogEntry,
     OplogIndex, PermissionCardDeriveError, PolymorphicCard, ResolvedCall, RuntimeCardCreation,
     StoredCard, Timestamp, Utc, WorkerCtx, WorkerExecutorError, agent_recipient_pattern, anyhow,
-    derive_error_to_permission_error, deserialize, durable_now,
-    ensure_install_permission_in_surface, instantiate_polymorphic_card_for_agent,
-    permission_error_to_derive_error, permissions_types, serialize,
+    derive_error_to_permission_error, durable_now, ensure_install_permission_in_surface,
+    instantiate_polymorphic_card_for_agent, permission_error_to_derive_error, permissions_types,
+    serialize,
 };
 use golem_common::model::OwnedAgentId;
 use std::sync::Arc;
+
+/// Decodes a permission card that the durable call whose `Start` is at `start_index` recorded in
+/// the oplog of `agent_id`. A card that does not decode is corrupt history: the error is
+/// `OplogFailed` for that agent and names the `Start` and the decoder reason.
+pub(super) fn decode_recorded_card(
+    agent_id: &golem_common::model::AgentId,
+    start_index: OplogIndex,
+    bytes: &[u8],
+) -> anyhow::Result<StoredCard> {
+    use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
+
+    golem_common::serialization::decode(bytes).map_err(|error| {
+        anyhow::Error::from(WorkerExecutorError::from(UnreadableOplog::new(
+            agent_id,
+            OplogReadError::corruption(
+                OplogReadSource::Other("permission card"),
+                format!(
+                    "failed to decode the recorded permission card of the durable call at oplog index {start_index}: {error}"
+                ),
+            ),
+        )))
+    })
+}
 
 /// After the card service refused a runtime card, names the first parent of the card that is no
 /// longer live. The card service refuses a child of a revoked or expired parent on every attempt,
@@ -240,9 +263,8 @@ where
     let was_live = handle.is_live();
     if !was_live {
         let request = handle.recorded_request(ctx).await?;
-        let requested: StoredCard = deserialize(&request.card).map_err(|error| {
-            anyhow!("failed to deserialize runtime-card request at {start}: {error}")
-        })?;
+        let requested =
+            decode_recorded_card(&ctx.state.owned_agent_id.agent_id, start, &request.card)?;
         if requested != card {
             return Err(anyhow!(
                 "runtime-card request at {start} differs from the reconstructed card {card_id}"
@@ -319,8 +341,7 @@ where
         Ok(created) => created,
         Err(refusal) => return Ok(Err(derive_error_to_permission_error(refusal))),
     };
-    let created: StoredCard = deserialize(&created)
-        .map_err(|err| anyhow!("failed to deserialize runtime permission card {card_id}: {err}"))?;
+    let created = decode_recorded_card(&ctx.state.owned_agent_id.agent_id, start, &created)?;
     if created.card_id() != card_id {
         return Err(anyhow!(
             "replayed runtime permission-card creation returned {}, expected {card_id}",
@@ -417,4 +438,32 @@ pub(crate) async fn persist_installed_child_card<Ctx: WorkerCtx>(
         },
     )
     .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn an_undecodable_recorded_card_is_unreadable_at_its_call() {
+        let agent_id = crate::test_agent_id("permission-card-unreadable");
+
+        let error = decode_recorded_card(&agent_id, OplogIndex::from_u64(7), &[255, 7, 7])
+            .expect_err("an undecodable card must fail");
+
+        let Some(WorkerExecutorError::OplogFailed {
+            agent_id: failed,
+            details,
+        }) = error.downcast_ref::<WorkerExecutorError>()
+        else {
+            panic!("expected an unreadable oplog, got {error:?}");
+        };
+        assert_eq!(*failed, agent_id);
+        assert!(details.contains("oplog index 7:"), "{details}");
+        assert!(
+            details.contains("unknown serialization version: 255"),
+            "{details}"
+        );
+    }
 }

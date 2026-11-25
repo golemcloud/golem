@@ -93,10 +93,10 @@ impl PrimaryOplogState {
 
         // Already refused once: fail fast rather than re-asking the storage. Only entries buffered
         // before the fence latched can reach here, and they go back where they were.
-        if let Some(fence) = self.fence.get() {
-            let fence = fence.clone();
+        if let Some(latch) = self.latch.get() {
+            let error = latch.error();
             self.retain_refused(entries);
-            return Err(OplogError::Fenced(fence));
+            return Err(error);
         }
 
         // Commit barrier: every deferred external payload reserved during this session must be
@@ -144,14 +144,14 @@ impl PrimaryOplogState {
             &self.retry_config,
             self.indexed_storage.as_ref(),
             &namespace,
+            &self.owned_agent_id.agent_id,
             "append",
             "append",
             &self.key,
             SerializedOplogAppend::Batch(serialized_pairs),
             self.shard_epoch,
         )
-        .await
-        .map_err(|err| Self::as_oplog_error(&self.owned_agent_id, err));
+        .await;
         if self.shard_epoch.is_some() {
             record_oplog_epoch_fence("append", matches!(appended, Err(OplogError::Fenced(_))));
         }
@@ -162,7 +162,7 @@ impl PrimaryOplogState {
                 // The epoch the storage holds is reported, so a shard manager whose state lost
                 // history can mint above it. Warned only when it latches: each write after that
                 // fails fast on the latch without reaching the storage.
-                if self.fence.set(fence.clone()).is_ok() {
+                if self.latch.set(WriteLatch::Fenced(fence.clone())).is_ok() {
                     warn!(
                         agent_id = %self.owned_agent_id,
                         expected_epoch = fence.expected_epoch.0,
@@ -170,8 +170,14 @@ impl PrimaryOplogState {
                         "Oplog append fenced: the shard has a new owner, refusing further writes"
                     );
                 }
-                self.retain_refused(pairs.into_iter().map(|(_, entry)| entry));
+            } else if let Some(latch) = WriteLatch::of_append(&error) {
+                // The read-back of the append failed, so its entries are neither stored nor
+                // absent for this handle. Nothing writes them again; the agent fails instead.
+                let _ = self.latch.set(latch);
             }
+            // A fenced append and an append whose outcome stays unknown keep their entries in the
+            // buffer, so that every index this oplog handed out stays readable from it.
+            self.retain_refused(pairs.into_iter().map(|(_, entry)| entry));
             return Err(error);
         }
 
@@ -196,12 +202,16 @@ impl PrimaryOplogState {
         ))
     }
 
-    /// Refuses a new write once the fence has latched, before anything is buffered or reserved.
+    /// Refuses a new write once a fence or an unconfirmed append has latched, before anything is
+    /// buffered or reserved.
     ///
     /// Without it an add below the commit threshold would only buffer, answer with an index, and
     /// report a write that can never reach the storage.
-    pub(super) fn refuse_if_fenced(&self) -> Result<(), OplogError> {
-        refuse_if_fenced(self.fence.get())
+    pub(super) fn refuse_if_latched(&self) -> Result<(), OplogError> {
+        match self.latch.get() {
+            Some(latch) => Err(latch.error()),
+            None => Ok(()),
+        }
     }
 
     /// Puts entries a fenced append turned away back at the head of the buffer, where `commit`
@@ -245,11 +255,6 @@ impl PrimaryOplogState {
         );
         self.commit_report = report;
         Ok(())
-    }
-
-    /// Names the agent on a refused write, so the worker that hit it can be given up by id.
-    fn as_oplog_error(owned_agent_id: &OwnedAgentId, err: IndexedStorageError) -> OplogError {
-        OplogError::Fenced(OplogFence::refused(owned_agent_id.agent_id(), err))
     }
 
     /// Pushes an entry into the in-memory buffer and advances the oplog index,
@@ -346,7 +351,7 @@ impl PrimaryOplogState {
     /// other failure is returned for the archive maintenance to retry later.
     pub(super) async fn try_drop_prefix(&self, last_dropped_id: OplogIndex) -> Result<(), String> {
         record_oplog_call("drop_prefix");
-        if self.fence.get().is_some() {
+        if self.latch.get().and_then(WriteLatch::fence).is_some() {
             return Ok(());
         }
 
@@ -373,7 +378,7 @@ impl PrimaryOplogState {
             Ok(()) => Ok(()),
             Err(error @ IndexedStorageError::Fenced { .. }) => {
                 let fence = OplogFence::refused(self.owned_agent_id.agent_id(), error);
-                if self.fence.set(fence.clone()).is_ok() {
+                if self.latch.set(WriteLatch::Fenced(fence.clone())).is_ok() {
                     warn!(
                         agent_id = %self.owned_agent_id,
                         expected_epoch = fence.expected_epoch.0,

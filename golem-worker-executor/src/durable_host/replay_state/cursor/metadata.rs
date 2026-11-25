@@ -608,7 +608,7 @@ impl ReplayState {
                             )));
                         }
                         crate::durable_host::durable_stream::DurableStreamStore::validate_consumer_reobservation(
-                            oplog.as_ref(), marker_idx, &record,
+                            agent_id, oplog.as_ref(), marker_idx, &record,
                         ).await.map_err(|error| match error {
                             crate::durable_host::durable_stream::StreamStoreError::Unreadable(
                                 unreadable,

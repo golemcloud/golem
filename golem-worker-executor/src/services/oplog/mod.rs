@@ -483,8 +483,9 @@ pub struct OplogFence {
 }
 
 impl OplogFence {
-    /// The fence a refused storage write reports for `agent_id`. Only a fence comes back from
-    /// the fenceable storage retries: every other storage failure panics inside them.
+    /// The fence a refused storage write reports for `agent_id`. Every caller passes an
+    /// `IndexedStorageError::Fenced` that it has matched; the append retries build their fence
+    /// themselves and return an unconfirmed append as `OplogError::Unreadable`.
     pub(crate) fn refused(agent_id: AgentId, error: IndexedStorageError) -> Self {
         match error {
             IndexedStorageError::Fenced {

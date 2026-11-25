@@ -183,12 +183,13 @@ impl UnreadableOplog {
     }
 }
 
-/// A transient failure is `RecoveryRequired`, which the start and the invocation retry with
-/// backoff. Any other failure is `OplogFailed`, which fails the agent for good.
+/// A transient failure is `RecoveryRequired` caused by the oplog read, which the start and the
+/// invocation retry with backoff. Any other failure is `OplogFailed`, which fails the agent for
+/// good.
 impl From<UnreadableOplog> for WorkerExecutorError {
     fn from(value: UnreadableOplog) -> Self {
         if value.is_transient() {
-            WorkerExecutorError::recovery_required(value.to_string())
+            WorkerExecutorError::oplog_read_unavailable(value.to_string())
         } else {
             WorkerExecutorError::oplog_failed(value.agent_id, value.error.to_string())
         }

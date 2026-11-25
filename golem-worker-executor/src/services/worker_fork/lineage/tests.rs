@@ -802,3 +802,48 @@ fn through_preserves_marker_and_deletion_boundaries() {
 fn test_invocation_id(value: String) -> InvocationId {
     InvocationId(Uuid::new_v5(&Uuid::NAMESPACE_OID, value.as_bytes()))
 }
+
+#[test]
+async fn an_undecodable_lineage_record_keeps_its_index_and_class() {
+    use golem_common::model::oplog::OplogPayload;
+
+    let identity = owner("source");
+    let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(41));
+    let fixture = ServiceFixture::new(&identity, fingerprint).await;
+    for size in 1..=3 {
+        fixture
+            .oplog
+            .add(OplogEntry::grow_memory(size))
+            .await
+            .unwrap();
+    }
+    let unreadable_index = fixture
+        .oplog
+        .add(OplogEntry::StreamSession {
+            timestamp: Timestamp::now_utc(),
+            entity_parent_start_index: None,
+            summary: None,
+            record: OplogPayload::SerializedInline {
+                bytes: vec![255, 7, 7],
+                cached: None,
+            },
+        })
+        .await
+        .unwrap();
+
+    let error = StreamForkLineage::load(&*fixture.oplog, &identity, fingerprint)
+        .await
+        .expect_err("an undecodable lineage record must fail the load");
+
+    assert_eq!(error.agent_id, identity.agent_id);
+    assert!(matches!(error.error, OplogReadError::Corruption { .. }));
+    let text = error.to_string();
+    assert!(
+        text.contains(&format!("at oplog index {unreadable_index}:")),
+        "{text}"
+    );
+    assert!(
+        text.contains("unknown serialization version: 255"),
+        "{text}"
+    );
+}

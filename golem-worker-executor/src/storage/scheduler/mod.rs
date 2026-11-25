@@ -20,6 +20,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::SafeDisplay;
 use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
+use golem_common::serialization::DecodeError;
 use golem_service_base::repo::RepoError;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::time::Duration;
@@ -37,7 +38,8 @@ pub struct ClaimedScheduledAction {
 /// Typed error for [`SchedulerStorage`] operations.
 ///
 /// `Transient` errors (pool exhaustion, connection resets) are retriable;
-/// `Other` errors (data issues, schema problems) are not.
+/// `Other` errors (data issues, schema problems) are not. `Unreadable` is a stored action that
+/// does not decode; a repeated read gives the same error.
 #[derive(Debug, Clone)]
 pub enum SchedulerStorageError {
     /// Transient error — pool exhaustion, connection reset, broken pipe.
@@ -46,6 +48,15 @@ pub enum SchedulerStorageError {
     /// Permanent error — data issue, unique violation, schema error.
     /// Caller should not retry.
     Other(String),
+    /// A stored action that does not decode. Caller should not retry.
+    Unreadable(Box<UnreadableScheduledAction>),
+}
+
+impl SchedulerStorageError {
+    /// The error of the stored action of `schedule_id` that does not decode.
+    pub fn unreadable(schedule_id: ScheduleId, error: DecodeError) -> Self {
+        Self::Unreadable(Box::new(UnreadableScheduledAction { schedule_id, error }))
+    }
 }
 
 impl Display for SchedulerStorageError {
@@ -53,7 +64,26 @@ impl Display for SchedulerStorageError {
         match self {
             SchedulerStorageError::Transient(msg) => write!(f, "Transient storage error: {msg}"),
             SchedulerStorageError::Other(msg) => write!(f, "Storage error: {msg}"),
+            SchedulerStorageError::Unreadable(unreadable) => write!(f, "{unreadable}"),
         }
+    }
+}
+
+/// A stored scheduled action that does not decode. It names the schedule and the decoder reason,
+/// not the stored bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnreadableScheduledAction {
+    pub schedule_id: ScheduleId,
+    pub error: DecodeError,
+}
+
+impl Display for UnreadableScheduledAction {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "failed to decode scheduled action {}: {}",
+            self.schedule_id, self.error
+        )
     }
 }
 

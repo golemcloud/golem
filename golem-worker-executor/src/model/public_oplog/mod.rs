@@ -21,15 +21,18 @@ mod reading;
 mod snapshots;
 
 use attribution::PublicOplogAttributionResolver;
+pub(crate) use conversion::PublicEntryError;
 #[cfg(test)]
 use conversion::host_response_to_public_value;
 pub(crate) use conversion::with_expected_request;
 use invocation::{agent_invocation_result_to_public, agent_invocation_to_public};
 pub use reading::{
     PublicOplogRangePage, check_oplog_cursor_query, find_component_revision_at,
-    get_public_oplog_chunk, get_public_oplog_entry, get_public_oplog_page,
-    get_public_oplog_range_page, oplog_page_cursor, oplog_page_start, oplog_range_allowance,
-    search_public_oplog, search_public_oplog_page,
+    get_public_oplog_entry, get_public_oplog_range_page, oplog_page_cursor, oplog_page_start,
+    oplog_range_allowance,
+};
+pub(crate) use reading::{
+    get_public_oplog_chunk, get_public_oplog_page, search_public_oplog, search_public_oplog_page,
 };
 use snapshots::raw_snapshot_to_public;
 
@@ -132,9 +135,11 @@ pub struct PublicOplogSearchResult<E = PublicOplogEntryWithIndex> {
 }
 
 /// The public form of the raw oplog entries. `claims` says whether the callers of the public
-/// entries hold the users' verified claims.
+/// entries hold the users' verified claims. A stored payload of the entry that does not read gives
+/// [`PublicEntryError::Unreadable`] at `oplog_index`.
 #[async_trait]
-pub trait PublicOplogEntryOps: Sized {
+pub(crate) trait PublicOplogEntryOps: Sized {
+    #[cfg(test)]
     async fn from_oplog_entry(
         oplog_index: OplogIndex,
         value: OplogEntry,
@@ -147,7 +152,7 @@ pub trait PublicOplogEntryOps: Sized {
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
         claims: ClaimVisibility,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, PublicEntryError> {
         Self::from_enrichment_entry(
             oplog_index,
             value.into(),
@@ -176,7 +181,7 @@ pub trait PublicOplogEntryOps: Sized {
         agent_type: Option<&AgentTypeName>,
         component_revision: ComponentRevision,
         claims: ClaimVisibility,
-    ) -> Result<Self, String>;
+    ) -> Result<Self, PublicEntryError>;
 }
 
 fn public_attributes(attributes: golem_common::model::oplog::AttributeMap) -> Vec<PublicAttribute> {

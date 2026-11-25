@@ -260,6 +260,10 @@ impl SchedulerServiceDefault {
                 Err(SchedulerStorageError::Other(msg)) => {
                     panic!("scheduler storage operation '{op_name}' failed for {target}: {msg}");
                 }
+                // Only `claim_due` decodes stored actions, and it does not run here.
+                Err(error @ SchedulerStorageError::Unreadable(_)) => {
+                    panic!("scheduler storage operation '{op_name}' failed for {target}: {error}");
+                }
             }
         }
     }

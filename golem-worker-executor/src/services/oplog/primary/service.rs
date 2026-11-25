@@ -97,6 +97,9 @@ impl PrimaryOplogService {
         }
     }
 
+    /// Writes the initial entry of a new oplog. A fence is not an error here: nothing more is
+    /// written, and `open` hands back an oplog that refuses every write. An initial entry whose
+    /// outcome stays unknown fails the create, because the oplog is neither confirmed nor absent.
     async fn append_initial_entry(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -105,7 +108,7 @@ impl PrimaryOplogService {
         api_name: &'static str,
         entry: &OplogEntry,
         shard_epoch: Option<ShardEpoch>,
-    ) {
+    ) -> Result<(), WorkerExecutorError> {
         let key = Self::oplog_key(owned_agent_id);
         let namespace = IndexedStorageNamespace::OpLog {
             owned_agent_id: owned_agent_id.clone(),
@@ -116,10 +119,11 @@ impl PrimaryOplogService {
                 .unwrap_or_else(|err| panic!("Failed to serialize initial oplog entry: {err}")),
         );
 
-        retry_oplog_append(
+        match retry_oplog_append(
             &self.retry_config,
             self.indexed_storage.as_ref(),
             &namespace,
+            &owned_agent_id.agent_id,
             op_name,
             api_name,
             &key,
@@ -127,16 +131,20 @@ impl PrimaryOplogService {
             shard_epoch,
         )
         .await
-        .unwrap_or_else(|err| {
-            // Only a fence reaches here - every other permanent failure already panicked inside
-            // `retry_oplog_append`. Nothing more is written: `open` records the epoch again and,
-            // being refused there too, hands back an oplog that refuses every write.
-            warn!(
-                agent_id = %owned_agent_id,
-                error = %err,
-                "Initial oplog entry fenced: the shard has a new owner"
-            );
-        });
+        {
+            Ok(()) => Ok(()),
+            // `open` records the epoch again and, being refused there too, hands back an oplog
+            // that refuses every write.
+            Err(error @ OplogError::Fenced(_)) => {
+                warn!(
+                    agent_id = %owned_agent_id,
+                    error = %error,
+                    "Initial oplog entry fenced: the shard has a new owner"
+                );
+                Ok(())
+            }
+            Err(error) => Err(error.into()),
+        }
     }
 
     async fn open_with(
@@ -513,7 +521,7 @@ impl OplogService for PrimaryOplogService {
                 &initial_entry,
                 shard_epoch,
             )
-            .await;
+            .await?;
         }
 
         // The claim came before the initial entry, so `INITIAL` is exact and needs no re-read.
@@ -573,7 +581,7 @@ impl OplogService for PrimaryOplogService {
                 &initial_entry,
                 shard_epoch,
             )
-            .await;
+            .await?;
         }
 
         // Claimed before the initial entry, so `INITIAL` is exact; not re-reading it keeps a fresh

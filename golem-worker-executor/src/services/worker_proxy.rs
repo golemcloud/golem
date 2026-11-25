@@ -2514,8 +2514,9 @@ mod tests {
 
         if reject_takeover {
             assert!(
-                matches!(result, Err(crate::services::rpc::RpcError::Denied { details })
-                if details == "scripted attachment rejection")
+                matches!(result, Err(crate::services::rpc::RpcAwaitError::Outcome(
+                    crate::services::rpc::RpcError::Denied { details }
+                )) if details == "scripted attachment rejection")
             );
         } else {
             assert_eq!(

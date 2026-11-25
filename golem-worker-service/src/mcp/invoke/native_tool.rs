@@ -928,7 +928,8 @@ mod tests {
     #[test]
     async fn unreadable_history_is_an_mcp_error_without_cancelling_open_stdout() {
         use golem_api_grpc::proto::golem::worker::v1::{
-            RuntimeError, WorkerExecutionError, worker_execution_error,
+            OplogReadFailure, RuntimeError, WorkerExecutionError, oplog_read_failure,
+            worker_execution_error,
         };
         use golem_api_grpc::proto::golem::worker::{
             InvocationFailure, InvocationFailureKind, InvocationResponse,
@@ -948,7 +949,14 @@ mod tests {
                         message: detail.clone(),
                         worker_error: Some(WorkerExecutionError {
                             error: Some(worker_execution_error::Error::RuntimeError(
-                                RuntimeError { details: detail },
+                                RuntimeError {
+                                    details: detail,
+                                    oplog_read: Some(OplogReadFailure {
+                                        kind: Some(oplog_read_failure::Kind::Failed(
+                                            golem_common::model::AgentId::from_parts(7, 43).into(),
+                                        )),
+                                    }),
+                                },
                             )),
                         }),
                     },

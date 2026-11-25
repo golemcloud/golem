@@ -223,3 +223,211 @@ fn a_remote_schedule_names_the_scheduling_agent_as_parent_also_for_a_tool() {
         );
     }
 }
+
+/// A read of the stored history of the target that failed is no result of an awaited call, on
+/// the direct route: the call stays without an outcome, and the caller recovers. An oplog of
+/// another agent that failed for good is, for the caller, a read that a later attempt can pass;
+/// the oplog of the caller itself stays failed.
+#[test]
+fn direct_route_keeps_a_failed_target_read_out_of_the_outcome() {
+    use super::{RpcAwaitError, rpc_await_outcome};
+    use golem_common::model::AgentId;
+    use golem_service_base::error::worker_executor::RecoveryCause;
+
+    let caller = AgentId::from_parts(7, 0xca11);
+    let target = AgentId::from_parts(7, 0x7a29);
+    let failed = WorkerExecutorError::oplog_failed(
+        target,
+        "oplog entry 43 has unknown serialization version 255",
+    );
+    let unavailable =
+        WorkerExecutorError::oplog_read_unavailable("primary storage of agent 7 did not answer");
+    for error in [
+        failed.clone(),
+        unavailable.clone(),
+        WorkerExecutorError::failed_to_resume_worker(target, failed.clone()),
+    ] {
+        let RpcAwaitError::Unobserved(_) = RpcAwaitError::from(error.clone()) else {
+            panic!("a failed read of the target became an outcome: {error:?}");
+        };
+        let recovery = rpc_await_outcome::<()>(&caller, Err(error.into()))
+            .expect_err("a failed read of the target has no outcome");
+        assert!(
+            matches!(
+                recovery,
+                WorkerExecutorError::RecoveryRequired {
+                    cause: RecoveryCause::OplogReadUnavailable,
+                    retry_from: None,
+                    ..
+                }
+            ),
+            "{recovery:?}"
+        );
+    }
+    let own = WorkerExecutorError::oplog_failed(caller, "oplog entry 12 is corrupt");
+    assert_eq!(
+        rpc_await_outcome::<()>(&caller, Err(own.clone().into())),
+        Err(own)
+    );
+
+    // A failure that the target recorded, and any other error, stays the outcome of the call.
+    assert_eq!(
+        rpc_await_outcome::<()>(
+            &caller,
+            Err(WorkerExecutorError::invalid_request("wrong argument shape").into())
+        ),
+        Ok(Err(RpcError::RemoteAgentError {
+            error: Box::new(ModelAgentError::InvalidInput(
+                "wrong argument shape".to_string()
+            )),
+        }))
+    );
+    assert_eq!(
+        rpc_await_outcome::<()>(
+            &caller,
+            Err(WorkerExecutorError::recovery_required("trapped body cleanup failed").into())
+        ),
+        Ok(Err(RpcError::RemoteInternalError {
+            details: "Runtime reconstruction required: trapped body cleanup failed".to_string()
+        }))
+    );
+}
+
+/// On the remote route, a rejection or a completion whose typed worker error is a failed read of
+/// the target is no result of an awaited call. A completion with a recorded failure, and a
+/// runtime error with no read kind, stay outcomes.
+#[test]
+fn remote_route_keeps_a_failed_target_read_out_of_the_outcome() {
+    use super::RpcAwaitError;
+    use super::remote::{await_error_from_invocation_finished, await_error_from_rejection};
+    use golem_api_grpc::proto::golem::worker::{
+        InvocationRejected, InvocationRejectionReason, InvocationSessionCompletion,
+        invocation_session_completion,
+    };
+    use golem_common::model::AgentId;
+
+    let target = AgentId::from_parts(7, 0x7a29);
+    let failed = WorkerExecutorError::oplog_failed(
+        target,
+        "oplog entry 43 has unknown serialization version 255",
+    );
+    let unavailable =
+        WorkerExecutorError::oplog_read_unavailable("primary storage of agent 7 did not answer");
+    let rejected = |error: &WorkerExecutorError| InvocationRejected {
+        reason: InvocationRejectionReason::Internal as i32,
+        error: error.to_string(),
+        worker_error: Some(error.clone().into()),
+        ..Default::default()
+    };
+    let finished = |error: &WorkerExecutorError| InvocationSessionCompletion {
+        outcome: Some(invocation_session_completion::Outcome::Failure(
+            InvocationFailure {
+                kind: InvocationFailureKind::Execution as i32,
+                code: "oplog-unreadable".to_string(),
+                message: error.to_string(),
+                worker_error: Some(error.clone().into()),
+            },
+        )),
+    };
+    for error in [&failed, &unavailable] {
+        assert_eq!(
+            await_error_from_rejection(rejected(error)),
+            RpcAwaitError::Unobserved(Box::new(error.clone()))
+        );
+        assert_eq!(
+            await_error_from_invocation_finished(finished(error)),
+            RpcAwaitError::Unobserved(Box::new(error.clone()))
+        );
+    }
+
+    let runtime = WorkerExecutorError::runtime("the guest stack overflowed");
+    assert_eq!(
+        await_error_from_rejection(rejected(&runtime)),
+        RpcAwaitError::Outcome(RpcError::RemoteInternalError {
+            details: runtime.to_string()
+        })
+    );
+    let recorded = InvocationSessionCompletion {
+        outcome: Some(invocation_session_completion::Outcome::Failure(
+            InvocationFailure {
+                kind: InvocationFailureKind::Execution as i32,
+                code: "persisted-invocation-failure".to_string(),
+                message: "the method returned an error".to_string(),
+                worker_error: None,
+            },
+        )),
+    };
+    assert_eq!(
+        await_error_from_invocation_finished(recorded),
+        RpcAwaitError::Outcome(RpcError::RemoteInternalError {
+            details: "the method returned an error".to_string()
+        })
+    );
+}
+
+/// A scalar awaited call has no result when the stored history of its target does not read. On
+/// the direct route the target gives the worker error itself; on the remote route the proxy
+/// decodes it from the typed error of the worker API. A recorded failure of the target and a
+/// proxy error that is not a worker error stay the outcome of the call.
+#[test]
+fn scalar_call_keeps_a_failed_target_read_out_of_the_outcome() {
+    use super::{RpcAwaitError, rpc_await_outcome};
+    use golem_api_grpc::proto::golem::worker::v1::{AgentError, agent_error};
+    use golem_common::model::AgentId;
+    use golem_service_base::error::worker_executor::RecoveryCause;
+
+    let caller = AgentId::from_parts(7, 0xca11);
+    let target = AgentId::from_parts(7, 0x7a29);
+    let failed = WorkerExecutorError::oplog_failed(
+        target,
+        "oplog entry 43 has unknown serialization version 255",
+    );
+    let unavailable =
+        WorkerExecutorError::oplog_read_unavailable("primary storage of agent 7 did not answer");
+    let remote = |error: &WorkerExecutorError| {
+        WorkerProxyError::from(AgentError {
+            error: Some(agent_error::Error::InternalError(error.clone().into())),
+        })
+    };
+    for error in [&failed, &unavailable] {
+        for awaited in [
+            RpcAwaitError::from(error.clone()),
+            RpcAwaitError::from(remote(error)),
+        ] {
+            assert_eq!(awaited, RpcAwaitError::Unobserved(Box::new(error.clone())));
+            let recovery = rpc_await_outcome::<()>(&caller, Err(awaited))
+                .expect_err("a failed read of the target has no outcome");
+            assert!(
+                matches!(
+                    recovery,
+                    WorkerExecutorError::RecoveryRequired {
+                        cause: RecoveryCause::OplogReadUnavailable,
+                        ..
+                    }
+                ),
+                "{recovery:?}"
+            );
+        }
+    }
+
+    let recorded = WorkerExecutorError::invalid_request("wrong argument shape");
+    for awaited in [
+        RpcAwaitError::from(recorded.clone()),
+        RpcAwaitError::from(remote(&recorded)),
+    ] {
+        assert_eq!(
+            rpc_await_outcome::<()>(&caller, Err(awaited)),
+            Ok(Err(RpcError::RemoteAgentError {
+                error: Box::new(ModelAgentError::InvalidInput(
+                    "wrong argument shape".to_string()
+                )),
+            }))
+        );
+    }
+    assert_eq!(
+        RpcAwaitError::from(WorkerProxyError::NotFound("agent-7 is gone".to_string())),
+        RpcAwaitError::Outcome(RpcError::NotFound {
+            details: "agent-7 is gone".to_string()
+        })
+    );
+}

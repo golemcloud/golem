@@ -855,17 +855,11 @@ pub(in crate::durable_host) fn payload_download_failure(
             SnapshotRecoveryResult::Lost(WorkerExecutorError::runtime(error))
         }
         SnapshotReplayPurpose::AssistedUpdate => SnapshotRecoveryResult::Unavailable(
-            WorkerExecutorError::RecoveryRequired {
-                retry_from: None,
-                details: error,
-            },
+            WorkerExecutorError::recovery_required(error),
             FailureProvenance::Host,
         ),
         SnapshotReplayPurpose::AutomaticUpdate if !lost => SnapshotRecoveryResult::Unavailable(
-            WorkerExecutorError::RecoveryRequired {
-                retry_from: None,
-                details: error,
-            },
+            WorkerExecutorError::recovery_required(error),
             FailureProvenance::Host,
         ),
         SnapshotReplayPurpose::None | SnapshotReplayPurpose::AutomaticUpdate => {

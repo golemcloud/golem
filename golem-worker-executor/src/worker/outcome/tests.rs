@@ -654,6 +654,57 @@ async fn a_recovery_failure_of_an_unreadable_oplog_adds_no_entry() {
     resident.stop().await;
 }
 
+/// A start whose oplog read fails for a time gives a recovery that the read caused. The startup
+/// records that recovery failure as the agent's start does, directly and wrapped in a failed
+/// resume. Neither adds an entry; a recovery for another cause still adds its error entry.
+#[test]
+#[test_r::timeout("60s")]
+async fn a_transient_oplog_read_at_startup_adds_no_recovery_entry() {
+    use crate::storage::indexed::IndexedStorageError;
+
+    let resident = ResidentWorker::start().await;
+    let worker = &resident.worker;
+    let tail = resident.oplog.current_oplog_index().await;
+    resident
+        .indexed
+        .set_read_error(Some(IndexedStorageError::Transient(
+            "startup read unavailable".into(),
+        )));
+    let reads = resident.indexed.reads();
+    let unreadable = resident.oplog.read(OplogIndex::INITIAL).await.unwrap_err();
+    assert!(
+        resident.indexed.reads() > reads,
+        "the read must reach storage"
+    );
+    let read_error = WorkerExecutorError::from(unreadable);
+    assert!(
+        matches!(&read_error, WorkerExecutorError::RecoveryRequired { details, .. }
+            if details.contains("startup read unavailable")),
+        "{read_error:?}"
+    );
+    resident.indexed.set_read_error(None);
+
+    for error in [
+        read_error.clone(),
+        WorkerExecutorError::failed_to_resume_worker(worker.agent_id(), read_error),
+    ] {
+        worker.record_recovery_failure(&error).await;
+        assert_eq!(
+            resident.oplog.current_oplog_index().await,
+            tail,
+            "{error} must not add an entry"
+        );
+    }
+
+    worker
+        .record_recovery_failure(&WorkerExecutorError::recovery_required(
+            "the component download did not answer",
+        ))
+        .await;
+    assert_eq!(resident.oplog.current_oplog_index().await, tail.next());
+    resident.stop().await;
+}
+
 /// A pending invocation is stored while the status fold cannot read, so the published status does
 /// not know its key. A result lookup gives the read error of the fold again, instead of reading
 /// the key as new; once reads pass, the fold knows the key and the lookup reads it as pending.

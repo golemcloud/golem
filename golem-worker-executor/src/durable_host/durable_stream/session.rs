@@ -15,6 +15,7 @@
 use super::index::registration_coordinate_depth;
 use super::registration::registration_record;
 use super::*;
+use crate::services::oplog::{OplogReadError, OplogReadSource};
 use futures::future::BoxFuture;
 use golem_common::model::oplog::DurableStreamEventSummary;
 
@@ -76,6 +77,7 @@ impl PreparedConsumerObservation {
 
 impl DurableStreamStore {
     pub(crate) async fn validate_consumer_reobservation(
+        agent_id: &AgentId,
         oplog: &dyn Oplog,
         index: OplogIndex,
         record: &StreamSessionRecord,
@@ -97,9 +99,18 @@ impl DurableStreamStore {
             ));
         };
         let original = oplog
-            .download_payload(original)
+            .download_payload_classified(original)
             .await
-            .map_err(StreamStoreError::Oplog)?;
+            .map_err(|error| {
+                StreamStoreError::Unreadable(UnreadableOplog::new(
+                    agent_id,
+                    OplogReadError::of_payload(
+                        OplogReadSource::Other("consumer re-observation original"),
+                        original_index,
+                        error,
+                    ),
+                ))
+            })?;
         if !record.has_supported_format() || !record.matches_reobserved(&original) {
             return Err(StreamStoreError::CorruptHistory(format!(
                 "consumer re-observation at {index} differs from original at {original_index}"
@@ -122,6 +133,7 @@ impl DurableStreamStore {
         // pending commits, which would hold every guest read behind the previous read's commit.
         if record.reobserves().is_some() {
             Self::validate_consumer_reobservation(
+                &self.producer,
                 self.oplog.as_ref(),
                 self.oplog.current_oplog_index().await.next(),
                 &record,
@@ -230,8 +242,13 @@ impl DurableStreamStore {
                 }) {
                     continue;
                 }
-                Self::validate_consumer_reobservation(self.oplog.as_ref(), position, &record)
-                    .await?;
+                Self::validate_consumer_reobservation(
+                    &self.producer,
+                    self.oplog.as_ref(),
+                    position,
+                    &record,
+                )
+                .await?;
                 refreshed.apply_consumer_journal_record(
                     &record,
                     self.environment_id,
@@ -538,6 +555,7 @@ impl DurableStreamStore {
         }
         for record in &records {
             Self::validate_consumer_reobservation(
+                &self.producer,
                 self.oplog.as_ref(),
                 self.oplog.current_oplog_index().await.next(),
                 record,

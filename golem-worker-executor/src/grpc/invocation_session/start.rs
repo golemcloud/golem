@@ -30,7 +30,7 @@ use super::{
 use crate::worker::InvocationObservationFailure;
 use std::future::{Future, pending};
 
-use super::attachment::preserve_attachment_on_read_failure;
+use super::attachment::{AttachmentCleanup, CleanupEvent, join_output_pumps};
 
 enum InvocationObservation<F> {
     InFlight(F),
@@ -372,10 +372,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         }
         // Observation must never run attachment cleanup, even while the original is current.
-        let mut durable_attachment = accepted
-            .durable_streams
-            .clone()
-            .filter(|_| !accepted.joined_origin_observer);
+        let mut cleanup = AttachmentCleanup::new(
+            accepted
+                .durable_streams
+                .clone()
+                .filter(|_| !accepted.joined_origin_observer),
+        );
         let native_tool = start.external_tool.is_some();
         *response_lease.lock().unwrap() = accepted
             .durable_streams
@@ -386,7 +388,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             match durable_streams.input_high_waters().await {
                 Ok(high_waters) => high_waters,
                 Err(error) => {
-                    preserve_attachment_on_read_failure(&mut durable_attachment, &error);
+                    cleanup.observe_error(&error);
                     tracing::warn!(
                         target = ?start.target,
                         attempt_id = ?start.attempt_id,
@@ -480,7 +482,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             _ = responses.closed() => return,
         }
         if let Err(error) = observation.check_observation() {
-            durable_attachment = None;
+            cleanup.observe(CleanupEvent::of_observation_failure(&error));
             send_worker_failure(&responses, error).await;
             return;
         }
@@ -578,7 +580,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             && let Err(error) = streams.ensure_current_attachment().await
         {
             // An unsuccessful authority check is not a transport detach.
-            durable_attachment = None;
+            cleanup.observe(CleanupEvent::AuthorityEnded);
             send_attachment_revocation(&responses, Err(error)).await;
             return;
         }
@@ -593,8 +595,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             route_durable_request(durable_streams, &responses, &state, request)
                                 .await
                         {
-                            end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut durable_attachment, details, async {
-                                let _ = durable_streams.pump_output_streams(&responses).await;
+                            end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut cleanup, details, async {
+                                durable_streams.pump_output_streams(&responses).await
                             }).await;
                             return;
                         }
@@ -640,7 +642,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                     .map_err(|error| SessionError::from(format!("durable output pump task failed: {error}")))
                                     .and_then(|result| result);
                                 if let Err(error) = result {
-                                    preserve_attachment_on_read_failure(&mut durable_attachment, &error);
+                                    cleanup.observe_error(&error);
                                     if !ends_only_the_attachment(&error) {
                                         send_protocol_failure(&responses, error).await;
                                     }
@@ -650,14 +652,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             result = &mut result => match result {
                                 Ok(result) => break Some(result),
                                 Err(error) => {
-                                    preserve_attachment_on_read_failure(&mut durable_attachment, &error);
+                                    cleanup.observe_error(&error);
                                     send_protocol_failure(&responses, error).await;
                                     return;
                                 }
                             },
                             () = observation.wait_for_completion() => {
                                 if let Err(error) = observation.check_observation() {
-                                    durable_attachment = None;
+                                    cleanup.observe(CleanupEvent::of_observation_failure(&error));
                                     send_worker_failure(&responses, error).await;
                                     return;
                                 }
@@ -665,7 +667,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 match persisted_invocation_result(durable_streams, native_tool).await {
                                     Ok(result) => break result,
                                     Err(error) => {
-                                        preserve_attachment_on_read_failure(&mut durable_attachment, &error);
+                                        cleanup.observe_error(&error);
                                         send_protocol_failure(&responses, error).await;
                                         return;
                                     }
@@ -679,9 +681,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                         &state,
                                         request,
                                     ).await {
-                                        end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut durable_attachment, details, async {
-                                            while output_pump.join_next().await.is_some() {}
-                                        }).await;
+                                        end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut cleanup, details, join_output_pumps(&mut output_pump)).await;
                                         return;
                                     }
                                 }
@@ -690,7 +690,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 }
                             },
                             revocation = &mut attachment_revoked => {
-                                durable_attachment = None;
+                                cleanup.observe(CleanupEvent::AuthorityEnded);
                                 send_attachment_revocation(&responses, revocation).await;
                                 return;
                             },
@@ -698,7 +698,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     }
                 }
                 Err(error) => {
-                    preserve_attachment_on_read_failure(&mut durable_attachment, &error);
+                    cleanup.observe_error(&error);
                     send_protocol_failure(&responses, error).await;
                     return;
                 }
@@ -706,7 +706,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             if let InvocationObservation::InvocationFailed(error) = &observation {
                 let details = error.to_string();
                 if let Err(finish_error) = durable_streams.fail_invocation(details).await {
-                    preserve_attachment_on_read_failure(&mut durable_attachment, &finish_error);
+                    cleanup.observe_error(&finish_error);
                     send_protocol_failure(&responses, finish_error).await;
                     return;
                 }
@@ -714,11 +714,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     if let Err(error @ SessionError::Unreadable(_)) = durable_streams
                         .pump_input_cancellations(&responses, &high_waters).await
                     {
-                        preserve_attachment_on_read_failure(&mut durable_attachment, &error);
+                        cleanup.observe_error(&error);
                         send_protocol_failure(&responses, error).await;
                         return;
                     }
-                    while output_pump.join_next().await.is_some() {}
+                    if let Err(error) = join_output_pumps(&mut output_pump).await {
+                        cleanup.observe_error(&error);
+                    }
                     send_worker_failure(&responses, (**error).clone()).await;
                     return;
                 }
@@ -769,7 +771,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 tokio::select! {
                     () = observation.wait_for_completion() => {
                         if let Err(error) = observation.check_observation() {
-                            durable_attachment = None;
+                            cleanup.observe(CleanupEvent::of_observation_failure(&error));
                             send_worker_failure(&responses, error).await;
                             return;
                         }
@@ -779,7 +781,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 .fail_invocation(details)
                                 .await
                             {
-                                preserve_attachment_on_read_failure(&mut durable_attachment, &finish_error);
+                                cleanup.observe_error(&finish_error);
                                 send_protocol_failure(&responses, finish_error).await;
                                 return;
                             }
@@ -787,11 +789,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 .pump_input_cancellations(&responses, &high_waters)
                                 .await
                             {
-                                preserve_attachment_on_read_failure(&mut durable_attachment, &error);
+                                cleanup.observe_error(&error);
                                 send_protocol_failure(&responses, error).await;
                                 return;
                             }
-                            while output_pump.join_next().await.is_some() {}
+                            if let Err(error) = join_output_pumps(&mut output_pump).await {
+                                cleanup.observe_error(&error);
+                            }
                             send_worker_failure(&responses, *error).await;
                             return;
                         }
@@ -805,9 +809,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             None => Err("durable output pump task stopped unexpectedly".to_string().into()),
                         };
                         if let Err(error) = result {
-                            end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut durable_attachment, error, async {
-                                while output_pump.join_next().await.is_some() {}
-                            }).await;
+                            end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut cleanup, error, join_output_pumps(&mut output_pump)).await;
                             return;
                         }
                     },
@@ -819,9 +821,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 &state,
                                 request,
                             ).await {
-                                end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut durable_attachment, details, async {
-                                    while output_pump.join_next().await.is_some() {}
-                                }).await;
+                                end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut cleanup, details, join_output_pumps(&mut output_pump)).await;
                                 return;
                             }
                         }
@@ -831,7 +831,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         }
                     },
                     revocation = &mut attachment_revoked => {
-                        durable_attachment = None;
+                        cleanup.observe(CleanupEvent::AuthorityEnded);
                         output_pump.shutdown().await;
                         send_attachment_revocation(&responses, revocation).await;
                         return;
@@ -842,7 +842,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 if let Err(error @ SessionError::Unreadable(_)) = durable_streams
                     .pump_input_cancellations(&responses, &high_waters).await
                 {
-                    preserve_attachment_on_read_failure(&mut durable_attachment, &error);
+                    cleanup.observe_error(&error);
                     send_protocol_failure(&responses, error).await;
                     return;
                 }
@@ -850,12 +850,12 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
             if let Err(error) = durable_streams.complete().await {
-                preserve_attachment_on_read_failure(&mut durable_attachment, &error);
+                cleanup.observe_error(&error);
                 send_protocol_failure(&responses, error).await;
                 return;
             }
             if let Err(error) = durable_streams.pump_input_cancellations(&responses, &high_waters).await {
-                preserve_attachment_on_read_failure(&mut durable_attachment, &error);
+                cleanup.observe_error(&error);
                 send_protocol_failure(&responses, error).await;
                 return;
             }
@@ -876,7 +876,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 &state,
                                 request,
                             ).await {
-                                end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut durable_attachment, details, async {}).await;
+                                end_attachment_on_failure(durable_streams, &responses, &high_waters, &mut cleanup, details, async { Ok(()) }).await;
                                 return;
                             }
                         }
@@ -885,7 +885,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         }
                     },
                     revocation = &mut attachment_revoked => {
-                        durable_attachment = None;
+                        cleanup.observe(CleanupEvent::AuthorityEnded);
                         send_attachment_revocation(&responses, revocation).await;
                         return;
                     },
@@ -1047,7 +1047,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             .await;
         })
         .await;
-        detach_durable_attachment(durable_attachment).await;
+        cleanup.finish().await;
     }
 }
 

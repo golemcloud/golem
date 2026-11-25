@@ -12,7 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::conversion::PublicEntryError;
 use super::*;
+use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
 
 #[derive(Clone)]
 struct OplogStartAttributionSource {
@@ -84,12 +86,13 @@ impl<'a> PublicOplogAttributionResolver<'a> {
         &mut self,
         index: OplogIndex,
         entry: &OplogEntry,
-    ) -> Result<PublicOplogEntryAttribution, String> {
+    ) -> Result<PublicOplogEntryAttribution, PublicEntryError> {
         if let Some(start_index) = entry.entity_parent_start_index() {
             if start_index >= index {
                 return Err(format!(
                     "oplog entry {index} has non-causal entity parent Start index {start_index}"
-                ));
+                )
+                .into());
             }
             let source = self.load_start(start_index).await?.ok_or_else(|| {
                 format!(
@@ -99,7 +102,8 @@ impl<'a> PublicOplogAttributionResolver<'a> {
             if source.function_name != HostFunctionName::GolemEntityInvoke {
                 return Err(format!(
                     "oplog entry {index} entity parent Start {start_index} is not an entity invocation"
-                ));
+                )
+                .into());
             }
             return self
                 .entity_context_for_start(start_index)
@@ -109,6 +113,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                     format!(
                         "oplog entry {index} entity parent Start {start_index} has no entity attribution"
                     )
+                    .into()
                 });
         }
 
@@ -277,7 +282,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
     async fn entity_context_for_start(
         &mut self,
         start_index: OplogIndex,
-    ) -> Result<Option<PublicEntityInvocationContext>, String> {
+    ) -> Result<Option<PublicEntityInvocationContext>, PublicEntryError> {
         let mut path = Vec::new();
         let mut visited = HashSet::new();
         let mut current = start_index;
@@ -286,7 +291,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 break resolved.clone();
             }
             if !visited.insert(current) {
-                return Err(format!("cyclic oplog Start attribution at index {current}"));
+                return Err(format!("cyclic oplog Start attribution at index {current}").into());
             }
 
             let Some(source) = self.load_start(current).await? else {
@@ -346,7 +351,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
     async fn load_start(
         &mut self,
         index: OplogIndex,
-    ) -> Result<Option<OplogStartAttributionSource>, String> {
+    ) -> Result<Option<OplogStartAttributionSource>, PublicEntryError> {
         if let Some(start) = self.starts.get(&index) {
             return Ok(start.clone());
         }
@@ -354,8 +359,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
         let entry = self
             .oplog_service
             .read_exact(self.owned_agent_id, self.agent_mode, index, 1)
-            .await
-            .map_err(|error| error.to_string())?
+            .await?
             .remove(&index);
         let start = entry
             .as_ref()
@@ -368,7 +372,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
         &self,
         start_index: OplogIndex,
         source: &OplogStartAttributionSource,
-    ) -> Result<PublicEntityInvocation, String> {
+    ) -> Result<PublicEntityInvocation, PublicEntryError> {
         let request_payload = source
             .request
             .clone()
@@ -376,20 +380,138 @@ impl<'a> PublicOplogAttributionResolver<'a> {
         let request: HostRequest = self
             .oplog_service
             .download_payload(self.owned_agent_id, self.agent_mode, request_payload)
-            .await?;
+            .await
+            .map_err(|error| {
+                PublicEntryError::unreadable(self.owned_agent_id, start_index, error)
+            })?;
         let request = match request {
             HostRequest::EntityInvocation(request) => request,
             actual => {
                 return Err(format!(
                     "entity invocation Start {start_index} has unexpected request {actual:?}"
-                ));
+                )
+                .into());
             }
         };
+        // A decoder error can include values from the stored payload, so the error names only the
+        // entry.
         let metadata = desert_rust::deserialize::<EntityInvocationRequest>(&request.metadata)
-            .map_err(|error| {
-                format!("failed to decode entity invocation Start {start_index}: {error}")
+            .map_err(|_| {
+                UnreadableOplog::new(
+                    &self.owned_agent_id.agent_id,
+                    OplogReadError::corruption(
+                        OplogReadSource::Other("public oplog entry"),
+                        format!(
+                            "failed to decode the entity invocation metadata at oplog index {start_index}"
+                        ),
+                    ),
+                )
             })?;
 
         Ok(public_entity_invocation(start_index, metadata))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::oplog::tests::{
+        default_execution_status, default_last_known_status, make_agent_metadata,
+    };
+    use crate::services::oplog::{CommitLevel, PrimaryOplogService};
+    use crate::services::worker::session_index_tests::UnusedComponentService;
+    use crate::storage::indexed::memory::InMemoryIndexedStorage;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::DurableFunctionType;
+    use golem_common::model::{RetryConfig, Timestamp};
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use test_r::test;
+    use uuid::Uuid;
+
+    #[test]
+    async fn an_undecodable_entity_request_fails_the_attribution_as_unreadable_at_its_start() {
+        let service: Arc<dyn OplogService> = Arc::new(
+            PrimaryOplogService::new(
+                Arc::new(InMemoryIndexedStorage::new()),
+                Arc::new(InMemoryBlobStorage::new()),
+                1,
+                1,
+                100,
+                32,
+                RetryConfig::default(),
+            )
+            .await,
+        );
+        let agent_id = crate::test_agent_id("public-oplog-attribution-unreadable");
+        let environment_id = EnvironmentId::new();
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let oplog = service
+            .open(
+                &mut service.lock_lifecycle(&agent_id).await,
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                make_agent_metadata(agent_id, AccountId::new(), environment_id),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                None,
+            )
+            .await
+            .unwrap();
+        for size in 1..=4 {
+            oplog.add(OplogEntry::grow_memory(size)).await.unwrap();
+        }
+        let start_index = oplog
+            .add(OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: HostFunctionName::GolemEntityInvoke,
+                invocation_id: None,
+                observational_owner: None,
+                driver: None,
+                request: Some(OplogPayload::SerializedInline {
+                    bytes: vec![255, 7, 7],
+                    cached: None,
+                }),
+                durable_function_type: DurableFunctionType::WriteRemote,
+                span_started: None,
+                denial: None,
+            })
+            .await
+            .unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+
+        let error = get_public_oplog_entry(
+            Arc::new(UnusedComponentService),
+            service,
+            &owned_agent_id,
+            AgentMode::Durable,
+            ComponentId(Uuid::from_u128(0xc1)),
+            OwnerKind::ComponentAgent,
+            None,
+            start_index,
+            Some(ComponentRevision::INITIAL),
+            ClaimVisibility::Hidden,
+        )
+        .await
+        .expect_err("an undecodable entity request must fail the read");
+
+        let WorkerExecutorError::OplogFailed {
+            agent_id: failed,
+            details,
+        } = &error
+        else {
+            panic!("expected an unreadable oplog, got {error:?}");
+        };
+        assert_eq!(*failed, agent_id);
+        assert!(
+            details.contains(&format!("at oplog index {start_index}:")),
+            "{details}"
+        );
+        assert!(
+            details.contains("unknown serialization version: 255"),
+            "{details}"
+        );
     }
 }

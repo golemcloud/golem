@@ -109,7 +109,7 @@ impl ChunkBuilder for RemotePage {
     }
 }
 
-pub async fn get_public_oplog_chunk(
+pub(crate) async fn get_public_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
@@ -121,7 +121,7 @@ pub async fn get_public_oplog_chunk(
     initial_oplog_index: OplogIndex,
     count: usize,
     claims: ClaimVisibility,
-) -> Result<PublicOplogChunk, String> {
+) -> Result<PublicOplogChunk, PublicEntryError> {
     let (chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
@@ -137,8 +137,7 @@ pub async fn get_public_oplog_chunk(
         claims,
         &mut InProcessChunk,
     )
-    .await
-    .map_err(|error| error.to_string())?;
+    .await?;
     Ok(chunk)
 }
 
@@ -146,7 +145,7 @@ pub async fn get_public_oplog_chunk(
 /// `limits.max_entry_bytes`, and ends early when the next entry does not fit in
 /// `limits.max_bytes`. The entries hold claims only with `ClaimVisibility::Shown`, so only claims
 /// that the reader asked for count against the limits.
-pub async fn get_public_oplog_page(
+pub(crate) async fn get_public_oplog_page(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
@@ -158,7 +157,8 @@ pub async fn get_public_oplog_page(
     initial_oplog_index: OplogIndex,
     limits: PublicOplogPageLimits,
     claims: ClaimVisibility,
-) -> Result<PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
+) -> Result<PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>, PublicEntryError>
+{
     let (chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
@@ -174,8 +174,7 @@ pub async fn get_public_oplog_page(
         claims,
         &mut RemotePage::new(limits),
     )
-    .await
-    .map_err(|error| error.to_string())?;
+    .await?;
     Ok(chunk)
 }
 
@@ -241,6 +240,8 @@ pub async fn get_public_oplog_entry(
 /// `filter` to the chunk, in the form that `builder` selects. The chunk ends early at the first
 /// matching entry that does not fit; the cursor of the chunk then points to that entry, and the
 /// returned flag is `true`.
+/// A stored value of an entry that does not read gives [`PublicEntryError::Unreadable`] with the
+/// index of the entry.
 #[allow(clippy::too_many_arguments)]
 async fn read_public_oplog_chunk<B: ChunkBuilder>(
     components: Arc<dyn ComponentService>,
@@ -346,7 +347,7 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
 /// Searches the oplog for a guest. The search reads no entry after `last_oplog_index`; the guest
 /// passes the `last_index` of its first result, so that its own entries, which every page adds,
 /// do not move the end of the search.
-pub async fn search_public_oplog(
+pub(crate) async fn search_public_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
@@ -361,7 +362,7 @@ pub async fn search_public_oplog(
     query: &str,
     budget: ScanBudget,
     claims: ClaimVisibility,
-) -> Result<PublicOplogSearchResult, String> {
+) -> Result<PublicOplogSearchResult, PublicEntryError> {
     search_public_oplog_with(
         component_service,
         oplog_service,
@@ -385,7 +386,7 @@ pub async fn search_public_oplog(
 /// Searches the oplog for a remote reader. The result is an oplog page with the limits of
 /// `get_public_oplog_page`; only the matching entries count against the limits. The search
 /// stops early when `budget` is spent.
-pub async fn search_public_oplog_page(
+pub(crate) async fn search_public_oplog_page(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
@@ -399,7 +400,10 @@ pub async fn search_public_oplog_page(
     query: &str,
     budget: ScanBudget,
     claims: ClaimVisibility,
-) -> Result<PublicOplogSearchResult<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
+) -> Result<
+    PublicOplogSearchResult<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
+    PublicEntryError,
+> {
     search_public_oplog_with(
         component_service,
         oplog_service,
@@ -443,7 +447,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     budget: ScanBudget,
     claims: ClaimVisibility,
     mut builder: B,
-) -> Result<PublicOplogSearchResult<B::Entry>, String> {
+) -> Result<PublicOplogSearchResult<B::Entry>, PublicEntryError> {
     let started = Instant::now();
     let mut scanned = 0u64;
     let mut results = Vec::new();
@@ -475,8 +479,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
             claims,
             &mut builder,
         )
-        .await
-        .map_err(|error| error.to_string())?;
+        .await?;
 
         results.extend(chunk.entries);
 
@@ -972,10 +975,50 @@ mod read_error_tests {
         .err()
         .expect("an undecodable payload must fail the page");
 
-        assert!(error.contains("at oplog index 6:"), "{error}");
+        assert_unreadable_at_entry_6(&owned_agent_id, WorkerExecutorError::from(error));
+    }
+
+    #[test]
+    async fn an_undecodable_payload_names_its_entry_and_version_in_a_search_page() {
+        let (service, owned_agent_id) = oplog_with_undecodable_end().await;
+
+        let error = search_public_oplog_page(
+            Arc::new(UnusedComponentService),
+            service,
+            &owned_agent_id,
+            AgentMode::Durable,
+            ComponentId(Uuid::from_u128(0xc0)),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            OplogIndex::from_u64(2),
+            PublicOplogPageLimits {
+                count: 10,
+                max_bytes: 1 << 20,
+                max_entry_bytes: 1 << 20,
+            },
+            "end",
+            ScanBudget::default(),
+            ClaimVisibility::Hidden,
+        )
+        .await
+        .err()
+        .expect("an undecodable payload must fail the search");
+
+        assert_unreadable_at_entry_6(&owned_agent_id, WorkerExecutorError::from(error));
+    }
+
+    /// The error is `OplogFailed` for the agent that owns the oplog, and names entry 6 and the
+    /// version byte that does not decode.
+    fn assert_unreadable_at_entry_6(owned_agent_id: &OwnedAgentId, error: WorkerExecutorError) {
+        let WorkerExecutorError::OplogFailed { agent_id, details } = &error else {
+            panic!("expected an unreadable oplog, got {error:?}");
+        };
+        assert_eq!(*agent_id, owned_agent_id.agent_id);
+        assert!(details.contains("at oplog index 6:"), "{details}");
         assert!(
-            error.contains("unknown serialization version: 255"),
-            "{error}"
+            details.contains("unknown serialization version: 255"),
+            "{details}"
         );
     }
 }

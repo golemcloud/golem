@@ -57,6 +57,7 @@ use crate::preview2::golem::agent::host::ScheduledInvocationReceipt;
 use crate::services::HasWorker;
 use crate::services::oplog::CommitLevel;
 use crate::services::rpc::RpcError as InternalRpcError;
+use crate::services::rpc::rpc_await_outcome;
 use crate::worker::target::{ResolvedTarget, keyed_target};
 use crate::workerctx::InvocationContextManagement;
 use crate::workerctx::WorkerCtx;
@@ -998,7 +999,12 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     ),
                 ));
                 match futures::future::select(call, interrupt_signal).await {
-                    Either::Left((Ok(result), _)) => result,
+                    // A target history that did not read gives the call no result, so the call
+                    // keeps its `Start` without an `End`.
+                    Either::Left((Ok(result), _)) => match rpc_await_outcome(&agent_id, result) {
+                        Ok(result) => result,
+                        Err(error) => return Err(handle.trap(error)),
+                    },
                     Either::Left((Err(error), _)) => {
                         return Err(handle.trap(error.into_trap()));
                     }

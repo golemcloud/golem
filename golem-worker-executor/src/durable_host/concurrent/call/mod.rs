@@ -613,17 +613,13 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 format!("Start with request at {}", self.start_idx),
             ));
         };
-        let request = ctx
-            .state
-            .oplog
-            .download_payload(request)
-            .await
-            .map_err(|error| {
-                WorkerExecutorError::runtime(format!(
-                    "failed to load durable call request at {}: {error}",
-                    self.start_idx
-                ))
-            })?;
+        let request = download_recorded_request(
+            &*ctx.state.oplog,
+            &ctx.state.owned_agent_id.agent_id,
+            self.start_idx,
+            request,
+        )
+        .await?;
         Pair::Req::try_from(request).map_err(|actual| {
             WorkerExecutorError::unexpected_oplog_entry(
                 self.start_idx,
@@ -784,6 +780,33 @@ pub(super) enum ReplayedResolution {
 }
 
 type EncodedResponse<Resp> = Box<(Box<Resp>, Vec<u8>)>;
+
+/// Reads the request of the durable call whose `Start` is at `start_idx` in the oplog of
+/// `agent_id`. A request that does not read makes that oplog unreadable at `start_idx`, with its
+/// read class.
+async fn download_recorded_request(
+    oplog: &dyn Oplog,
+    agent_id: &golem_common::model::AgentId,
+    start_idx: OplogIndex,
+    request: OplogPayload<HostRequest>,
+) -> Result<HostRequest, WorkerExecutorError> {
+    use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
+
+    oplog
+        .download_payload_classified(request)
+        .await
+        .map_err(|error| {
+            UnreadableOplog::new(
+                agent_id,
+                OplogReadError::of_payload(
+                    OplogReadSource::Other("durable call request"),
+                    start_idx,
+                    error,
+                ),
+            )
+            .into()
+        })
+}
 
 #[cfg(test)]
 mod response_encoding_tests;
