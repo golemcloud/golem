@@ -15,8 +15,8 @@
 //! Persistence of the durable status baseline: the *clean* [`AgentStatusRecord`] checkpoint.
 //!
 //! The live cached status blob (see [`crate::worker::status_flusher`]) is written in the background
-//! and is allowed to advance into replay/deleted oplog regions. That makes it useless as a fold
-//! baseline after a jump: a replay-time `Jump` deletes the region the cached status' own oplog index
+//! and is allowed to advance into replay/deleted oplog regions. That makes it useless as a start
+//! status after a jump: a replay-time `Jump` deletes the region the cached status' own oplog index
 //! sits in, so the status recompute can no longer fold forward and has to re-read the whole oplog
 //! from index 1.
 //!
@@ -81,11 +81,11 @@ pub struct StatusCheckpointer {
     fingerprint: AgentFingerprint,
     /// Ephemeral workers never persist any cached status; every operation is a no-op for them.
     is_ephemeral: bool,
-    /// When `false`, no checkpoint is ever written (recompute falls back to a full from-scratch
-    /// fold).
+    /// When `false`, this checkpointer writes no checkpoint. A recompute with no cached status
+    /// folds from a checkpoint that an earlier run wrote, or else from index 1.
     enabled: bool,
     /// Minimum number of oplog entries appended since the last checkpoint before a throttled
-    /// (idle) checkpoint is written. Snapshot checkpoints ignore this.
+    /// (idle or mid-invocation) checkpoint is written. Snapshot checkpoints ignore this.
     min_oplog_delta: u64,
 
     worker_service: Arc<dyn WorkerService>,
@@ -149,11 +149,12 @@ impl StatusCheckpointer {
     /// - never for ephemeral workers or when disabled;
     /// - always for [`CheckpointReason::Snapshot`] (bypasses the throttle, aligning the checkpoint
     ///   with the snapshot index);
-    /// - for [`CheckpointReason::Idle`] and [`CheckpointReason::MidInvocation`]: when no checkpoint
-    ///   exists yet, when the existing checkpoint is no longer a usable fold baseline (its index
-    ///   now sits in a skipped/deleted region — e.g. a logical revert appended a `Revert` marker
-    ///   and recorded a deleted region covering it), or when at least `min_oplog_delta` entries
-    ///   were appended since the last checkpoint.
+    /// - for [`CheckpointReason::Idle`] and [`CheckpointReason::MidInvocation`]: when this
+    ///   checkpointer has written no checkpoint yet (each load of the worker starts with none,
+    ///   also when a stored baseline exists), when the last checkpoint is no longer a usable fold
+    ///   baseline (its index now sits in a skipped/deleted region — e.g. a logical revert appended
+    ///   a `Revert` marker and recorded a deleted region covering it), or when at least
+    ///   `min_oplog_delta` entries were appended since the last checkpoint.
     ///
     /// Never written once [`Self::begin_delete`] has run, so an in-flight write cannot resurrect the
     /// checkpoint after it is deleted.
