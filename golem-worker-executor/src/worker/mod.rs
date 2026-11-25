@@ -81,6 +81,7 @@ mod outcome;
 pub mod owner_lane;
 pub(crate) mod owner_wallet;
 pub mod read_only_cache;
+mod retention;
 pub(crate) mod snapshot_selection;
 pub(crate) mod start_outcome;
 mod state_actor;

@@ -355,6 +355,7 @@ bind_address = "127.0.0.1"
 max_in_function_retry_delay = "20s"
 max_websocket_connections = 100
 runtime_metrics_sampling_interval = "5s"
+standalone_tool_invocation_retention = "7days"
 
 [worker_executor.active_agents]
 drop_when_full = 0.25
@@ -1333,6 +1334,7 @@ type = "Disabled"
 # max_in_function_retry_delay = "20s"
 # max_websocket_connections = 100
 # runtime_metrics_sampling_interval = "5s"
+# standalone_tool_invocation_retention = "7days"
 #
 # [worker_executor.active_agents]
 # drop_when_full = 0.25

@@ -526,6 +526,11 @@ pub enum ScheduledAction {
         session_key: InvocationId,
         expected_deadline_millis: u64,
     },
+    /// Deletes a finished standalone invocation after its retention lifetime.
+    DeleteFinishedInvocation {
+        owned_agent_id: OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    },
 }
 
 impl ScheduledAction {
@@ -538,6 +543,7 @@ impl ScheduledAction {
             } => OwnedAgentId::new(*environment_id, &promise_id.agent_id),
             ScheduledAction::ArchiveOplog { owned_agent_id, .. } => owned_agent_id.clone(),
             ScheduledAction::WakeInvocation { owned_agent_id, .. }
+            | ScheduledAction::DeleteFinishedInvocation { owned_agent_id, .. }
             | ScheduledAction::ExpireDurableStreamSession { owned_agent_id, .. } => {
                 owned_agent_id.clone()
             }
@@ -567,6 +573,9 @@ impl Display for ScheduledAction {
                 "expire-stream-session[{owned_agent_id}/{public_session_id}]"
             ),
             ScheduledAction::Resume { owned_agent_id, .. } => write!(f, "resume[{owned_agent_id}]"),
+            ScheduledAction::DeleteFinishedInvocation { owned_agent_id, .. } => {
+                write!(f, "delete-finished-invocation[{owned_agent_id}]")
+            }
         }
     }
 }
@@ -585,6 +594,15 @@ impl ScheduleId {
     pub fn for_invocation(fingerprint: AgentFingerprint, key: &InvocationId) -> Self {
         Self {
             id: Uuid::new_v5(&fingerprint.0, key.to_string().as_bytes()),
+        }
+    }
+
+    pub fn for_finished_invocation(owned_agent_id: &OwnedAgentId) -> Self {
+        Self {
+            id: Uuid::new_v5(
+                &Uuid::NAMESPACE_OID,
+                format!("golem:delete-finished-invocation:v1:{owned_agent_id}").as_bytes(),
+            ),
         }
     }
 }

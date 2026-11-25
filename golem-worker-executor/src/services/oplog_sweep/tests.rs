@@ -910,6 +910,14 @@ fn resident_set(agents: HashSet<AgentId>) -> ResidentSet {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for DirectAccess {
+    async fn delete_finished_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, WorkerExecutorError> {
+        unreachable!("the sweep never deletes finished invocations")
+    }
+
     async fn expire_durable_stream_session(
         &self,
         _owned_agent_id: &OwnedAgentId,

@@ -951,6 +951,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             worker.retire_if_shard_left_during_construction().await;
                             if !worker.owner_retirement_requested.is_cancelled() {
                                 worker.register_pending_invocation_wakes().await;
+                                worker.schedule_finished_invocation_retention().await;
                             }
                         }
                     };
@@ -1192,6 +1193,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             initial_worker_metadata.fingerprint,
             initial_worker_metadata.agent_mode,
             initial_worker_metadata.created_by,
+            initial_worker_metadata
+                .standalone_tool
+                .as_ref()
+                .map(|tool| tool.invocation_id),
             oplog.clone(),
             current_status.clone(),
             last_known_status_detached.clone(),

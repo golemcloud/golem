@@ -93,6 +93,20 @@ pub trait SchedulerStorage: Debug {
 
     async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError>;
 
+    async fn get_action(
+        &self,
+        schedule_id: &ScheduleId,
+    ) -> Result<Option<Vec<u8>>, SchedulerStorageError>;
+
+    /// Replaces exactly the observed payload and invalidates any lease of that payload.
+    async fn replace_action(
+        &self,
+        schedule_id: &ScheduleId,
+        expected_action: &[u8],
+        action: &[u8],
+        due_at: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError>;
+
     async fn claim_due(
         &self,
         now: DateTime<Utc>,
@@ -128,6 +142,15 @@ pub trait SchedulerStorage: Debug {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
+        now: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError>;
+
+    /// Moves a matching, live claim to a new deadline and releases its lease atomically.
+    async fn reschedule(
+        &self,
+        schedule_id: &ScheduleId,
+        lease_owner: Uuid,
+        due_at: DateTime<Utc>,
         now: DateTime<Utc>,
     ) -> Result<bool, SchedulerStorageError>;
 }

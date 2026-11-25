@@ -67,6 +67,13 @@ fn scheduled_action_fingerprints_roundtrip() {
                 target_worker_fingerprint: fingerprint,
             },
         ),
+        (
+            "scheduled_action_delete_finished_invocation.bin",
+            ScheduledAction::DeleteFinishedInvocation {
+                owned_agent_id: OwnedAgentId::new(environment_id, &agent_id),
+                fingerprint,
+            },
+        ),
     ];
     let mut mint = goldenfile::Mint::new("tests/goldenfiles");
     let encoded = serialize(&promise_id).unwrap();
@@ -267,6 +274,75 @@ async fn assert_scheduler_lease_contracts(
             .unwrap()
     );
     assert_eq!(holder.count_due(now, &assignment).await.unwrap(), 0);
+
+    let id = ScheduleId::fresh();
+    let original = serialize(&action).unwrap();
+    let replacement = serialize(&lease_action()).unwrap();
+    assert_ne!(original, replacement);
+    assert_eq!(holder.get_action(&id).await.unwrap(), None);
+    holder
+        .insert(id, now, ShardId::new(0), &original)
+        .await
+        .unwrap();
+    assert_eq!(
+        contender.get_action(&id).await.unwrap(),
+        Some(original.clone())
+    );
+    let claim = holder
+        .claim_due(now, &assignment, 1, Duration::from_secs(30))
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(
+        !contender
+            .replace_action(&id, &replacement, &original, now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        contender
+            .replace_action(&id, &original, &replacement, now)
+            .await
+            .unwrap()
+    );
+    // A claim of the replaced incarnation cannot remove or postpone the new timer.
+    assert!(!holder.ack(&id, claim.lease_owner, now).await.unwrap());
+    assert!(
+        !holder
+            .reschedule(&id, claim.lease_owner, now + ChronoDuration::days(9), now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !holder
+            .extend_lease(&id, claim.lease_owner, now + Duration::from_secs(90), now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !holder
+            .replace_action(&id, &original, &original, now)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        holder.get_action(&id).await.unwrap(),
+        Some(replacement.clone())
+    );
+    let new_claim = contender
+        .claim_due(now, &assignment, 1, Duration::from_secs(30))
+        .await
+        .unwrap()
+        .remove(0);
+    assert_ne!(claim.lease_owner, new_claim.lease_owner);
+    assert_eq!(serialize(&new_claim.action).unwrap(), replacement);
+    assert_eq!(new_claim.attempt_count, 1);
+    assert!(
+        contender
+            .ack(&id, new_claim.lease_owner, now)
+            .await
+            .unwrap()
+    );
 
     let ttl = Duration::from_secs(10);
     let expiry = now + ttl;

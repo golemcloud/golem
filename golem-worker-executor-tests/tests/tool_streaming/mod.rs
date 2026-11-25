@@ -116,6 +116,7 @@ mod node_tool_processes;
 mod path_policy_acceptance;
 mod python_sidecar;
 mod rdbms_drop;
+mod retention_storage;
 mod rust_sdk_gol40_conformance;
 mod sdk_child_process_tools;
 mod snapshot_attachments;
@@ -23257,6 +23258,845 @@ impl golem_worker_executor::services::component::ComponentService
             .invalidate_all_metadata_for_environment(environment)
             .await
     }
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::{ExternalToolInvocation, InvocationStart};
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let effect_gate = Arc::new(NativeOrderEffectGate::default());
+    let (http_port, _server, effects) =
+        start_native_order_http_server(Some(effect_gate.clone())).await;
+    let (checkpoint_port, gate_port, _checkpoints, mut checkpoints) =
+        start_crash_checkpoint_server().await;
+    let (promise_port, _promises, mut promises) = start_promise_checkpoint_server().await;
+    let loads = Arc::new(AtomicUsize::new(0));
+    let release_wakes = tokio_util::sync::CancellationToken::new();
+    let storage = Arc::new(std::sync::Mutex::new(None));
+    let retention_insert = Arc::new(retention_storage::RetentionInsertGate::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        wrap_scheduler_storage: Some(Arc::new({
+            let release = release_wakes.clone();
+            let storage = storage.clone();
+            let gate = retention_insert.clone();
+            move |inner| {
+                *storage.lock().unwrap() = Some(inner.clone());
+                Arc::new(crate::scheduled_ephemeral::PausedScheduler {
+                    inner: Arc::new(retention_storage::HoldRetentionInsert {
+                        inner,
+                        gate: gate.clone(),
+                    }),
+                    release: release.clone(),
+                    invocation_wake: Default::default(),
+                    acknowledged: Default::default(),
+                })
+            }
+        })),
+        wrap_component_service: Some(Arc::new(move |inner| {
+            Arc::new(BaselineOwnerComponentService {
+                inner,
+                owner_loads: loads.clone(),
+                http_port,
+                extra_env: BTreeMap::from([
+                    ("CRASH_CHECKPOINT_PORT".into(), checkpoint_port.to_string()),
+                    ("CRASH_CHECKPOINT_GATE_PORT".into(), gate_port.to_string()),
+                    (
+                        "PROVIDER_PROMISE_CHECKPOINT_PORT".into(),
+                        promise_port.to_string(),
+                    ),
+                ]),
+            })
+        })),
+        ..Default::default()
+    }
+    .with_agent_sockets();
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .name("virtual-native-policy")
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    let tool_name = ToolName::try_from("streaming").unwrap();
+    let type_id = deployment.registered_tools[&tool_name].type_id;
+    let mut bindings = deployment
+        .tool_bindings
+        .remove(&ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName("ToolStreamingCaller".to_string()),
+        })
+        .unwrap();
+    let baseline = ToolBindingOwner::ComponentBaseline {
+        component_id: component.id,
+    };
+    for binding in bindings.values_mut() {
+        binding.owner = baseline.clone();
+    }
+    bindings.get_mut(&tool_name).unwrap().filesystem_access = ToolFilesystemAccess::Allowed;
+    deployment.tool_bindings.insert(baseline, bindings);
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(deployment.clone()),
+    );
+    let key = IdempotencyKey::fresh();
+    let invocation_id = golem_common::model::StandaloneToolInvocation::unique_part(
+        context.default_environment_id,
+        &tool_name,
+        executor.auth_ctx().idempotency_scope(),
+        "no-stream",
+        Some(&key),
+    );
+    let owner_id = golem_common::model::AgentId::standalone_tool_invocation(
+        context.default_environment_id,
+        type_id,
+        invocation_id,
+    );
+    let owned = OwnedAgentId::new(context.default_environment_id, &owner_id);
+    let input = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(vec![
+            golem_common::schema::NamedFieldType {
+                name: "value".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+        ])),
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String("native-order".to_string())],
+        },
+    );
+    let request = InvocationStart {
+        target: Some(crate::agent::id_target(&owned)),
+        component_id: Some(component.id.into()),
+        idempotency_key: Some(IdempotencyKey::new(invocation_id.to_string()).into()),
+        auth_ctx: Some(executor.auth_ctx().into()),
+        caller: Some(callers::account(context.account_id).into()),
+        environment_id: Some(context.default_environment_id.into()),
+        component_owner_account_id: Some(context.account_id.into()),
+        attempt_id: Some(uuid::Uuid::new_v4().into()),
+        mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+        external_tool: Some(ExternalToolInvocation {
+            tool_name: "streaming".to_string(),
+            command_path: vec!["no-stream".to_string()],
+            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+            fresh_owner: true,
+            ..Default::default()
+        }),
+        request_key: Some(
+            golem_common::model::InvocationRequestKey::external(
+                executor.auth_ctx().idempotency_scope(),
+                Some(&key),
+            )
+            .into(),
+        ),
+        ..Default::default()
+    };
+    let (first, second) = tokio::join!(
+        executor.invoke_agent_session(request.clone()),
+        executor.invoke_agent_session(request.clone())
+    );
+    let first = first?;
+    let second = second?;
+    assert_eq!(first, second);
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    let metadata = executor.get_worker_metadata(&owned).await?;
+    assert_eq!(metadata.owner_kind, OwnerKind::StandaloneTool);
+    let before = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
+    assert!(
+        matches!(&before[0].entry, PublicOplogEntry::Create(parameters) if parameters.agent_mode == AgentMode::Durable)
+    );
+    let mut conflict = request.clone();
+    conflict.component_id = Some(provider_component.id.into());
+    let error = executor.invoke_agent_session(conflict).await.unwrap_err();
+    assert!(
+        error.to_string().contains("IDEMPOTENCY_CONFLICT"),
+        "{error:#}"
+    );
+    assert_eq!(
+        before,
+        executor.get_oplog(&owned, OplogIndex::INITIAL).await?
+    );
+    let mut conflict = request.clone();
+    let changed_input = TypedSchemaValue::new(
+        SchemaGraph::anonymous(SchemaType::record(vec![
+            golem_common::schema::NamedFieldType {
+                name: "value".to_string(),
+                body: SchemaType::string(),
+                metadata: Default::default(),
+            },
+        ])),
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String("native-error".to_string())],
+        },
+    );
+    conflict.external_tool.as_mut().unwrap().input =
+        Some(changed_input.try_into().map_err(anyhow::Error::msg)?);
+    let error = executor.invoke_agent_session(conflict).await.unwrap_err();
+    assert!(
+        error.to_string().contains("IDEMPOTENCY_CONFLICT"),
+        "{error:#}"
+    );
+    for error in [
+        executor
+            .fork_worker(&owned, OplogIndex::from_u64(2))
+            .await
+            .unwrap_err(),
+        executor
+            .auto_update_worker(&owned, component.revision, false)
+            .await
+            .unwrap_err(),
+        executor
+            .manual_update_worker(&owned, component.revision, false)
+            .await
+            .unwrap_err(),
+        executor
+            .snapshot_assisted_update_worker(&owned, component.revision, false)
+            .await
+            .unwrap_err(),
+        executor
+            .revert(
+                &owned,
+                golem_common::model::agent::RevertWorkerTarget::RevertToOplogIndex(
+                    golem_common::model::agent::RevertToOplogIndex {
+                        last_oplog_index: OplogIndex::from_u64(2),
+                    },
+                ),
+            )
+            .await
+            .unwrap_err(),
+    ] {
+        assert!(error.to_string().contains("NotAnAgent"), "{error:#}");
+    }
+    assert_eq!(
+        before,
+        executor.get_oplog(&owned, OplogIndex::INITIAL).await?
+    );
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    assert_eq!(first, executor.invoke_agent_session(request.clone()).await?);
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    assert_eq!(effect_gate.attempts.load(Ordering::SeqCst), 1);
+    let oplog = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        1
+    );
+    assert!(
+        !oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
+    );
+    let scope = executor.auth_ctx().idempotency_scope();
+    let scheduled_request = |label: &str| {
+        let key = IdempotencyKey::new(label.to_string());
+        let id = golem_common::model::StandaloneToolInvocation::unique_part(
+            context.default_environment_id,
+            &tool_name,
+            scope,
+            "no-stream",
+            Some(&key),
+        );
+        let agent = golem_common::model::AgentId::standalone_tool_invocation(
+            context.default_environment_id,
+            type_id,
+            id,
+        );
+        let owned = OwnedAgentId::new(context.default_environment_id, &agent);
+        let mut start = request.clone();
+        start.target = Some(crate::agent::id_target(&owned));
+        start.idempotency_key = Some(IdempotencyKey::new(id.to_string()).into());
+        start.request_key =
+            Some(golem_common::model::InvocationRequestKey::external(scope, Some(&key)).into());
+        start.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32;
+        let due = chrono::Utc::now() - chrono::Duration::seconds(1);
+        start.schedule_at = Some(prost_types::Timestamp {
+            seconds: due.timestamp(),
+            nanos: due.timestamp_subsec_nanos() as i32,
+        });
+        (owned, id, start)
+    };
+    let (scheduled_owner, _, scheduled) = scheduled_request("scheduled-survives-restart");
+    let (cancelled_owner, cancelled_id, mut cancelled) =
+        scheduled_request("cancelled-across-restart");
+    let future = chrono::Utc::now() + chrono::Duration::hours(1);
+    cancelled.schedule_at = Some(prost_types::Timestamp {
+        seconds: future.timestamp(),
+        nanos: 0,
+    });
+    executor.invoke_agent_session(scheduled.clone()).await?;
+    executor.invoke_agent_session(cancelled.clone()).await?;
+    for owner in [&scheduled_owner, &cancelled_owner] {
+        let oplog = executor.get_oplog(owner, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::PendingAgentInvocation(_)))
+                .count(),
+            1
+        );
+        assert!(
+            !oplog
+                .iter()
+                .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        );
+    }
+    assert_eq!(effects.load(Ordering::SeqCst), 1);
+    drop(executor);
+    let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    assert!(
+        executor
+            .cancel_invocation(&cancelled_owner, &cancelled_id)
+            .await?
+    );
+    release_wakes.cancel();
+    let mut await_scheduled = scheduled;
+    await_scheduled.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32;
+    await_scheduled.schedule_at = None;
+    executor.invoke_agent_session(await_scheduled).await?;
+    executor.invoke_agent_session(cancelled).await?;
+    assert_eq!(effects.load(Ordering::SeqCst), 2);
+    let cancelled_oplog = executor
+        .get_oplog(&cancelled_owner, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        !cancelled_oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+    );
+    assert_eq!(
+        cancelled_oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::CancelPendingInvocation(_)))
+            .count(),
+        1
+    );
+
+    let make_start = |value: &str| -> anyhow::Result<_> {
+        let key = IdempotencyKey::new(value.to_string());
+        let id = golem_common::model::StandaloneToolInvocation::unique_part(
+            context.default_environment_id,
+            &tool_name,
+            scope,
+            "no-stream",
+            Some(&key),
+        );
+        let owner = OwnedAgentId::new(
+            context.default_environment_id,
+            &golem_common::model::AgentId::standalone_tool_invocation(
+                context.default_environment_id,
+                type_id,
+                id,
+            ),
+        );
+        let mut start = request.clone();
+        start.target = Some(crate::agent::id_target(&owner));
+        start.idempotency_key = Some(IdempotencyKey::new(id.to_string()).into());
+        start.request_key =
+            Some(golem_common::model::InvocationRequestKey::external(scope, Some(&key)).into());
+        let input = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(vec![
+                golem_common::schema::NamedFieldType {
+                    name: "value".into(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                },
+            ])),
+            SchemaValue::Record {
+                fields: vec![SchemaValue::String(value.into())],
+            },
+        );
+        start.external_tool.as_mut().unwrap().input =
+            Some(input.try_into().map_err(anyhow::Error::msg)?);
+        Ok((owner, start))
+    };
+
+    // A rejected preparation can leave Create without an accepted payload. A retry must check
+    // the actual activation again, rather than admitting a newly deployed host implementation.
+    let (unaccepted_owner, mut unaccepted) = make_start("standalone-unaccepted")?;
+    unaccepted
+        .external_tool
+        .as_mut()
+        .unwrap()
+        .expected_deployment_revision = Some(999);
+    assert!(
+        executor
+            .invoke_agent_session(unaccepted.clone())
+            .await
+            .is_err()
+    );
+    let unaccepted_oplog = executor
+        .get_oplog(&unaccepted_owner, OplogIndex::INITIAL)
+        .await?;
+    assert_eq!(unaccepted_oplog.len(), 1);
+    assert!(matches!(
+        unaccepted_oplog[0].entry,
+        PublicOplogEntry::Create(_)
+    ));
+    let mut host_deployment = deployment.clone();
+    host_deployment
+        .registered_tools
+        .get_mut(&tool_name)
+        .unwrap()
+        .registration
+        .source = golem_common::model::tool::ToolSource::Host {
+        host_tool_id: "mcp-import".to_string().try_into().unwrap(),
+        implementation_version: "1".into(),
+    };
+    let host_source = host_deployment.registered_tools[&tool_name]
+        .registration
+        .source
+        .clone();
+    for bindings in host_deployment.tool_bindings.values_mut() {
+        if let Some(binding) = bindings.get_mut(&tool_name) {
+            binding.source = host_source.clone();
+        }
+    }
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(host_deployment.clone()),
+    );
+    unaccepted
+        .external_tool
+        .as_mut()
+        .unwrap()
+        .expected_deployment_revision = None;
+    let rejected = executor.invoke_agent_session(unaccepted).await.unwrap_err();
+    assert!(
+        rejected
+            .to_string()
+            .contains("standalone durable owners require a component tool"),
+        "{rejected:#}"
+    );
+    assert_eq!(
+        executor
+            .get_oplog(&unaccepted_owner, OplogIndex::INITIAL)
+            .await?,
+        unaccepted_oplog
+    );
+    assert_eq!(effects.load(Ordering::SeqCst), 2);
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(deployment.clone()),
+    );
+
+    for (value, before_crash, after_recovery) in [
+        ("standalone-before-effect", 2, 3),
+        ("standalone-after-effect", 4, 4),
+    ] {
+        let (owner, start) = make_start(value)?;
+        let mut trigger = start.clone();
+        trigger.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32;
+        executor.invoke_agent_session(trigger).await?;
+        let checkpoint = next_crash_checkpoint(&mut checkpoints, value).await?;
+        assert_eq!(effects.load(Ordering::SeqCst), before_crash);
+        if value == "standalone-after-effect" {
+            environment_state.set_tool_deployment(
+                context.default_environment_id,
+                component.id,
+                component.revision,
+                Some(host_deployment.clone()),
+            );
+        }
+        drop(executor);
+        drop(checkpoint.release);
+        executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        next_crash_checkpoint(&mut checkpoints, value)
+            .await?
+            .release
+            .send(())
+            .unwrap();
+        executor.invoke_agent_session(start).await?;
+        assert_eq!(effects.load(Ordering::SeqCst), after_recovery);
+        assert_eq!(effect_gate.attempts.load(Ordering::SeqCst), after_recovery);
+        environment_state.set_tool_deployment(
+            context.default_environment_id,
+            component.id,
+            component.revision,
+            Some(deployment.clone()),
+        );
+        let oplog = executor.get_oplog(&owner, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+                .count(),
+            1
+        );
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+                .count(),
+            1
+        );
+        for entry in &oplog {
+            if matches!(entry.entry, PublicOplogEntry::Start(_)) {
+                assert!(
+                    oplog.iter().any(|terminal| match &terminal.entry {
+                        PublicOplogEntry::End(end) => end.start_index == entry.oplog_index,
+                        PublicOplogEntry::Cancelled(cancelled) =>
+                            cancelled.start_index == entry.oplog_index,
+                        _ => false,
+                    }),
+                    "unterminated Start at {}",
+                    entry.oplog_index
+                );
+            }
+        }
+    }
+    let (promise_owner, start) = make_start("standalone-promise")?;
+    let mut trigger = start.clone();
+    trigger.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32;
+    executor.invoke_agent_session(trigger).await?;
+    let promise = next_promise_checkpoint(&mut promises, "standalone-promise").await?;
+    wait_for_promise_checkpoint_to_await(&executor, &promise_owner.agent_id, &promise).await?;
+    let fingerprint = executor
+        .get_worker_metadata(&promise_owner)
+        .await?
+        .fingerprint;
+    drop(executor);
+    executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    executor
+        .complete_promise(
+            &context.default_environment_id,
+            &PromiseId {
+                agent_id: promise_owner.agent_id,
+                fingerprint,
+                oplog_idx: promise.oplog_idx,
+            },
+            b"continue".to_vec(),
+        )
+        .await?;
+    executor.invoke_agent_session(start).await?;
+    assert_eq!(effects.load(Ordering::SeqCst), 5);
+
+    let (held_owner, held) = make_start("standalone-held-effect")?;
+    effect_gate.hold_next.store(true, Ordering::SeqCst);
+    let mut trigger = held.clone();
+    trigger.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32;
+    executor.invoke_agent_session(trigger).await?;
+    tokio::time::timeout(Duration::from_secs(30), effect_gate.arrived.notified()).await?;
+    assert_eq!(effects.load(Ordering::SeqCst), 6);
+    let attempts_before_crash = effect_gate.attempts.load(Ordering::SeqCst);
+    let before_response = executor.get_oplog(&held_owner, OplogIndex::INITIAL).await?;
+    assert!(before_response.iter().any(|entry| {
+        matches!(&entry.entry, PublicOplogEntry::Start(start) if start.function_name == "http::client::send")
+            && !before_response.iter().any(|terminal| matches!(&terminal.entry, PublicOplogEntry::End(end) if end.start_index == entry.oplog_index))
+    }), "effect happened while its HTTP Start still had no End");
+    drop(executor);
+    effect_gate.release.notify_one();
+    executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    executor.invoke_agent_session(held).await?;
+    assert_eq!(
+        effect_gate.attempts.load(Ordering::SeqCst),
+        attempts_before_crash + 1
+    );
+    assert_eq!(
+        effects.load(Ordering::SeqCst),
+        6,
+        "the external peer deduplicates the ambiguous retry by its durable HTTP key"
+    );
+    let recovered = executor.get_oplog(&held_owner, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        recovered
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        1
+    );
+    assert!(incomplete_starts_before(&recovered, OplogIndex::from_u64(u64::MAX)).is_empty());
+
+    use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
+    let storage = storage.lock().unwrap().clone().unwrap();
+    let (timer_crash_owner, timer_crash) = make_start("standalone-retention-crash")?;
+    retention_insert.hold_next.store(true, Ordering::SeqCst);
+    let mut trigger = timer_crash.clone();
+    trigger.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32;
+    executor.invoke_agent_session(trigger).await?;
+    tokio::time::timeout(Duration::from_secs(30), retention_insert.arrived.notified()).await?;
+    assert!(
+        executor
+            .stored_oplog(&timer_crash_owner.agent_id)
+            .await
+            .iter()
+            .any(|entry| matches!(
+                entry,
+                golem_common::model::oplog::OplogEntry::AgentInvocationFinished { .. }
+            ))
+    );
+    assert!(
+        storage
+            .get_action(&ScheduleId::for_finished_invocation(&timer_crash_owner))
+            .await?
+            .is_none()
+    );
+    drop(executor);
+    // Also exercise cold-load repair of a missing timer for an older completed owner.
+    storage
+        .cancel(&ScheduleId::for_finished_invocation(&owned))
+        .await?;
+    let mut expired = overrides.clone();
+    expired.configure = Some(Arc::new(|config| {
+        config.standalone_tool_invocation_retention = Duration::ZERO;
+    }));
+    let executor = start_with_overrides(deps, &context, expired).await?;
+    let mut timer_lookup = timer_crash;
+    timer_lookup.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32;
+    let _ = executor.invoke_agent_session(timer_lookup).await;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while executor
+            .get_worker_metadata(&timer_crash_owner)
+            .await
+            .is_ok()
+        {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("crash-before-insert did not repair the retention timer on load");
+    assert!(
+        executor
+            .stored_oplog(&timer_crash_owner.agent_id)
+            .await
+            .is_empty()
+    );
+    let mut lookup = request.clone();
+    lookup.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32;
+    // Deletion may cancel the lookup's response lease after cold hydration.
+    let _ = executor.invoke_agent_session(lookup).await;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while executor.get_worker_metadata(&owned).await.is_ok() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("reconstructed finished owner was not retained for deletion");
+    assert!(executor.stored_oplog(&owned.agent_id).await.is_empty());
+    let archive_id = ScheduleId::fresh();
+    storage
+        .insert(
+            archive_id,
+            chrono::Utc::now() - chrono::Duration::seconds(1),
+            ShardId::new(0),
+            &golem_common::serialization::serialize(&ScheduledAction::ArchiveOplog {
+                account_id: context.account_id,
+                owned_agent_id: timer_crash_owner.clone(),
+                agent_mode: AgentMode::Durable,
+                last_oplog_index: OplogIndex::from_u64(100),
+                next_after: Duration::from_secs(1),
+            })
+            .map_err(anyhow::Error::msg)?,
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while storage.get_action(&archive_id).await.unwrap().is_some() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("archive action for a deleted owner was not acknowledged");
+    assert!(
+        executor
+            .stored_oplog(&timer_crash_owner.agent_id)
+            .await
+            .is_empty()
+    );
+    drop(executor);
+
+    // A retry after retention creates a new incarnation at the same T3 address.
+    // Deliver an old timer after that Create; the replacement must remain intact.
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let mut recreated = request.clone();
+    recreated.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32;
+    recreated.schedule_at = Some(prost_types::Timestamp {
+        seconds: future.timestamp(),
+        nanos: 0,
+    });
+    executor.invoke_agent_session(recreated).await?;
+    let replacement = executor.get_worker_metadata(&owned).await?;
+    assert_ne!(metadata.fingerprint, replacement.fingerprint);
+    let action = ScheduledAction::DeleteFinishedInvocation {
+        owned_agent_id: owned.clone(),
+        fingerprint: metadata.fingerprint,
+    };
+    let now = chrono::Utc::now();
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    storage
+        .insert(
+            ScheduleId::for_finished_invocation(&owned),
+            now,
+            ShardId::new(0),
+            &golem_common::serialization::serialize(&action).map_err(anyhow::Error::msg)?,
+        )
+        .await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while storage.count_due(now, &assignment).await.unwrap() != 0 {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("stale retention action was not acknowledged");
+    assert_eq!(
+        executor.get_worker_metadata(&owned).await?.fingerprint,
+        replacement.fingerprint
+    );
+    assert_eq!(effects.load(Ordering::SeqCst), 6);
+
+    let failed_component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .name("virtual-native-policy-failed")
+        .store()
+        .await?;
+    let mut failed_deployment = deployment;
+    let baseline = ToolBindingOwner::ComponentBaseline {
+        component_id: component.id,
+    };
+    let mut bindings = failed_deployment.tool_bindings.remove(&baseline).unwrap();
+    let failed_baseline = ToolBindingOwner::ComponentBaseline {
+        component_id: failed_component.id,
+    };
+    for binding in bindings.values_mut() {
+        binding.owner = failed_baseline.clone();
+    }
+    failed_deployment
+        .tool_bindings
+        .insert(failed_baseline, bindings);
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        failed_component.id,
+        failed_component.revision,
+        Some(failed_deployment),
+    );
+    let (failed_owner, mut failed_start) = make_start("standalone-startup-failure")?;
+    failed_start.component_id = Some(failed_component.id.into());
+    failed_start.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32;
+    drop(executor);
+    let hold_deletion = tokio_util::sync::CancellationToken::new();
+    let mut short_retention = overrides.clone();
+    short_retention.configure = Some(Arc::new(|config| {
+        config.standalone_tool_invocation_retention = Duration::from_secs(1);
+    }));
+    short_retention.wrap_scheduler_storage = Some(Arc::new({
+        let release = hold_deletion.clone();
+        let gate = retention_insert.clone();
+        move |inner| {
+            Arc::new(crate::scheduled_ephemeral::PausedScheduler {
+                inner: Arc::new(retention_storage::HoldRetentionInsert {
+                    inner,
+                    gate: gate.clone(),
+                }),
+                release: release.clone(),
+                invocation_wake: Default::default(),
+                acknowledged: Default::default(),
+            })
+        }
+    }));
+    let executor = start_with_overrides(deps, &context, short_retention.clone()).await?;
+    executor.invoke_agent_session(failed_start).await?;
+    executor
+        .wait_for_status(&failed_owner, AgentStatus::Failed, Duration::from_secs(30))
+        .await?;
+    let failed_history = executor.stored_oplog(&failed_owner.agent_id).await;
+    assert!(
+        failed_history
+            .iter()
+            .any(|entry| matches!(entry, golem_common::model::oplog::OplogEntry::Error { .. }))
+    );
+    let failed_oplog = executor
+        .get_oplog(&failed_owner, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        !failed_oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+    );
+    assert!(
+        storage
+            .get_action(&ScheduleId::for_finished_invocation(&failed_owner))
+            .await?
+            .is_some()
+    );
+    drop(executor);
+    short_retention.configure = Some(Arc::new(|config| {
+        config.standalone_tool_invocation_retention = Duration::from_secs(10);
+    }));
+    let executor = start_with_overrides(deps, &context, short_retention).await?;
+    assert_eq!(
+        executor.get_worker_metadata(&failed_owner).await?.status,
+        AgentStatus::Failed
+    );
+    assert_eq!(
+        executor.stored_oplog(&failed_owner.agent_id).await,
+        failed_history
+    );
+    hold_deletion.cancel();
+    tokio::time::timeout(
+        Duration::from_secs(30),
+        retention_insert.rescheduled.notified(),
+    )
+    .await?;
+    assert_eq!(
+        executor.get_worker_metadata(&failed_owner).await?.status,
+        AgentStatus::Failed
+    );
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while executor.get_worker_metadata(&failed_owner).await.is_ok() {
+            tokio::task::yield_now().await;
+        }
+    })
+    .await
+    .expect("terminal startup failure was not deleted by retention after restart");
+    assert!(
+        executor
+            .stored_oplog(&failed_owner.agent_id)
+            .await
+            .is_empty()
+    );
+    Ok(())
 }
 
 #[test]

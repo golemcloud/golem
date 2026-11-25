@@ -70,6 +70,14 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         wait: ArchiveWait,
     ) -> Result<Option<bool>, WorkerExecutorError>;
 
+    /// Deletes a finished standalone owner if due; otherwise returns its later deadline.
+    /// Missing or replaced incarnations and unfinished owners are left alone.
+    async fn delete_finished_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, WorkerExecutorError>;
+
     async fn expire_durable_stream_session(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -322,6 +330,25 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         }
     }
 
+    async fn delete_finished_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, WorkerExecutorError> {
+        let activator = self
+            .worker_activator
+            .lock()
+            .unwrap()
+            .as_ref()
+            .and_then(|w| w.upgrade())
+            .ok_or_else(|| {
+                WorkerExecutorError::runtime("WorkerActivator is disabled, not deleting invocation")
+            })?;
+        activator
+            .delete_finished_invocation(owned_agent_id, fingerprint)
+            .await
+    }
+
     async fn enqueue_exact_existing(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -567,6 +594,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
             caller,
         )
         .await
+    }
+
+    async fn delete_finished_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, WorkerExecutorError> {
+        let worker = match self
+            .all
+            .active_agents()
+            .get_existing_with_fingerprint(&self.all, owned_agent_id, Some(fingerprint))
+            .await
+        {
+            Ok(worker) => worker,
+            Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(None),
+            Err(error) => return Err(error),
+        };
+        let Some(deadline) = worker.finished_invocation_deadline().await? else {
+            return Ok(None);
+        };
+        if deadline > chrono::Utc::now() {
+            return Ok(Some(deadline));
+        }
+        match Worker::<Ctx>::delete(&self.all, owned_agent_id, fingerprint).await {
+            Ok(()) | Err(WorkerExecutorError::AgentNotFound { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     async fn enqueue_exact_existing(
