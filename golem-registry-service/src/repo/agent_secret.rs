@@ -214,8 +214,8 @@ impl DbAgentSecretRepo<PostgresPool> {
             .fetch_one_as(
                 sqlx::query_as(indoc! { r#"
                     INSERT INTO agent_secret_revisions
-                    (agent_secret_id, revision_id, agent_secret_revision_data, created_at, created_by, deleted)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                    (agent_secret_id, revision_id, agent_secret_revision_data, created_at, created_by, deleted, destinations)
+                    VALUES ($1, $2, $3, $4, $5, $6, '[]')
                     RETURNING agent_secret_id, revision_id, agent_secret_revision_data, created_at, created_by, deleted
                 "# })
                 .bind(revision.agent_secret_id)
@@ -236,8 +236,8 @@ impl DbAgentSecretRepo<PostgresPool> {
         let agent_secret_record: AgentSecretRecord = tx
             .fetch_one_as(
                 sqlx::query_as(indoc! {r#"
-                    INSERT INTO agent_secrets (agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id)
-                    VALUES ($1, $2, $3, $4, $5, $5, NULL, $6, $7)
+                    INSERT INTO agent_secrets (agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id, owner_kind)
+                    VALUES ($1, $2, $3, $4, $5, $5, NULL, $6, $7, 'environment')
                     RETURNING agent_secret_id, environment_id, path, agent_secret_data, created_at, updated_at, deleted_at, modified_by, current_revision_id
                 "#})
                     .bind(record.revision.agent_secret_id)
