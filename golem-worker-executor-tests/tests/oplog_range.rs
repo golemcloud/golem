@@ -184,19 +184,36 @@ async fn read_pages_to(
     to: Option<u64>,
     count: u64,
 ) -> anyhow::Result<Vec<PublicOplogPageEntry>> {
-    let pages = futures::stream::try_unfold(Some(None), |cursor| async move {
-        let Some(cursor) = cursor else {
-            return Ok(None);
+    let pages = futures::stream::try_unfold(PageRead::First, |read| async move {
+        let cursor = match read {
+            PageRead::First => None,
+            PageRead::Next(cursor) => Some(cursor),
+            PageRead::Done => return Ok(None),
         };
         let get_oplog_response::Result::Success(page) =
             get_page(executor, agent_id, from, to, cursor, count).await?
         else {
             anyhow::bail!("the oplog read from {from} to {to:?} failed");
         };
-        let next = page.next.clone();
-        Ok(Some((page_entries(page), next.map(Some))))
+        let next = PageRead::after(page.next.clone());
+        Ok(Some((page_entries(page), next)))
     });
     pages.try_concat().await
+}
+
+/// The read of the pages of a range: the first page, a later page from the cursor of the page
+/// before it, or the end of the read after a page without a cursor.
+enum PageRead {
+    First,
+    Next(OplogCursor),
+    Done,
+}
+
+impl PageRead {
+    /// The read after a page whose cursor is `next`.
+    fn after(next: Option<OplogCursor>) -> Self {
+        next.map_or(Self::Done, Self::Next)
+    }
 }
 
 /// The count of entries after which the primary oplog of the second executor moves its entries to
