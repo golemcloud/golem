@@ -720,6 +720,11 @@ mod tests {
             .await;
         let page = oplog_page(&client, &agent_id, None).await?;
         assert_eq!(page.first_index_in_chunk, retained_start.as_u64());
+        assert_eq!(
+            page.entries.first().map(|entry| entry.oplog_index()),
+            Some(retained_start),
+            "a page without a `from` gives its entries from the retained start"
+        );
         let page = oplog_page(&client, &control_id, None).await?;
         assert_eq!(
             page.entries.first().map(|entry| entry.oplog_index()),
