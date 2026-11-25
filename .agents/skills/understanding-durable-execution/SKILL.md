@@ -1433,7 +1433,8 @@ reads the `Create` entry alone (`read_create_entry`). The expired error becomes
 because no page gives one. A status fold from a cached status that is two or more entries below the
 retained start, so that its fold reads below it, is expired, and the status goes on to the clean
 status checkpoint. An initialization whose result is below the
-start is answered from the status: a completed constructor result in `invocation_results` proves
+start is answered from the status while the status holds that result (its exact membership or its
+recent results): a completed constructor result in `invocation_results` proves
 that the agent was initialized, and the status names the key of the initialization of a fork. A recovery that has no usable restore source at or after the start fails with this
 error and keeps the oplog. `delete` removes the record only after the delete of the oplog returns
 `Ok` (fenced for a durable oplog), so a refused delete keeps the start.
