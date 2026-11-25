@@ -6,16 +6,20 @@
 //
 //     http://license.golem.cloud/LICENSE
 
-use golem_api_grpc::proto::golem::worker::input_stream_item;
+use golem_api_grpc::proto::golem::worker::v1::worker_execution_error;
 use golem_api_grpc::proto::golem::worker::{
     DurableStreamMapping, InputStreamItem, InvocationAccepted, InvocationRequest, ResumeAttach,
     StreamDirection, StreamEnd, StreamMappingRole, StreamTerminalAuthor, invocation_request,
     invocation_session_result,
 };
+use golem_api_grpc::proto::golem::worker::{
+    InvocationRejected, InvocationRejectionReason, input_stream_item,
+};
 use golem_common::model::durable_stream::{StreamError, StreamTerminal};
 use golem_schema::proto::golem::schema::{ListValue, SchemaValue, schema_value};
 use prost::Message;
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::OnceLock;
 use tokio::sync::OwnedSemaphorePermit;
 use tokio::time::Instant;
 
@@ -286,4 +290,51 @@ pub(super) struct RecoveryProgress {
     /// The executor may commit this attempt before its acceptance reaches us. Transport loss is
     /// therefore ambiguous: replay the exact request until an acceptance or definite rejection.
     pub(super) pending: Option<ResumeAttach>,
+}
+
+/// An executor answer that ends the right of the worker service to clean up the invocation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ExecutorEnd {
+    /// The executor finished the session with a success or a failure.
+    Finished,
+    /// The executor refused the session because it cannot read the history of the agent. The
+    /// refusal does not end the invocation, and it is not an outcome.
+    ReadRefused,
+}
+
+impl ExecutorEnd {
+    /// The end that `rejected` reports. The executor reports a refused oplog read as an
+    /// internal rejection with a runtime worker error; the worker service cannot tell it apart
+    /// from other runtime errors, so it treats all of them as refused reads.
+    pub(super) fn of_rejection(rejected: &InvocationRejected) -> Option<Self> {
+        let runtime_error = matches!(
+            rejected
+                .worker_error
+                .as_ref()
+                .and_then(|error| error.error.as_ref()),
+            Some(worker_execution_error::Error::RuntimeError(_))
+        );
+        (rejected.reason() == InvocationRejectionReason::Internal && runtime_error)
+            .then_some(Self::ReadRefused)
+    }
+}
+
+/// The right of the worker service to cancel the invocation and interrupt the agent when the
+/// session ends. The right is open until the first executor end, which closes it. Later ends
+/// do not change it.
+#[derive(Default)]
+pub(super) struct CleanupAuthority(OnceLock<ExecutorEnd>);
+
+impl CleanupAuthority {
+    pub(super) fn observe(&self, end: ExecutorEnd) {
+        let _ = self.0.set(end);
+    }
+
+    pub(super) fn grants_cleanup(&self) -> bool {
+        self.0.get().is_none()
+    }
+
+    pub(super) fn finished(&self) -> bool {
+        self.0.get() == Some(&ExecutorEnd::Finished)
+    }
 }

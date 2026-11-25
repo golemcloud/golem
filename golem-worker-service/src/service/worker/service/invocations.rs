@@ -246,7 +246,9 @@ impl WorkerService {
         summary_from_proto(agent_id, environment_id, summary)
     }
 
-    /// The result of a terminal invocation, read through the existing result lookup.
+    /// The result of a terminal invocation, read through the existing result lookup. When the
+    /// lookup fails and the failure is not the recorded outcome, the read fails. The error does
+    /// not show the details of the lookup failure, because they can contain stored data.
     async fn invocation_outcome(
         &self,
         agent: &ManagedAgent,
@@ -282,7 +284,9 @@ impl WorkerService {
                     error = error.to_safe_string(),
                     "Failed to read the result of a terminal invocation"
                 );
-                return Ok(None);
+                return Err(WorkerServiceError::Internal(format!(
+                    "the result of invocation {invocation_id} cannot be read"
+                )));
             }
         };
         let background_failure = output.background_failure.map(background_failure);

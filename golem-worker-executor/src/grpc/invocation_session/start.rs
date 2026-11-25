@@ -82,116 +82,6 @@ where
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use futures::FutureExt;
-    use std::future::ready;
-    use test_r::test;
-
-    #[test]
-    fn joined_observer_reports_read_errors_without_repolling_an_observed_invocation() {
-        let cancelled = WorkerExecutorError::InvocationCancelled;
-        let mut observation = InvocationObservation::accepted(ready(Err(cancelled.clone())), None);
-        observation.wait_for_completion().now_or_never().unwrap();
-        assert!(
-            matches!(&observation, InvocationObservation::InvocationFailed(error) if **error == cancelled)
-        );
-        assert!(observation.check_observation().is_ok());
-        assert!(observation.wait_for_completion().now_or_never().is_none());
-
-        let outage = WorkerExecutorError::recovery_required("temporary result read failure");
-        let mut observation = InvocationObservation::accepted(ready(Err(outage.clone())), None);
-        observation.wait_for_completion().now_or_never().unwrap();
-        assert_eq!(observation.check_observation(), Err(outage.clone()));
-        assert!(observation.wait_for_completion().now_or_never().is_none());
-
-        let mut early =
-            InvocationObservation::accepted(ready(Err(cancelled)), Some(Err(outage.clone())));
-        assert_eq!(early.check_observation(), Err(outage));
-        assert!(early.wait_for_completion().now_or_never().is_none());
-    }
-
-    #[test]
-    fn accepted_observer_keeps_scalar_output() {
-        let output = AgentInvocationOutput {
-            result: AgentInvocationResult::AgentInitialization,
-            consumed_fuel: Some(42),
-            invocation_status: None,
-            component_revision: None,
-            agent_id: None,
-            idempotency_key: None,
-            oplog_index: None,
-            agent_fingerprint: None,
-            background_failure: None,
-        };
-        let mut observation = InvocationObservation::accepted(
-            ready(Err(WorkerExecutorError::InvocationCancelled)),
-            Some(Ok(output.clone())),
-        );
-        assert!(observation.wait_for_completion().now_or_never().is_none());
-        assert!(
-            matches!(observation, InvocationObservation::Succeeded(observed) if *observed == output)
-        );
-    }
-
-    #[test]
-    async fn attachment_check_preserves_storage_errors_and_revokes_stale_attachments() {
-        use crate::services::oplog::{OplogFence, OplogReadError, UnreadableOplog};
-        use golem_common::model::sharding::ShardEpoch;
-        use golem_common::model::{AgentId, OplogIndex};
-
-        let (responses, mut rx) = mpsc::channel(1);
-        send_attachment_revocation(
-            &responses,
-            Err(SessionError::from(
-                "StaleEpoch: durable attachment has been fenced",
-            )),
-        )
-        .await;
-        assert!(matches!(
-            rx.try_recv().unwrap().response,
-            Some(invocation_response::Response::AttachmentRevoked(_))
-        ));
-
-        let agent_id = AgentId::from_parts(7, 7);
-        [
-            SessionError::from("durable session has no attachment authority"),
-            SessionError::Unreadable(UnreadableOplog::new(
-                &agent_id,
-                OplogReadError::Gap {
-                    start: OplogIndex::INITIAL,
-                    end: OplogIndex::INITIAL,
-                },
-            )),
-            SessionError::Fenced(OplogFence {
-                agent_id,
-                expected_epoch: ShardEpoch(1),
-                actual_epoch: Some(ShardEpoch(2)),
-            }),
-        ]
-        .into_iter()
-        .for_each(|error| {
-            let expected = (!matches!(&error, SessionError::Failed(_))).then(|| {
-                error
-                    .clone()
-                    .into_worker_executor_error(WorkerExecutorError::runtime)
-                    .into()
-            });
-            send_attachment_revocation(&responses, Err(error))
-                .now_or_never()
-                .unwrap();
-            let Some(invocation_response::Response::Finished(InvocationSessionCompletion {
-                outcome: Some(invocation_session_completion::Outcome::Failure(failure)),
-            })) = rx.try_recv().unwrap().response
-            else {
-                panic!("expected a worker failure frame");
-            };
-            assert_eq!(failure.worker_error, expected);
-        });
-    }
-}
-
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
 {
@@ -1158,5 +1048,115 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         })
         .await;
         detach_durable_attachment(durable_attachment).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use futures::FutureExt;
+    use std::future::ready;
+    use test_r::test;
+
+    #[test]
+    fn joined_observer_reports_read_errors_without_repolling_an_observed_invocation() {
+        let cancelled = WorkerExecutorError::InvocationCancelled;
+        let mut observation = InvocationObservation::accepted(ready(Err(cancelled.clone())), None);
+        observation.wait_for_completion().now_or_never().unwrap();
+        assert!(
+            matches!(&observation, InvocationObservation::InvocationFailed(error) if **error == cancelled)
+        );
+        assert!(observation.check_observation().is_ok());
+        assert!(observation.wait_for_completion().now_or_never().is_none());
+
+        let outage = WorkerExecutorError::recovery_required("temporary result read failure");
+        let mut observation = InvocationObservation::accepted(ready(Err(outage.clone())), None);
+        observation.wait_for_completion().now_or_never().unwrap();
+        assert_eq!(observation.check_observation(), Err(outage.clone()));
+        assert!(observation.wait_for_completion().now_or_never().is_none());
+
+        let mut early =
+            InvocationObservation::accepted(ready(Err(cancelled)), Some(Err(outage.clone())));
+        assert_eq!(early.check_observation(), Err(outage));
+        assert!(early.wait_for_completion().now_or_never().is_none());
+    }
+
+    #[test]
+    fn accepted_observer_keeps_scalar_output() {
+        let output = AgentInvocationOutput {
+            result: AgentInvocationResult::AgentInitialization,
+            consumed_fuel: Some(42),
+            invocation_status: None,
+            component_revision: None,
+            agent_id: None,
+            idempotency_key: None,
+            oplog_index: None,
+            agent_fingerprint: None,
+            background_failure: None,
+        };
+        let mut observation = InvocationObservation::accepted(
+            ready(Err(WorkerExecutorError::InvocationCancelled)),
+            Some(Ok(output.clone())),
+        );
+        assert!(observation.wait_for_completion().now_or_never().is_none());
+        assert!(
+            matches!(observation, InvocationObservation::Succeeded(observed) if *observed == output)
+        );
+    }
+
+    #[test]
+    async fn attachment_check_preserves_storage_errors_and_revokes_stale_attachments() {
+        use crate::services::oplog::{OplogFence, OplogReadError, UnreadableOplog};
+        use golem_common::model::sharding::ShardEpoch;
+        use golem_common::model::{AgentId, OplogIndex};
+
+        let (responses, mut rx) = mpsc::channel(1);
+        send_attachment_revocation(
+            &responses,
+            Err(SessionError::from(
+                "StaleEpoch: durable attachment has been fenced",
+            )),
+        )
+        .await;
+        assert!(matches!(
+            rx.try_recv().unwrap().response,
+            Some(invocation_response::Response::AttachmentRevoked(_))
+        ));
+
+        let agent_id = AgentId::from_parts(7, 7);
+        [
+            SessionError::from("durable session has no attachment authority"),
+            SessionError::Unreadable(UnreadableOplog::new(
+                &agent_id,
+                OplogReadError::Gap {
+                    start: OplogIndex::INITIAL,
+                    end: OplogIndex::INITIAL,
+                },
+            )),
+            SessionError::Fenced(OplogFence {
+                agent_id,
+                expected_epoch: ShardEpoch(1),
+                actual_epoch: Some(ShardEpoch(2)),
+            }),
+        ]
+        .into_iter()
+        .for_each(|error| {
+            let expected = (!matches!(&error, SessionError::Failed(_))).then(|| {
+                error
+                    .clone()
+                    .into_worker_executor_error(WorkerExecutorError::runtime)
+                    .into()
+            });
+            send_attachment_revocation(&responses, Err(error))
+                .now_or_never()
+                .unwrap();
+            let Some(invocation_response::Response::Finished(InvocationSessionCompletion {
+                outcome: Some(invocation_session_completion::Outcome::Failure(failure)),
+            })) = rx.try_recv().unwrap().response
+            else {
+                panic!("expected a worker failure frame");
+            };
+            assert_eq!(failure.worker_error, expected);
+        });
     }
 }

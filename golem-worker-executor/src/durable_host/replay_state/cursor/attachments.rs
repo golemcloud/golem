@@ -86,9 +86,16 @@ impl ReplayState {
             Some(payload) => Some(
                 self.cursor
                     .oplog
-                    .download_payload(payload.clone())
+                    .download_payload_classified(payload.clone())
                     .await
-                    .map_err(WorkerExecutorError::runtime)?,
+                    .map_err(|error| {
+                        super::metadata::unreadable_history_payload(
+                            &self.cursor.owned_agent_id.agent_id,
+                            "tool attachment observation body",
+                            source,
+                            error,
+                        )
+                    })?,
             ),
             None => None,
         };
@@ -533,5 +540,112 @@ impl ReplayState {
                 _ = progress => {}
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod read_error_tests {
+    use super::super::metadata::read_error_tests::{
+        append, assert_unreadable_at, open_primary_oplog,
+    };
+    use super::*;
+    use golem_common::model::Timestamp;
+    use golem_common::model::durable_stream::StreamConsumerObservation;
+    use golem_common::model::oplog::attachment::{
+        AcceptedAttachmentWriteEnd, ToolAttachmentId, ToolAttachmentReadObservation,
+        ToolAttachmentReadOutcome, ToolAttachmentSlot,
+    };
+    use golem_common::model::oplog::payload::tool_attachment::{
+        ToolAttachmentWriteOutcome, ToolAttachmentWriteRequest,
+    };
+    use golem_common::model::oplog::{
+        DurableFunctionType, HostRequestToolAttachmentWrite, HostResponseToolAttachmentWrite,
+        OplogPayload,
+    };
+    use test_r::test;
+
+    #[test]
+    async fn an_undecodable_attachment_body_fails_hydration_at_its_entry() {
+        let (owned_agent_id, oplog) = open_primary_oplog("attachment-body-unreadable").await;
+        let attachment = ToolAttachmentId {
+            creation_start: OplogIndex::INITIAL,
+            slot: ToolAttachmentSlot::Stdout,
+        };
+        let request = HostRequestToolAttachmentWrite {
+            request: ToolAttachmentWriteRequest::new(attachment, 0, b"abc"),
+        };
+        append(
+            &oplog,
+            vec![
+                OplogEntry::grow_memory(1),
+                OplogEntry::grow_memory(2),
+                OplogEntry::grow_memory(3),
+                OplogEntry::Start {
+                    timestamp: Timestamp::now_utc(),
+                    parent_start_index: None,
+                    function_name: HostFunctionName::GolemToolOutputWrite,
+                    invocation_id: None,
+                    observational_owner: None,
+                    driver: None,
+                    request: Some(OplogPayload::Inline(Box::new(request.into()))),
+                    durable_function_type: DurableFunctionType::ReadLocal,
+                    span_started: None,
+                    denial: None,
+                },
+                OplogEntry::End {
+                    timestamp: Timestamp::now_utc(),
+                    start_index: OplogIndex::from_u64(4),
+                    response: Some(OplogPayload::Inline(Box::new(
+                        HostResponseToolAttachmentWrite {
+                            outcome: ToolAttachmentWriteOutcome::Accepted,
+                        }
+                        .into(),
+                    ))),
+                    forced_commit: false,
+                    span_finished: None,
+                    span_attributes: None,
+                },
+                OplogEntry::ToolAttachmentRead {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
+                    observation: Box::new(ToolAttachmentReadObservation {
+                        attachment,
+                        logical_invocation: uuid::Uuid::from_u128(4).into(),
+                        observation: StreamConsumerObservation::Guest {
+                            parent_start_index: None,
+                        },
+                        ordinal: 0,
+                        read_attempt_ordinal: 2,
+                        outcome: ToolAttachmentReadOutcome::TypedChunk(AcceptedAttachmentWriteEnd(
+                            OplogIndex::from_u64(5),
+                        )),
+                        reobserves: None,
+                    }),
+                    payload: Some(OplogPayload::SerializedInline {
+                        bytes: vec![255, 7, 7],
+                        cached: None,
+                    }),
+                },
+            ],
+        )
+        .await;
+        let replay = ReplayState::new_for_owner(
+            owned_agent_id.clone(),
+            oplog.clone(),
+            DeletedRegions::new(),
+            None,
+            crate::durable_host::tool::operation::OwnerToolOperations::new(),
+            oplog.current_oplog_index().await,
+            None,
+        )
+        .await
+        .unwrap();
+
+        let error = replay
+            .hydrate_tool_attachment_observation(OplogIndex::from_u64(6), 3)
+            .await
+            .expect_err("an undecodable attachment body must fail the hydration");
+
+        assert_unreadable_at(&error, &owned_agent_id, 6);
     }
 }

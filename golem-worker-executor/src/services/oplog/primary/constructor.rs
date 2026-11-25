@@ -57,6 +57,21 @@ impl CreateOplogConstructor {
     }
 }
 
+impl CreateOplogConstructor {
+    /// The last stored index. A failed read fails the open with the read error; it is never
+    /// taken as an empty oplog.
+    async fn stored_last_index(&self) -> Result<OplogIndex, WorkerExecutorError> {
+        PrimaryOplogService::get_last_index_from_storage(
+            &*self.indexed_storage,
+            &self.owned_agent_id,
+            self.agent_mode,
+            &self.retry_config,
+        )
+        .await
+        .map_err(|error| UnreadableOplog::new(&self.owned_agent_id.agent_id, error).into())
+    }
+}
+
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl OplogConstructor for CreateOplogConstructor {
@@ -71,8 +86,8 @@ impl OplogConstructor for CreateOplogConstructor {
     ) -> Result<Arc<dyn Oplog>, WorkerExecutorError> {
         // Recorded before the oplog is usable, so an executor whose shard has moved is refused
         // at its very first write rather than after replaying the new owner's entries.
-        let fence = match (self.epoch_record, self.shard_epoch) {
-            (EpochRecord::Recorded(fence), _) => fence,
+        let fence = match (&self.epoch_record, self.shard_epoch) {
+            (EpochRecord::Recorded(fence), _) => fence.clone(),
             (EpochRecord::Pending, Some(shard_epoch)) => {
                 record_owning_epoch(
                     &*self.indexed_storage,
@@ -93,20 +108,12 @@ impl OplogConstructor for CreateOplogConstructor {
         // between, and this handle's first append would collide with it. That index is merged
         // rather than replaced, because it may count entries this layer no longer holds, such as
         // ones already moved to an archive.
-        let stored_last_index = || {
-            PrimaryOplogService::get_last_index_from_storage(
-                &*self.indexed_storage,
-                &self.owned_agent_id,
-                self.agent_mode,
-                &self.retry_config,
-            )
-        };
         let last_oplog_idx = match self.last_oplog_idx {
-            None => stored_last_index().await,
+            None => self.stored_last_index().await?,
             Some(idx)
                 if self.reconcile_last_index && self.shard_epoch.is_some() && fence.is_none() =>
             {
-                OplogIndex::from_u64(idx.as_u64().max(stored_last_index().await.as_u64()))
+                OplogIndex::from_u64(idx.as_u64().max(self.stored_last_index().await?.as_u64()))
             }
             Some(idx) => idx,
         };

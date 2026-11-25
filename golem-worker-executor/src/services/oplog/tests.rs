@@ -3825,6 +3825,117 @@ async fn exhausted_primary_read_retries_remain_transient(_tracing: &Tracing) {
 }
 
 #[test]
+async fn primary_post_claim_open_returns_the_failed_horizon_read(_tracing: &Tracing) {
+    let storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = append_reconciliation_service(storage.clone()).await;
+    let (agent_id, owner, metadata) = archive_open_agent("primary-post-claim-read");
+    let mode = AgentMode::Durable;
+    let mut lifecycle = service.lock_lifecycle(&agent_id).await;
+
+    *storage.primary_last_id_error.lock().unwrap() = Some(IndexedStorageError::Transient(
+        "injected horizon outage".into(),
+    ));
+    let error = service
+        .open(
+            &mut lifecycle,
+            &owner,
+            mode,
+            Some(OplogIndex::NONE),
+            metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(mode),
+            Some(ShardEpoch(1)),
+        )
+        .await
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        WorkerExecutorError::RecoveryRequired { .. }
+    ));
+    assert!(error.to_string().contains("get_last_index"));
+    assert!(error.to_string().contains(&owner.storage_key()));
+    assert_eq!(storage.reads(), 3);
+
+    *storage.primary_last_id_error.lock().unwrap() = None;
+    service
+        .open(
+            &mut lifecycle,
+            &owner,
+            mode,
+            Some(OplogIndex::NONE),
+            metadata,
+            default_last_known_status(),
+            default_execution_status(mode),
+            Some(ShardEpoch(1)),
+        )
+        .await
+        .unwrap();
+    assert_eq!(storage.reads(), 4);
+}
+
+#[test]
+async fn primary_create_refuses_to_append_when_the_existence_probe_fails(_tracing: &Tracing) {
+    let storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = append_reconciliation_service(storage.clone()).await;
+    let (agent_id, owner, metadata) = archive_open_agent("primary-create-read");
+    let mode = AgentMode::Durable;
+    let create = create_test_entry(
+        agent_id,
+        mode,
+        ComponentRevision::INITIAL,
+        owner.environment_id,
+        metadata.created_by,
+        metadata.fingerprint.0,
+    );
+    storage.fail_next_exists();
+    let error = service
+        .create(
+            &mut service.lock_lifecycle(&agent_id).await,
+            &owner,
+            mode,
+            create,
+            metadata,
+            default_last_known_status(),
+            default_execution_status(mode),
+            Some(ShardEpoch(1)),
+        )
+        .await
+        .unwrap_err();
+    assert_oplog_failed(&error, &owner, &["create_exists", &owner.storage_key()]);
+    assert_eq!(storage.reads(), 1);
+    assert_eq!(storage.append_attempts(), 0);
+    assert!(!service.exists(&owner, mode).await.unwrap());
+}
+
+#[test]
+async fn primary_exists_returns_the_failed_read(_tracing: &Tracing) {
+    let storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = append_reconciliation_service(storage.clone()).await;
+    let (_, owner, _) = archive_open_agent("primary-exists-read");
+    storage.fail_next_exists();
+    let error = assert_unreadable(service.exists(&owner, AgentMode::Durable)).await;
+    assert_eq!(error.agent_id, owner.agent_id);
+    assert!(matches!(error.error, OplogReadError::SourceFailure { .. }));
+    let message = error.to_string();
+    assert!(message.contains("exists") && message.contains(&owner.storage_key()));
+    assert_eq!(storage.reads(), 1);
+}
+
+#[test]
+async fn primary_handle_length_returns_the_failed_read(_tracing: &Tracing) {
+    let storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = append_reconciliation_service(storage.clone()).await;
+    let oplog = create_append_reconciliation_oplog(&service, "primary-length-read").await;
+    storage.fail_next_length();
+    let error = assert_unreadable(oplog.length()).await;
+    assert_eq!(error.agent_id, crate::test_agent_id("primary-length-read"));
+    assert!(matches!(error.error, OplogReadError::SourceFailure { .. }));
+    assert!(error.to_string().contains("length"));
+    assert_eq!(storage.reads(), 1);
+    assert_eq!(oplog.length().await.unwrap(), 1);
+}
+
+#[test]
 #[test_r::timeout("10s")]
 async fn oplog_horizon_preserves_primary_read_failure_classification(_tracing: &Tracing) {
     let storage = Arc::new(ReadCountingIndexedStorage::new());
@@ -3955,7 +4066,16 @@ async fn assert_primary_decode_diagnostic(bytes: Vec<u8>, diagnostic: &str) {
     ];
     errors.into_iter().for_each(|error| {
         assert_eq!(error.agent_id, agent_id);
-        assert!(!error.is_transient());
+        assert!(
+            matches!(
+                &error.error,
+                OplogReadError::Corruption {
+                    source: OplogReadSource::Primary,
+                    detail,
+                } if detail.starts_with("failed to decode oplog entry 7: ")
+            ),
+            "{error:?}"
+        );
         let message = error.to_string();
         assert!(message.contains(diagnostic), "{message}");
         assert!(message.contains("entry 7"), "{message}");
@@ -9091,10 +9211,9 @@ async fn corrupt_compressed_chunk_fails_the_read_without_a_panic(_tracing: &Trac
         panic!("a chunk that does not decode is corruption, got {error:?}");
     };
     assert_eq!(*source, OplogReadSource::Archive(1));
-    assert!(
-        detail.contains("failed to decode compressed oplog chunk ending at 2")
-            && detail.contains("Input ended unexpectedly"),
-        "{detail}"
+    assert_eq!(
+        detail,
+        "failed to decode compressed oplog chunk ending at 2: failed to deserialize oplog chunk: invalid data for serialization version 3"
     );
 
     let primary = Arc::new(
@@ -9132,7 +9251,8 @@ async fn corrupt_compressed_chunk_fails_the_read_without_a_panic(_tracing: &Trac
     assert!(
         rendered.contains(&owned_agent_id.agent_id().to_string())
             && rendered.contains("archive layer 1")
-            && rendered.contains("Input ended unexpectedly"),
+            && rendered.contains("chunk ending at 2")
+            && rendered.contains("invalid data for serialization version 3"),
         "{rendered}"
     );
 

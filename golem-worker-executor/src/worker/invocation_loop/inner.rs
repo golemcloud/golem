@@ -185,7 +185,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                             if let Ok(SelectedWork::Resident(message)) = selected {
                                 message.fail(&error);
                             }
-                            break self.unreadable_oplog_outcome(&error).await;
+                            break self.unreadable_oplog_outcome(&error);
                         }
                         let result = match selected {
                             Ok(SelectedWork::Resident(message)) => {
@@ -200,7 +200,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                             Ok(SelectedWork::Idle(status)) => {
                                 self.handle_idle_status(&status).await
                             }
-                            Err(error) => self.unreadable_oplog_outcome(&error).await,
+                            Err(error) => self.unreadable_oplog_outcome(&error),
                         };
 
                         match result {
@@ -348,16 +348,14 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         ))
     }
 
-    /// What the loop does when the oplog does not give what the next work needs: the status
-    /// could not be rebuilt, for example after a commit whose receipt its caller already took, or
-    /// the selected pending invocation could not be hydrated. The failure is recorded like a
-    /// failed recovery: an oplog whose storage did not answer recovers after a delay and keeps its
-    /// pending work, and one that does not read for good stops the agent with the cause.
-    pub(super) async fn unreadable_oplog_outcome(
-        &self,
-        error: &WorkerExecutorError,
-    ) -> CommandOutcome {
-        self.parent.record_recovery_failure(error).await;
+    /// What the loop does when the oplog does not give what the next work needs: the status did
+    /// not fold, the commit before the work failed, or the selected pending invocation did not
+    /// read. The loop writes nothing to the oplog, because a read error is not an outcome of the
+    /// agent, and the pending work stays pending. An oplog that failed for good stops the agent,
+    /// and the stop gives the error to the waiters. Any other error reconstructs the agent after
+    /// the infrastructure delay. A lost shard retires the worker.
+    fn unreadable_oplog_outcome(&self, error: &WorkerExecutorError) -> CommandOutcome {
+        self.parent.retire_if_shard_lost(error);
         infrastructure_failure_outcome(self.parent.retired_for_lost_shard(), error, || {
             self.parent.next_infrastructure_recovery_delay()
         })
@@ -469,9 +467,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             Err(error) => {
                 warn!(
                     agent_id = %self.owned_agent_id.agent_id,
-                    "Failed to hydrate pending invocation from oplog: {error}"
+                    %error,
+                    "Failed to hydrate pending invocation from oplog"
                 );
-                return self.unreadable_oplog_outcome(&error).await;
+                return self.unreadable_oplog_outcome(&error);
             }
         };
 
@@ -517,7 +516,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         .await;
 
         match outcome {
-            Err(error) => self.unreadable_oplog_outcome(&error).await,
+            Err(error) => self.unreadable_oplog_outcome(&error),
             Ok(CommandOutcome::Continue) => {
                 if self.on_external_invocation_completed().await {
                     return CommandOutcome::Continue;

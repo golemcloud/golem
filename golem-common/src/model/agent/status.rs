@@ -1348,7 +1348,9 @@ impl DurableStreamSessionIndex {
                 cached: None,
             } => {
                 decoded = crate::serialization::decode(bytes).map_err(|error| {
-                    format!("failed to decode inline durable stream session record: {error}")
+                    format!(
+                        "failed to decode inline durable stream session record at oplog index {index}: {error}"
+                    )
                 })?;
                 &decoded
             }

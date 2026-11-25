@@ -283,9 +283,17 @@ impl PrimaryOplog {
                         done,
                     } => {
                         let result = async {
-                            let before = state.reader().try_length().await?;
+                            let before = state
+                                .reader()
+                                .length()
+                                .await
+                                .map_err(|error| error.to_string())?;
                             state.try_drop_prefix(last_dropped_id).await?;
-                            let remaining = state.reader().try_length().await?;
+                            let remaining = state
+                                .reader()
+                                .length()
+                                .await
+                                .map_err(|error| error.to_string())?;
                             let dropped = before - remaining;
                             if dropped > 0 {
                                 let account_id = state.account_id.to_string();
@@ -655,12 +663,10 @@ impl Oplog for PrimaryOplog {
 
     async fn length(&self) -> Result<u64, UnreadableOplog> {
         let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        Ok(reader.length().await)
-    }
-
-    async fn try_length(&self) -> Result<u64, String> {
-        let reader = self.run_job(|done| OplogJob::Reader { done }).await;
-        reader.try_length().await
+        reader
+            .length()
+            .await
+            .map_err(|error| UnreadableOplog::new(&self.owned_agent_id.agent_id, error))
     }
 
     async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {

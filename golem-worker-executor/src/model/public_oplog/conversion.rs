@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::{
+    OplogPayloadDownloadError, OplogReadError, OplogReadSource, UnreadableOplog,
+};
 
 pub(super) fn host_response_to_public_value(
     response: HostResponse,
@@ -24,6 +27,61 @@ pub(super) fn host_response_to_public_value(
         response => response
             .into_typed_schema_value()
             .map_err(|error| error.to_string()),
+    }
+}
+
+/// Why an oplog entry has no public form.
+#[derive(Debug)]
+pub(super) enum PublicEntryError {
+    /// A stored value of the entry does not read. It keeps the entry index and the read class.
+    Unreadable(UnreadableOplog),
+    /// The entry has no public form.
+    Other(String),
+}
+
+impl PublicEntryError {
+    /// The error of a stored payload of the entry at `index` in the oplog of `owned_agent_id`.
+    pub(super) fn unreadable(
+        owned_agent_id: &OwnedAgentId,
+        index: OplogIndex,
+        error: OplogPayloadDownloadError,
+    ) -> Self {
+        Self::Unreadable(UnreadableOplog::new(
+            &owned_agent_id.agent_id,
+            OplogReadError::of_payload(OplogReadSource::Other("public oplog entry"), index, error),
+        ))
+    }
+}
+
+impl From<String> for PublicEntryError {
+    fn from(error: String) -> Self {
+        Self::Other(error)
+    }
+}
+
+impl From<UnreadableOplog> for PublicEntryError {
+    fn from(error: UnreadableOplog) -> Self {
+        Self::Unreadable(error)
+    }
+}
+
+impl std::fmt::Display for PublicEntryError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Unreadable(error) => write!(f, "{error}"),
+            Self::Other(error) => f.write_str(error),
+        }
+    }
+}
+
+/// An unreadable oplog is `OplogFailed`, or `RecoveryRequired` when a later read can pass. Any
+/// other error is unknown.
+impl From<PublicEntryError> for WorkerExecutorError {
+    fn from(error: PublicEntryError) -> Self {
+        match error {
+            PublicEntryError::Unreadable(error) => error.into(),
+            PublicEntryError::Other(error) => WorkerExecutorError::unknown(error),
+        }
     }
 }
 
@@ -42,986 +100,1042 @@ impl PublicOplogEntryOps for PublicOplogEntry {
         component_revision: ComponentRevision,
         claims: ClaimVisibility,
     ) -> Result<Self, String> {
-        let value = match value {
-            golem_common::model::oplog::OplogEnrichmentEntry::CreateProjection {
-                timestamp,
-                parameters,
-            } => {
-                let golem_common::model::oplog::CreateProjectionParameters {
-                    agent_id,
-                    agent_type_name: created_agent_type_name,
-                    owner_kind,
-                    agent_mode,
-                    component_revision,
-                    env,
-                    environment_id,
-                    created_by,
-                    parent,
-                    component_size,
-                    initial_total_linear_memory_size,
-                    initial_active_plugins,
-                    local_agent_config,
-                    instance_id,
-                    never_live,
-                } = *parameters;
-                let metadata = components
-                    .get_metadata(owner_component_id, Some(component_revision))
-                    .await
-                    .map_err(|err| err.to_string())?;
+        public_entry(
+            oplog_index,
+            value,
+            oplog_service,
+            components,
+            owned_agent_id,
+            agent_mode,
+            owner_component_id,
+            owner_kind,
+            agent_type_name,
+            component_revision,
+            claims,
+        )
+        .await
+        .map_err(|error| error.to_string())
+    }
+}
 
-                let initial_plugins = metadata
-                    .metadata
-                    .owner_plugins(owner_kind, agent_type_name)
-                    .unwrap_or_default()
-                    .iter()
-                    .filter(|&p| initial_active_plugins.contains(&p.environment_plugin_grant_id))
-                    .cloned()
-                    .map(make_plugin_installation_description)
-                    .collect();
+/// The public form of the oplog entry at `oplog_index`. A stored payload of the entry that does
+/// not read gives [`PublicEntryError::Unreadable`] at `oplog_index`.
+#[allow(clippy::too_many_arguments)]
+pub(super) async fn public_entry(
+    oplog_index: OplogIndex,
+    value: golem_common::model::oplog::OplogEnrichmentEntry,
+    oplog_service: Arc<dyn OplogService>,
+    components: Arc<dyn ComponentService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    owner_component_id: ComponentId,
+    owner_kind: OwnerKind,
+    agent_type_name: Option<&AgentTypeName>,
+    component_revision: ComponentRevision,
+    claims: ClaimVisibility,
+) -> Result<PublicOplogEntry, PublicEntryError> {
+    let value = match value {
+        golem_common::model::oplog::OplogEnrichmentEntry::CreateProjection {
+            timestamp,
+            parameters,
+        } => {
+            let golem_common::model::oplog::CreateProjectionParameters {
+                agent_id,
+                agent_type_name: created_agent_type_name,
+                owner_kind,
+                agent_mode,
+                component_revision,
+                env,
+                environment_id,
+                created_by,
+                parent,
+                component_size,
+                initial_total_linear_memory_size,
+                initial_active_plugins,
+                local_agent_config,
+                instance_id,
+                never_live,
+            } = *parameters;
+            let metadata = components
+                .get_metadata(owner_component_id, Some(component_revision))
+                .await
+                .map_err(|err| err.to_string())?;
 
-                let local_agent_config = local_agent_config
-                    .into_iter()
-                    .map(|lac| {
-                        let typed =
-                            lac.enrich_with_type(&metadata.metadata, owner_kind, agent_type_name)?;
-                        Ok::<_, String>(PublicTypedAgentConfigEntry {
-                            path: typed.path,
-                            value: typed.value,
-                        })
+            let initial_plugins = metadata
+                .metadata
+                .owner_plugins(owner_kind, agent_type_name)
+                .unwrap_or_default()
+                .iter()
+                .filter(|&p| initial_active_plugins.contains(&p.environment_plugin_grant_id))
+                .cloned()
+                .map(make_plugin_installation_description)
+                .collect();
+
+            let local_agent_config = local_agent_config
+                .into_iter()
+                .map(|lac| {
+                    let typed =
+                        lac.enrich_with_type(&metadata.metadata, owner_kind, agent_type_name)?;
+                    Ok::<_, String>(PublicTypedAgentConfigEntry {
+                        path: typed.path,
+                        value: typed.value,
                     })
-                    .collect::<Result<Vec<_>, _>>()?;
+                })
+                .collect::<Result<Vec<_>, _>>()?;
 
-                return Ok(PublicOplogEntry::Create(CreateParams {
-                    timestamp,
-                    agent_id,
-                    agent_type_name: created_agent_type_name,
-                    owner_kind,
-                    agent_mode,
-                    component_revision,
-                    env: env.into_iter().collect(),
-                    environment_id,
-                    created_by,
-                    parent,
-                    component_size,
-                    initial_total_linear_memory_size,
-                    initial_active_plugins: initial_plugins,
-                    local_agent_config,
-                    instance_id,
-                    never_live,
-                }));
-            }
-            golem_common::model::oplog::OplogEnrichmentEntry::Other(value) => value,
-        };
-        match value {
-            OplogEntry::Create { .. } => {
-                Err("Create must be projected before enrichment".to_string())
-            }
-            OplogEntry::Start {
+            return Ok(PublicOplogEntry::Create(CreateParams {
+                timestamp,
+                agent_id,
+                agent_type_name: created_agent_type_name,
+                owner_kind,
+                agent_mode,
+                component_revision,
+                env: env.into_iter().collect(),
+                environment_id,
+                created_by,
+                parent,
+                component_size,
+                initial_total_linear_memory_size,
+                initial_active_plugins: initial_plugins,
+                local_agent_config,
+                instance_id,
+                never_live,
+            }));
+        }
+        golem_common::model::oplog::OplogEnrichmentEntry::Other(value) => value,
+    };
+    match value {
+        OplogEntry::Create { .. } => Err(PublicEntryError::Other(
+            "Create must be projected before enrichment".to_string(),
+        )),
+        OplogEntry::Start {
+            timestamp,
+            parent_start_index,
+            function_name,
+            invocation_id,
+            observational_owner,
+            driver,
+            request,
+            durable_function_type,
+            span_started,
+            denial,
+        } => {
+            let request_value = match request {
+                Some(request_payload) => Some(
+                    public_host_request(
+                        oplog_index,
+                        request_payload,
+                        &oplog_service,
+                        owned_agent_id,
+                        agent_mode,
+                    )
+                    .await?,
+                ),
+                None => None,
+            };
+
+            Ok(PublicOplogEntry::Start(StartParams {
                 timestamp,
                 parent_start_index,
-                function_name,
+                function_name: function_name.to_string(),
                 invocation_id,
                 observational_owner,
                 driver,
-                request,
-                durable_function_type,
-                span_started,
+                request: request_value,
+                durable_function_type: durable_function_type.into(),
+                span_started: span_started.map(|span| public_span_started(*span)),
                 denial,
-            } => {
-                let request_value = match request {
-                    Some(request_payload) => Some(
-                        public_host_request(
-                            request_payload,
-                            &oplog_service,
-                            owned_agent_id,
-                            agent_mode,
-                        )
-                        .await?,
-                    ),
-                    None => None,
-                };
+            }))
+        }
+        OplogEntry::End {
+            timestamp,
+            start_index,
+            response,
+            forced_commit,
+            span_finished,
+            span_attributes,
+        } => {
+            let response_value = if let Some(response_payload) = response {
+                let host_response: HostResponse = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, response_payload)
+                    .await
+                    .map_err(|error| {
+                        PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                    })?;
+                Some(host_response_to_public_value(host_response)?)
+            } else {
+                None
+            };
 
-                Ok(PublicOplogEntry::Start(StartParams {
-                    timestamp,
-                    parent_start_index,
-                    function_name: function_name.to_string(),
-                    invocation_id,
-                    observational_owner,
-                    driver,
-                    request: request_value,
-                    durable_function_type: durable_function_type.into(),
-                    span_started: span_started.map(|span| public_span_started(*span)),
-                    denial,
-                }))
-            }
-            OplogEntry::End {
+            Ok(PublicOplogEntry::End(EndParams {
                 timestamp,
                 start_index,
-                response,
+                response: response_value,
                 forced_commit,
-                span_finished,
-                span_attributes,
-            } => {
-                let response_value = if let Some(response_payload) = response {
-                    let host_response: HostResponse = oplog_service
-                        .download_payload(owned_agent_id, agent_mode, response_payload)
-                        .await?;
-                    Some(host_response_to_public_value(host_response)?)
-                } else {
-                    None
-                };
+                span_finished: span_finished.map(public_span_finished),
+                span_attributes: span_attributes.map(public_span_attributes),
+            }))
+        }
+        OplogEntry::Cancelled {
+            timestamp,
+            start_index,
+            partial,
+            span_finished,
+        } => {
+            let partial_value = if let Some(partial_payload) = partial {
+                let host_response: HostResponse = oplog_service
+                    .download_payload(owned_agent_id, agent_mode, partial_payload)
+                    .await
+                    .map_err(|error| {
+                        PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                    })?;
+                Some(host_response_to_public_value(host_response)?)
+            } else {
+                None
+            };
 
-                Ok(PublicOplogEntry::End(EndParams {
-                    timestamp,
-                    start_index,
-                    response: response_value,
-                    forced_commit,
-                    span_finished: span_finished.map(public_span_finished),
-                    span_attributes: span_attributes.map(public_span_attributes),
-                }))
-            }
-            OplogEntry::Cancelled {
+            Ok(PublicOplogEntry::Cancelled(CancelledParams {
                 timestamp,
                 start_index,
-                partial,
-                span_finished,
-            } => {
-                let partial_value = if let Some(partial_payload) = partial {
-                    let host_response: HostResponse = oplog_service
-                        .download_payload(owned_agent_id, agent_mode, partial_payload)
-                        .await?;
-                    Some(host_response_to_public_value(host_response)?)
-                } else {
-                    None
-                };
-
-                Ok(PublicOplogEntry::Cancelled(CancelledParams {
-                    timestamp,
-                    start_index,
-                    partial: partial_value,
-                    span_finished: span_finished.map(public_span_finished),
-                }))
-            }
-            OplogEntry::CompletionDiscarded {
+                partial: partial_value,
+                span_finished: span_finished.map(public_span_finished),
+            }))
+        }
+        OplogEntry::CompletionDiscarded {
+            timestamp,
+            start_index,
+        } => Ok(PublicOplogEntry::CompletionDiscarded(
+            CompletionDiscardedParams {
                 timestamp,
                 start_index,
-            } => Ok(PublicOplogEntry::CompletionDiscarded(
-                CompletionDiscardedParams {
-                    timestamp,
-                    start_index,
-                },
-            )),
-            OplogEntry::CompletionDelivered {
+            },
+        )),
+        OplogEntry::CompletionDelivered {
+            timestamp,
+            start_index,
+        } => Ok(PublicOplogEntry::CompletionDelivered(
+            CompletionDeliveredParams {
                 timestamp,
                 start_index,
-            } => Ok(PublicOplogEntry::CompletionDelivered(
-                CompletionDeliveredParams {
+            },
+        )),
+        OplogEntry::AgentInvocationStarted {
+            timestamp,
+            invocation_id: idempotency_key,
+            operation,
+            payload,
+            trace_id,
+            trace_states,
+            invocation_context,
+            wallet_pin,
+        } => {
+            let invocation_payload = oplog_service
+                .download_payload(owned_agent_id, agent_mode, payload)
+                .await
+                .map_err(|error| PublicEntryError::unreadable(owned_agent_id, oplog_index, error))?
+                .with_operation(*operation)?;
+
+            let invocation_context_stack =
+                InvocationContextStack::from_oplog_data(trace_id, trace_states, invocation_context);
+            let invocation = AgentInvocation::from_parts(
+                idempotency_key,
+                invocation_payload,
+                invocation_context_stack,
+            );
+            let public_invocation = agent_invocation_to_public(
+                components.clone(),
+                owner_component_id,
+                agent_type_name,
+                component_revision,
+                invocation,
+                claims,
+            )
+            .await?;
+
+            Ok(PublicOplogEntry::AgentInvocationStarted(
+                AgentInvocationStartedParams {
                     timestamp,
-                    start_index,
-                },
-            )),
-            OplogEntry::AgentInvocationStarted {
-                timestamp,
-                invocation_id: idempotency_key,
-                operation,
-                payload,
-                trace_id,
-                trace_states,
-                invocation_context,
-                wallet_pin,
-            } => {
-                let invocation_payload = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, payload)
-                    .await?
-                    .with_operation(*operation)?;
-
-                let invocation_context_stack = InvocationContextStack::from_oplog_data(
-                    trace_id,
-                    trace_states,
-                    invocation_context,
-                );
-                let invocation = AgentInvocation::from_parts(
-                    idempotency_key,
-                    invocation_payload,
-                    invocation_context_stack,
-                );
-                let public_invocation = agent_invocation_to_public(
-                    components.clone(),
-                    owner_component_id,
-                    agent_type_name,
-                    component_revision,
-                    invocation,
-                    claims,
-                )
-                .await?;
-
-                Ok(PublicOplogEntry::AgentInvocationStarted(
-                    AgentInvocationStartedParams {
-                        timestamp,
-                        invocation: public_invocation,
-                        wallet_pin: golem_common::model::card::PublicInvocationWalletPin {
-                            wallet_token: wallet_pin.wallet_token,
-                            scope_card_id: wallet_pin.scope_card_id,
-                        },
+                    invocation: public_invocation,
+                    wallet_pin: golem_common::model::card::PublicInvocationWalletPin {
+                        wallet_token: wallet_pin.wallet_token,
+                        scope_card_id: wallet_pin.scope_card_id,
                     },
-                ))
-            }
-            OplogEntry::AgentInvocationFinished {
-                timestamp,
-                invocation_id,
-                result,
-                method_name,
-                consumed_fuel,
-                component_revision: entry_component_revision,
-                awaits_settlement: _,
-            } => {
-                let invocation_result: AgentInvocationResult = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, result)
-                    .await?;
+                },
+            ))
+        }
+        OplogEntry::AgentInvocationFinished {
+            timestamp,
+            invocation_id,
+            result,
+            method_name,
+            consumed_fuel,
+            component_revision: entry_component_revision,
+            awaits_settlement: _,
+        } => {
+            let invocation_result: AgentInvocationResult = oplog_service
+                .download_payload(owned_agent_id, agent_mode, result)
+                .await
+                .map_err(|error| {
+                    PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                })?;
 
-                let public_result = agent_invocation_result_to_public(
-                    components.clone(),
-                    owner_component_id,
-                    agent_type_name,
-                    component_revision,
-                    method_name.clone(),
-                    invocation_result,
-                )
-                .await?;
+            let public_result = agent_invocation_result_to_public(
+                components.clone(),
+                owner_component_id,
+                agent_type_name,
+                component_revision,
+                method_name.clone(),
+                invocation_result,
+            )
+            .await?;
 
-                Ok(PublicOplogEntry::AgentInvocationFinished(
-                    AgentInvocationFinishedParams {
-                        timestamp,
-                        invocation_id,
-                        result: public_result,
-                        method_name,
-                        consumed_fuel,
-                        component_revision: entry_component_revision,
-                    },
-                ))
-            }
-            OplogEntry::AgentInvocationFailed {
-                timestamp,
-                invocation_id,
-                error,
-                start_index,
-                ..
-            } => Ok(PublicOplogEntry::AgentInvocationFailed(
-                AgentInvocationFailedParams {
+            Ok(PublicOplogEntry::AgentInvocationFinished(
+                AgentInvocationFinishedParams {
                     timestamp,
                     invocation_id,
-                    error: error.to_string(""),
-                    start_index,
-                },
-            )),
-            OplogEntry::AgentInvocationSettled {
-                timestamp,
-                invocation_id,
-                consumed_fuel,
-            } => Ok(PublicOplogEntry::AgentInvocationSettled(
-                AgentInvocationSettledParams {
-                    timestamp,
-                    invocation_id,
+                    result: public_result,
+                    method_name,
                     consumed_fuel,
+                    component_revision: entry_component_revision,
                 },
-            )),
-            OplogEntry::Suspend { timestamp } => {
-                Ok(PublicOplogEntry::Suspend(SuspendParams { timestamp }))
-            }
-            OplogEntry::Error {
+            ))
+        }
+        OplogEntry::AgentInvocationFailed {
+            timestamp,
+            invocation_id,
+            error,
+            start_index,
+            ..
+        } => Ok(PublicOplogEntry::AgentInvocationFailed(
+            AgentInvocationFailedParams {
                 timestamp,
-                kind,
-                invocation_id,
-                error,
-                retry_from,
-                retry_policy_state,
-                retry_at,
-                retrying_start_index,
-                ..
-            } => Ok(PublicOplogEntry::Error(ErrorParams {
-                timestamp,
-                kind,
                 invocation_id,
                 error: error.to_string(""),
-                retry_from,
-                retry_policy_state: retry_policy_state.map(Into::into),
-                retry_at,
-                retrying_start_index,
-            })),
-            OplogEntry::RecoverySucceeded { timestamp } => Ok(PublicOplogEntry::RecoverySucceeded(
-                RecoverySucceededParams { timestamp },
-            )),
-            OplogEntry::Jump {
-                timestamp, jump, ..
-            } => Ok(PublicOplogEntry::Jump(JumpParams { timestamp, jump })),
-            OplogEntry::Interrupted { timestamp } => {
-                Ok(PublicOplogEntry::Interrupted(InterruptedParams {
+                start_index,
+            },
+        )),
+        OplogEntry::AgentInvocationSettled {
+            timestamp,
+            invocation_id,
+            consumed_fuel,
+        } => Ok(PublicOplogEntry::AgentInvocationSettled(
+            AgentInvocationSettledParams {
+                timestamp,
+                invocation_id,
+                consumed_fuel,
+            },
+        )),
+        OplogEntry::Suspend { timestamp } => {
+            Ok(PublicOplogEntry::Suspend(SuspendParams { timestamp }))
+        }
+        OplogEntry::Error {
+            timestamp,
+            kind,
+            invocation_id,
+            error,
+            retry_from,
+            retry_policy_state,
+            retry_at,
+            retrying_start_index,
+            ..
+        } => Ok(PublicOplogEntry::Error(ErrorParams {
+            timestamp,
+            kind,
+            invocation_id,
+            error: error.to_string(""),
+            retry_from,
+            retry_policy_state: retry_policy_state.map(Into::into),
+            retry_at,
+            retrying_start_index,
+        })),
+        OplogEntry::RecoverySucceeded { timestamp } => Ok(PublicOplogEntry::RecoverySucceeded(
+            RecoverySucceededParams { timestamp },
+        )),
+        OplogEntry::Jump {
+            timestamp, jump, ..
+        } => Ok(PublicOplogEntry::Jump(JumpParams { timestamp, jump })),
+        OplogEntry::Interrupted { timestamp } => {
+            Ok(PublicOplogEntry::Interrupted(InterruptedParams {
+                timestamp,
+            }))
+        }
+        OplogEntry::Exited { timestamp } => {
+            Ok(PublicOplogEntry::Exited(ExitedParams { timestamp }))
+        }
+        OplogEntry::PendingAgentInvocation {
+            timestamp,
+            not_before,
+            invocation_id: idempotency_key,
+            operation,
+            payload,
+            trace_id,
+            trace_states,
+            invocation_context,
+        } => {
+            let invocation_payload = oplog_service
+                .download_payload(owned_agent_id, agent_mode, payload)
+                .await
+                .map_err(|error| PublicEntryError::unreadable(owned_agent_id, oplog_index, error))?
+                .with_operation(*operation)?;
+
+            let invocation_context_stack =
+                InvocationContextStack::from_oplog_data(trace_id, trace_states, invocation_context);
+            let invocation = AgentInvocation::from_parts(
+                idempotency_key,
+                invocation_payload,
+                invocation_context_stack,
+            );
+            let public_invocation = agent_invocation_to_public(
+                components.clone(),
+                owner_component_id,
+                agent_type_name,
+                component_revision,
+                invocation,
+                claims,
+            )
+            .await?;
+
+            Ok(PublicOplogEntry::PendingAgentInvocation(
+                PendingAgentInvocationParams {
                     timestamp,
-                }))
-            }
-            OplogEntry::Exited { timestamp } => {
-                Ok(PublicOplogEntry::Exited(ExitedParams { timestamp }))
-            }
-            OplogEntry::PendingAgentInvocation {
-                timestamp,
-                not_before,
-                invocation_id: idempotency_key,
-                operation,
-                payload,
-                trace_id,
-                trace_states,
-                invocation_context,
-            } => {
-                let invocation_payload = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, payload)
-                    .await?
-                    .with_operation(*operation)?;
-
-                let invocation_context_stack = InvocationContextStack::from_oplog_data(
-                    trace_id,
-                    trace_states,
-                    invocation_context,
-                );
-                let invocation = AgentInvocation::from_parts(
-                    idempotency_key,
-                    invocation_payload,
-                    invocation_context_stack,
-                );
-                let public_invocation = agent_invocation_to_public(
-                    components.clone(),
-                    owner_component_id,
-                    agent_type_name,
-                    component_revision,
-                    invocation,
-                    claims,
-                )
-                .await?;
-
-                Ok(PublicOplogEntry::PendingAgentInvocation(
-                    PendingAgentInvocationParams {
-                        timestamp,
-                        not_before,
-                        invocation: public_invocation,
-                    },
-                ))
-            }
-            OplogEntry::PendingUpdate {
-                timestamp,
-                description,
-                update_attempt_index,
-                requester,
-            } => {
-                let target_revision = *description.target_revision();
-                let public_description = match description {
-                    UpdateDescription::Automatic { .. } => {
-                        PublicUpdateDescription::Automatic(Empty {})
-                    }
-                    UpdateDescription::SnapshotAssistedAutomatic { .. } => {
-                        PublicUpdateDescription::SnapshotAssistedAutomatic(
-                            SnapshotAssistedAutomaticUpdateParameters {},
-                        )
-                    }
-                    UpdateDescription::SnapshotBased {
-                        payload,
+                    not_before,
+                    invocation: public_invocation,
+                },
+            ))
+        }
+        OplogEntry::PendingUpdate {
+            timestamp,
+            description,
+            update_attempt_index,
+            requester,
+        } => {
+            let target_revision = *description.target_revision();
+            let public_description = match description {
+                UpdateDescription::Automatic { .. } => PublicUpdateDescription::Automatic(Empty {}),
+                UpdateDescription::SnapshotAssistedAutomatic { .. } => {
+                    PublicUpdateDescription::SnapshotAssistedAutomatic(
+                        SnapshotAssistedAutomaticUpdateParameters {},
+                    )
+                }
+                UpdateDescription::SnapshotBased {
+                    payload,
+                    mime_type,
+                    filesystem_snapshot,
+                    ..
+                } => {
+                    let bytes = oplog_service
+                        .download_payload(owned_agent_id, agent_mode, payload)
+                        .await
+                        .map_err(|error| {
+                            PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                        })?;
+                    PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
+                        payload: bytes,
                         mime_type,
-                        filesystem_snapshot,
-                        ..
-                    } => {
-                        let bytes = oplog_service
-                            .download_payload(owned_agent_id, agent_mode, payload)
-                            .await?;
-                        PublicUpdateDescription::SnapshotBased(SnapshotBasedUpdateParameters {
-                            payload: bytes,
-                            mime_type,
-                            filesystem_snapshot: filesystem_snapshot.map(String::from),
-                        })
-                    }
-                };
-                Ok(PublicOplogEntry::PendingUpdate(PendingUpdateParams {
-                    timestamp,
-                    target_revision,
-                    description: public_description,
-                    update_attempt_index: update_attempt_index.unwrap_or(oplog_index),
-                    requester: PublicCaller::new(&requester, claims),
-                }))
-            }
-            OplogEntry::SuccessfulUpdate {
+                        filesystem_snapshot: filesystem_snapshot.map(String::from),
+                    })
+                }
+            };
+            Ok(PublicOplogEntry::PendingUpdate(PendingUpdateParams {
+                timestamp,
+                target_revision,
+                description: public_description,
+                update_attempt_index: update_attempt_index.unwrap_or(oplog_index),
+                requester: PublicCaller::new(&requester, claims),
+            }))
+        }
+        OplogEntry::SuccessfulUpdate {
+            timestamp,
+            target_revision,
+            new_component_size,
+            new_total_linear_memory_size: _,
+            new_active_plugins,
+            snapshot_assisted_details,
+            bootstrap,
+        } => {
+            let metadata = components
+                .get_metadata(owner_component_id, Some(target_revision))
+                .await
+                .map_err(|err| err.to_string())?;
+
+            let new_plugins = metadata
+                .metadata
+                .owner_plugins(owner_kind, agent_type_name)
+                .unwrap_or_default()
+                .iter()
+                .filter(|&p| new_active_plugins.contains(&p.environment_plugin_grant_id))
+                .cloned()
+                .map(make_plugin_installation_description)
+                .collect();
+
+            Ok(PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
                 timestamp,
                 target_revision,
                 new_component_size,
-                new_total_linear_memory_size: _,
-                new_active_plugins,
-                snapshot_assisted_details,
-                bootstrap,
-            } => {
-                let metadata = components
-                    .get_metadata(owner_component_id, Some(target_revision))
-                    .await
-                    .map_err(|err| err.to_string())?;
-
-                let new_plugins = metadata
-                    .metadata
-                    .owner_plugins(owner_kind, agent_type_name)
-                    .unwrap_or_default()
-                    .iter()
-                    .filter(|&p| new_active_plugins.contains(&p.environment_plugin_grant_id))
-                    .cloned()
-                    .map(make_plugin_installation_description)
-                    .collect();
-
-                Ok(PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
-                    timestamp,
-                    target_revision,
-                    new_component_size,
-                    new_active_plugins: new_plugins,
-                    snapshot_assisted_details: snapshot_assisted_details.map(|details| {
-                        PublicSnapshotAssistedUpdateDetails {
-                            pending_update_index: details.pending_update_index,
-                            source_component_revision: details.source_component_revision,
-                            source_revision_start_index: details.source_revision_start_index,
-                            snapshot_index: details.snapshot_index,
-                        }
-                    }),
-                    bootstrap,
-                }))
-            }
-            OplogEntry::FailedUpdate {
-                timestamp,
-                target_revision,
-                details,
-                snapshot_assisted_details,
-                update_attempt_index,
-                snapshot_fault: _,
-                failure_class,
-                divergence,
-            } => Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParams {
-                timestamp,
-                target_revision,
-                details,
-                update_attempt_index,
-                failure_class,
-                divergence: match divergence {
-                    Some(divergence) => Some(
-                        with_expected_request(
-                            divergence,
-                            &oplog_service,
-                            owned_agent_id,
-                            agent_mode,
-                        )
-                        .await,
-                    ),
-                    None => None,
-                },
+                new_active_plugins: new_plugins,
                 snapshot_assisted_details: snapshot_assisted_details.map(|details| {
-                    PublicFailedSnapshotAssistedUpdateDetails {
+                    PublicSnapshotAssistedUpdateDetails {
                         pending_update_index: details.pending_update_index,
                         source_component_revision: details.source_component_revision,
                         source_revision_start_index: details.source_revision_start_index,
                         snapshot_index: details.snapshot_index,
                     }
                 }),
-            })),
-            OplogEntry::GrowMemory { timestamp, delta } => {
-                Ok(PublicOplogEntry::GrowMemory(GrowMemoryParams {
+                bootstrap,
+            }))
+        }
+        OplogEntry::FailedUpdate {
+            timestamp,
+            target_revision,
+            details,
+            snapshot_assisted_details,
+            update_attempt_index,
+            snapshot_fault: _,
+            failure_class,
+            divergence,
+        } => Ok(PublicOplogEntry::FailedUpdate(FailedUpdateParams {
+            timestamp,
+            target_revision,
+            details,
+            update_attempt_index,
+            failure_class,
+            divergence: match divergence {
+                Some(divergence) => Some(
+                    with_expected_request(divergence, &oplog_service, owned_agent_id, agent_mode)
+                        .await,
+                ),
+                None => None,
+            },
+            snapshot_assisted_details: snapshot_assisted_details.map(|details| {
+                PublicFailedSnapshotAssistedUpdateDetails {
+                    pending_update_index: details.pending_update_index,
+                    source_component_revision: details.source_component_revision,
+                    source_revision_start_index: details.source_revision_start_index,
+                    snapshot_index: details.snapshot_index,
+                }
+            }),
+        })),
+        OplogEntry::GrowMemory { timestamp, delta } => {
+            Ok(PublicOplogEntry::GrowMemory(GrowMemoryParams {
+                timestamp,
+                delta,
+            }))
+        }
+        OplogEntry::MemorySizeReconciled { timestamp, bytes } => {
+            Ok(PublicOplogEntry::MemorySizeReconciled(
+                golem_common::model::oplog::public_oplog_entry::MemorySizeReconciledParams {
                     timestamp,
-                    delta,
-                }))
-            }
-            OplogEntry::MemorySizeReconciled { timestamp, bytes } => {
-                Ok(PublicOplogEntry::MemorySizeReconciled(
-                    golem_common::model::oplog::public_oplog_entry::MemorySizeReconciledParams {
-                        timestamp,
-                        bytes,
-                    },
-                ))
-            }
-            OplogEntry::CreateResource {
-                timestamp,
-                id,
-                resource_type_id,
-                ..
-            } => Ok(PublicOplogEntry::CreateResource(CreateResourceParams {
-                timestamp,
-                id,
-                name: resource_type_id.name,
-                owner: resource_type_id.owner,
-            })),
-            OplogEntry::DropResource {
-                timestamp,
-                id,
-                resource_type_id,
-                ..
-            } => Ok(PublicOplogEntry::DropResource(DropResourceParams {
-                timestamp,
-                id,
-                name: resource_type_id.name,
-                owner: resource_type_id.owner,
-            })),
+                    bytes,
+                },
+            ))
+        }
+        OplogEntry::CreateResource {
+            timestamp,
+            id,
+            resource_type_id,
+            ..
+        } => Ok(PublicOplogEntry::CreateResource(CreateResourceParams {
+            timestamp,
+            id,
+            name: resource_type_id.name,
+            owner: resource_type_id.owner,
+        })),
+        OplogEntry::DropResource {
+            timestamp,
+            id,
+            resource_type_id,
+            ..
+        } => Ok(PublicOplogEntry::DropResource(DropResourceParams {
+            timestamp,
+            id,
+            name: resource_type_id.name,
+            owner: resource_type_id.owner,
+        })),
 
-            OplogEntry::Log {
-                timestamp,
-                level,
-                context,
-                message,
-                trace_context,
-                ..
-            } => Ok(PublicOplogEntry::Log(LogParams {
-                timestamp,
-                level,
-                context,
-                message,
-                trace_context,
-            })),
-            OplogEntry::Restart { timestamp } => {
-                Ok(PublicOplogEntry::Restart(RestartParams { timestamp }))
-            }
-            OplogEntry::Resumed { timestamp } => {
-                Ok(PublicOplogEntry::Resumed(ResumedParams { timestamp }))
-            }
-            OplogEntry::ActivatePlugin {
-                timestamp,
-                plugin_grant_id,
-            } => {
-                let metadata = components
-                    .get_metadata(owner_component_id, Some(component_revision))
-                    .await
-                    .map_err(|err| err.to_string())?;
+        OplogEntry::Log {
+            timestamp,
+            level,
+            context,
+            message,
+            trace_context,
+            ..
+        } => Ok(PublicOplogEntry::Log(LogParams {
+            timestamp,
+            level,
+            context,
+            message,
+            trace_context,
+        })),
+        OplogEntry::Restart { timestamp } => {
+            Ok(PublicOplogEntry::Restart(RestartParams { timestamp }))
+        }
+        OplogEntry::Resumed { timestamp } => {
+            Ok(PublicOplogEntry::Resumed(ResumedParams { timestamp }))
+        }
+        OplogEntry::ActivatePlugin {
+            timestamp,
+            plugin_grant_id,
+        } => {
+            let metadata = components
+                .get_metadata(owner_component_id, Some(component_revision))
+                .await
+                .map_err(|err| err.to_string())?;
 
-                let plugin_installation = metadata
-                    .metadata
-                    .owner_plugins(owner_kind, agent_type_name)
-                    .and_then(|plugins| {
-                        plugins
-                            .iter()
-                            .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
-                    })
-                    .cloned()
-                    .ok_or("plugin not found in metadata".to_string())?;
+            let plugin_installation = metadata
+                .metadata
+                .owner_plugins(owner_kind, agent_type_name)
+                .and_then(|plugins| {
+                    plugins
+                        .iter()
+                        .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
+                })
+                .cloned()
+                .ok_or("plugin not found in metadata".to_string())?;
 
-                let desc = make_plugin_installation_description(plugin_installation);
-                Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
-                    timestamp,
-                    plugin: desc,
-                }))
-            }
-            OplogEntry::DeactivatePlugin {
+            let desc = make_plugin_installation_description(plugin_installation);
+            Ok(PublicOplogEntry::ActivatePlugin(ActivatePluginParams {
                 timestamp,
-                plugin_grant_id,
-            } => {
-                let metadata = components
-                    .get_metadata(owner_component_id, Some(component_revision))
-                    .await
-                    .map_err(|err| err.to_string())?;
+                plugin: desc,
+            }))
+        }
+        OplogEntry::DeactivatePlugin {
+            timestamp,
+            plugin_grant_id,
+        } => {
+            let metadata = components
+                .get_metadata(owner_component_id, Some(component_revision))
+                .await
+                .map_err(|err| err.to_string())?;
 
-                let plugin_installation = metadata
-                    .metadata
-                    .owner_plugins(owner_kind, agent_type_name)
-                    .and_then(|plugins| {
-                        plugins
-                            .iter()
-                            .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
-                    })
-                    .cloned()
-                    .ok_or("plugin not found in metadata".to_string())?;
+            let plugin_installation = metadata
+                .metadata
+                .owner_plugins(owner_kind, agent_type_name)
+                .and_then(|plugins| {
+                    plugins
+                        .iter()
+                        .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
+                })
+                .cloned()
+                .ok_or("plugin not found in metadata".to_string())?;
 
-                let desc = make_plugin_installation_description(plugin_installation);
-                Ok(PublicOplogEntry::DeactivatePlugin(DeactivatePluginParams {
-                    timestamp,
-                    plugin: desc,
-                }))
-            }
-            OplogEntry::Revert {
+            let desc = make_plugin_installation_description(plugin_installation);
+            Ok(PublicOplogEntry::DeactivatePlugin(DeactivatePluginParams {
                 timestamp,
-                dropped_region,
-            } => Ok(PublicOplogEntry::Revert(RevertParams {
-                timestamp,
-                dropped_region,
-            })),
-            OplogEntry::CancelPendingInvocation {
+                plugin: desc,
+            }))
+        }
+        OplogEntry::Revert {
+            timestamp,
+            dropped_region,
+        } => Ok(PublicOplogEntry::Revert(RevertParams {
+            timestamp,
+            dropped_region,
+        })),
+        OplogEntry::CancelPendingInvocation {
+            timestamp,
+            invocation_id,
+        } => Ok(PublicOplogEntry::CancelPendingInvocation(
+            CancelPendingInvocationParams {
                 timestamp,
                 invocation_id,
-            } => Ok(PublicOplogEntry::CancelPendingInvocation(
-                CancelPendingInvocationParams {
-                    timestamp,
-                    invocation_id,
-                },
-            )),
-            OplogEntry::BeginRemoteTransaction {
+            },
+        )),
+        OplogEntry::BeginRemoteTransaction {
+            timestamp,
+            transaction_id,
+            ..
+        } => Ok(PublicOplogEntry::BeginRemoteTransaction(
+            BeginRemoteTransactionParams {
                 timestamp,
                 transaction_id,
-                ..
-            } => Ok(PublicOplogEntry::BeginRemoteTransaction(
-                BeginRemoteTransactionParams {
-                    timestamp,
-                    transaction_id,
-                },
-            )),
-            OplogEntry::PreCommitRemoteTransaction {
+            },
+        )),
+        OplogEntry::PreCommitRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => Ok(PublicOplogEntry::PreCommitRemoteTransaction(
+            PreCommitRemoteTransactionParams {
                 timestamp,
                 begin_index,
-            } => Ok(PublicOplogEntry::PreCommitRemoteTransaction(
-                PreCommitRemoteTransactionParams {
-                    timestamp,
-                    begin_index,
-                },
-            )),
-            OplogEntry::PreRollbackRemoteTransaction {
+            },
+        )),
+        OplogEntry::PreRollbackRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => Ok(PublicOplogEntry::PreRollbackRemoteTransaction(
+            PreRollbackRemoteTransactionParams {
                 timestamp,
                 begin_index,
-            } => Ok(PublicOplogEntry::PreRollbackRemoteTransaction(
-                PreRollbackRemoteTransactionParams {
-                    timestamp,
-                    begin_index,
-                },
-            )),
-            OplogEntry::CommittedRemoteTransaction {
+            },
+        )),
+        OplogEntry::CommittedRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => Ok(PublicOplogEntry::CommittedRemoteTransaction(
+            CommittedRemoteTransactionParams {
                 timestamp,
                 begin_index,
-            } => Ok(PublicOplogEntry::CommittedRemoteTransaction(
-                CommittedRemoteTransactionParams {
-                    timestamp,
-                    begin_index,
-                },
-            )),
-            OplogEntry::RolledBackRemoteTransaction {
+            },
+        )),
+        OplogEntry::RolledBackRemoteTransaction {
+            timestamp,
+            begin_index,
+        } => Ok(PublicOplogEntry::RolledBackRemoteTransaction(
+            RolledBackRemoteTransactionParams {
                 timestamp,
                 begin_index,
-            } => Ok(PublicOplogEntry::RolledBackRemoteTransaction(
-                RolledBackRemoteTransactionParams {
-                    timestamp,
-                    begin_index,
-                },
-            )),
-            OplogEntry::Snapshot {
-                timestamp,
-                data,
+            },
+        )),
+        OplogEntry::Snapshot {
+            timestamp,
+            data,
+            mime_type,
+            filesystem_snapshot,
+            bootstrap,
+            ..
+        } => {
+            let bytes: Vec<u8> = oplog_service
+                .download_payload(owned_agent_id, agent_mode, data)
+                .await
+                .map_err(|error| {
+                    PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                })?;
+
+            let snapshot_data = raw_snapshot_to_public(RawSnapshotData {
+                data: bytes,
                 mime_type,
-                filesystem_snapshot,
+            });
+
+            Ok(PublicOplogEntry::Snapshot(SnapshotParams {
+                timestamp,
+                data: snapshot_data,
+                filesystem_snapshot: filesystem_snapshot.map(String::from),
                 bootstrap,
-                ..
-            } => {
-                let bytes: Vec<u8> = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, data)
-                    .await?;
-
-                let snapshot_data = raw_snapshot_to_public(RawSnapshotData {
-                    data: bytes,
-                    mime_type,
-                });
-
-                Ok(PublicOplogEntry::Snapshot(SnapshotParams {
-                    timestamp,
-                    data: snapshot_data,
-                    filesystem_snapshot: filesystem_snapshot.map(String::from),
-                    bootstrap,
-                }))
-            }
-            OplogEntry::SnapshotConfirmed {
+            }))
+        }
+        OplogEntry::SnapshotConfirmed {
+            timestamp,
+            filesystem_snapshot,
+        } => Ok(PublicOplogEntry::SnapshotConfirmed(
+            SnapshotConfirmedParams {
                 timestamp,
-                filesystem_snapshot,
-            } => Ok(PublicOplogEntry::SnapshotConfirmed(
-                SnapshotConfirmedParams {
+                filesystem_snapshot: filesystem_snapshot.into(),
+            },
+        )),
+        OplogEntry::SpanClosed {
+            timestamp,
+            resource_start_index,
+            span_finished,
+            ..
+        } => Ok(PublicOplogEntry::SpanClosed(SpanClosedParams {
+            timestamp,
+            resource_start_index,
+            span_finished: public_span_finished(span_finished),
+        })),
+        OplogEntry::OplogProcessorCheckpoint {
+            timestamp,
+            plugin_grant_id,
+            source_component_revision,
+            target_agent_id,
+            confirmed_up_to,
+            sending_up_to,
+            last_batch_start,
+            ..
+        } => {
+            let metadata = components
+                .get_metadata(owner_component_id, Some(source_component_revision))
+                .await
+                .map_err(|err| err.to_string())?;
+
+            let plugin_installation = metadata
+                .metadata
+                .owner_plugins(owner_kind, agent_type_name)
+                .and_then(|plugins| {
+                    plugins
+                        .iter()
+                        .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
+                })
+                .cloned()
+                .ok_or("plugin not found in metadata".to_string())?;
+
+            let desc = make_plugin_installation_description(plugin_installation);
+            Ok(PublicOplogEntry::OplogProcessorCheckpoint(
+                OplogProcessorCheckpointParams {
                     timestamp,
-                    filesystem_snapshot: filesystem_snapshot.into(),
+                    plugin: desc,
+                    source_component_revision,
+                    target_agent_id,
+                    confirmed_up_to,
+                    sending_up_to,
+                    last_batch_start,
                 },
-            )),
-            OplogEntry::SpanClosed {
-                timestamp,
-                resource_start_index,
-                span_finished,
-                ..
-            } => Ok(PublicOplogEntry::SpanClosed(SpanClosedParams {
-                timestamp,
-                resource_start_index,
-                span_finished: public_span_finished(span_finished),
-            })),
-            OplogEntry::OplogProcessorCheckpoint {
-                timestamp,
-                plugin_grant_id,
-                source_component_revision,
-                target_agent_id,
-                confirmed_up_to,
-                sending_up_to,
-                last_batch_start,
-                ..
-            } => {
-                let metadata = components
-                    .get_metadata(owner_component_id, Some(source_component_revision))
-                    .await
-                    .map_err(|err| err.to_string())?;
+            ))
+        }
+        OplogEntry::SetRetryPolicy {
+            timestamp, policy, ..
+        } => Ok(PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams {
+            timestamp,
+            policy: (*policy).into(),
+        })),
+        OplogEntry::RemoveRetryPolicy {
+            timestamp, name, ..
+        } => Ok(PublicOplogEntry::RemoveRetryPolicy(
+            RemoveRetryPolicyParams { timestamp, name },
+        )),
+        OplogEntry::CardRevoked {
+            timestamp,
+            queued_event_index,
+            card_id,
+            wallet_generation,
+            ..
+        } => Ok(PublicOplogEntry::CardRevoked(CardRevokedParams {
+            timestamp,
+            queued_event_index,
+            card_id,
+            wallet_generation,
+        })),
+        OplogEntry::CardExpired {
+            timestamp,
+            card_id,
+            wallet_generation,
+            ..
+        } => Ok(PublicOplogEntry::CardExpired(CardExpiredParams {
+            timestamp,
+            card_id,
+            wallet_generation,
+        })),
+        OplogEntry::HostStreamFrame {
+            timestamp,
+            parent_start_index,
+            kind,
+            payload,
+        } => {
+            let host_request: HostRequest = oplog_service
+                .download_payload(owned_agent_id, agent_mode, payload)
+                .await
+                .map_err(|error| {
+                    PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                })?;
 
-                let plugin_installation = metadata
-                    .metadata
-                    .owner_plugins(owner_kind, agent_type_name)
-                    .and_then(|plugins| {
-                        plugins
-                            .iter()
-                            .find(|p| p.environment_plugin_grant_id == plugin_grant_id)
-                    })
-                    .cloned()
-                    .ok_or("plugin not found in metadata".to_string())?;
-
-                let desc = make_plugin_installation_description(plugin_installation);
-                Ok(PublicOplogEntry::OplogProcessorCheckpoint(
-                    OplogProcessorCheckpointParams {
-                        timestamp,
-                        plugin: desc,
-                        source_component_revision,
-                        target_agent_id,
-                        confirmed_up_to,
-                        sending_up_to,
-                        last_batch_start,
-                    },
-                ))
-            }
-            OplogEntry::SetRetryPolicy {
-                timestamp, policy, ..
-            } => Ok(PublicOplogEntry::SetRetryPolicy(SetRetryPolicyParams {
-                timestamp,
-                policy: (*policy).into(),
-            })),
-            OplogEntry::RemoveRetryPolicy {
-                timestamp, name, ..
-            } => Ok(PublicOplogEntry::RemoveRetryPolicy(
-                RemoveRetryPolicyParams { timestamp, name },
-            )),
-            OplogEntry::CardRevoked {
-                timestamp,
-                queued_event_index,
-                card_id,
-                wallet_generation,
-                ..
-            } => Ok(PublicOplogEntry::CardRevoked(CardRevokedParams {
-                timestamp,
-                queued_event_index,
-                card_id,
-                wallet_generation,
-            })),
-            OplogEntry::CardExpired {
-                timestamp,
-                card_id,
-                wallet_generation,
-                ..
-            } => Ok(PublicOplogEntry::CardExpired(CardExpiredParams {
-                timestamp,
-                card_id,
-                wallet_generation,
-            })),
-            OplogEntry::HostStreamFrame {
+            Ok(PublicOplogEntry::HostStreamFrame(HostStreamFrameParams {
                 timestamp,
                 parent_start_index,
                 kind,
-                payload,
-            } => {
-                let host_request: HostRequest = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, payload)
-                    .await?;
-
-                Ok(PublicOplogEntry::HostStreamFrame(HostStreamFrameParams {
-                    timestamp,
-                    parent_start_index,
-                    kind,
-                    payload: host_request
-                        .into_typed_schema_value()
-                        .map_err(|e| e.to_string())?,
-                }))
-            }
-            OplogEntry::StreamRegistered {
-                timestamp, record, ..
-            } => {
-                let record = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, record)
-                    .await?;
-                Ok(PublicOplogEntry::StreamRegistered(StreamRegisteredParams {
-                    timestamp,
-                    record: record
-                        .into_typed_schema_value()
-                        .map_err(|e| e.to_string())?,
-                }))
-            }
-            OplogEntry::ToolAttachmentControl {
+                payload: host_request
+                    .into_typed_schema_value()
+                    .map_err(|e| e.to_string())?,
+            }))
+        }
+        OplogEntry::StreamRegistered {
+            timestamp, record, ..
+        } => {
+            let record = oplog_service
+                .download_payload(owned_agent_id, agent_mode, record)
+                .await
+                .map_err(|error| {
+                    PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                })?;
+            Ok(PublicOplogEntry::StreamRegistered(StreamRegisteredParams {
                 timestamp,
-                attachment,
-                transition,
-                ..
-            } => Ok(PublicOplogEntry::ToolAttachmentControl(
-                golem_common::model::oplog::public_oplog_entry::ToolAttachmentControlParams {
+                record: record
+                    .into_typed_schema_value()
+                    .map_err(|e| e.to_string())?,
+            }))
+        }
+        OplogEntry::ToolAttachmentControl {
+            timestamp,
+            attachment,
+            transition,
+            ..
+        } => Ok(PublicOplogEntry::ToolAttachmentControl(
+            golem_common::model::oplog::public_oplog_entry::ToolAttachmentControlParams {
+                timestamp,
+                attachment: attachment
+                    .into_typed_schema_value()
+                    .map_err(|error| error.to_string())?,
+                transition: transition
+                    .into_typed_schema_value()
+                    .map_err(|error| error.to_string())?,
+            },
+        )),
+        OplogEntry::ToolAttachmentRead {
+            timestamp,
+            observation,
+            payload,
+            ..
+        } => {
+            let payload = match payload {
+                Some(payload) => Some(
+                    oplog_service
+                        .download_payload(owned_agent_id, agent_mode, payload)
+                        .await
+                        .map_err(|error| {
+                            PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                        })?,
+                ),
+                None => None,
+            };
+            Ok(PublicOplogEntry::ToolAttachmentRead(
+                golem_common::model::oplog::public_oplog_entry::ToolAttachmentReadParams {
                     timestamp,
-                    attachment: attachment
+                    observation: (*observation)
                         .into_typed_schema_value()
                         .map_err(|error| error.to_string())?,
-                    transition: transition
-                        .into_typed_schema_value()
-                        .map_err(|error| error.to_string())?,
+                    payload,
                 },
-            )),
-            OplogEntry::ToolAttachmentRead {
+            ))
+        }
+        OplogEntry::StreamItems {
+            timestamp, record, ..
+        } => {
+            let record = oplog_service
+                .download_payload(owned_agent_id, agent_mode, record)
+                .await
+                .map_err(|error| {
+                    PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                })?;
+            Ok(PublicOplogEntry::StreamItems(StreamItemsParams {
                 timestamp,
-                observation,
-                payload,
-                ..
-            } => {
-                let payload = match payload {
-                    Some(payload) => Some(
-                        oplog_service
-                            .download_payload(owned_agent_id, agent_mode, payload)
-                            .await?,
-                    ),
-                    None => None,
-                };
-                Ok(PublicOplogEntry::ToolAttachmentRead(
-                    golem_common::model::oplog::public_oplog_entry::ToolAttachmentReadParams {
-                        timestamp,
-                        observation: (*observation)
-                            .into_typed_schema_value()
-                            .map_err(|error| error.to_string())?,
-                        payload,
-                    },
-                ))
-            }
-            OplogEntry::StreamItems {
-                timestamp, record, ..
-            } => {
-                let record = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, record)
-                    .await?;
-                Ok(PublicOplogEntry::StreamItems(StreamItemsParams {
-                    timestamp,
-                    record: record
-                        .into_typed_schema_value()
-                        .map_err(|e| e.to_string())?,
-                }))
-            }
-            OplogEntry::StreamTerminal {
-                timestamp, record, ..
-            } => {
-                let record = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, record)
-                    .await?;
-                Ok(PublicOplogEntry::StreamTerminal(StreamTerminalParams {
-                    timestamp,
-                    record: record
-                        .into_typed_schema_value()
-                        .map_err(|e| e.to_string())?,
-                }))
-            }
-            OplogEntry::StreamSession {
-                timestamp, record, ..
-            } => {
-                let record = oplog_service
-                    .download_payload(owned_agent_id, agent_mode, record)
-                    .await?;
-                Ok(PublicOplogEntry::StreamSession(StreamSessionParams {
-                    timestamp,
-                    record: record
-                        .into_typed_schema_value()
-                        .map_err(|e| e.to_string())?,
-                }))
-            }
-            OplogEntry::CardEventQueued {
-                timestamp, event, ..
-            } => Ok(PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
+                record: record
+                    .into_typed_schema_value()
+                    .map_err(|e| e.to_string())?,
+            }))
+        }
+        OplogEntry::StreamTerminal {
+            timestamp, record, ..
+        } => {
+            let record = oplog_service
+                .download_payload(owned_agent_id, agent_mode, record)
+                .await
+                .map_err(|error| {
+                    PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                })?;
+            Ok(PublicOplogEntry::StreamTerminal(StreamTerminalParams {
                 timestamp,
-                event: (*event).into(),
-            })),
-            OplogEntry::CardInstalled {
+                record: record
+                    .into_typed_schema_value()
+                    .map_err(|e| e.to_string())?,
+            }))
+        }
+        OplogEntry::StreamSession {
+            timestamp, record, ..
+        } => {
+            let record = oplog_service
+                .download_payload(owned_agent_id, agent_mode, record)
+                .await
+                .map_err(|error| {
+                    PublicEntryError::unreadable(owned_agent_id, oplog_index, error)
+                })?;
+            Ok(PublicOplogEntry::StreamSession(StreamSessionParams {
                 timestamp,
-                queued_event_index,
-                card,
-                wallet_generation,
-                ..
-            } => Ok(PublicOplogEntry::CardInstalled(CardInstalledParams {
-                timestamp,
-                queued_event_index,
-                card_id: card.card_id(),
-                wallet_generation,
-            })),
-            OplogEntry::CardInstallFailed {
+                record: record
+                    .into_typed_schema_value()
+                    .map_err(|e| e.to_string())?,
+            }))
+        }
+        OplogEntry::CardEventQueued {
+            timestamp, event, ..
+        } => Ok(PublicOplogEntry::CardEventQueued(CardEventQueuedParams {
+            timestamp,
+            event: (*event).into(),
+        })),
+        OplogEntry::CardInstalled {
+            timestamp,
+            queued_event_index,
+            card,
+            wallet_generation,
+            ..
+        } => Ok(PublicOplogEntry::CardInstalled(CardInstalledParams {
+            timestamp,
+            queued_event_index,
+            card_id: card.card_id(),
+            wallet_generation,
+        })),
+        OplogEntry::CardInstallFailed {
+            timestamp,
+            queued_event_index,
+            card_id,
+            reason,
+            ..
+        } => Ok(PublicOplogEntry::CardInstallFailed(
+            CardInstallFailedParams {
                 timestamp,
                 queued_event_index,
                 card_id,
                 reason,
-                ..
-            } => Ok(PublicOplogEntry::CardInstallFailed(
-                CardInstallFailedParams {
-                    timestamp,
-                    queued_event_index,
-                    card_id,
-                    reason,
-                },
-            )),
-            OplogEntry::CardDerived {
-                timestamp,
-                card,
-                wallet_generation,
-                ..
-            } => Ok(PublicOplogEntry::CardDerived(CardDerivedParams {
-                timestamp,
-                card_id: card.card_id(),
-                parent_ids: card.parent_ids().to_vec(),
-                wallet_generation,
-            })),
-            OplogEntry::CardTransferStarted {
+            },
+        )),
+        OplogEntry::CardDerived {
+            timestamp,
+            card,
+            wallet_generation,
+            ..
+        } => Ok(PublicOplogEntry::CardDerived(CardDerivedParams {
+            timestamp,
+            card_id: card.card_id(),
+            parent_ids: card.parent_ids().to_vec(),
+            wallet_generation,
+        })),
+        OplogEntry::CardTransferStarted {
+            timestamp,
+            transfer_id,
+            card_id,
+            target_holder,
+            source_wallet_generation,
+            ..
+        } => Ok(PublicOplogEntry::CardTransferStarted(
+            CardTransferStartedParams {
                 timestamp,
                 transfer_id,
                 card_id,
                 target_holder,
                 source_wallet_generation,
-                ..
-            } => Ok(PublicOplogEntry::CardTransferStarted(
-                CardTransferStartedParams {
-                    timestamp,
-                    transfer_id,
-                    card_id,
-                    target_holder,
-                    source_wallet_generation,
-                },
-            )),
-            OplogEntry::CardTransferred {
-                timestamp,
-                transfer_id,
-                source_card_id,
-                installed_card_id,
-                target_holder,
-                target_wallet_generation,
-                ..
-            } => Ok(PublicOplogEntry::CardTransferred(CardTransferredParams {
-                timestamp,
-                transfer_id,
-                source_card_id,
-                installed_card_id,
-                target_holder,
-                target_wallet_generation,
-            })),
-            OplogEntry::CardRevokedCascade {
+            },
+        )),
+        OplogEntry::CardTransferred {
+            timestamp,
+            transfer_id,
+            source_card_id,
+            installed_card_id,
+            target_holder,
+            target_wallet_generation,
+            ..
+        } => Ok(PublicOplogEntry::CardTransferred(CardTransferredParams {
+            timestamp,
+            transfer_id,
+            source_card_id,
+            installed_card_id,
+            target_holder,
+            target_wallet_generation,
+        })),
+        OplogEntry::CardRevokedCascade {
+            timestamp,
+            revoked_card_ids,
+            local_wallet_generation,
+            ..
+        } => Ok(PublicOplogEntry::CardRevokedCascade(
+            CardRevokedCascadeParams {
                 timestamp,
                 revoked_card_ids,
                 local_wallet_generation,
-                ..
-            } => Ok(PublicOplogEntry::CardRevokedCascade(
-                CardRevokedCascadeParams {
-                    timestamp,
-                    revoked_card_ids,
-                    local_wallet_generation,
-                },
-            )),
-            OplogEntry::CardTransferConfirmed {
+            },
+        )),
+        OplogEntry::CardTransferConfirmed {
+            timestamp,
+            transfer_id,
+            source_card_id,
+            installed_card_id,
+            target_holder,
+            ..
+        } => Ok(PublicOplogEntry::CardTransferConfirmed(
+            CardTransferConfirmedParams {
                 timestamp,
                 transfer_id,
                 source_card_id,
                 installed_card_id,
                 target_holder,
-                ..
-            } => Ok(PublicOplogEntry::CardTransferConfirmed(
-                CardTransferConfirmedParams {
-                    timestamp,
-                    transfer_id,
-                    source_card_id,
-                    installed_card_id,
-                    target_holder,
-                },
-            )),
-        }
+            },
+        )),
     }
 }
 
@@ -1037,16 +1151,18 @@ fn make_plugin_installation_description(
     }
 }
 
-/// The public value of the request of a recorded `Start`.
+/// The public value of the request of the recorded `Start` at `oplog_index`.
 async fn public_host_request(
+    oplog_index: OplogIndex,
     request_payload: OplogPayload<HostRequest>,
     oplog_service: &Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
-) -> Result<TypedSchemaValue, String> {
+) -> Result<TypedSchemaValue, PublicEntryError> {
     let host_request: HostRequest = oplog_service
         .download_payload(owned_agent_id, agent_mode, request_payload)
-        .await?;
+        .await
+        .map_err(|error| PublicEntryError::unreadable(owned_agent_id, oplog_index, error))?;
 
     match host_request {
         HostRequest::EntityInvocation(request) => Ok(request.input),
@@ -1058,13 +1174,13 @@ async fn public_host_request(
             for (_, entry) in &mut inner.entries {
                 entry.clear();
             }
-            HostRequest::GolemApiOplogEnrich(inner)
+            Ok(HostRequest::GolemApiOplogEnrich(inner)
                 .into_typed_schema_value()
-                .map_err(|error| error.to_string())
+                .map_err(|error| error.to_string())?)
         }
-        other => other
+        other => Ok(other
             .into_typed_schema_value()
-            .map_err(|error| error.to_string()),
+            .map_err(|error| error.to_string())?),
     }
 }
 
@@ -1095,7 +1211,9 @@ pub(crate) async fn with_expected_request(
             request: Some(request),
             ..
         })) if function_name.to_string() == expected.function_name => {
-            public_host_request(request, oplog_service, owned_agent_id, agent_mode).await
+            public_host_request(index, request, oplog_service, owned_agent_id, agent_mode)
+                .await
+                .map_err(|error| error.to_string())
         }
         Ok(_) => Err(format!(
             "the entry at {index} is not a Start of {} with a request",

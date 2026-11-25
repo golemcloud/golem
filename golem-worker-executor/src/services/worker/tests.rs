@@ -3780,6 +3780,10 @@ async fn a_result_index_field_that_does_not_decode_resets_the_index() {
         positions_only(lookup(first).await),
         InvocationResultIndexLookup::Found(result_at(3))
     );
+    assert_eq!(
+        positions_only(lookup(second).await),
+        InvocationResultIndexLookup::Found(result_at(5))
+    );
 
     storage
         .with_entity("test", "corrupt_result_listing", "invocation_result")
@@ -3809,6 +3813,10 @@ async fn a_result_index_field_that_does_not_decode_resets_the_index() {
     assert_eq!(
         positions_only(lookup(first).await),
         InvocationResultIndexLookup::Found(result_at(3))
+    );
+    assert_eq!(
+        positions_only(lookup(second).await),
+        InvocationResultIndexLookup::Found(result_at(5))
     );
 }
 

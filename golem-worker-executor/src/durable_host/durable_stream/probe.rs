@@ -13,6 +13,55 @@
 // limitations under the License.
 
 use super::*;
+use crate::services::oplog::{OplogReadError, OplogReadSource};
+
+/// The stream error of a failed read of the metadata or the identity of `agent_id`. An oplog
+/// that does not read keeps its read class: `OplogFailed` stays unreadable for good, and
+/// `RecoveryRequired` stays unreadable until a later read passes.
+fn agent_read_error(agent_id: &AgentId, error: WorkerExecutorError) -> StreamStoreError {
+    match error {
+        WorkerExecutorError::OplogFailed { agent_id, details } => {
+            StreamStoreError::Unreadable(UnreadableOplog::new(
+                &agent_id,
+                OplogReadError::corruption(OplogReadSource::Other("agent identity"), details),
+            ))
+        }
+        WorkerExecutorError::RecoveryRequired { details, .. } => {
+            StreamStoreError::Unreadable(UnreadableOplog::new(
+                agent_id,
+                OplogReadError::source_unavailable(
+                    OplogReadSource::Other("agent identity"),
+                    details,
+                ),
+            ))
+        }
+        error => StreamStoreError::Oplog(error.to_string()),
+    }
+}
+
+/// Reads the stream session record of the entry at `index` in the oplog of `consumer`. A record
+/// that does not read is an unreadable oplog of `consumer` at `index`, with its read class.
+async fn consumer_record(
+    oplog_service: &dyn OplogService,
+    consumer: &OwnedAgentId,
+    agent_mode: AgentMode,
+    index: OplogIndex,
+    record: OplogPayload<StreamSessionRecord>,
+) -> Result<StreamSessionRecord, StreamStoreError> {
+    oplog_service
+        .download_payload(consumer, agent_mode, record)
+        .await
+        .map_err(|error| {
+            StreamStoreError::Unreadable(UnreadableOplog::new(
+                &consumer.agent_id,
+                OplogReadError::of_payload(
+                    OplogReadSource::Other("consumer journal record"),
+                    index,
+                    error,
+                ),
+            ))
+        })
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 /// Durable consumer evidence used when reconciling a producer attachment.
@@ -141,7 +190,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
             .worker_service
             .resolve_agent_identity(&session_owner)
             .await
-            .map_err(|err| StreamStoreError::Oplog(err.to_string()))?
+            .map_err(|error| agent_read_error(&session_owner.agent_id, error))?
         else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
@@ -224,7 +273,7 @@ impl DbDirectStreamAttachmentConsumerProbe {
             .worker_service
             .resolve_agent_identity(&consumer)
             .await
-            .map_err(|err| StreamStoreError::Oplog(err.to_string()))?
+            .map_err(|error| agent_read_error(&consumer.agent_id, error))?
         else {
             return Ok(ConsumerAttachmentStatus::Missing);
         };
@@ -324,7 +373,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             .worker_service
             .get(&consumer)
             .await
-            .map_err(|err| StreamStoreError::Oplog(err.to_string()))?
+            .map_err(|error| agent_read_error(&consumer.agent_id, error))?
         else {
             return Ok(None);
         };
@@ -387,11 +436,14 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             let OplogEntry::StreamSession { record, .. } = entry else {
                 continue;
             };
-            let record = self
-                .oplog_service
-                .download_payload(&consumer, agent_mode, record)
-                .await
-                .map_err(|error| StreamStoreError::Oplog(error.into()))?;
+            let record = consumer_record(
+                self.oplog_service.as_ref(),
+                &consumer,
+                agent_mode,
+                index,
+                record,
+            )
+            .await?;
             if let Some(original_index) = record.reobserves() {
                 let original = self
                     .oplog_service
@@ -405,11 +457,14 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
                         "consumer re-observation has no original record".into(),
                     ));
                 };
-                let original = self
-                    .oplog_service
-                    .download_payload(&consumer, agent_mode, original.clone())
-                    .await
-                    .map_err(|error| StreamStoreError::Oplog(error.into()))?;
+                let original = consumer_record(
+                    self.oplog_service.as_ref(),
+                    &consumer,
+                    agent_mode,
+                    original_index,
+                    original.clone(),
+                )
+                .await?;
                 if original_index >= index
                     || !record.has_supported_format()
                     || !record.matches_reobserved(&original)
@@ -551,7 +606,7 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
             .worker_service
             .get(&consumer)
             .await
-            .map_err(|err| StreamStoreError::Oplog(err.to_string()))?
+            .map_err(|error| agent_read_error(&consumer.agent_id, error))?
         else {
             return Ok(None);
         };
@@ -649,5 +704,127 @@ impl StreamAttachmentConsumerProbe for DbDirectStreamAttachmentConsumerProbe {
         .await
         .map_err(|error| StreamStoreError::Oplog(error.to_string()))?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod read_error_tests {
+    use super::*;
+    use crate::services::oplog::PrimaryOplogService;
+    use crate::services::oplog::tests::{
+        default_execution_status, default_last_known_status, make_agent_metadata,
+    };
+    use crate::storage::indexed::memory::InMemoryIndexedStorage;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::{RetryConfig, Timestamp};
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use test_r::test;
+
+    #[test]
+    async fn an_undecodable_consumer_record_is_unreadable_at_its_entry() {
+        let service = PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await;
+        let agent_id = crate::test_agent_id("probe-journal-unreadable");
+        let environment_id = EnvironmentId::new();
+        let consumer = OwnedAgentId::new(environment_id, &agent_id);
+        let oplog = service
+            .open(
+                &mut service.lock_lifecycle(&agent_id).await,
+                &consumer,
+                AgentMode::Durable,
+                None,
+                make_agent_metadata(agent_id, AccountId::new(), environment_id),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                None,
+            )
+            .await
+            .unwrap();
+        for size in 1..=5 {
+            oplog.add(OplogEntry::grow_memory(size)).await.unwrap();
+        }
+        oplog
+            .add(OplogEntry::StreamSession {
+                timestamp: Timestamp::now_utc(),
+                entity_parent_start_index: None,
+                record: OplogPayload::SerializedInline {
+                    bytes: vec![255, 7, 7],
+                    cached: None,
+                },
+                summary: None,
+            })
+            .await
+            .unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+        let index = OplogIndex::from_u64(6);
+        let Some(OplogEntry::StreamSession { record, .. }) = service
+            .read_exact(&consumer, AgentMode::Durable, index, 1)
+            .await
+            .unwrap()
+            .remove(&index)
+        else {
+            panic!("entry 6 is the stream session record");
+        };
+
+        let error = consumer_record(&service, &consumer, AgentMode::Durable, index, record)
+            .await
+            .expect_err("an undecodable record must fail the read");
+
+        let StreamStoreError::Unreadable(unreadable) = &error else {
+            panic!("expected an unreadable oplog, got {error:?}");
+        };
+        assert_eq!(unreadable.agent_id, agent_id);
+        assert!(!unreadable.is_transient());
+        let text = unreadable.to_string();
+        assert!(text.contains("at oplog index 6:"), "{text}");
+        assert!(
+            text.contains("unknown serialization version: 255"),
+            "{text}"
+        );
+    }
+
+    #[test]
+    fn an_unreadable_agent_keeps_its_read_class_in_the_stream_error() {
+        let agent_id = crate::test_agent_id("probe-identity-unreadable");
+        let failed = agent_read_error(
+            &agent_id,
+            WorkerExecutorError::oplog_failed(
+                agent_id,
+                "failed to decode oplog entry 6: unknown serialization version: 255",
+            ),
+        );
+        let StreamStoreError::Unreadable(unreadable) = &failed else {
+            panic!("expected an unreadable oplog, got {failed:?}");
+        };
+        assert_eq!(unreadable.agent_id, agent_id);
+        assert!(!unreadable.is_transient());
+        assert!(
+            unreadable
+                .to_string()
+                .contains("failed to decode oplog entry 6: unknown serialization version: 255")
+        );
+
+        let temporary = agent_read_error(
+            &agent_id,
+            WorkerExecutorError::recovery_required("oplog data from primary is unavailable"),
+        );
+        let StreamStoreError::Unreadable(unreadable) = &temporary else {
+            panic!("expected an unreadable oplog, got {temporary:?}");
+        };
+        assert_eq!(unreadable.agent_id, agent_id);
+        assert!(unreadable.is_transient());
+        assert!(
+            unreadable
+                .to_string()
+                .contains("oplog data from primary is unavailable")
+        );
     }
 }

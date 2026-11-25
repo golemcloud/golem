@@ -39,7 +39,7 @@ use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
 use tonic::Code;
-use tracing::{Instrument, debug, info_span};
+use tracing::{Instrument, debug, info_span, warn};
 use uuid::Uuid;
 
 #[derive(Debug, thiserror::Error)]
@@ -727,12 +727,19 @@ fn encode<T: desert_rust::BinarySerializer>(value: &T) -> Result<Vec<u8>, QuotaR
     serialize(value).map_err(|err| QuotaRepoError::InternalError(anyhow::anyhow!(err)))
 }
 
-fn decode<T: desert_rust::BinaryDeserializer>(kv: &KeyValue) -> Result<T, QuotaRepoError> {
-    golem_common::serialization::decode(kv.value()).map_err(|error| {
-        QuotaRepoError::InternalError(anyhow::anyhow!(
-            "failed to decode quota key {}: {error}",
-            String::from_utf8_lossy(kv.key())
-        ))
+/// Decodes the value stored at `key`, which [`parse_key`] has validated. A value that does not
+/// decode is logged with the key and the decoder reason, never with the stored bytes.
+fn decode<T: desert_rust::BinaryDeserializer>(
+    key: &QuotaKey,
+    value: &[u8],
+) -> Result<T, QuotaRepoError> {
+    golem_common::serialization::decode(value).map_err(|error| {
+        let key = match key {
+            QuotaKey::Resource(id) => state_key(*id),
+            QuotaKey::Lease(id, pod) => lease_key(*id, pod.ip(), pod.port()),
+        };
+        warn!(%key, %error, "Failed to decode stored quota record");
+        QuotaRepoError::InternalError(anyhow::anyhow!("failed to decode quota key {key}: {error}"))
     })
 }
 
@@ -924,7 +931,8 @@ impl EtcdQuotaRepo {
     fn decode_state(kvs: Vec<KeyValue>) -> Result<StoredQuotaState, QuotaRepoError> {
         let mut state = StoredQuotaState::default();
         for kv in kvs {
-            match parse_key(kv.key())? {
+            let key = parse_key(kv.key())?;
+            match key {
                 QuotaKey::Resource(id) => {
                     // etcd's revisions start at 1, so a live key cannot carry mod_revision 0,
                     // which the contract reserves for "not stored".
@@ -936,7 +944,7 @@ impl EtcdQuotaRepo {
                         )));
                     }
 
-                    let resource: QuotaResourceState = decode(&kv)?;
+                    let resource: QuotaResourceState = decode(&key, kv.value())?;
                     state.resources.push(StoredQuotaResource {
                         record: QuotaResourceRecord {
                             resource_definition_id: id,
@@ -950,7 +958,7 @@ impl EtcdQuotaRepo {
                     });
                 }
                 QuotaKey::Lease(id, pod) => {
-                    let lease: QuotaLeaseState = decode(&kv)?;
+                    let lease: QuotaLeaseState = decode(&key, kv.value())?;
                     state.leases.push(QuotaLeaseRecord {
                         resource_definition_id: id,
                         pod_ip: Blob::new(pod.ip()),
@@ -1241,6 +1249,25 @@ mod tests {
                 "{key} did not parse back"
             );
         }
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn an_unreadable_record_logs_its_key_and_reason_without_its_bytes() {
+        let id = Uuid::new_v4();
+        let pod = SocketAddr::new(IpAddr::V4(Ipv4Addr::new(10, 0, 0, 9)), 9100);
+        let error = decode::<QuotaLeaseState>(&QuotaKey::Lease(id, pod), b"\xffprivate payload")
+            .unwrap_err()
+            .to_string();
+        let key = lease_key(id, pod.ip(), pod.port());
+        assert_eq!(
+            error,
+            format!("failed to decode quota key {key}: unknown serialization version: 255")
+        );
+        assert!(logs_contain("Failed to decode stored quota record"));
+        assert!(logs_contain(&key));
+        assert!(logs_contain("unknown serialization version: 255"));
+        assert!(!logs_contain("private payload"));
     }
 
     #[test]

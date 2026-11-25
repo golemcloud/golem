@@ -5022,6 +5022,7 @@ mod tests {
         invocation_summary:
             Mutex<Option<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>,
         revert_resolution_error: Mutex<Option<String>>,
+        invocation_lookup_error: Mutex<Option<WorkerExecutorError>>,
     }
 
     impl RecordingWorkerClient {
@@ -5060,6 +5061,7 @@ mod tests {
                 oplog_entry_reads: Mutex::new(Vec::new()),
                 invocation_summary: Mutex::new(None),
                 revert_resolution_error: Mutex::new(None),
+                invocation_lookup_error: Mutex::new(None),
             }
         }
 
@@ -5678,6 +5680,11 @@ mod tests {
             agent_id: &AgentId,
             start: InvocationStart,
         ) -> WorkerResult<AgentInvocationOutput> {
+            if start.mode() == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup
+                && let Some(error) = self.invocation_lookup_error.lock().unwrap().clone()
+            {
+                return Err(error.into());
+            }
             let key: golem_common::model::InvocationId = if start.mode()
                 == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup
             {
@@ -10551,5 +10558,49 @@ mod tests {
             panic!("get of a completed invocation with unknown operation failed: {error}")
         });
         assert!(got.result.is_none());
+    }
+
+    /// A completed invocation whose result the executor cannot read is an error, not an
+    /// invocation without a result. The error does not show the stored details.
+    #[test]
+    async fn a_completed_invocation_with_an_unreadable_result_is_an_error() {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            InvocationKind as ProtoKind, InvocationLifecycleState as ProtoState,
+        };
+        let harness = RestHarness::new(AgentMode::Durable);
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let invocation_id = golem_common::model::InvocationId(Uuid::new_v4());
+        let agent_id = harness.some_agent_id().agent_id;
+        let owned = golem_common::model::OwnedInvocationId::new(agent_id, invocation_id);
+        *harness.worker_client.invocation_summary.lock().unwrap() = Some(invocation_summary_proto(
+            invocation_id,
+            ProtoState::Completed,
+            ProtoKind::Unspecified,
+            Some("run".to_string()),
+        ));
+        *harness
+            .worker_client
+            .invocation_lookup_error
+            .lock()
+            .unwrap() = Some(WorkerExecutorError::Runtime {
+            details: WorkerExecutorError::oplog_failed(
+                agent_id,
+                "oplog entry 43 has unknown serialization version 255",
+            )
+            .to_string(),
+        });
+
+        let error = harness
+            .worker_service
+            .get_invocation(harness.environment_id, &owned, AuthCtx::system())
+            .await
+            .expect_err("an unreadable result is not an invocation without a result");
+
+        let public = golem_common::SafeDisplay::to_safe_string(&error);
+        assert!(public.contains(&invocation_id.to_string()), "{public}");
+        assert!(!public.contains("entry 43"), "{public}");
+        assert!(!public.contains("version 255"), "{public}");
     }
 }

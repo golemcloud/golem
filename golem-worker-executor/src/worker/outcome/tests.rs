@@ -354,3 +354,394 @@ fn monthly_policy_outage_preserves_its_reason_in_ephemeral_suspend_failure() {
         );
     }
 }
+
+struct WrappedOplogBootstrap(Arc<dyn crate::services::oplog::OplogService>);
+
+#[async_trait::async_trait]
+impl crate::Bootstrap<crate::workerctx::default::Context> for WrappedOplogBootstrap {
+    fn create_additional_deps(
+        &self,
+        _: Arc<dyn golem_service_base::clients::registry::RegistryService>,
+    ) -> crate::services::NoAdditionalDeps {
+        crate::services::NoAdditionalDeps
+    }
+
+    fn wrap_oplog_service(
+        &self,
+        _: Arc<dyn crate::services::oplog::OplogService>,
+    ) -> Arc<dyn crate::services::oplog::OplogService> {
+        self.0.clone()
+    }
+}
+
+/// A resident worker over a primary oplog whose indexed reads a test can fail, with the
+/// production status actor and result lookup.
+struct ResidentWorker {
+    worker: Arc<Worker<crate::workerctx::default::Context>>,
+    oplog: Arc<dyn Oplog>,
+    indexed: Arc<crate::services::oplog::tests::ReadCountingIndexedStorage>,
+    shutdown: crate::services::shutdown::Shutdown,
+    _tasks: tokio::task::JoinSet<anyhow::Result<()>>,
+}
+
+impl ResidentWorker {
+    async fn start() -> Self {
+        use crate::services::HasShardService;
+        use crate::services::golem_config::*;
+        use crate::services::oplog::tests::{
+            ReadCountingIndexedStorage, create_test_entry, default_execution_status,
+            default_last_known_status, make_agent_metadata,
+        };
+        use crate::services::oplog::{OplogService, PrimaryOplogService};
+        use crate::worker::status::calculate_last_known_status_for_existing_worker;
+        use crate::worker::{GetOrCreateWorkerResult, ResolvedOwnerContext};
+        use futures::FutureExt;
+        use golem_common::model::account::{AccountEmail, AccountId};
+        use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey, Snapshotting};
+        use golem_common::model::application::{ApplicationId, ApplicationName};
+        use golem_common::model::component::ComponentName;
+        use golem_common::model::component_metadata::ComponentMetadata;
+        use golem_common::model::diff::Hash;
+        use golem_common::model::environment::{EnvironmentId, EnvironmentName};
+        use golem_common::model::{AgentId, RetryConfig};
+        use golem_common::schema::agent::{
+            AgentConstructorSchema, AgentTypeKind, AgentTypeSchema, InputSchema,
+        };
+        use golem_common::schema::{SchemaGraph, SchemaType, SchemaValue, TypedSchemaValue};
+        use golem_service_base::config::{BlobStorageConfig, InMemoryBlobStorageConfig};
+        use golem_service_base::model::component::Component;
+        use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+        use std::collections::{BTreeMap, HashMap};
+        use std::time::Duration;
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let indexed = Arc::new(ReadCountingIndexedStorage::new());
+        let service = Arc::new(
+            PrimaryOplogService::new(
+                indexed.clone(),
+                Arc::new(InMemoryBlobStorage::new()),
+                0,
+                0,
+                1024,
+                0,
+                RetryConfig {
+                    max_attempts: 2,
+                    min_delay: Duration::ZERO,
+                    max_delay: Duration::ZERO,
+                    ..Default::default()
+                },
+            )
+            .await,
+        );
+        let mut config = GolemConfig {
+            key_value_storage: KeyValueStorageConfig::InMemory(KeyValueStorageInMemoryConfig {}),
+            indexed_storage: IndexedStorageConfig::InMemory(IndexedStorageInMemoryConfig {}),
+            scheduler_storage: SchedulerStorageConfig::InMemory(SchedulerStorageInMemoryConfig {}),
+            blob_storage: BlobStorageConfig::InMemory(InMemoryBlobStorageConfig {}),
+            resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
+            ..Default::default()
+        };
+        config.filesystem_storage.mode = FilesystemStorageMode::Temporary;
+        config.engine.enable_fs_cache = false;
+        config.oplog.sweep.enabled = false;
+        config.agent_status_flush.enabled = false;
+        config.agent_status_checkpoint.enabled = false;
+        config.set_golem_issuer(crate::test_callers::TEST_ISSUER.parse().unwrap());
+        let shutdown = crate::services::shutdown::Shutdown::new();
+        let mut tasks = tokio::task::JoinSet::new();
+        let (deps, _epoch, _) =
+            crate::create_worker_executor_impl::<crate::workerctx::default::Context, _>(
+                config,
+                &WrappedOplogBootstrap(service.clone()),
+                tokio::runtime::Handle::current(),
+                &Arc::new(crate::services::worker_activator::LazyWorkerActivator::new()),
+                shutdown.clone(),
+                &mut tasks,
+            )
+            .await
+            .unwrap();
+        deps.shard_service().install_unexpiring(
+            1,
+            &HashMap::from([(
+                golem_common::model::ShardId::new(0),
+                golem_common::model::ShardEpoch(0),
+            )]),
+        );
+
+        let id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1628));
+        let account = AccountId::new();
+        let parsed = ParsedAgentKey::new(
+            AgentTypeName("Counter".into()),
+            TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::record(Vec::new())),
+                SchemaValue::Record { fields: Vec::new() },
+            ),
+        );
+        let mut metadata = make_agent_metadata(id.agent_id, account, id.environment_id);
+        metadata.agent_type_name = Some(parsed.agent_type.clone());
+        metadata.constructor_parameters = Some(parsed.canonical_parameters().unwrap());
+        let mut create = create_test_entry(
+            id.agent_id,
+            AgentMode::Durable,
+            ComponentRevision::INITIAL,
+            id.environment_id,
+            account,
+            metadata.fingerprint.0,
+        );
+        let OplogEntry::Create { parameters, .. } = &mut create else {
+            unreachable!()
+        };
+        parameters.agent_type_name = metadata.agent_type_name.clone();
+        parameters.constructor_parameters = metadata.constructor_parameters.clone();
+        let oplog = service
+            .create_fresh(
+                &mut service.lock_lifecycle(&id.agent_id).await,
+                &id,
+                AgentMode::Durable,
+                create,
+                metadata.clone(),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                None,
+            )
+            .await
+            .unwrap();
+        let status =
+            calculate_last_known_status_for_existing_worker(&deps, &id, AgentMode::Durable, None)
+                .await
+                .unwrap();
+        let component = Component {
+            id: metadata.component_id,
+            revision: ComponentRevision::INITIAL,
+            environment_id: id.environment_id,
+            component_name: ComponentName("counter".into()),
+            hash: Hash::empty(),
+            application_id: ApplicationId::new(),
+            account_id: account,
+            account_email: AccountEmail::new("owner@example.com"),
+            application_name: ApplicationName("test".into()),
+            environment_name: EnvironmentName::try_from("test").unwrap(),
+            component_size: 0,
+            metadata: ComponentMetadata::from_parts(
+                Default::default(),
+                Vec::new(),
+                vec![AgentTypeSchema {
+                    type_name: parsed.agent_type.clone(),
+                    kind: AgentTypeKind::Regular,
+                    description: String::new(),
+                    source_language: String::new(),
+                    schema: SchemaGraph::empty(),
+                    constructor: AgentConstructorSchema {
+                        name: None,
+                        description: String::new(),
+                        prompt_hint: None,
+                        input_schema: InputSchema::parameters([]),
+                    },
+                    methods: Vec::new(),
+                    dependencies: Vec::new(),
+                    mode: AgentMode::Durable,
+                    http_mount: None,
+                    snapshotting: Snapshotting::Disabled(golem_schema::Empty {}),
+                    config: Vec::new(),
+                }],
+                BTreeMap::new(),
+            ),
+            created_at: chrono::Utc::now(),
+            wasm_hash: Hash::empty(),
+            package_metadata: None,
+            object_store_key: String::new(),
+        };
+        metadata.last_known_status = status.clone();
+        let initial = GetOrCreateWorkerResult {
+            initial_worker_metadata: metadata,
+            current_status: Arc::new(arc_swap::ArcSwap::from_pointee(status)),
+            persisted_status: None,
+            execution_status: Arc::new(std::sync::RwLock::new(
+                crate::model::ExecutionStatus::Suspended {
+                    agent_mode: AgentMode::Durable,
+                    timestamp: Timestamp::now_utc(),
+                },
+            )),
+            owner_context: ResolvedOwnerContext::Agent(Box::new(parsed)),
+            snapshot_policy: SnapshotPolicy::Disabled,
+            oplog: oplog.clone(),
+            initial_component: Arc::new(component),
+            reconstructed_ephemeral: false,
+            newly_created: false,
+        };
+        let worker = Worker::<crate::workerctx::default::Context>::unresolved(
+            &deps,
+            Arc::new(crate::services::card_interest::CardInterestIndex::new()),
+            id,
+        );
+        let constructing = worker.clone();
+        let (_, initialized) = worker
+            .initialize_with(
+                async move {
+                    constructing
+                        .finish_construction(std::time::Instant::now(), Ok(initial))
+                        .await
+                }
+                .boxed(),
+            )
+            .await;
+        initialized.unwrap();
+        Self {
+            worker,
+            oplog,
+            indexed,
+            shutdown,
+            _tasks: tasks,
+        }
+    }
+
+    async fn stop(self) {
+        self.worker
+            .state_actor
+            .stop_handle()
+            .stop_and_wait()
+            .await
+            .unwrap();
+        self.worker.status_flusher.begin_delete().await;
+        self.oplog.stop_and_wait().await.unwrap();
+        self.shutdown
+            .cancel_and_wait_for_tracked(std::time::Duration::from_secs(5))
+            .await;
+    }
+}
+
+/// An oplog that does not read for good stays as it is: the recovery failure of that read adds no
+/// error entry, so nothing records the read error as an outcome of the agent. A recovery that
+/// failed for another reason still records its error.
+#[test]
+#[test_r::timeout("60s")]
+async fn a_recovery_failure_of_an_unreadable_oplog_adds_no_entry() {
+    use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
+
+    let resident = ResidentWorker::start().await;
+    let worker = &resident.worker;
+    let tail = resident.oplog.current_oplog_index().await;
+    let unreadable = WorkerExecutorError::from(UnreadableOplog::new(
+        &worker.agent_id(),
+        OplogReadError::of_payload(
+            OplogReadSource::Other("queued agent invocation request payload"),
+            tail,
+            crate::services::oplog::OplogPayloadDownloadError::Corrupt(anyhow::anyhow!(
+                "unknown serialization version: 255"
+            )),
+        ),
+    ));
+    assert!(matches!(
+        unreadable,
+        WorkerExecutorError::OplogFailed { .. }
+    ));
+    for error in [
+        unreadable.clone(),
+        WorkerExecutorError::failed_to_resume_worker(worker.agent_id(), unreadable),
+    ] {
+        worker.record_recovery_failure(&error).await;
+        assert_eq!(
+            resident.oplog.current_oplog_index().await,
+            tail,
+            "{error} must not add an entry"
+        );
+    }
+
+    worker
+        .record_recovery_failure(&WorkerExecutorError::unknown("the guest stack overflowed"))
+        .await;
+    assert_eq!(resident.oplog.current_oplog_index().await, tail.next());
+    resident.stop().await;
+}
+
+/// A pending invocation is stored while the status fold cannot read, so the published status does
+/// not know its key. A result lookup gives the read error of the fold again, instead of reading
+/// the key as new; once reads pass, the fold knows the key and the lookup reads it as pending.
+#[test]
+#[test_r::timeout("60s")]
+async fn a_result_lookup_on_a_detached_status_gives_the_read_error() {
+    use crate::model::LookupResult;
+    use crate::services::oplog::OplogOps;
+    use crate::storage::indexed::IndexedStorageError;
+    use golem_common::model::AgentInvocationPayload;
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::schema::SchemaValue;
+
+    let resident = ResidentWorker::start().await;
+    let worker = &resident.worker;
+    let key = InvocationId(uuid::Uuid::from_u128(0x1628_0003));
+    let (operation, payload) = resident
+        .oplog
+        .upload_request(AgentInvocationPayload::AgentMethod {
+            method_name: "count".into(),
+            allow_streams: false,
+            input: SchemaValue::Tuple { elements: vec![] }.try_into().unwrap(),
+            caller: Caller::anonymous(),
+            scope_card: None,
+        })
+        .await
+        .unwrap();
+    let context = InvocationContextStack::fresh_rounded();
+    resident
+        .indexed
+        .set_read_error(Some(IndexedStorageError::Transient(
+            "pending fold read unavailable".into(),
+        )));
+    resident
+        .oplog
+        .add(OplogEntry::pending_agent_invocation(
+            None,
+            key,
+            Box::new(operation),
+            payload,
+            context.trace_id.clone(),
+            context.trace_states.clone(),
+            context.to_oplog_data(),
+        ))
+        .await
+        .unwrap();
+    let commit = worker
+        .commit_oplog_and_update_state(crate::services::oplog::CommitLevel::Always)
+        .await;
+    let published = worker.state_actor.status().await;
+    assert!(
+        !published
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.has_idempotency_key(&key))
+            && worker.last_known_status_detached(),
+        "the fold must fail: commit {commit:?}, reads {}, detached {}, pending {:?}",
+        resident.indexed.reads(),
+        worker.last_known_status_detached(),
+        published.pending_invocations
+    );
+
+    let lookup = worker.lookup_invocation_result(&key).await;
+    assert!(
+        matches!(&lookup, Err(WorkerExecutorError::RecoveryRequired { details, .. })
+            if details.contains("pending fold read unavailable")),
+        "{lookup:?}"
+    );
+    resident
+        .indexed
+        .set_read_error(Some(IndexedStorageError::Other(
+            "pending fold entry corrupt".into(),
+        )));
+    let lookup = worker.try_lookup_invocation_result(&key).await;
+    assert!(
+        matches!(&lookup, Err(WorkerExecutorError::OplogFailed { details, .. })
+            if details.contains("pending fold entry corrupt")),
+        "{lookup:?}"
+    );
+
+    resident.indexed.set_read_error(None);
+    assert_eq!(
+        worker.try_lookup_invocation_result(&key).await.unwrap(),
+        LookupResult::Pending
+    );
+    assert_eq!(
+        worker.lookup_invocation_result(&key).await.unwrap(),
+        LookupResult::Pending
+    );
+    resident.stop().await;
+}

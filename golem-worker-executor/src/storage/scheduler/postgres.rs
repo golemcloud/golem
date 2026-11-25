@@ -20,7 +20,7 @@ use crate::services::golem_config::SchedulerStoragePostgresConfig;
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
-use golem_common::serialization::deserialize;
+use golem_common::serialization::{DecodeError, decode};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -162,7 +162,8 @@ impl SchedulerStorage for PostgresSchedulerStorage {
                     schedule_id: ScheduleId {
                         id: row.schedule_id,
                     },
-                    action: deserialize(&row.action)?,
+                    action: decode(&row.action)
+                        .map_err(|error| unreadable_action(&row.schedule_id, &error))?,
                     due_at: millis_to_datetime(row.due_at_ms)?,
                     lease_owner,
                     attempt_count: row.attempt_count as u32,
@@ -238,4 +239,15 @@ impl SchedulerStorage for PostgresSchedulerStorage {
             .map(|result| result.rows_affected() == 1)
             .map_err(SchedulerStorageError::from)
     }
+}
+
+/// A stored action that does not decode. The error names the schedule and the decoder reason,
+/// not the stored bytes.
+fn unreadable_action(
+    schedule_id: &impl std::fmt::Display,
+    error: &DecodeError,
+) -> SchedulerStorageError {
+    SchedulerStorageError::Other(format!(
+        "failed to decode scheduled action {schedule_id}: {error}"
+    ))
 }

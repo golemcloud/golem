@@ -2,15 +2,37 @@ use super::*;
 use golem_common::model::AgentMetadata;
 use golem_common::model::component::InstalledPlugin;
 
+/// The problem of a processor checkpoint at `index`, if it has one. A checkpoint whose batch is
+/// in flight must hold the delivery snapshot that its retry sends again. A delivery snapshot must
+/// decode.
+fn checkpoint_delivery_problem(
+    index: OplogIndex,
+    confirmed_up_to: OplogIndex,
+    sending_up_to: OplogIndex,
+    delivery: Option<&[u8]>,
+) -> Option<String> {
+    match delivery {
+        None => (sending_up_to > confirmed_up_to).then(|| {
+            format!("in-flight checkpoint at oplog index {index} has no delivery snapshot")
+        }),
+        Some(delivery) => decode::<(InstalledPlugin, AgentMetadata)>(delivery)
+            .err()
+            .map(|error| format!("failed to decode delivery at oplog index {index}: {error}")),
+    }
+}
+
 fn delivery_snapshots_are_readable(status: &AgentStatusRecord) -> bool {
     status
         .oplog_processor_checkpoints
         .values()
         .all(|checkpoint| {
-            checkpoint
-                .delivery
-                .as_deref()
-                .is_none_or(|delivery| decode::<(InstalledPlugin, AgentMetadata)>(delivery).is_ok())
+            checkpoint_delivery_problem(
+                status.oplog_idx,
+                checkpoint.confirmed_up_to,
+                checkpoint.sending_up_to,
+                checkpoint.delivery.as_deref(),
+            )
+            .is_none()
         })
 }
 
@@ -20,23 +42,29 @@ fn validate_delivery_snapshots(
     entries: &BTreeMap<OplogIndex, OplogEntry>,
 ) -> Result<(), UnreadableOplog> {
     entries.iter().try_for_each(|(index, entry)| {
-        if !deleted.is_in_deleted_region(*index)
-            && let OplogEntry::OplogProcessorCheckpoint {
-                delivery: Some(delivery),
+        let problem = match entry {
+            OplogEntry::OplogProcessorCheckpoint {
+                confirmed_up_to,
+                sending_up_to,
+                delivery,
                 ..
-            } = entry
-        {
-            decode::<(InstalledPlugin, AgentMetadata)>(delivery).map_err(|error| {
-                UnreadableOplog::new(
-                    &owned_agent_id.agent_id,
-                    OplogReadError::corruption(
-                        OplogReadSource::Other("oplog processor delivery"),
-                        format!("failed to decode delivery at oplog index {index}: {error}"),
-                    ),
-                )
-            })?;
-        }
-        Ok(())
+            } if !deleted.is_in_deleted_region(*index) => checkpoint_delivery_problem(
+                *index,
+                *confirmed_up_to,
+                *sending_up_to,
+                delivery.as_deref(),
+            ),
+            _ => None,
+        };
+        problem.map_or(Ok(()), |problem| {
+            Err(UnreadableOplog::new(
+                &owned_agent_id.agent_id,
+                OplogReadError::corruption(
+                    OplogReadSource::Other("oplog processor delivery"),
+                    problem,
+                ),
+            ))
+        })
     })
 }
 
@@ -284,6 +312,16 @@ where
         // Live appends keep the decoded lookup payloads; only a payload without one downloads.
         let deleted = deleted_regions(baseline.deleted_regions.clone(), &entries);
         let status = async {
+            // A commit report that was read again from storage holds serialized records. The
+            // fold applies a stream session record only in its decoded form.
+            hydrate_stream_session_payloads(
+                this,
+                owned_agent_id,
+                agent_mode,
+                &deleted,
+                &mut entries,
+            )
+            .await?;
             hydrate_lookup_payloads(
                 this,
                 owned_agent_id,
@@ -293,7 +331,6 @@ where
                 &mut entries,
             )
             .await?;
-            validate_delivery_snapshots(owned_agent_id, &deleted, &entries)?;
             let reader =
                 StatusOplogReader::new(this, owned_agent_id, agent_mode, Some(oplog), horizon);
             hydrate_initial_pending_evidence(&reader, &mut baseline, &entries).await?;
@@ -627,7 +664,8 @@ where
     Ok(())
 }
 
-/// Replaces an external `payload` that holds no decoded value with its downloaded value.
+/// Replaces a serialized or external `payload` that holds no decoded value with its decoded
+/// value. A payload that does not decode is an unreadable entry at `index`.
 async fn load_payload<T, P>(
     this: &T,
     owned_agent_id: &OwnedAgentId,
@@ -639,7 +677,11 @@ where
     T: HasOplogService + Sync,
     P: desert_rust::BinaryCodec + std::fmt::Debug + Clone + PartialEq + Send + Sync + 'static,
 {
-    if !matches!(payload, OplogPayload::External { cached: None, .. }) {
+    if !matches!(
+        payload,
+        OplogPayload::External { cached: None, .. }
+            | OplogPayload::SerializedInline { cached: None, .. }
+    ) {
         return Ok(());
     }
     let decoded = this

@@ -19,11 +19,18 @@ use crate::storage::keyvalue::{
 };
 use desert_rust::BinaryDeserializer;
 use golem_common::model::durable_stream::StreamForkCutRecord;
+use golem_common::serialization::{DecodeError, decode};
 
 #[derive(Debug)]
 pub(crate) enum ProjectionError {
-    CacheDecode,
+    CacheMiss,
     Other(Box<SessionError>),
+}
+
+impl From<DecodeError> for ProjectionError {
+    fn from(_: DecodeError) -> Self {
+        Self::CacheMiss
+    }
 }
 
 impl From<SessionError> for ProjectionError {
@@ -60,7 +67,48 @@ pub(crate) async fn read_projection<T: BinaryDeserializer>(
         .get_attempt_deserialize(namespace, field)
         .await?
         .transpose()
-        .map_err(|_| ProjectionError::CacheDecode)
+        .map_err(|_| ProjectionError::CacheMiss)
+}
+
+impl ProducerMetadataRow {
+    pub(crate) fn decode_for_key(
+        key: &ProducerMetadataKey,
+        bytes: &[u8],
+    ) -> Result<Self, ProjectionError> {
+        use ProducerMetadataKey as Key;
+        use ProducerMetadataRow as Row;
+
+        let row = decode(bytes)?;
+        let matches = match (key, &row) {
+            (_, Row::Retired)
+            | (Key::Lineage, Row::Lineage(_))
+            | (Key::Global, Row::Global { .. })
+            | (Key::Coordinate(_), Row::Coordinate(_))
+            | (Key::SessionPage(_), Row::SessionPage(_))
+            | (Key::Session(_), Row::Session(_))
+            | (Key::Batch(..), Row::Batch(_))
+            | (Key::ConsumerHead(..), Row::ConsumerHead(_))
+            | (Key::ActiveAttachmentCount(..), Row::ActiveAttachmentCount(_))
+            | (Key::Cascade(_), Row::Cascade(_))
+            | (Key::AttachmentPage(_), Row::AttachmentPage(_))
+            | (Key::AttachmentPosition(..), Row::AttachmentPosition(_))
+            | (Key::Position(..), Row::Position(..))
+            | (Key::ExternalProducerHead(..), Row::ExternalProducer(_))
+            | (Key::ExternalProducerSequence(..), Row::ExternalProducerOffset(_)) => true,
+            (Key::Stream(id), Row::Stream(value)) => *id == value.registration.handle.stream_id,
+            (
+                Key::Attachment(attachment, stream, environment, consumer),
+                Row::Attachment(value),
+            ) => {
+                value.key.attachment_id == *attachment
+                    && value.key.stream_id == *stream
+                    && value.key.consumer_environment_id == *environment
+                    && value.key.consumer == *consumer
+            }
+            _ => false,
+        };
+        matches.then_some(row).ok_or(ProjectionError::CacheMiss)
+    }
 }
 
 struct Projection<'a> {
@@ -83,10 +131,22 @@ pub(crate) struct ProducerMetadataProjection {
 }
 
 impl Projection<'_> {
+    async fn read(
+        &self,
+        key: &ProducerMetadataKey,
+    ) -> Result<Option<ProducerMetadataRow>, ProjectionError> {
+        self.storage
+            .with_entity("stream_session_index", "read_cache", "row")
+            .get_raw(self.namespace.clone(), &key.field()?)
+            .await?
+            .as_deref()
+            .map(|bytes| ProducerMetadataRow::decode_for_key(key, bytes))
+            .transpose()
+    }
+
     async fn load(&mut self, key: ProducerMetadataKey) -> Result<(), ProjectionError> {
         if self.loaded.insert(key.clone()) {
-            let row = read_projection(self.storage, self.namespace.clone(), &key.field()?).await?;
-            if let Some(row) = row {
+            if let Some(row) = self.read(&key).await? {
                 self.index.hydrate_metadata_row(key, row)?;
             } else if let ProducerMetadataKey::Session(session) = key {
                 self.new_sessions.insert(session);
@@ -165,9 +225,8 @@ impl Projection<'_> {
                     .get(&stream)
                     .ok_or("fork selected stream is not registered")?;
                 let key = ProducerMetadataKey::Position(stream, offset.producer_oplog_index());
-                let row =
-                    read_projection(self.storage, self.namespace.clone(), &key.field()?).await?;
-                let Some(ProducerMetadataRow::Position(first, count)) = row else {
+                let Some(ProducerMetadataRow::Position(first, count)) = self.read(&key).await?
+                else {
                     return Err("fork retained offset is not an item of the selected stream".into());
                 };
                 let sub = u64::from(offset.sub_index());

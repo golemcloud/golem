@@ -313,10 +313,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     }
 
     pub(crate) async fn record_recovery_failure(&self, error: &WorkerExecutorError) {
-        // A recovery that failed because the shard moved is recorded by nobody: the agent retires
-        // here and is recovered by the shard's new owner. The caller stops the worker right after
-        // this, and that stop is where the agent is dropped.
-        if self.retire_if_shard_lost(error) {
+        // An oplog that failed for good stays as it is: an error entry would record a read
+        // error as the outcome of the agent. The caller stops the worker and tells the waiters.
+        // A lost shard also retires the worker.
+        if self.retire_if_shard_lost(error) || is_failed_oplog(error) {
             return;
         }
 
@@ -782,12 +782,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         )
     }
 
-    /// A read error does not establish whether the invocation completed.
+    /// A read error does not establish whether the invocation completed. The lookup reads a
+    /// status that is a fold of the oplog: when an earlier fold failed, it folds again first and
+    /// gives the read error of that fold, not the result of the older publication.
     pub async fn lookup_invocation_result(
         &self,
         key: &InvocationId,
     ) -> Result<LookupResult, WorkerExecutorError> {
-        let status = self.state_actor.status().await;
+        let status = self.get_repaired_status().await?;
         self.lookup_invocation_result_in(status, key).await
     }
 
@@ -800,10 +802,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         key: &InvocationId,
     ) -> Result<LookupResult, WorkerExecutorError> {
-        let status = match self.state_actor.try_status().await {
-            Err(_) if self.retired_for_lost_shard() => Err(self.retirement_error()),
-            status => status,
-        }?;
+        let status = match self.state_actor.observe_repaired_status().await {
+            Ok(Some(status)) => status,
+            Ok(None) if self.retired_for_lost_shard() => return Err(self.retirement_error()),
+            Ok(None) => return Err(WorkerExecutorError::runtime("Worker status actor stopped")),
+            Err(error) => return Err(self.invocation_observation_error(error)),
+        };
         self.lookup_invocation_result_in(status, key)
             .await
             .map_err(|error| self.invocation_observation_error(error))
@@ -830,8 +834,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .filter(|error| matches!(error, WorkerExecutorError::InvalidShardId { .. }))
     }
 
-    /// The lookup in a status read from the state actor with `status` or `try_status`, which are
-    /// ordered after a preceding completion fold; `last_known_status` can lag behind it.
+    /// The lookup in a repaired status read from the state actor, which is ordered after a
+    /// preceding completion fold; `last_known_status` can lag behind it.
     async fn lookup_invocation_result_in(
         &self,
         // Kept as an `Arc` rather than cloned out of. The record owns `invocation_results`,
@@ -999,6 +1003,15 @@ pub(in crate::worker) fn invocation_result_index_unavailable(
             detail,
         },
     )
+}
+
+/// Whether `error` is an oplog that failed for good, also when a failed resume carries it.
+fn is_failed_oplog(error: &WorkerExecutorError) -> bool {
+    match error {
+        WorkerExecutorError::OplogFailed { .. } => true,
+        WorkerExecutorError::FailedToResumeAgent { reason, .. } => is_failed_oplog(reason),
+        _ => false,
+    }
 }
 
 pub(in crate::worker) fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {

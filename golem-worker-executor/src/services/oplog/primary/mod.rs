@@ -53,7 +53,7 @@ use golem_common::model::{
 };
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::{DecodeError, decode, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::{
     BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace,
@@ -75,10 +75,8 @@ mod service;
 mod state;
 mod storage;
 
-use reader::{primary_read_error, read_persisted_oplog_entries};
-use storage::{
-    retry_maintenance_storage_op, retry_oplog_append, retry_storage_op, retry_storage_op_result,
-};
+use reader::{read_persisted_oplog_entries, retry_primary_read};
+use storage::{retry_maintenance_storage_op, retry_oplog_append, retry_storage_op};
 
 enum SerializedOplogAppend {
     Entry((u64, Bytes)),

@@ -198,6 +198,8 @@ async fn collect_session(
     let mut stdout_error = None;
     let mut stderr_error = None;
     let mut result = None;
+    // `Err` is a session that did not finish, whose open streams get terminals. `Ok` holds the
+    // end the executor reported: a tool outcome, or an error that is not a tool outcome.
     let outcome = async {
         loop {
             let next_input = if !input_done && !input_in_flight { accepted.as_ref().and_then(|a| {
@@ -291,23 +293,21 @@ async fn collect_session(
                         }
                         Some(invocation_response::Response::Finished(completion)) => {
                             if let Some(invocation_session_completion::Outcome::Failure(failure)) = completion.outcome {
-                                let message = if failure.code == OPLOG_UNREADABLE_FAILURE_CODE {
+                                if failure.code == OPLOG_UNREADABLE_FAILURE_CODE {
                                     tracing::warn!(error = %failure.message, "Native tool invocation history is unreadable");
-                                    "native tool invocation failed".to_string()
-                                } else {
-                                    failure.message
-                                };
-                                return Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(message)), stdout, stderr));
+                                    return Ok(Err(ErrorData::internal_error("native tool invocation failed", None)));
+                                }
+                                return Ok(Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(failure.message)), stdout, stderr)));
                             }
                             if !stdout_done || !stderr_done { return Err(invalid("native session completed before tool output")); }
                             let result = result.ok_or_else(|| invalid("native tool completed without a result"))?;
                             if matches!(result, PublicExternalToolResult::Success(_)) && let Some(error) = stdout_error {
-                                return Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(error)), stdout, stderr));
+                                return Ok(Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(error)), stdout, stderr)));
                             }
                             if matches!(result, PublicExternalToolResult::Success(_)) && let Some(error) = stderr_error {
-                                return Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(error)), stdout, stderr));
+                                return Ok(Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(error)), stdout, stderr)));
                             }
-                            return Ok((result, stdout, stderr));
+                            return Ok(Ok((result, stdout, stderr)));
                         }
                         Some(invocation_response::Response::Rejected(rejected)) => return Err(invalid(rejected.error)),
                         _ => return Err(invalid("native tool attachment was revoked or returned an invalid frame")),
@@ -393,7 +393,7 @@ async fn collect_session(
         })
         .await;
     }
-    outcome
+    outcome?
 }
 
 fn project_result(
@@ -926,7 +926,7 @@ mod tests {
     }
 
     #[test]
-    async fn unreadable_history_finishes_with_open_stdout_without_exposing_storage_details() {
+    async fn unreadable_history_is_an_mcp_error_without_cancelling_open_stdout() {
         use golem_api_grpc::proto::golem::worker::v1::{
             RuntimeError, WorkerExecutionError, worker_execution_error,
         };
@@ -961,16 +961,59 @@ mod tests {
             })
         })));
         let (sender, mut receiver) = mpsc::channel(2);
-        let (result, stdout, stderr) =
-            collect_session(session, sender, None, true, false, CancellationToken::new())
-                .await
-                .unwrap();
+        let error = collect_session(session, sender, None, true, false, CancellationToken::new())
+            .await
+            .unwrap_err();
+
+        assert_eq!(error.code, rmcp::model::ErrorCode::INTERNAL_ERROR);
+        assert_eq!(error.message, "native tool invocation failed");
+        assert_eq!(error.data, None);
+        assert!(receiver.recv().await.is_none());
+    }
+
+    #[test]
+    async fn ordinary_execution_failure_is_still_a_tool_outcome() {
+        use golem_api_grpc::proto::golem::worker::{
+            InvocationFailure, InvocationFailureKind, InvocationResponse,
+            InvocationSessionCompletion,
+        };
+
+        let (mut session, accepted) = byte_session_with_outputs(false, false, false);
+        let frames = [
+            invocation_response::Response::Accepted(accepted),
+            invocation_response::Response::Finished(InvocationSessionCompletion {
+                outcome: Some(invocation_session_completion::Outcome::Failure(
+                    InvocationFailure {
+                        kind: InvocationFailureKind::Execution as i32,
+                        code: "worker-execution".into(),
+                        message: "tool failed".into(),
+                        worker_error: None,
+                    },
+                )),
+            }),
+        ];
+        session.responses = Box::pin(stream::iter(frames.into_iter().map(|response| {
+            Ok(InvocationResponse {
+                response: Some(response),
+            })
+        })));
+        let (sender, mut receiver) = mpsc::channel(2);
+        let (result, stdout, stderr) = collect_session(
+            session,
+            sender,
+            None,
+            false,
+            false,
+            CancellationToken::new(),
+        )
+        .await
+        .unwrap();
 
         assert!(matches!(result,
             PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(message))
-                if message == "native tool invocation failed"
+                if message == "tool failed"
         ));
-        assert_eq!(stdout, b"partial output");
+        assert!(stdout.is_empty());
         assert!(stderr.is_empty());
         assert!(receiver.recv().await.is_none());
     }

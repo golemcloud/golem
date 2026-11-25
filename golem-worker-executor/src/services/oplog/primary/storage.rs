@@ -121,16 +121,18 @@ fn stored_batch_matches(mut actual: Vec<(u64, Vec<u8>)>, expected: &[(u64, Bytes
         )
 }
 
+/// Reads back the indices of an append whose outcome is unknown. `Ok(None)` means storage holds
+/// none of them; a failed read is an error, never an absent batch.
 async fn stored_oplog_batch_matches(
     retry_config: &RetryConfig,
     indexed_storage: &(dyn IndexedStorage + Send + Sync),
     namespace: &IndexedStorageNamespace,
     key: &str,
     expected: &[(u64, Bytes)],
-) -> Option<bool> {
+) -> Result<Option<bool>, IndexedStorageError> {
     let first_id = expected.first().expect("non-empty oplog batch").0;
     let last_id = expected.last().expect("non-empty oplog batch").0;
-    retry_storage_op(retry_config, "append_reconcile", key, || {
+    retry_maintenance_storage_op(retry_config, "append_reconcile", key, || {
         let namespace = namespace.clone();
         async move {
             indexed_storage
@@ -193,6 +195,7 @@ pub(super) async fn retry_oplog_append(
 ) -> Result<(), IndexedStorageError> {
     let mut attempts = 0u32;
     let mut write_may_have_committed = false;
+    let mut reconcile_error: Option<IndexedStorageError> = None;
     loop {
         attempts += 1;
         let error = match append
@@ -244,8 +247,8 @@ pub(super) async fn retry_oplog_append(
             )
             .await
             {
-                Some(true) => return Ok(()),
-                Some(false) => {
+                Ok(Some(true)) => return Ok(()),
+                Ok(Some(false)) => {
                     // The stored content differs from what this attempt sent - the only
                     // legitimate way that happens is a new owner having already written those
                     // same indices. Repeat the write once as a probe: the backends check the
@@ -264,7 +267,17 @@ pub(super) async fn retry_oplog_append(
                         "Indexed storage operation '{op_name}' failed for key '{key}' and the indeterminate write did not match storage: {error}"
                     )
                 }
-                None => {}
+                Ok(None) => reconcile_error = None,
+                // The outcome stays unknown. A repeated write that conflicts reconciles again.
+                Err(error) => {
+                    warn!(
+                        op = op_name,
+                        key = key,
+                        error = %error,
+                        "Could not read back an indeterminate oplog write"
+                    );
+                    reconcile_error = Some(error);
+                }
             }
         }
 
@@ -282,7 +295,11 @@ pub(super) async fn retry_oplog_append(
             continue;
         }
 
-        if write_may_have_committed {
+        if let Some(reconcile_error) = reconcile_error {
+            panic!(
+                "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts and the indeterminate write could not be read back: {error}; read: {reconcile_error}"
+            );
+        } else if write_may_have_committed {
             panic!(
                 "Indexed storage operation '{op_name}' failed for key '{key}' after {attempts} attempts and the indeterminate write did not match storage: {error}"
             );

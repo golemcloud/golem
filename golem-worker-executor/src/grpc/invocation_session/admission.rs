@@ -19,8 +19,39 @@ use super::{
     Utc, Worker, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl,
     build_durable_streaming_request, from_proto_invocation_context, golem,
 };
+use crate::worker::read_only_cache::AdmissionSignal;
 use golem_common::model::InvocationRequestKey;
 use golem_common::model::caller::Caller;
+use tokio::sync::oneshot;
+
+/// Waits until a streaming Start is admitted or its invocation completes.
+///
+/// `Ok(None)`: the invocation is admitted and still runs. `Ok(Some(result))`: the invocation
+/// completed after admission, or completed with a success and no admission signal, as a cached
+/// result does. `Err`: admission failed, or the invocation failed before an admission signal.
+pub(super) async fn wait_streaming_start_admission(
+    mut invocation: Pin<
+        &mut impl Future<Output = Result<AgentInvocationOutput, WorkerExecutorError>>,
+    >,
+    mut admission: oneshot::Receiver<AdmissionSignal>,
+) -> Result<Option<Result<AgentInvocationOutput, WorkerExecutorError>>, WorkerExecutorError> {
+    tokio::select! {
+        biased;
+        signal = &mut admission => match signal {
+            Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate) => Ok(None),
+            Ok(AdmissionSignal::Failure(error)) => Err(error),
+            Ok(AdmissionSignal::Waiting) => unreachable!("waiting admission is never published"),
+            Err(_) => Ok(Some(Ok(invocation.await?))),
+        },
+        result = &mut invocation => {
+            if matches!(admission.try_recv(), Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate)) {
+                Ok(Some(result))
+            } else {
+                Ok(Some(Ok(result?)))
+            }
+        },
+    }
+}
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -437,37 +468,23 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         };
                     let replayed = worker.try_lookup_invocation_result(&ik).await?
                         != crate::model::LookupResult::New;
-                    let (admission_tx, mut admission_rx) = tokio::sync::oneshot::channel();
+                    let (admission_tx, admission_rx) = oneshot::channel();
                     let invocation = worker.clone().invoke_and_await_with_attachment(
                         invocation,
                         Some(admission_tx),
                         Some(attached.clone()),
                     );
                     tokio::pin!(invocation);
-                    use crate::worker::read_only_cache::AdmissionSignal;
-                    let completed = tokio::select! {
-                        biased;
-                        signal = &mut admission_rx => match signal {
-                            Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate) => None,
-                            Ok(AdmissionSignal::Failure(error)) => return Err(error),
-                            Ok(AdmissionSignal::Waiting) => unreachable!("waiting admission is never published"),
-                            Err(_) => return Err(invocation.await.err().unwrap_or_else(|| {
-                                WorkerExecutorError::runtime("streaming invocation completed without an admission signal")
-                            })),
-                        },
-                        result = &mut invocation => {
-                            if !matches!(admission_rx.try_recv(), Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate)) {
-                                result?;
-                                return Err(WorkerExecutorError::runtime("streaming invocation completed without an admission signal"));
-                            }
-                            Some(result)
-                        },
-                    };
+                    let completed =
+                        wait_streaming_start_admission(invocation.as_mut(), admission_rx).await?;
                     let retained = worker.retained_stream_attachment(&session_key).await?;
-                    let (streams, queued) = if let Some((_, retained)) = retained {
-                        if retained.acceptance != attached.acceptance
-                            || retained.attempt_id != attempt_id
-                        {
+                    let (streams, queued) = if let Some((index, retained)) = retained {
+                        if !worker.retained_attachment_matches(
+                            index,
+                            &retained,
+                            &attached.acceptance,
+                            attempt_id,
+                        )? {
                             return Err(WorkerExecutorError::invalid_request(
                                 "AttemptConflict: retained stream acceptance differs",
                             ));

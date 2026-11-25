@@ -22,7 +22,7 @@ use golem_schema::proto::golem::schema::{
 use serde_json::Value;
 use std::collections::VecDeque;
 use std::pin::Pin;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Context, Poll};
 use tokio::sync::{Mutex, Semaphore, mpsc};
 use tokio::time::{Duration, timeout};
@@ -1103,6 +1103,81 @@ async fn rejected_start_cleans_up_its_prepared_unkeyed_identity_exactly_once() {
         .unwrap();
     assert_eq!(agent, owned_agent());
     assert_eq!(key, InvocationId(uuid));
+    assert!(
+        timeout(Duration::from_millis(50), h.cleanups.recv())
+            .await
+            .is_err()
+    );
+}
+
+fn rejected_resume(
+    worker_error: Option<golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError>,
+) -> InvocationResponse {
+    response(invocation_response::Response::Rejected(
+        InvocationRejected {
+            reason: InvocationRejectionReason::Internal as i32,
+            error: "resume refused".into(),
+            idempotency_key: Some(key()),
+            agent_id: Some(proto_agent()),
+            component_revision: None,
+            worker_error,
+        },
+    ))
+}
+
+/// Starts a session, loses its transport after the first acceptance, and answers the Resume
+/// with `refusal`. Returns the session and the harness that records cleanup calls.
+async fn session_with_refused_resume(refusal: InvocationResponse) -> (HttpSession, Harness) {
+    let mut h = harness(2);
+    let mut session =
+        HttpSession::start_with_transport(start(), h.transport.clone(), limits()).unwrap();
+    let Call::Start(_, _) = call(&mut h.calls).await else {
+        panic!()
+    };
+    send(&h.response_txs[0], accepted(1, None)).await;
+    let _ = event(&mut session).await;
+    drop(h.response_txs.remove(0));
+    let Call::Resume(_, _) = call(&mut h.calls).await else {
+        panic!()
+    };
+    send(&h.response_txs[0], refusal).await;
+    assert!(matches!(
+        event(&mut session).await,
+        HttpSessionEvent::Error(HttpSessionError::Rejected)
+    ));
+    (session, h)
+}
+
+#[test]
+#[test_timeout("10s")]
+async fn resume_refused_on_an_unreadable_oplog_neither_cancels_nor_interrupts() {
+    use golem_api_grpc::proto::golem::worker::v1::{
+        RuntimeError, WorkerExecutionError, worker_execution_error,
+    };
+    let refusal = rejected_resume(Some(WorkerExecutionError {
+        error: Some(worker_execution_error::Error::RuntimeError(RuntimeError {
+            details: "The oplog of agent-7 failed: oplog entry 43 has unknown serialization \
+                      version 255"
+                .into(),
+        })),
+    }));
+    let (_session, mut h) = session_with_refused_resume(refusal).await;
+    assert!(
+        timeout(Duration::from_millis(150), h.cleanups.recv())
+            .await
+            .is_err()
+    );
+}
+
+#[test]
+#[test_timeout("10s")]
+async fn resume_refused_without_a_worker_error_still_cleans_up_exactly_once() {
+    let (_session, mut h) = session_with_refused_resume(rejected_resume(None)).await;
+    let (agent, _) = timeout(Duration::from_secs(1), h.cleanups.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(agent, owned_agent());
     assert!(
         timeout(Duration::from_millis(50), h.cleanups.recv())
             .await

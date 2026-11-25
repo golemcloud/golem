@@ -66,7 +66,12 @@ pub fn deserialize<T: BinaryDeserializer>(bytes: &[u8]) -> Result<T, String> {
     decode(bytes).map_err(|error| error.to_string())
 }
 
-/// Decodes versioned data without panicking or discarding the reason it does not decode.
+/// Decodes versioned data.
+///
+/// Returns `MissingVersion`, `UnknownVersion` or `UnsupportedVersion` when the version byte is
+/// missing or not supported. Returns `InvalidData` when the payload decoder returns an error. Its
+/// message names only the version, not the decoder error, because that error can contain stored
+/// values. This function does not catch a panic in the payload decoder.
 pub fn decode<T: BinaryDeserializer>(bytes: &[u8]) -> Result<T, DecodeError> {
     let (&version, data) = bytes.split_first().ok_or(DecodeError::MissingVersion)?;
     decode_with_version(data, version)

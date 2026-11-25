@@ -190,25 +190,9 @@ impl PrimaryOplogService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         retry_config: &RetryConfig,
-    ) -> OplogIndex {
-        Self::try_get_last_index_from_storage(
-            indexed_storage,
-            owned_agent_id,
-            agent_mode,
-            retry_config,
-        )
-        .await
-        .unwrap_or_else(|error| panic!("{error}"))
-    }
-
-    async fn try_get_last_index_from_storage(
-        indexed_storage: &(dyn IndexedStorage + Send + Sync),
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        retry_config: &RetryConfig,
-    ) -> Result<OplogIndex, String> {
+    ) -> Result<OplogIndex, OplogReadError> {
         let key = Self::oplog_key(owned_agent_id);
-        retry_storage_op_result(retry_config, "get_last_index", &key, || {
+        retry_primary_read(retry_config, "get_last_index", &key, || {
             Self::read_last_index(
                 indexed_storage,
                 Self::namespace(owned_agent_id, agent_mode),
@@ -216,6 +200,29 @@ impl PrimaryOplogService {
             )
         })
         .await
+    }
+
+    async fn read_exists(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        op_name: &'static str,
+        api_name: &'static str,
+    ) -> Result<bool, UnreadableOplog> {
+        let key = Self::oplog_key(owned_agent_id);
+        let indexed_storage = self.indexed_storage.as_ref();
+        let key_ref = key.as_str();
+        retry_primary_read(&self.retry_config, op_name, &key, || {
+            let namespace = Self::namespace(owned_agent_id, agent_mode);
+            async move {
+                indexed_storage
+                    .with("oplog", api_name)
+                    .exists(namespace, key_ref)
+                    .await
+            }
+        })
+        .await
+        .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))
     }
 
     async fn read_last_index(
@@ -488,21 +495,11 @@ impl OplogService for PrimaryOplogService {
         };
 
         if fence_at_create.is_none() {
-            let already_exists: bool = {
-                let is = self.indexed_storage.clone();
-                let ns_owner = owned_agent_id.clone();
-                let key = key.clone();
-                retry_storage_op(&self.retry_config, "create_exists", &key, || {
-                    let is = is.clone();
-                    let ns = IndexedStorageNamespace::OpLog {
-                        owned_agent_id: ns_owner.clone(),
-                        agent_mode,
-                    };
-                    let key = key.clone();
-                    async move { is.with("oplog", "create").exists(ns, &key).await }
-                })
+            // A failed probe fails the create before the initial entry is written.
+            let already_exists = self
+                .read_exists(owned_agent_id, agent_mode, "create_exists", "create")
                 .await
-            };
+                .map_err(WorkerExecutorError::from)?;
 
             if already_exists {
                 panic!("oplog for worker {owned_agent_id} already exists in indexed storage")
@@ -626,31 +623,14 @@ impl OplogService for PrimaryOplogService {
         agent_mode: AgentMode,
     ) -> Result<OplogIndex, UnreadableOplog> {
         record_oplog_call("get_last_index");
-        let key = Self::oplog_key(owned_agent_id);
-        retry_maintenance_storage_op(&self.retry_config, "get_last_index", &key, || {
-            Self::read_last_index(
-                self.indexed_storage.as_ref(),
-                Self::namespace(owned_agent_id, agent_mode),
-                &key,
-            )
-        })
-        .await
-        .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, primary_read_error(error)))
-    }
-
-    async fn try_get_last_index(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-    ) -> Result<OplogIndex, String> {
-        record_oplog_call("get_last_index");
-        Self::try_get_last_index_from_storage(
+        Self::get_last_index_from_storage(
             &*self.indexed_storage,
             owned_agent_id,
             agent_mode,
             &self.retry_config,
         )
         .await
+        .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))
     }
 
     async fn assert_owning_epoch(
@@ -752,29 +732,20 @@ impl OplogService for PrimaryOplogService {
             return Ok(BTreeMap::new());
         };
 
-        Ok({
-            let is = self.indexed_storage.clone();
-            let ns_owner = owned_agent_id.clone();
-            let key = Self::oplog_key(owned_agent_id);
-            let start: u64 = idx.into();
-            let end: u64 = end.into();
-            retry_maintenance_storage_op(&self.retry_config, "read", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    owned_agent_id: ns_owner.clone(),
-                    agent_mode,
-                };
-                let key = key.clone();
-                async move { read_persisted_oplog_entries(is, ns, key, start, end).await }
-            })
-            .await
-            .map_err(|error| {
-                UnreadableOplog::new(&owned_agent_id.agent_id, primary_read_error(error))
-            })?
-            .into_iter()
-            .map(|(k, v): (u64, OplogEntry)| (OplogIndex::from_u64(k), v))
-            .collect()
-        })
+        Ok(read_persisted_oplog_entries(
+            self.indexed_storage.clone(),
+            &self.retry_config,
+            "read",
+            Self::namespace(owned_agent_id, agent_mode),
+            &Self::oplog_key(owned_agent_id),
+            idx.into(),
+            end.into(),
+        )
+        .await
+        .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, error))?
+        .into_iter()
+        .map(|(k, v)| (OplogIndex::from_u64(k), v))
+        .collect())
     }
 
     async fn exists(
@@ -782,34 +753,9 @@ impl OplogService for PrimaryOplogService {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
     ) -> Result<bool, UnreadableOplog> {
-        Ok(self
-            .try_exists(owned_agent_id, agent_mode)
-            .await
-            .unwrap_or_else(|error| panic!("{error}")))
-    }
-
-    async fn try_exists(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-    ) -> Result<bool, String> {
         record_oplog_call("exists");
-
-        Ok({
-            let is = self.indexed_storage.clone();
-            let ns_owner = owned_agent_id.clone();
-            let key = Self::oplog_key(owned_agent_id);
-            retry_storage_op_result(&self.retry_config, "exists", &key, || {
-                let is = is.clone();
-                let ns = IndexedStorageNamespace::OpLog {
-                    owned_agent_id: ns_owner.clone(),
-                    agent_mode,
-                };
-                let key = key.clone();
-                async move { is.with("oplog", "exists").exists(ns, &key).await }
-            })
-            .await?
-        })
+        self.read_exists(owned_agent_id, agent_mode, "exists", "exists")
+            .await
     }
 
     async fn scan_for_type(

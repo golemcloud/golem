@@ -989,7 +989,7 @@ type DecodedStreamExecution = (
     (Option<Vec<(String, String)>>, bool, bool),
 );
 
-fn decode_stream_execution(bytes: &[u8]) -> Result<DecodedStreamExecution, DecodeError> {
+pub(super) fn decode_stream_execution(bytes: &[u8]) -> Result<DecodedStreamExecution, DecodeError> {
     let (configuration, environment, stdout, stderr): StreamExecutionConfig =
         golem_common::serialization::decode(bytes)?;
     let request =

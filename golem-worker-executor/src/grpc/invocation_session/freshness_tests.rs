@@ -63,6 +63,287 @@ use std::collections::BTreeMap;
 use std::task::Poll;
 use test_r::test;
 
+mod retained_admission {
+    use super::*;
+    use crate::Bootstrap;
+    use crate::services::component::ComponentService;
+    use crate::services::golem_config::{
+        FilesystemStorageMode, GolemConfig, IndexedStorageConfig, IndexedStorageInMemoryConfig,
+        KeyValueStorageConfig, KeyValueStorageInMemoryConfig, ResourceLimitsConfig,
+        ResourceLimitsDisabledConfig, SchedulerStorageConfig, SchedulerStorageInMemoryConfig,
+    };
+    use crate::services::oplog::tests::{
+        create_test_entry, default_execution_status, default_last_known_status,
+    };
+    use crate::services::oplog::{CommitLevel, DurableStreamOplogRecord, OplogOps};
+    use crate::services::worker_activator::LazyWorkerActivator;
+    use crate::services::{HasOplogService, HasShardService, NoAdditionalDeps};
+    use crate::worker::Worker;
+    use crate::workerctx::default::Context;
+    use async_trait::async_trait;
+    use golem_common::model::account::{AccountEmail, AccountId};
+    use golem_common::model::agent::OwnerKind;
+    use golem_common::model::application::ApplicationId;
+    use golem_common::model::component::ComponentId;
+    use golem_common::model::durable_stream::{
+        AttemptId, StreamSessionAttachedRecord, StreamSessionRecord,
+    };
+    use golem_common::model::oplog::OplogEntry;
+    use golem_common::model::sharding::ShardEpoch;
+    use golem_common::model::{AgentMetadata, OwnedAgentId, ShardId};
+    use golem_service_base::clients::registry::RegistryService;
+    use golem_service_base::config::{BlobStorageConfig, InMemoryBlobStorageConfig};
+    use golem_service_base::model::component::Component;
+    use golem_service_base::storage::blob::BlobStorage;
+    use std::sync::Arc;
+    use test_r::test;
+
+    struct RetainedStartBootstrap(Component);
+
+    impl Bootstrap<Context> for RetainedStartBootstrap {
+        fn create_additional_deps(&self, _: Arc<dyn RegistryService>) -> NoAdditionalDeps {
+            NoAdditionalDeps::new()
+        }
+
+        fn create_component_service(
+            &self,
+            _: &GolemConfig,
+            _: Arc<dyn RegistryService>,
+            _: Arc<dyn BlobStorage>,
+        ) -> Arc<dyn ComponentService> {
+            Arc::new(Self(self.0.clone()))
+        }
+
+        fn create_wasmtime_linker(
+            &self,
+            engine: &wasmtime::Engine,
+        ) -> anyhow::Result<wasmtime::component::Linker<Context>> {
+            Ok(wasmtime::component::Linker::new(engine))
+        }
+    }
+
+    #[async_trait]
+    #[golem_async_trait::region_simple]
+    impl ComponentService for RetainedStartBootstrap {
+        async fn get(
+            &self,
+            _engine: &wasmtime::Engine,
+            _component_id: ComponentId,
+            _revision: ComponentRevision,
+        ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
+            panic!("a refused retained retry must not start the worker")
+        }
+
+        async fn get_metadata(
+            &self,
+            id: ComponentId,
+            _revision: Option<ComponentRevision>,
+        ) -> Result<Component, WorkerExecutorError> {
+            assert_eq!(id, self.0.id);
+            Ok(self.0.clone())
+        }
+
+        async fn resolve_component(
+            &self,
+            _component_name: String,
+            _environment_id: EnvironmentId,
+            _application_id: ApplicationId,
+            _account_id: AccountId,
+        ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+            unreachable!()
+        }
+
+        async fn all_cached_metadata(&self) -> Vec<Component> {
+            vec![self.0.clone()]
+        }
+
+        async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn retained_stream_retry_refuses_unreadable_configuration_at_its_attachment_index() {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let (request, component_metadata, invocation) = builder_fixture();
+        let component = Component {
+            id: ComponentId(uuid::Uuid::from_u128(1)),
+            revision: ComponentRevision::INITIAL,
+            environment_id: request.environment_id.unwrap().try_into().unwrap(),
+            component_name: golem_common::model::component::ComponentName("test-component".into()),
+            hash: golem_common::model::diff::Hash::empty(),
+            application_id: ApplicationId::new(),
+            account_id: AccountId::new(),
+            account_email: AccountEmail::new("test@golem"),
+            application_name: "test-app".parse().unwrap(),
+            environment_name: "test-env".parse().unwrap(),
+            component_size: 100,
+            metadata: component_metadata,
+            created_at: chrono::Utc::now(),
+            wasm_hash: golem_common::model::diff::Hash::empty(),
+            package_metadata: None,
+            object_store_key: "test-object".into(),
+        };
+        let owner = OwnedAgentId::new(component.environment_id, &callee_of(&request));
+        let fingerprint = AgentFingerprint(uuid::Uuid::from_u128(3));
+        let mut create = create_test_entry(
+            owner.agent_id,
+            AgentMode::Durable,
+            component.revision,
+            owner.environment_id,
+            component.account_id,
+            fingerprint.0,
+        );
+        let OplogEntry::Create { parameters, .. } = &mut create else {
+            unreachable!()
+        };
+        parameters.agent_type_name = Some(AgentTypeName("test-agent".into()));
+        parameters.constructor_parameters = Some(String::new());
+        let metadata = AgentMetadata {
+            component_id: component.id,
+            agent_type_name: parameters.agent_type_name.clone(),
+            canonical_key: None,
+            constructor_parameters: parameters.constructor_parameters.clone(),
+            agent_id: owner.agent_id,
+            owner_kind: OwnerKind::ComponentAgent,
+            env: vec![],
+            environment_id: owner.environment_id,
+            created_by: component.account_id,
+            created_by_email: component.account_email.clone(),
+            config: vec![],
+            created_at: golem_common::model::Timestamp::now_utc(),
+            parent: None,
+            last_known_status: Default::default(),
+            fingerprint,
+            agent_mode: AgentMode::Durable,
+            create_request: parameters.create_request.clone(),
+        };
+        let mut config = GolemConfig {
+            key_value_storage: KeyValueStorageConfig::InMemory(KeyValueStorageInMemoryConfig {}),
+            indexed_storage: IndexedStorageConfig::InMemory(IndexedStorageInMemoryConfig {}),
+            scheduler_storage: SchedulerStorageConfig::InMemory(SchedulerStorageInMemoryConfig {}),
+            blob_storage: BlobStorageConfig::InMemory(InMemoryBlobStorageConfig {}),
+            resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
+            ..Default::default()
+        };
+        config.set_golem_issuer(crate::test_callers::TEST_ISSUER.parse().unwrap());
+        config.filesystem_storage.mode = FilesystemStorageMode::Temporary;
+        config.engine.enable_fs_cache = false;
+        let shutdown = crate::services::shutdown::Shutdown::new();
+        let _shutdown = shutdown.token().drop_guard();
+        let (services, _epoch, _) = crate::create_worker_executor_impl(
+            config,
+            &RetainedStartBootstrap(component),
+            tokio::runtime::Handle::current(),
+            &Arc::new(LazyWorkerActivator::new()),
+            shutdown.clone(),
+            &mut tokio::task::JoinSet::new(),
+        )
+        .await
+        .unwrap();
+        services
+            .shard_service()
+            .install_unexpiring(1, &[(ShardId::new(0), ShardEpoch(0))].into());
+        let oplog_service = services.oplog_service();
+        let oplog = oplog_service
+            .create_fresh(
+                &mut oplog_service.lock_lifecycle(&owner.agent_id).await,
+                &owner,
+                AgentMode::Durable,
+                create,
+                metadata,
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                None,
+            )
+            .await
+            .unwrap();
+        let key = *invocation.idempotency_key().unwrap();
+        let attempt = AttemptId(uuid::Uuid::new_v4());
+        let mut acceptance =
+            super::super::request::capture_session_acceptance(&request, 8).unwrap();
+        acceptance.public_session_id = key.to_string();
+        let proposed = StreamSessionAttachedRecord {
+            format_version: DURABLE_STREAM_FORMAT_VERSION,
+            session_key: key,
+            attachment_id: AttachmentId::primary(owner.environment_id, &owner.agent_id, &key)
+                .unwrap(),
+            attempt_id: attempt,
+            epoch: 1,
+            pending_invocation_oplog_index: OplogIndex::INITIAL.next(),
+            acceptance,
+        };
+        let (_, payload, context) = invocation.clone().into_parts();
+        let (operation, payload) = oplog.upload_request(payload).await.unwrap();
+        assert_eq!(
+            oplog
+                .add(OplogEntry::pending_agent_invocation(
+                    None,
+                    key,
+                    Box::new(operation),
+                    payload,
+                    context.trace_id.clone(),
+                    context.trace_states.clone(),
+                    context.to_oplog_data(),
+                ))
+                .await
+                .unwrap(),
+            proposed.pending_invocation_oplog_index,
+        );
+        let mut retained = proposed.clone();
+        retained.acceptance.execution_config = vec![99];
+        let attachment_index = oplog
+            .add(
+                DurableStreamOplogRecord::Session(
+                    None,
+                    Box::new(StreamSessionRecord::Attached(retained)),
+                )
+                .into_inline_entry(),
+            )
+            .await
+            .unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+        drop(oplog);
+
+        let worker = Worker::get_exact_existing_suspended(&services, &owner)
+            .await
+            .unwrap();
+        let conflicting = StreamSessionAttachedRecord {
+            attempt_id: AttemptId(uuid::Uuid::new_v4()),
+            ..proposed.clone()
+        };
+        let error = worker
+            .clone()
+            .invoke_and_await_with_attachment(invocation.clone(), None, Some(conflicting))
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(error, WorkerExecutorError::InvalidRequest { details }
+            if details.starts_with("AttemptConflict:"))
+        );
+
+        let error = worker
+            .clone()
+            .invoke_and_await_with_attachment(invocation, None, Some(proposed))
+            .await
+            .unwrap_err();
+        let expected = format!(
+            "at oplog index {attachment_index}: corrupt payload: unknown serialization version: 99"
+        );
+        assert!(
+            matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details }
+            if *agent_id == owner.agent_id && details.contains("stream execution config")
+                && details.contains(&expected)),
+            "{error:?}"
+        );
+        assert_eq!(
+            crate::services::HasOplog::oplog(worker.as_ref())
+                .current_oplog_index()
+                .await,
+            attachment_index
+        );
+    }
+}
+
 #[test]
 async fn response_retention_survives_queued_frames_until_drain_or_drop() {
     use futures::StreamExt;
@@ -1385,6 +1666,56 @@ async fn dropped_acceptance_sender_preserves_invocation_output() {
         race,
         AcceptanceRace::InvocationFinished("invocation error")
     ));
+}
+
+#[test]
+async fn streaming_start_admits_cached_scalar_output_without_a_notifier() {
+    use super::admission::wait_streaming_start_admission;
+    use golem_common::model::{AgentInvocationOutput, AgentInvocationResult};
+    use tokio::sync::oneshot;
+
+    let output = AgentInvocationOutput {
+        result: AgentInvocationResult::AgentInitialization,
+        consumed_fuel: Some(42),
+        invocation_status: None,
+        component_revision: None,
+        agent_id: None,
+        idempotency_key: None,
+        oplog_index: Some(OplogIndex::from_u64(10)),
+        agent_fingerprint: None,
+        background_failure: None,
+    };
+    let (tx, rx) = oneshot::channel();
+    let invocation = async {
+        drop(tx);
+        Ok(output.clone())
+    };
+    tokio::pin!(invocation);
+    assert_eq!(
+        wait_streaming_start_admission(invocation.as_mut(), rx).await,
+        Ok(Some(Ok(output.clone()))),
+    );
+
+    let (tx, rx) = oneshot::channel();
+    drop(tx);
+    let invocation = future::ready(Ok(output.clone()));
+    tokio::pin!(invocation);
+    assert_eq!(
+        wait_streaming_start_admission(invocation.as_mut(), rx).await,
+        Ok(Some(Ok(output.clone()))),
+    );
+
+    let (tx, rx) = oneshot::channel();
+    let error = WorkerExecutorError::recovery_required("temporary result read failure");
+    let invocation = async {
+        drop(tx);
+        Err(error.clone())
+    };
+    tokio::pin!(invocation);
+    assert_eq!(
+        wait_streaming_start_admission(invocation.as_mut(), rx).await,
+        Err(error.clone()),
+    );
 }
 
 #[test]

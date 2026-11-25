@@ -7269,65 +7269,310 @@ async fn incremental_fold_does_not_download_payload_reverted_in_later_chunk() {
     );
 }
 
-// --------------------------------------------------------------------------
-// U2: Checkpoint state tracking — calculate_oplog_processor_checkpoints
-// --------------------------------------------------------------------------
-
 #[test]
-async fn unreadable_delivery_snapshots_refold_caches_and_fail_authoritative_history() {
-    futures::stream::iter([Vec::new(), vec![255], vec![1], vec![2]])
-        .for_each(|delivery| async move {
-            let mut test_case = TestCase::builder(0).build();
-            let expected = test_case.entries.last().unwrap().expected_status.clone();
-            let grant = EnvironmentPluginGrantId::new();
-            let mut cached = expected.clone();
-            cached.oplog_processor_checkpoints.insert(
-                grant,
-                OplogProcessorCheckpointState {
-                    target_agent_id: Some(test_case.owned_agent_id.agent_id),
-                    confirmed_up_to: OplogIndex::NONE,
-                    sending_up_to: OplogIndex::INITIAL,
-                    last_batch_start: OplogIndex::INITIAL,
-                    delivery: Some(delivery.clone()),
-                },
-            );
-            let rebuilt = calculate_last_known_status_for_existing_worker(
-                &test_case,
-                &test_case.owned_agent_id,
-                AgentMode::Durable,
-                Some(cached),
-            )
-            .await
-            .unwrap();
-            assert_eq!(rebuilt, expected);
+async fn inline_dns_decode_failure_names_the_agent_and_entry_without_panicking() {
+    use crate::services::oplog::{OplogReadError, OplogReadSource, OplogRefusal};
+    use crate::worker::state_actor::reconstructed_status;
+    use golem_common::model::oplog::HostRequestNetworkDnsResolve;
+    use golem_common::model::oplog::types::SerializableDnsRecordType;
 
+    futures::stream::iter([true, false])
+        .for_each(|bad_request| async move {
+            let mut test_case = TestCase::builder(1).build();
+            let mut start = OplogEntry::Start {
+                timestamp: Timestamp::now_utc(),
+                function_name: HostFunctionName::GolemNetworkDnsResolve,
+                durable_function_type: DurableFunctionType::ReadRemote,
+                request: Some(OplogPayload::Inline(Box::new(HostRequest::NetworkDnsResolve(
+                    HostRequestNetworkDnsResolve {
+                        name: "example.test".to_string(),
+                        record_type: SerializableDnsRecordType::A,
+                    },
+                )))),
+                parent_start_index: None,
+                invocation_id: None,
+                observational_owner: None,
+                driver: None,
+                span_started: None,
+                denial: None,
+            };
+            if bad_request {
+                let OplogEntry::Start { request, .. } = &mut start else {
+                    unreachable!()
+                };
+                *request = Some(OplogPayload::SerializedInline {
+                    bytes: vec![255],
+                    cached: None,
+                });
+            }
             test_case.entries.push(TestEntry {
-                oplog_entry: OplogEntry::OplogProcessorCheckpoint {
-                    timestamp: Timestamp::now_utc(),
-                    plugin_grant_id: grant,
-                    target_agent_id: test_case.owned_agent_id.agent_id,
-                    confirmed_up_to: OplogIndex::NONE,
-                    sending_up_to: OplogIndex::INITIAL,
-                    last_batch_start: OplogIndex::INITIAL,
-                    source_component_revision: ComponentRevision::INITIAL,
-                    delivery: Some(delivery),
-                },
-                expected_status: expected,
+                oplog_entry: start,
+                expected_status: AgentStatusRecord::default(),
             });
-            let error = calculate_last_known_status_for_existing_worker(
+            if !bad_request {
+                test_case.entries.push(TestEntry {
+                    oplog_entry: OplogEntry::End {
+                        timestamp: Timestamp::now_utc(),
+                        start_index: OplogIndex::from_u64(2),
+                        response: Some(OplogPayload::SerializedInline {
+                            bytes: vec![255],
+                            cached: None,
+                        }),
+                        forced_commit: false,
+                        span_finished: None,
+                        span_attributes: None,
+                    },
+                    expected_status: AgentStatusRecord::default(),
+                });
+            }
+            let status = calculate_last_known_status(
                 &test_case,
                 &test_case.owned_agent_id,
                 AgentMode::Durable,
                 None,
             )
-            .await
-            .unwrap_err();
-            assert!(matches!(&error, super::StatusError::Unreadable(_)));
-            let message = error.to_string();
-            assert!(message.contains("oplog index 2"), "{message}");
-            assert!(message.contains("version"), "{message}");
+            .await;
+            let Err(OplogRefusal::Unreadable(error)) = reconstructed_status(status) else {
+                panic!("expected the actor to refuse unreadable DNS history");
+            };
+            assert_eq!(error.agent_id, test_case.owned_agent_id.agent_id);
+            assert_eq!(
+                error.error,
+                OplogReadError::Corruption {
+                    source: OplogReadSource::Other("address lookup payload"),
+                    detail: format!(
+                        "failed to load payload at oplog index {}: unknown serialization version: 255",
+                        if bad_request { 2 } else { 3 },
+                    ),
+                }
+            );
         })
         .await;
+}
+
+/// The fold of a commit through an opened, buffered oplog and the read of the entries that a
+/// revert keeps both refuse the last entry of `test_case` with `expected`, and add no entry.
+async fn buffered_and_revert_reads_refuse_without_new_entries(
+    test_case: &TestCase,
+    expected: crate::services::oplog::OplogReadError,
+) {
+    use crate::services::oplog::{CommitLevel, gated_ephemeral_fixture};
+    use crate::worker::status::hydrate_stream_session_payloads;
+
+    let fixture = gated_ephemeral_fixture(100).await;
+    fixture.archive.release(100);
+    for entry in &test_case.entries {
+        fixture.oplog.add(entry.oplog_entry.clone()).await.unwrap();
+    }
+    let sampled = fixture.oplog.current_oplog_index().await;
+    let receipt = fixture.oplog.commit(CommitLevel::Always).await.unwrap();
+    let (result, _, _) = fold_committed_status(
+        test_case,
+        &test_case.owned_agent_id,
+        fixture.oplog.as_ref(),
+        AgentMode::Ephemeral,
+        CommitLevel::Always,
+        sampled,
+        test_case.entries[0].expected_status.clone(),
+        receipt,
+    )
+    .await;
+    let Err(super::StatusError::Unreadable(error)) = result else {
+        panic!("expected the buffered fold to refuse the entry: {result:?}");
+    };
+    assert_eq!(error.agent_id, test_case.owned_agent_id.agent_id);
+    assert_eq!(error.error, expected);
+    assert_eq!(fixture.oplog.current_oplog_index().await, sampled);
+    assert!(
+        fixture
+            .oplog
+            .commit(CommitLevel::Always)
+            .await
+            .unwrap()
+            .is_empty()
+    );
+
+    let mut retained = test_case
+        .entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            (
+                OplogIndex::from_u64(index as u64 + 1),
+                entry.oplog_entry.clone(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let before = retained.clone();
+    let Err(super::StatusError::Unreadable(error)) = hydrate_stream_session_payloads(
+        test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        &DeletedRegions::default(),
+        &mut retained,
+    )
+    .await
+    else {
+        panic!("expected the revert read to refuse the entry");
+    };
+    assert_eq!(error.error, expected);
+    assert_eq!(retained, before);
+    fixture.oplog.retire();
+    fixture.oplog.closed().await.unwrap();
+}
+
+// --------------------------------------------------------------------------
+// U2: Checkpoint state tracking — calculate_oplog_processor_checkpoints
+// --------------------------------------------------------------------------
+
+#[test]
+async fn in_flight_processor_checkpoint_without_delivery_is_not_a_status_baseline() {
+    use crate::services::oplog::{OplogReadError, OplogReadSource};
+
+    let mut test_case = TestCase::builder(1).build();
+    let expected = test_case.entries[0].expected_status.clone();
+    let grant = EnvironmentPluginGrantId::new();
+    let mut cached = expected.clone();
+    cached.oplog_processor_checkpoints.insert(
+        grant,
+        OplogProcessorCheckpointState {
+            target_agent_id: Some(test_case.owned_agent_id.agent_id),
+            confirmed_up_to: OplogIndex::NONE,
+            sending_up_to: OplogIndex::INITIAL,
+            last_batch_start: OplogIndex::INITIAL,
+            delivery: None,
+        },
+    );
+    let read = |cached| {
+        calculate_last_known_status_for_existing_worker(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            cached,
+        )
+    };
+    assert_eq!(read(Some(cached)).await.unwrap(), expected);
+
+    test_case.entries.push(TestEntry {
+        oplog_entry: OplogEntry::OplogProcessorCheckpoint {
+            timestamp: Timestamp::now_utc(),
+            plugin_grant_id: grant,
+            target_agent_id: test_case.owned_agent_id.agent_id,
+            confirmed_up_to: OplogIndex::NONE,
+            sending_up_to: OplogIndex::INITIAL,
+            last_batch_start: OplogIndex::INITIAL,
+            source_component_revision: ComponentRevision::INITIAL,
+            delivery: None,
+        },
+        expected_status: expected,
+    });
+    let Err(super::StatusError::Unreadable(error)) = calculate_last_known_status(
+        &test_case,
+        &test_case.owned_agent_id,
+        AgentMode::Durable,
+        None,
+    )
+    .await
+    else {
+        panic!("expected a retained in-flight checkpoint without a delivery snapshot to fail");
+    };
+    assert_eq!(error.agent_id, test_case.owned_agent_id.agent_id);
+    let expected_error = OplogReadError::Corruption {
+        source: OplogReadSource::Other("oplog processor delivery"),
+        detail: "in-flight checkpoint at oplog index 2 has no delivery snapshot".to_string(),
+    };
+    assert_eq!(error.error, expected_error);
+    buffered_and_revert_reads_refuse_without_new_entries(&test_case, expected_error).await;
+    let OplogEntry::OplogProcessorCheckpoint {
+        confirmed_up_to, ..
+    } = &mut test_case.entries[1].oplog_entry
+    else {
+        unreachable!()
+    };
+    *confirmed_up_to = OplogIndex::INITIAL;
+    assert_eq!(
+        calculate_last_known_status_for_existing_worker(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            None,
+        )
+        .await
+        .unwrap()
+        .oplog_idx,
+        OplogIndex::from_u64(2),
+    );
+}
+
+#[test]
+async fn unreadable_delivery_snapshots_refold_caches_and_fail_authoritative_history() {
+    use crate::services::oplog::{OplogReadError, OplogReadSource};
+
+    futures::stream::iter([
+        (Vec::new(), "missing serialization version"),
+        (vec![255], "unknown serialization version: 255"),
+        (vec![1], "serialization version 1 is no longer supported"),
+        (vec![2], "serialization version 2 is no longer supported"),
+        (vec![3], "invalid data for serialization version 3"),
+    ])
+    .for_each(|(delivery, diagnostic)| async move {
+        let mut test_case = TestCase::builder(0).build();
+        let expected = test_case.entries.last().unwrap().expected_status.clone();
+        let grant = EnvironmentPluginGrantId::new();
+        let mut cached = expected.clone();
+        cached.oplog_processor_checkpoints.insert(
+            grant,
+            OplogProcessorCheckpointState {
+                target_agent_id: Some(test_case.owned_agent_id.agent_id),
+                confirmed_up_to: OplogIndex::NONE,
+                sending_up_to: OplogIndex::INITIAL,
+                last_batch_start: OplogIndex::INITIAL,
+                delivery: Some(delivery.clone()),
+            },
+        );
+        let rebuilt = calculate_last_known_status_for_existing_worker(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            Some(cached),
+        )
+        .await
+        .unwrap();
+        assert_eq!(rebuilt, expected);
+
+        test_case.entries.push(TestEntry {
+            oplog_entry: OplogEntry::OplogProcessorCheckpoint {
+                timestamp: Timestamp::now_utc(),
+                plugin_grant_id: grant,
+                target_agent_id: test_case.owned_agent_id.agent_id,
+                confirmed_up_to: OplogIndex::NONE,
+                sending_up_to: OplogIndex::INITIAL,
+                last_batch_start: OplogIndex::INITIAL,
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: Some(delivery),
+            },
+            expected_status: expected,
+        });
+        let error = calculate_last_known_status_for_existing_worker(
+            &test_case,
+            &test_case.owned_agent_id,
+            AgentMode::Durable,
+            None,
+        )
+        .await
+        .unwrap_err();
+        let super::StatusError::Unreadable(error) = error else {
+            panic!("expected unreadable history, got {error:?}");
+        };
+        assert_eq!(error.agent_id, test_case.owned_agent_id.agent_id);
+        let expected_error = OplogReadError::Corruption {
+            source: OplogReadSource::Other("oplog processor delivery"),
+            detail: format!("failed to decode delivery at oplog index 2: {diagnostic}"),
+        };
+        assert_eq!(error.error, expected_error);
+        buffered_and_revert_reads_refuse_without_new_entries(&test_case, expected_error).await;
+    })
+    .await;
 }
 
 #[test]

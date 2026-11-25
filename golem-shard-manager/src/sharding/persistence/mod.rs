@@ -84,8 +84,11 @@ pub trait RoutingTablePersistence: Send + Sync {
 
 /// Decodes a persisted state blob and refuses to load one that violates the state invariants.
 fn decode_shard_state(bytes: &[u8]) -> Result<ShardLeaseState, ShardManagerError> {
-    let shard_state: ShardLeaseState =
-        decode(bytes).map_err(|error| ShardManagerError::SerializationError(error.to_string()))?;
+    let shard_state: ShardLeaseState = decode(bytes).map_err(|error| {
+        ShardManagerError::SerializationError(format!(
+            "failed to decode persisted shard lease state: {error}"
+        ))
+    })?;
     shard_state.check_invariants().map_err(|violation| {
         ShardManagerError::SerializationError(format!(
             "persisted shard lease state violates invariants: {violation}"
@@ -201,7 +204,10 @@ mod tests {
     fn empty_blob_is_rejected() {
         match decode_shard_state(&[]) {
             Err(ShardManagerError::SerializationError(msg)) => {
-                assert_eq!(msg, "missing serialization version");
+                assert_eq!(
+                    msg,
+                    "failed to decode persisted shard lease state: missing serialization version"
+                );
             }
             other => panic!("expected SerializationError, got {other:?}"),
         }

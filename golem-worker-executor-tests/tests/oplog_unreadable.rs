@@ -24,7 +24,8 @@ use futures::stream::BoxStream;
 use golem_common::model::agent::{AgentMode, AgentTypeName, ParsedAgentKey};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::host_functions::HostFunctionName;
-use golem_common::model::oplog::{OplogEntry, OplogIndex, PublicOplogEntry};
+use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload, PublicOplogEntry};
+use golem_common::model::worker::UpdateRecord;
 use golem_common::model::{
     AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, ScanCursor, ShardAssignment, ShardId,
 };
@@ -58,7 +59,7 @@ use golem_worker_executor_test_utils::{
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
@@ -482,6 +483,184 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
     Ok(())
 }
 
+#[test]
+#[timeout("4m")]
+async fn unreadable_replay_payloads_do_not_settle_an_automatic_update(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let check = async |corrupt_started| -> anyhow::Result<()> {
+        let context = TestContext::new(last_unique_id);
+        let config = OplogConfig {
+            indexed_storage_layers: 1,
+            blob_storage_layers: 0,
+            ..Default::default()
+        };
+        let executor = start_with_oplog_config(deps, &context, Some(config.clone())).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_counters)
+            .store()
+            .await?;
+        let agent = agent_key!("Counter", "unreadable-replay-payload");
+        let healthy = agent_key!("Counter", "healthy-next-to-unreadable-update");
+        let agent_id = executor.start_agent(&component.id, agent.clone()).await?;
+        let healthy_id = executor.start_agent(&component.id, healthy.clone()).await?;
+        let key = IdempotencyKey::fresh();
+        let invocation_id = executor
+            .external_invocation_key(&agent_id.agent_id, &key, "increment")
+            .await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent_with_key(
+                    &component,
+                    &agent,
+                    &key,
+                    "increment",
+                    data_value!()
+                )
+                .await?
+                .into_typed::<u32>()?,
+            1
+        );
+        executor
+            .wait_for_status(&agent_id, AgentStatus::Idle, Duration::from_secs(30))
+            .await?;
+        executor.interrupt(&agent_id).await?;
+        executor
+            .wait_for_status(&agent_id, AgentStatus::Interrupted, Duration::from_secs(30))
+            .await?;
+        let target = executor
+            .update_component(&component.id, "it_agent_counters_release")
+            .await?;
+        executor
+            .auto_update_worker(&agent_id, target.revision, true)
+            .await?;
+        let before_failure = executor.oplog_max_index(&agent_id).await?;
+        executor.release().await?;
+
+        let storage_config = sqlite_storage_config(deps, &context);
+        let indexed_config =
+            golem_worker_executor::derive_disjoint_sqlite_config(&storage_config, "indexed");
+        let indexed = SqliteIndexedStorage::configured(&indexed_config).await?;
+        let namespace = IndexedStorageNamespace::OpLog {
+            owned_agent_id: agent_id.clone(),
+            agent_mode: AgentMode::Durable,
+        };
+        let storage_key = agent_id.storage_key();
+        let rows = indexed
+            .with_entity("test", "read_replay_payload", "entry")
+            .read_raw(namespace, &storage_key, 1, before_failure.as_u64())
+            .await?;
+        let (index, original, corrupted) = rows
+            .into_iter()
+            .find_map(|(index, bytes)| {
+                let mut entry = golem_common::serialization::decode::<OplogEntry>(&bytes).unwrap();
+                match &mut entry {
+                    OplogEntry::AgentInvocationStarted {
+                        invocation_id: id,
+                        payload,
+                        ..
+                    } if corrupt_started && *id == invocation_id => {
+                        *payload = OplogPayload::SerializedInline {
+                            bytes: vec![255],
+                            cached: None,
+                        };
+                    }
+                    OplogEntry::AgentInvocationFinished {
+                        invocation_id: id,
+                        result,
+                        ..
+                    } if !corrupt_started && *id == invocation_id => {
+                        *result = OplogPayload::SerializedInline {
+                            bytes: vec![255],
+                            cached: None,
+                        };
+                    }
+                    _ => return None,
+                }
+                Some((
+                    index,
+                    bytes,
+                    golem_common::serialization::serialize(&entry).unwrap(),
+                ))
+            })
+            .expect("the completed invocation must have a Started and a Finished entry");
+        let pool =
+            sqlx::SqlitePool::connect(&format!("sqlite://{}", indexed_config.database)).await?;
+        let replace = async |bytes: &[u8]| -> anyhow::Result<()> {
+            assert_eq!(
+                sqlx::query("UPDATE index_storage SET value = ? WHERE namespace = 'durable-worker-oplog' AND key = ? AND id = ?")
+                    .bind(bytes)
+                    .bind(&storage_key)
+                    .bind(i64::try_from(index)?)
+                    .execute(&pool)
+                    .await?
+                    .rows_affected(),
+                1
+            );
+            Ok(())
+        };
+        replace(&corrupted).await?;
+
+        let executor = start_with_oplog_config(deps, &context, Some(config)).await?;
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &healthy, "increment", data_value!())
+                .await?
+                .into_typed::<u32>()?,
+            1
+        );
+        let mut events = executor.event_bus(&healthy_id.agent_id).await?.subscribe();
+        executor.resume(&agent_id, true).await?;
+        let result = tokio::time::timeout(
+            Duration::from_secs(30),
+            events.wait_for(|event| match event {
+                Event::WorkerLoaded {
+                    agent_id: id,
+                    result,
+                    ..
+                } if id == &agent_id.agent_id => Some(result.clone()),
+                _ => None,
+            }),
+        )
+        .await??;
+        let error = result.expect_err("the unreadable replay entry must prevent startup");
+        let message = error.to_string();
+        assert!(
+            message.contains(&format!("oplog index {index}"))
+                && message.contains("unknown serialization version: 255"),
+            "{message}"
+        );
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &healthy, "increment", data_value!())
+                .await?
+                .into_typed::<u32>()?,
+            2
+        );
+        assert!(!executor.worker_is_loaded(&agent_id).await);
+        assert_eq!(
+            agent_oplog_length(deps, &context, &agent_id).await?,
+            before_failure.as_u64(),
+            "a failed read must not change the durable tail"
+        );
+        replace(&original).await?;
+        let metadata = executor.get_worker_metadata(&agent_id).await?;
+        assert_eq!(metadata.component_revision, component.revision);
+        assert!(matches!(
+            metadata.updates.as_slice(),
+            [UpdateRecord::PendingUpdate(_)]
+        ));
+        assert_eq!(executor.oplog_max_index(&agent_id).await?, before_failure);
+        Ok(())
+    };
+    check(true).await?;
+    check(false).await?;
+    Ok(())
+}
+
 /// Keeps only the blob archive below the primary oplog, and moves every committed entry into it.
 fn blob_archiving_config() -> OplogConfig {
     OplogConfig {
@@ -562,8 +741,7 @@ const ARCHIVE_UNAVAILABLE: u8 = 1;
 const ARCHIVE_CORRUPT: u8 = 2;
 const ARCHIVE_UNKNOWN_VERSION: u8 = 3;
 
-/// How a [`FlakyArchiveStorage`] answers the reads of archived oplog chunks, and how many error
-/// entries it archived since the history failed.
+/// How a [`FlakyArchiveStorage`] answers the reads of archived oplog chunks.
 ///
 /// The fault applies only to the history: the chunks whose last entry is at or before
 /// `history_end`. A status rebuild reads that history.
@@ -572,7 +750,7 @@ struct ArchiveFault {
     agent_path: OnceLock<String>,
     mode: AtomicU8,
     history_end: AtomicU64,
-    archived_errors: AtomicUsize,
+    unavailable_read: tokio::sync::Notify,
     write_release: Option<tokio_util::sync::CancellationToken>,
     write_blocked: tokio::sync::Notify,
 }
@@ -581,18 +759,11 @@ impl ArchiveFault {
     fn fail_history(&self, mode: u8, history_end: OplogIndex) {
         self.history_end
             .store(u64::from(history_end), Ordering::SeqCst);
-        self.archived_errors.store(0, Ordering::SeqCst);
         self.mode.store(mode, Ordering::SeqCst);
     }
 
     fn restore(&self) {
         self.mode.store(ARCHIVE_UP, Ordering::SeqCst);
-    }
-
-    /// The error entries archived since the history failed. The archive receives every committed
-    /// entry, so this shows a recorded error without a read of the history.
-    fn archived_errors(&self) -> usize {
-        self.archived_errors.load(Ordering::SeqCst)
     }
 
     async fn observe_write(&self, namespace: &BlobStorageNamespace, data: &[u8]) {
@@ -618,11 +789,6 @@ impl ArchiveFault {
             self.write_blocked.notify_one();
             release.cancelled().await;
         }
-        let errors = entries
-            .iter()
-            .filter(|entry| matches!(entry, OplogEntry::Error { .. }))
-            .count();
-        self.archived_errors.fetch_add(errors, Ordering::SeqCst);
     }
 
     /// The answer to a read of the object at `path` in `namespace` that replaces the stored one.
@@ -653,9 +819,12 @@ impl ArchiveFault {
             return None;
         }
         match self.mode.load(Ordering::SeqCst) {
-            ARCHIVE_UNAVAILABLE => Some(Err(anyhow::anyhow!(
-                "injected 503: the oplog archive is down"
-            ))),
+            ARCHIVE_UNAVAILABLE => {
+                self.unavailable_read.notify_one();
+                Some(Err(anyhow::anyhow!(
+                    "injected 503: the oplog archive is down"
+                )))
+            }
             ARCHIVE_CORRUPT => {
                 let mut bytes = vec![golem_common::serialization::SERIALIZATION_VERSION_V3];
                 bytes.extend_from_slice(b"not a compressed oplog chunk");
@@ -1013,22 +1182,31 @@ impl ArchiveFaultAgent {
         Ok((invocation.await?, before_failure))
     }
 
-    /// Whether the oplog after `index` records an error.
-    async fn records_an_error_after(&self, index: OplogIndex) -> anyhow::Result<bool> {
-        Ok(self
+    async fn assert_only_prior_invocation_completed(
+        &self,
+        index: OplogIndex,
+    ) -> anyhow::Result<()> {
+        let oplog = self
             .executor
             .get_oplog(&self.agent_id, index.next())
-            .await?
-            .iter()
-            .any(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))))
+            .await?;
+        assert!(
+            matches!(
+                oplog.as_slice(),
+                [finished, settled]
+                    if matches!(finished.entry, PublicOplogEntry::AgentInvocationFinished(_))
+                        && matches!(settled.entry, PublicOplogEntry::AgentInvocationSettled(_))
+            ),
+            "only the preceding invocation may finish and settle: {oplog:#?}"
+        );
+        Ok(())
     }
 }
 
 /// A commit acknowledges its entries before it rebuilds the status, and the caller that took the
 /// acknowledgement no longer waits for the rebuild. When the rebuild cannot read the archive, the
-/// owner of the agent still finds out: it chooses no work from the detached status, records a
-/// recovery failure, and recovers when the archive answers again. The invocation that committed
-/// stays successful.
+/// owner of the agent still finds out. It chooses no work from the detached status and recovers
+/// when the archive answers again. The invocation that committed stays successful.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -1054,16 +1232,12 @@ async fn an_unavailable_archive_after_an_early_commit_receipt_recovers_the_agent
         .await?;
     result.expect("an invocation whose entries were committed must stay successful");
 
-    // While the history is down, the owner fails to repair the status and records the failure,
-    // without any new request reaching the agent.
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(60);
-    while agent.fault.archived_errors() == 0 {
-        anyhow::ensure!(
-            tokio::time::Instant::now() < deadline,
-            "the owner must record the failed rebuild as a recovery failure"
-        );
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
+    // The owner tries to read the history without any new request reaching the agent.
+    tokio::time::timeout(
+        Duration::from_secs(60),
+        agent.fault.unavailable_read.notified(),
+    )
+    .await?;
 
     agent.fault.restore();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(90);
@@ -1084,10 +1258,8 @@ async fn an_unavailable_archive_after_an_early_commit_receipt_recovers_the_agent
 }
 
 /// As [`an_unavailable_archive_after_an_early_commit_receipt_recovers_the_agent`], but the
-/// archived history does not decode. The owner stops the agent for good with the cause: the
-/// failure is recorded, a later invocation fails with the cause without running, and the
-/// committed invocation stays successful. Metadata reports the unreadable history, then the
-/// terminal failure once reads recover, without starting the agent again.
+/// archived history does not decode. The owner stops the agent with the cause, and the committed
+/// invocation stays successful. After reads recover, the oplog has no synthetic outcome.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -1167,25 +1339,12 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
                 .get_worker_metadata(&agent.agent_id)
                 .await?
                 .status,
-            AgentStatus::Failed
+            AgentStatus::Idle
         );
         assert!(!worker.is_loaded().await);
-        assert!(
-            agent.records_an_error_after(before_failure).await?,
-            "the owner must record the failed rebuild"
-        );
-        let oplog = agent
-            .executor
-            .get_oplog(&agent.agent_id, before_failure.next())
+        agent
+            .assert_only_prior_invocation_completed(before_failure)
             .await?;
-        assert!(
-            !oplog.iter().any(|entry| matches!(
-                entry.entry,
-                PublicOplogEntry::AgentInvocationStarted(_)
-                    | PublicOplogEntry::RecoverySucceeded(_)
-            )),
-            "metadata observation must not restart the failed agent: {oplog:#?}"
-        );
 
         let healthy = agent_key!("GolemHostApi", "healthy-next-to-corrupt-archive");
         agent
@@ -1211,10 +1370,9 @@ async fn a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent(
 }
 
 /// As [`a_corrupt_archive_after_an_early_commit_receipt_fails_the_agent`], with a result cache of
-/// one entry and a second invocation queued behind the first. The stop that fails the agent fails
-/// the queued invocation, whose result takes the only cache entry. The detached status still names
-/// the committed invocation as current, and the stop must not fail it: no second completion is
-/// published for it, and its result reads as the success once the archive answers again.
+/// one entry and a second invocation queued behind the first. The stop tells the queued waiter
+/// about the read failure. The detached status still names the committed invocation as current,
+/// but the stop must not publish a second completion for it.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -1316,7 +1474,7 @@ async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left
             .get_worker_metadata(&agent.agent_id)
             .await?
             .status,
-        AgentStatus::Failed
+        AgentStatus::Running
     );
     let lookup = worker.lookup_invocation_result(&committed).await?;
     assert!(
@@ -1326,10 +1484,8 @@ async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left
     Ok(())
 }
 
-/// A queued invocation whose pending entry is in archived history that does not decode. The status
-/// rebuilds, so only the hydration of the queued invocation reads the history. The owner records
-/// the failure and stops the agent with the cause, instead of retrying it without end: the queued
-/// invocation fails with the decode error, and no invocation starts after the failure.
+/// The published status knows the queued invocation, but its pending payload does not read. The
+/// agent stops and tells its waiter, without settling the queued invocation.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -1357,6 +1513,11 @@ async fn a_queued_invocation_whose_entry_does_not_decode_fails_the_agent(
         .await
         .expect("the agent is loaded after its first invocation");
     let mut events = worker.events().subscribe();
+    let healthy = agent_key!("GolemHostApi", "healthy-next-to-unreadable-pickup");
+    let healthy_id = agent
+        .executor
+        .start_agent(&agent.component.id, healthy.clone())
+        .await?;
     let queued = IdempotencyKey::fresh();
     let stored_queued = agent
         .executor
@@ -1407,28 +1568,29 @@ async fn a_queued_invocation_whose_entry_does_not_decode_fails_the_agent(
         "the queued invocation must fail with the decode error: {error}"
     );
 
-    agent.fault.restore();
-    assert!(
-        agent.records_an_error_after(before_failure).await?,
-        "the owner must record the failed hydration"
-    );
-    let oplog = agent
-        .executor
-        .get_oplog(&agent.agent_id, before_failure.next())
-        .await?;
-    assert!(
-        !oplog
-            .iter()
-            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_))),
-        "no invocation may start after the failed hydration: {oplog:#?}"
-    );
+    assert!(!worker.is_loaded().await);
     assert_eq!(
         agent
             .executor
-            .get_worker_metadata(&agent.agent_id)
+            .invoke_and_await_agent(
+                &agent.component,
+                &healthy,
+                "get_self_metadata_result",
+                data_value!(),
+            )
             .await?
-            .status,
-        AgentStatus::Failed
+            .into_typed::<Result<String, String>>()?,
+        Ok(healthy_id.agent_id.to_string())
+    );
+
+    agent.fault.restore();
+    agent
+        .assert_only_prior_invocation_completed(before_failure)
+        .await?;
+    let lookup = worker.lookup_invocation_result(&stored_queued).await?;
+    assert!(
+        matches!(lookup, LookupResult::Pending),
+        "a failed read must leave the invocation pending: {lookup:?}"
     );
     Ok(())
 }

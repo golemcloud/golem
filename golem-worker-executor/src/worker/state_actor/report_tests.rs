@@ -16,13 +16,14 @@ use super::*;
 use crate::services::golem_config::*;
 use crate::services::oplog::OplogOps;
 use crate::services::oplog::tests::{
-    ReadCountingIndexedStorage, create_test_entry, default_execution_status,
-    default_last_known_status, make_agent_metadata,
+    ReadCountingBlobStorage, ReadCountingIndexedStorage, create_test_entry,
+    default_execution_status, default_last_known_status, make_agent_metadata,
 };
 use crate::services::oplog::{OplogService, PrimaryOplogService};
 use crate::storage::indexed::{
     IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageNamespace,
 };
+use crate::storage::keyvalue::{KeyValueStorageLabelledApi, KeyValueStorageNamespace};
 use crate::test_callers::TEST_ISSUER;
 use crate::worker::status::calculate_last_known_status_for_existing_worker;
 use crate::worker::{GetOrCreateWorkerResult, ResolvedOwnerContext};
@@ -52,10 +53,19 @@ use std::collections::HashMap;
 use std::time::Duration;
 use test_r::{test, timeout};
 
-struct ReportBootstrap(Arc<dyn OplogService>);
+type SharedKeyValueStorage = Arc<dyn crate::storage::keyvalue::KeyValueStorage + Send + Sync>;
+
+struct ReportBootstrap(
+    Arc<dyn OplogService>,
+    std::sync::OnceLock<SharedKeyValueStorage>,
+);
 
 #[async_trait::async_trait]
 impl crate::Bootstrap<Context> for ReportBootstrap {
+    fn wrap_key_value_storage(&self, storage: SharedKeyValueStorage) -> SharedKeyValueStorage {
+        self.1.get_or_init(|| storage).clone()
+    }
+
     fn create_additional_deps(
         &self,
         _: Arc<dyn golem_service_base::clients::registry::RegistryService>,
@@ -73,10 +83,11 @@ impl crate::Bootstrap<Context> for ReportBootstrap {
 async fn failed_primary_reports_detach_before_same_key_admission_and_keep_storage_receipts() {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let indexed = Arc::new(ReadCountingIndexedStorage::new());
+    let blob = Arc::new(ReadCountingBlobStorage::new());
     let service = Arc::new(
         PrimaryOplogService::new(
             indexed.clone(),
-            Arc::new(InMemoryBlobStorage::new()),
+            blob.clone(),
             0,
             0,
             1024,
@@ -105,9 +116,10 @@ async fn failed_primary_reports_detach_before_same_key_admission_and_keep_storag
     config.set_golem_issuer(TEST_ISSUER.parse().unwrap());
     let shutdown = crate::services::shutdown::Shutdown::new();
     let mut tasks = tokio::task::JoinSet::new();
+    let bootstrap = ReportBootstrap(service.clone(), Default::default());
     let (deps, _epoch, _) = crate::create_worker_executor_impl::<Context, _>(
         config,
-        &ReportBootstrap(service.clone()),
+        &bootstrap,
         tokio::runtime::Handle::current(),
         &Arc::new(crate::services::worker_activator::LazyWorkerActivator::new()),
         shutdown.clone(),
@@ -115,6 +127,7 @@ async fn failed_primary_reports_detach_before_same_key_admission_and_keep_storag
     )
     .await
     .unwrap();
+    let key_value_storage = bootstrap.1.get().unwrap().clone();
     crate::services::HasShardService::shard_service(&deps).install_unexpiring(
         1,
         &HashMap::from([(
@@ -129,6 +142,8 @@ async fn failed_primary_reports_detach_before_same_key_admission_and_keep_storag
             let deps = deps.clone();
             let service = service.clone();
             let indexed = indexed.clone();
+            let blob = blob.clone();
+            let key_value_storage = key_value_storage.clone();
             async move {
                 let id = OwnedAgentId::new(
                     EnvironmentId::new(),
@@ -328,6 +343,110 @@ async fn failed_primary_reports_detach_before_same_key_admission_and_keep_storag
                     "an attached empty commit must not invalidate authority"
                 );
 
+                use golem_common::model::durable_stream::{
+                    LocalStreamId, SessionStreamRole, StreamCancellationRequest,
+                    StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord,
+                    StreamEndpointSide, StreamError, StreamRecordReference,
+                    StreamRegistrationInvocation, StreamSessionRecord, StreamTerminal,
+                    StreamTerminalAuthor,
+                };
+                let intent = StreamConsumerCancelIntentRecord {
+                    format_version: 1,
+                    session_key: StreamRegistrationInvocation::Remote(
+                        crate::durable_host::durable_stream::tests::identity().invocation,
+                    ),
+                    consumer_invocation: key,
+                    source: StreamRecordReference::Local(LocalStreamId(OplogIndex::INITIAL)),
+                    epoch: 7,
+                    cancellation: StreamCancellationRequest {
+                        direction: SessionStreamRole::Output,
+                        side: StreamEndpointSide::Consumer,
+                        authored_by: StreamTerminalAuthor::Host,
+                        terminal: StreamTerminal::Failed(StreamError::Interrupted(
+                            "stream cancelled".into(),
+                        )),
+                    },
+                };
+                // The persisted status cache, as stored fields, after a forced flush.
+                let cached = async || {
+                    flusher.flush(FlushReason::Forced).await.unwrap();
+                    key_value_storage
+                        .with_entity("test", "report", "agent_status")
+                        .get_all_raw(KeyValueStorageNamespace::AgentStatus {
+                            owned_agent_id: id.clone(),
+                            fingerprint,
+                        })
+                        .await
+                        .unwrap()
+                        .into_iter()
+                        .collect::<BTreeMap<_, _>>()
+                };
+                let retry_report = async |record| {
+                    let before_report_cache = cached().await;
+                    assert!(!before_report_cache.is_empty());
+                    indexed.set_read_error(Some(IndexedStorageError::Transient(
+                        "cancellation report unavailable".into(),
+                    )));
+                    let index = oplog
+                        .add(OplogEntry::StreamSession {
+                            timestamp: Timestamp::now_utc(),
+                            entity_parent_start_index: None,
+                            record: OplogPayload::Inline(Box::new(record)),
+                            summary: None,
+                        })
+                        .await
+                        .unwrap();
+                    assert!(actor.status().await.oplog_idx < index);
+                    assert!(detached.load(Ordering::Acquire));
+
+                    indexed.set_read_error(None);
+                    let detached_cache = cached().await;
+                    assert_eq!(
+                        detached_cache, before_report_cache,
+                        "a detached projection must not reach the status cache"
+                    );
+                    let entries = indexed
+                        .with_entity("test", "report", "entry")
+                        .read::<OplogEntry>(
+                            namespace.clone(),
+                            &id.storage_key(),
+                            index.as_u64(),
+                            index.as_u64(),
+                        )
+                        .await
+                        .unwrap();
+                    assert!(matches!(
+                        entries.as_slice(),
+                        [(_, OplogEntry::StreamSession {
+                            record: OplogPayload::SerializedInline { cached: None, .. }, ..
+                        })]
+                    ));
+                    let status = actor.repaired_status().await.unwrap();
+                    assert_eq!(status.oplog_idx, index);
+                    assert!(!detached.load(Ordering::Acquire));
+                    let reads_after_repair = indexed.reads();
+                    assert!(oplog.commit(CommitLevel::ReportOnly).await.unwrap().is_empty());
+                    assert_eq!(indexed.reads(), reads_after_repair);
+                    assert_eq!(oplog.current_oplog_index().await, index);
+                    assert_ne!(
+                        cached().await,
+                        detached_cache,
+                        "the reattached projection must reach the status cache"
+                    );
+                    status
+                };
+                let status = retry_report(StreamSessionRecord::ConsumerCancelIntent(intent.clone()))
+                    .await;
+                assert_eq!(
+                    status.pending_durable_stream_cancellations,
+                    HashMap::from([((intent.source.clone(), intent.epoch), vec![intent.clone()])])
+                );
+                let status = retry_report(StreamSessionRecord::ConsumerCancelApplied(
+                    StreamConsumerCancelAppliedRecord { format_version: 1, intent },
+                ))
+                .await;
+                assert!(status.pending_durable_stream_cancellations.is_empty());
+
                 let (previous, own) = (
                     FilesystemSnapshotName::periodic(),
                     FilesystemSnapshotName::periodic(),
@@ -384,6 +503,67 @@ async fn failed_primary_reports_detach_before_same_key_admission_and_keep_storag
                         .files,
                     SnapshotFiles::Confirmed(own)
                 );
+
+                use golem_common::model::oplog::RawOplogPayload;
+                use golem_common::model::oplog::host_functions::HostFunctionName;
+                let RawOplogPayload::External { payload_id, md5_hash } =
+                    oplog.upload_raw_payload(vec![255; 2048]).await.unwrap()
+                else {
+                    panic!("expected the large test payload to be external");
+                };
+                indexed.set_read_error(Some(IndexedStorageError::Transient(
+                    "report read unavailable".into(),
+                )));
+                let lookup_index = oplog
+                    .add(OplogEntry::Start {
+                        timestamp: Timestamp::now_utc(),
+                        parent_start_index: None,
+                        function_name: HostFunctionName::GolemNetworkDnsResolve,
+                        invocation_id: None,
+                        observational_owner: None,
+                        driver: None,
+                        request: Some(OplogPayload::External { payload_id, md5_hash, cached: None }),
+                        durable_function_type: golem_common::model::oplog::DurableFunctionType::ReadRemote,
+                        span_started: None,
+                        denial: None,
+                    })
+                    .await
+                    .unwrap();
+                assert!(actor.status().await.oplog_idx < lookup_index);
+                indexed.set_read_error(None);
+
+                let (fold_read_started, release_fold_read) = blob.pause_next_read();
+                let (receipt, mut stored) = oneshot::channel();
+                let (done, mut transaction) = oneshot::channel();
+                actor
+                    .commit
+                    .status_jobs
+                    .send(StatusJob::CommitAndUpdateState {
+                        level: CommitLevel::Always,
+                        committed: Some(CommitReceipt::Refusable(receipt)),
+                        done,
+                    })
+                    .unwrap_or_else(|_| panic!("status actor stopped"));
+                fold_read_started.await.unwrap();
+                let receipt_during_fold = stored.try_recv();
+                let transaction_during_fold = transaction.try_recv();
+                release_fold_read.send(()).unwrap();
+                assert_eq!(receipt_during_fold, Ok(Ok(())));
+                assert!(matches!(
+                    transaction_during_fold,
+                    Err(oneshot::error::TryRecvError::Empty)
+                ));
+                let Err(OplogRefusal::Unreadable(error)) = transaction.await.unwrap() else {
+                    panic!("expected the fold to refuse the malformed external payload");
+                };
+                assert_eq!(error.agent_id, id.agent_id);
+                assert!(
+                    error.to_string().ends_with(&format!(
+                        "failed to load payload at oplog index {lookup_index}: unknown serialization version: 255"
+                    )),
+                    "{error}"
+                );
+                assert_eq!(oplog.current_oplog_index().await, lookup_index);
                 actor.stop_handle().stop_and_wait().await.unwrap();
             }
         })
@@ -436,7 +616,7 @@ async fn old_invocation_result_index_preserves_authoritative_read_errors() {
     let mut tasks = tokio::task::JoinSet::new();
     let (deps, _epoch, _) = crate::create_worker_executor_impl::<Context, _>(
         config,
-        &ReportBootstrap(service.clone()),
+        &ReportBootstrap(service.clone(), Default::default()),
         tokio::runtime::Handle::current(),
         &Arc::new(crate::services::worker_activator::LazyWorkerActivator::new()),
         shutdown.clone(),

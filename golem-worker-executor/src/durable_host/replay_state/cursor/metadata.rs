@@ -27,6 +27,24 @@ pub(in crate::durable_host::replay_state) fn recovery_metadata_floor(
         .map_or(OplogIndex::INITIAL, |end| end.next())
 }
 
+/// The error of a stored payload of the entry at `index` in the oplog of `agent_id` that did not
+/// read. It keeps the entry index, the decoder reason and the read class: a storage that did not
+/// answer can read later, and corrupt data fails the agent.
+pub(super) fn unreadable_history_payload(
+    agent_id: &golem_common::model::AgentId,
+    source: &'static str,
+    index: OplogIndex,
+    error: crate::services::oplog::OplogPayloadDownloadError,
+) -> WorkerExecutorError {
+    use crate::services::oplog::{OplogReadError, OplogReadSource};
+
+    UnreadableOplog::new(
+        agent_id,
+        OplogReadError::of_payload(OplogReadSource::Other(source), index, error),
+    )
+    .into()
+}
+
 impl ReplayState {
     /// Installs an actor-FIFO status snapshot obtained without holding a cursor lock.
     pub(crate) async fn install_entity_replay_progress(
@@ -122,6 +140,7 @@ impl ReplayState {
             invocation_boundaries,
         } = Self::scan_completion_markers(
             &oplog,
+            &owned_agent_id.agent_id,
             metadata_floor,
             last_oplog_index,
             &skipped_regions,
@@ -206,9 +225,11 @@ impl ReplayState {
     /// Scans retained history for delivery, transaction, stream, invocation-boundary and
     /// attachment recovery metadata.
     /// Exactly one visible `CompletionDelivered` or `CompletionDiscarded` may reference a
-    /// `Start`; duplicates or a conflicting pair are oplog corruption.
+    /// `Start`; duplicates or a conflicting pair are oplog corruption. A stored payload of
+    /// `agent_id` that does not read gives an unreadable oplog error at the index of its entry.
     pub(in crate::durable_host::replay_state) async fn scan_completion_markers(
         oplog: &Arc<dyn Oplog>,
+        agent_id: &golem_common::model::AgentId,
         from: OplogIndex,
         to: OplogIndex,
         skipped_regions: &DeletedRegions,
@@ -302,9 +323,16 @@ impl ReplayState {
                                 WorkerExecutorError::runtime("output write Start has no request")
                             })?;
                             let request = oplog
-                                .download_payload(request)
+                                .download_payload_classified(request)
                                 .await
-                                .map_err(WorkerExecutorError::runtime)?;
+                                .map_err(|error| {
+                                    unreadable_history_payload(
+                                        agent_id,
+                                        "replay recovery metadata payload",
+                                        marker_idx,
+                                        error,
+                                    )
+                                })?;
                             let request = golem_common::model::oplog::HostRequestToolAttachmentWrite::try_from(request)
                                 .map_err(WorkerExecutorError::runtime)?;
                             attachments.requests.insert(marker_idx, request.request);
@@ -321,9 +349,16 @@ impl ReplayState {
                                 )
                             })?;
                             let request = oplog
-                                .download_payload(request)
+                                .download_payload_classified(request)
                                 .await
-                                .map_err(WorkerExecutorError::runtime)?;
+                                .map_err(|error| {
+                                    unreadable_history_payload(
+                                        agent_id,
+                                        "replay recovery metadata payload",
+                                        marker_idx,
+                                        error,
+                                    )
+                                })?;
                             let attachment = if matches!(
                                 function_name,
                                 HostFunctionName::GolemToolOutputFail
@@ -361,10 +396,18 @@ impl ReplayState {
                                 "output write End at {marker_idx} has no response"
                             ))
                         })?;
-                        let response = oplog
-                            .download_payload(response)
-                            .await
-                            .map_err(WorkerExecutorError::runtime)?;
+                        let response =
+                            oplog
+                                .download_payload_classified(response)
+                                .await
+                                .map_err(|error| {
+                                    unreadable_history_payload(
+                                        agent_id,
+                                        "replay recovery metadata payload",
+                                        marker_idx,
+                                        error,
+                                    )
+                                })?;
                         let response =
                             golem_common::model::oplog::HostResponseToolAttachmentWrite::try_from(
                                 response,
@@ -424,10 +467,18 @@ impl ReplayState {
                         let response = response.ok_or_else(|| {
                             WorkerExecutorError::runtime("attachment terminal End has no response")
                         })?;
-                        let response = oplog
-                            .download_payload(response)
-                            .await
-                            .map_err(WorkerExecutorError::runtime)?;
+                        let response =
+                            oplog
+                                .download_payload_classified(response)
+                                .await
+                                .map_err(|error| {
+                                    unreadable_history_payload(
+                                        agent_id,
+                                        "replay recovery metadata payload",
+                                        marker_idx,
+                                        error,
+                                    )
+                                })?;
                         let response = golem_common::model::oplog::HostResponseToolAttachmentTerminalResult::try_from(response)
                             .map_err(WorkerExecutorError::runtime)?;
                         if let ToolAttachmentTerminalOutcome::Selected(terminal) = response.outcome
@@ -535,9 +586,16 @@ impl ReplayState {
                             StreamConsumerObservation, StreamSessionRecord,
                         };
                         let record: StreamSessionRecord = oplog
-                            .download_payload(record)
+                            .download_payload_classified(record)
                             .await
-                            .map_err(WorkerExecutorError::runtime)?;
+                            .map_err(|error| {
+                                unreadable_history_payload(
+                                    agent_id,
+                                    "replay recovery metadata payload",
+                                    marker_idx,
+                                    error,
+                                )
+                            })?;
                         if matches!(
                             &record,
                             StreamSessionRecord::ConsumerItemValue(_)
@@ -551,9 +609,16 @@ impl ReplayState {
                         }
                         crate::durable_host::durable_stream::DurableStreamStore::validate_consumer_reobservation(
                             oplog.as_ref(), marker_idx, &record,
-                        ).await.map_err(|error| WorkerExecutorError::unexpected_oplog_entry(marker_idx,
-                            "unchanged logical consumer input", error.to_string(),
-                        ))?;
+                        ).await.map_err(|error| match error {
+                            crate::durable_host::durable_stream::StreamStoreError::Unreadable(
+                                unreadable,
+                            ) => unreadable.into(),
+                            error => WorkerExecutorError::unexpected_oplog_entry(
+                                marker_idx,
+                                "unchanged logical consumer input",
+                                error.to_string(),
+                            ),
+                        })?;
                         let observation = match record {
                             StreamSessionRecord::ConsumerItemValue(record) => {
                                 Some(record.observation)
@@ -783,6 +848,7 @@ impl ReplayState {
                         invocation_boundaries,
                     } = Self::scan_completion_markers(
                         &cursor.oplog,
+                        &cursor.owned_agent_id.agent_id,
                         old_target.next(),
                         new_target,
                         &tx.st.skipped_regions,
@@ -891,5 +957,127 @@ impl ReplayCursor {
                     && invocation_id.is_none_or(|id| boundary.invocation_id == *id)
             })
             .map(|(index, _)| *index)
+    }
+}
+
+#[cfg(test)]
+pub(super) mod read_error_tests {
+    use super::*;
+    use crate::services::oplog::tests::{
+        default_execution_status, default_last_known_status, make_agent_metadata,
+    };
+    use crate::services::oplog::{CommitLevel, OplogService, PrimaryOplogService};
+    use crate::storage::indexed::memory::InMemoryIndexedStorage;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::agent::AgentMode;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::oplog::OplogPayload;
+    use golem_common::model::{RetryConfig, Timestamp};
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use test_r::test;
+
+    /// An empty durable primary oplog in memory. Its first added entry has the index 1.
+    pub(in crate::durable_host::replay_state) async fn open_primary_oplog(
+        name: &str,
+    ) -> (OwnedAgentId, Arc<dyn Oplog>) {
+        let service = PrimaryOplogService::new(
+            Arc::new(InMemoryIndexedStorage::new()),
+            Arc::new(InMemoryBlobStorage::new()),
+            1,
+            1,
+            100,
+            32,
+            RetryConfig::default(),
+        )
+        .await;
+        let agent_id = crate::test_agent_id(name);
+        let environment_id = EnvironmentId::new();
+        let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
+        let oplog = service
+            .open(
+                &mut service.lock_lifecycle(&agent_id).await,
+                &owned_agent_id,
+                AgentMode::Durable,
+                None,
+                make_agent_metadata(agent_id, AccountId::new(), environment_id),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                None,
+            )
+            .await
+            .unwrap();
+        (owned_agent_id, oplog)
+    }
+
+    /// Appends `entries` from the index 1 and commits them.
+    pub(in crate::durable_host::replay_state) async fn append(
+        oplog: &Arc<dyn Oplog>,
+        entries: Vec<OplogEntry>,
+    ) {
+        for entry in entries {
+            oplog.add(entry).await.unwrap();
+        }
+        oplog.commit(CommitLevel::Always).await.unwrap();
+    }
+
+    /// Asserts that `error` fails the agent for good at the entry `index` with an undecodable
+    /// version byte 255.
+    pub(in crate::durable_host::replay_state) fn assert_unreadable_at(
+        error: &WorkerExecutorError,
+        owned_agent_id: &OwnedAgentId,
+        index: u64,
+    ) {
+        let WorkerExecutorError::OplogFailed { agent_id, details } = error else {
+            panic!("expected an unreadable oplog, got {error:?}");
+        };
+        assert_eq!(*agent_id, owned_agent_id.agent_id);
+        assert!(
+            details.contains(&format!("at oplog index {index}:")),
+            "the error does not name entry {index}: {details}"
+        );
+        assert!(
+            details.contains("unknown serialization version: 255"),
+            "the error does not name the version byte: {details}"
+        );
+    }
+
+    #[test]
+    async fn an_undecodable_stream_session_payload_fails_the_metadata_scan_at_its_entry() {
+        let (owned_agent_id, oplog) = open_primary_oplog("metadata-scan-unreadable").await;
+        append(
+            &oplog,
+            vec![
+                OplogEntry::grow_memory(1),
+                OplogEntry::grow_memory(2),
+                OplogEntry::grow_memory(3),
+                OplogEntry::grow_memory(4),
+                OplogEntry::grow_memory(5),
+                OplogEntry::StreamSession {
+                    timestamp: Timestamp::now_utc(),
+                    entity_parent_start_index: None,
+                    record: OplogPayload::SerializedInline {
+                        bytes: vec![255, 7, 7],
+                        cached: None,
+                    },
+                    summary: None,
+                },
+                OplogEntry::grow_memory(6),
+            ],
+        )
+        .await;
+
+        let error = ReplayState::scan_completion_markers(
+            &oplog,
+            &owned_agent_id.agent_id,
+            OplogIndex::INITIAL,
+            OplogIndex::from_u64(7),
+            &DeletedRegions::new(),
+            &mut ToolAttachmentReconstruction::default(),
+        )
+        .await
+        .err()
+        .expect("an undecodable payload must fail the scan");
+
+        assert_unreadable_at(&error, &owned_agent_id, 6);
     }
 }

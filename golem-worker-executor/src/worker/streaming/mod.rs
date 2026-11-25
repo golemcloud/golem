@@ -14,6 +14,7 @@
 
 use crate::worker::*;
 use golem_common::model::durable_stream::{AttachmentId, StreamInvocationId};
+use golem_common::serialization::DecodeError;
 use std::ops::ControlFlow;
 
 use super::ingress::EnqueueInvocationOutcome;
@@ -163,24 +164,56 @@ fn stream_admission_needs_wake(status: &AgentStatusRecord, key: &InvocationId) -
 /// with a fresh attempt and an expiry deadline computed at that creation, so it matches every
 /// other part of the retained acceptance, including the execution configuration. The binding
 /// checks the expiry policy. Any other session start must repeat the retained attempt exactly.
+///
+/// When the execution configuration is the only difference, the retained configuration must be
+/// readable. If it is not readable, the result is its decode error, not a mismatch.
 fn retained_acceptance_matches(
     retained: &StreamSessionAttachedRecord,
     requested: &golem_common::model::durable_stream::StreamSessionAcceptance,
     attempt_id: AttemptId,
-) -> bool {
-    match &requested.route_scope {
-        Some(_) => {
-            retained.acceptance
-                == golem_common::model::durable_stream::StreamSessionAcceptance {
-                    expiry_deadline_millis: retained.acceptance.expiry_deadline_millis,
-                    ..requested.clone()
-                }
-        }
-        None => retained.acceptance == *requested && retained.attempt_id == attempt_id,
+) -> Result<bool, DecodeError> {
+    let (expected, same_attempt) = match &requested.route_scope {
+        Some(_) => (
+            golem_common::model::durable_stream::StreamSessionAcceptance {
+                expiry_deadline_millis: retained.acceptance.expiry_deadline_millis,
+                ..requested.clone()
+            },
+            true,
+        ),
+        None => (requested.clone(), retained.attempt_id == attempt_id),
+    };
+    if !same_attempt {
+        return Ok(false);
     }
+    if retained.acceptance == expected {
+        return Ok(true);
+    }
+    if retained.acceptance
+        == (golem_common::model::durable_stream::StreamSessionAcceptance {
+            execution_config: retained.acceptance.execution_config.clone(),
+            ..expected
+        })
+    {
+        sessions::decode_stream_execution(&retained.acceptance.execution_config)?;
+    }
+    Ok(false)
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Whether a request repeats the stream attachment retained at `index`, under the rule of
+    /// `retained_acceptance_matches`. An unreadable retained execution configuration is a read
+    /// error of the entry at `index`.
+    pub(crate) fn retained_attachment_matches(
+        &self,
+        index: OplogIndex,
+        retained: &StreamSessionAttachedRecord,
+        requested: &golem_common::model::durable_stream::StreamSessionAcceptance,
+        attempt_id: AttemptId,
+    ) -> Result<bool, WorkerExecutorError> {
+        retained_acceptance_matches(retained, requested, attempt_id)
+            .map_err(|error| self.stream_execution_config_read_error(index, error))
+    }
+
     pub(in crate::worker) async fn ensure_matching_stream_attachment(
         &self,
         requested: &StreamSessionAttachedRecord,
@@ -188,8 +221,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let producer = self.durable_stream_producer().await?;
         let key =
             producer.qualify_session(&StreamRegistrationInvocation::Local(requested.session_key));
-        if let Some((_, retained)) = self.retained_stream_attachment(&key).await?
-            && !retained_acceptance_matches(&retained, &requested.acceptance, requested.attempt_id)
+        if let Some((index, retained)) = self.retained_stream_attachment(&key).await?
+            && !self.retained_attachment_matches(
+                index,
+                &retained,
+                &requested.acceptance,
+                requested.attempt_id,
+            )?
         {
             return Err(WorkerExecutorError::invalid_request(
                 "AttemptConflict: stream acceptance differs from the retained request",
@@ -221,8 +259,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 acceptance.public_session_id = key.to_string();
             }
             let existing = worker.retained_stream_attachment(&session_key).await?;
-            let (attached, replayed) = if let Some((_, attached)) = existing {
-                if !retained_acceptance_matches(&attached, &acceptance, attempt_id) {
+            let (attached, replayed) = if let Some((index, attached)) = existing {
+                if !worker.retained_attachment_matches(index, &attached, &acceptance, attempt_id)? {
                     return Err(WorkerExecutorError::invalid_request("AttemptConflict: stream acceptance does not match the retained request"));
                 }
                 (attached, true)
@@ -1601,6 +1639,16 @@ mod tests {
     use golem_common::model::{InvocationId, OplogIndex};
     use test_r::test;
 
+    fn execution_config(stdout: bool) -> Vec<u8> {
+        golem_common::serialization::serialize(&(
+            Vec::<u8>::new(),
+            None::<Vec<(String, String)>>,
+            stdout,
+            false,
+        ))
+        .unwrap()
+    }
+
     fn acceptance(route_scope: Option<&str>) -> StreamSessionAcceptance {
         StreamSessionAcceptance {
             public_session_id: "session".to_string(),
@@ -1608,7 +1656,7 @@ mod tests {
             expiry_policy: StreamSessionExpiryPolicy::Sliding { ttl_seconds: 60 },
             expiry_deadline_millis: Some(1_000),
             effective_identity: vec![1, 2],
-            execution_config: vec![3, 4],
+            execution_config: execution_config(false),
             live_join_buffer_events: 16,
             transport_stream_ids: vec![1],
         }
@@ -1639,11 +1687,14 @@ mod tests {
             expiry_deadline_millis: Some(2_000),
             ..acceptance(Some("route"))
         };
-        assert!(retained_acceptance_matches(
-            &retained,
-            &requested,
-            AttemptId(uuid::Uuid::from_u128(11))
-        ));
+        assert_eq!(
+            retained_acceptance_matches(
+                &retained,
+                &requested,
+                AttemptId(uuid::Uuid::from_u128(11))
+            ),
+            Ok(true)
+        );
     }
 
     #[test]
@@ -1654,7 +1705,7 @@ mod tests {
         );
         for requested in [
             StreamSessionAcceptance {
-                execution_config: vec![3, 5],
+                execution_config: execution_config(true),
                 ..acceptance(Some("route"))
             },
             StreamSessionAcceptance {
@@ -1670,12 +1721,13 @@ mod tests {
                 ..acceptance(Some("route"))
             },
         ] {
-            assert!(
-                !retained_acceptance_matches(
+            assert_eq!(
+                retained_acceptance_matches(
                     &retained,
                     &requested,
                     AttemptId(uuid::Uuid::from_u128(10))
                 ),
+                Ok(false),
                 "{requested:?}"
             );
         }
@@ -1685,23 +1737,73 @@ mod tests {
     fn a_session_without_a_route_must_repeat_the_attempt_and_the_deadline() {
         let attempt = AttemptId(uuid::Uuid::from_u128(10));
         let retained = retained(acceptance(None), attempt);
-        assert!(retained_acceptance_matches(
-            &retained,
-            &acceptance(None),
-            attempt
-        ));
-        assert!(!retained_acceptance_matches(
-            &retained,
-            &acceptance(None),
-            AttemptId(uuid::Uuid::from_u128(11))
-        ));
-        assert!(!retained_acceptance_matches(
-            &retained,
-            &StreamSessionAcceptance {
-                expiry_deadline_millis: Some(2_000),
+        assert_eq!(
+            retained_acceptance_matches(&retained, &acceptance(None), attempt),
+            Ok(true)
+        );
+        assert_eq!(
+            retained_acceptance_matches(
+                &retained,
+                &acceptance(None),
+                AttemptId(uuid::Uuid::from_u128(11))
+            ),
+            Ok(false)
+        );
+        assert_eq!(
+            retained_acceptance_matches(
+                &retained,
+                &StreamSessionAcceptance {
+                    expiry_deadline_millis: Some(2_000),
+                    ..acceptance(None)
+                },
+                attempt
+            ),
+            Ok(false)
+        );
+    }
+
+    #[test]
+    fn an_unreadable_retained_configuration_is_a_read_error_only_when_it_decides_the_match() {
+        let attempt = AttemptId(uuid::Uuid::from_u128(10));
+        [None, Some("route")].into_iter().for_each(|route| {
+            let retained = retained(
+                StreamSessionAcceptance {
+                    execution_config: vec![99],
+                    ..acceptance(route)
+                },
+                attempt,
+            );
+            assert!(
+                retained_acceptance_matches(&retained, &acceptance(route), attempt).is_err(),
+                "{route:?}"
+            );
+            assert_eq!(
+                retained_acceptance_matches(
+                    &retained,
+                    &StreamSessionAcceptance {
+                        live_join_buffer_events: 17,
+                        ..acceptance(route)
+                    },
+                    attempt
+                ),
+                Ok(false),
+                "{route:?}"
+            );
+        });
+        let retained = retained(
+            StreamSessionAcceptance {
+                execution_config: vec![99],
                 ..acceptance(None)
             },
-            attempt
-        ));
+            attempt,
+        );
+        assert_eq!(
+            retained_acceptance_matches(
+                &retained,
+                &acceptance(None),
+                AttemptId(uuid::Uuid::from_u128(11))
+            ),
+            Ok(false)
+        );
     }
 }

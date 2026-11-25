@@ -2513,3 +2513,128 @@ fn a_tainted_generation_turns_target_failures_and_divergences_into_operational_f
         assert_eq!(failure_class(problem, &error, true), tainted);
     }
 }
+
+/// The replay of a completed invocation reads its stored request and result again. When one of
+/// them does not decode, the replay gives the read error with the entry index and the version
+/// byte, and the start of an automatic update passes that error on. The update stays pending:
+/// history that does not read is not a failure of the target revision.
+#[test]
+async fn an_unreadable_replayed_invocation_payload_keeps_an_automatic_update_pending() {
+    use crate::durable_host::durable_stream::tests::TestOplog;
+    use crate::durable_host::replay_state::ReplayState;
+    use crate::services::oplog::Oplog;
+    use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
+    use golem_common::model::environment::EnvironmentId;
+    use golem_common::model::invocation_context::TraceId;
+    use golem_common::model::oplog::OplogPayload;
+    use golem_common::model::regions::DeletedRegions;
+    use golem_common::model::{
+        InvocationId, InvocationRequestOperation, OwnedAgentId, StoredAgentInvocationPayload,
+    };
+
+    let owned_agent_id = OwnedAgentId {
+        environment_id: EnvironmentId::new(),
+        agent_id: agent_id(),
+    };
+    let invocation_id = InvocationId(uuid::Uuid::from_u128(0x5eed));
+    let started = |payload| OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::from(2_000),
+        invocation_id,
+        operation: Box::new(InvocationRequestOperation::SaveSnapshot),
+        payload,
+        trace_id: TraceId::generate(),
+        trace_states: Vec::new(),
+        invocation_context: Vec::new(),
+        wallet_pin: Box::new(InvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: [9; 32],
+                generation: 4,
+            },
+            pinned_card_ids: Vec::new(),
+            scope_card_id: None,
+        }),
+    };
+    let readable_request =
+        OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::SaveSnapshot {
+            caller: golem_common::model::caller::Caller::anonymous(),
+        }));
+    let finished = |result| OplogEntry::AgentInvocationFinished {
+        timestamp: Timestamp::from(3_000),
+        invocation_id,
+        result,
+        method_name: None,
+        consumed_fuel: 11,
+        component_revision: revision(2),
+        awaits_settlement: false,
+    };
+    let replay_error = async |entries: Vec<OplogEntry>| -> (OplogIndex, WorkerExecutorError) {
+        let oplog = Arc::new(TestOplog::default());
+        oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
+        let mut last = OplogIndex::INITIAL;
+        for entry in entries {
+            last = oplog.add(entry).await.unwrap();
+        }
+        let horizon = oplog.current_oplog_index().await;
+        let replay = ReplayState::new_for_owner(
+            owned_agent_id.clone(),
+            oplog,
+            DeletedRegions::default(),
+            None,
+            crate::durable_host::tool::operation::OwnerToolOperations::new(),
+            horizon,
+            None,
+        )
+        .await
+        .unwrap();
+        let error = match replay.get_oplog_entry_agent_invocation_started().await {
+            Err(error) => error,
+            Ok(_) => replay
+                .get_oplog_entry_agent_invocation_finished(&invocation_id)
+                .await
+                .expect_err("the unreadable result must fail the replay"),
+        };
+        (last, error)
+    };
+
+    let automatic = automatic_head();
+    let unreadable_request = replay_error(vec![started(OplogPayload::SerializedInline {
+        bytes: vec![255],
+        cached: None,
+    })])
+    .await;
+    let unreadable_result = replay_error(vec![
+        started(readable_request),
+        finished(OplogPayload::SerializedInline {
+            bytes: vec![255],
+            cached: None,
+        }),
+    ])
+    .await;
+    for (index, error) in [unreadable_request, unreadable_result] {
+        let WorkerExecutorError::OplogFailed {
+            agent_id: failed,
+            details,
+        } = &error
+        else {
+            panic!("expected the read error of entry {index}, got {error:?}");
+        };
+        assert_eq!(*failed, agent_id());
+        assert!(
+            details.contains(&format!("oplog index {index}")) && details.contains("version: 255"),
+            "{details}"
+        );
+        let action = decide_now(
+            &BaselineRole::InitialFiles,
+            Some(&automatic),
+            RawStartError::Replay {
+                error: &error,
+                diverged: false,
+                provenance: Some(FailureProvenance::Host),
+            },
+        );
+        assert!(
+            matches!(&action, StartAction::Error(passed) if *passed == error),
+            "{action:?}"
+        );
+    }
+}
