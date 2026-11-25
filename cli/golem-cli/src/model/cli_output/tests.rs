@@ -4561,16 +4561,23 @@ fn arb_agent_oplog_page_result() -> OutputDocumentStrategy {
         (
             proptest::collection::vec(arb_agent_oplog_entry_view(), 0..3),
             proptest::option::of(
-                (arb_small_u64(), arb_small_u64(), "([0-9a-f]{16})?").prop_map(
-                    |(next_oplog_index, current_component_revision, query_hash)| {
-                        golem_common::model::oplog::OplogCursor {
-                            next_oplog_index,
-                            current_component_revision,
-                            query_hash,
-                        }
-                        .to_string()
-                    },
-                ),
+                (
+                    arb_small_u64(),
+                    arb_small_u64(),
+                    "([0-9a-f]{16})?",
+                    proptest::option::of(arb_small_u64()),
+                )
+                    .prop_map(
+                        |(next_oplog_index, current_component_revision, query_hash, scan_to)| {
+                            golem_common::model::oplog::OplogCursor {
+                                next_oplog_index,
+                                current_component_revision,
+                                query_hash,
+                                scan_to,
+                            }
+                            .to_string()
+                        },
+                    ),
             ),
         )
             .prop_map(

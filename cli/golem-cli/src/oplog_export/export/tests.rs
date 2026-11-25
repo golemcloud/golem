@@ -185,6 +185,7 @@ impl OplogReads for FakeReads {
             next_oplog_index: taken.last().unwrap().entry.oplog_index.as_u64() + 1,
             current_component_revision: REVISION,
             query_hash: OplogCursor::query_hash(query),
+            scan_to: None,
         });
         Ok(OplogPage {
             entries: taken
@@ -229,6 +230,7 @@ impl OplogReads for FakeReads {
             next_oplog_index: index,
             current_component_revision: REVISION,
             query_hash: OplogCursor::query_hash(None),
+            scan_to: None,
         };
         let scan = |charged_entries: u64, charged_millis: u64, exhausted: bool| OplogScan {
             limit,

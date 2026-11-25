@@ -53,33 +53,84 @@ impl OplogRangeEndsBeforeStart {
 
 impl std::error::Error for OplogRangeEndsBeforeStart {}
 
-/// The error of a cursor whose next index is not in the range of the read. The cursor came from
-/// a read of another range.
+/// The error of a cursor that a read of a range refuses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct OplogCursorOutsideRange {
-    next: OplogIndex,
-    range: OplogRange,
+pub enum OplogCursorRefused {
+    /// The next index of the cursor is not in the range of the read. The cursor came from a read
+    /// of another range.
+    OutsideRange { next: OplogIndex, range: OplogRange },
+    /// A page read got the cursor of a search that scans for the component revision at `start`,
+    /// the start of its range.
+    SearchScan { next: OplogIndex, start: OplogIndex },
+    /// The search start of the cursor is not the start of the range of the read. Or the cursor
+    /// does not point to an index from 1 to before its search start. The cursor came from a
+    /// search of another range.
+    ScanOutsideRange {
+        next: OplogIndex,
+        scan_to: u64,
+        range: OplogRange,
+    },
 }
 
-impl OplogCursorOutsideRange {
-    /// The next index of the cursor.
-    pub fn next(&self) -> OplogIndex {
-        self.next
-    }
-}
-
-impl Display for OplogCursorOutsideRange {
+impl Display for OplogCursorRefused {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        let start = self.range.first_possible();
-        write!(f, "the oplog cursor points to index {}, ", self.next)?;
-        match self.range.end {
-            Some(end) => write!(f, "outside the oplog range from {start} to {end}"),
-            None => write!(f, "before the oplog range from {start}"),
+        match self {
+            Self::OutsideRange { next, range } => {
+                let start = range.first_possible();
+                write!(f, "the oplog cursor points to index {next}, ")?;
+                match range.end {
+                    Some(end) => write!(f, "outside the oplog range from {start} to {end}"),
+                    None => write!(f, "before the oplog range from {start}"),
+                }
+            }
+            Self::SearchScan { next, start } => write!(
+                f,
+                "the oplog cursor at index {next} continues a search from index {start}, not a \
+                 page"
+            ),
+            Self::ScanOutsideRange {
+                next,
+                scan_to,
+                range,
+            } => {
+                write!(
+                    f,
+                    "the oplog cursor at index {next}, which continues a search from index \
+                     {scan_to}, does not fit the oplog range"
+                )?;
+                match (range.start, range.end) {
+                    (Some(start), Some(end)) => write!(f, " from {start} to {end}"),
+                    (Some(start), None) => write!(f, " from {start}"),
+                    (None, Some(end)) => write!(f, " to {end}"),
+                    (None, None) => Ok(()),
+                }
+            }
         }
     }
 }
 
-impl std::error::Error for OplogCursorOutsideRange {}
+impl OplogCursorRefused {
+    /// The next index of the cursor.
+    pub fn next(&self) -> OplogIndex {
+        match self {
+            Self::OutsideRange { next, .. }
+            | Self::SearchScan { next, .. }
+            | Self::ScanOutsideRange { next, .. } => *next,
+        }
+    }
+}
+
+impl std::error::Error for OplogCursorRefused {}
+
+/// Where a search of a range continues from a cursor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OplogSearchResume {
+    /// The search did not find the component revision at the start of `range` yet. It scans on
+    /// for the revision from `next`, and then searches `range`, which has a start.
+    Scan { next: OplogIndex, range: OplogRange },
+    /// The search reads the rest of the range from the cursor. The rest has a start.
+    Read(OplogRange),
+}
 
 impl OplogRange {
     /// Every entry of the oplog.
@@ -178,19 +229,65 @@ impl OplogRange {
         })
     }
 
-    /// The rest of the range from the next index of `cursor`. A cursor before the start or after
-    /// the end of the range gives an error, because a page of this range never gives it. A range
-    /// without a start starts at 1 for this check. The rest of the range has a start.
-    pub fn resume(&self, cursor: &OplogCursor) -> Result<Self, OplogCursorOutsideRange> {
+    /// The rest of the range from the next index of `cursor`, for a page read. A cursor before
+    /// the start or after the end of the range gives an error, because a page of this range never
+    /// gives it. A range without a start starts at 1 for this check. The cursor of a search that
+    /// scans for the component revision gives an error too. The rest of the range has a start.
+    pub fn resume(&self, cursor: &OplogCursor) -> Result<Self, OplogCursorRefused> {
+        match self.resume_search(cursor)? {
+            OplogSearchResume::Read(rest) => Ok(rest),
+            OplogSearchResume::Scan { next, range } => Err(OplogCursorRefused::SearchScan {
+                next,
+                start: range.first_possible(),
+            }),
+        }
+    }
+
+    /// Where a search of the range continues from `cursor`. A cursor without `scan_to` continues
+    /// the search in the range, with the rule of [`Self::resume`]. A cursor with `scan_to` continues
+    /// the scan for the component revision. A range with a start must start at `scan_to`, and a
+    /// range without a start takes `scan_to` as its start. The cursor must point to an index from 1
+    /// to before `scan_to`, and the range must not end before `scan_to`.
+    pub fn resume_search(
+        &self,
+        cursor: &OplogCursor,
+    ) -> Result<OplogSearchResume, OplogCursorRefused> {
         let next = OplogIndex::from_u64(cursor.next_oplog_index);
-        let outside = next < self.first_possible() || self.end.is_some_and(|end| next > end);
-        if outside {
-            Err(OplogCursorOutsideRange { next, range: *self })
-        } else {
-            Ok(Self {
-                start: Some(next),
-                end: self.end,
-            })
+        match cursor.scan_to {
+            None => {
+                let outside =
+                    next < self.first_possible() || self.end.is_some_and(|end| next > end);
+                if outside {
+                    Err(OplogCursorRefused::OutsideRange { next, range: *self })
+                } else {
+                    Ok(OplogSearchResume::Read(Self {
+                        start: Some(next),
+                        end: self.end,
+                    }))
+                }
+            }
+            Some(scan_to) => {
+                let start = OplogIndex::from_u64(scan_to);
+                let fits = self.can_start_at(start)
+                    && OplogIndex::INITIAL <= next
+                    && next < start
+                    && self.end.is_none_or(|end| start <= end);
+                if fits {
+                    Ok(OplogSearchResume::Scan {
+                        next,
+                        range: Self {
+                            start: Some(start),
+                            end: self.end,
+                        },
+                    })
+                } else {
+                    Err(OplogCursorRefused::ScanOutsideRange {
+                        next,
+                        scan_to,
+                        range: *self,
+                    })
+                }
+            }
         }
     }
 
@@ -236,7 +333,7 @@ impl OplogRange {
 
 #[cfg(test)]
 mod tests {
-    use super::{OplogCursorOutsideRange, OplogRange, OplogRangeEndsBeforeStart};
+    use super::{OplogCursorRefused, OplogRange, OplogRangeEndsBeforeStart, OplogSearchResume};
     use crate::base_model::OplogIndex;
     use crate::model::oplog::OplogCursor;
     use test_r::test;
@@ -254,6 +351,16 @@ mod tests {
             next_oplog_index: next,
             current_component_revision: 0,
             query_hash: String::new(),
+            scan_to: None,
+        }
+    }
+
+    /// The cursor of a search that scans on for the component revision from `next`, and then
+    /// searches from `scan_to`.
+    fn scan_cursor(next: u64, scan_to: u64) -> OplogCursor {
+        OplogCursor {
+            scan_to: Some(scan_to),
+            ..cursor(next)
         }
     }
 
@@ -361,7 +468,7 @@ mod tests {
     #[test]
     fn a_range_resumes_at_a_cursor_within_it_and_refuses_a_cursor_outside_it() {
         let outside = |range: OplogRange, next| {
-            Err(OplogCursorOutsideRange {
+            Err(OplogCursorRefused::OutsideRange {
                 next: index(next),
                 range,
             })
@@ -398,14 +505,147 @@ mod tests {
         ]
         .into_iter()
         .for_each(|((range, next), expected)| {
-            assert_eq!(range.resume(&cursor(next)), expected, "{range:?} at {next}")
+            assert_eq!(range.resume(&cursor(next)), expected, "{range:?} at {next}");
+            assert_eq!(
+                range.resume_search(&cursor(next)),
+                expected.map(OplogSearchResume::Read),
+                "a search of {range:?} at {next}"
+            )
         });
-        assert_eq!(
-            range(Some(5), None)
-                .resume(&cursor(2))
-                .map_err(|error| error.next()),
-            Err(index(2))
-        );
+    }
+
+    #[test]
+    fn a_search_continues_its_revision_scan_only_before_the_start_of_its_range() {
+        let scan = |next, start, end| {
+            Ok(OplogSearchResume::Scan {
+                next: index(next),
+                range: range(Some(start), end),
+            })
+        };
+        let refused = |range: OplogRange, next, scan_to| {
+            Err(OplogCursorRefused::ScanOutsideRange {
+                next: index(next),
+                scan_to,
+                range,
+            })
+        };
+        [
+            // A range without a start takes the search start of the cursor as its start.
+            ((range(None, None), 3, 10), scan(3, 10, None)),
+            ((range(None, Some(20)), 3, 10), scan(3, 10, Some(20))),
+            ((range(None, Some(10)), 3, 10), scan(3, 10, Some(10))),
+            (
+                (range(None, Some(9)), 3, 10),
+                refused(range(None, Some(9)), 3, 10),
+            ),
+            // A range with a start must start at the search start of the cursor.
+            ((range(Some(10), Some(20)), 3, 10), scan(3, 10, Some(20))),
+            ((range(Some(10), None), 1, 10), scan(1, 10, None)),
+            ((range(Some(10), None), 9, 10), scan(9, 10, None)),
+            (
+                (range(Some(11), None), 3, 10),
+                refused(range(Some(11), None), 3, 10),
+            ),
+            (
+                (range(Some(9), None), 3, 10),
+                refused(range(Some(9), None), 3, 10),
+            ),
+            // The cursor points to an index from 1 to before its search start.
+            (
+                (range(Some(10), None), 10, 10),
+                refused(range(Some(10), None), 10, 10),
+            ),
+            (
+                (range(Some(10), None), 12, 10),
+                refused(range(Some(10), None), 12, 10),
+            ),
+            (
+                (range(Some(10), None), 0, 10),
+                refused(range(Some(10), None), 0, 10),
+            ),
+            ((range(None, None), 0, 0), refused(range(None, None), 0, 0)),
+        ]
+        .into_iter()
+        .for_each(|((range, next, scan_to), expected)| {
+            assert_eq!(
+                range.resume_search(&scan_cursor(next, scan_to)),
+                expected,
+                "a search of {range:?} at {next} to {scan_to}"
+            )
+        });
+        // A page read refuses the cursor of a search that scans for the component revision.
+        [
+            (
+                (range(None, None), 3, 10),
+                Err(OplogCursorRefused::SearchScan {
+                    next: index(3),
+                    start: index(10),
+                }),
+            ),
+            (
+                (range(Some(10), Some(20)), 9, 10),
+                Err(OplogCursorRefused::SearchScan {
+                    next: index(9),
+                    start: index(10),
+                }),
+            ),
+            (
+                (range(Some(11), None), 3, 10),
+                Err(OplogCursorRefused::ScanOutsideRange {
+                    next: index(3),
+                    scan_to: 10,
+                    range: range(Some(11), None),
+                }),
+            ),
+        ]
+        .into_iter()
+        .for_each(|((range, next, scan_to), expected)| {
+            assert_eq!(
+                range.resume(&scan_cursor(next, scan_to)),
+                expected,
+                "a page of {range:?} at {next} to {scan_to}"
+            )
+        });
+    }
+
+    #[test]
+    fn a_refused_cursor_tells_where_it_points_and_the_range_that_refused_it() {
+        [
+            (
+                range(Some(5), Some(9)).resume(&cursor(4)),
+                "the oplog cursor points to index 4, outside the oplog range from 5 to 9",
+            ),
+            (
+                range(Some(5), None).resume(&cursor(4)),
+                "the oplog cursor points to index 4, before the oplog range from 5",
+            ),
+            (
+                range(None, None).resume(&scan_cursor(3, 10)),
+                "the oplog cursor at index 3 continues a search from index 10, not a page",
+            ),
+            (
+                range(Some(11), Some(20)).resume(&scan_cursor(3, 10)),
+                "the oplog cursor at index 3, which continues a search from index 10, does not \
+                 fit the oplog range from 11 to 20",
+            ),
+            (
+                range(Some(11), None).resume(&scan_cursor(3, 10)),
+                "the oplog cursor at index 3, which continues a search from index 10, does not \
+                 fit the oplog range from 11",
+            ),
+            (
+                range(None, Some(9)).resume(&scan_cursor(3, 10)),
+                "the oplog cursor at index 3, which continues a search from index 10, does not \
+                 fit the oplog range to 9",
+            ),
+            (
+                range(None, None).resume(&scan_cursor(10, 10)),
+                "the oplog cursor at index 10, which continues a search from index 10, does not \
+                 fit the oplog range",
+            ),
+        ]
+        .into_iter()
+        .for_each(|(refused, message)| assert_eq!(refused.unwrap_err().to_string(), message));
     }
 
     #[test]

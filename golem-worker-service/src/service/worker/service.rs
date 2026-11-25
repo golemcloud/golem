@@ -79,7 +79,7 @@ use golem_common::model::invocation_session_public::{
     InvocationSelector, JsonMethodInput, PublicAgentTarget, PublicConfigEntry, PublicErrorCode,
     PublicNativeToolTarget, PublicTypedValue,
 };
-use golem_common::model::oplog::{OplogCursor, OplogCursorOutsideRange, OplogRange};
+use golem_common::model::oplog::{OplogCursor, OplogCursorRefused, OplogRange, OplogSearchResume};
 use golem_common::model::oplog::{OplogIndex, OplogScanAllowance, PublicOplogEntryWithIndex};
 use golem_common::model::tool::{ToolBindingOwner, ToolName, ToolSource};
 use golem_common::model::{
@@ -412,24 +412,34 @@ enum OplogReadKind {
 }
 
 /// The oplog resource that a read of `range` needs. The read resumes `range` at the cursor. A
-/// cursor outside `range` is an error. A page needs the oplog up to its last entry, or up to the
-/// end of the range when that is earlier. A search needs the oplog up to the end of the range.
-/// Before the read, the first entry of the oplog is not known. So a range without a start needs
-/// the oplog from index 1, the first index of an oplog. `OplogRange::new` and
-/// `OplogRange::resume` keep the end of a range at or after index 1 and at or after its start.
+/// cursor that the range refuses is an error. A page needs the oplog up to its last entry, or up to
+/// the end of the range when that is earlier. A search needs the oplog up to the end of the range.
+/// A search cursor that continues the scan for the component revision needs the oplog from its
+/// search start, as [`OplogRange::resume_search`] gives it. The search returns no entry before
+/// that start. Before the read, the first entry of the oplog is not known. So a range
+/// without a start needs the oplog from index 1, the first index of an oplog. `OplogRange::new`
+/// and `OplogRange::resume` keep the end of a range at or after index 1 and at or after its start.
 /// So the resumed range always has a page from index 1. A resumed range without such a page would
 /// need the whole resumed range, which never asks for less.
 fn oplog_read_resource(
     range: OplogRange,
     cursor: Option<&OplogCursor>,
     kind: OplogReadKind,
-) -> Result<OplogResourcePattern, OplogCursorOutsideRange> {
-    let resumed = cursor.map_or(Ok(range), |cursor| range.resume(cursor))?;
+) -> Result<OplogResourcePattern, OplogCursorRefused> {
     let read = match kind {
-        OplogReadKind::Page(count) => resumed
-            .page_in(OplogIndex::INITIAL, count)
-            .unwrap_or(resumed),
-        OplogReadKind::Search => resumed,
+        OplogReadKind::Page(count) => {
+            let resumed = cursor.map_or(Ok(range), |cursor| range.resume(cursor))?;
+            resumed
+                .page_in(OplogIndex::INITIAL, count)
+                .unwrap_or(resumed)
+        }
+        OplogReadKind::Search => match cursor.map(|cursor| range.resume_search(cursor)) {
+            None => range,
+            Some(resume) => match resume? {
+                OplogSearchResume::Scan { range, .. } => range,
+                OplogSearchResume::Read(rest) => rest,
+            },
+        },
     };
     Ok(oplog_resource_in(read, OplogIndex::INITIAL))
 }
@@ -7550,6 +7560,7 @@ mod tests {
                     next_oplog_index: 5,
                     current_component_revision: 0,
                     query_hash: String::new(),
+                    scan_to: None,
                 }),
                 50,
                 None,
@@ -7579,6 +7590,11 @@ mod tests {
             next_oplog_index: next,
             current_component_revision: 0,
             query_hash: String::new(),
+            scan_to: None,
+        };
+        let scan_cursor = |next: u64, scan_to: u64| OplogCursor {
+            scan_to: Some(scan_to),
+            ..cursor(next)
         };
         let pattern =
             |start: u64, end: Option<u64>| Ok(OplogResourcePattern::range(Some(start), end));
@@ -7631,6 +7647,29 @@ mod tests {
                 pattern(8, Some(9)),
             ),
             ((range(Some(5), None), Some(cursor(2)), search), outside(2)),
+            // A search cursor of the scan for the component revision needs the oplog from its
+            // search start, with and without a start of the range.
+            (
+                (range(None, None), Some(scan_cursor(3, 10)), search),
+                pattern(10, None),
+            ),
+            (
+                (range(None, Some(20)), Some(scan_cursor(3, 10)), search),
+                pattern(10, Some(20)),
+            ),
+            (
+                (range(Some(10), Some(20)), Some(scan_cursor(3, 10)), search),
+                pattern(10, Some(20)),
+            ),
+            (
+                (range(Some(11), None), Some(scan_cursor(3, 10)), search),
+                outside(3),
+            ),
+            // A page refuses such a cursor.
+            (
+                (range(Some(10), Some(20)), Some(scan_cursor(3, 10)), page(3)),
+                outside(3),
+            ),
         ]
         .into_iter()
         .for_each(|((range, cursor, kind), expected)| {
@@ -7653,6 +7692,7 @@ mod tests {
             next_oplog_index: next,
             current_component_revision: 0,
             query_hash: String::new(),
+            scan_to: None,
         };
         let pattern =
             |start: u64, end: Option<u64>| Some(OplogResourcePattern::range(Some(start), end));
@@ -7717,6 +7757,7 @@ mod tests {
                     next_oplog_index: next,
                     current_component_revision: 0,
                     query_hash: String::new(),
+                    scan_to: None,
                 }),
                 50,
                 None,

@@ -1283,10 +1283,11 @@ async function api(path, params) {
 }
 function fetchPage(params) {
   const cursor = params.cursor;
-  return api('api/oplog', { from: params.from, cursorIndex: cursor ? idxOf(cursor.nextOplogIndex) : null, cursorRevision: cursor ? cursor.currentComponentRevision : null, cursorQueryHash: cursor ? cursor.queryHash : null, count: state.live.pageSize, query: params.query });
+  return api('api/oplog', { from: params.from, cursorIndex: cursor ? idxOf(cursor.nextOplogIndex) : null, cursorRevision: cursor ? cursor.currentComponentRevision : null, cursorQueryHash: cursor ? cursor.queryHash : null, cursorScanTo: cursor ? cursor.scanTo : null, count: state.live.pageSize, query: params.query });
 }
 // A page has a cursor while the oplog has entries after it. A search page can be empty and still
-// have a cursor, when the server spent its scan budget before a match, so this follows the cursor
+// have a cursor, when the server spent its scan budget before a match or before the start of the
+// range, so this follows the cursor
 // until a page has entries that `keep` accepts or the cursor ends. The coverage it returns covers
 // every page it read.
 async function fetchEntries(params, keep) {

@@ -161,6 +161,7 @@ struct OplogPageQuery {
     cursor_index: Option<u64>,
     cursor_revision: Option<u64>,
     cursor_query_hash: Option<String>,
+    cursor_scan_to: Option<u64>,
     count: Option<u64>,
     query: Option<String>,
 }
@@ -208,6 +209,7 @@ async fn oplog_page(
             next_oplog_index,
             current_component_revision,
             query_hash: params.cursor_query_hash.unwrap_or_default(),
+            scan_to: params.cursor_scan_to,
         }),
         _ => None,
     };

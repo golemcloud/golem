@@ -3412,6 +3412,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             next_oplog_index: indices[7].as_u64(),
             current_component_revision: updated_revision.into(),
             query_hash: OplogCursor::query_hash(Some("needle")),
+            scan_to: None,
         }
     );
 
@@ -3494,6 +3495,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
                 next_oplog_index,
                 current_component_revision: updated_revision.into(),
                 query_hash: OplogCursor::query_hash(Some("needle")),
+                scan_to: None,
             }),
             OplogRange::ALL,
             OplogIndex::INITIAL,
@@ -4420,6 +4422,7 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
         next_oplog_index: indices[9].as_u64(),
         current_component_revision: updated_revision.into(),
         query_hash: OplogCursor::query_hash(None),
+        scan_to: None,
     };
     assert!(
         read(Some(outside), from, to, 10, allowance(100))
@@ -4491,6 +4494,7 @@ async fn a_paged_read_resumes_a_cursor_within_its_range_and_refuses_a_cursor_out
                 next_oplog_index: next.as_u64(),
                 current_component_revision: 0,
                 query_hash: OplogCursor::query_hash(None),
+                scan_to: None,
             }),
             range,
             OplogIndex::INITIAL,
@@ -4513,4 +4517,263 @@ async fn a_paged_read_resumes_a_cursor_within_its_range_and_refuses_a_cursor_out
             "a cursor at {next} is outside {range:?}, got {result:?}"
         )
     });
+}
+
+/// An oplog of 12 entries from index 1. It has a component update at index 2, and the matches of
+/// "needle" at the indices 4, 10 and 12. It gives the oplog and the indices of its entries.
+async fn open_search_scan_oplog(
+    name: &str,
+) -> (Arc<PrimaryOplogService>, OwnedAgentId, Vec<OplogIndex>) {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog(name).await;
+    let oplog_ref = &oplog;
+    let indices = futures::StreamExt::collect::<Vec<_>>(futures::StreamExt::then(
+        futures::stream::iter((1..=12u64).map(|index| match index {
+            2 => OplogEntry::SuccessfulUpdate {
+                timestamp: Timestamp::now_utc(),
+                target_revision: ComponentRevision::new(4).unwrap(),
+                new_component_size: 100,
+                new_total_linear_memory_size: None,
+                new_active_plugins: HashSet::new(),
+                snapshot_assisted_details: None,
+                bootstrap: None,
+            },
+            4 | 10 | 12 => OplogEntry::Log {
+                timestamp: Timestamp::now_utc(),
+                parent_start_index: None,
+                level: LogLevel::Stderr,
+                context: "context".to_string(),
+                message: "needle".to_string(),
+                trace_context: None,
+            },
+            _ => log_entry(0),
+        })),
+        move |entry| async move { oplog_ref.add(entry).await.unwrap() },
+    ))
+    .await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    assert_eq!(indices[0], OplogIndex::INITIAL);
+    (oplog_service, owned_agent_id, indices)
+}
+
+fn search_scan_budget(entries: u64, time: std::time::Duration) -> ScanBudget {
+    ScanBudget {
+        entries: std::num::NonZeroU64::new(entries).unwrap(),
+        time,
+    }
+}
+
+#[test]
+async fn a_remote_search_with_a_start_charges_its_revision_scan_and_continues_it_with_its_cursor() {
+    let (oplog_service, owned_agent_id, indices) = open_search_scan_oplog("search-scan").await;
+    let search = |cursor: Option<OplogCursor>, range: OplogRange| {
+        search_public_oplog_remote(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            cursor,
+            range,
+            OplogIndex::INITIAL,
+            PublicOplogPageLimits {
+                count: 10,
+                max_bytes: 1_000_000,
+                max_entry_bytes: 1_000_000,
+            },
+            "needle",
+            search_scan_budget(2, std::time::Duration::from_secs(600)),
+            ClaimVisibility::Hidden,
+        )
+    };
+    let from = indices[9];
+    let with_start = OplogRange::new(Some(from), None).unwrap();
+    // Follows the cursors from a first search of `with_start`, and sends `cursor_range` with each
+    // cursor. The pages stop after 20 reads, so a cursor that does not move cannot hang the test.
+    let follow = |cursor_range: OplogRange| {
+        let search = &search;
+        futures::TryStreamExt::try_collect::<Vec<_>>(futures::StreamExt::take(
+            futures::stream::try_unfold(
+                Some(None),
+                move |state: Option<Option<OplogCursor>>| async move {
+                    let Some(cursor) = state else {
+                        return Ok(None);
+                    };
+                    let range = if cursor.is_some() {
+                        cursor_range
+                    } else {
+                        with_start
+                    };
+                    let page = search(cursor, range).await?;
+                    let next = page.next.clone();
+                    Ok::<_, WorkerExecutorError>(Some((page, next.map(Some))))
+                },
+            ),
+            20,
+        ))
+    };
+
+    let pages = follow(OplogRange::ALL).await.unwrap();
+    // The budget of 2 entries ends the first search in the revision scan, before `from`.
+    let first = pages[0].next.clone().expect("the scan goes on");
+    assert!(pages[0].entries.is_empty());
+    assert_eq!(
+        (first.next_oplog_index, first.scan_to),
+        (indices[2].as_u64(), Some(from.as_u64()))
+    );
+    assert_eq!(
+        first.current_component_revision, 4,
+        "the cursor carries the revision of the update at index 2"
+    );
+    assert_eq!(pages.last().unwrap().next, None, "the search ends");
+    let nexts = pages
+        .iter()
+        .filter_map(|page| page.next.as_ref())
+        .map(|next| next.next_oplog_index)
+        .collect::<Vec<_>>();
+    assert!(
+        nexts.windows(2).all(|pair| pair[0] < pair[1]),
+        "each cursor is after the cursor before it: {nexts:?}"
+    );
+    // A cursor sent without `from`, as `--page --cursor` sends it, gives only the matches from
+    // `from`, and not the match at index 4.
+    let matches = |pages: &[PublicOplogSearchPage]| {
+        pages
+            .iter()
+            .flat_map(|page| page_indices(&page.entries))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        matches(&pages),
+        vec![(indices[9], true), (indices[11], true)]
+    );
+    // A cursor sent with `from` gives the same matches.
+    assert_eq!(matches(&follow(with_start).await.unwrap()), matches(&pages));
+    // A page read refuses the cursor of the revision scan.
+    let page_start = oplog_page_start(
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(first.clone()),
+        with_start,
+        OplogIndex::INITIAL,
+    )
+    .await;
+    assert!(
+        matches!(page_start, Err(WorkerExecutorError::InvalidRequest { .. })),
+        "{page_start:?}"
+    );
+}
+
+#[test]
+async fn a_remote_search_of_a_range_after_the_end_of_the_oplog_gives_no_entry_and_no_cursor() {
+    let (oplog_service, owned_agent_id, indices) = open_search_scan_oplog("search-empty").await;
+    let last = *indices.last().unwrap();
+    // The oplog is longer than the budget. So a revision scan up to the end of the oplog would
+    // spend the budget and give a cursor.
+    let (oplog_service, owned_agent_id) = (&oplog_service, &owned_agent_id);
+    let searches = [
+        OplogRange::new(Some(OplogIndex::from_u64(last.as_u64() + 5)), None).unwrap(),
+        OplogRange::new(
+            Some(OplogIndex::from_u64(last.as_u64() + 5)),
+            Some(OplogIndex::from_u64(last.as_u64() + 10)),
+        )
+        .unwrap(),
+    ]
+    .map(|range| async move {
+        let page = search_public_oplog_remote(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            None,
+            range,
+            OplogIndex::INITIAL,
+            PublicOplogPageLimits {
+                count: 10,
+                max_bytes: 1_000_000,
+                max_entry_bytes: 1_000_000,
+            },
+            "needle",
+            search_scan_budget(2, std::time::Duration::from_secs(600)),
+            ClaimVisibility::Hidden,
+        )
+        .await
+        .unwrap();
+        (range, page)
+    });
+    futures::future::join_all(searches)
+        .await
+        .into_iter()
+        .for_each(|(range, page)| {
+            assert!(page.entries.is_empty(), "{range:?}");
+            assert_eq!(page.next, None, "{range:?}");
+            assert_eq!(page.last_index, last, "{range:?}");
+        });
+}
+
+#[test]
+async fn a_remote_search_reads_at_least_one_batch_of_its_revision_scan_with_a_spent_time_budget() {
+    let (oplog_service, owned_agent_id, indices) = open_search_scan_oplog("search-progress").await;
+    let from = indices[9];
+    let range = OplogRange::new(Some(from), None).unwrap();
+    let search = |cursor: Option<OplogCursor>| {
+        search_public_oplog_remote(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            cursor,
+            range,
+            OplogIndex::INITIAL,
+            PublicOplogPageLimits {
+                count: 10,
+                max_bytes: 1_000_000,
+                max_entry_bytes: 1_000_000,
+            },
+            "needle",
+            search_scan_budget(2, std::time::Duration::ZERO),
+            ClaimVisibility::Hidden,
+        )
+    };
+    let scan_cursor = |next: OplogIndex| OplogCursor {
+        next_oplog_index: next.as_u64(),
+        current_component_revision: 4,
+        query_hash: OplogCursor::query_hash(Some("needle")),
+        scan_to: Some(from.as_u64()),
+    };
+    // The time budget is spent before the first batch. Each call still reads a batch of the 2
+    // entries of the budget, so the cursor moves on.
+    let searches = [
+        (None, indices[2]),
+        (Some(scan_cursor(indices[2])), indices[4]),
+    ]
+    .map(|(cursor, expected)| {
+        let search = &search;
+        async move { (cursor.clone(), search(cursor).await.unwrap(), expected) }
+    });
+    futures::future::join_all(searches)
+        .await
+        .into_iter()
+        .for_each(|(cursor, page, expected)| {
+            assert!(page.entries.is_empty());
+            assert_eq!(
+                page.next,
+                Some(scan_cursor(expected)),
+                "the search from {cursor:?} moves on"
+            );
+        });
+    // A scan cursor at index 0 is refused.
+    let at_zero = search(Some(scan_cursor(OplogIndex::NONE))).await;
+    assert!(
+        matches!(at_zero, Err(WorkerExecutorError::InvalidRequest { .. })),
+        "{at_zero:?}"
+    );
 }

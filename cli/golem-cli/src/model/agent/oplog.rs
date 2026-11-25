@@ -2182,6 +2182,7 @@ mod tests {
             next_oplog_index: next,
             current_component_revision: 0,
             query_hash: String::new(),
+            scan_to: None,
         }
     }
 
@@ -2302,6 +2303,38 @@ mod tests {
             },
         ))
         .await;
+    }
+
+    #[test]
+    async fn an_oplog_export_of_a_search_follows_a_cursor_before_the_start_of_its_range() {
+        let from = OplogRange::from_indices(Some(10), None).unwrap();
+        let closed = OplogRange::from_indices(Some(10), Some(20)).unwrap();
+        // The scan budget ended the first search before the start of the range. Its page is
+        // empty, and its cursor continues the scan at index 3.
+        let scan_page = OplogExportPage {
+            entries: Vec::new(),
+            next: Some(OplogCursor {
+                scan_to: Some(10),
+                ..export_cursor(3)
+            }),
+            last_index: OplogIndex::from_u64(20),
+        };
+        let (written, reads) = export_pages(
+            OplogExportSelection::Matches,
+            from,
+            vec![
+                scan_page,
+                export_page(&[12], Some(15), 20),
+                export_page(&[18], None, 20),
+            ],
+            Ok(()),
+        )
+        .await;
+        assert_eq!(written.unwrap(), vec![12, 18]);
+        assert_eq!(
+            reads,
+            vec![(from, None), (closed, Some(3)), (closed, Some(15))]
+        );
     }
 
     #[test]

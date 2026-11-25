@@ -21,8 +21,8 @@ use crate::Tracing;
 use futures::{StreamExt, TryStreamExt};
 use golem_api_grpc::proto::golem::worker::OplogCursor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    GetOplogRequest, GetOplogSuccessResponse, SearchOplogRequest, get_oplog_response,
-    search_oplog_response,
+    GetOplogRequest, GetOplogSuccessResponse, SearchOplogRequest, SearchOplogSuccessResponse,
+    get_oplog_response, search_oplog_response,
 };
 use golem_common::model::caller::ClaimVisibility;
 use golem_common::model::component::ComponentDto;
@@ -63,6 +63,13 @@ fn indices(entries: &[PublicOplogEntryWithIndex]) -> Vec<u64> {
 }
 
 fn page_entries(page: GetOplogSuccessResponse) -> Vec<PublicOplogPageEntry> {
+    page.entries
+        .into_iter()
+        .map(|entry| PublicOplogPageEntry::try_from(entry).unwrap())
+        .collect()
+}
+
+fn search_page_entries(page: SearchOplogSuccessResponse) -> Vec<PublicOplogPageEntry> {
     page.entries
         .into_iter()
         .map(|entry| PublicOplogPageEntry::try_from(entry).unwrap())
@@ -464,7 +471,8 @@ async fn a_search_within_a_range_returns_only_the_matching_entries_in_the_range(
 /// The scan budget ends a search page, not a read that follows the cursors. With a budget far below
 /// the length of the oplog, one search page stops at the budget. The read of the same range and
 /// query returns every match. A range read without an allowance has no budget, also when its start
-/// is after the budget.
+/// is after the budget. A search whose start is after the budget gives empty pages while it scans
+/// the oplog before its start. Its cursors then give only the matches in its range.
 #[test]
 #[timeout("4m")]
 async fn a_read_that_follows_the_cursors_is_not_limited_by_the_scan_budget(
@@ -543,6 +551,70 @@ async fn a_read_that_follows_the_cursors_is_not_limited_by_the_scan_budget(
         .read_oplog(&agent_id, range(from, last), None)
         .await?;
     assert_eq!(indices(&late), (from..=last).collect::<Vec<_>>());
+
+    // A search of the same range scans the oplog before its start for the component revision,
+    // and the budget covers that scan. So its first page has no entry, and its cursor continues
+    // the scan before `from`. The cursors are followed without `from`, as `--page --cursor` and
+    // the MCP tool send them. The pages give only the matches from `from`.
+    let started_from = started
+        .iter()
+        .copied()
+        .filter(|index| *index >= from)
+        .collect::<Vec<_>>();
+    assert!(!started_from.is_empty(), "{started:?}");
+    let search_page = |from_oplog_index: Option<u64>, cursor: Option<OplogCursor>| {
+        let mut client = executor.client.clone();
+        let request = SearchOplogRequest {
+            agent_id: Some(agent_id.agent_id.into()),
+            environment_id: Some(agent_id.environment_id.into()),
+            cursor,
+            count: 100,
+            query: QUERY.to_string(),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            claims: ClaimVisibility::Hidden.to_protobuf(),
+            from_oplog_index,
+            to_oplog_index: Some(last),
+        };
+        async move {
+            match client.search_oplog(request).await?.into_inner().result {
+                Some(search_oplog_response::Result::Success(page)) => Ok(page),
+                other => Err(anyhow::anyhow!("the search failed: {other:?}")),
+            }
+        }
+    };
+    let search_page = &search_page;
+    let first = search_page(Some(from), None).await?;
+    assert!(
+        first.entries.is_empty(),
+        "the budget ends the revision scan"
+    );
+    let first_cursor = first.next.clone().expect("the revision scan goes on");
+    assert!(
+        first_cursor.next_oplog_index < from,
+        "the cursor continues the scan before {from}: {first_cursor:?}"
+    );
+    assert_eq!(first_cursor.scan_to, Some(from));
+    let followed = futures::stream::try_unfold(first.next, |cursor| async move {
+        match cursor {
+            None => anyhow::Ok(None),
+            Some(cursor) => {
+                let page = search_page(None, Some(cursor)).await?;
+                let next = page.next.clone();
+                Ok(Some((search_page_entries(page), next)))
+            }
+        }
+    })
+    .take(100)
+    .try_concat()
+    .await?;
+    assert_eq!(
+        followed.iter().map(page_entry_index).collect::<Vec<_>>(),
+        started_from
+    );
+    let read = executor
+        .read_oplog(&agent_id, range(from, last), Some(QUERY))
+        .await?;
+    assert_eq!(indices(&read), started_from);
     Ok(())
 }
 
