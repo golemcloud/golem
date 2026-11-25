@@ -341,7 +341,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             return self
                 .load_durable_stream_producer()
                 .await
-                .map_err(source_unavailable_error)?
+                .map_err(|error| {
+                    DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
+                })?
                 .commit_source_unavailable_overlay(
                     None,
                     key.clone(),
@@ -350,7 +352,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     *consumer_read_ordinal,
                 )
                 .await
-                .map_err(source_unavailable_error);
+                .map_err(|error| {
+                    DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime)
+                });
         }
         if key.producer_environment_id != self.owned_agent_id.environment_id
             || key.producer != self.owned_agent_id.agent_id
@@ -974,18 +978,4 @@ pub(in crate::worker) async fn wait_for_durable_stream_retry(
     interval: Duration,
 ) -> bool {
     wait_for_durable_stream_maintenance(shutdown, std::future::pending(), Some(interval)).await
-}
-
-/// The error of a routed source-unavailable overlay. An unreadable oplog keeps its typed error,
-/// so an expired read reaches the caller as `OplogFailed` with the retained start. Every other
-/// error maps as for every producer control request.
-pub(super) fn source_unavailable_error(
-    error: crate::durable_host::durable_stream::StreamStoreError,
-) -> DurableStreamRemoteError<WorkerExecutorError> {
-    match error {
-        crate::durable_host::durable_stream::StreamStoreError::Unreadable(unreadable) => {
-            DurableStreamRemoteError::Other(unreadable.into())
-        }
-        error => DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime),
-    }
 }

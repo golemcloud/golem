@@ -161,7 +161,10 @@ async fn explicit_retirement_does_not_wait_for_ephemeral_responses() {
         Ok(_) => panic!("explicit retirement admitted a response"),
     };
     assert_eq!(
-        crate::services::rpc::DurableStreamRemoteError::from_producer(error, |error| error),
+        crate::services::rpc::DurableStreamRemoteError::from_producer(
+            error,
+            WorkerExecutorError::runtime
+        ),
         crate::services::rpc::DurableStreamRemoteError::Unavailable,
     );
     assert!(producer.ensure_healthy().is_err());
@@ -588,28 +591,38 @@ async fn corrupt_recovery_stays_fenced_without_automatic_retries() {
     );
 }
 
-/// A routed source-unavailable overlay of a reader that a record below the retained start
-/// introduced reads below the start. The caller gets the expired error with the start, not a
-/// runtime error. A store that awaits recovery stays unavailable.
+/// A producer request that reads below the retained start, such as a routed attach or a routed
+/// source-unavailable overlay of a reader that a record below the start introduced, gives the
+/// caller the expired error with the start, not a runtime error. A store that awaits recovery
+/// stays unavailable, and every other error keeps its text.
 #[test]
-fn a_routed_source_unavailable_overlay_keeps_the_expired_error() {
+fn a_producer_request_keeps_the_expired_error() {
     use crate::durable_host::durable_stream::StreamStoreError;
     use crate::services::oplog::UnreadableOplog;
     use crate::services::oplog::retention::test_oplog::expired;
     use crate::services::rpc::DurableStreamRemoteError;
 
     let agent_id = identity().agent_id;
+    let producer_error =
+        |error| DurableStreamRemoteError::from_producer(error, WorkerExecutorError::runtime);
     assert_eq!(
-        super::attachments::source_unavailable_error(StreamStoreError::Unreadable(
-            UnreadableOplog::new(&agent_id, expired(4))
-        )),
+        producer_error(StreamStoreError::Unreadable(UnreadableOplog::new(
+            &agent_id,
+            expired(4)
+        ))),
         DurableStreamRemoteError::Other(WorkerExecutorError::oplog_expired(
             agent_id,
             OplogIndex::from_u64(4)
         ))
     );
     assert_eq!(
-        super::attachments::source_unavailable_error(StreamStoreError::RecoveryRequired),
+        producer_error(StreamStoreError::RecoveryRequired),
         DurableStreamRemoteError::Unavailable
+    );
+    assert_eq!(
+        producer_error(StreamStoreError::InvalidHandle),
+        DurableStreamRemoteError::Other(WorkerExecutorError::runtime(
+            StreamStoreError::InvalidHandle.to_string()
+        ))
     );
 }
