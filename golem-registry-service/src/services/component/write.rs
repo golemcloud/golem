@@ -478,11 +478,7 @@ impl ComponentWriteService {
                 wasm,
             )
             .await?;
-        record_component_uploaded(
-            &auth.actor_account_id().to_string(),
-            &environment_id.to_string(),
-            component_size,
-        );
+        record_component_uploaded(component_size);
 
         let record = ComponentRevisionRecord::creation(
             component_id,
@@ -908,11 +904,7 @@ impl ComponentWriteService {
                 .await?;
             component.wasm_hash = wasm_hash;
             component.object_store_key.clone_from(&staged.object_key);
-            record_component_uploaded(
-                &auth.actor_account_id().to_string(),
-                &environment_id.to_string(),
-                new_wasm_bytes,
-            );
+            record_component_uploaded(new_wasm_bytes);
             Some(staged)
         } else {
             None

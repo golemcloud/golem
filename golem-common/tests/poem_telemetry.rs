@@ -14,10 +14,9 @@
 
 use std::sync::{Arc, Mutex};
 
-use golem_common::poem::{OpenTelemetryMetrics, OpenTelemetryTracing, PrometheusExporter};
+use golem_common::poem::{HttpMetrics, OpenTelemetryTracing, PrometheusExporter};
 use opentelemetry::trace::{SpanId, TracerProvider};
 use opentelemetry_sdk::error::OTelSdkResult;
-use opentelemetry_sdk::metrics::SdkMeterProvider;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use opentelemetry_sdk::trace::{SdkTracerProvider, SimpleSpanProcessor, SpanData, SpanExporter};
 use poem::EndpointExt;
@@ -29,6 +28,8 @@ use test_r::test;
 test_r::enable!();
 
 #[test]
+// The exporter is tested with a private registry and metric, outside the catalog.
+#[allow(clippy::disallowed_methods)]
 async fn prometheus_exporter_serves_registered_metrics() {
     let registry = Registry::new();
     let counter = prometheus::IntCounter::new("requests", "request count").unwrap();
@@ -52,41 +53,77 @@ async fn prometheus_exporter_serves_registered_metrics() {
 
 #[test]
 async fn metrics_use_the_matched_route_and_response_status() {
-    let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
-        .without_counter_suffixes()
-        .without_units()
-        .build();
-    let provider = SdkMeterProvider::builder()
-        .with_reader(exporter.clone())
-        .build();
-    opentelemetry::global::set_meter_provider(provider);
     let app = poem::Route::new()
         .at(
             "/items/:id",
             poem::endpoint::make_sync(|_| StatusCode::CREATED),
         )
-        .with(OpenTelemetryMetrics::new());
+        .with(HttpMetrics);
 
-    TestClient::new(app)
+    let client = TestClient::new(app);
+    client
         .get("/items/42")
         .send()
         .await
         .assert_status(StatusCode::CREATED);
+    client
+        .request(
+            poem::http::Method::from_bytes(b"BREW").unwrap(),
+            "/items/42",
+        )
+        .send()
+        .await
+        .assert_status(StatusCode::CREATED);
+    client
+        .get("/unknown/42")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
 
-    let mut output = Vec::new();
-    exporter.export(&mut output).unwrap();
-    let output = String::from_utf8(output).unwrap();
-    assert!(output.contains("poem_requests_count"), "{output}");
-    assert!(output.contains("poem_request_duration_ms"), "{output}");
+    let output = prometheus::TextEncoder::new()
+        .encode_to_string(&prometheus::gather())
+        .unwrap();
     assert!(
-        output.contains("http_path_pattern=\"/items/:id\""),
+        output.contains(
+            r#"golem_http_requests_total{method="GET",route="/items/:id",status="201"} 1"#
+        ),
         "{output}"
     );
-    assert!(output.contains("http_request_method=\"GET\""), "{output}");
     assert!(
-        output.contains("http_response_status_code=\"201\""),
+        output.contains(
+            r#"golem_http_request_duration_seconds_count{method="GET",route="/items/:id",status="201"} 1"#
+        ),
         "{output}"
     );
+    assert!(
+        output.contains(
+            r#"golem_http_requests_total{method="other",route="/items/:id",status="201"} 1"#
+        ),
+        "{output}"
+    );
+    assert!(
+        output.contains(r#"golem_http_requests_total{method="GET",route="other",status="404"} 1"#),
+        "{output}"
+    );
+    assert!(!output.contains("/items/42"), "{output}");
+
+    // The gateway nests the custom HTTP APIs at `/`, which poem records as an empty pattern.
+    let nested = poem::Route::new()
+        .nest("/", poem::endpoint::make_sync(|_| StatusCode::OK))
+        .with(HttpMetrics);
+    TestClient::new(nested)
+        .get("/custom/api")
+        .send()
+        .await
+        .assert_status(StatusCode::OK);
+    let output = prometheus::TextEncoder::new()
+        .encode_to_string(&prometheus::gather())
+        .unwrap();
+    assert!(
+        output.contains(r#"golem_http_requests_total{method="GET",route="other",status="200"} 1"#),
+        "{output}"
+    );
+    assert!(!output.contains(r#"route="""#), "{output}");
 }
 
 #[derive(Clone, Debug, Default)]

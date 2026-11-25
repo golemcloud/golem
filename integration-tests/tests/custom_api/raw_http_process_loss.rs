@@ -231,7 +231,7 @@ async fn explicit_cancellations(metrics_port: u16) -> anyhow::Result<u64> {
         .await?;
     Ok(metrics
         .lines()
-        .find_map(|line| line.strip_prefix("http_session_explicit_cancellations_total "))
+        .find_map(|line| line.strip_prefix("golem_http_session_explicit_cancellations_total "))
         .map(|value| value.trim().parse::<f64>())
         .transpose()?
         .unwrap_or_default() as u64)

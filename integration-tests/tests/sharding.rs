@@ -1798,7 +1798,7 @@ mod tests {
             // because the survivor recorded a higher epoch first, which the epoch check below asserts.
             // The refusal itself is pinned deterministically by golem-worker-executor's oplog and
             // indexed-storage tests; in a live cluster it is visible as
-            // `oplog_epoch_fence_total{op="append",outcome="refused"}`.
+            // `golem_oplog_epoch_fence_total{op="append",outcome="refused"}`.
             info!("Resuming worker executors {frozen:?}");
             for idx in frozen {
                 cluster_control.resume(*idx).await;

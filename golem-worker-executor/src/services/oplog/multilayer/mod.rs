@@ -33,7 +33,6 @@ use crate::storage::indexed::{IndexedStorageError, IndexedStorageMetaNamespace};
 use async_trait::async_trait;
 use futures::FutureExt;
 use golem_common::model::ShardEpoch;
-use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
@@ -320,8 +319,6 @@ pub(crate) fn layers_fence(
 #[derive(Debug)]
 pub struct InstrumentedOplogArchive {
     inner: Arc<dyn OplogArchive + Send + Sync>,
-    account_id: AccountId,
-    environment_id: EnvironmentId,
 }
 
 #[derive(Debug)]

@@ -12,106 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::metrics::catalog;
 use lazy_static::lazy_static;
 use prometheus::*;
 
-const EVENT_COUNT_BUCKETS: &[f64] = &[
-    0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 128.0, 256.0, 512.0, 1_024.0, 4_096.0, 16_384.0,
-];
-const EPOCH_BUCKETS: &[f64] = &[
-    0.0, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0, 64.0, 256.0, 1_024.0, 65_536.0,
-];
-const LEASE_REMAINING_BUCKETS: &[f64] =
-    &[0.0, 1.0, 5.0, 10.0, 20.0, 30.0, 45.0, 60.0, 120.0, 300.0];
-
 lazy_static! {
-    static ref LIFECYCLE_TOTAL: CounterVec = register_counter_vec!(
-        "golem_durable_stream_lifecycle_total",
-        "Durable stream registrations and terminal transitions",
-        &["event"]
-    )
-    .unwrap();
-    static ref OPEN_STREAMS: IntGauge = register_int_gauge!(
-        "golem_durable_stream_open",
-        "Open durable streams owned by loaded producers on this executor"
-    )
-    .unwrap();
-    static ref PRODUCER_OPERATION_TOTAL: CounterVec = register_counter_vec!(
-        "golem_durable_stream_producer_operation_total",
-        "Durable producer operations by bounded operation and commit outcome",
-        &["operation", "outcome"]
-    )
-    .unwrap();
-    static ref CATCH_UP_DISTANCE_EVENTS: Histogram = register_histogram!(
-        "golem_durable_stream_catch_up_distance_events",
-        "Committed events read before a durable reader joins the live tail",
-        EVENT_COUNT_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref LIVE_JOIN_TOTAL: CounterVec = register_counter_vec!(
-        "golem_durable_stream_live_join_total",
-        "Durable live-tail join attempts by outcome",
-        &["outcome"]
-    )
-    .unwrap();
-    static ref ACTIVE_READERS: IntGauge = register_int_gauge!(
-        "golem_durable_stream_active_readers",
-        "Active durable live-tail readers on this executor"
-    )
-    .unwrap();
-    static ref BACKPRESSURE_TOTAL: IntCounter = register_int_counter!(
-        "golem_durable_stream_backpressure_total",
-        "Durable event fan-outs that waited on a full live-reader queue"
-    )
-    .unwrap();
-    static ref ATTEMPT_TOTAL: CounterVec = register_counter_vec!(
-        "golem_durable_stream_attempt_total",
-        "Durable Stream Session start, resume, and takeover attempts by outcome",
-        &["operation", "outcome"]
-    )
-    .unwrap();
-    static ref ATTACHMENT_EPOCH: Histogram = register_histogram!(
-        "golem_durable_stream_attachment_epoch",
-        "Accepted durable Stream Session attachment epochs",
-        EPOCH_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref JOURNAL_LAG_EVENTS: Histogram = register_histogram!(
-        "golem_durable_stream_journal_lag_events",
-        "Committed source events not yet recorded in the value-only consumer journal, sampled at creation, terminal, and at most every 100 ms during consumption",
-        EVENT_COUNT_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref ATTACHMENT_OPERATION_TOTAL: CounterVec = register_counter_vec!(
-        "golem_durable_stream_attachment_operation_total",
-        "Cross-oplog attachment operations by bounded operation and outcome",
-        &["operation", "outcome"]
-    )
-    .unwrap();
-    static ref LEASE_REMAINING_SECONDS: Histogram = register_histogram!(
-        "golem_durable_stream_lease_remaining_seconds",
-        "Remaining attachment lease time when inspected or reconciled",
-        LEASE_REMAINING_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref RECONCILIATION_TOTAL: CounterVec = register_counter_vec!(
-        "golem_durable_stream_reconciliation_total",
-        "Attachment reconciliation candidates by outcome",
-        &["outcome"]
-    )
-    .unwrap();
-    static ref CASCADE_TOTAL: CounterVec = register_counter_vec!(
-        "golem_durable_stream_cascade_total",
-        "Producer deletion cascade dependents by durable outcome",
-        &["outcome"]
-    )
-    .unwrap();
-    static ref LIMIT_VIOLATION_TOTAL: CounterVec = register_counter_vec!(
-        "golem_durable_stream_limit_violation_total",
-        "Rejected durable Stream Session operations by frozen limit category",
-        &["limit"]
-    )
-    .unwrap();
+    static ref LIFECYCLE_TOTAL: CounterVec = catalog::DURABLE_STREAM_LIFECYCLE_TOTAL.register();
+    static ref OPEN_STREAMS: IntGauge = catalog::DURABLE_STREAM_OPEN.register();
+    static ref PRODUCER_OPERATION_TOTAL: CounterVec =
+        catalog::DURABLE_STREAM_PRODUCER_OPERATION_TOTAL.register();
+    static ref CATCH_UP_DISTANCE_EVENTS: Histogram =
+        catalog::DURABLE_STREAM_CATCH_UP_DISTANCE_EVENTS.register();
+    static ref LIVE_JOIN_TOTAL: CounterVec = catalog::DURABLE_STREAM_LIVE_JOIN_TOTAL.register();
+    static ref ACTIVE_READERS: IntGauge = catalog::DURABLE_STREAM_ACTIVE_READERS.register();
+    static ref BACKPRESSURE_TOTAL: IntCounter =
+        catalog::DURABLE_STREAM_BACKPRESSURE_TOTAL.register();
+    static ref ATTEMPT_TOTAL: CounterVec = catalog::DURABLE_STREAM_ATTEMPT_TOTAL.register();
+    static ref ATTACHMENT_EPOCH: Histogram = catalog::DURABLE_STREAM_ATTACHMENT_EPOCH.register();
+    static ref JOURNAL_LAG_EVENTS: Histogram =
+        catalog::DURABLE_STREAM_JOURNAL_LAG_EVENTS.register();
+    static ref ATTACHMENT_OPERATION_TOTAL: CounterVec =
+        catalog::DURABLE_STREAM_ATTACHMENT_OPERATION_TOTAL.register();
+    static ref LEASE_REMAINING_SECONDS: Histogram =
+        catalog::DURABLE_STREAM_LEASE_REMAINING_SECONDS.register();
+    static ref RECONCILIATION_TOTAL: CounterVec =
+        catalog::DURABLE_STREAM_RECONCILIATION_TOTAL.register();
+    static ref CASCADE_TOTAL: CounterVec = catalog::DURABLE_STREAM_CASCADE_TOTAL.register();
+    static ref LIMIT_VIOLATION_TOTAL: CounterVec =
+        catalog::DURABLE_STREAM_LIMIT_VIOLATION_TOTAL.register();
 }
 
 pub fn record_lifecycle(event: &'static str) {

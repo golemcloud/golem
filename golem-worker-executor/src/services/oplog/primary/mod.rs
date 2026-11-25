@@ -41,7 +41,6 @@ use bytes::Bytes;
 use futures::FutureExt;
 use golem_common::model::RetryConfig;
 use golem_common::model::ShardEpoch;
-use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex, PayloadId, RawOplogPayload};
@@ -126,7 +125,6 @@ struct CreateOplogConstructor {
     reconcile_last_index: bool,
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
-    account_id: AccountId,
     fingerprint: AgentFingerprint,
     stream_session_index: Option<Arc<super::StreamSessionIndexService>>,
     shard_epoch: Option<ShardEpoch>,
@@ -266,7 +264,6 @@ struct OplogBlobContext {
     blob_storage: Arc<dyn BlobStorage + Send + Sync>,
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
-    account_id: AccountId,
     max_payload_size: usize,
 }
 
@@ -306,9 +303,6 @@ struct PrimaryOplogState {
     owned_agent_id: OwnedAgentId,
     agent_mode: AgentMode,
     fingerprint: AgentFingerprint,
-    account_id: AccountId,
-    account_id_label: String,
-    environment_id_label: String,
     last_added_non_hint_entry: Option<OplogIndex>,
     /// In-flight external payload uploads started by [`PrimaryOplogState::reserve_raw_payload`] but
     /// not yet known to be durable. The commit barrier in `append` waits on these before persisting

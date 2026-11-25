@@ -12,58 +12,36 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use lazy_static::lazy_static;
-use prometheus::*;
+use golem_common::golem_version;
+use golem_common::metrics::catalog;
+use prometheus::IntGaugeVec;
+use std::sync::LazyLock;
 
-lazy_static! {
-    pub static ref VERSION_INFO: IntCounterVec =
-        register_int_counter_vec!("version_info", "Version info of the server", &["version"])
-            .unwrap();
+static BUILD_INFO: LazyLock<IntGaugeVec> = LazyLock::new(|| catalog::BUILD_INFO.register());
+
+/// Sets `golem_build_info` for the version of this process.
+pub fn record_build_info() {
+    BUILD_INFO.with_label_values(&[golem_version()]).set(1);
 }
 
 pub mod storage {
+    use golem_common::metrics::catalog;
     use lazy_static::lazy_static;
     use prometheus::*;
 
-    pub const STORAGE_TYPE_COMPILATION_CACHE: &str = "compilation_cache";
-
     lazy_static! {
-        pub static ref LOGICAL_OPERATIONS_TOTAL: IntCounterVec = register_int_counter_vec!(
-            "golem_storage_logical_operations_total",
-            "Storage API calls, including failed calls, before backend retries",
-            &["kind", "operation", "service", "api", "entity"]
-        )
-        .unwrap();
-        pub static ref STORAGE_BYTES_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
-            "golem_storage_bytes_written_total",
-            "Total bytes written to storage, by storage type, account and environment",
-            &["storage_type", "account_id", "environment_id"]
-        )
-        .unwrap();
-        pub static ref STORAGE_OBJECTS_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
-            "golem_storage_objects_written_total",
-            "Total objects written to storage, by storage type, account and environment",
-            &["storage_type", "account_id", "environment_id"]
-        )
-        .unwrap();
-        pub static ref STORAGE_OBJECTS_DELETED_TOTAL: CounterVec = register_counter_vec!(
-            "golem_storage_objects_deleted_total",
-            "Total objects deleted from storage, by storage type, account and environment",
-            &["storage_type", "account_id", "environment_id"]
-        )
-        .unwrap();
-        pub static ref COMPILATION_CACHE_BYTES_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
-            "golem_compilation_cache_bytes_written_total",
-            "Total bytes written to the compiled component cache, by environment",
-            &["storage_type", "environment_id"]
-        )
-        .unwrap();
-        pub static ref COMPILATION_CACHE_OBJECTS_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
-            "golem_compilation_cache_objects_written_total",
-            "Total objects written to the compiled component cache, by environment",
-            &["storage_type", "environment_id"]
-        )
-        .unwrap();
+        pub static ref LOGICAL_OPERATIONS_TOTAL: IntCounterVec =
+            catalog::STORAGE_LOGICAL_OPERATIONS_TOTAL.register();
+        pub static ref STORAGE_BYTES_WRITTEN_TOTAL: CounterVec =
+            catalog::STORAGE_BYTES_WRITTEN_TOTAL.register();
+        pub static ref STORAGE_OBJECTS_WRITTEN_TOTAL: CounterVec =
+            catalog::STORAGE_OBJECTS_WRITTEN_TOTAL.register();
+        pub static ref STORAGE_OBJECTS_DELETED_TOTAL: CounterVec =
+            catalog::STORAGE_OBJECTS_DELETED_TOTAL.register();
+        pub static ref COMPILATION_CACHE_BYTES_WRITTEN_TOTAL: Counter =
+            catalog::COMPILATION_CACHE_BYTES_WRITTEN_TOTAL.register();
+        pub static ref COMPILATION_CACHE_OBJECTS_WRITTEN_TOTAL: Counter =
+            catalog::COMPILATION_CACHE_OBJECTS_WRITTEN_TOTAL.register();
     }
 
     pub fn record_logical_operation(
@@ -78,49 +56,30 @@ pub mod storage {
             .inc();
     }
 
-    pub fn record_storage_bytes_written(
-        storage_type: &str,
-        account_id: &str,
-        environment_id: &str,
-        bytes: u64,
-    ) {
+    pub fn record_storage_bytes_written(storage_type: &str, bytes: u64) {
         STORAGE_BYTES_WRITTEN_TOTAL
-            .with_label_values(&[storage_type, account_id, environment_id])
+            .with_label_values(&[storage_type])
             .inc_by(bytes as f64);
     }
 
-    pub fn record_storage_objects_written(
-        storage_type: &str,
-        account_id: &str,
-        environment_id: &str,
-        count: u64,
-    ) {
+    pub fn record_storage_objects_written(storage_type: &str, count: u64) {
         STORAGE_OBJECTS_WRITTEN_TOTAL
-            .with_label_values(&[storage_type, account_id, environment_id])
+            .with_label_values(&[storage_type])
             .inc_by(count as f64);
     }
 
-    pub fn record_storage_objects_deleted(
-        storage_type: &str,
-        account_id: &str,
-        environment_id: &str,
-        count: u64,
-    ) {
+    pub fn record_storage_objects_deleted(storage_type: &str, count: u64) {
         STORAGE_OBJECTS_DELETED_TOTAL
-            .with_label_values(&[storage_type, account_id, environment_id])
+            .with_label_values(&[storage_type])
             .inc_by(count as f64);
     }
 
-    pub fn record_compilation_cache_bytes_written(environment_id: &str, bytes: u64) {
-        COMPILATION_CACHE_BYTES_WRITTEN_TOTAL
-            .with_label_values(&[STORAGE_TYPE_COMPILATION_CACHE, environment_id])
-            .inc_by(bytes as f64);
+    pub fn record_compilation_cache_bytes_written(bytes: u64) {
+        COMPILATION_CACHE_BYTES_WRITTEN_TOTAL.inc_by(bytes as f64);
     }
 
-    pub fn record_compilation_cache_objects_written(environment_id: &str, count: u64) {
-        COMPILATION_CACHE_OBJECTS_WRITTEN_TOTAL
-            .with_label_values(&[STORAGE_TYPE_COMPILATION_CACHE, environment_id])
-            .inc_by(count as f64);
+    pub fn record_compilation_cache_objects_written(count: u64) {
+        COMPILATION_CACHE_OBJECTS_WRITTEN_TOTAL.inc_by(count as f64);
     }
 }
 
@@ -129,29 +88,17 @@ pub mod grpc {
 
     use std::time::Duration;
 
+    use golem_common::metrics::catalog;
     use lazy_static::lazy_static;
     use prometheus::*;
 
     lazy_static! {
-        static ref INTERNAL_GRPC_SUCCESS_SECONDS: HistogramVec = register_histogram_vec!(
-            "internal_grpc_success_seconds",
-            "Duration of successful internal gRPC calls between Golem services",
-            &["target", "op"],
-            golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-        )
-        .unwrap();
-        static ref INTERNAL_GRPC_FAILURE_TOTAL: CounterVec = register_counter_vec!(
-            "internal_grpc_failure_total",
-            "Number of failed internal gRPC calls that were not retried or exhausted retries",
-            &["target", "op", "status_code"]
-        )
-        .unwrap();
-        static ref INTERNAL_GRPC_RETRY_TOTAL: CounterVec = register_counter_vec!(
-            "internal_grpc_retry_total",
-            "Number of internal gRPC call attempts retried due to a reconnectable error",
-            &["target", "op"]
-        )
-        .unwrap();
+        static ref INTERNAL_GRPC_SUCCESS_SECONDS: HistogramVec =
+            catalog::INTERNAL_GRPC_SUCCESS_SECONDS.register();
+        static ref INTERNAL_GRPC_FAILURE_TOTAL: CounterVec =
+            catalog::INTERNAL_GRPC_FAILURE_TOTAL.register();
+        static ref INTERNAL_GRPC_RETRY_TOTAL: CounterVec =
+            catalog::INTERNAL_GRPC_RETRY_TOTAL.register();
     }
 
     pub fn record_internal_grpc_success(target: &str, op: &str, duration: Duration) {
@@ -179,22 +126,15 @@ pub mod tls {
 
     use std::time::SystemTime;
 
+    use golem_common::metrics::catalog;
     use lazy_static::lazy_static;
     use prometheus::*;
 
     lazy_static! {
-        pub static ref CERTIFICATE_NOT_AFTER_SECONDS: GaugeVec = register_gauge_vec!(
-            "golem_tls_certificate_not_after_seconds",
-            "Unix time at which the TLS certificate in use expires, by use",
-            &["use"]
-        )
-        .unwrap();
-        pub static ref RELOAD_FAILURES_TOTAL: IntCounterVec = register_int_counter_vec!(
-            "golem_tls_certificate_reload_failures_total",
-            "Changed TLS files that could not be used, by use",
-            &["use"]
-        )
-        .unwrap();
+        pub static ref CERTIFICATE_NOT_AFTER_SECONDS: GaugeVec =
+            catalog::TLS_CERTIFICATE_NOT_AFTER_SECONDS.register();
+        pub static ref RELOAD_FAILURES_TOTAL: IntCounterVec =
+            catalog::TLS_CERTIFICATE_RELOAD_FAILURES_TOTAL.register();
     }
 
     pub fn record_certificate_not_after(use_name: &str, not_after: SystemTime) {

@@ -5692,6 +5692,13 @@ async fn send_batch_captures_active_delta_and_zeroes_it() {
     );
     mock.set_batch_update_response(AccountResourceLimits(updated));
 
+    // The counters are shared with the other tests of this process, which only add to them.
+    // The registry counts GB-seconds of 2^30 bytes; the metric counts byte-seconds.
+    const GIB: f64 = (1u64 << 30) as f64;
+    let durable_metric_before =
+        crate::metrics::resources::memory_byte_seconds_total(AgentMode::Durable);
+    let ephemeral_metric_before =
+        crate::metrics::resources::memory_byte_seconds_total(AgentMode::Ephemeral);
     let svc = make_grpc(mock.clone());
     let entry = svc.initialize_account(id).await.unwrap();
     entry.borrow_fuel(300);
@@ -5718,13 +5725,13 @@ async fn send_batch_captures_active_delta_and_zeroes_it() {
     assert_eq!(update.memory_gb_seconds_delta, 7);
     assert_eq!(update.durable_storage_byte_seconds_delta, 100);
     assert_eq!(update.ephemeral_storage_byte_seconds_delta, 200);
-    assert_eq!(
-        crate::metrics::resources::memory_gb_seconds_total(&id.to_string(), AgentMode::Durable,),
-        3.0
+    assert!(
+        crate::metrics::resources::memory_byte_seconds_total(AgentMode::Durable)
+            >= durable_metric_before + 3.0 * GIB
     );
-    assert_eq!(
-        crate::metrics::resources::memory_gb_seconds_total(&id.to_string(), AgentMode::Ephemeral,),
-        4.0
+    assert!(
+        crate::metrics::resources::memory_byte_seconds_total(AgentMode::Ephemeral)
+            >= ephemeral_metric_before + 4.0 * GIB
     );
 }
 
@@ -5857,10 +5864,6 @@ async fn send_batch_failure_clears_in_flight_without_updating_fuel() {
         0
     );
     assert_eq!(entry.effective_fuel(), 700);
-    assert_eq!(
-        crate::metrics::resources::memory_gb_seconds_total(&id.to_string(), AgentMode::Durable,),
-        0.0
-    );
 }
 
 #[test]

@@ -12,213 +12,77 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::metrics::catalog;
 use golem_common::model::AgentStatus;
 use lazy_static::lazy_static;
 use prometheus::*;
 use std::time::Duration;
 
 lazy_static! {
-    static ref WORKER_EXECUTOR_CALL_TOTAL: CounterVec = register_counter_vec!(
-        "worker_executor_call_total",
-        "Number of calls to the worker layer",
-        &["api"]
-    )
-    .unwrap();
-    static ref WORKER_COUNT_BY_STATUS: GaugeVec = register_gauge_vec!(
-        "worker_count_by_status",
-        "Number of in-memory workers per status",
-        &["status"]
-    )
-    .unwrap();
-    static ref WORKER_EVICTION_TOTAL: CounterVec = register_counter_vec!(
-        "worker_eviction_total",
-        "Number of workers evicted from memory",
-        &["class"]
-    )
-    .unwrap();
-    pub static ref WORKER_MEMORY_RESIDENT_COUNT: GaugeVec = register_gauge_vec!(
-        "worker_memory_resident_count",
-        "Workers currently holding a memory permit and running an invocation loop on this executor",
-        &["executor_id"]
-    )
-    .unwrap();
-    pub static ref WORKER_WAITING_FOR_MEMORY_COUNT: GaugeVec = register_gauge_vec!(
-        "worker_waiting_for_memory_count",
-        "Workers blocked waiting to acquire a memory permit on this executor",
-        &["executor_id"]
-    )
-    .unwrap();
-    pub static ref WORKER_ADMISSION_WAIT_SECONDS: HistogramVec = register_histogram_vec!(
-        "worker_admission_wait_seconds",
-        "Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. worker_waiting_for_memory_count says how many workers are waiting, this says for how long",
-        &["executor_id", "phase"],
-        crate::metrics::ADMISSION_WAIT_BUCKETS.to_vec()
-    )
-    .unwrap();
-    pub static ref WORKER_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
-        "golem_worker_store_alive_count",
-        "Live wasmtime Store contexts on this executor, counted by the Store's own lifetime: incremented when a worker's Store is constructed and decremented when it is dropped. Diverging above the resident-worker count means Stores are retained after the owning worker was deleted",
-        &["executor_id"]
-    )
-    .unwrap();
-    static ref OWNER_GROUP_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
-        "golem_owner_group_alive_count",
-        "Owner-routed active agent groups on this executor",
-        &["executor_id"]
-    )
-    .unwrap();
-    static ref PRIMARY_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
-        "golem_primary_store_alive_count",
-        "Live primary agent Stores on this executor",
-        &["executor_id"]
-    )
-    .unwrap();
-    static ref ENTITY_STORE_ALIVE_COUNT: GaugeVec = register_gauge_vec!(
-        "golem_entity_store_alive_count",
-        "Live transient entity Stores on this executor",
-        &["executor_id", "entity_kind"]
-    )
-    .unwrap();
-    static ref ENTITY_INVOCATION_ACTIVE_COUNT: GaugeVec = register_gauge_vec!(
-        "golem_entity_invocation_active_count",
-        "Entity invocation bodies currently active on this executor",
-        &["entity_kind", "execution_mode"]
-    )
-    .unwrap();
-    static ref ENTITY_INVOCATION_TOTAL: CounterVec = register_counter_vec!(
-        "golem_entity_invocation_total",
-        "Entity invocation bodies by terminal outcome",
-        &["entity_kind", "execution_mode", "outcome"]
-    )
-    .unwrap();
-    pub static ref WORKER_KV_CACHE_VALUE_SIZE_BYTES: HistogramVec = register_histogram_vec!(
-        "worker_kv_cache_value_size_bytes",
-        "Bytes of a value written to the Worker-namespace KV cache (worker status blob size)",
-        &["executor_id"],
-        crate::metrics::BLOB_SIZE_BUCKETS.to_vec()
-    )
-    .unwrap();
-    pub static ref WORKER_MEMORY_POOL_TOTAL_BYTES: GaugeVec = register_gauge_vec!(
-        "golem_worker_memory_pool_total_bytes",
-        "Usable memory ceiling (usable_ratio * measured limit) the admission gate admits against on this executor",
-        &["executor_id"]
-    )
-    .unwrap();
-    pub static ref WORKER_MEMORY_POOL_USED_BYTES: GaugeVec = register_gauge_vec!(
-        "golem_worker_memory_pool_used_bytes",
-        "Total linear memory granted to live workers and reserved by the admission gate on this executor",
-        &["executor_id"]
-    )
-    .unwrap();
-    pub static ref WORKER_ADMISSION_RSS_BYTES: GaugeVec = register_gauge_vec!(
-        "golem_worker_admission_rss_bytes",
-        "Measured resident memory (probe snapshot) the admission gate last read on this executor",
-        &["executor_id"]
-    )
-    .unwrap();
-    static ref WORKER_MEMORY_POOL_TOTAL_BYTES_GAUGE: Gauge = WORKER_MEMORY_POOL_TOTAL_BYTES
-        .with_label_values(&[crate::metrics::storage::executor_id()]);
-    static ref WORKER_MEMORY_POOL_USED_BYTES_GAUGE: Gauge = WORKER_MEMORY_POOL_USED_BYTES
-        .with_label_values(&[crate::metrics::storage::executor_id()]);
-    static ref WORKER_ADMISSION_RSS_BYTES_GAUGE: Gauge = WORKER_ADMISSION_RSS_BYTES
-        .with_label_values(&[crate::metrics::storage::executor_id()]);
-    pub static ref WORKER_MEMORY_GROW_REJECTED_TOTAL: CounterVec = register_counter_vec!(
-        "golem_worker_memory_grow_rejected_total",
-        "Invocations interrupted because a worker's linear-memory grow could not be admitted by the gate (out-of-memory trap, retried via reacquire)",
-        &["executor_id"]
-    )
-    .unwrap();
-    static ref AGENT_STATUS_FLUSH_TOTAL: CounterVec = register_counter_vec!(
-        "agent_status_flush_total",
-        "Number of cached agent status blob flushes by reason (background/forced)",
-        &["reason"]
-    )
-    .unwrap();
-    static ref AGENT_STATUS_FLUSH_FAILED_TOTAL: CounterVec = register_counter_vec!(
-        "agent_status_flush_failed_total",
-        "Number of cached agent status blob flushes that failed, by reason (background/forced)",
-        &["reason"]
-    )
-    .unwrap();
-    static ref REPLAY_METADATA_SCAN_ENTRIES_TOTAL: CounterVec = register_counter_vec!(
-        "replay_metadata_scan_entries_total",
-        "Number of oplog entries scanned for recovery metadata when a replay generation starts, by the start of the replayed history (snapshot/initial)",
-        &["start"]
-    )
-    .unwrap();
-    static ref AGENT_STATUS_RECOMPUTE_TOTAL: CounterVec = register_counter_vec!(
-        "agent_status_recompute_total",
-        "Number of agent status recomputes by the baseline used (cache/checkpoint/full)",
-        &["source"]
-    )
-    .unwrap();
-    static ref AGENT_STATUS_CHECKPOINT_WRITE_TOTAL: CounterVec = register_counter_vec!(
-        "agent_status_checkpoint_write_total",
-        "Number of clean agent status checkpoint writes by reason (snapshot/idle)",
-        &["reason"]
-    )
-    .unwrap();
-    static ref AGENT_STATUS_CHECKPOINT_WRITE_FAILED_TOTAL: CounterVec = register_counter_vec!(
-        "agent_status_checkpoint_write_failed_total",
-        "Number of clean agent status checkpoint writes that failed, by reason (snapshot/idle)",
-        &["reason"]
-    )
-    .unwrap();
-    static ref INVOCATION_RESULT_RESOLUTION_TOTAL: CounterVec = register_counter_vec!(
-        "invocation_result_resolution_total",
-        "Invocation-result resolutions by the lookup path and outcome",
-        &["outcome"]
-    )
-    .unwrap();
-    static ref INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL: Counter = register_counter!(
-        "invocation_result_index_catch_up_chunks_total",
-        "Physical invocation-result index catch-up chunks completed"
-    )
-    .unwrap();
-    static ref INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL: Counter = register_counter!(
-        "invocation_result_index_catch_up_entries_total",
-        "Oplog entries processed while catching up the physical invocation-result index"
-    )
-    .unwrap();
-    static ref INVOCATION_LISTINGS_TOTAL: Counter = register_counter!(
-        "invocation_listings_total",
-        "Listings of the invocations of one agent"
-    )
-    .unwrap();
-    static ref INVOCATION_LISTING_RESULTS_TOTAL: Counter = register_counter!(
-        "invocation_listing_results_total",
-        "Invocation results read to list the invocations of one agent"
-    )
-    .unwrap();
-    static ref AGENT_IDENTITY_RESOLUTION_TOTAL: CounterVec = register_counter_vec!(
-        "agent_identity_resolution_total",
-        "Mode-hint events observed during authoritative agent identity resolution; multiple events may occur per resolution",
-        &["event"]
-    )
-    .unwrap();
-    static ref STALE_RUNNING_WORKER_TOTAL: CounterVec = register_counter_vec!(
-        "stale_running_worker_total",
-        "Stale recovery-index members removed by reason",
-        &["reason"]
-    )
-    .unwrap();
-    static ref STATUS_CACHE_PUBLICATION_TOTAL: CounterVec = register_counter_vec!(
-        "status_cache_publication_total",
-        "Status cache publication events by cache and reconciliation path; fallback and eventual reconciliation are separate events",
-        &["cache", "event"]
-    )
-    .unwrap();
-    static ref DERIVED_CACHE_PUBLICATION_FAILED_TOTAL: CounterVec = register_counter_vec!(
-        "derived_cache_publication_failed_total",
-        "Derived-cache publications that failed while atomically applying expiry",
-        &["cache"]
-    )
-    .unwrap();
-    static ref FOREIGN_STREAM_FINGERPRINT_MISMATCH_TOTAL: Counter = register_counter!(
-        "foreign_stream_fingerprint_mismatch_total",
-        "Foreign durable-stream accesses rejected because the current fingerprint differs"
-    )
-    .unwrap();
+    static ref WORKER_EXECUTOR_CALL_TOTAL: CounterVec =
+        catalog::WORKER_EXECUTOR_CALL_TOTAL.register();
+    static ref WORKER_COUNT_BY_STATUS: GaugeVec = catalog::WORKER_COUNT_BY_STATUS.register();
+    static ref WORKER_EVICTION_TOTAL: CounterVec = catalog::WORKER_EVICTION_TOTAL.register();
+    pub static ref WORKER_MEMORY_RESIDENT_COUNT: GaugeVec =
+        catalog::WORKER_MEMORY_RESIDENT_COUNT.register();
+    pub static ref WORKER_WAITING_FOR_MEMORY_COUNT: GaugeVec =
+        catalog::WORKER_WAITING_FOR_MEMORY_COUNT.register();
+    pub static ref WORKER_ADMISSION_WAIT_SECONDS: HistogramVec =
+        catalog::WORKER_ADMISSION_WAIT_SECONDS.register();
+    pub static ref WORKER_STORE_ALIVE_COUNT: GaugeVec =
+        catalog::WORKER_STORE_ALIVE_COUNT.register();
+    static ref OWNER_GROUP_ALIVE_COUNT: GaugeVec = catalog::OWNER_GROUP_ALIVE_COUNT.register();
+    static ref PRIMARY_STORE_ALIVE_COUNT: GaugeVec = catalog::PRIMARY_STORE_ALIVE_COUNT.register();
+    static ref ENTITY_STORE_ALIVE_COUNT: GaugeVec = catalog::ENTITY_STORE_ALIVE_COUNT.register();
+    static ref ENTITY_INVOCATION_ACTIVE_COUNT: GaugeVec =
+        catalog::ENTITY_INVOCATION_ACTIVE_COUNT.register();
+    static ref ENTITY_INVOCATION_TOTAL: CounterVec = catalog::ENTITY_INVOCATION_TOTAL.register();
+    pub static ref WORKER_KV_CACHE_VALUE_SIZE_BYTES: HistogramVec =
+        catalog::WORKER_KV_CACHE_VALUE_SIZE_BYTES.register();
+    pub static ref WORKER_MEMORY_POOL_TOTAL_BYTES: GaugeVec =
+        catalog::WORKER_MEMORY_POOL_TOTAL_BYTES.register();
+    pub static ref WORKER_MEMORY_POOL_USED_BYTES: GaugeVec =
+        catalog::WORKER_MEMORY_POOL_USED_BYTES.register();
+    pub static ref WORKER_ADMISSION_RSS_BYTES: GaugeVec =
+        catalog::WORKER_ADMISSION_RSS_BYTES.register();
+    static ref WORKER_MEMORY_POOL_TOTAL_BYTES_GAUGE: Gauge =
+        WORKER_MEMORY_POOL_TOTAL_BYTES.with_label_values(&[crate::metrics::storage::executor_id()]);
+    static ref WORKER_MEMORY_POOL_USED_BYTES_GAUGE: Gauge =
+        WORKER_MEMORY_POOL_USED_BYTES.with_label_values(&[crate::metrics::storage::executor_id()]);
+    static ref WORKER_ADMISSION_RSS_BYTES_GAUGE: Gauge =
+        WORKER_ADMISSION_RSS_BYTES.with_label_values(&[crate::metrics::storage::executor_id()]);
+    pub static ref WORKER_MEMORY_GROW_REJECTED_TOTAL: CounterVec =
+        catalog::WORKER_MEMORY_GROW_REJECTED_TOTAL.register();
+    static ref AGENT_STATUS_FLUSH_TOTAL: CounterVec = catalog::AGENT_STATUS_FLUSH_TOTAL.register();
+    static ref AGENT_STATUS_FLUSH_FAILED_TOTAL: CounterVec =
+        catalog::AGENT_STATUS_FLUSH_FAILED_TOTAL.register();
+    static ref REPLAY_METADATA_SCAN_ENTRIES_TOTAL: CounterVec =
+        catalog::REPLAY_METADATA_SCAN_ENTRIES_TOTAL.register();
+    static ref AGENT_STATUS_RECOMPUTE_TOTAL: CounterVec =
+        catalog::AGENT_STATUS_RECOMPUTE_TOTAL.register();
+    static ref AGENT_STATUS_CHECKPOINT_WRITE_TOTAL: CounterVec =
+        catalog::AGENT_STATUS_CHECKPOINT_WRITE_TOTAL.register();
+    static ref AGENT_STATUS_CHECKPOINT_WRITE_FAILED_TOTAL: CounterVec =
+        catalog::AGENT_STATUS_CHECKPOINT_WRITE_FAILED_TOTAL.register();
+    static ref INVOCATION_RESULT_RESOLUTION_TOTAL: CounterVec =
+        catalog::INVOCATION_RESULT_RESOLUTION_TOTAL.register();
+    static ref INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL: Counter =
+        catalog::INVOCATION_RESULT_INDEX_CATCH_UP_CHUNKS_TOTAL.register();
+    static ref INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL: Counter =
+        catalog::INVOCATION_RESULT_INDEX_CATCH_UP_ENTRIES_TOTAL.register();
+    static ref INVOCATION_LISTINGS_TOTAL: Counter = catalog::INVOCATION_LISTINGS_TOTAL.register();
+    static ref INVOCATION_LISTING_RESULTS_TOTAL: Counter =
+        catalog::INVOCATION_LISTING_RESULTS_TOTAL.register();
+    static ref AGENT_IDENTITY_RESOLUTION_TOTAL: CounterVec =
+        catalog::AGENT_IDENTITY_RESOLUTION_TOTAL.register();
+    static ref STALE_RUNNING_WORKER_TOTAL: CounterVec =
+        catalog::STALE_RUNNING_WORKER_TOTAL.register();
+    static ref STATUS_CACHE_PUBLICATION_TOTAL: CounterVec =
+        catalog::STATUS_CACHE_PUBLICATION_TOTAL.register();
+    static ref DERIVED_CACHE_PUBLICATION_FAILED_TOTAL: CounterVec =
+        catalog::DERIVED_CACHE_PUBLICATION_FAILED_TOTAL.register();
+    static ref FOREIGN_STREAM_FINGERPRINT_MISMATCH_TOTAL: Counter =
+        catalog::FOREIGN_STREAM_FINGERPRINT_MISMATCH_TOTAL.register();
 }
 
 pub fn record_worker_call(api_name: &'static str) {

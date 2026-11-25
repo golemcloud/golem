@@ -12,37 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::base_model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND;
+use golem_common::metrics::catalog;
 use golem_common::model::agent::AgentMode;
 use lazy_static::lazy_static;
 use prometheus::*;
 
 lazy_static! {
-    static ref FUEL_BORROW_TOTAL: Counter =
-        register_counter!("fuel_borrow_total", "Total amount of fuel borrowed").unwrap();
-    static ref FUEL_RETURN_TOTAL: Counter =
-        register_counter!("fuel_return_total", "Total amount of fuel returned").unwrap();
-    static ref EPHEMERAL_OVERDRAFT_FUEL_TOTAL: Counter = register_counter!(
-        "ephemeral_overdraft_fuel_total",
-        "Total amount of ephemeral overdraft fuel consumed"
-    )
-    .unwrap();
-    static ref STORAGE_BYTE_SECONDS_TOTAL: CounterVec = register_counter_vec!(
-        "storage_byte_seconds_total",
-        "Filesystem storage byte-seconds billed, by account and agent mode",
-        &["account_id", "agent_mode"]
-    )
-    .unwrap();
-    static ref MEMORY_GB_SECONDS_TOTAL: CounterVec = register_counter_vec!(
-        "memory_gb_seconds_total",
-        "Allocated linear-memory GB-seconds delivered to the registry, by account and agent mode",
-        &["account_id", "agent_mode"]
-    )
-    .unwrap();
-    static ref RESOURCE_USAGE_BATCH_UPDATE_FAILURE_TOTAL: Counter = register_counter!(
-        "resource_usage_batch_update_failure_total",
-        "Number of resource usage batches dropped after registry update failures"
-    )
-    .unwrap();
+    static ref FUEL_BORROW_TOTAL: Counter = catalog::FUEL_BORROW_TOTAL.register();
+    static ref FUEL_RETURN_TOTAL: Counter = catalog::FUEL_RETURN_TOTAL.register();
+    static ref EPHEMERAL_OVERDRAFT_FUEL_TOTAL: Counter =
+        catalog::EPHEMERAL_OVERDRAFT_FUEL_TOTAL.register();
+    static ref STORAGE_BYTE_SECONDS_TOTAL: CounterVec =
+        catalog::STORAGE_BYTE_SECONDS_TOTAL.register();
+    static ref MEMORY_BYTE_SECONDS_TOTAL: CounterVec =
+        catalog::MEMORY_BYTE_SECONDS_TOTAL.register();
+    static ref RESOURCE_USAGE_BATCH_UPDATE_FAILURE_TOTAL: Counter =
+        catalog::RESOURCE_USAGE_BATCH_UPDATE_FAILURE_TOTAL.register();
 }
 
 pub fn record_fuel_borrow(amount: u64) {
@@ -64,24 +50,26 @@ fn agent_mode_label(mode: AgentMode) -> &'static str {
     }
 }
 
-pub fn record_storage_byte_seconds(account_id: &str, mode: AgentMode, amount: i64) {
+pub fn record_storage_byte_seconds(mode: AgentMode, amount: i64) {
     // Lower-cased here rather than via `Display`, which renders for humans and is
     // free to change; label values are a query interface and must stay stable.
     STORAGE_BYTE_SECONDS_TOTAL
-        .with_label_values(&[account_id, agent_mode_label(mode)])
+        .with_label_values(&[agent_mode_label(mode)])
         .inc_by(amount as f64);
 }
 
-pub fn record_memory_gb_seconds(account_id: &str, mode: AgentMode, amount: i64) {
-    MEMORY_GB_SECONDS_TOTAL
-        .with_label_values(&[account_id, agent_mode_label(mode)])
-        .inc_by(amount as f64);
+const BYTES_PER_GB: f64 = (BYTE_NANOSECONDS_PER_GB_SECOND / 1_000_000_000) as f64;
+
+pub fn record_memory_gb_seconds(mode: AgentMode, amount: i64) {
+    MEMORY_BYTE_SECONDS_TOTAL
+        .with_label_values(&[agent_mode_label(mode)])
+        .inc_by(amount as f64 * BYTES_PER_GB);
 }
 
 #[cfg(test)]
-pub(crate) fn memory_gb_seconds_total(account_id: &str, mode: AgentMode) -> f64 {
-    MEMORY_GB_SECONDS_TOTAL
-        .with_label_values(&[account_id, agent_mode_label(mode)])
+pub(crate) fn memory_byte_seconds_total(mode: AgentMode) -> f64 {
+    MEMORY_BYTE_SECONDS_TOTAL
+        .with_label_values(&[agent_mode_label(mode)])
         .get()
 }
 

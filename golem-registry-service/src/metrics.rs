@@ -12,24 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::golem_version;
-use lazy_static::lazy_static;
-use prometheus::*;
+use prometheus::{IntCounterVec, Registry, default_registry};
+use std::sync::LazyLock;
 
-lazy_static! {
-    static ref VERSION_INFO: IntCounterVec =
-        register_int_counter_vec!("version_info", "Version info of the server", &["version"])
-            .unwrap();
-    pub(crate) static ref COMPILATION_ENQUEUE_TOTAL: IntCounterVec = register_int_counter_vec!(
-        "component_compilation_enqueue_total",
-        "Cache-warming enqueue attempts by outcome (accepted, rejected, failed, timeout)",
-        &["outcome"]
-    )
-    .unwrap();
-}
+use golem_common::metrics::catalog;
+
+pub(crate) static COMPILATION_ENQUEUE_TOTAL: LazyLock<IntCounterVec> =
+    LazyLock::new(|| catalog::COMPONENT_COMPILATION_ENQUEUE_TOTAL.register());
 
 pub fn register_all() -> Registry {
-    VERSION_INFO.with_label_values(&[golem_version()]).inc();
+    golem_service_base::metrics::record_build_info();
 
     default_registry().clone()
 }
@@ -39,9 +31,9 @@ pub mod storage {
 
     pub const STORAGE_TYPE_COMPONENT: &str = "component";
 
-    pub fn record_component_uploaded(account_id: &str, environment_id: &str, bytes: u64) {
-        record_storage_bytes_written(STORAGE_TYPE_COMPONENT, account_id, environment_id, bytes);
-        record_storage_objects_written(STORAGE_TYPE_COMPONENT, account_id, environment_id, 1);
+    pub fn record_component_uploaded(bytes: u64) {
+        record_storage_bytes_written(STORAGE_TYPE_COMPONENT, bytes);
+        record_storage_objects_written(STORAGE_TYPE_COMPONENT, 1);
     }
 
     #[cfg(test)]
@@ -51,48 +43,30 @@ pub mod storage {
 
         test_r::enable!();
 
+        /// Other tests of this crate may upload components at the same time, so the counters
+        /// grow by at least the recorded upload.
         #[test]
         fn record_component_uploaded_increments_bytes_and_objects() {
-            let acct = "acct-comp-1";
-            let env = "env-comp-1";
-
             let bytes_before = STORAGE_BYTES_WRITTEN_TOTAL
-                .with_label_values(&[STORAGE_TYPE_COMPONENT, acct, env])
+                .with_label_values(&[STORAGE_TYPE_COMPONENT])
                 .get();
             let objects_before = STORAGE_OBJECTS_WRITTEN_TOTAL
-                .with_label_values(&[STORAGE_TYPE_COMPONENT, acct, env])
+                .with_label_values(&[STORAGE_TYPE_COMPONENT])
                 .get();
 
-            record_component_uploaded(acct, env, 1024);
+            record_component_uploaded(1024);
 
-            assert_eq!(
+            assert!(
                 STORAGE_BYTES_WRITTEN_TOTAL
-                    .with_label_values(&[STORAGE_TYPE_COMPONENT, acct, env])
-                    .get(),
-                bytes_before + 1024.0
+                    .with_label_values(&[STORAGE_TYPE_COMPONENT])
+                    .get()
+                    >= bytes_before + 1024.0
             );
-            assert_eq!(
+            assert!(
                 STORAGE_OBJECTS_WRITTEN_TOTAL
-                    .with_label_values(&[STORAGE_TYPE_COMPONENT, acct, env])
-                    .get(),
-                objects_before + 1.0
-            );
-        }
-
-        #[test]
-        fn different_accounts_are_independent() {
-            let acct_a = "acct-comp-ind-a";
-            let acct_b = "acct-comp-ind-b";
-            let env = "env-comp-ind-1";
-
-            record_component_uploaded(acct_a, env, 512);
-
-            assert_eq!(
-                STORAGE_BYTES_WRITTEN_TOTAL
-                    .with_label_values(&[STORAGE_TYPE_COMPONENT, acct_b, env])
-                    .get(),
-                0.0,
-                "acct_b should be unaffected"
+                    .with_label_values(&[STORAGE_TYPE_COMPONENT])
+                    .get()
+                    >= objects_before + 1.0
             );
         }
     }

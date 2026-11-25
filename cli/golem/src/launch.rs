@@ -30,8 +30,6 @@ use golem_worker_executor::services::golem_config::GolemConfig as WorkerExecutor
 use golem_worker_executor::services::shutdown::Shutdown;
 use golem_worker_service::WorkerService;
 use golem_worker_service::config::WorkerServiceConfig;
-use opentelemetry::global;
-use opentelemetry_sdk::metrics::MeterProviderBuilder;
 use serde::Serialize;
 use std::path::Path;
 use tokio::runtime::Handle;
@@ -61,17 +59,6 @@ pub async fn launch_golem_services(
     // Services build rustls configurations from the process-level provider. A host that embeds
     // this launcher may not install one, and the `golem` binary has already installed it.
     let _ = rustls::crypto::ring::default_provider().install_default();
-
-    let exporter = opentelemetry_prometheus_text_exporter::ExporterBuilder::default()
-        .without_counter_suffixes()
-        .without_units()
-        .build();
-
-    global::set_meter_provider(
-        MeterProviderBuilder::default()
-            .with_reader(exporter)
-            .build(),
-    );
 
     let mut join_set: JoinSet<anyhow::Result<()>> = JoinSet::new();
 

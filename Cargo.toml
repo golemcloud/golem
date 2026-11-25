@@ -217,7 +217,6 @@ openapiv3 = "=2.0.0"
 openidconnect = "4.0.1"
 opentelemetry = "0.32.0"
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace", "internal-logs"] }
-opentelemetry-prometheus-text-exporter = "=0.3.0"
 opentelemetry_sdk = { version = "0.32.0", default-features = false, features = ["trace", "metrics", "internal-logs"] }
 phf = { version = "0.12.1", features = ["macros"] }
 pin-project = "1.1.10"

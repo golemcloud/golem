@@ -4019,7 +4019,6 @@ dependencies = [
  "golem-worker-service",
  "hex",
  "opentelemetry",
- "opentelemetry-prometheus-text-exporter",
  "opentelemetry_sdk",
  "poem",
  "prometheus",
@@ -4291,7 +4290,6 @@ dependencies = [
  "openidconnect",
  "opentelemetry",
  "opentelemetry-otlp",
- "opentelemetry-prometheus-text-exporter",
  "opentelemetry_sdk",
  "poem",
  "poem-openapi",
@@ -4533,7 +4531,6 @@ dependencies = [
  "oauth2",
  "openidconnect",
  "opentelemetry",
- "opentelemetry-prometheus-text-exporter",
  "opentelemetry_sdk",
  "poem",
  "poem-openapi",
@@ -4690,6 +4687,7 @@ dependencies = [
  "indexmap 2.14.0",
  "lazy_static",
  "libsqlite3-sys",
+ "metrics",
  "metrics-prometheus",
  "openidconnect",
  "pin-project",
@@ -5165,7 +5163,6 @@ dependencies = [
  "mime_guess",
  "openidconnect",
  "opentelemetry",
- "opentelemetry-prometheus-text-exporter",
  "opentelemetry_sdk",
  "poem",
  "poem-derive",
@@ -7650,17 +7647,6 @@ dependencies = [
  "prost",
  "reqwest 0.13.4",
  "thiserror 2.0.20",
-]
-
-[[package]]
-name = "opentelemetry-prometheus-text-exporter"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b4fe57ea90b12f643a366aa7c4fa5cfb54bd1cf252f55368337e40534b278a68"
-dependencies = [
- "opentelemetry",
- "opentelemetry_sdk",
- "smartstring",
 ]
 
 [[package]]
@@ -10424,17 +10410,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
 dependencies = [
  "serde",
-]
-
-[[package]]
-name = "smartstring"
-version = "1.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fb72c633efbaa2dd666986505016c32c3044395ceaf881518399d2f4127ee29"
-dependencies = [
- "autocfg",
- "static_assertions",
- "version_check",
 ]
 
 [[package]]

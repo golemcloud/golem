@@ -33,6 +33,11 @@ pub trait WorkerExecutor: Send + Sync {
 
     fn grpc_port(&self) -> u16;
 
+    /// The port of the HTTP interface, which serves `/metrics`, when it is known.
+    fn http_port(&self) -> Option<u16> {
+        None
+    }
+
     /// Hard kill and reap the owned child before the deadline. Unsupported
     /// executors fail closed; absence of a child handle is not proof of exit.
     async fn kill_and_wait(&self, _deadline: tokio::time::Instant) -> anyhow::Result<()> {

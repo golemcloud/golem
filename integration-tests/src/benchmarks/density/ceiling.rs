@@ -39,7 +39,7 @@
 //! - Catastrophic: any of (5-minute timeout fires; pod-restart count increased;
 //!   connection lost; or a sustained run of overloaded (503) responses). Transitions
 //!   to `Catastrophic`; emits [`CeilingEvent::Catastrophic`]. Schedule density has
-//!   its own lag-runaway detector: `scheduler_queue_depth` is a claimed-batch size,
+//!   its own lag-runaway detector: `golem_scheduler_queue_depth` is a claimed-batch size,
 //!   not a scheduler backlog.
 
 use std::collections::VecDeque;

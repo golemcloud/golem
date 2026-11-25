@@ -29,7 +29,7 @@ INFO golem_shard_manager: Started shard manager
      grpc_port=9002
 ```
 
-and reports `shard_manager_is_serving 1` on its HTTP port's `/metrics`. The other two log
+and reports `golem_shard_manager_is_serving 1` on its HTTP port's `/metrics`. The other two log
 `Campaigning for shard manager leadership` and then `Still standing by; leadership is held
 elsewhere` with the leader's address. On `SIGTERM` the leader logs `Released the shard manager
 leadership` before exiting, and a standby takes over within milliseconds: `docker compose stop` the
@@ -139,8 +139,8 @@ startup: it serves almost at once when every stored executor lease is still vali
 executors for at most `initial_health_check_timeout` (3s by default). The worker executors and the worker
 service wait a failover out by themselves, for about 15s, so no client setting needs tuning for it.
 
-`/metrics` on the HTTP port distinguishes the roles: `shard_manager_is_serving` is 1 on the replica
-that takes calls, and `shard_manager_is_leader` is 1 on the replica that holds the leadership lease.
+`/metrics` on the HTTP port distinguishes the roles: `golem_shard_manager_is_serving` is 1 on the replica
+that takes calls, and `golem_shard_manager_is_leader` is 1 on the replica that holds the leadership lease.
 They differ only while a new leader starts.
 
 See `docs/src/content/next/deploy.mdx` for the full deployment guide.

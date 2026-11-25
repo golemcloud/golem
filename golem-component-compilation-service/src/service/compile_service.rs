@@ -142,7 +142,10 @@ mod tests {
             accepted.result,
             Some(component_compilation_response::Result::Success(_))
         ));
-        assert_eq!(queue_length("component_compilation_queue_length"), 1.0);
+        assert_eq!(
+            queue_length("golem_component_compilation_queue_length"),
+            1.0
+        );
 
         let rejected = service
             .enqueue_compilation(tonic::Request::new(request))
@@ -157,7 +160,10 @@ mod tests {
             matches!(error.error, Some(component_compilation_error::Error::InternalError(body))
             if body.code == INTERNAL_COMPILATION_QUEUE_FULL)
         );
-        assert_eq!(queue_length("component_compilation_queue_length"), 1.0);
+        assert_eq!(
+            queue_length("golem_component_compilation_queue_length"),
+            1.0
+        );
         let queued = receiver.recv().await.unwrap();
         crate::metrics::decrement_queue_length();
         assert_eq!(queued.component.id, component_id);
@@ -182,7 +188,10 @@ mod tests {
             matches!(error.error, Some(component_compilation_error::Error::InternalError(body))
             if body.code != INTERNAL_COMPILATION_QUEUE_FULL && body.error.contains("closed"))
         );
-        assert_eq!(queue_length("component_compilation_queue_length"), 0.0);
+        assert_eq!(
+            queue_length("golem_component_compilation_queue_length"),
+            0.0
+        );
     }
 
     struct GatedStorage {
@@ -296,9 +305,12 @@ mod tests {
                 .is_err(),
             "a full upload queue must stop the compiler from starting another component"
         );
-        assert_eq!(queue_length("component_compilation_queue_length"), 2.0);
         assert_eq!(
-            queue_length("component_compilation_upload_queue_length"),
+            queue_length("golem_component_compilation_queue_length"),
+            2.0
+        );
+        assert_eq!(
+            queue_length("golem_component_compilation_upload_queue_length"),
             1.0
         );
         storage.upload_gate.add_permits(10);
@@ -311,9 +323,12 @@ mod tests {
             uploaded.recv().await.is_none(),
             "workers must drain and exit when admission closes"
         );
-        assert_eq!(queue_length("component_compilation_queue_length"), 0.0);
         assert_eq!(
-            queue_length("component_compilation_upload_queue_length"),
+            queue_length("golem_component_compilation_queue_length"),
+            0.0
+        );
+        assert_eq!(
+            queue_length("golem_component_compilation_upload_queue_length"),
             0.0
         );
     }

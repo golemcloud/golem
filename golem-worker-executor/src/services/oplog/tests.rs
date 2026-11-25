@@ -9526,7 +9526,7 @@ fn an_archive_epoch_record_is_counted_as_an_archive_record() {
     fn accepted(op: &str) -> f64 {
         prometheus::gather()
             .into_iter()
-            .filter(|family| family.name() == "oplog_epoch_fence_total")
+            .filter(|family| family.name() == "golem_oplog_epoch_fence_total")
             .flat_map(|family| family.get_metric().to_vec())
             .filter(|metric| {
                 let labels = metric.get_label();

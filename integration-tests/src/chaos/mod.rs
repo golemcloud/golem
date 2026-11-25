@@ -1824,7 +1824,7 @@ impl ScenarioConfig {
                 // evidence has to come from outside the workload, and for S15A
                 // it does — the scheduler polls its own schema on the delayed
                 // cluster whether or not anything is scheduled, so
-                // `db_success_seconds{svc="scheduler_storage"}` moves under the
+                // `golem_db_success_seconds{svc="scheduler_storage"}` moves under the
                 // fault regardless. The runbook says to check it.
                 if slowed.is_empty() && steady.is_empty() {
                     anyhow::bail!(

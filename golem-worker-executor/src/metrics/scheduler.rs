@@ -12,51 +12,23 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::metrics::catalog;
 use lazy_static::lazy_static;
 use prometheus::*;
 use std::time::Duration;
 
 lazy_static! {
-    pub static ref SCHEDULED_ACTION_LAG_SECONDS: HistogramVec = register_histogram_vec!(
-        "scheduled_action_lag_seconds",
-        "Wall-clock delay in seconds between scheduled_at and the time the action fires",
-        &["executor_id"],
-        crate::metrics::SCHEDULER_LAG_BUCKETS.to_vec()
-    )
-    .unwrap();
-    pub static ref SCHEDULER_QUEUE_DEPTH: GaugeVec = register_gauge_vec!(
-        "scheduler_queue_depth",
-        "Count of matching actions to process at the start of each scheduler process() iteration",
-        &["executor_id"]
-    )
-    .unwrap();
-    pub static ref SCHEDULER_DUE_ACTION_BACKLOG_AFTER_TICK: GaugeVec = register_gauge_vec!(
-        "scheduler_due_action_backlog_after_tick",
-        "Due scheduled actions not yet acknowledged after scheduler tick processing",
-        &["executor_id"]
-    )
-    .unwrap();
-    pub static ref SCHEDULER_TICK_DURATION_SECONDS: HistogramVec = register_histogram_vec!(
-        "scheduler_tick_duration_seconds",
-        "Wall time of a single scheduler process() iteration",
-        &["executor_id"],
-        crate::metrics::SCHEDULER_TICK_DURATION_BUCKETS.to_vec()
-    )
-    .unwrap();
-    pub static ref SCHEDULED_ACTION_PROCESSING_SECONDS: HistogramVec = register_histogram_vec!(
-        "scheduled_action_processing_seconds",
-        "Time to process a claimed scheduled action before acknowledgement",
-        &["executor_id", "action_kind"],
-        crate::metrics::SCHEDULER_TICK_DURATION_BUCKETS.to_vec()
-    )
-    .unwrap();
-    pub static ref SCHEDULED_ACTION_SIZE_BYTES: HistogramVec = register_histogram_vec!(
-        "scheduled_action_size_bytes",
-        "Serialized blob size in bytes of a ScheduledAction at insert time",
-        &["executor_id", "action_kind"],
-        crate::metrics::BLOB_SIZE_BUCKETS.to_vec()
-    )
-    .unwrap();
+    pub static ref SCHEDULED_ACTION_LAG_SECONDS: HistogramVec =
+        catalog::SCHEDULED_ACTION_LAG_SECONDS.register();
+    pub static ref SCHEDULER_QUEUE_DEPTH: GaugeVec = catalog::SCHEDULER_QUEUE_DEPTH.register();
+    pub static ref SCHEDULER_DUE_ACTION_BACKLOG_AFTER_TICK: GaugeVec =
+        catalog::SCHEDULER_DUE_ACTION_BACKLOG_AFTER_TICK.register();
+    pub static ref SCHEDULER_TICK_DURATION_SECONDS: HistogramVec =
+        catalog::SCHEDULER_TICK_DURATION_SECONDS.register();
+    pub static ref SCHEDULED_ACTION_PROCESSING_SECONDS: HistogramVec =
+        catalog::SCHEDULED_ACTION_PROCESSING_SECONDS.register();
+    pub static ref SCHEDULED_ACTION_SIZE_BYTES: HistogramVec =
+        catalog::SCHEDULED_ACTION_SIZE_BYTES.register();
 }
 
 pub fn record_scheduled_action_lag(lag: Duration) {

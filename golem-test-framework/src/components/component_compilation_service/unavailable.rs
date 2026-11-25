@@ -31,5 +31,9 @@ impl ComponentCompilationService for UnavailableComponentCompilationService {
         panic!("component_compilation_service() is not available in cloud mode");
     }
 
+    fn http_port(&self) -> u16 {
+        panic!("component_compilation_service() is not available in cloud mode");
+    }
+
     async fn kill(&self) {}
 }

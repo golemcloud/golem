@@ -14,6 +14,7 @@
 
 use std::time::Duration;
 
+use golem_common::metrics::catalog;
 use lazy_static::lazy_static;
 use prometheus::*;
 use tracing::debug;
@@ -23,94 +24,33 @@ use golem_common::metrics::api::ApiErrorDetails;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 lazy_static! {
-    static ref CREATE_WORKER_SECONDS: Histogram = register_histogram!(
-        "create_worker_seconds",
-        "Time taken to create a worker",
-        golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref CREATE_WORKER_FAILURE_TOTAL: CounterVec = register_counter_vec!(
-        "create_worker_failure_total",
-        "Number of failed worker creations",
-        &["error"]
-    )
-    .unwrap();
-    static ref INVOCATION_TOTAL: CounterVec = register_counter_vec!(
-        "invocation_total",
-        "Number of invocations",
-        &["mode", "outcome"]
-    )
-    .unwrap();
-    static ref INVOCATION_CONSUMPTION_TOTAL: Histogram = register_histogram!(
-        "invocation_consumption_total",
-        "Amount of fuel consumed by an invocation",
-        crate::metrics::FUEL_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref ALLOCATED_MEMORY_BYTES: Histogram = register_histogram!(
-        "allocated_memory_bytes",
-        "Store's accounted total of linear-memory bytes and GC heap capacity, sampled after each positive memory-growth notification.",
-        crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref WORKER_ALLOCATED_LINEAR_MEMORY_BYTES: Histogram = register_histogram!(
-        "worker_allocated_linear_memory_bytes",
-        "Per-Store allocated linear-memory bytes plus GC heap capacity, sampled after instance reconciliation. Linear memories contribute current data_size values for unique backings; this is not measured resident memory.",
-        crate::metrics::MEMORY_SIZE_BUCKETS.to_vec()
-    )
-    .unwrap();
+    static ref CREATE_WORKER_SECONDS: Histogram = catalog::CREATE_WORKER_SECONDS.register();
+    static ref CREATE_WORKER_FAILURE_TOTAL: CounterVec =
+        catalog::CREATE_WORKER_FAILURE_TOTAL.register();
+    static ref INVOCATION_TOTAL: CounterVec = catalog::INVOCATION_TOTAL.register();
+    static ref INVOCATION_CONSUMPTION_TOTAL: Histogram =
+        catalog::INVOCATION_FUEL_CONSUMPTION.register();
+    static ref ALLOCATED_MEMORY_BYTES: Histogram = catalog::ALLOCATED_MEMORY_BYTES.register();
+    static ref WORKER_ALLOCATED_LINEAR_MEMORY_BYTES: Histogram =
+        catalog::WORKER_ALLOCATED_LINEAR_MEMORY_BYTES.register();
 }
 
 lazy_static! {
-    static ref HOST_FUNCTION_CALL_TOTAL: CounterVec = register_counter_vec!(
-        "host_function_call_total",
-        "Number of calls to specific host functions",
-        &["interface", "name"]
-    )
-    .unwrap();
-    static ref RESUME_WORKER_SECONDS: Histogram = register_histogram!(
-        "resume_worker_seconds",
-        "Time taken to resume a worker",
-        golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-    )
-    .unwrap();
-    static ref REPLAYED_FUNCTIONS_COUNT: Histogram = register_histogram!(
-        "replayed_functions_count",
-        "Number of functions replayed per worker resumption",
-        golem_common::metrics::DEFAULT_COUNT_BUCKETS.to_vec()
-    )
-    .unwrap();
+    static ref HOST_FUNCTION_CALL_TOTAL: CounterVec = catalog::HOST_FUNCTION_CALL_TOTAL.register();
+    static ref RESUME_WORKER_SECONDS: Histogram = catalog::RESUME_WORKER_SECONDS.register();
+    static ref REPLAYED_FUNCTIONS_COUNT: Histogram = catalog::REPLAYED_FUNCTIONS.register();
 }
 
 lazy_static! {
-    static ref IN_FUNCTION_RETRY_TOTAL: Counter = register_counter!(
-        "in_function_retry_total",
-        "Number of in-function retries (retries inside host function without oplog replay)"
-    )
-    .unwrap();
-    static ref CUSTOM_INVOCATION_SCOPE_OPEN_TOTAL: Counter = register_counter!(
-        "custom_invocation_scope_open_total",
-        "Number of live custom-durability ownership scopes opened"
-    )
-    .unwrap();
-    static ref AGENT_PERMISSION_AUTHORIZATION_TOTAL: CounterVec = register_counter_vec!(
-        "agent_permission_authorization_total",
-        "Number of live host-call permission authorization decisions",
-        &["permission_class", "outcome"]
-    )
-    .unwrap();
-    static ref AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL: CounterVec = register_counter_vec!(
-        "agent_permission_authority_sync_total",
-        "Number of host-call authority boundary checks by path",
-        &["path"]
-    )
-    .unwrap();
-    static ref AGENT_PERMISSION_AUTHORITY_SYNC_SECONDS: Histogram = register_histogram!(
-        "agent_permission_authority_sync_seconds",
-        "Time spent refreshing host-call permission authority on the slow path",
-        golem_common::metrics::DEFAULT_TIME_BUCKETS.to_vec()
-    )
-    .unwrap();
+    static ref IN_FUNCTION_RETRY_TOTAL: Counter = catalog::IN_FUNCTION_RETRY_TOTAL.register();
+    static ref CUSTOM_INVOCATION_SCOPE_OPEN_TOTAL: Counter =
+        catalog::CUSTOM_INVOCATION_SCOPE_OPEN_TOTAL.register();
+    static ref AGENT_PERMISSION_AUTHORIZATION_TOTAL: CounterVec =
+        catalog::AGENT_PERMISSION_AUTHORIZATION_TOTAL.register();
+    static ref AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL: CounterVec =
+        catalog::AGENT_PERMISSION_AUTHORITY_SYNC_TOTAL.register();
+    static ref AGENT_PERMISSION_AUTHORITY_SYNC_SECONDS: Histogram =
+        catalog::AGENT_PERMISSION_AUTHORITY_SYNC_SECONDS.register();
 }
 
 pub fn record_host_function_call(iface: &str, name: &str) {

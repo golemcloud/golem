@@ -12,22 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use golem_common::metrics::catalog;
 use lazy_static::lazy_static;
 use prometheus::*;
 
 lazy_static! {
-    static ref EVENT_TOTAL: CounterVec = register_counter_vec!(
-        "event_total",
-        "Number of events produced by the server",
-        &["event"]
-    )
-    .unwrap();
-    static ref EVENT_BROADCAST_TOTAL: CounterVec = register_counter_vec!(
-        "event_broadcast_total",
-        "Number of events broadcast by the server",
-        &["event"]
-    )
-    .unwrap();
+    static ref EVENT_TOTAL: CounterVec = catalog::EVENT_TOTAL.register();
+    static ref EVENT_BROADCAST_TOTAL: CounterVec = catalog::EVENT_BROADCAST_TOTAL.register();
 }
 
 pub fn record_event(event: &'static str) {

@@ -31,7 +31,6 @@ impl CreateOplogConstructor {
         reconcile_last_index: bool,
         owned_agent_id: OwnedAgentId,
         agent_mode: AgentMode,
-        account_id: AccountId,
         fingerprint: AgentFingerprint,
         stream_session_index: Option<Arc<crate::services::oplog::StreamSessionIndexService>>,
     ) -> Self {
@@ -50,7 +49,6 @@ impl CreateOplogConstructor {
             reconcile_last_index,
             owned_agent_id,
             agent_mode,
-            account_id,
             fingerprint,
             stream_session_index,
         }
@@ -126,7 +124,6 @@ impl OplogConstructor for CreateOplogConstructor {
             last_oplog_idx,
             self.owned_agent_id,
             self.agent_mode,
-            self.account_id,
             self.fingerprint,
             self.stream_session_index,
             close,

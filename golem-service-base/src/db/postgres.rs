@@ -96,7 +96,7 @@ impl PostgresPool {
     }
 
     /// Runs the periodic pool-metrics reporting loop.
-    /// Records `db_pool_size`, `db_pool_idle`, and `db_pool_max` for the given service name every 15 seconds.
+    /// Records `golem_db_pool_size`, `golem_db_pool_idle`, and `golem_db_pool_max` for the given service name every 15 seconds.
     /// Never returns — intended to be run as a background task.
     pub async fn run_metrics_loop(&self, svc_name: &'static str) -> anyhow::Result<()> {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(15));

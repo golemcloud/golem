@@ -257,31 +257,26 @@ impl ResourceLimitsGrpc {
                                 continue;
                             }
 
-                            let account_id = account_id.to_string();
                             if durable > 0 {
                                 record_storage_byte_seconds(
-                                    &account_id,
                                     AgentMode::Durable,
                                     durable,
                                 );
                             }
                             if ephemeral > 0 {
                                 record_storage_byte_seconds(
-                                    &account_id,
                                     AgentMode::Ephemeral,
                                     ephemeral,
                                 );
                             }
                             if durable_memory > 0 {
                                 record_memory_gb_seconds(
-                                    &account_id,
                                     AgentMode::Durable,
                                     durable_memory,
                                 );
                             }
                             if ephemeral_memory > 0 {
                                 record_memory_gb_seconds(
-                                    &account_id,
                                     AgentMode::Ephemeral,
                                     ephemeral_memory,
                                 );

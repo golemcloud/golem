@@ -1,219 +1,358 @@
+{/* This page is generated from golem-common/src/metrics/catalog.rs by `cargo make generate-docs-metrics`. Do not edit it by hand. */}
+
 # Metrics
 
 ## Overview
 
-Every Golem service exposes **Prometheus metrics** on its HTTP interface. The metrics are available at the `/metrics` endpoint for scraping.
+Every Golem service exposes **Prometheus metrics** on its HTTP interface, at the `/metrics` endpoint. Every metric name starts with `golem_`. A metric with a unit ends with the unit of its values in base units (`_seconds`, `_bytes` or `_byte_seconds`), and a counter ends with `_total`. The generated Tokio runtime metrics keep the names of their library. No label holds an agent, worker, component, environment or account identifier.
 
-Beside the service-specific metrics each service exports a single **counter** called `version_info` in which the labels hold service-specific information.
-The currently available labels are:
-
-| Label     | Description                |
-| --------- | -------------------------- |
-| `version` | The version of the service |
-
-The shard lease metrics take their label values from a fixed set and never from an agent, project or environment identifier. A label value is exported at 0 before its first event, so a query reads 0 instead of no data. To find a single agent, use the logs at the site of the refusal.
-
-## Service-specific metrics
+A service exports a metric only when it uses the feature that the metric measures.
 
 <div className="metrics-reference">
 
-### Component Service
+## Build
 
-Component service exposes the following Prometheus metrics:
-
-| Metric                     | Type      | Labels                                                                                                     | Description                                                                     |
-| -------------------------- | --------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `poem_request_count`       | counter   | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Counts every request on the HTTP interface                                      |
-| `poem_errors_count`        | counter   | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Counts failed requests on the HTTP interface                                    |
-| `poem_request_duration_ms` | histogram | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Measures the duration of handling requests on the HTTP interface                |
-| `api_success_seconds`      | histogram | `api`, `api_type`                                                                                          | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
-| `api_failure_seconds`      | histogram | `api`, `api_type`, `error`                                                                                 | Measures the duration of failed API requests (both HTTP and gRPC)               |
-| `grpc_api_active_streams`  | gauge     |                                                                                                            | Number of open incoming gRPC streams                                            |
-
-The registry service also exports `component_compilation_enqueue_total`, a counter with the fixed `outcome` labels `accepted`, `rejected`, `failed`, and `timeout`. `accepted` means the compilation service admitted the request, not that compilation finished. `rejected` means its compilation queue was full. `failed` includes transport errors, application errors, and malformed responses. `timeout` means the registry exhausted its overall enqueue budget. These outcomes do not fail the component upload. The counter does not count uploads made with precompilation disabled.
-
-### Component Compilation Service
-
-Component compilation service exposes the following Prometheus metrics:
-
-| Metric                               | Type      | Labels             | Description                                    |
-| ------------------------------------ | --------- | ------------------ | ---------------------------------------------- |
-| `cache_size`                         | gauge     | `cache`            | Current maximal capacity of the cache          |
-| `cache_hit_total`                    | counter   | `cache`            | Number of cache hits                           |
-| `cache_miss_total`                   | counter   | `cache`            | Number of cache misses                         |
-| `cache_eviction_total`               | counter   | `cache`, `trigger` | Number of cache evictions                      |
-| `component_compilation_queue_length` | gauge     |                    | Pending compilation requests, excluding the active request |
-| `component_compilation_upload_queue_length` | gauge |                | Compiled components waiting for upload, excluding the active upload |
-| `component_compilation_time_seconds` | histogram |                    | Duration of successful Wasmtime component-build calls; excludes queue wait, download, compiled-blob cache hits, and upload, but includes filesystem-cache loads when enabled |
-
-### Shard Manager
-
-Shard manager exposes the following Prometheus metrics:
-
-| Metric                              | Type      | Labels              | Description                                                                     |
-| ----------------------------------- | --------- | ------------------- | ------------------------------------------------------------------------------- |
-| `api_success_seconds`               | histogram | `api`, `api_type`   | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
-| `api_failure_seconds`               | histogram | `api`, `api_type`, `error` | Measures the duration of failed API requests (both HTTP and gRPC)               |
-| `grpc_api_active_streams`           | gauge     |                     | Number of open incoming gRPC streams                                            |
-| `external_call_success_seconds`     | histogram | `target`, `op`      | Duration of successful outgoing calls                                          |
-| `external_call_response_size_bytes` | histogram | `target`, `op`      | Size of the response of outgoing calls                                          |
-| `external_call_retry_total`         | counter   | `target`, `op`      | Number of failed outgoing calls that got retried                                |
-| `external_call_failure_total`       | counter   | `target`, `op`      | Number of failed outgoing calls not to be retried                               |
-| `redis_success_seconds`             | histogram | `svc`, `api`, `cmd` | Duration of successful Redis calls                                              |
-| `redis_failure_total`               | counter   | `svc`, `api`, `cmd` | Number of failed Redis calls                                                    |
-| `redis_serialized_size_bytes`       | histogram | `svc`, `entity`     | Size of serialized Redis entities                                               |
-| `redis_deserialized_size_bytes`     | histogram | `svc`, `entity`     | Size of deserialized Redis entities                                             |
-| `shard_manager_is_leader`           | gauge     |                     | 1 while this replica holds the etcd leadership lease, 0 while it stands by (distributed mode only) |
-| `shard_manager_is_serving`          | gauge     |                     | 1 while this replica serves calls: a leader whose startup has completed, or a shard manager in local mode; 0 otherwise. A replica that has just won the election holds the leadership but serves only after its startup |
-| `shard_manager_leader_since_epoch`  | gauge     |                     | Unix seconds at which this replica was elected, 0 while it stands by (distributed mode only) |
-| `shard_manager_campaign_attempt_failures_total` | counter |            | Attempts to reach etcd on the way to leadership that failed retriably and were retried (distributed mode only) |
-| `shard_manager_executor_lease_expired_total` | counter |              | Executor leases that lapsed without a renewal and had their shards released. Only the leader counts, so sum it over all replicas. This counter also sees an executor that no longer answers a scrape |
-
-### Worker Executor
-
-Worker executors expose the following Prometheus metrics:
-
-| Metric                              | Type      | Labels              | Description                                                                     |
-| ----------------------------------- | --------- | ------------------- | ------------------------------------------------------------------------------- |
-| `api_success_seconds`               | histogram | `api`, `api_type`   | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
-| `api_failure_seconds`               | histogram | `api`, `api_type`, `error` | Measures the duration of failed API requests (both HTTP and gRPC)               |
-| `grpc_api_active_streams`           | gauge     |                     | Number of open incoming gRPC streams                                            |
-| `external_call_success_seconds`     | histogram | `target`, `op`      | Duration of successful outgoing calls                                          |
-| `external_call_response_size_bytes` | histogram | `target`, `op`      | Size of the response of outgoing calls                                          |
-| `external_call_retry_total`         | counter   | `target`, `op`      | Number of failed outgoing calls that got retried                                |
-| `external_call_failure_total`       | counter   | `target`, `op`      | Number of failed outgoing calls not to be retried                               |
-| `redis_success_seconds`             | histogram | `svc`, `api`, `cmd` | Duration of successful Redis calls                                              |
-| `redis_failure_total`               | counter   | `svc`, `api`, `cmd` | Number of failed Redis calls                                                    |
-| `redis_serialized_size_bytes`       | histogram | `svc`, `entity`     | Size of serialized Redis entities                                               |
-| `redis_deserialized_size_bytes`     | histogram | `svc`, `entity`     | Size of deserialized Redis entities                                             |
-| `cache_size`                        | gauge     | `cache`             | Current maximal capacity of the cache                                           |
-| `cache_hit_total`                   | counter   | `cache`             | Number of cache hits                                                            |
-| `cache_miss_total`                  | counter   | `cache`             | Number of cache misses                                                          |
-| `cache_eviction_total`              | counter   | `cache`, `trigger`  | Number of cache evictions                                                       |
-| `compilation_time_seconds`          | histogram |                     | Time to compile a WASM component to native code                                 |
-| `event_total`                       | counter   | `event`             | Number of events produced by workers                                            |
-| `event_broadcast_total`             | counter   | `event`             | Number of events broadcasted by the executor                                    |
-| `worker_executor_call_total`        | counter   | `api`               | Number of calls to the worker layer                                             |
-| `promises_count_total`              | counter   |                     | Number of promises created                                                      |
-| `promises_scheduled_complete_total` | counter   |                     | Number of scheduled promise completions                                         |
-| `assigned_shard_count`              | gauge     |                     | Number of assigned shards                                                       |
-| `stale_shard_delivery_total`        | counter   | `delivery`          | Shard deliveries dropped for naming a revision older than the last one applied; `delivery` is `register`, `assign`, `revoke` or `renewal`. One is normal when a push and a renewal cross; a sustained rate is not |
-| `shard_lease_expiry_timestamp_seconds` | gauge |                   | Unix time at which the shard lease of this executor lapses unless it is renewed. Absent on a single-shard executor, which has no lease, and before the executor registers. `shard_lease_expiry_timestamp_seconds - time()` is the remaining lease time, and it keeps counting down when the renewal loop stops |
-| `shard_lease_renewals_total`        | counter   | `outcome`           | Shard lease renewal attempts; `outcome` is `granted`, `not_registered`, `timeout`, `lease_not_found` or `failed`. On `lease_not_found` the executor drops its shards and registers again |
-| `shard_admission_refusals_total`    | counter   | `reason`            | Agent admissions refused by the shard assignment; `reason` is `not_registered`, `lease_lapsed` (the executor fenced itself) or `not_owned` (the agent is on another executor's shard, which is normal during a rebalance) |
-| `create_worker_seconds`             | histogram |                     | Time to create a new worker                                                     |
-| `create_worker_failure_total`       | counter   | `error`             | Number of failed worker creations                                               |
-| `invocation_total`                  | counter   | `mode`, `outcome`   | Number of invocations                                                           |
-| `invocation_consumption_total`      | histogram |                     | Amount of fuel consumed by an invocation                                        |
-| `allocated_memory_bytes`            | histogram |                     | Amount of memory allocated by a single `memory.grow` instruction                |
-| `host_function_call_total`          | counter   | `interface`, `name` | Number of calls to specific host functions                                      |
-| `resume_worker_seconds`             | histogram |                     | Time taken to resume a worker                                                   |
-| `replayed_functions_count`          | histogram |                     | Number of functions replayed per forker resumption                              |
-| `oplog_svc_call_total`              | counter   | `api`               | Number of calls to the oplog layer                                              |
-
-#### Durable Stream Sessions
-
-| Metric                                               | Type      | Labels                 | Description                                                        |
-| ---------------------------------------------------- | --------- | ---------------------- | ------------------------------------------------------------------ |
-| `golem_durable_stream_lifecycle_total`               | counter   | `event`                | Registered and terminal durable stream transitions                 |
-| `golem_durable_stream_open`                          | gauge     |                        | Open streams owned by loaded producers                             |
-| `golem_durable_stream_producer_operation_total`      | counter   | `operation`, `outcome` | Producer commits and replay no-ops                                  |
-| `golem_durable_stream_catch_up_distance_events`      | histogram |                        | Committed events read before joining a live tail                   |
-| `golem_durable_stream_live_join_total`               | counter   | `outcome`              | Accepted and rejected live-tail joins                              |
-| `golem_durable_stream_active_readers`                | gauge     |                        | Attached live-tail readers                                         |
-| `golem_durable_stream_backpressure_total`            | counter   |                        | Fan-outs that waited on a full reader queue                        |
-| `golem_durable_stream_attempt_total`                 | counter   | `operation`, `outcome` | Start, resume, and takeover attempts                               |
-| `golem_durable_stream_attachment_epoch`              | histogram |                        | Accepted attachment epochs                                         |
-| `golem_durable_stream_journal_lag_events`            | histogram |                        | Source events not yet recorded in the value-only consumer journal  |
-| `golem_durable_stream_attachment_operation_total`    | counter   | `operation`, `outcome` | Prepare, activate, renew, and finalize attachment operations       |
-| `golem_durable_stream_lease_remaining_seconds`       | histogram |                        | Lease headroom observed during attachment work                     |
-| `golem_durable_stream_reconciliation_total`          | counter   | `outcome`              | Reconciler decisions and failures                                  |
-| `golem_durable_stream_cascade_total`                 | counter   | `outcome`              | Durable producer-deletion cascade outcomes                         |
-| `golem_durable_stream_limit_violation_total`         | counter   | `limit`                | Rejections by bounded protocol-v1 limit category                   |
-| `foreign_stream_fingerprint_mismatch_total`          | counter   |                        | Foreign-stream accesses rejected because the current agent fingerprint differs. This metric has no `golem_` prefix. |
-
-For configuration, recovery, and deletion diagnostics, see [Operating Durable Stream Sessions](/next/operate/durable_streams).
-
-#### Agent Filesystems
-
-These metrics are for the XFS volume of the agent filesystems. An executor exports them at 0 from the start when it uses an XFS storage mode. The project metrics are only for `ManagedXfs`. For the usage of the volume, use the volume metrics of your platform, for example `kubelet_volume_stats_available_bytes` on Kubernetes.
+Every service exports its version, so a query can join any metric with the version of the process that exported it.
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
-| `filesystem_pressure_recovery_seconds` | histogram | `outcome` | Time of a recovery of free space after a write failed for space. The recovery unloads idle agents until the free space reaches the target. `outcome` is `recovered`, `target_not_reached` (no idle agent was left to unload), `deadline`, `observation_failed` (the free space could not be read), `cleanup_failed` (the cleanup of an unloaded agent filesystem failed), `not_under_pressure` (the volume had enough space, so the failure has another cause) or `unavailable` (the executor is shutting down). |
-| `filesystem_pressure_unload_attempts_total` | counter | `outcome` | Each unload of an idle agent that a recovery of free space tried. `outcome` is `unloaded`, `ineligible` (the agent got new work or is being deleted before the unload ran; the recovery goes on with the next agent), `cleanup_failed` (the agent stopped, but the cleanup of its filesystem failed), `task_failed` (the unload task panicked or was cancelled) or `deadline` (the recovery deadline passed before the unload finished). Many `ineligible` attempts with `target_not_reached` recoveries mean that the candidates woke up, not that none were idle. |
-| `filesystem_storage_refusals_total` | counter | `cause` | Agent filesystem calls that failed because no space was left. `cause` is `agent_quota` (the agent used up its own quota, which is normal) or `physical_capacity` (the volume is full, and a recovery did not free enough). |
-| `filesystem_project_cleanup_failures_total` | counter | `operation` | Failed cleanups of managed XFS projects. The project stays reserved, and its space stays used, until a later cleanup succeeds. `operation` is `delete` (the delete of an agent filesystem), `drop` (the fallback cleanup of an agent filesystem that was dropped without a delete) or `stale` (the cleanup of a project left over at the path of a new agent filesystem). |
-| `filesystem_project_stale_reclaims_total` | counter | | Managed XFS projects that a new agent filesystem found left over at its path, for example after a crash, and cleaned. A rate that keeps going up shows that cleanups fail. |
+| `golem_build_info` | gauge | `version` | Always 1; the version label holds the version of the service |
+| `golem_executor_build_info` | gauge | `version`, `wasmtime` | Always 1; the labels hold the version of the worker executor and of its Wasmtime |
 
-#### Filesystem Snapshots
+## HTTP and gRPC APIs
 
-| Metric                                            | Type      | Labels            | Description                                                                      |
-| ------------------------------------------------- | --------- | ----------------- | -------------------------------------------------------------------------------- |
-| `filesystem_snapshot_capture_seconds`             | histogram | `outcome`         | Time that a capture of an agent filesystem, or a check of its initial files on an executor without filesystem snapshots, stops the file calls |
-| `filesystem_snapshot_upload_seconds`              | histogram | `kind`, `outcome` | Time of an upload of a filesystem snapshot, with its retries                     |
-| `filesystem_snapshot_uploaded_bytes_total`        | counter   | `kind`            | File sizes of the trees of the uploaded filesystem snapshots                     |
-| `filesystem_snapshot_uploads_in_progress`         | gauge     |                   | Runs of uploads that hold a slot now                                             |
-| `filesystem_snapshot_restore_seconds`             | histogram | `outcome`         | Time of a restore of a filesystem snapshot, with the wait for a restore slot and the retries |
-| `filesystem_snapshot_dropped_confirmations_total` | counter   | `reason`          | Uploaded filesystem snapshots that no confirmation record names                  |
-| `filesystem_snapshot_leaked_cleanups_total`       | counter   | `operation`       | Clean-ups of filesystem snapshots that left snapshots in blob storage            |
-| `filesystem_snapshot_cleanups_pending`            | gauge     |                   | Agents with clean-up work of filesystem snapshots that waits or runs             |
-| `filesystem_snapshot_copy_seconds`                | histogram | `outcome`         | Time of a copy of the filesystem snapshots of a fork source                      |
-| `filesystem_snapshot_skipped_total`               | counter   | `kind`, `reason`  | Filesystem snapshots that the admission skipped                                  |
-| `filesystem_snapshot_restored_age_seconds`        | histogram |                   | Time from the save of a filesystem snapshot to its successful restore            |
-| `filesystem_snapshot_delete_seconds`              | histogram | `operation`, `outcome` | Time of a delete of filesystem snapshots, with its prune                    |
-| `filesystem_snapshot_prune_seconds`               | histogram | `outcome`         | Time of a prune of a filesystem snapshot repository after a delete               |
-| `filesystem_snapshot_prune_skipped_total`         | counter   | `reason`          | Deletes of filesystem snapshots after which no prune ran                         |
-| `filesystem_snapshot_retention_runs_total`        | counter   | `outcome`         | Retention runs after a filesystem snapshot                                       |
-| `filesystem_snapshot_stored_bytes_total`          | counter   | `source`          | Bytes of repository files that the executor wrote to blob storage                |
-| `filesystem_snapshot_removed_bytes_total`         | counter   | `source`          | Bytes that the executor deleted from the filesystem snapshot storage             |
-| `filesystem_snapshot_released_bytes_total`        | counter   |                   | Packed bytes of deleted filesystem snapshots that a later prune can remove       |
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_http_requests_total` | counter | `method`, `route`, `status` | Requests served on an HTTP interface. `route` is the matched route pattern of a Golem API, or `other` for any other request, such as a request of a custom HTTP API; `method` is `other` for a method that HTTP does not define |
+| `golem_http_request_duration_seconds` | histogram | `method`, `route`, `status` | Time of serving a request on an HTTP interface, with the labels of golem_http_requests_total |
+| `golem_api_success_seconds` | histogram | `api`, `api_type` | Time of successfully serving an API request (HTTP and gRPC) |
+| `golem_api_failure_seconds` | histogram | `api`, `api_type`, `error` | Time of serving a failed API request (HTTP and gRPC). `error` is `Drop` when the caller went away before the request produced a result |
+| `golem_grpc_api_active_streams` | gauge |  | Open incoming gRPC streams |
+| `golem_http_api_active_streams` | gauge | `kind` | Open long-lived HTTP streams of the worker service. `kind` is `connect` (agent connect WebSockets), `invocation_session` (invocation session WebSockets) or `durable_stream_sse` (durable stream reads with `live=sse`) |
+| `golem_internal_grpc_success_seconds` | histogram | `target`, `op` | Time of a successful internal gRPC call between Golem services |
+| `golem_internal_grpc_failure_total` | counter | `target`, `op`, `status_code` | Internal gRPC calls that failed without a retry or after the retries ran out |
+| `golem_internal_grpc_retry_total` | counter | `target`, `op` | Internal gRPC call attempts retried after a reconnectable error |
+
+## External calls
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_external_call_success_seconds` | histogram | `target`, `op` | Time of a successful outgoing call |
+| `golem_external_call_response_size_bytes` | histogram | `target`, `op` | Size of the response of an outgoing call |
+| `golem_external_call_retry_total` | counter | `target`, `op` | Failed outgoing calls that got retried |
+| `golem_external_call_failure_total` | counter | `target`, `op` | Failed outgoing calls that are not retried |
+
+## Redis
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_redis_success_seconds` | histogram | `svc`, `api`, `cmd` | Time of a successful Redis call |
+| `golem_redis_failure_total` | counter | `svc`, `api`, `cmd` | Failed Redis calls |
+| `golem_redis_serialized_size_bytes` | histogram | `svc`, `entity` | Size of a serialized Redis entity |
+| `golem_redis_deserialized_size_bytes` | histogram | `svc`, `entity` | Size of a deserialized Redis entity |
+
+## Databases
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_db_success_seconds` | histogram | `db_type`, `svc`, `api` | Time of a successful database call |
+| `golem_db_failure_total` | counter | `db_type`, `svc`, `api` | Failed database calls |
+| `golem_db_rollback_total` | counter | `db_type`, `svc`, `api` | Explicit rollbacks of database transactions |
+| `golem_db_transaction_seconds` | histogram | `db_type`, `svc`, `api` | Time of a database transaction |
+| `golem_db_serialized_size_bytes` | histogram | `db_type`, `svc`, `entity` | Size of a serialized database entity |
+| `golem_db_deserialized_size_bytes` | histogram | `db_type`, `svc`, `entity` | Size of a deserialized database entity |
+| `golem_db_pool_size` | gauge | `db_type`, `svc` | Connections in the database connection pool |
+| `golem_db_pool_idle` | gauge | `db_type`, `svc` | Idle connections in the database connection pool |
+| `golem_db_pool_max` | gauge | `db_type`, `svc` | Maximum number of connections in the database connection pool |
+
+## Caches
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_cache_size` | gauge | `cache` | Current number of entries in the cache |
+| `golem_cache_capacity` | gauge | `cache` | Current maximal capacity of the cache |
+| `golem_cache_hit_total` | counter | `cache` | Cache hits |
+| `golem_cache_miss_total` | counter | `cache` | Cache misses |
+| `golem_cache_eviction_total` | counter | `cache`, `trigger` | Cache evictions |
+
+## Storage
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_storage_logical_operations_total` | counter | `kind`, `operation`, `service`, `api`, `entity` | Storage API calls, including failed calls, before backend retries |
+| `golem_storage_written_bytes_total` | counter | `storage_type` | Bytes written to storage, by storage type |
+| `golem_storage_objects_written_total` | counter | `storage_type` | Objects written to storage, by storage type |
+| `golem_storage_objects_deleted_total` | counter | `storage_type` | Objects deleted from storage, by storage type |
+| `golem_compilation_cache_written_bytes_total` | counter |  | Bytes written to the compiled component cache |
+| `golem_compilation_cache_objects_written_total` | counter |  | Objects written to the compiled component cache |
+
+## TLS certificates
+
+Every service that serves or calls gRPC with TLS, and the shard manager's etcd client, exports these metrics for the certificate in use. See [TLS between the services](/next/deploy/cluster#tls-between-the-services) and [Renew certificates](/next/operate/shard-manager#renew-certificates).
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_tls_certificate_not_after_seconds` | gauge | `use` | Unix time at which the TLS certificate in use expires. `use` is `grpc server`, `&lt;target&gt; client` or `etcd client` |
+| `golem_tls_certificate_reload_failures_total` | counter | `use` | Changed TLS files that could not be used, counted once for each distinct set of files |
+
+## Tokio runtime
+
+Every service exports the metrics of its Tokio runtime. The `tokio-metrics` crate generates them; Golem replaces their `tokio_` prefix with `golem_tokio_` and keeps the rest of the name. These names do not follow the unit and `_total` rules of this page: for example `golem_tokio_total_busy_duration` is a counter of microseconds.
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_tokio_*` | generated | | Tokio runtime metrics, such as `golem_tokio_workers_count`, `golem_tokio_global_queue_depth` and `golem_tokio_total_busy_duration`; see the `RuntimeMetrics` documentation of the `tokio-metrics` crate |
+
+## Process
+
+Every service on Linux exports the process metrics of the Prometheus client, with the `golem_` prefix added to their standard `process_` names.
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_process_*` | generated | | CPU time, resident and virtual memory, open and maximum file descriptors, threads and start time of the process, such as `golem_process_cpu_seconds_total` and `golem_process_resident_memory_bytes` |
+
+## Component compilation
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_component_compilation_queue_length` | gauge |  | Pending compilation requests of the compilation service, excluding the active request |
+| `golem_component_compilation_upload_queue_length` | gauge |  | Compiled components waiting for upload in the compilation service, excluding the active upload |
+| `golem_component_compilation_time_seconds` | histogram |  | Time of a successful Wasmtime component build in the compilation service; excludes the queue wait, the download, compiled-blob cache hits and the upload, but includes filesystem-cache loads when enabled |
+| `golem_component_compilation_enqueue_total` | counter | `outcome` | Cache-warming compilation requests that the registry service sent. `outcome` is `accepted` (the compilation service admitted the request, not that compilation finished), `rejected` (its compilation queue was full), `failed` (transport errors, application errors and malformed responses) or `timeout` (the registry exhausted its overall enqueue budget). These outcomes do not fail the component upload, and uploads with precompilation disabled are not counted |
+| `golem_compilation_time_seconds` | histogram |  | Time of a compilation of a WASM component to native code in the worker executor |
+
+## Shard manager
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_shard_manager_is_leader` | gauge |  | 1 while this replica holds the etcd leadership lease, 0 while it stands by (distributed mode only) |
+| `golem_shard_manager_is_serving` | gauge |  | 1 while this replica serves shard manager calls: a leader whose startup has completed, or a shard manager in local mode; 0 otherwise. A replica that has just won the election holds the leadership but serves only after its startup |
+| `golem_shard_manager_leader_since_timestamp_seconds` | gauge |  | Unix time at which this replica was elected, 0 while it stands by (distributed mode only) |
+| `golem_shard_manager_campaign_attempt_failures_total` | counter |  | Attempts to reach etcd on the way to leadership that failed retriably and were retried (distributed mode only) |
+| `golem_shard_manager_executor_lease_expired_total` | counter |  | Executor leases that lapsed without a renewal and had their shards released. Only the leader counts, so sum it over all replicas. This counter also sees an executor that no longer answers a scrape |
+
+## Worker executor: sharding
+
+The shard lease metrics take their label values from a fixed set. A label value is exported at 0 before its first event, so a query reads 0 instead of no data. To find a single agent, use the logs at the site of the refusal.
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_assigned_shard_count` | gauge |  | Shards assigned to this executor |
+| `golem_stale_shard_delivery_total` | counter | `delivery` | Shard deliveries dropped for naming a revision older than the last one applied; `delivery` is `register`, `assign`, `revoke` or `renewal`. One is normal when a push and a renewal cross; a sustained rate is not |
+| `golem_shard_lease_expiry_timestamp_seconds` | gauge |  | Unix time at which the shard lease of this executor lapses unless it is renewed. Absent on a single-shard executor, which has no lease, and before the executor registers. `golem_shard_lease_expiry_timestamp_seconds - time()` is the remaining lease time, and it keeps counting down when the renewal loop stops |
+| `golem_shard_lease_renewals_total` | counter | `outcome` | Shard lease renewal attempts; `outcome` is `granted`, `not_registered`, `timeout`, `lease_not_found` or `failed`. On `lease_not_found` the executor drops its shards and registers again |
+| `golem_shard_admission_refusals_total` | counter | `reason` | Agent admissions refused by the shard assignment; `reason` is `not_registered`, `lease_lapsed` (the executor fenced itself) or `not_owned` (the agent is on another executor's shard, which is normal during a rebalance) |
+
+## Worker executor: agent resource release
+
+Process-local observations of how long an executor takes to release the resources of an agent after it accepts a stop or unloads the agent.
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_agent_resource_release_seconds` | histogram | `origin`, `stage`, `cause`, `outcome` | Elapsed seconds from accepted stop or ordinary unload to physical owner facts |
+| `golem_agent_stop_host_operation_exit_seconds` | histogram | `operation`, `outcome` | Elapsed seconds from accepted stop to actual tracked driver exit |
+| `golem_agent_filesystem_lifecycle_seconds` | histogram | `operation`, `outcome` | Elapsed seconds from owning filesystem deletion acceptance through verified deletion, including repair |
+| `golem_agent_resource_cleanup_failures_total` | counter | `stage`, `reason` | Distinct bounded failure facts per logical cleanup obligation |
+| `golem_agent_resource_release_unfinished` | gauge | `origin`, `stage`, `cause`, `health` | Outstanding applicable release receipts; end_to_end counts episodes |
+| `golem_agent_resource_release_oldest_unfinished_age_seconds` | gauge | `origin`, `stage`, `cause`, `health` | Oldest process-local unfinished release age in seconds |
+
+## Worker executor: agents
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_worker_executor_call_total` | counter | `api` | Calls to the worker layer |
+| `golem_worker_count_by_status` | gauge | `status` | In-memory workers per status |
+| `golem_worker_eviction_total` | counter | `class` | Workers evicted from memory |
+| `golem_worker_memory_resident_count` | gauge | `executor_id` | Workers currently holding a memory permit and running an invocation loop on this executor |
+| `golem_worker_waiting_for_memory_count` | gauge | `executor_id` | Workers blocked waiting to acquire a memory permit on this executor |
+| `golem_worker_admission_wait_seconds` | histogram | `executor_id`, `phase` | Time a starting worker spent blocked in one phase of admission before it could become resident, labelled by phase (resolve_component_charge, concurrency_slot, memory). Observed once per phase per worker start. Sum across phases for the total wait; read per phase to see which resource is the constraint. golem_worker_waiting_for_memory_count says how many workers are waiting, this says for how long |
+| `golem_worker_store_alive_count` | gauge | `executor_id` | Live wasmtime Store contexts on this executor, counted by the Store's own lifetime: incremented when a worker's Store is constructed and decremented when it is dropped. Diverging above the resident-worker count means Stores are retained after the owning worker was deleted |
+| `golem_owner_group_alive_count` | gauge | `executor_id` | Owner-routed active agent groups on this executor |
+| `golem_primary_store_alive_count` | gauge | `executor_id` | Live primary agent Stores on this executor |
+| `golem_entity_store_alive_count` | gauge | `executor_id`, `entity_kind` | Live transient entity Stores on this executor |
+| `golem_entity_invocation_active_count` | gauge | `entity_kind`, `execution_mode` | Entity invocation bodies currently active on this executor |
+| `golem_entity_invocation_total` | counter | `entity_kind`, `execution_mode`, `outcome` | Entity invocation bodies by terminal outcome |
+| `golem_worker_kv_cache_value_size_bytes` | histogram | `executor_id` | Bytes of a value written to the Worker-namespace KV cache (worker status blob size) |
+| `golem_worker_memory_pool_total_bytes` | gauge | `executor_id` | Usable memory ceiling (usable_ratio * measured limit) the admission gate admits against on this executor |
+| `golem_worker_memory_pool_used_bytes` | gauge | `executor_id` | Total linear memory granted to live workers and reserved by the admission gate on this executor |
+| `golem_worker_admission_rss_bytes` | gauge | `executor_id` | Measured resident memory (probe snapshot) the admission gate last read on this executor |
+| `golem_worker_memory_grow_rejected_total` | counter | `executor_id` | Invocations interrupted because a worker's linear-memory grow could not be admitted by the gate (out-of-memory trap, retried via reacquire) |
+| `golem_agent_status_flush_total` | counter | `reason` | Cached agent status blob flushes by reason (background/forced) |
+| `golem_agent_status_flush_failed_total` | counter | `reason` | Cached agent status blob flushes that failed, by reason (background/forced) |
+| `golem_replay_metadata_scan_entries_total` | counter | `start` | Oplog entries scanned for recovery metadata when a replay generation starts, by the start of the replayed history (snapshot/initial) |
+| `golem_agent_status_recompute_total` | counter | `source` | Agent status recomputes by the baseline used (cache/checkpoint/full) |
+| `golem_agent_status_checkpoint_write_total` | counter | `reason` | Clean agent status checkpoint writes by reason (snapshot/idle) |
+| `golem_agent_status_checkpoint_write_failed_total` | counter | `reason` | Clean agent status checkpoint writes that failed, by reason (snapshot/idle) |
+| `golem_invocation_result_resolution_total` | counter | `outcome` | Invocation-result resolutions by the lookup path and outcome |
+| `golem_invocation_result_index_catch_up_chunks_total` | counter |  | Physical invocation-result index catch-up chunks completed |
+| `golem_invocation_result_index_catch_up_entries_total` | counter |  | Oplog entries processed while catching up the physical invocation-result index |
+| `golem_invocation_listings_total` | counter |  | Listings of the invocations of one agent |
+| `golem_invocation_listing_results_total` | counter |  | Invocation results read to list the invocations of one agent |
+| `golem_agent_identity_resolution_total` | counter | `event` | Mode-hint events observed during authoritative agent identity resolution; multiple events may occur per resolution |
+| `golem_stale_running_worker_total` | counter | `reason` | Stale recovery-index members removed by reason |
+| `golem_status_cache_publication_total` | counter | `cache`, `event` | Status cache publication events by cache and reconciliation path; fallback and eventual reconciliation are separate events |
+| `golem_derived_cache_publication_failed_total` | counter | `cache` | Derived-cache publications that failed while atomically applying expiry |
+| `golem_foreign_stream_fingerprint_mismatch_total` | counter |  | Foreign durable-stream accesses rejected because the current agent fingerprint differs |
+
+## Worker executor: invocations and the Wasm runtime
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_create_worker_seconds` | histogram |  | Time of the creation of a worker |
+| `golem_create_worker_failure_total` | counter | `error` | Failed worker creations |
+| `golem_invocation_total` | counter | `mode`, `outcome` | Invocations; `mode` is `live` or `replay` |
+| `golem_invocation_fuel_consumption` | histogram |  | Fuel consumed by an invocation |
+| `golem_allocated_memory_bytes` | histogram |  | Store's accounted total of linear-memory bytes and GC heap capacity, sampled after each positive memory-growth notification |
+| `golem_worker_allocated_linear_memory_bytes` | histogram |  | Per-Store allocated linear-memory bytes plus GC heap capacity, sampled after instance reconciliation. Linear memories contribute current data_size values for unique backings; this is not measured resident memory |
+| `golem_host_function_call_total` | counter | `interface`, `name` | Calls to specific host functions |
+| `golem_resume_worker_seconds` | histogram |  | Time of the resumption of a worker |
+| `golem_replayed_functions` | histogram |  | Functions replayed per worker resumption |
+| `golem_in_function_retry_total` | counter |  | In-function retries (retries inside a host function without oplog replay) |
+| `golem_custom_invocation_scope_open_total` | counter |  | Live custom-durability ownership scopes opened |
+| `golem_agent_permission_authorization_total` | counter | `permission_class`, `outcome` | Live host-call permission authorization decisions |
+| `golem_agent_permission_authority_sync_total` | counter | `path` | Host-call authority boundary checks by path |
+| `golem_agent_permission_authority_sync_seconds` | histogram |  | Time spent refreshing host-call permission authority on the slow path |
+| `golem_event_total` | counter | `event` | Events produced by workers |
+| `golem_event_broadcast_total` | counter | `event` | Events broadcast by the executor |
+| `golem_rdbms_success_seconds` | histogram | `rdbms_type`, `api` | Time of a successful `golem:rdbms` call |
+| `golem_rdbms_failure_total` | counter | `rdbms_type`, `api` | Failed `golem:rdbms` calls |
+
+## Worker executor: memory
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_mimalloc_peak_rss_bytes` | gauge | `executor_id` | Peak resident set size of the executor process since it started, from getrusage |
+| `golem_mimalloc_current_commit_bytes` | gauge | `executor_id` | Heap address space that mimalloc committed; on Linux it goes down only when mimalloc unmaps memory, so it is close to a high-water mark and can exceed the resident heap |
+| `golem_mimalloc_peak_commit_bytes` | gauge | `executor_id` | Peak of golem_mimalloc_current_commit_bytes since the executor started |
+
+## Worker executor: resources
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_fuel_borrow_total` | counter |  | Fuel borrowed |
+| `golem_fuel_return_total` | counter |  | Fuel returned |
+| `golem_ephemeral_overdraft_fuel_total` | counter |  | Ephemeral overdraft fuel consumed |
+| `golem_storage_byte_seconds_total` | counter | `agent_mode` | Filesystem storage byte-seconds billed, by agent mode |
+| `golem_memory_byte_seconds_total` | counter | `agent_mode` | Allocated linear-memory byte-seconds delivered to the registry, by agent mode. The registry receives them in whole GB-seconds of 2^30 byte-seconds |
+| `golem_resource_usage_batch_update_failure_total` | counter |  | Resource usage batches dropped after registry update failures |
+
+## Worker executor: promises and the scheduler
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_promise_created_total` | counter |  | Promises created |
+| `golem_promise_scheduled_completion_total` | counter |  | Scheduled promise completions |
+| `golem_promise_completion_seconds` | histogram | `executor_id`, `outcome` | Wall time of complete_promise from call entry to return, labelled by outcome |
+| `golem_promise_pending_count` | gauge | `executor_id` | Distinct PromiseIds in Pending state in this executor's PromiseRegistry |
+| `golem_promise_data_size_bytes` | histogram | `executor_id` | Bytes of the data payload submitted to complete_promise at call time |
+| `golem_scheduled_action_lag_seconds` | histogram | `executor_id` | Wall-clock delay between scheduled_at and the time the action fires |
+| `golem_scheduler_queue_depth` | gauge | `executor_id` | Matching actions to process at the start of each scheduler iteration |
+| `golem_scheduler_due_action_backlog_after_tick` | gauge | `executor_id` | Due scheduled actions not yet acknowledged after scheduler tick processing |
+| `golem_scheduler_tick_duration_seconds` | histogram | `executor_id` | Wall time of a single scheduler iteration |
+| `golem_scheduled_action_processing_seconds` | histogram | `executor_id`, `action_kind` | Time to process a claimed scheduled action before acknowledgement |
+| `golem_scheduled_action_size_bytes` | histogram | `executor_id`, `action_kind` | Serialized blob size of a ScheduledAction at insert time |
+
+## Worker executor: oplog
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_oplog_svc_call_total` | counter | `api` | Calls to the oplog layer |
+| `golem_oplog_scheduled_archive_seconds` | histogram | `type` | Time of a scheduled archive step of the oplog of a worker; `type` is `intermediate` or `final` |
+| `golem_oplog_rate_limited_total` | counter |  | Oplog add calls that were delayed by the rate limiter |
+| `golem_oplog_sweep_outcome_total` | counter | `route`, `outcome` | Keys the oplog sweep examined, by what it decided about each. One outcome per key, so the outcomes sum to what a tick decided |
+| `golem_oplog_sweep_tick_seconds` | histogram | `route` | Time of one oplog sweep tick |
+| `golem_oplog_sweep_truncated_total` | counter | `route` | Oplog sweep ticks that hit a budget or their deadline before reaching the end of the namespace |
+| `golem_oplog_storage_retry_total` | counter | `op` | Oplog storage operation retries due to transient errors or indeterminate writes |
+| `golem_oplog_archive_maintenance_failure_total` | counter | `operation` | Failed background oplog archive maintenance operations |
+| `golem_oplog_epoch_fence_total` | counter | `op`, `outcome` | Oplog operations checked against the shard epoch: `op` is `record` for an open recording its epoch, `append` for a write and `drop_prefix` for a trim after archiving, and `archive_record`, `archive_append`, `archive_drop_prefix` and `archive_delete_empty` for the same on a compressed archive level or a blob level's manifest; `outcome` is `accepted` or `refused` |
+
+## Ephemeral agents
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_ephemeral_promise_waiting` | gauge |  | Ephemeral agents currently waiting on promises |
+| `golem_ephemeral_non_suspending_failure_total` | counter | `reason` | Ephemeral failures that replace suspension |
+| `golem_ephemeral_invocation_attempt_total` | counter | `disposition` | Ephemeral invocation attempts by freshness disposition |
+| `golem_ephemeral_known_fresh_validation_failure_total` | counter |  | Rejected KnownFresh invocation requests |
+| `golem_ephemeral_lower_oplog_existence_read_total` | counter |  | Lower oplog existence reads for ephemeral agents |
+| `golem_ephemeral_inactive_invocation_failure_total` | counter |  | Attempts to invoke or resume inactive ephemeral agents |
+| `golem_ephemeral_phantom_invocation_rejection_total` | counter | `reason` | Ephemeral invocation requests that the worker service rejected for an invalid phantom ID, by reason |
+
+## Durable stream sessions
+
+For configuration, recovery, and deletion diagnostics, see [Operating Durable Stream Sessions](/next/operate/durable_streams).
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_durable_stream_lifecycle_total` | counter | `event` | Durable stream registrations and terminal transitions |
+| `golem_durable_stream_open` | gauge |  | Open durable streams owned by loaded producers on this executor |
+| `golem_durable_stream_producer_operation_total` | counter | `operation`, `outcome` | Durable producer operations by bounded operation and commit outcome |
+| `golem_durable_stream_catch_up_distance_events` | histogram |  | Committed events read before a durable reader joins the live tail |
+| `golem_durable_stream_live_join_total` | counter | `outcome` | Durable live-tail join attempts by outcome |
+| `golem_durable_stream_active_readers` | gauge |  | Active durable live-tail readers on this executor |
+| `golem_durable_stream_backpressure_total` | counter |  | Durable event fan-outs that waited on a full live-reader queue |
+| `golem_durable_stream_attempt_total` | counter | `operation`, `outcome` | Durable Stream Session start, resume, and takeover attempts by outcome |
+| `golem_durable_stream_attachment_epoch` | histogram |  | Accepted durable Stream Session attachment epochs |
+| `golem_durable_stream_journal_lag_events` | histogram |  | Committed source events not yet recorded in the value-only consumer journal, sampled at creation, terminal, and at most every 100 ms during consumption |
+| `golem_durable_stream_attachment_operation_total` | counter | `operation`, `outcome` | Cross-oplog attachment operations by bounded operation and outcome |
+| `golem_durable_stream_lease_remaining_seconds` | histogram |  | Remaining attachment lease time when inspected or reconciled |
+| `golem_durable_stream_reconciliation_total` | counter | `outcome` | Attachment reconciliation candidates by outcome |
+| `golem_durable_stream_cascade_total` | counter | `outcome` | Producer deletion cascade dependents by durable outcome |
+| `golem_durable_stream_limit_violation_total` | counter | `limit` | Rejected durable Stream Session operations by frozen limit category |
+| `golem_durable_stream_load_rejection_total` | counter | `reason` | Durable stream requests that the worker service rejected by per-stream reader, per-node reader, catch-up-rate, or append-rate limits; `append-rate-limit` identifies append admission failures |
+| `golem_durable_stream_append_total` | counter | `outcome` | Durable stream append requests of the worker service by outcome: `accepted`, `duplicate`, `fenced` or `gap` |
+
+## Agent filesystems
+
+These metrics are for the local XFS disk of the agent filesystems of an executor. An executor exports them at 0 from the start when it uses an XFS storage mode. The project metrics are only for `ManagedXfs`. For the usage of the disk, use the disk metrics of your platform, for example `kubelet_volume_stats_available_bytes` on Kubernetes.
+
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_filesystem_pressure_recovery_seconds` | histogram | `outcome` | Time of a recovery of free space on the agent filesystem disk after a write failed for space. The recovery unloads idle agents until the free space reaches the target. `outcome` is `recovered`, `target_not_reached` (no idle agent was left to unload), `deadline`, `observation_failed` (the free space could not be read), `cleanup_failed` (the cleanup of an unloaded agent failed), `not_under_pressure` (another recovery freed the space first) or `unavailable` (the disk does not report its free space) |
+| `golem_filesystem_pressure_unload_attempts_total` | counter | `outcome` | Unloads of idle agents that a recovery of free space on the agent filesystem disk tried. `outcome` is `unloaded`, `ineligible` (the agent got new work or is being deleted before the unload ran; the recovery goes on with the next agent), `cleanup_failed` (the agent stopped, but the cleanup of its filesystem failed), `task_failed` (the unload task panicked) or `deadline` |
+| `golem_filesystem_storage_refusals_total` | counter | `cause` | Agent filesystem calls that failed because no space was left. `cause` is `agent_quota` (the agent used up its own quota, which is normal) or `physical_capacity` (the disk is full, and a recovery did not free enough) |
+| `golem_filesystem_project_cleanup_failures_total` | counter | `operation` | Failed cleanups of managed XFS projects. The project stays reserved, and its space stays used, until a later cleanup succeeds. `operation` is `delete` (the delete of an agent filesystem), `drop` (the fallback cleanup of an agent filesystem that was dropped without a delete) or `stale` (the cleanup of a project left over at the path of a new agent filesystem) |
+| `golem_filesystem_project_stale_reclaims_total` | counter |  | Managed XFS projects that a new agent filesystem found left over at its path, for example after a crash, and cleaned. A rate that keeps going up shows that cleanups fail |
+
+## Filesystem snapshots
 
 For the label values and what to watch, see [Filesystem Snapshots](/next/operate/filesystem_snapshots/monitoring#metrics).
 
-### Worker Service
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_filesystem_snapshot_capture_seconds` | histogram | `outcome` | Time that a capture of an agent filesystem, or a check of its initial files on an executor without filesystem snapshots, stops the file calls, by outcome |
+| `golem_filesystem_snapshot_upload_seconds` | histogram | `kind`, `outcome` | Time of an upload of a filesystem snapshot, with its retries, by kind and outcome |
+| `golem_filesystem_snapshot_uploaded_bytes_total` | counter | `kind` | Bytes of the trees of the uploaded filesystem snapshots, by kind |
+| `golem_filesystem_snapshot_uploads_in_progress` | gauge |  | Store attempts of uploads of filesystem snapshots that hold a slot now |
+| `golem_filesystem_snapshot_restore_seconds` | histogram | `outcome` | Time of a restore of a filesystem snapshot, with the waits for a restore slot and the retries, by outcome |
+| `golem_filesystem_snapshot_dropped_confirmations_total` | counter | `reason` | Uploaded filesystem snapshots that no confirmation record names, by reason |
+| `golem_filesystem_snapshot_leaked_cleanups_total` | counter | `operation` | Clean-ups of filesystem snapshots that left snapshots in blob storage, by operation |
+| `golem_filesystem_snapshot_cleanups_pending` | gauge |  | Agents with pending or running clean-up work of filesystem snapshots |
+| `golem_filesystem_snapshot_copy_seconds` | histogram | `outcome` | Time of a copy of the filesystem snapshots of a fork source, by outcome |
+| `golem_filesystem_snapshot_stored_bytes_total` | counter | `source` | Bytes of the repository files that the filesystem snapshot store wrote to blob storage, by source |
+| `golem_filesystem_snapshot_removed_bytes_total` | counter | `source` | Bytes that the filesystem snapshot store deleted from blob storage, by source |
+| `golem_filesystem_snapshot_released_bytes_total` | counter |  | Packed bytes of the deleted filesystem snapshots, which a later prune can remove when no other snapshot uses them |
+| `golem_filesystem_snapshot_restored_age_seconds` | histogram |  | Time from the save of a filesystem snapshot to its successful restore |
+| `golem_filesystem_snapshot_skipped_total` | counter | `kind`, `reason` | Filesystem snapshots that the admission skipped, by kind and reason |
+| `golem_filesystem_snapshot_delete_seconds` | histogram | `operation`, `outcome` | Time of a delete of filesystem snapshots, with its prune, by operation and outcome |
+| `golem_filesystem_snapshot_prune_seconds` | histogram | `outcome` | Time of a prune of a filesystem snapshot repository after a delete, with its check, by outcome |
+| `golem_filesystem_snapshot_prune_skipped_total` | counter | `reason` | Deletes of filesystem snapshots after which no prune ran, by reason |
+| `golem_filesystem_snapshot_retention_runs_total` | counter | `outcome` | Retention runs after a confirmed or committed filesystem snapshot, by outcome |
 
-Worker service exposes the following Prometheus metrics:
+## Worker service: HTTP sessions and OpenAPI
 
-| Metric                              | Type      | Labels                                                                                                     | Description                                                                     |
-| ----------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
-| `poem_request_count`                | counter   | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Counts every request on the HTTP interface                                      |
-| `poem_errors_count`                 | counter   | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Counts failed requests on the HTTP interface                                    |
-| `poem_request_duration_ms`          | histogram | `http.request.method`, `url.full`, `[http.path_pattern]`, `http.response.status_code`, `exception.message` | Measures the duration of handling requests on the HTTP interface                |
-| `api_success_seconds`               | histogram | `api`, `api_type`                                                                                          | Measures the duration of successfully serving API requests (both HTTP and gRPC) |
-| `api_failure_seconds`               | histogram | `api`, `api_type`, `error`                                                                                 | Measures the duration of failed API requests (both HTTP and gRPC)               |
-| `grpc_api_active_streams`           | gauge     |                                                                                                            | Number of open incoming gRPC streams                                            |
-| `http_api_active_streams`           | gauge     | `kind`: `connect`, `invocation_session`, `durable_stream_sse`                                              | Number of open long-lived HTTP streams: agent `connect` WebSockets, invocation session WebSockets and durable stream reads with `live=sse` |
-| `external_call_success_seconds`     | histogram | `target`, `op`                                                                                             | Duration of successful outgoing calls                                          |
-| `external_call_response_size_bytes` | histogram | `target`, `op`                                                                                             | Size of the response of outgoing calls                                          |
-| `external_call_retry_total`         | counter   | `target`, `op`                                                                                             | Number of failed outgoing calls that got retried                                |
-| `external_call_failure_total`       | counter   | `target`, `op`                                                                                             | Number of failed outgoing calls not to be retried                               |
-| `cache_size`                        | gauge     | `cache`                                                                                                    | Current maximal capacity of the cache                                           |
-| `cache_hit_total`                   | counter   | `cache`                                                                                                    | Number of cache hits                                                            |
-| `cache_miss_total`                  | counter   | `cache`                                                                                                    | Number of cache misses                                                          |
-| `cache_eviction_total`              | counter   | `cache`, `trigger`                                                                                         | Number of cache evictions                                                       |
-| `http_session_reattach_attempts_total` | counter |                                                                                                          | HTTP session reattach attempts                                                  |
-| `http_session_reattach_seconds`     | histogram | `outcome`                                                                                                  | Duration of an HTTP session reattach                                            |
-| `http_session_stale_fencing_total`  | counter   |                                                                                                            | Stale HTTP sessions that a newer attachment fenced                              |
-| `http_session_explicit_cancellations_total` | counter |                                                                                                        | HTTP sessions that ended by cancellation                                        |
-| `http_session_terminal_total`       | counter   | `cause`                                                                                                    | HTTP sessions that ended without a completed exchange, by cause                 |
-| `http_session_cleanup_seconds`      | histogram | `outcome`                                                                                                  | Duration of the cleanup of an HTTP session that did not complete                |
-| `durable_stream_append_total`       | counter   | `outcome`                                                                                                  | Durable stream append outcomes: `accepted`, `duplicate`, `fenced`, and `gap`. |
-| `durable_stream_load_rejection_total` | counter | `reason`                                                                                                   | Durable stream requests rejected by per-stream reader, per-node reader, catch-up-rate, or append-rate limits. `append-rate-limit` identifies append admission failures. |
-| `ephemeral_phantom_invocation_rejection_total` | counter | `reason`                                                                                          | Ephemeral invocation requests rejected for an invalid phantom ID                |
-| `openapi_cache_total`               | counter   | `outcome`                                                                                                  | OpenAPI cache lookups and stale fencing                                         |
-| `openapi_generation_seconds`        | histogram | `outcome`                                                                                                  | Duration of an OpenAPI generation                                               |
+| Metric | Type | Labels | Description |
+| --- | --- | --- | --- |
+| `golem_http_session_reattach_attempts_total` | counter |  | HTTP session reattach attempts |
+| `golem_http_session_reattach_seconds` | histogram | `outcome` | Time of an HTTP session reattach, by outcome |
+| `golem_http_session_stale_fencing_total` | counter |  | Stale HTTP sessions that a newer attachment fenced |
+| `golem_http_session_explicit_cancellations_total` | counter |  | HTTP sessions that ended by cancellation |
+| `golem_http_session_terminal_total` | counter | `cause` | HTTP sessions that ended without a completed exchange, by cause |
+| `golem_http_session_cleanup_seconds` | histogram | `outcome` | Time of the cleanup of an HTTP session that did not complete, by outcome |
+| `golem_openapi_cache_total` | counter | `outcome` | OpenAPI cache lookups and stale fencing by bounded outcome |
+| `golem_openapi_generation_seconds` | histogram | `outcome` | Time of an OpenAPI generation, by success or bounded failure category |
 
-### TLS Certificates
-
-Every service that serves or calls gRPC with TLS, and the shard manager's etcd client, exports the following metrics for the certificate in use. See [TLS between the services](/next/deploy/cluster#tls-between-the-services) and [Renew certificates](/next/operate/shard-manager#renew-certificates).
-
-| Metric                                       | Type    | Labels | Description                                                                                              |
-| -------------------------------------------- | ------- | ------ | -------------------------------------------------------------------------------------------------------- |
-| `golem_tls_certificate_not_after_seconds`    | gauge   | `use`  | Unix time at which the TLS certificate in use expires. `use` is `grpc server`, `<target> client` or `etcd client` |
-| `golem_tls_certificate_reload_failures_total` | counter | `use`  | Changed TLS files that could not be used; counted once for each distinct set of files                    |
-
-### OTLP Plugin
+## OTLP plugin
 
 The [OTLP plugin](/next/develop/observability#setting-up-the-otlp-plugin) exports durable stream summaries separately from the service's Prometheus endpoint:
 

@@ -12,22 +12,16 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::metrics::DEFAULT_TIME_BUCKETS;
+use golem_common::metrics::catalog;
 use lazy_static::lazy_static;
 use prometheus::*;
 use std::time::Duration;
 
 lazy_static! {
-    static ref COMPILATION_QUEUE_LENGTH: Gauge = register_gauge!(
-        "component_compilation_queue_length",
-        "Number of compilation requests waiting for the compiler"
-    )
-    .unwrap();
-    static ref UPLOAD_QUEUE_LENGTH: Gauge = register_gauge!(
-        "component_compilation_upload_queue_length",
-        "Number of compiled components waiting for upload"
-    )
-    .unwrap();
+    static ref COMPILATION_QUEUE_LENGTH: Gauge =
+        catalog::COMPONENT_COMPILATION_QUEUE_LENGTH.register();
+    static ref UPLOAD_QUEUE_LENGTH: Gauge =
+        catalog::COMPONENT_COMPILATION_UPLOAD_QUEUE_LENGTH.register();
 }
 
 pub fn increment_queue_length() {
@@ -47,12 +41,8 @@ pub fn decrement_upload_queue_length() {
 }
 
 lazy_static! {
-    pub static ref COMPILATION_TIME_SECONDS: Histogram = register_histogram!(
-        "component_compilation_time_seconds",
-        "Time to compile a WASM component to native code",
-        DEFAULT_TIME_BUCKETS.to_vec()
-    )
-    .unwrap();
+    pub static ref COMPILATION_TIME_SECONDS: Histogram =
+        catalog::COMPONENT_COMPILATION_TIME_SECONDS.register();
 }
 
 pub fn record_compilation_time(duration: Duration) {
@@ -60,5 +50,7 @@ pub fn record_compilation_time(duration: Duration) {
 }
 
 pub fn register_all() -> Registry {
+    golem_service_base::metrics::record_build_info();
+
     default_registry().clone()
 }

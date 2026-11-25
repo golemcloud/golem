@@ -1,2 +1,34 @@
 too-many-arguments-threshold = 20
 large-error-threshold = 1024
+
+# Every metric is declared in the catalog in golem-common/src/metrics/catalog.rs, and
+# `catalog::register_collector` is the only function that may register a metric: it refuses a
+# family that the catalog does not declare. A metric registered on first use appears in a scrape
+# only after a workload touches it, so only a static rule proves that no metric bypasses the
+# catalog.
+disallowed-methods = [
+    { path = "prometheus::Registry::register", reason = "register through golem_common::metrics::catalog" },
+    { path = "prometheus::register", reason = "register through golem_common::metrics::catalog" },
+]
+disallowed-macros = [
+    { path = "prometheus::register_counter", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_counter_with_registry", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_int_counter", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_int_counter_with_registry", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_counter_vec", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_counter_vec_with_registry", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_int_counter_vec", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_int_counter_vec_with_registry", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_gauge", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_gauge_with_registry", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_int_gauge", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_int_gauge_with_registry", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_gauge_vec", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_gauge_vec_with_registry", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_int_gauge_vec", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_int_gauge_vec_with_registry", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_histogram", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_histogram_with_registry", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_histogram_vec", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "prometheus::register_histogram_vec_with_registry", reason = "declare the metric in golem_common::metrics::catalog" },
+]

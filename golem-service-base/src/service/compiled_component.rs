@@ -209,9 +209,8 @@ impl CompiledComponentService for DefaultCompiledComponentService {
                 )
             });
         if result.is_ok() {
-            let env_str = environment_id.to_string();
-            record_compilation_cache_bytes_written(&env_str, byte_count);
-            record_compilation_cache_objects_written(&env_str, 1);
+            record_compilation_cache_bytes_written(byte_count);
+            record_compilation_cache_objects_written(1);
         }
         result
     }

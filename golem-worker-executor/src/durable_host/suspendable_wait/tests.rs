@@ -142,7 +142,7 @@ async fn ephemeral_promises_complete_timeout_and_interrupt() {
     fn gauge() -> f64 {
         prometheus::gather()
             .into_iter()
-            .find(|metric| metric.name() == "ephemeral_promise_waiting")
+            .find(|metric| metric.name() == "golem_ephemeral_promise_waiting")
             .unwrap()
             .get_metric()[0]
             .get_gauge()

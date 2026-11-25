@@ -108,7 +108,7 @@ Only revert deletes queue individual snapshot names. Each agent can queue at mos
 
 The queue also has fixed limits of 65,536 agents and 786,432 snapshot names. At the agent limit, deleting an entire repository first removes another agent's oldest queued revert deletes to make room. If none can be removed, the delete-all request is refused. These losses also count as `overflow`.
 
-Snapshots can remain in storage after exhausted delete retries, queue overflow, shutdown, a crash, or a fork with an unknown publication outcome. They consume space but do not change recovery correctness. `filesystem_snapshot_leaked_cleanups_total` counts observed losses; it cannot count work lost to a crash.
+Snapshots can remain in storage after exhausted delete retries, queue overflow, shutdown, a crash, or a fork with an unknown publication outcome. They consume space but do not change recovery correctness. `golem_filesystem_snapshot_leaked_cleanups_total` counts observed losses; it cannot count work lost to a crash.
 
 Later retention can remove overflowed automatic snapshots after enough newer snapshots are confirmed, or overflowed manual-update snapshots after further manual updates. Deleting the agent also removes them. See [monitoring](/next/operate/filesystem_snapshots/monitoring#diagnose-symptoms) for storage-growth diagnostics.
 
