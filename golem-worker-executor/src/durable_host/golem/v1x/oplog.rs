@@ -21,10 +21,7 @@ use crate::durable_host::concurrent::DurableCallSession;
 use crate::durable_host::concurrent::NotCancellable;
 use crate::durable_host::concurrent::ResolvedCall;
 use crate::model::public_oplog::PublicOplogEntryOps;
-use crate::model::public_oplog::find_component_revision_at;
-use crate::model::public_oplog::get_public_oplog_chunk;
-use crate::model::public_oplog::search_public_oplog;
-use crate::model::public_oplog::{GuestSearchBatch, guest_oplog_read_error, guest_search_plan};
+use crate::model::public_oplog::{get_guest_oplog_chunk, search_guest_oplog};
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::oplog::Host as OplogHost;
 use crate::preview2::golem_api_1_x::oplog::HostGetOplog;
@@ -51,7 +48,6 @@ use golem_common::model::oplog::host_functions::GolemApiEnrichOplogEntries;
 use golem_common::model::oplog::host_functions::GolemApiGetOplogNext;
 use golem_common::model::oplog::host_functions::GolemApiSearchOplogNext;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use std::num::NonZeroU64;
 use uuid::Uuid;
 use wasmtime::component::Resource;
 use wasmtime_wasi::IoView;
@@ -224,43 +220,22 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         .await
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
-    let agent_mode = identity.agent_mode;
-    let retention = ctx
-        .state
-        .oplog_service()
-        .retention(&entry.owned_agent_id, agent_mode)
-        .await
-        .map_err(|error| error.to_string())?;
-    let current_component_revision = if entry.initialized {
-        entry.current_component_revision
-    } else {
-        find_component_revision_at(
-            ctx.state.oplog_service(),
-            &entry.owned_agent_id,
-            agent_mode,
-            retention,
-            entry.next_oplog_index,
-        )
-        .await
-        .map_err(|error| error.to_string())?
-    };
-    let agent_type = &identity.create_parameters().agent_type_name;
-    get_public_oplog_chunk(
+    get_guest_oplog_chunk(
         ctx.state.component_service.clone(),
         ctx.state.oplog_service(),
         &entry.owned_agent_id,
-        agent_mode,
-        retention,
+        identity.agent_mode,
         identity.create_parameters().component_id,
         identity.create_parameters().owner_kind,
-        agent_type.as_ref(),
-        current_component_revision,
+        identity.create_parameters().agent_type_name.as_ref(),
         entry.next_oplog_index,
+        entry
+            .initialized
+            .then_some(entry.current_component_revision),
         entry.page_size,
         GUEST_CLAIM_VISIBILITY,
     )
     .await
-    .map_err(guest_oplog_read_error)
 }
 
 async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
@@ -274,70 +249,25 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         .await
         .map_err(|err| err.to_string())?
         .ok_or_else(|| format!("agent {} does not exist", entry.owned_agent_id))?;
-    let agent_mode = identity.agent_mode;
-    let retention = ctx
-        .state
-        .oplog_service()
-        .retention(&entry.owned_agent_id, agent_mode)
-        .await
-        .map_err(|error| error.to_string())?;
-    let agent_type = &identity.create_parameters().agent_type_name;
-    // The scanner caps each storage read at the remaining entry budget, even when a chunk has no
-    // matches, so the budget of the batch keeps the scan inside the window of its grant.
-    let page_size = NonZeroU64::new(entry.page_size as u64).expect("search page size is nonzero");
-    let (batch, current_component_revision) = guest_search_plan(
-        ctx.state.oplog_service(),
-        &entry.owned_agent_id,
-        agent_mode,
-        retention,
-        entry.next_oplog_index,
-        page_size,
-        entry
-            .initialized
-            .then_some(entry.current_component_revision),
-        ctx.state.config.limits.scan_budget,
-    )
-    .await
-    .map_err(|error| error.to_string())?;
-    let (start, budget) = match batch {
-        GuestSearchBatch::SkipTo(start) => {
-            let last_index = match entry.last_oplog_index {
-                Some(last_index) => last_index,
-                None => ctx
-                    .state
-                    .oplog_service()
-                    .get_last_index(&entry.owned_agent_id, agent_mode)
-                    .await
-                    .map_err(|error| error.to_string())?,
-            };
-            return Ok(crate::model::public_oplog::PublicOplogSearchResult {
-                entries: Vec::new(),
-                next_oplog_index: start,
-                current_component_revision,
-                last_index,
-            });
-        }
-        GuestSearchBatch::Read { start, budget } => (start, budget),
-    };
-    search_public_oplog(
+    search_guest_oplog(
         ctx.state.component_service.clone(),
         ctx.state.oplog_service(),
         &entry.owned_agent_id,
-        agent_mode,
-        retention,
+        identity.agent_mode,
         identity.create_parameters().component_id,
         identity.create_parameters().owner_kind,
-        agent_type.as_ref(),
-        current_component_revision,
-        start,
+        identity.create_parameters().agent_type_name.as_ref(),
+        entry.next_oplog_index,
         entry.last_oplog_index,
         entry.page_size,
+        entry
+            .initialized
+            .then_some(entry.current_component_revision),
         &entry.query,
-        budget,
+        ctx.state.config.limits.scan_budget,
         GUEST_CLAIM_VISIBILITY,
     )
     .await
-    .map_err(guest_oplog_read_error)
 }
 
 impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
@@ -633,22 +563,10 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             handle.complete(self, response).await?
         };
 
-        let denied = is_denied_oplog_read(&response);
-        self.as_wasi_view().table().get_mut(&self_).map(|entry| {
-            if denied {
-                entry.update(
-                    entry.next_oplog_index,
-                    entry.current_component_revision,
-                    entry.last_oplog_index,
-                );
-            } else {
-                entry.update(
-                    response.next_oplog_index,
-                    response.current_component_revision,
-                    response.last_oplog_index,
-                );
-            }
-        })?;
+        self.as_wasi_view()
+            .table()
+            .get_mut(&self_)
+            .map(|entry| entry.apply(&response))?;
         match response.result {
             Ok(Some(entries)) => {
                 let entries: Vec<(OplogIndex, PublicOplogEntry)> = serde_json::from_slice(&entries)
@@ -726,6 +644,19 @@ impl SearchOplogEntry {
         self.current_component_revision = current_component_revision;
         self.last_oplog_index = last_oplog_index;
         self.initialized = true;
+    }
+
+    /// Moves the search to the position that the response of a batch gives. A batch that failed,
+    /// or that the grant denied, leaves the search as it was. A new search then stays new, so the
+    /// next batch still starts it at the retained start.
+    pub fn apply(&mut self, response: &HostResponseGolemApiOplogChunk) {
+        if response.result.is_ok() {
+            self.update(
+                response.next_oplog_index,
+                response.current_component_revision,
+                response.last_oplog_index,
+            );
+        }
     }
 }
 
@@ -940,6 +871,88 @@ mod tests {
 
     /// The enrichment of a failed update reads the recorded `Start` at the index of its
     /// divergence, which the guest supplies, so the oplog grant must cover that index too.
+    /// A first batch of a new search that failed, or that the grant denied, leaves the search
+    /// new. The next batch starts the search at the retained start 5, and not at the index that
+    /// the guest gave. A batch that read moves the search to its response.
+    #[test]
+    async fn only_a_batch_that_read_moves_a_guest_search() {
+        use crate::model::public_oplog::guest_search_start;
+        use crate::services::oplog::retention::test_oplog::{RetainedOplog, at, idx, jump};
+        use futures::StreamExt;
+        use golem_common::model::ShardEpoch;
+        use golem_common::model::agent::AgentMode;
+
+        let oplog = RetainedOplog::new().await;
+        let handle = oplog.create(oplog.create_entry(), ShardEpoch(1)).await;
+        oplog.add((2..=10).map(jump)).await;
+        drop(handle);
+        oplog.advance(5).await;
+        let new_search = || {
+            SearchOplogEntry::new(
+                oplog.owned_agent_id.clone(),
+                OplogIndex::INITIAL,
+                ComponentRevision::INITIAL,
+                10,
+                "query".to_string(),
+            )
+        };
+        let response = |result| HostResponseGolemApiOplogChunk {
+            result,
+            next_oplog_index: OplogIndex::INITIAL,
+            current_component_revision: ComponentRevision::INITIAL,
+            last_oplog_index: Some(idx(10)),
+        };
+        futures::stream::iter([
+            Err(AGENT_OPERATION_PERMISSION_DENIED.to_string()),
+            Err("the storage failed".to_string()),
+        ])
+        .for_each(|result| {
+            let mut search = new_search();
+            search.apply(&response(result));
+            let oplog = &oplog;
+            async move {
+                assert!(!search.initialized);
+                assert_eq!(search.last_oplog_index, None);
+                assert_eq!(
+                    guest_search_start(
+                        oplog.service.clone(),
+                        &oplog.owned_agent_id,
+                        AgentMode::Durable,
+                        at(5),
+                        search.next_oplog_index,
+                        search
+                            .initialized
+                            .then_some(search.current_component_revision),
+                    )
+                    .await,
+                    Ok((idx(5), ComponentRevision::INITIAL))
+                );
+            }
+        })
+        .await;
+
+        let mut search = new_search();
+        search.apply(&HostResponseGolemApiOplogChunk {
+            result: Ok(None),
+            next_oplog_index: idx(7),
+            current_component_revision: ComponentRevision::try_from(2u64).unwrap(),
+            last_oplog_index: Some(idx(10)),
+        });
+        assert!(search.initialized);
+        assert_eq!(
+            (
+                search.next_oplog_index,
+                search.current_component_revision,
+                search.last_oplog_index
+            ),
+            (
+                idx(7),
+                ComponentRevision::try_from(2u64).unwrap(),
+                Some(idx(10))
+            )
+        );
+    }
+
     #[test]
     fn enrichment_authorizes_the_divergence_index_of_a_failed_update() {
         let indexes =

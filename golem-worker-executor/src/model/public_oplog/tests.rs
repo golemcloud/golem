@@ -3887,7 +3887,7 @@ async fn an_oplog_range_read_shows_claims_only_on_request() {
             OwnerKind::ComponentAgent,
             None,
             None,
-            started_index,
+            Some(started_index),
             started_index,
             PublicOplogPageLimits {
                 count: 1,
@@ -4131,7 +4131,7 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
             OwnerKind::ComponentAgent,
             None,
             cursor,
-            from,
+            Some(from),
             to,
             PublicOplogPageLimits {
                 count,
@@ -4155,6 +4155,7 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
     assert_eq!(first.scan.charged_entries, charged_before + 2);
     assert!(!first.scan.exhausted);
     let cursor = first.next.clone().expect("the range goes on");
+    let cursor_template = cursor.clone();
     assert_eq!(cursor.next_oplog_index, indices[7].as_u64());
     assert_eq!(
         cursor.current_component_revision,
@@ -4171,6 +4172,19 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
     assert_eq!(second.scan.charged_entries, 2);
     assert!(!second.scan.exhausted);
     assert!(second.last_index > to);
+    // A cursor at index 0 is stale, not a cursor outside the range.
+    let mut before_first = cursor_template.clone();
+    before_first.next_oplog_index = 0;
+    assert!(
+        matches!(
+            read(Some(before_first), from, to, 10, allowance(100)).await,
+            Err(WorkerExecutorError::StaleCursor {
+                reason: StaleCursorReason::BeforeFirstEntry,
+                ..
+            })
+        ),
+        "a cursor at 0 is stale"
+    );
 
     // Exactly the allowance completes the range; one entry less stops before `to`.
     let exact = read(None, from, to, 10, allowance(charged_before + 4))
@@ -4199,7 +4213,7 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
         OwnerKind::ComponentAgent,
         None,
         None,
-        from,
+        Some(from),
         to,
         PublicOplogPageLimits {
             count: 10,
@@ -4724,52 +4738,57 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         Ok((OplogIndex::from_u64(2), updated_revision)),
         "a search that read a page before keeps its position"
     );
-    // The first batch of a new search reads from the retained start, and only the part of the
-    // window of its grant from the cursor at or after the start.
-    let plan = guest_search_plan(
-        oplog_service.clone(),
-        &owned_agent_id,
-        AgentMode::Durable,
-        retention,
-        OplogIndex::INITIAL,
-        std::num::NonZeroU64::new(100).unwrap(),
-        None,
-        ScanBudget {
-            entries: std::num::NonZeroU64::new(1000).unwrap(),
-            time: std::time::Duration::from_secs(7),
-        },
-    )
-    .await
-    .unwrap();
-    assert!(
-        matches!(
-            plan,
-            (GuestSearchBatch::Read { start, budget }, revision)
-                if start == retained_start
-                    && budget.entries.get() == 97
-                    && revision == ComponentRevision::INITIAL
-        ),
-        "{plan:?}"
-    );
     // A guest gets the expired error of a read below the start as text in `internal-error`.
     // The text names the expired cause and the retained start.
     assert_eq!(
         guest_oplog_read_error(guest_chunk(1).await.err().expect("expired")),
         format!("The oplog of {agent_id} expired: it starts at index 4")
     );
-    let guest_search = search_public_oplog(
+    // The guest `get-oplog` reads the retention itself. A new resource at the start finds the
+    // revision there and reads from the start; at index 1 it is expired.
+    let new_guest_chunk = |from: u64| {
+        get_guest_oplog_chunk(
+            Arc::new(PanicComponentService),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            OplogIndex::from_u64(from),
+            None,
+            2,
+            ClaimVisibility::Hidden,
+        )
+    };
+    assert_eq!(
+        new_guest_chunk(1).await.err(),
+        Some(format!(
+            "The oplog of {agent_id} expired: it starts at index 4"
+        ))
+    );
+    let chunk = new_guest_chunk(4).await.unwrap();
+    assert_eq!(
+        (
+            chunk.entries.first().map(|entry| entry.oplog_index),
+            chunk.next_oplog_index
+        ),
+        (Some(retained_start), OplogIndex::from_u64(6))
+    );
+    // The guest `search-oplog` reads the retention itself. The first batch of a new search with
+    // its cursor at index 1 reads from the retained start, and its first entry is there.
+    let guest_search = search_guest_oplog(
         Arc::new(PanicComponentService),
         oplog_service.clone(),
         &owned_agent_id,
         AgentMode::Durable,
-        retention,
         test_component_id(),
         OwnerKind::ComponentAgent,
         None,
-        search_revision,
-        search_start,
+        OplogIndex::INITIAL,
         Some(OplogIndex::from_u64(5)),
         10,
+        None,
         "context",
         ScanBudget::default(),
         ClaimVisibility::Hidden,
@@ -4791,7 +4810,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         guest_search.entries
     );
 
-    let range_to = |from: u64, to: u64, cursor: Option<OplogCursor>| {
+    let range_to = |from: Option<u64>, to: u64, cursor: Option<OplogCursor>| {
         get_public_oplog_range_page(
             Arc::new(PanicComponentService),
             oplog_service.clone(),
@@ -4802,7 +4821,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             OwnerKind::ComponentAgent,
             None,
             cursor,
-            OplogIndex::from_u64(from),
+            from.map(OplogIndex::from_u64),
             OplogIndex::from_u64(to),
             PublicOplogPageLimits {
                 count: 10,
@@ -4816,7 +4835,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             ClaimVisibility::Hidden,
         )
     };
-    let range_page = |from: u64, cursor: Option<OplogCursor>| range_to(from, 5, cursor);
+    let range_page = |from: u64, cursor: Option<OplogCursor>| range_to(Some(from), 5, cursor);
     let range = range_page(retained_start.as_u64(), None).await.unwrap();
     assert_eq!(
         page_indices(&range.entries),
@@ -4857,28 +4876,53 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         current_component_revision: ComponentRevision::INITIAL.into(),
         query_hash: OplogCursor::query_hash(None),
     };
+    let without_from = range_to(None, 5, None).await.unwrap();
     assert_eq!(
-        range_to(retained_start.as_u64(), 3, None).await.err(),
+        (
+            without_from.first_index_in_chunk,
+            page_indices(&without_from.entries)
+        ),
+        (
+            retained_start,
+            vec![
+                (OplogIndex::from_u64(4), true),
+                (OplogIndex::from_u64(5), true)
+            ]
+        ),
+        "a range without `from` starts at the retained start"
+    );
+    assert_eq!(
+        range_to(None, 3, None).await.err(),
         Some(range_expired.clone()),
         "a range without `from` that ends below the start is expired"
     );
     assert_eq!(
-        range_to(retained_start.as_u64(), 5, Some(cursor_at(3)))
-            .await
-            .err(),
+        range_to(None, 5, Some(cursor_at(3))).await.err(),
         Some(range_expired.clone()),
         "a cursor below the start of a range without `from` is expired"
     );
+    // A cursor at index 0 points before the first entry of every oplog: it is stale, also in a
+    // range page whose start is above 1.
     assert!(
         matches!(
-            range_to(5, 4, None).await,
+            range_to(None, 5, Some(cursor_at(0))).await,
+            Err(WorkerExecutorError::StaleCursor {
+                reason: StaleCursorReason::BeforeFirstEntry,
+                ..
+            })
+        ),
+        "a cursor at 0 is stale"
+    );
+    assert!(
+        matches!(
+            range_to(Some(5), 4, None).await,
             Err(WorkerExecutorError::InvalidRequest { .. })
         ),
         "a range at or after the start that ends before its start is not valid"
     );
     assert!(
         matches!(
-            range_to(5, 5, Some(cursor_at(4))).await,
+            range_to(Some(5), 5, Some(cursor_at(4))).await,
             Err(WorkerExecutorError::InvalidRequest { .. })
         ),
         "a cursor at or after the start but before `from` is not valid"
@@ -4896,7 +4940,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             OwnerKind::ComponentAgent,
             None,
             None,
-            OplogIndex::from_u64(3),
+            Some(OplogIndex::from_u64(3)),
             OplogIndex::from_u64(5),
             PublicOplogPageLimits {
                 count: 10,

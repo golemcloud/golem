@@ -95,9 +95,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 identity.create_parameters().owner_kind,
                 agent_type_name.as_ref(),
                 cursor,
-                request
-                    .from_oplog_index
-                    .map_or(retention.start(), OplogIndex::from_u64),
+                request.from_oplog_index.map(OplogIndex::from_u64),
                 OplogIndex::from_u64(to),
                 limits,
                 allowance,

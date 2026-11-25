@@ -783,18 +783,20 @@ pub fn oplog_range_allowance(
 }
 
 /// Checks the request of a range page from `from` to `to` that `cursor` continues, and gives the
-/// start of the range: `from`, or index 1 when `from` is 0. A `to` or a cursor below the retained
-/// start is expired, before the other checks, because a range without `from` starts at the
+/// start of the range: `from`, or index 1 when `from` is 0, or the retained start without `from`.
+/// A cursor at index 0 is stale, before the other checks. A `to` or a cursor below the retained
+/// start is expired, before the checks of the range, because a range without `from` starts at the
 /// retained start. Then a range that ends before its start, or a cursor outside the range, is an
 /// invalid request.
 fn checked_range_start(
     retention: OplogRetention,
     agent_id: &golem_common::model::AgentId,
-    from: OplogIndex,
+    from: Option<OplogIndex>,
     to: OplogIndex,
     cursor: Option<&OplogCursor>,
 ) -> Result<OplogIndex, WorkerExecutorError> {
-    let from = from.max(OplogIndex::INITIAL);
+    check_cursor_after_first_entry(agent_id, cursor)?;
+    let from = from.map_or(retention.start(), |from| from.max(OplogIndex::INITIAL));
     retention.check_agent_from(agent_id, to.max(OplogIndex::INITIAL))?;
     if let Some(cursor) = cursor {
         retention.check_agent_from(
@@ -818,7 +820,7 @@ fn checked_range_start(
 }
 
 /// Reads one oplog page of the range from `from` to `to`, inclusive, for a remote reader, within
-/// `allowance`. The page has the limits of [`get_public_oplog_page`], and reads no entry after
+/// `allowance`. Without `from`, the range starts at the retained start. The page has the limits of [`get_public_oplog_page`], and reads no entry after
 /// `to`.
 ///
 /// The allowance covers the entries that the read reads to find the component revision at
@@ -830,8 +832,10 @@ fn checked_range_start(
 /// continues the range where the page stopped; it must be within the range.
 ///
 /// `retention` is the retention of the oplog, which the caller reads once. A range read is a
-/// page: a `from`, a `to` or a cursor below the retained start is expired, also at index 1,
-/// before the read charges any entry to the allowance.
+/// page: a `to` below the retained start is expired, also at index 1, before the read charges any
+/// entry to the allowance. Without a cursor, a `from` below the start is expired. A cursor takes
+/// the place of `from` as the start of the read, so with a cursor a cursor below the start is
+/// expired.
 #[allow(clippy::too_many_arguments)]
 pub async fn get_public_oplog_range_page(
     components: Arc<dyn ComponentService>,
@@ -843,7 +847,7 @@ pub async fn get_public_oplog_range_page(
     owner_kind: OwnerKind,
     agent_type_name: Option<&AgentTypeName>,
     cursor: Option<OplogCursor>,
-    from: OplogIndex,
+    from: Option<OplogIndex>,
     to: OplogIndex,
     limits: PublicOplogPageLimits,
     allowance: OplogScanAllowance,
@@ -1020,34 +1024,135 @@ pub fn guest_search_batch(
     }
 }
 
-/// The next batch of a guest search whose cursor is `next_oplog_index`, and the component
-/// revision to decode its first entry with. [`guest_search_start`] gives the start of the batch,
-/// and [`guest_search_batch`] cuts the batch to the window of the grant from the cursor.
-/// `continued` is the revision of a search that already ran a batch.
+/// The next chunk of a guest `get-oplog` resource whose cursor is `next_oplog_index`. The read
+/// reads the retention of the oplog. `continued` is the component revision of a resource that
+/// already read a chunk; a new resource finds the revision at its cursor. The chunk reads from
+/// the cursor, so a chunk below the retained start is expired. The error is the text that the
+/// guest gets in `internal-error`.
 #[allow(clippy::too_many_arguments)]
-pub async fn guest_search_plan(
+pub async fn get_guest_oplog_chunk(
+    components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
-    retention: OplogRetention,
+    owner_component_id: ComponentId,
+    owner_kind: OwnerKind,
+    agent_type_name: Option<&AgentTypeName>,
     next_oplog_index: OplogIndex,
-    page_size: NonZeroU64,
     continued: Option<ComponentRevision>,
-    configured: ScanBudget,
-) -> Result<(GuestSearchBatch, ComponentRevision), WorkerExecutorError> {
-    let (start, revision) = guest_search_start(
+    count: usize,
+    claims: ClaimVisibility,
+) -> Result<PublicOplogChunk, String> {
+    let retention = oplog_service
+        .retention(owned_agent_id, agent_mode)
+        .await
+        .map_err(|error| error.to_string())?;
+    let revision = match continued {
+        Some(revision) => revision,
+        None => find_component_revision_at(
+            oplog_service.clone(),
+            owned_agent_id,
+            agent_mode,
+            retention,
+            next_oplog_index,
+        )
+        .await
+        .map_err(|error| error.to_string())?,
+    };
+    get_public_oplog_chunk(
+        components,
         oplog_service,
+        owned_agent_id,
+        agent_mode,
+        retention,
+        owner_component_id,
+        owner_kind,
+        agent_type_name,
+        revision,
+        next_oplog_index,
+        count,
+        claims,
+    )
+    .await
+    .map_err(guest_oplog_read_error)
+}
+
+/// The next batch of a guest `search-oplog` resource whose cursor is `next_oplog_index`. The
+/// batch reads the retention of the oplog. [`guest_search_start`] gives the start of the batch
+/// and the component revision to decode its first entry with, and [`guest_search_batch`] cuts
+/// the batch to the window of the grant from the cursor. `continued` is the revision of a search
+/// that already ran a batch. A batch whose start is after its window reads no entry and moves the
+/// cursor to the start. The error is the text that the guest gets in `internal-error`.
+#[allow(clippy::too_many_arguments)]
+pub async fn search_guest_oplog(
+    components: Arc<dyn ComponentService>,
+    oplog_service: Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    owner_component_id: ComponentId,
+    owner_kind: OwnerKind,
+    agent_type_name: Option<&AgentTypeName>,
+    next_oplog_index: OplogIndex,
+    last_oplog_index: Option<OplogIndex>,
+    page_size: usize,
+    continued: Option<ComponentRevision>,
+    query: &str,
+    configured: ScanBudget,
+    claims: ClaimVisibility,
+) -> Result<PublicOplogSearchResult, String> {
+    let retention = oplog_service
+        .retention(owned_agent_id, agent_mode)
+        .await
+        .map_err(|error| error.to_string())?;
+    let (start, revision) = guest_search_start(
+        oplog_service.clone(),
         owned_agent_id,
         agent_mode,
         retention,
         next_oplog_index,
         continued,
     )
-    .await?;
-    Ok((
-        guest_search_batch(next_oplog_index, page_size, start, configured),
-        revision,
-    ))
+    .await
+    .map_err(|error| error.to_string())?;
+    // The scanner caps each storage read at the remaining entry budget, even when a chunk has no
+    // matches, so the budget of the batch keeps the scan inside the window of its grant.
+    let window = NonZeroU64::new(page_size as u64).expect("search page size is nonzero");
+    match guest_search_batch(next_oplog_index, window, start, configured) {
+        GuestSearchBatch::SkipTo(start) => {
+            let last_index = match last_oplog_index {
+                Some(last_index) => last_index,
+                None => oplog_service
+                    .get_last_index(owned_agent_id, agent_mode)
+                    .await
+                    .map_err(|error| error.to_string())?,
+            };
+            Ok(PublicOplogSearchResult {
+                entries: Vec::new(),
+                next_oplog_index: start,
+                current_component_revision: revision,
+                last_index,
+            })
+        }
+        GuestSearchBatch::Read { start, budget } => search_public_oplog(
+            components,
+            oplog_service,
+            owned_agent_id,
+            agent_mode,
+            retention,
+            owner_component_id,
+            owner_kind,
+            agent_type_name,
+            revision,
+            start,
+            last_oplog_index,
+            page_size,
+            query,
+            budget,
+            claims,
+        )
+        .await
+        .map_err(guest_oplog_read_error),
+    }
 }
 
 /// The text of a failed guest oplog read. The guest gets it in `internal-error`, because the
@@ -1100,6 +1205,22 @@ pub fn check_oplog_cursor_query(
     }
 }
 
+/// Refuses a cursor at index 0 as stale: it points before the first entry of every oplog, so no
+/// page gave it.
+fn check_cursor_after_first_entry(
+    agent_id: &golem_common::model::AgentId,
+    cursor: Option<&OplogCursor>,
+) -> Result<(), WorkerExecutorError> {
+    match cursor {
+        Some(cursor) if cursor.next_oplog_index == 0 => Err(WorkerExecutorError::StaleCursor {
+            agent_id: *agent_id,
+            next_oplog_index: OplogIndex::NONE,
+            reason: StaleCursorReason::BeforeFirstEntry,
+        }),
+        _ => Ok(()),
+    }
+}
+
 /// Where a paged oplog read starts, and the component revision to decode its first entry with:
 /// the cursor of the previous page, or else `from` with the revision that
 /// [`find_component_revision_at`] gives there. Without a
@@ -1122,15 +1243,7 @@ pub async fn oplog_page_start(
     cursor: Option<OplogCursor>,
     from: Option<OplogIndex>,
 ) -> Result<(OplogIndex, ComponentRevision), WorkerExecutorError> {
-    if let Some(cursor) = &cursor
-        && cursor.next_oplog_index == 0
-    {
-        return Err(WorkerExecutorError::StaleCursor {
-            agent_id: owned_agent_id.agent_id,
-            next_oplog_index: OplogIndex::NONE,
-            reason: StaleCursorReason::BeforeFirstEntry,
-        });
-    }
+    check_cursor_after_first_entry(&owned_agent_id.agent_id, cursor.as_ref())?;
     let start = cursor.as_ref().map_or_else(
         || from.map_or(retention.start(), |from| from.max(OplogIndex::INITIAL)),
         |cursor| OplogIndex::from_u64(cursor.next_oplog_index),
