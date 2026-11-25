@@ -377,6 +377,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .map(|region| region.into())
                 .collect(),
             oplog_idx: u64::from(latest_status.oplog_idx),
+            state_oplog_idx: u64::from(latest_status.state_oplog_idx),
             fingerprint: Some(metadata.fingerprint.0.into()),
         })
     }

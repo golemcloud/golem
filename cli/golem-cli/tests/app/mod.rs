@@ -983,6 +983,52 @@ impl TestContext {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
+        let (child, mut stdout) = self.spawn_cli_process(command_args);
+
+        tokio::time::timeout(Duration::from_secs(30), async {
+            loop {
+                let line = stdout
+                    .next_line()
+                    .await
+                    .expect("failed to read golem-cli stdout")
+                    .expect("golem-cli exited before the expected output");
+                println!("> golem-cli - stdout: {line}");
+                if line.contains(expected) {
+                    break;
+                }
+            }
+        })
+        .await
+        .expect("failed to observe expected golem-cli output");
+        tokio::time::sleep(pause_after_match).await;
+        forward_stdout(stdout);
+
+        child
+    }
+
+    /// Spawns a long-running golem-cli command without waiting for any of its output.
+    fn cli_process<I, S>(&self, command_args: I) -> Child
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
+        let (child, stdout) = self.spawn_cli_process(command_args);
+        forward_stdout(stdout);
+        child
+    }
+
+    /// Spawns golem-cli, forwards its stderr and returns its stdout lines.
+    fn spawn_cli_process<I, S>(
+        &self,
+        command_args: I,
+    ) -> (
+        Child,
+        tokio::io::Lines<BufReader<tokio::process::ChildStdout>>,
+    )
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<OsStr>,
+    {
         self.rewrite_local_http_domain_ports();
 
         let mut args = vec![
@@ -1015,7 +1061,7 @@ impl TestContext {
             .spawn()
             .unwrap();
 
-        let mut stdout = BufReader::new(child.stdout.take().unwrap()).lines();
+        let stdout = BufReader::new(child.stdout.take().unwrap()).lines();
         let mut stderr = BufReader::new(child.stderr.take().unwrap()).lines();
         tokio::spawn(async move {
             while let Ok(Some(line)) = stderr.next_line().await {
@@ -1023,29 +1069,7 @@ impl TestContext {
             }
         });
 
-        tokio::time::timeout(Duration::from_secs(30), async {
-            loop {
-                let line = stdout
-                    .next_line()
-                    .await
-                    .expect("failed to read golem-cli stdout")
-                    .expect("golem-cli exited before the expected output");
-                println!("> golem-cli - stdout: {line}");
-                if line.contains(expected) {
-                    break;
-                }
-            }
-        })
-        .await
-        .expect("failed to observe expected golem-cli output");
-        tokio::time::sleep(pause_after_match).await;
-        tokio::spawn(async move {
-            while let Ok(Some(line)) = stdout.next_line().await {
-                println!("> golem-cli - stdout: {line}");
-            }
-        });
-
-        child
+        (child, stdout)
     }
 
     /// Spawns a long-running golem-cli command and returns the child together with the first
@@ -2154,4 +2178,12 @@ fn go_component_dir(ctx: &TestContext) -> std::path::PathBuf {
         .filter_map(|entry| entry.ok().map(|e| e.path()))
         .find(|path| path.join("go.mod").exists())
         .unwrap_or_else(|| ctx.cwd_path().to_path_buf())
+}
+
+fn forward_stdout(mut stdout: tokio::io::Lines<BufReader<tokio::process::ChildStdout>>) {
+    tokio::spawn(async move {
+        while let Ok(Some(line)) = stdout.next_line().await {
+            println!("> golem-cli - stdout: {line}");
+        }
+    });
 }
