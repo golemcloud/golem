@@ -11401,6 +11401,32 @@ async fn a_fold_from_the_status_at_the_create_entry_is_expired_only_with_a_start
     );
 }
 
+/// A cached status at the `Create` entry folds from index 2, which is expired with a retained
+/// start of 3. The rebuild then folds from the clean status checkpoint, which is at or after the
+/// index before the start.
+#[test]
+async fn an_expired_fold_from_the_cached_status_falls_back_to_the_checkpoint() {
+    let case = retained_test_case();
+    let owned_agent_id = case.owned_agent_id.clone();
+    let at_create = case.entries[0].expected_status.clone();
+    let checkpoint = case.entries[2].expected_status.clone();
+    assert_eq!(checkpoint.oplog_idx, OplogIndex::from_u64(3));
+    let last = OplogIndex::from_u64(case.entries.len() as u64);
+    let retained = RetainedTestCase::new(case, 3).await;
+
+    let status = super::calculate_last_known_status_with_checkpoint_reader(
+        &retained,
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(at_create),
+        || async { Some(checkpoint) },
+    )
+    .await
+    .unwrap()
+    .expect("the oplog exists");
+    assert_eq!(status.oplog_idx, last);
+}
+
 /// The skipped regions of a fork source read from the start of the retention that the caller
 /// passes, and keep the regions after it.
 #[test]

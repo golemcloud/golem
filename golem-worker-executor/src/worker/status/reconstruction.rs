@@ -125,7 +125,8 @@ where
 /// Calculates the latest worker status, trying baselines in order of decreasing freshness:
 ///
 /// 1. the live cached status (`last_known`), folded forward — the common cold-load path;
-/// 2. on a fold failure (e.g. a jump deleted the cached index), the *clean* status checkpoint
+/// 2. on a fold failure (e.g. a jump deleted the cached index, or the cached status is below the
+///    retained start, so its fold is expired), the *clean* status checkpoint
 ///    (read lazily via `read_checkpoint`), folded forward — this predates any later jump region and
 ///    avoids re-reading the whole oplog;
 /// 3. a full recompute from the start of the oplog.
@@ -168,15 +169,21 @@ where
     Fut: std::future::Future<Output = Option<AgentStatusRecord>>,
 {
     // 1. Try folding forward from the live cached status.
-    if let Some(last_known) = last_known
-        && let Some(status) = try_fold_status_from_reader(this, reader, last_known).await?
-    {
-        crate::metrics::workers::record_agent_status_recompute("cache");
-        return Ok(Some(status));
+    if let Some(last_known) = last_known {
+        match try_fold_status_from_reader(this, reader, last_known).await {
+            Ok(Some(status)) => {
+                crate::metrics::workers::record_agent_status_recompute("cache");
+                return Ok(Some(status));
+            }
+            Ok(None) => {}
+            Err(error) if is_expired_fold(&error) => {}
+            Err(error) => return Err(error),
+        }
     }
 
     // 2. Live cache baseline missing or its fold was impossible (e.g. a jump deleted the cached
-    //    index, or a revert moved the oplog behind it): try folding from the clean checkpoint.
+    //    index, a revert moved the oplog behind it, or the cached status is below the retained
+    //    start, so its fold is expired): try folding from the clean checkpoint.
     if let Some(checkpoint) = read_checkpoint().await
         && let Some(status) = try_fold_status_from_reader(this, reader, checkpoint).await?
     {
@@ -190,6 +197,18 @@ where
         crate::metrics::workers::record_agent_status_recompute("full");
     }
     Ok(status)
+}
+
+/// Whether the fold failed because it read below the retained start. A baseline that is older
+/// than the retained start cannot fold, but a newer baseline can.
+fn is_expired_fold(error: &StatusError) -> bool {
+    matches!(
+        error,
+        StatusError::Unreadable(UnreadableOplog {
+            error: crate::services::oplog::OplogReadError::Expired { .. },
+            ..
+        })
+    )
 }
 
 /// Folds an acknowledged commit, returning receipt-gap detection and the fixed repair horizon.
