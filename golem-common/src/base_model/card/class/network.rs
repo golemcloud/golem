@@ -305,7 +305,7 @@ impl PermissionClass for NetworkClass {
     }
 }
 
-fn normalize_host_pattern(host: &str, resource: &str) -> Result<String, CardParseError> {
+pub(crate) fn normalize_host_pattern(host: &str, resource: &str) -> Result<String, CardParseError> {
     let host = host.trim();
     if host == "*" {
         return Ok(host.to_string());
@@ -350,7 +350,7 @@ fn normalize_host_pattern(host: &str, resource: &str) -> Result<String, CardPars
     Ok(host.to_ascii_lowercase())
 }
 
-fn host_pattern_subsumes(left: &str, right: &str) -> bool {
+pub(crate) fn host_pattern_subsumes(left: &str, right: &str) -> bool {
     if left == "*" {
         return true;
     }
