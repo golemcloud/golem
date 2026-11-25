@@ -587,3 +587,29 @@ async fn corrupt_recovery_stays_fenced_without_automatic_retries() {
         Err(StreamStoreError::RecoveryRequired)
     );
 }
+
+/// A routed source-unavailable overlay of a reader that a record below the retained start
+/// introduced reads below the start. The caller gets the expired error with the start, not a
+/// runtime error. A store that awaits recovery stays unavailable.
+#[test]
+fn a_routed_source_unavailable_overlay_keeps_the_expired_error() {
+    use crate::durable_host::durable_stream::StreamStoreError;
+    use crate::services::oplog::UnreadableOplog;
+    use crate::services::oplog::retention::test_oplog::expired;
+    use crate::services::rpc::DurableStreamRemoteError;
+
+    let agent_id = identity().agent_id;
+    assert_eq!(
+        super::attachments::source_unavailable_error(StreamStoreError::Unreadable(
+            UnreadableOplog::new(&agent_id, expired(4))
+        )),
+        DurableStreamRemoteError::Other(WorkerExecutorError::oplog_expired(
+            agent_id,
+            OplogIndex::from_u64(4)
+        ))
+    );
+    assert_eq!(
+        super::attachments::source_unavailable_error(StreamStoreError::RecoveryRequired),
+        DurableStreamRemoteError::Unavailable
+    );
+}
