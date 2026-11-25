@@ -945,7 +945,9 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
     }
 }
 
-/// The expiry of the derived caches of an agent. A write to a cache namespace sets or renews it.
+/// The expiry of the derived caches of an agent. Only the Redis backend applies it: there a write
+/// to a cache namespace sets or renews it. The SQLite, multi-SQLite, PostgreSQL and in-memory
+/// backends store no expiry.
 pub(crate) const DERIVED_CACHE_EXPIRY: Duration = Duration::from_secs(7 * 24 * 60 * 60);
 
 /// Various namespaces for key-value storage
@@ -979,7 +981,8 @@ pub enum KeyValueStorageNamespace {
     /// region is open: the snapshot save, the throttled idle boundary, and the throttled
     /// `checkpoint_status_mid_invocation` during a long invocation. The background status flusher
     /// never moves it forward. Thus it always holds a baseline before any later jump region, and
-    /// the status recompute folds forward from it. It does not read the oplog again from index 1.
+    /// the status recompute folds forward from it. The recompute folds from index 1 when no
+    /// usable baseline exists.
     ///
     /// This namespace is not a cache. It has no expiry, an archive of the oplog keeps it, and
     /// namespace routing stores it in the persistent backend. Only the deletion of the agent

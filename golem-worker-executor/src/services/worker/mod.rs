@@ -210,8 +210,10 @@ pub trait WorkerService: Send + Sync {
         on_stale: OnStale<'_>,
     ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError>;
 
-    /// Deletes the worker: its cached status, its status baseline, its indexes, its oplog and its
-    /// entry in the recovery index, in that order.
+    /// Deletes the worker in this order: its invocation result index, its cached status, its
+    /// agent mode hint, its status baseline, its durable stream session index, its rejected
+    /// periodic snapshots, its oplog, the delete request of its filesystem snapshots, its promises
+    /// and its entry in the recovery index.
     ///
     /// Returns `Err` when the storage could not be reached. Safe to run again, and it is: by
     /// `Worker::delete`'s staged deletion and by the worker service's re-dispatch. The oplog goes
@@ -402,10 +404,9 @@ pub trait WorkerService: Send + Sync {
     /// changed are written. The complete invocation-result index is maintained in its dedicated
     /// namespace.
     ///
-    /// `delta_base` is the status currently held in the cache (i.e. the last value successfully
-    /// written). When provided, the delta of changed fields is computed against it. Pass `None` on
-    /// cold paths (worker create, recompute after a cache miss, detach reload) where the
-    /// previously stored fields are reconciled by reading them back.
+    /// `delta_base` is the status that the cache holds: the last value that a write stored. With
+    /// a delta base, the write computes the delta of the changed fields against it. With `None`,
+    /// the write reads the stored fields back and reconciles them.
     ///
     /// On success the (reassembled) status is returned: the delta base of the next write. The
     /// `AgentMode` is read from `status_value.agent_mode`. Cached status is only written for
@@ -427,8 +428,7 @@ pub trait WorkerService: Send + Sync {
     /// The baseline is a full `AgentStatusRecord` written only at structurally clean boundaries
     /// and stored in its own per-agent hash (see
     /// [`KeyValueStorageNamespace::AgentStatusCheckpoint`]). Because it is never advanced into an
-    /// open jump region, a status recompute folds forward from it, also when a later jump region
-    /// follows.
+    /// open jump region, a fold from it is valid also when a later jump region follows.
     ///
     /// Returns `Ok(None)` when no baseline is stored or its format is stale, and `Err` when the
     /// storage could not be read. The transient `agent_mode` field (not part of the persisted
