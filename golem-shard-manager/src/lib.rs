@@ -61,7 +61,10 @@ pub use sharding::persistence::{
     RoutingTablePersistence, STATE_KEY,
 };
 pub use sharding::shard_management::ShardManagement;
-pub use sharding::worker_executor::{InMemoryWorkerExecutorService, WorkerExecutorService};
+pub use sharding::worker_executor::{
+    InMemoryWorkerExecutorConditions, InMemoryWorkerExecutorHealth, InMemoryWorkerExecutorService,
+    WorkerExecutorService,
+};
 pub use sharding::{
     ExecutorAddr, ExecutorAddrs, ExecutorId, ExecutorLease, ExecutorShards, RegisterAck,
     ShardAssignmentEntry, ShardAssignmentPush, ShardEpoch, ShardLeaseGrant, ShardLeaseRevision,

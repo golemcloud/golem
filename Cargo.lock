@@ -4684,6 +4684,7 @@ dependencies = [
  "golem-schema",
  "golem-service-base",
  "golem-test-framework",
+ "golem-worker-executor",
  "h2",
  "hex",
  "http",

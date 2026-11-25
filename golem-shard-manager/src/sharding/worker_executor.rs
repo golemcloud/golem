@@ -14,7 +14,9 @@
 
 mod in_memory;
 
-pub use in_memory::InMemoryWorkerExecutorService;
+pub use in_memory::{
+    InMemoryWorkerExecutorConditions, InMemoryWorkerExecutorHealth, InMemoryWorkerExecutorService,
+};
 
 #[cfg(test)]
 mod contract_tests;

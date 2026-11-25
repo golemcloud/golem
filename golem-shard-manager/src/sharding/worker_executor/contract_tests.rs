@@ -14,33 +14,39 @@
 
 use super::*;
 use crate::sharding::model::{ShardEpoch, incarnation_id};
-use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    AssignShardsRequest, AssignShardsResponse, RevokeShardsRequest, RevokeShardsResponse,
-    assign_shards_response, revoke_shards_response,
-};
-use golem_common::model::protobuf::{shard_assignment_from_proto, shard_revocation_from_proto};
+use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::model::sharding::{
     ShardAssignmentEvent, ShardAssignmentState, transition_shard_assignment,
 };
-use golem_common::model::{RetryConfig, ShardAssignment, ShardDeliveryOutcome};
+use golem_common::model::{RetryConfig, ShardAssignment};
 use golem_common::retriable_error::IsRetriableError;
-use golem_schema::proto::golem::common::Empty;
-use prost::Message;
+use golem_service_base::clients::registry::RegistryService;
+use golem_service_base::clients::shard_manager::{ExecutorEndpoint, ShardManager};
+use golem_service_base::config::BlobStorageConfig;
+use golem_worker_executor::services::NoAdditionalDeps;
+use golem_worker_executor::services::golem_config::*;
+use golem_worker_executor::services::quota::{QuotaService, UnlimitedQuotaService};
+use golem_worker_executor::services::shard::{ShardService, ShardServiceDefault};
+use golem_worker_executor::services::shard_manager::ShardManagerService;
+use golem_worker_executor::services::shutdown::{SHUTDOWN_GRACE, Shutdown};
+use golem_worker_executor::storage::keyvalue::fault_injecting::{
+    FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+};
+use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageError};
+use golem_worker_executor::workerctx::default::Context;
+use golem_worker_executor::{Bootstrap, RunDetails, bootstrap_and_run_worker_executor};
 use std::collections::HashMap;
-use std::convert::Infallible;
-use std::marker::PhantomData;
 use std::num::NonZeroUsize;
-use std::sync::{Mutex, RwLock};
-use std::task::{Context, Poll};
+use std::task::{Context as TaskContext, Poll};
 use std::time::{Duration, Instant};
 use test_r::{test, timeout};
 use tokio::net::TcpListener;
-use tokio::sync::oneshot;
+use tokio::sync::Notify;
+use tokio::task::JoinSet;
+use tokio_util::sync::CancellationToken;
 use tonic::body::Body;
-use tonic::codec::{Codec, DecodeBuf, Decoder, EncodeBuf, Encoder};
 use tonic::codegen::Service;
-use tonic::server::{NamedService, UnaryService};
-use tonic::{Request, Status};
+use tonic::server::NamedService;
 use uuid::Uuid;
 
 #[derive(Clone, Copy)]
@@ -53,14 +59,14 @@ struct Fixture {
     service: Arc<dyn WorkerExecutorService>,
     pod: Pod,
     snapshot: Box<dyn Fn() -> Option<ShardAssignment> + Send + Sync>,
-    last_revoke: Arc<Mutex<Option<RevokeShardsRequest>>>,
-    shutdown: Option<oneshot::Sender<()>>,
-    server: Option<tokio::task::JoinHandle<Result<(), tonic::transport::Error>>>,
+    set_index_outage: Box<dyn Fn(bool) + Send + Sync>,
+    runtime: ExecutorRuntime,
 }
+
+const INDEX_OUTAGE: &str = "injected recovery index outage";
 
 impl Fixture {
     async fn new(adapter: Adapter, state: ShardAssignmentState) -> Self {
-        let last_revoke = Arc::new(Mutex::new(None));
         match adapter {
             Adapter::Memory => {
                 let pod = Pod {
@@ -69,74 +75,215 @@ impl Fixture {
                 };
                 let service = Arc::new(InMemoryWorkerExecutorService::new([(pod, state)]));
                 let observed = service.clone();
+                let controlled = service.clone();
                 Self {
                     service,
                     pod,
                     snapshot: Box::new(move || observed.current_assignment(&pod)),
-                    last_revoke,
-                    shutdown: None,
-                    server: None,
+                    set_index_outage: Box::new(move |outage| {
+                        controlled
+                            .set_conditions(
+                                &pod,
+                                InMemoryWorkerExecutorConditions {
+                                    recovery_index_error: outage.then(|| INDEX_OUTAGE.into()),
+                                    ..Default::default()
+                                },
+                            )
+                            .unwrap();
+                    }),
+                    runtime: ExecutorRuntime::default(),
                 }
             }
             Adapter::Grpc => {
-                let state = Arc::new(RwLock::new(state));
-                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-                let address = listener.local_addr().unwrap();
-                let pod = Pod {
-                    ip: address.ip(),
-                    port: address.port(),
+                let _ = rustls::crypto::ring::default_provider().install_default();
+                let shard_service = Arc::new(ShardServiceDefault::new());
+                let bootstrap = ContractBootstrap {
+                    shard_service: shard_service.clone(),
+                    registration: Arc::new(SeedRegistration(state.as_ref().unwrap().clone())),
+                    faults: KeyValueStorageFaults::default(),
                 };
-                let (shutdown, stopped) = oneshot::channel();
-                let (health, health_service) = tonic_health::server::health_reporter();
-                health
-                    .set_service_status("", tonic_health::ServingStatus::Serving)
-                    .await;
-                let server = tokio::spawn(
-                    tonic::transport::Server::builder()
-                        .add_service(ExecutorServer {
-                            state: state.clone(),
-                            last_revoke: last_revoke.clone(),
-                        })
-                        .add_service(health_service)
-                        .serve_with_incoming_shutdown(
-                            tokio_stream::wrappers::TcpListenerStream::new(listener),
-                            async move {
-                                let _ = stopped.await;
-                            },
-                        ),
-                );
+                let mut runtime = ExecutorRuntime::default();
+                let config = local_executor_config();
+                let run = bootstrap_and_run_worker_executor(
+                    &bootstrap,
+                    config,
+                    prometheus::Registry::new(),
+                    tokio::runtime::Handle::current(),
+                    runtime.tasks.as_mut().unwrap(),
+                    false,
+                )
+                .await
+                .unwrap();
+                let pod = Pod {
+                    ip: "127.0.0.1".parse().unwrap(),
+                    port: run.grpc_port,
+                };
+                runtime.run = Some(run);
+                let faults = bootstrap.faults;
                 Self {
-                    service: Arc::new(WorkerExecutorServiceDefault::new({
-                        let mut config = WorkerExecutorServiceConfig {
-                            retries: RetryConfig::no_retries(),
-                            ..Default::default()
-                        };
-                        config.client_config.retries_on_unavailable = RetryConfig::no_retries();
-                        config
-                    })),
+                    service: Arc::new(WorkerExecutorServiceDefault::new(client_config())),
                     pod,
-                    snapshot: Box::new(move || state.read().unwrap().as_ref().cloned()),
-                    last_revoke,
-                    shutdown: Some(shutdown),
-                    server: Some(server),
+                    snapshot: Box::new(move || shard_service.try_get_current_assignment()),
+                    set_index_outage: Box::new(move |outage| {
+                        if outage {
+                            faults.fail(
+                                "enum",
+                                usize::MAX,
+                                KeyValueStorageError::Other(INDEX_OUTAGE.into()),
+                            );
+                        } else {
+                            faults.clear();
+                        }
+                    }),
+                    runtime,
                 }
             }
         }
     }
 
-    async fn finish(self) {
-        if let Some(shutdown) = self.shutdown {
-            let _ = shutdown.send(());
-        }
-        // Drop the pooled client before the server waits for its connections to close.
+    async fn finish(mut self) {
         drop(self.service);
-        if let Some(server) = self.server {
-            server.await.unwrap().unwrap();
+        self.runtime.cleanup().await.unwrap();
+    }
+}
+
+fn client_config() -> WorkerExecutorServiceConfig {
+    let mut config = WorkerExecutorServiceConfig {
+        retries: RetryConfig::no_retries(),
+        ..Default::default()
+    };
+    config.client_config.retries_on_unavailable = RetryConfig::no_retries();
+    config
+}
+
+fn local_executor_config() -> GolemConfig {
+    let mut config = GolemConfig {
+        key_value_storage: KeyValueStorageConfig::InMemory(KeyValueStorageInMemoryConfig {}),
+        indexed_storage: IndexedStorageConfig::InMemory(IndexedStorageInMemoryConfig {}),
+        scheduler_storage: SchedulerStorageConfig::InMemory(SchedulerStorageInMemoryConfig {}),
+        blob_storage: BlobStorageConfig::default_in_memory(),
+        resource_limits: ResourceLimitsConfig::Disabled(ResourceLimitsDisabledConfig {}),
+        filesystem_snapshots: FilesystemSnapshotsConfig::Disabled(
+            FilesystemSnapshotsDisabledConfig {},
+        ),
+        bind_address: "127.0.0.1".parse().unwrap(),
+        http_port: 0,
+        ..GolemConfig::default()
+    };
+    config.grpc.port = 0;
+    config.filesystem_storage.mode = FilesystemStorageMode::Temporary;
+    config.engine.enable_fs_cache = false;
+    config.set_golem_issuer(GolemIssuer::generate());
+    config
+}
+
+struct SeedRegistration(ShardAssignment);
+
+#[async_trait]
+impl ShardManagerService for SeedRegistration {
+    async fn register(
+        &self,
+        _endpoint: ExecutorEndpoint,
+        _pod_name: Option<String>,
+    ) -> Result<ShardAssignment, golem_service_base::clients::shard_manager::ShardManagerError>
+    {
+        Ok(self.0.clone())
+    }
+
+    async fn deregister(&self) {}
+}
+
+struct ContractBootstrap {
+    shard_service: Arc<ShardServiceDefault>,
+    registration: Arc<SeedRegistration>,
+    faults: KeyValueStorageFaults,
+}
+
+#[async_trait]
+impl Bootstrap<Context> for ContractBootstrap {
+    fn create_additional_deps(&self, _registry: Arc<dyn RegistryService>) -> NoAdditionalDeps {
+        NoAdditionalDeps::new()
+    }
+
+    fn create_shard_service(&self) -> Arc<dyn ShardService> {
+        self.shard_service.clone()
+    }
+
+    fn create_shard_manager_service(
+        &self,
+        _client: Arc<dyn ShardManager>,
+        _shards: Arc<dyn ShardService>,
+        _shutdown: Shutdown,
+    ) -> Arc<dyn ShardManagerService> {
+        self.registration.clone()
+    }
+
+    fn create_quota_service(
+        &self,
+        _client: Arc<dyn ShardManager>,
+        _config: &QuotaServiceConfig,
+        _shutdown: CancellationToken,
+    ) -> Arc<dyn QuotaService> {
+        Arc::new(UnlimitedQuotaService)
+    }
+
+    fn wrap_key_value_storage(
+        &self,
+        storage: Arc<dyn KeyValueStorage + Send + Sync>,
+    ) -> Arc<dyn KeyValueStorage + Send + Sync> {
+        Arc::new(FaultInjectingKeyValueStorage::new(
+            storage,
+            self.faults.clone(),
+        ))
+    }
+}
+
+struct ExecutorRuntime {
+    run: Option<RunDetails>,
+    tasks: Option<JoinSet<anyhow::Result<()>>>,
+}
+
+impl Default for ExecutorRuntime {
+    fn default() -> Self {
+        Self {
+            run: None,
+            tasks: Some(JoinSet::new()),
+        }
+    }
+}
+
+impl ExecutorRuntime {
+    fn cleanup(&mut self) -> tokio::task::JoinHandle<()> {
+        let run = self.run.take();
+        let mut tasks = self.tasks.take().unwrap();
+        if let Some(run) = run.as_ref() {
+            run.shutdown.cancel();
+        }
+        tokio::spawn(async move {
+            let drained = match run.as_ref() {
+                Some(run) => run.shutdown.wait_for_tracked(SHUTDOWN_GRACE).await,
+                None => true,
+            };
+            tasks.shutdown().await;
+            drop(run);
+            assert!(drained, "executor tracked shutdown did not finish");
+        })
+    }
+}
+
+impl Drop for ExecutorRuntime {
+    fn drop(&mut self) {
+        if self.tasks.is_some() {
+            drop(self.cleanup());
         }
     }
 }
 
 fn registered(incarnation: Uuid) -> ShardAssignmentState {
+    registered_until(incarnation, Instant::now() + Duration::from_secs(60))
+}
+
+fn registered_until(incarnation: Uuid, expires_at: Instant) -> ShardAssignmentState {
     let shard_epochs = HashMap::from([
         (ShardId::new(0), golem_common::model::ShardEpoch(7)),
         (ShardId::new(1), golem_common::model::ShardEpoch(8)),
@@ -146,7 +293,7 @@ fn registered(incarnation: Uuid) -> ShardAssignmentState {
         ShardAssignmentEvent::Register {
             number_of_shards: 8,
             shard_epochs: &shard_epochs,
-            expires_at: Some(Instant::now() + Duration::from_secs(60)),
+            expires_at: Some(expires_at),
             revision: golem_common::model::ShardLeaseRevision {
                 incarnation,
                 number: 1,
@@ -214,6 +361,7 @@ async fn delivery_contract(adapter: Adapter) {
         ])
     );
 
+    (fixture.set_index_outage)(true);
     let mut stale = assignment(9, 8);
     stale.shard_epochs.clear();
     fixture
@@ -230,6 +378,7 @@ async fn delivery_contract(adapter: Adapter) {
         .unwrap();
     assert_snapshot(&fixture, &expected);
 
+    (fixture.set_index_outage)(false);
     fixture
         .service
         .assign_shards(&fixture.pod, &assignment(10, 4))
@@ -247,20 +396,6 @@ async fn delivery_contract(adapter: Adapter) {
     expected.executor_count = 3;
     expected.revision.as_mut().unwrap().number = 11;
     assert_snapshot(&fixture, &expected);
-    if let Adapter::Grpc = adapter {
-        let request = fixture.last_revoke.lock().unwrap().clone().unwrap();
-        assert_eq!(request.executor_count, 3);
-        assert_eq!(request.revision, 11);
-        assert_eq!(request.incarnation_id, incarnation_id());
-        assert_eq!(
-            request
-                .shard_ids
-                .into_iter()
-                .map(ShardId::from)
-                .collect::<BTreeSet<_>>(),
-            removed
-        );
-    }
 
     fixture
         .service
@@ -336,30 +471,11 @@ async fn delivery_contract(adapter: Adapter) {
     assert_snapshot(&fixture, &expected);
     fixture.finish().await;
 
-    let fixture = Fixture::new(adapter, ShardAssignmentState::default()).await;
-    assert_invalid_deliveries(&fixture, &fixture.pod).await;
-    assert_worker_error(
-        fixture
-            .service
-            .assign_shards(&fixture.pod, &assignment(1, 3))
-            .await,
-        WorkerExecutorError::ShardingNotReady,
-    );
-    assert!((fixture.snapshot)().is_none());
-    assert_worker_error(
-        fixture
-            .service
-            .revoke_shards(&fixture.pod, &removed, ShardLeaseRevision(1), 3)
-            .await,
-        WorkerExecutorError::ShardingNotReady,
-    );
-    assert!((fixture.snapshot)().is_none());
-    fixture.finish().await;
-
     let other_manager = Uuid::from_u128(0xf00);
     assert_ne!(other_manager, incarnation);
     let fixture = Fixture::new(adapter, registered(other_manager)).await;
     let expected = (fixture.snapshot)().unwrap();
+    (fixture.set_index_outage)(true);
     fixture
         .service
         .assign_shards(&fixture.pod, &assignment(100, 9))
@@ -489,6 +605,394 @@ async fn grpc_worker_executor_obeys_delivery_contract() {
     delivery_contract(Adapter::Grpc).await;
 }
 
+#[test]
+#[timeout("30s")]
+async fn cancelling_the_grpc_fixture_owner_stops_its_executor_and_servers() {
+    let mut fixture = Fixture::new(
+        Adapter::Grpc,
+        registered(Uuid::parse_str(&incarnation_id()).unwrap()),
+    )
+    .await;
+    let shutdown = fixture.runtime.run.as_ref().unwrap().shutdown.clone();
+    let stopped = CancellationToken::new();
+    let signal = stopped.clone().drop_guard();
+    fixture.runtime.tasks.as_mut().unwrap().spawn(async move {
+        let _signal = signal;
+        std::future::pending::<anyhow::Result<()>>().await
+    });
+    let owner = tokio::spawn(async move {
+        let _fixture = fixture;
+        std::future::pending::<()>().await;
+    });
+    owner.abort();
+    assert!(owner.await.unwrap_err().is_cancelled());
+    assert!(shutdown.token().is_cancelled());
+    stopped.cancelled().await;
+    shutdown.join_tracked().await;
+}
+
+async fn recovery_index_outage_contract(adapter: Adapter) {
+    let incarnation = Uuid::parse_str(&incarnation_id()).unwrap();
+    let initial = registered(incarnation);
+    let initial_assignment = initial.as_ref().unwrap().clone();
+    let fixture = Fixture::new(adapter, initial).await;
+    assert_snapshot(&fixture, &initial_assignment);
+    (fixture.set_index_outage)(true);
+    assert_snapshot(&fixture, &initial_assignment);
+    let expected = ShardAssignment {
+        number_of_shards: 16,
+        executor_count: 5,
+        shard_epochs: HashMap::from([
+            (ShardId::new(0), golem_common::model::ShardEpoch(9)),
+            (ShardId::new(2), golem_common::model::ShardEpoch(4)),
+        ]),
+        revision: Some(golem_common::model::ShardLeaseRevision {
+            incarnation,
+            number: 10,
+        }),
+        expires_at: initial_assignment.expires_at,
+    };
+    let push = assignment(10, 5);
+    assert_index_outage(fixture.service.assign_shards(&fixture.pod, &push).await);
+    assert_snapshot(&fixture, &expected);
+    assert_index_outage(fixture.service.assign_shards(&fixture.pod, &push).await);
+    assert_snapshot(&fixture, &expected);
+    (fixture.set_index_outage)(false);
+    assert_snapshot(&fixture, &expected);
+    fixture
+        .service
+        .assign_shards(&fixture.pod, &push)
+        .await
+        .unwrap();
+    assert_snapshot(&fixture, &expected);
+    fixture.finish().await;
+}
+
+fn assert_index_outage(result: Result<(), ShardManagerError>) {
+    assert!(result.as_ref().unwrap_err().is_retriable());
+    assert_worker_error(
+        result,
+        WorkerExecutorError::Runtime {
+            details: "failed to get worker ids from KV storage: injected recovery index outage"
+                .into(),
+        },
+    );
+}
+
+#[test]
+#[timeout("30s")]
+async fn grpc_assignment_installs_before_a_persistent_recovery_index_failure() {
+    recovery_index_outage_contract(Adapter::Grpc).await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn in_memory_assignment_installs_before_a_persistent_recovery_index_failure() {
+    recovery_index_outage_contract(Adapter::Memory).await;
+}
+
+async fn recovery_index_controls_contract(adapter: Adapter) {
+    let incarnation = Uuid::parse_str(&incarnation_id()).unwrap();
+    let fixture = Fixture::new(adapter, registered(incarnation)).await;
+    let mut expected = (fixture.snapshot)().unwrap();
+    (fixture.set_index_outage)(true);
+    assert_invalid_deliveries(&fixture, &fixture.pod).await;
+    let omitted = Pod {
+        port: 0,
+        ..fixture.pod
+    };
+    assert_invalid_deliveries(&fixture, &omitted).await;
+    fixture
+        .service
+        .revoke_shards(
+            &fixture.pod,
+            &BTreeSet::from([ShardId::new(0)]),
+            ShardLeaseRevision(10),
+            5,
+        )
+        .await
+        .unwrap();
+    expected.shard_epochs.remove(&ShardId::new(0));
+    expected.executor_count = 5;
+    expected.revision.as_mut().unwrap().number = 10;
+    assert_snapshot(&fixture, &expected);
+    let mut empty = assignment(11, 4);
+    empty.shard_epochs.clear();
+    fixture
+        .service
+        .assign_shards(&fixture.pod, &empty)
+        .await
+        .unwrap();
+    expected.number_of_shards = 16;
+    expected.shard_epochs.clear();
+    expected.executor_count = 4;
+    expected.revision.as_mut().unwrap().number = 11;
+    assert_snapshot(&fixture, &expected);
+    assert_index_outage(
+        fixture
+            .service
+            .assign_shards(&fixture.pod, &assignment(12, 6))
+            .await,
+    );
+    expected.shard_epochs = HashMap::from([
+        (ShardId::new(0), golem_common::model::ShardEpoch(9)),
+        (ShardId::new(2), golem_common::model::ShardEpoch(4)),
+    ]);
+    expected.executor_count = 6;
+    expected.revision.as_mut().unwrap().number = 12;
+    assert_snapshot(&fixture, &expected);
+    fixture.finish().await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn grpc_index_outage_does_not_fail_revoke_empty_or_invalid_deliveries() {
+    recovery_index_controls_contract(Adapter::Grpc).await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn in_memory_index_outage_does_not_fail_revoke_empty_or_invalid_deliveries() {
+    recovery_index_controls_contract(Adapter::Memory).await;
+}
+
+async fn lapsed_lease_contract(adapter: Adapter) {
+    let incarnation = Uuid::parse_str(&incarnation_id()).unwrap();
+    let expiry = Instant::now() - Duration::from_secs(1);
+    let fixture = Fixture::new(adapter, registered_until(incarnation, expiry)).await;
+    (fixture.set_index_outage)(true);
+    fixture.service.health_check(&fixture.pod).await.unwrap();
+    fixture
+        .service
+        .assign_shards(&fixture.pod, &assignment(10, 5))
+        .await
+        .unwrap();
+    assert_snapshot(
+        &fixture,
+        &ShardAssignment {
+            number_of_shards: 16,
+            executor_count: 5,
+            shard_epochs: HashMap::from([
+                (ShardId::new(0), golem_common::model::ShardEpoch(9)),
+                (ShardId::new(2), golem_common::model::ShardEpoch(4)),
+            ]),
+            revision: Some(golem_common::model::ShardLeaseRevision {
+                incarnation,
+                number: 10,
+            }),
+            expires_at: Some(expiry),
+        },
+    );
+    fixture.service.health_check(&fixture.pod).await.unwrap();
+    fixture.finish().await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn grpc_lapsed_lease_defers_index_recovery_but_stays_healthy() {
+    lapsed_lease_contract(Adapter::Grpc).await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn in_memory_lapsed_lease_defers_index_recovery_but_stays_healthy() {
+    lapsed_lease_contract(Adapter::Memory).await;
+}
+
+async fn health_contract(adapter: Adapter, health: InMemoryWorkerExecutorHealth) {
+    use futures::StreamExt;
+
+    let mut runtime = ExecutorRuntime::default();
+    let entered = Arc::new(Notify::new());
+    let release = CancellationToken::new();
+    let release_on_drop = release.clone().drop_guard();
+    if health != InMemoryWorkerExecutorHealth::Timeout {
+        release.cancel();
+    }
+    let (pod, service): (_, Arc<dyn WorkerExecutorService>) = match adapter {
+        Adapter::Memory => {
+            let pod = Pod {
+                ip: "127.0.0.1".parse().unwrap(),
+                port: 1,
+            };
+            let service =
+                InMemoryWorkerExecutorService::new([(pod, ShardAssignmentState::default())]);
+            service
+                .set_conditions(
+                    &pod,
+                    InMemoryWorkerExecutorConditions {
+                        health,
+                        ..Default::default()
+                    },
+                )
+                .unwrap();
+            (pod, Arc::new(service))
+        }
+        Adapter::Grpc => {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let (reporter, service) = tonic_health::server::health_reporter();
+            reporter
+                .set_service_status(
+                    "",
+                    match health {
+                        InMemoryWorkerExecutorHealth::NotServing => {
+                            tonic_health::ServingStatus::NotServing
+                        }
+                        _ => tonic_health::ServingStatus::Serving,
+                    },
+                )
+                .await;
+            let service = HealthResponseGate {
+                inner: service,
+                entered: entered.clone(),
+                release,
+            };
+            runtime.tasks.as_mut().unwrap().spawn(async move {
+                tonic::transport::Server::builder()
+                    .add_service(service)
+                    .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                    .await
+                    .map_err(anyhow::Error::from)
+            });
+            let config = WorkerExecutorServiceConfig {
+                health_check_timeout: Duration::from_secs(1),
+                ..client_config()
+            };
+            (
+                Pod {
+                    ip: address.ip(),
+                    port: address.port(),
+                },
+                Arc::new(WorkerExecutorServiceDefault::new(config)),
+            )
+        }
+    };
+    futures::stream::iter([(), ()])
+        .then(|()| async {
+            let (result, ()) = tokio::join!(service.health_check(&pod), async {
+                if matches!(adapter, Adapter::Grpc) {
+                    entered.notified().await;
+                }
+            });
+            assert_health(result, health);
+        })
+        .collect::<()>()
+        .await;
+    drop(service);
+    drop(release_on_drop);
+    runtime.cleanup().await.unwrap();
+}
+
+#[derive(Clone)]
+struct HealthResponseGate<S> {
+    inner: S,
+    entered: Arc<Notify>,
+    release: CancellationToken,
+}
+
+impl<S: NamedService> NamedService for HealthResponseGate<S> {
+    const NAME: &'static str = S::NAME;
+}
+
+impl<S> Service<http::Request<Body>> for HealthResponseGate<S>
+where
+    S: Service<http::Request<Body>>,
+    S::Future: Send + 'static,
+    S::Response: Send + 'static,
+    S::Error: Send + 'static,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, cx: &mut TaskContext<'_>) -> Poll<Result<(), Self::Error>> {
+        self.inner.poll_ready(cx)
+    }
+
+    fn call(&mut self, request: http::Request<Body>) -> Self::Future {
+        let response = self.inner.call(request);
+        let entered = self.entered.clone();
+        let release = self.release.clone();
+        Box::pin(async move {
+            let response = response.await?;
+            entered.notify_one();
+            release.cancelled().await;
+            Ok(response)
+        })
+    }
+}
+
+fn assert_health(result: Result<(), HealthCheckError>, health: InMemoryWorkerExecutorHealth) {
+    match health {
+        InMemoryWorkerExecutorHealth::Serving => result.unwrap(),
+        InMemoryWorkerExecutorHealth::NotServing | InMemoryWorkerExecutorHealth::Timeout => {
+            let expected = match health {
+                InMemoryWorkerExecutorHealth::NotServing => "NOT_SERVING",
+                _ => "health check timeout",
+            };
+            let error = result.unwrap_err();
+            assert!(error.is_retriable());
+            match error {
+                HealthCheckError::GrpcOther(actual) => assert_eq!(actual, expected),
+                other => panic!("expected {expected}, got {other:?}"),
+            }
+        }
+    }
+}
+
+#[test]
+#[timeout("30s")]
+async fn grpc_health_reports_not_serving() {
+    health_contract(Adapter::Grpc, InMemoryWorkerExecutorHealth::NotServing).await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn in_memory_health_reports_not_serving() {
+    health_contract(Adapter::Memory, InMemoryWorkerExecutorHealth::NotServing).await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn grpc_health_times_out_after_the_health_response_is_ready() {
+    health_contract(Adapter::Grpc, InMemoryWorkerExecutorHealth::Timeout).await;
+}
+
+#[test]
+#[timeout("30s")]
+async fn in_memory_health_times_out_after_the_health_response_is_ready() {
+    health_contract(Adapter::Memory, InMemoryWorkerExecutorHealth::Timeout).await;
+}
+
+#[test]
+async fn in_memory_delivery_before_registration_is_refused() {
+    let fixture = Fixture::new(Adapter::Memory, ShardAssignmentState::default()).await;
+    assert_invalid_deliveries(&fixture, &fixture.pod).await;
+    assert_worker_error(
+        fixture
+            .service
+            .assign_shards(&fixture.pod, &assignment(1, 3))
+            .await,
+        WorkerExecutorError::ShardingNotReady,
+    );
+    assert!((fixture.snapshot)().is_none());
+    assert_worker_error(
+        fixture
+            .service
+            .revoke_shards(
+                &fixture.pod,
+                &BTreeSet::from([ShardId::new(0)]),
+                ShardLeaseRevision(1),
+                3,
+            )
+            .await,
+        WorkerExecutorError::ShardingNotReady,
+    );
+    assert!((fixture.snapshot)().is_none());
+    fixture.finish().await;
+}
+
 fn registration() -> crate::sharding::model::RegisterAck {
     crate::sharding::model::RegisterAck {
         number_of_shards: 12,
@@ -567,6 +1071,79 @@ async fn in_memory_registration_installs_exact_fields_and_adopts_stale_expiry() 
 }
 
 #[test]
+async fn in_memory_conditions_preserve_assignment_expiry_and_pod_membership() {
+    let pod = Pod {
+        ip: "127.0.0.1".parse().unwrap(),
+        port: 1,
+    };
+    let other = Pod { port: 2, ..pod };
+    let omitted = Pod { port: 3, ..pod };
+    let seed = registered(Uuid::parse_str(&incarnation_id()).unwrap());
+    let service = InMemoryWorkerExecutorService::new([(pod, seed.clone()), (other, seed.clone())]);
+    let mut expected = seed.as_ref().unwrap().clone();
+    service
+        .set_conditions(
+            &pod,
+            InMemoryWorkerExecutorConditions {
+                health: InMemoryWorkerExecutorHealth::NotServing,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    assert_assignment(&service.current_assignment(&pod).unwrap(), &expected);
+    assert_assignment(&service.current_assignment(&other).unwrap(), &expected);
+    assert_health(
+        service.health_check(&pod).await,
+        InMemoryWorkerExecutorHealth::NotServing,
+    );
+    service.health_check(&other).await.unwrap();
+    service
+        .assign_shards(&pod, &assignment(10, 5))
+        .await
+        .unwrap();
+    expected.number_of_shards = 16;
+    expected.executor_count = 5;
+    expected.revision.as_mut().unwrap().number = 10;
+    expected.shard_epochs = HashMap::from([
+        (ShardId::new(0), golem_common::model::ShardEpoch(9)),
+        (ShardId::new(2), golem_common::model::ShardEpoch(4)),
+    ]);
+    assert_assignment(&service.current_assignment(&pod).unwrap(), &expected);
+    assert_health(
+        service.health_check(&pod).await,
+        InMemoryWorkerExecutorHealth::NotServing,
+    );
+    service
+        .set_conditions(&pod, InMemoryWorkerExecutorConditions::default())
+        .unwrap();
+    assert_assignment(&service.current_assignment(&pod).unwrap(), &expected);
+    service.health_check(&pod).await.unwrap();
+    assert_unavailable(service.set_conditions(
+        &omitted,
+        InMemoryWorkerExecutorConditions {
+            health: InMemoryWorkerExecutorHealth::Timeout,
+            recovery_index_error: Some(INDEX_OUTAGE.into()),
+        },
+    ));
+    assert!(service.current_assignment(&omitted).is_none());
+    assert_unavailable(service.assign_shards(&omitted, &assignment(10, 5)).await);
+    assert_unavailable(
+        service
+            .revoke_shards(&omitted, &BTreeSet::new(), ShardLeaseRevision(10), 5)
+            .await,
+    );
+    match service.health_check(&omitted).await.unwrap_err() {
+        HealthCheckError::GrpcError(status) => assert_eq!(status.code(), tonic::Code::Unavailable),
+        other => panic!("omitted pod was inserted by conditions: {other:?}"),
+    }
+    assert_assignment(&service.current_assignment(&pod).unwrap(), &expected);
+    assert_assignment(
+        &service.current_assignment(&other).unwrap(),
+        seed.as_ref().unwrap(),
+    );
+}
+
+#[test]
 async fn in_memory_registration_validates_before_lookup_and_follows_reply_lineage() {
     let pod = Pod {
         ip: "127.0.0.1".parse().unwrap(),
@@ -640,180 +1217,4 @@ async fn in_memory_registration_validates_before_lookup_and_follows_reply_lineag
         other => panic!("omitted pod was inserted: {other:?}"),
     }
     assert_assignment(&service.current_assignment(&pod).unwrap(), &expected);
-}
-
-// Only the two shard RPCs are served. The real client still builds, compresses and sends each
-// request and decodes each response. The receiver applies the common executor transition.
-#[derive(Clone)]
-struct ExecutorServer {
-    state: Arc<RwLock<ShardAssignmentState>>,
-    last_revoke: Arc<Mutex<Option<RevokeShardsRequest>>>,
-}
-
-impl NamedService for ExecutorServer {
-    const NAME: &'static str = "golem.workerexecutor.v1.WorkerExecutor";
-}
-
-impl Service<http::Request<Body>> for ExecutorServer {
-    type Response = http::Response<Body>;
-    type Error = Infallible;
-    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
-
-    fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-        Poll::Ready(Ok(()))
-    }
-
-    fn call(&mut self, request: http::Request<Body>) -> Self::Future {
-        let server = self.clone();
-        let is_assignment = request.uri().path().ends_with("/AssignShards");
-        Box::pin(async move {
-            if is_assignment {
-                let mut grpc = tonic::server::Grpc::new(Protobuf::<
-                    AssignShardsResponse,
-                    AssignShardsRequest,
-                >::default())
-                .accept_compressed(CompressionEncoding::Gzip)
-                .send_compressed(CompressionEncoding::Gzip);
-                Ok(grpc.unary(server, request).await)
-            } else {
-                let mut grpc = tonic::server::Grpc::new(Protobuf::<
-                    RevokeShardsResponse,
-                    RevokeShardsRequest,
-                >::default())
-                .accept_compressed(CompressionEncoding::Gzip)
-                .send_compressed(CompressionEncoding::Gzip);
-                Ok(grpc.unary(server, request).await)
-            }
-        })
-    }
-}
-
-impl UnaryService<AssignShardsRequest> for ExecutorServer {
-    type Response = AssignShardsResponse;
-    type Future = BoxFuture<'static, Result<Response<Self::Response>, Status>>;
-
-    fn call(&mut self, request: Request<AssignShardsRequest>) -> Self::Future {
-        let result = receive_assignment(&mut self.state.write().unwrap(), request.into_inner());
-        Box::pin(async move {
-            Ok(Response::new(AssignShardsResponse {
-                result: Some(match result {
-                    Ok(()) => assign_shards_response::Result::Success(Empty {}),
-                    Err(error) => assign_shards_response::Result::Failure(error.into()),
-                }),
-            }))
-        })
-    }
-}
-
-impl UnaryService<RevokeShardsRequest> for ExecutorServer {
-    type Response = RevokeShardsResponse;
-    type Future = BoxFuture<'static, Result<Response<Self::Response>, Status>>;
-
-    fn call(&mut self, request: Request<RevokeShardsRequest>) -> Self::Future {
-        let request = request.into_inner();
-        *self.last_revoke.lock().unwrap() = Some(request.clone());
-        let result = receive_revoke(&mut self.state.write().unwrap(), request);
-        Box::pin(async move {
-            Ok(Response::new(RevokeShardsResponse {
-                result: Some(match result {
-                    Ok(()) => revoke_shards_response::Result::Success(Empty {}),
-                    Err(error) => revoke_shards_response::Result::Failure(error.into()),
-                }),
-            }))
-        })
-    }
-}
-
-fn receive_assignment(
-    state: &mut ShardAssignmentState,
-    request: AssignShardsRequest,
-) -> Result<(), WorkerExecutorError> {
-    let decoded =
-        shard_assignment_from_proto(request).map_err(WorkerExecutorError::invalid_request)?;
-    receive(
-        state,
-        ShardAssignmentEvent::Assign {
-            number_of_shards: decoded.number_of_shards,
-            shard_epochs: &decoded.shard_epochs,
-            revision: decoded.revision,
-            executor_count: decoded.executor_count,
-        },
-    )
-}
-
-fn receive_revoke(
-    state: &mut ShardAssignmentState,
-    request: RevokeShardsRequest,
-) -> Result<(), WorkerExecutorError> {
-    let decoded =
-        shard_revocation_from_proto(request).map_err(WorkerExecutorError::invalid_request)?;
-    receive(
-        state,
-        ShardAssignmentEvent::Revoke {
-            shard_ids: &decoded.shard_ids,
-            revision: decoded.revision,
-            executor_count: decoded.executor_count,
-        },
-    )
-}
-
-fn receive(
-    state: &mut ShardAssignmentState,
-    event: ShardAssignmentEvent<'_>,
-) -> Result<(), WorkerExecutorError> {
-    let (next, outcome) = transition_shard_assignment(std::mem::take(state), event);
-    *state = next;
-    outcome
-        .map(|_: ShardDeliveryOutcome| ())
-        .ok_or(WorkerExecutorError::ShardingNotReady)
-}
-
-// The package already has prost and tonic. A small codec avoids adding a dependency just for
-// the two-method test server.
-struct Protobuf<E, D>(PhantomData<(E, D)>);
-
-impl<E, D> Default for Protobuf<E, D> {
-    fn default() -> Self {
-        Self(PhantomData)
-    }
-}
-
-impl<E, D> Codec for Protobuf<E, D>
-where
-    E: Message + Send + 'static,
-    D: Message + Default + Send + 'static,
-{
-    type Encode = E;
-    type Decode = D;
-    type Encoder = Self;
-    type Decoder = Self;
-
-    fn encoder(&mut self) -> Self::Encoder {
-        Self::default()
-    }
-
-    fn decoder(&mut self) -> Self::Decoder {
-        Self::default()
-    }
-}
-
-impl<E: Message, D> Encoder for Protobuf<E, D> {
-    type Item = E;
-    type Error = Status;
-
-    fn encode(&mut self, item: E, dst: &mut EncodeBuf<'_>) -> Result<(), Status> {
-        item.encode(dst)
-            .map_err(|error| Status::internal(error.to_string()))
-    }
-}
-
-impl<E, D: Message + Default> Decoder for Protobuf<E, D> {
-    type Item = D;
-    type Error = Status;
-
-    fn decode(&mut self, src: &mut DecodeBuf<'_>) -> Result<Option<D>, Status> {
-        D::decode(src)
-            .map(Some)
-            .map_err(|error| Status::internal(error.to_string()))
-    }
 }
