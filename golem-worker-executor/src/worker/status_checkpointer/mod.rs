@@ -32,8 +32,9 @@
 //! never reads the baseline of an earlier incarnation.
 //!
 //! A write is best-effort. Every oplog keeps its entries from index 1, so a failed, stale or
-//! missing checkpoint makes a later recompute read more oplog entries. The status that the
-//! recompute gives does not change.
+//! missing checkpoint makes a later recompute read more oplog entries. The fold also reads the
+//! executor configuration (`retry` and `invocation_results`). Under the same configuration, the
+//! status that the recompute gives does not change.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -161,7 +162,8 @@ impl StatusCheckpointer {
     ///
     /// Best-effort: a write failure is logged and metered, the stored baseline stays as it was,
     /// and the worker continues. Every oplog keeps its entries from index 1, so an older or
-    /// missing baseline makes a later fold longer and does not change the status.
+    /// missing baseline makes a later fold longer. Under the same executor configuration (`retry`
+    /// and `invocation_results`), it does not change the status.
     pub async fn maybe_checkpoint(&self, status: &AgentStatusRecord, reason: CheckpointReason) {
         if self.is_ephemeral || !self.enabled || self.writes_stopped() {
             return;

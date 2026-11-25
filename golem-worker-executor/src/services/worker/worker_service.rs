@@ -222,8 +222,10 @@ impl WorkerService for DefaultWorkerService {
                             || async {
                                 // The function cannot report a read failure of the status
                                 // baseline. Every oplog keeps its entries from index 1, so the
-                                // full fold after a failed read gives the same status, in more
-                                // time. The live cached status above is the read that propagates.
+                                // full fold after a failed read takes more time. Under the same
+                                // executor configuration (`retry` and `invocation_results`), it
+                                // gives the same status. The live cached status above is the read
+                                // that propagates.
                                 self.read_status_checkpoint(owned_agent_id, fingerprint, agent_mode)
                                     .await
                                     .unwrap_or_else(|err| {
@@ -349,7 +351,8 @@ impl WorkerService for DefaultWorkerService {
         // The status baseline is part of that state. A refused delete keeps an oplog without its
         // baseline. Every oplog keeps its entries from index 1, so a later fold reads from index 1,
         // and a later clean boundary writes a new baseline when checkpoints are on. A missing
-        // baseline makes the fold longer and does not change its result.
+        // baseline makes the fold longer. Under the same executor configuration (`retry` and
+        // `invocation_results`), it does not change the result of the fold.
         if delete_current_oplog && let Some(epoch) = expected_epoch {
             self.oplog_service
                 .assert_owning_epoch(owned_agent_id, agent_mode, epoch)

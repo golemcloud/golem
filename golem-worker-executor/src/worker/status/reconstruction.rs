@@ -108,8 +108,9 @@ where
         last_known,
         || async move {
             // This function cannot report a read failure of the status baseline. Every oplog
-            // keeps its entries from index 1, so the full fold after a failed read gives the
-            // same status, in more time.
+            // keeps its entries from index 1, so the full fold after a failed read takes more
+            // time. Under the same executor configuration (`retry` and `invocation_results`), it
+            // gives the same status.
             worker_service
                 .read_status_checkpoint(owned_agent_id, fingerprint, agent_mode)
                 .await
