@@ -754,7 +754,7 @@ mod tests {
     }
 
     #[test]
-    fn four_digit_signing_years_have_nanosecond_boundaries() {
+    fn four_digit_signing_years_have_subsecond_boundaries() {
         use std::time::Duration;
 
         let credentials = AwsCredentials::from_record(&serde_json::json!({
@@ -766,35 +766,47 @@ mod tests {
             .body(())
             .unwrap()
             .into_parts();
-        let first = SystemTime::UNIX_EPOCH
-            .checked_sub(Duration::from_secs(62_167_219_200))
-            .unwrap();
+        let first = SystemTime::UNIX_EPOCH.checked_sub(Duration::from_secs(62_167_219_200));
         let after_last = SystemTime::UNIX_EPOCH
             .checked_add(Duration::from_secs(253_402_300_800))
             .unwrap();
         let nanosecond = Duration::from_nanos(1);
-        [
-            (first, Some("00000101T000000Z")),
-            (first.checked_sub(nanosecond).unwrap(), None),
-            (
-                after_last.checked_sub(nanosecond).unwrap(),
-                Some("99991231T235959Z"),
-            ),
-            (after_last, None),
-            (
-                SystemTime::UNIX_EPOCH.checked_sub(nanosecond).unwrap(),
-                Some("19691231T235959Z"),
-            ),
-            (SystemTime::UNIX_EPOCH, Some("19700101T000000Z")),
-        ]
-        .into_iter()
-        .for_each(|(time, expected)| {
-            let result = sign_request(&head, EMPTY_HASH, &credentials, "us-east-1", "s3", time);
-            match expected {
-                Some(date) => assert_eq!(result.unwrap()["x-amz-date"], date),
-                None => assert_eq!(result, Err(SigningFailure::InvalidRequest)),
-            }
-        });
+        std::iter::once(Duration::from_nanos(100))
+            .chain(
+                SystemTime::UNIX_EPOCH
+                    .checked_sub(nanosecond)
+                    .filter(|time| {
+                        SystemTime::UNIX_EPOCH.duration_since(*time).ok() == Some(nanosecond)
+                    })
+                    .map(|_| nanosecond),
+            )
+            .flat_map(|step| {
+                [
+                    first.map(|time| (time, Some("00000101T000000Z"))),
+                    first
+                        .and_then(|time| time.checked_sub(step))
+                        .map(|time| (time, None)),
+                    Some((
+                        after_last.checked_sub(step).unwrap(),
+                        Some("99991231T235959Z"),
+                    )),
+                    Some((after_last, None)),
+                    Some((
+                        SystemTime::UNIX_EPOCH.checked_sub(step).unwrap(),
+                        Some("19691231T235959Z"),
+                    )),
+                    Some((SystemTime::UNIX_EPOCH, Some("19700101T000000Z"))),
+                ]
+                .into_iter()
+                .flatten()
+            })
+            .for_each(|(time, expected)| {
+                let result = sign_request(&head, EMPTY_HASH, &credentials, "us-east-1", "s3", time);
+                match expected {
+                    Some(date) => assert_eq!(result.unwrap()["x-amz-date"], date),
+                    None => assert_eq!(result, Err(SigningFailure::InvalidRequest)),
+                }
+            });
     }
 
     #[test]
@@ -810,14 +822,16 @@ mod tests {
             .into_parts();
         let duration = std::time::Duration::from_secs(1 << 62);
         [
-            SystemTime::UNIX_EPOCH
-                .checked_add(duration)
-                .expect("the test requires a representable far-future SystemTime"),
-            SystemTime::UNIX_EPOCH
-                .checked_sub(duration)
-                .expect("the test requires a representable far-past SystemTime"),
+            Some(
+                SystemTime::UNIX_EPOCH
+                    .checked_add(std::time::Duration::from_secs(1 << 39))
+                    .expect("the test requires a representable far-future SystemTime"),
+            ),
+            SystemTime::UNIX_EPOCH.checked_add(duration),
+            SystemTime::UNIX_EPOCH.checked_sub(duration),
         ]
         .into_iter()
+        .flatten()
         .for_each(|time| {
             assert_eq!(
                 sign_request(&head, EMPTY_HASH, &credentials, "us-east-1", "s3", time),
