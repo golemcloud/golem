@@ -55,6 +55,49 @@ async fn cli(dir: &Path, args: &[&str]) -> Value {
 
 #[test]
 #[timeout("45s")]
+async fn install_oci_refuses_authentication_over_loopback_http() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let root = dir.path();
+    fs::write(
+        root.join("golem.yaml"),
+        format!(
+            "manifestVersion: {}\napp: installer\n",
+            versions::sdk::MANIFEST
+        ),
+    )?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let host = listener.local_addr()?;
+    let docker_config = root.join("isolated-docker-config");
+    fs::create_dir(&docker_config)?;
+    fs::write(
+        docker_config.join("config.json"),
+        format!(r#"{{"auths":{{"{host}":{{"auth":"dXNlcjpwYXNz"}}}}}}"#),
+    )?;
+    let (requests, mut seen) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        let app = axum::Router::new().fallback(move |headers: axum::http::HeaderMap| async move {
+            let _ = requests.send(headers.contains_key(axum::http::header::AUTHORIZATION));
+            (
+                axum::http::StatusCode::UNAUTHORIZED,
+                [(
+                    axum::http::header::WWW_AUTHENTICATE,
+                    "Basic realm=\"registry\"",
+                )],
+            )
+        });
+        axum::serve(listener, app).await.unwrap();
+    });
+    let source = format!("oci://{host}/packages/remote:1.0");
+    assert_cli_error(root, &["install", &source], "must allow anonymous pulls").await;
+    server.abort();
+    assert_eq!(seen.try_recv(), Ok(false));
+    assert!(seen.try_recv().is_err(), "unexpected authentication retry");
+    assert!(!root.join("golem.lock").exists());
+    Ok(())
+}
+
+#[test]
+#[timeout("45s")]
 async fn install_url_pins_digest_and_cold_build_rejects_replacement() {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path();

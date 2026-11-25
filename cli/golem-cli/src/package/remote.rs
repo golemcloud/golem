@@ -420,6 +420,43 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn package_urls_require_https_or_literal_loopback_and_no_userinfo() {
+        for source in [
+            "https://example.com/p.tar",
+            "http://127.0.0.1:1/p.tar",
+            "http://[::1]/p.tar",
+            "http://localhost/p.tar",
+        ] {
+            assert!(package_url(source).is_ok(), "{source}");
+        }
+        for source in [
+            "http://example.com/p.tar",
+            "http://127.0.0.1.nip.io/p.tar",
+            "http://0.0.0.0/p.tar",
+            "http://[::ffff:127.0.0.1]/p.tar",
+            "http://user:pass@127.0.0.1/p.tar",
+        ] {
+            assert!(package_url(source).is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    async fn package_download_refuses_redirect_to_non_loopback_http() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = package_url(&format!("http://{}/p.tar", listener.local_addr().unwrap())).unwrap();
+        let server = tokio::spawn(async move {
+            let app = axum::Router::new().fallback(|| async {
+                axum::response::Redirect::temporary("http://example.invalid/p.tar")
+            });
+            axum::serve(listener, app).await.unwrap();
+        });
+        let error = fetch_url(url, 4096).await.unwrap_err();
+        server.abort();
+        let message = format!("{error:#}");
+        assert!(message.contains("Unsafe package URL redirect"), "{message}");
+    }
+
+    #[test]
     fn docker_credentials_use_the_platform_home_unless_config_is_overridden() {
         let home = tempfile::tempdir().unwrap();
         let override_dir = tempfile::tempdir().unwrap();
