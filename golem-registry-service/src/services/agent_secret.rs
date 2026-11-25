@@ -22,8 +22,8 @@ use crate::repo::model::agent_secrets::{
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent_secret::{
-    AgentSecretCreation, AgentSecretId, AgentSecretRevision, AgentSecretUpdate,
-    CanonicalAgentSecretPath,
+    AgentSecretCreation, AgentSecretId, AgentSecretOwner, AgentSecretReadMode, AgentSecretRevision,
+    AgentSecretRevisionSelector, AgentSecretUpdate, CanonicalAgentSecretPath,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
@@ -443,9 +443,11 @@ impl AgentSecretService {
             .create(AgentSecretCreationRecord::new(
                 id,
                 environment_id,
+                AgentSecretOwner::Environment,
                 agent_secret_path.clone(),
                 secret_type_graph,
                 secret_value,
+                vec![],
                 auth.actor_account_id(),
             ))
             .await
@@ -667,7 +669,14 @@ impl AgentSecretService {
         self.agent_secret_repo
             // Secret values are not stored in the oplog, so replay must be able to
             // resolve historical secret revisions after the owning entities are deleted.
-            .get_revision(environment_id.0, agent_secret_id, path.0, revision, true)
+            .get_revision(
+                environment_id.0,
+                &AgentSecretOwner::Environment,
+                agent_secret_id,
+                path.0,
+                AgentSecretRevisionSelector::Fixed(revision),
+                AgentSecretReadMode::Historical,
+            )
             .await?
             .map(TryInto::try_into)
             .transpose()

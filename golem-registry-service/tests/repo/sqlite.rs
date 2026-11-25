@@ -295,6 +295,31 @@ async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
 }
 
 #[test]
+async fn test_agent_secret_owner_identity(deps: &Deps) {
+    crate::repo::common::test_agent_secret_owner_identity(deps).await;
+}
+
+#[test]
+async fn test_agent_secret_owner_constraints(deps: &Deps) {
+    crate::repo::common::test_agent_secret_owner_constraints(deps).await;
+}
+
+#[test]
+async fn test_agent_secret_revision_destinations(deps: &Deps) {
+    crate::repo::common::test_agent_secret_revision_destinations(deps).await;
+}
+
+#[test]
+async fn test_agent_secret_owner_lookups(deps: &Deps) {
+    crate::repo::common::test_agent_secret_owner_lookups(deps).await;
+}
+
+#[test]
+async fn test_agent_secret_environment_restore(deps: &Deps) {
+    crate::repo::common::test_agent_secret_environment_restore(deps).await;
+}
+
+#[test]
 async fn test_retry_policy_and_agent_secret_natural_key_lookups(deps: &Deps) {
     crate::repo::common::test_retry_policy_and_agent_secret_natural_key_lookups(deps).await;
 }
