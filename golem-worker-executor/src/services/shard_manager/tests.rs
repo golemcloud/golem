@@ -302,6 +302,31 @@ fn make_service_with_rpc_deadline_floor(
 }
 
 #[test]
+fn rpc_deadline_uses_the_granted_cadence_and_not_the_retry_backoff() {
+    let (service, _) = make_service(Arc::new(MockShardManager::new()), Shutdown::new());
+    assert_eq!(service.rpc_deadline(), Duration::from_secs(10));
+    service.apply_retry_event(RenewalRetryEvent::Granted(Some(Duration::from_secs(60))));
+    assert_eq!(service.rpc_deadline(), Duration::from_secs(30));
+    service.apply_retry_event(RenewalRetryEvent::Failed);
+    assert_eq!(service.rpc_deadline(), Duration::from_secs(30));
+    service.apply_retry_event(RenewalRetryEvent::Granted(Some(Duration::from_secs(1))));
+    assert_eq!(service.rpc_deadline(), Duration::from_secs(10));
+}
+
+#[test]
+fn out_of_order_deferrals_keep_the_newest_recovery_ticket() {
+    for (incoming, expected) in [(6, 7), (7, 7), (8, 8)] {
+        assert_eq!(
+            recovery_debt_transition(
+                RecoveryDebt::Owed(RecoveryTicket(7)),
+                RecoveryDebtEvent::Deferred(RecoveryTicket(incoming)),
+            ),
+            (RecoveryDebt::Owed(RecoveryTicket(expected)), false),
+        );
+    }
+}
+
+#[test]
 // The hook closes over the service graph that owns this service, so a strong reference here
 // would be a cycle nothing could free. `WorkerExecutorImpl` owns the hook; this only borrows
 // it.

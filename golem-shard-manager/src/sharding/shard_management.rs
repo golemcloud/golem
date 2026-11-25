@@ -1069,6 +1069,98 @@ mod tests {
     }
 
     #[test]
+    fn registration_decisions_distinguish_add_refresh_and_address_replacement() {
+        let (state, added) = decisions::register(
+            ShardLeaseState::new(4),
+            executor(1),
+            addr(1),
+            None,
+            t0(),
+            TTL,
+        )
+        .unwrap();
+        assert!(matches!(added.registration, decisions::Registration::Added));
+        assert_eq!(added.number_of_shards, 4);
+        assert_eq!(added.pending.stamp(state.revision).executor_count, 1);
+        let (state, refreshed) =
+            decisions::register(state, executor(1), addr(1), None, t0(), TTL).unwrap();
+        assert!(matches!(
+            refreshed.registration,
+            decisions::Registration::Refreshed
+        ));
+        let (state, replaced) =
+            decisions::register(state, executor(2), addr(1), None, t0(), TTL).unwrap();
+        assert!(
+            matches!(replaced.registration, decisions::Registration::Replaced { previous, push_to }
+            if previous == executor(1) && push_to == executor(2))
+        );
+        assert!(!state.has_executor(executor(1)));
+        assert_eq!(replaced.pending.stamp(state.revision).executor_count, 1);
+    }
+
+    #[test]
+    fn renewal_decisions_report_foreign_missing_and_wrong_epochs_without_losing_the_count() {
+        let mut state = ShardLeaseState::new(4);
+        state.add_executor(executor(1), addr(1), None, t0(), TTL);
+        state.add_executor(executor(2), addr(2), None, t0(), TTL);
+        state.assign_shard(executor(1), ShardId::new(0));
+        state.assign_shard(executor(1), ShardId::new(1));
+        state.assign_shard(executor(2), ShardId::new(2));
+        let correct = state.epoch_for_shard(ShardId::new(0)).unwrap();
+        let claims = BTreeMap::from([
+            (ShardId::new(0), correct),
+            (ShardId::new(1), ShardEpoch(99)),
+            (
+                ShardId::new(2),
+                state.epoch_for_shard(ShardId::new(2)).unwrap(),
+            ),
+            (ShardId::new(3), ShardEpoch(0)),
+        ]);
+        assert!(matches!(
+            decisions::renew(state.clone(), executor(9), &claims, t0(), TTL),
+            Err(ShardManagerError::ShardLeaseNotFound { executor_id }) if executor_id == executor(9)
+        ));
+        let renewed_at = t0() + chrono::Duration::seconds(10);
+        let (state, renewed) =
+            decisions::renew(state, executor(1), &claims, renewed_at, TTL).unwrap();
+        assert_eq!(
+            renewed.mismatched,
+            vec![ShardId::new(1), ShardId::new(2), ShardId::new(3)]
+        );
+        let grant = renewed.pending.stamp(state.revision);
+        assert_eq!(grant.executor_count, 2);
+        assert_eq!(grant.shard_epochs.len(), 2);
+        assert_eq!(grant.expires_at, renewed_at + chrono::Duration::seconds(60));
+    }
+
+    #[test]
+    fn delivery_decisions_union_recipients_and_retry_only_failed_targets() {
+        let mut assignments = crate::sharding::model::Assignments::new();
+        assignments.assign(executor(1), ShardId::new(0));
+        let mut unassignments = crate::sharding::model::Unassignments::new();
+        unassignments.unassign(executor(2), ShardId::new(0));
+        let rebalance = Rebalance::new(assignments, unassignments);
+        assert_eq!(
+            decisions::full_assignment_recipients(
+                &rebalance,
+                &HashSet::from([executor(2), executor(3)])
+            ),
+            BTreeSet::from([executor(1), executor(2), executor(3)])
+        );
+        assert_eq!(
+            decisions::repair_failed_deliveries(BTreeSet::new(), BTreeSet::new()),
+            None
+        );
+        assert_eq!(
+            decisions::repair_failed_deliveries(
+                BTreeSet::from([executor(1), executor(2)]),
+                BTreeSet::from([executor(2), executor(3)])
+            ),
+            Some(BTreeSet::from([executor(1), executor(2), executor(3)]))
+        );
+    }
+
+    #[test]
     // Registration is applied inline by `register_executor`, before the loop runs, so by the time
     // the pass applies the queued removal of the instance that was replaced, that instance is
     // already gone and the removal must not take the transferred shards away again.
