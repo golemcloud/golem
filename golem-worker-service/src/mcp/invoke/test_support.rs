@@ -635,6 +635,7 @@ impl WorkerClient for RecordingWorkerClient {
             .get(agent_id)
             .cloned()
             .map(|metadata| ExistingAgent {
+                state_oplog_index: metadata.last_oplog_index,
                 metadata,
                 component_id: self.component_id,
             })

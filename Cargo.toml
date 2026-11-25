@@ -132,6 +132,7 @@ derive_more = { version = "2.0.1", features = ["display", "into", "from_str"] }
 desert_rust = { version = "0.1.11", features = ["bigdecimal", "uuid", "chrono", "nonempty-collections", "serde-json", "bit-vec", "url", "mac_address", "im"] }
 dir-diff = "0.3.3"
 dirs = "6.0.0"
+docker_credential = "1.4.0"
 dotenvy = "0.15.7"
 etcd-client = { git = "https://github.com/golemcloud/etcd-client", rev = "1a3789dedac7e3d21982dfc6b612b1834f53df26", features = ["tls"] }
 evicting_cache_map = "0.4.0"
@@ -212,6 +213,8 @@ nonzero_ext = "0.3.0"
 num-bigint = "0.4"
 num-traits = "0.2.19"
 oauth2 = { version = "5.0.0", default-features = false }
+oci-client = "0.16.1"
+oci-spec = "0.9.0"
 once_cell = "1.21.0"
 openapiv3 = "=2.0.0"
 openidconnect = "4.0.1"
@@ -348,7 +351,7 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.251.0"
 wasm-metadata = { version = "0.251.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.5.4", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { version = "0.5.5", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.251"
 wasmparser = "0.251.0"
 wasmprinter = "0.251.0"

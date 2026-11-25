@@ -4958,10 +4958,16 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
     state
         .validate_response(&accepted)
         .map_err(anyhow::Error::msg)?;
-    assert!(matches!(
-        accepted.response,
-        Some(invocation_response::Response::Accepted(_))
-    ));
+    let Some(invocation_response::Response::Accepted(accepted)) = accepted.response else {
+        anyhow::bail!("expected held-input acceptance, got {accepted:?}");
+    };
+    // A queued acceptance is followed by readiness when the selected revision starts the method.
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        await_session_readiness(&mut responses, Some(&mut state), accepted),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("held-input invocation did not become ready"))??;
 
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -4990,12 +4996,11 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
     .await
     .map_err(|_| anyhow::anyhow!("hold_input did not reach its method-start marker"))??;
 
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), responses.message())
-            .await
-            .is_err(),
-        "host-wait invocation terminated before interruption"
-    );
+    if let Ok(response) =
+        tokio::time::timeout(Duration::from_millis(100), responses.message()).await
+    {
+        panic!("host-wait invocation terminated before interruption: {response:?}");
+    }
     executor.interrupt(&worker_agent_id).await?;
     assert_interrupted_transport_closed(&mut responses, &mut state).await?;
     assert_eq!(

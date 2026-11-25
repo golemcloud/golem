@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use golem_common::model::caller::Caller;
-use uuid::Uuid;
 
 use golem_common::model::InvocationId;
 
@@ -415,6 +414,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             self.ensure_matching_invocation_payload(
                 &Self::require_idempotency_key(&invocation)?,
                 &invocation.clone().into_parts().1,
+                None,
             )
             .await?;
         }
@@ -719,6 +719,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             self.ensure_matching_invocation_payload(
                                 &idempotency_key,
                                 &invocation.clone().into_parts().1,
+                                None,
                             )
                             .await?;
                             Ok(entry)
@@ -972,27 +973,79 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let key = Self::require_idempotency_key(invocation)?;
         let result = self.try_lookup_invocation_result(&key).await?;
         if result != LookupResult::New {
-            self.ensure_matching_invocation_payload(&key, &invocation.clone().into_parts().1)
-                .await?;
+            self.ensure_matching_invocation_payload(
+                &key,
+                &invocation.clone().into_parts().1,
+                result.recorded_revision(),
+            )
+            .await?;
         }
         Ok(result)
     }
 
+    /// Refuses a repeated request that differs from the accepted one. `recorded_revision` is the
+    /// component revision that recorded the invocation's result, when it has one: a repeated
+    /// external REST request can then observe a result accepted in another representation if
+    /// that revision's result type holds no host-managed capability.
     async fn ensure_matching_invocation_payload(
         &self,
         key: &InvocationId,
         request: &AgentInvocationPayload,
+        recorded_revision: Option<ComponentRevision>,
     ) -> Result<(), WorkerExecutorError> {
-        if let Some(accepted) = self.accepted_invocation_payload(key).await?
-            && !accepted.same_caller_request_decoding(request, |input| {
-                self.decode_scalar_method_input(request, input)
-            })
-        {
-            return Err(WorkerExecutorError::invalid_request(
-                "IdempotencyConflict: invocation identity was already accepted with a different request",
-            ));
+        let Some(accepted) = self.accepted_invocation_payload(key).await? else {
+            return Ok(());
+        };
+        let decode = |input: &golem_common::model::agent::AgentMethodInput| {
+            self.decode_scalar_method_input(request, input)
+        };
+        if accepted.same_caller_request_decoding(request, decode, false) {
+            return Ok(());
         }
-        Ok(())
+        if let Some(revision) = recorded_revision
+            && self
+                .method_result_admits_external_rest(request, revision)
+                .await?
+            && accepted.same_caller_request_decoding(request, decode, true)
+        {
+            return Ok(());
+        }
+        Err(WorkerExecutorError::invalid_request(
+            "IdempotencyConflict: invocation identity was already accepted with a different request",
+        ))
+    }
+
+    /// Whether the result type of the method of `request` in the component `revision` holds no
+    /// host-managed capability, so that an external REST request can receive its result.
+    async fn method_result_admits_external_rest(
+        &self,
+        request: &AgentInvocationPayload,
+        revision: ComponentRevision,
+    ) -> Result<bool, WorkerExecutorError> {
+        let AgentInvocationPayload::AgentMethod { method_name, .. } = request else {
+            return Ok(false);
+        };
+        let Some(agent_type) = self.parsed_agent_id.as_ref().map(|id| &id.agent_type) else {
+            return Ok(false);
+        };
+        let component = self
+            .component_service()
+            .get_metadata(self.initial_worker_metadata.component_id, Some(revision))
+            .await?;
+        let Some(agent_type) = component.metadata.find_agent_type_by_name_ref(agent_type) else {
+            return Ok(false);
+        };
+        let Some(method) = agent_type
+            .methods
+            .iter()
+            .find(|method| method.name == *method_name)
+        else {
+            return Ok(false);
+        };
+        Ok(method.output_schema.schema().is_none_or(|output| {
+            golem_schema::schema::host_managed::find_host_managed_type(&agent_type.schema, output)
+                .is_ok_and(|occurrence| occurrence.is_none())
+        }))
     }
 
     /// Decodes a stream-free method input of `request` with the executing component's schema,
@@ -1067,14 +1120,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .any(|pending| pending.is_due(now))
     }
 
-    /// Reserved constructor key, also used to recognize initialization before inspecting files.
-    /// Uses the request-key root namespace so constructor-derived child keys keep their identity.
-    pub(in crate::worker) fn initialization_idempotency_key(&self) -> InvocationId {
-        InvocationId(Uuid::new_v5(
-            &uuid::uuid!("9c19b15a-c83d-46f7-9bc3-ead7923733f4"),
-            format!("init-{}", self.agent_id()).as_bytes(),
-        ))
-    }
     /// Reads the `PendingAgentInvocation` oplog entry referenced by `pending` and reconstructs the
     /// full invocation, downloading its payload from external storage if needed. The status record
     /// only keeps a lightweight reference, so callers that need to execute the invocation hydrate
@@ -1258,11 +1303,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
 
             if let Some(idempotency_key) = invocation.idempotency_key()
-                && self.lookup_invocation_result(idempotency_key).await != LookupResult::New
+                && let recorded = self.lookup_invocation_result(idempotency_key).await
+                && recorded != LookupResult::New
             {
                 self.ensure_matching_invocation_payload(
                     idempotency_key,
                     &invocation.clone().into_parts().1,
+                    recorded.recorded_revision(),
                 )
                 .await?;
                 if let Some(attachment) = &attachment {
@@ -1296,11 +1343,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 drop(caller_instance_guard.take());
                 loop {
                     let status = self.state_actor.try_status().await?;
-                    if self.try_lookup_invocation_result(idempotency_key).await?
-                        != LookupResult::New
-                    {
-                        self.ensure_matching_invocation_payload(idempotency_key, &caller_payload)
-                            .await?;
+                    let recorded = self.try_lookup_invocation_result(idempotency_key).await?;
+                    if recorded != LookupResult::New {
+                        self.ensure_matching_invocation_payload(
+                            idempotency_key,
+                            &caller_payload,
+                            recorded.recorded_revision(),
+                        )
+                        .await?;
                         if let Some(attachment) = &attachment {
                             self.ensure_matching_stream_attachment(attachment).await?;
                         }
@@ -1551,7 +1601,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let status = self.state_actor.try_status().await?;
         if super::invocation_loop::ephemeral_inspection_may_start(
             &status,
-            &self.initialization_idempotency_key(),
+            &InvocationId::constructor(self.initial_worker_metadata.fingerprint),
             Timestamp::now_utc(),
         ) {
             Ok(())

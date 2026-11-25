@@ -1562,6 +1562,95 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
     Ok(())
 }
 
+/// A same-key external REST retry by ID observes a stream-free result that a public session
+/// recorded. Whether the result may cross the REST boundary comes from the component revision
+/// that recorded it, so it still holds after a deployment removes the agent type and the agent
+/// is reconstructed.
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn rest_retry_of_a_session_result_uses_the_recorded_revision(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::{
+        AgentInvocationMode, InvocationFreshnessDisposition,
+    };
+    use golem_common::model::agent::{AgentMethodInput, NativeMethodInput};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agent = agent_key!("RustMethodFailure", "rest-retry-recorded-revision");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    let key = IdempotencyKey::fresh();
+    let start_for = |executor: &TestWorkerExecutor,
+                     target: golem_api_grpc::proto::golem::worker::AgentTarget|
+     -> anyhow::Result<InvocationStart> {
+        let (_, input) = data_value!().into_parts();
+        Ok(InvocationStart {
+            target: Some(target),
+            component_id: Some(component.id.into()),
+            method_name: Some("increment".to_string()),
+            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+            mode: AgentInvocationMode::Await as i32,
+            idempotency_key: Some(key.clone().into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
+            request_key: Some(
+                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
+                    .into(),
+            ),
+            caller: Some(callers::anonymous().into()),
+            ..Default::default()
+        })
+    };
+    let rest_retry = async |executor: &TestWorkerExecutor| -> anyhow::Result<_> {
+        let mut start = start_for(executor, id_target(&worker))?;
+        let (native, _) =
+            NativeMethodInput::capture(start.input.take().expect("input"), Vec::new())
+                .map_err(anyhow::Error::msg)?;
+        start.captured_method_input = Some(
+            golem_common::serialization::serialize(&AgentMethodInput::Native(
+                native.for_external_rest(),
+            ))
+            .map_err(anyhow::Error::msg)?,
+        );
+        Ok(executor.invoke_agent_session(start).await?.result)
+    };
+
+    let mut session = start_for(&executor, key_target(&agent)?)?;
+    session.allow_streams = true;
+    session.attempt_id = Some(uuid::Uuid::new_v4().into());
+    let recorded = executor.invoke_agent_session(session).await?.result;
+    assert!(recorded.is_some());
+    assert_eq!(rest_retry(&executor).await?, recorded);
+
+    // The latest revision has no `RustMethodFailure` type.
+    executor
+        .update_component(&component.id, &agent_counters.wasm_name)
+        .await?;
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    assert_eq!(rest_retry(&executor).await?, recorded);
+    assert_eq!(
+        executor
+            .get_worker_metadata(&worker)
+            .await?
+            .component_revision,
+        ComponentRevision::INITIAL
+    );
+    Ok(())
+}
+
 fn files_below(root: &Path) -> anyhow::Result<HashSet<PathBuf>> {
     fn visit(root: &Path, current: &Path, files: &mut HashSet<PathBuf>) -> anyhow::Result<()> {
         if !current.exists() {

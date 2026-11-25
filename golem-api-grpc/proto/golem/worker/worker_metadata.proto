@@ -56,8 +56,11 @@ message AgentMetadata {
   optional string constructor_parameters = 26;
   // The folded status underneath `status`. Set only when `status` is SANDBOXED.
   optional AgentStatus underlying_status = 27;
+  // The index of the latest entry other than an invocation settlement. Read-only HTTP
+  // validators name it; the public agent metadata has no such index.
+  uint64 state_oplog_idx = 28;
   // How the agent came to exist.
-  AgentOrigin origin = 28;
+  AgentOrigin origin = 29;
 }
 
 enum AgentOrigin {
