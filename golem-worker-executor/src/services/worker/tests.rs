@@ -487,6 +487,7 @@ async fn get_recovers_non_agent_external_tool_owner() {
     let create = OplogEntry::Create {
         timestamp: Timestamp::now_utc(),
         parameters: Box::new(golem_common::model::oplog::CreateParameters {
+            standalone_tool: None,
             agent_id,
             component_id,
             agent_type_name: None,
@@ -2799,6 +2800,7 @@ fn test_create_entry(
     fingerprint: AgentFingerprint,
 ) -> OplogEntry {
     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+        standalone_tool: None,
         agent_id: owned_agent_id.agent_id,
         component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
         agent_type_name: None,

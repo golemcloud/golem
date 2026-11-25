@@ -2586,10 +2586,24 @@ impl Streaming for StreamingImpl {
                 .expect("append native declared-error invocation order");
             return Err(StreamingError::Declared { bytes_read: 0 });
         }
-        if value == "native-order" {
+        if value == "standalone-before-effect" {
+            wait_at_crash_checkpoint(&value, "standalone-before-effect").await;
+        }
+        if value == "standalone-promise" {
+            wait_at_promise_checkpoint("standalone-promise").await;
+        }
+        if value == "native-order"
+            || value == "standalone-before-effect"
+            || value == "standalone-after-effect"
+            || value == "standalone-promise"
+            || value == "standalone-held-effect"
+        {
             record_native_order_external_effect().await;
             append_owner_file("/native-tool-order.log", b"T")
                 .expect("append native external tool invocation order");
+        }
+        if value == "standalone-after-effect" {
+            wait_at_crash_checkpoint(&value, "standalone-after-effect").await;
         }
         Ok(format!("no-stream:{value}"))
     }

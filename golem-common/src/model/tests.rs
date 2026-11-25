@@ -1569,6 +1569,7 @@ fn worker_filter_combination() {
 fn worker_filter_matches() {
     let component_id = ComponentId::new();
     let worker_metadata = AgentMetadata {
+        standalone_tool: None,
         owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         component_id,
         agent_type_name: Some(AgentTypeName("Worker".to_string())),
@@ -1781,6 +1782,7 @@ fn worker_filter_matches() {
 fn sandbox_metadata(never_live: bool, status: AgentStatus) -> AgentMetadata {
     let component_id = ComponentId(uuid!("15d70aa5-2e23-4ee3-b65c-4e1d702836a3"));
     AgentMetadata {
+        standalone_tool: None,
         component_id,
         agent_type_name: None,
         canonical_key: None,

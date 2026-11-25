@@ -157,6 +157,7 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
             AgentMode::Durable,
             stage_id,
             AgentMetadata {
+                standalone_tool: None,
                 agent_id: target.agent_id,
                 component_id: ComponentId(Uuid::from_u128(2)),
                 agent_type_name: None,
@@ -187,6 +188,7 @@ async fn published_fork_reconciles_after_advancing_but_never_matches_another_req
     stage
         .add(OplogEntry::create(Box::new(
             golem_common::model::oplog::CreateParameters {
+                standalone_tool: None,
                 agent_id: target.agent_id,
                 component_id: ComponentId(Uuid::from_u128(2)),
                 agent_type_name: None,

@@ -1053,6 +1053,7 @@ impl Walker<'_, '_> {
                 local_agent_config,
                 instance_id,
                 never_live,
+                standalone_tool,
             }) => Fields::new()
                 .add(
                     "agentId",
@@ -1112,6 +1113,20 @@ impl Walker<'_, '_> {
                 )
                 .add("instanceId", text(instance_id.to_string()))
                 .add("neverLive", self.boolean(*never_live))
+                .opt(
+                    "standaloneTool",
+                    standalone_tool.as_ref().map(|tool| {
+                        Fields::new()
+                            .add(
+                                "toolName",
+                                self.str_leaf(tool.tool_name.as_str(), Region::Customer),
+                            )
+                            .add("commandPath", self.tok(&tool.command_path))
+                            .add("invocationId", self.tok(&tool.invocation_id))
+                            .add("caller", self.caller(&tool.caller))
+                            .build()
+                    }),
+                )
                 .build(),
             PublicOplogEntry::Start(StartParams {
                 timestamp: _,

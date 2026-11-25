@@ -400,6 +400,7 @@ fn test_agent_metadata() -> golem_common::model::AgentMetadata {
         constructor_parameters: None,
         fingerprint: AgentFingerprint::new(),
         agent_mode: AgentMode::Durable,
+        standalone_tool: None,
         create_request: CreateRequest::new(
             CreateRequestKind::GetOrCreate,
             None,

@@ -538,6 +538,7 @@ fn restart_sets_ephemeral_execution_begun_permanently() {
 fn create_with_mark(never_live: bool) -> OplogEntry {
     let component_id = ComponentId::new();
     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+        standalone_tool: None,
         agent_id: AgentId::from_parts(7, 1),
         component_id,
         agent_type_name: None,
@@ -1373,6 +1374,7 @@ async fn exhausted_semantic_retry_state_marks_status_failed() {
             ),
             move |mut status, timestamp| {
                 status.status = AgentStatus::Failed;
+                status.terminal_failure_at = Some(timestamp);
                 status.last_error_kind = Some(OplogErrorKind::Invocation);
                 status.current_retry_state.insert(retry_from, retry_state);
                 expect_ended(
@@ -1638,6 +1640,7 @@ fn recovery_success_in_deleted_region_must_not_clear_failure() {
         &DeletedRegions::default(),
         &deleted_regions,
         &entries,
+        &mut None,
     );
 
     assert_eq!(status, AgentStatus::Failed);
@@ -1698,6 +1701,7 @@ fn recovery_success_preserves_retry_state_from_skipped_region() {
         &skipped_regions,
         &DeletedRegions::default(),
         &entries,
+        &mut None,
     );
 
     assert_eq!(
@@ -1772,6 +1776,7 @@ fn retry_deadline_belongs_to_the_waiting_call_until_its_terminal() {
         &DeletedRegions::default(),
         &DeletedRegions::default(),
         &entries,
+        &mut None,
     );
 
     assert_eq!(
@@ -1812,6 +1817,7 @@ fn repeated_infrastructure_recovery_failures_do_not_consume_invocation_retry_sta
             &DeletedRegions::default(),
             &DeletedRegions::default(),
             &entries,
+            &mut None,
         );
 
         assert_eq!(status, AgentStatus::Retrying);
@@ -1830,7 +1836,7 @@ async fn invocation_failure_is_classified_separately_from_recovery_failure() {
     let idempotency_key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(1);
     let test_case = TestCase::builder(0)
-        .add(
+        .add_at(
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
@@ -1841,8 +1847,9 @@ async fn invocation_failure_is_classified_separately_from_recovery_failure() {
                 None,
                 None,
             ),
-            move |mut status| {
+            move |mut status, timestamp| {
                 status.status = AgentStatus::Failed;
+                status.terminal_failure_at = Some(timestamp);
                 status.last_error_kind = Some(OplogErrorKind::Invocation);
                 status
                     .current_retry_state
@@ -1863,7 +1870,7 @@ async fn recovery_errors_are_not_treated_as_invocation_rejections() {
         AgentError::InvalidRequest("invalid startup".to_string()),
     ] {
         let test_case = TestCase::builder(0)
-            .add(
+            .add_at(
                 OplogEntry::error(
                     None,
                     OplogErrorKind::Recovery,
@@ -1874,8 +1881,9 @@ async fn recovery_errors_are_not_treated_as_invocation_rejections() {
                     None,
                     None,
                 ),
-                move |mut status| {
+                move |mut status, timestamp| {
                     status.status = AgentStatus::Failed;
+                    status.terminal_failure_at = Some(timestamp);
                     status.last_error_kind = Some(OplogErrorKind::Recovery);
                     status
                         .current_retry_state
@@ -1973,6 +1981,7 @@ fn invocation_local_failure_does_not_hide_unresolved_recovery_or_preserve_retry_
             &DeletedRegions::default(),
             &DeletedRegions::default(),
             &entries,
+            &mut None,
         );
         if recovery {
             assert_eq!(status, AgentStatus::Retrying);
@@ -2066,6 +2075,7 @@ async fn background_work_after_invocation_result_runs_until_settled() {
             &DeletedRegions::default(),
             &DeletedRegions::default(),
             &entries,
+            &mut None,
         )
         .0
     };
@@ -2100,6 +2110,7 @@ fn an_unsettled_result_keeps_the_agent_running_through_lifecycle_hints_until_it_
             &DeletedRegions::default(),
             &DeletedRegions::default(),
             &entries,
+            &mut None,
         );
         (status, settling)
     };
@@ -2174,6 +2185,7 @@ fn settled_clears_an_invocation_retry_but_not_an_unresolved_recovery() {
             &DeletedRegions::default(),
             &DeletedRegions::default(),
             &entries,
+            &mut None,
         );
         if recovery {
             assert_eq!(status, AgentStatus::Retrying);
@@ -5818,6 +5830,7 @@ impl TestCaseBuilder {
             entries: vec![TestEntry {
                 oplog_entry: OplogEntry::create(Box::new(
                     golem_common::model::oplog::CreateParameters {
+                        standalone_tool: None,
                         agent_id: owned_agent_id.agent_id(),
                         component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
                         agent_type_name: None,

@@ -76,6 +76,7 @@ fn component_id() -> ComponentId {
 
 fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry {
     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+        standalone_tool: None,
         agent_id: *agent_id,
         component_id: component_id(),
         agent_type_name: None,
@@ -848,6 +849,7 @@ fn deep_layers(compressed_levels: usize) -> Layers {
 
 fn metadata(agent_id: &AgentId, environment_id: EnvironmentId) -> AgentMetadata {
     AgentMetadata {
+        standalone_tool: None,
         agent_id: *agent_id,
         component_id: component_id(),
         agent_type_name: None,

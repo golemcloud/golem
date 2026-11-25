@@ -119,6 +119,7 @@ mod rdbms_drop;
 mod rust_sdk_gol40_conformance;
 mod sdk_child_process_tools;
 mod snapshot_attachments;
+mod standalone_middleware;
 mod tool_result_delivery;
 mod trapped_leaf_observers;
 
@@ -2313,7 +2314,18 @@ async fn start_idempotency_effect_server() -> (
     (port, task, attempt_rx, keys, effects)
 }
 
-async fn start_native_order_http_server() -> (u16, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
+#[derive(Default)]
+struct NativeOrderEffectGate {
+    hold_next: std::sync::atomic::AtomicBool,
+    attempts: AtomicUsize,
+    arrived: tokio::sync::Notify,
+    release: tokio::sync::Notify,
+    keys: std::sync::Mutex<std::collections::HashSet<String>>,
+}
+
+async fn start_native_order_http_server(
+    gate: Option<Arc<NativeOrderEffectGate>>,
+) -> (u16, tokio::task::JoinHandle<()>, Arc<AtomicUsize>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
         .await
         .expect("bind native-order HTTP server");
@@ -2325,10 +2337,28 @@ async fn start_native_order_http_server() -> (u16, tokio::task::JoinHandle<()>, 
     let route_requests = requests.clone();
     let app = Router::new().route(
         "/",
-        post(move || {
+        post(move |headers: axum::http::HeaderMap| {
             let requests = route_requests.clone();
+            let gate = gate.clone();
             async move {
-                requests.fetch_add(1, Ordering::SeqCst);
+                if let Some(gate) = gate {
+                    gate.attempts.fetch_add(1, Ordering::SeqCst);
+                    let key = headers
+                        .get("idempotency-key")
+                        .expect("durable HTTP effect has a key")
+                        .to_str()
+                        .unwrap()
+                        .to_string();
+                    if gate.keys.lock().unwrap().insert(key) {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                    }
+                    if gate.hold_next.swap(false, Ordering::SeqCst) {
+                        gate.arrived.notify_one();
+                        gate.release.notified().await;
+                    }
+                } else {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                }
                 axum::http::StatusCode::NO_CONTENT
             }
         }),
@@ -16327,21 +16357,26 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     };
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state.clone()),
-            ..Default::default()
-        },
-    )
-    .await?;
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        wrap_component_service: Some(Arc::new(|inner| {
+            Arc::new(BaselineOwnerComponentService {
+                inner,
+                owner_loads: Default::default(),
+                http_port: 0,
+                extra_env: Default::default(),
+            })
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
         .store()
         .await?;
     let caller_component = executor
         .component_dep(&context.default_environment_id, caller)
+        .name("virtual-native-policy")
         .store()
         .await?;
     let metadata = extract_component_metadata(
@@ -16366,20 +16401,43 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
             .unwrap()
             .filesystem_access = ToolFilesystemAccess::Allowed;
     }
+    let tool_type_id =
+        deployment.registered_tools[&ToolName::try_from("streaming").unwrap()].type_id;
+    let mut bindings = deployment
+        .tool_bindings
+        .remove(&ToolBindingOwner::AgentType {
+            agent_type_name: AgentTypeName("ToolStreamingCaller".into()),
+        })
+        .unwrap();
+    let baseline = ToolBindingOwner::ComponentBaseline {
+        component_id: caller_component.id,
+    };
+    for binding in bindings.values_mut() {
+        binding.owner = baseline.clone();
+    }
+    deployment.tool_bindings.insert(baseline, bindings);
     environment_state.set_tool_deployment(
         context.default_environment_id,
         caller_component.id,
         caller_component.revision,
         Some(deployment),
     );
-    let worker_id = executor
-        .start_agent(
-            &caller_component.id,
-            agent_key!("ToolStreamingCaller", "native-session"),
-        )
-        .await?;
-    let metadata = executor.get_worker_metadata(&worker_id).await?;
     let key = IdempotencyKey::fresh();
+    let invocation_id = golem_common::model::StandaloneToolInvocation::unique_part(
+        context.default_environment_id,
+        &ToolName::try_from("streaming").unwrap(),
+        executor.auth_ctx().idempotency_scope(),
+        "run",
+        Some(&key),
+    );
+    let worker_id = OwnedAgentId::new(
+        context.default_environment_id,
+        &golem_common::model::AgentId::standalone_tool_invocation(
+            context.default_environment_id,
+            tool_type_id,
+            invocation_id,
+        ),
+    );
     let input = TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::record(vec![
             golem_common::schema::NamedFieldType {
@@ -16396,12 +16454,12 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     let start_request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
             target: Some(crate::agent::id_target(&worker_id)),
-            idempotency_key: Some(key.clone().into()),
+            component_id: Some(caller_component.id.into()),
+            idempotency_key: Some(IdempotencyKey::new(invocation_id.to_string()).into()),
             auth_ctx: Some(executor.auth_ctx().into()),
             caller: Some(callers::account(context.account_id).into()),
             environment_id: Some(context.default_environment_id.into()),
             component_owner_account_id: Some(context.account_id.into()),
-            expected_callee_fingerprint: Some(metadata.fingerprint.0.into()),
             attempt_id: Some(uuid::Uuid::new_v4().into()),
             external_tool: Some(ExternalToolInvocation {
                 tool_name: "streaming".to_string(),
@@ -16410,7 +16468,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
                 stdin: true,
                 stdout: true,
                 stderr: false,
-                fresh_owner: false,
+                fresh_owner: true,
                 expected_deployment_revision: None,
             }),
             request_key: Some(
@@ -16501,7 +16559,10 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
         "{rejected:?}"
     );
 
-    // Take over while the result is still blocked on stdin, resuming after the marker.
+    // Lose the Store and the transport after the committed marker. Reattach by its offset,
+    // not by replaying the already-observed bytes into the client.
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let Some(invocation_request::Request::Start(start)) = start_request.request else {
         unreachable!()
     };
@@ -16514,7 +16575,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
                 environment_id: start.environment_id,
                 attachment_id: accepted.attachment_id,
                 attempt_id: Some(uuid::Uuid::new_v4().into()),
-                expected_callee_fingerprint: start.expected_callee_fingerprint,
+                expected_callee_fingerprint: accepted.callee_fingerprint,
                 expected_epoch: accepted.epoch,
                 operation: ResumeOperation::Takeover as i32,
                 cursors: vec![stdout_cursor.unwrap()],
@@ -16651,15 +16712,7 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
         caller_component.revision,
         None,
     );
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            environment_state_service: Some(environment_state),
-            ..Default::default()
-        },
-    )
-    .await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
     let (completed_sender, completed_receiver) = tokio::sync::mpsc::channel(1);
     completed_sender
         .send(InvocationRequest {
@@ -16732,16 +16785,25 @@ async fn native_external_tool_session_delivers_stdout_before_input_eof(
     }
     assert!(completed_result && completed_finished);
     drop(completed_sender);
-    let after: String = executor
-        .invoke_and_await_agent(
-            &caller_component,
-            &agent_key!("ToolStreamingCaller", "native-session"),
-            "record_native_order",
-            data_value!("R"),
-        )
-        .await?
-        .into_typed()?;
-    assert_eq!(after, "R");
+    assert_eq!(
+        executor.get_worker_metadata(&worker_id).await?.owner_kind,
+        OwnerKind::StandaloneTool
+    );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+            .count(),
+        1
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .count(),
+        1
+    );
     Ok(())
 }
 
@@ -22753,7 +22815,7 @@ async fn native_external_tool_scalar_admission(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let (native_order_port, _native_order_server, native_order_requests) =
-        start_native_order_http_server().await;
+        start_native_order_http_server(None).await;
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     let overrides = TestExecutorOverrides {
         environment_state_service: Some(environment_state.clone()),
@@ -23091,6 +23153,7 @@ struct BaselineOwnerComponentService {
     inner: Arc<dyn golem_worker_executor::services::component::ComponentService>,
     owner_loads: Arc<AtomicUsize>,
     http_port: u16,
+    extra_env: BTreeMap<String, String>,
 }
 
 #[async_trait::async_trait]
@@ -23113,6 +23176,13 @@ impl golem_worker_executor::services::component::ComponentService
         if metadata.component_name.0 == "virtual-native-policy" {
             self.owner_loads.fetch_add(1, Ordering::SeqCst);
         }
+        if metadata.component_name.0 == "virtual-native-policy-failed" {
+            return Err(
+                golem_service_base::error::worker_executor::WorkerExecutorError::InvalidRequest {
+                    details: "primary instantiation refused".into(),
+                },
+            );
+        }
         let (component, _) = self.inner.get(engine, id, revision).await?;
         Ok((component, self.get_metadata(id, Some(revision)).await?))
     }
@@ -23127,7 +23197,11 @@ impl golem_worker_executor::services::component::ComponentService
     > {
         use golem_common::model::component_metadata::ComponentProvisionConfig;
         let mut component = self.inner.get_metadata(id, revision).await?;
-        if component.component_name.0 == "virtual-native-policy" {
+        if component
+            .component_name
+            .0
+            .starts_with("virtual-native-policy")
+        {
             let permissions = component
                 .metadata
                 .agent_type_provision_configs()
@@ -23145,7 +23219,10 @@ impl golem_worker_executor::services::component::ComponentService
                             self.http_port.to_string(),
                         ),
                         ("FORBID_AGENT_CONSTRUCTION".to_string(), "true".to_string()),
-                    ]),
+                    ])
+                    .into_iter()
+                    .chain(self.extra_env.clone())
+                    .collect(),
                     ..Default::default()
                 },
             );
@@ -23194,7 +23271,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
-    let (http_port, _server, effects) = start_native_order_http_server().await;
+    let (http_port, _server, effects) = start_native_order_http_server(None).await;
     let owner_loads = Arc::new(AtomicUsize::new(0));
     let loads = owner_loads.clone();
     let overrides = TestExecutorOverrides {
@@ -23210,6 +23287,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
                 inner,
                 owner_loads: loads.clone(),
                 http_port,
+                extra_env: Default::default(),
             })
         })),
         ..Default::default()
@@ -23561,9 +23639,7 @@ async fn ephemeral_external_tool_owner_converges_and_uses_component_baseline(
             .await
             .expect_err("automatic update must not interrupt a virtual owner's invocation");
         assert!(
-            update_error
-                .to_string()
-                .contains("update is not supported for an external tool owner"),
+            update_error.to_string().contains("NotAnAgent"),
             "unexpected update rejection: {update_error}"
         );
         assert!(

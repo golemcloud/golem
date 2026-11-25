@@ -71,7 +71,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             };
             let resolved = self.resolve_request_target(&lookup).await?;
             let (worker, _response_lease) = self
-                .get_or_create_pending_for_lookup(&lookup, &resolved, None)
+                .get_or_create_pending_for_lookup(
+                    &lookup,
+                    &resolved,
+                    Some(attempt.session_key.callee_fingerprint),
+                )
                 .await?
                 .ok_or_else(|| {
                     WorkerExecutorError::invalid_request(

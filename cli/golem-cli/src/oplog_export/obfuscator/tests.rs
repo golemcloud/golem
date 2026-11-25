@@ -4241,6 +4241,7 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
                 value: marker_value(),
             }],
             instance_id: Uuid::from_u128(0xF1F2),
+            standalone_tool: None,
             never_live: false,
         }),
         PublicOplogEntry::Start(StartParams {

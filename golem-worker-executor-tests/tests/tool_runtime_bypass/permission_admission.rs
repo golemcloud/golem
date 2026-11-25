@@ -1267,6 +1267,16 @@ struct LostInvocationWake {
 
 #[async_trait]
 impl SchedulerStorage for LostInvocationWake {
+    async fn reschedule(
+        &self,
+        id: &ScheduleId,
+        owner: uuid::Uuid,
+        due: DateTime<Utc>,
+        now: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.reschedule(id, owner, due, now).await
+    }
+
     async fn insert(
         &self,
         id: ScheduleId,
@@ -1291,6 +1301,20 @@ impl SchedulerStorage for LostInvocationWake {
 
     async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
         self.inner.cancel(id).await
+    }
+
+    async fn get_action(&self, id: &ScheduleId) -> Result<Option<Vec<u8>>, SchedulerStorageError> {
+        self.inner.get_action(id).await
+    }
+
+    async fn replace_action(
+        &self,
+        id: &ScheduleId,
+        expected: &[u8],
+        action: &[u8],
+        due: DateTime<Utc>,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.replace_action(id, expected, action, due).await
     }
 
     async fn claim_due(

@@ -95,7 +95,7 @@ pub enum AgentTarget {
 #[derive(Debug, Clone, PartialEq)]
 pub enum ResolvedOwnerContext {
     Agent(Box<ParsedAgentKey>),
-    /// An ephemeral external-tool owner using component-level policy without constructing an agent.
+    /// An external-tool owner using component-level policy without constructing an agent.
     ComponentBaseline,
     OplogProcessor,
 }
@@ -116,7 +116,9 @@ impl ResolvedOwnerContext {
                 .map(Self::Agent)
                 .ok_or_else(|| "A component agent has no agent type".to_string()),
             OwnerKind::ComponentAgent => Err("Component declares no agent types".to_string()),
-            OwnerKind::EphemeralExternalTool => Ok(Self::ComponentBaseline),
+            OwnerKind::EphemeralExternalTool | OwnerKind::StandaloneTool => {
+                Ok(Self::ComponentBaseline)
+            }
             OwnerKind::OplogProcessor if metadata.has_oplog_processor() => Ok(Self::OplogProcessor),
             OwnerKind::OplogProcessor => {
                 Err("Component declares no oplog processor export".to_string())

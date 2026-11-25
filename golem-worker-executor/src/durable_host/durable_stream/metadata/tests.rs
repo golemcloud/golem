@@ -101,6 +101,7 @@ impl Fixture {
         };
         let account = AccountId::new();
         let metadata = AgentMetadata {
+            standalone_tool: None,
             owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
             agent_id: identity.agent_id,
             component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
@@ -125,6 +126,7 @@ impl Fixture {
             ),
         };
         let create = OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+            standalone_tool: None,
             agent_id: identity.agent_id,
             component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
             agent_type_name: None,

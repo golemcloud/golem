@@ -1328,6 +1328,7 @@ pub fn is_worker_execution_error(
 
 pub fn worker_error_message(error: &WorkerExecutorError) -> String {
     match error {
+        WorkerExecutorError::NotAnAgent { agent_id } => format!("Not an agent: {agent_id}"),
         WorkerExecutorError::InvalidRequest { details } => details.clone(),
         WorkerExecutorError::PermissionDenied { details } => details.clone(),
         WorkerExecutorError::OplogFenced {

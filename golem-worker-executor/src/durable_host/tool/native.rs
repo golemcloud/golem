@@ -709,10 +709,12 @@ impl NativeToolTask {
                         }
                         stdin => stdin,
                     };
-                    spawn_tool_execution(accessor, *accepted, stdout, stderr)
+                    let execution =
+                        spawn_tool_execution(accessor, *accepted, stdout, stderr).await?;
+                    super::execution::await_tool_invoke_plans(accessor, vec![execution.get_plan()])
                         .await?
-                        .result()
-                        .await?
+                        .pop()
+                        .expect("one tool execution has one result")
                 }
             };
             Ok::<_, anyhow::Error>(response)

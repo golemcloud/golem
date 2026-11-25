@@ -9912,6 +9912,16 @@ async fn owner_load_restores_lost_invocation_wake(
 
     #[async_trait]
     impl SchedulerStorage for LoseFirstWake {
+        async fn reschedule(
+            &self,
+            id: &ScheduleId,
+            owner: uuid::Uuid,
+            due: chrono::DateTime<Utc>,
+            now: chrono::DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.reschedule(id, owner, due, now).await
+        }
+
         async fn insert(
             &self,
             id: ScheduleId,
@@ -9931,6 +9941,23 @@ async fn owner_load_restores_lost_invocation_wake(
 
         async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
             self.inner.cancel(id).await
+        }
+
+        async fn get_action(
+            &self,
+            id: &ScheduleId,
+        ) -> Result<Option<Vec<u8>>, SchedulerStorageError> {
+            self.inner.get_action(id).await
+        }
+
+        async fn replace_action(
+            &self,
+            id: &ScheduleId,
+            expected: &[u8],
+            action: &[u8],
+            due: DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.replace_action(id, expected, action, due).await
         }
 
         async fn claim_due(
@@ -13077,6 +13104,16 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
 
     #[async_trait]
     impl SchedulerStorage for WakeAfterArming {
+        async fn reschedule(
+            &self,
+            id: &ScheduleId,
+            owner: uuid::Uuid,
+            due: chrono::DateTime<Utc>,
+            now: chrono::DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.reschedule(id, owner, due, now).await
+        }
+
         async fn insert(
             &self,
             id: ScheduleId,
@@ -13089,6 +13126,23 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
 
         async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
             self.inner.cancel(id).await
+        }
+
+        async fn get_action(
+            &self,
+            id: &ScheduleId,
+        ) -> Result<Option<Vec<u8>>, SchedulerStorageError> {
+            self.inner.get_action(id).await
+        }
+
+        async fn replace_action(
+            &self,
+            id: &ScheduleId,
+            expected: &[u8],
+            action: &[u8],
+            due: DateTime<Utc>,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.replace_action(id, expected, action, due).await
         }
 
         async fn claim_due(

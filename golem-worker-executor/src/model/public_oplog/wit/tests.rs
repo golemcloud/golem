@@ -894,6 +894,7 @@ fn raw_create_conversions_flatten_parameters_without_swapping_fields() {
         let entry = OplogEntry::Create {
             timestamp: Timestamp::from(1_700_000_123_456),
             parameters: Box::new(CreateParameters {
+                standalone_tool: None,
                 component_id: ComponentId::new(),
                 agent_type_name: None,
                 canonical_key: None,
@@ -1374,6 +1375,7 @@ fn create_agent_config_rejection_drops_owned_stream_and_handles() {
     let entry = OplogEntry::Create {
         timestamp: Timestamp::from(1_000),
         parameters: Box::new(CreateParameters {
+            standalone_tool: None,
             component_id: ComponentId::new(),
             agent_type_name: None,
             canonical_key: None,

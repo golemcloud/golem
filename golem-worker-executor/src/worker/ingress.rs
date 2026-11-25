@@ -383,6 +383,29 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }
         };
+        if self.initial_worker_metadata.owner_kind == OwnerKind::StandaloneTool {
+            let accepted = self
+                .initial_worker_metadata
+                .standalone_tool
+                .as_ref()
+                .ok_or_else(|| WorkerExecutorError::runtime("standalone owner has no identity"))?;
+            if !matches!(
+                activation.registered_tool.source,
+                golem_common::model::tool::ToolSource::Component { .. }
+            ) {
+                return Err(WorkerExecutorError::invalid_request(
+                    "standalone durable owners require a component tool",
+                ));
+            }
+            if accepted.invocation_id != idempotency_key
+                || accepted.tool_name != tool_name
+                || accepted.command_path != command_path
+            {
+                return Err(WorkerExecutorError::CreateIdempotencyKeyConflict {
+                    agent_id: self.owned_agent_id.agent_id,
+                });
+            }
+        }
         if !already_accepted {
             require_expected_tool_deployment_revision(
                 expected_deployment_revision,
@@ -1022,6 +1045,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         operation: &str,
     ) -> Result<(), WorkerExecutorError> {
+        if matches!(
+            self.initial_worker_metadata.owner_kind,
+            OwnerKind::StandaloneTool | OwnerKind::EphemeralExternalTool
+        ) {
+            return Err(WorkerExecutorError::NotAnAgent {
+                agent_id: self.agent_id(),
+            });
+        }
         if self.initial_worker_metadata.owner_kind != OwnerKind::ComponentAgent {
             return Err(WorkerExecutorError::invalid_request(format!(
                 "{operation} requires an agent owner"
@@ -1035,6 +1066,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         invocation: &AgentInvocation,
     ) -> Result<(), WorkerExecutorError> {
         let kind = self.initial_worker_metadata.owner_kind;
+        if kind == OwnerKind::StandaloneTool
+            && let AgentInvocation::ExternalTool {
+                idempotency_key,
+                tool_name,
+                command_path,
+                ..
+            } = invocation
+            && !self
+                .initial_worker_metadata
+                .standalone_tool
+                .as_ref()
+                .is_some_and(|accepted| {
+                    accepted.invocation_id == *idempotency_key
+                        && accepted.tool_name == *tool_name
+                        && accepted.command_path == *command_path
+                })
+        {
+            return Err(WorkerExecutorError::CreateIdempotencyKeyConflict {
+                agent_id: self.agent_id(),
+            });
+        }
         let allowed = match invocation {
             AgentInvocation::ProcessOplogEntries { .. } => kind == OwnerKind::OplogProcessor,
             AgentInvocation::AgentInitialization { .. } | AgentInvocation::AgentMethod { .. } => {
@@ -1043,9 +1095,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             AgentInvocation::ExternalTool { .. } => kind != OwnerKind::OplogProcessor,
             AgentInvocation::ManualUpdate { .. }
             | AgentInvocation::LoadSnapshot { .. }
-            | AgentInvocation::SaveSnapshot { .. } => kind != OwnerKind::EphemeralExternalTool,
+            | AgentInvocation::SaveSnapshot { .. } => !matches!(
+                kind,
+                OwnerKind::EphemeralExternalTool | OwnerKind::StandaloneTool
+            ),
         };
         if !allowed {
+            if matches!(
+                kind,
+                OwnerKind::EphemeralExternalTool | OwnerKind::StandaloneTool
+            ) {
+                return Err(WorkerExecutorError::NotAnAgent {
+                    agent_id: self.agent_id(),
+                });
+            }
             return Err(WorkerExecutorError::invalid_request(
                 "invocation is not supported for this execution owner kind",
             ));

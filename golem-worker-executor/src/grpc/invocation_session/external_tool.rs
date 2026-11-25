@@ -65,6 +65,24 @@ where
             &tool.command_path,
         );
         let mode = request.mode();
+        let standalone = tool.fresh_owner && owned.agent_id.type_tag() != RESERVED_TYPE_TAG;
+        let standalone_invocation_id = if standalone {
+            Some(
+                request
+                    .idempotency_key
+                    .as_ref()
+                    .ok_or_else(|| {
+                        WorkerExecutorError::invalid_request(
+                            "a standalone tool owner requires its invocation ID",
+                        )
+                    })?
+                    .value
+                    .parse::<golem_common::model::InvocationId>()
+                    .map_err(|error| WorkerExecutorError::invalid_request(error.to_string()))?,
+            )
+        } else {
+            None
+        };
         let virtual_lookup = mode == Mode::Lookup && owned.agent_id.type_tag() == RESERVED_TYPE_TAG;
         if !tool.fresh_owner && owned.agent_id.type_tag() == RESERVED_TYPE_TAG && !virtual_lookup {
             return Err(WorkerExecutorError::invalid_request(
@@ -216,7 +234,7 @@ where
             .try_into()
             .map_err(WorkerExecutorError::invalid_request)?;
         let owner_key = request_key.owner_key(&operation);
-        if let Some(component_id) = fresh_owner_component
+        if let Some(component_id) = fresh_owner_component.filter(|_| !standalone)
             && owned.agent_id
                 != AgentId::external_tool_owner(owned.environment_id, component_id, &owner_key)
         {
@@ -256,7 +274,87 @@ where
             ));
         }
         let streaming = validate_live_stream_mode(tool, mode, request.schedule_at.is_some())?;
-        if let Some(component_id) = fresh_owner_component
+        if let Some(invocation_id) = standalone_invocation_id {
+            let component_id = fresh_owner_component.expect("fresh standalone owner");
+            let existing = Worker::<Ctx>::get_latest_metadata(self, &owned).await?;
+            if let Some(existing) = existing {
+                let matches = existing.component_id == component_id
+                    && existing.owner_kind == golem_common::model::agent::OwnerKind::StandaloneTool
+                    && existing.standalone_tool.as_ref().is_some_and(|accepted| {
+                        accepted.tool_name.as_str() == tool.tool_name
+                            && accepted.command_path == tool.command_path
+                            && accepted.invocation_id == invocation_id
+                    });
+                if !matches {
+                    return Err(WorkerExecutorError::CreateIdempotencyKeyConflict { agent_id });
+                }
+            } else {
+                let component = self
+                    .component_service()
+                    .get_metadata(component_id, None)
+                    .await?;
+                if component.environment_id != owned.environment_id {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "standalone owner environment does not match the component",
+                    ));
+                }
+                let tool_name: golem_common::model::tool::ToolName = tool
+                    .tool_name
+                    .clone()
+                    .try_into()
+                    .map_err(WorkerExecutorError::invalid_request)?;
+                let deployment = self
+                    .environment_state_service()
+                    .get_live_tool_deployment_state(
+                        owned.environment_id,
+                        component.id,
+                        component.revision,
+                    )
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                    .ok_or_else(|| {
+                        WorkerExecutorError::invalid_request("tool is not registered")
+                    })?;
+                let registered = deployment.registered_tools.get(&tool_name).ok_or_else(|| {
+                    WorkerExecutorError::invalid_request("tool is not registered")
+                })?;
+                if !matches!(
+                    registered.registration.source,
+                    golem_common::model::tool::ToolSource::Component { .. }
+                ) {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "standalone durable owners require a component tool",
+                    ));
+                }
+                if agent_id
+                    != AgentId::standalone_tool_invocation(
+                        owned.environment_id,
+                        registered.type_id,
+                        invocation_id,
+                    )
+                {
+                    return Err(WorkerExecutorError::invalid_request(
+                        "standalone owner identity does not match the invocation",
+                    ));
+                }
+                self.active_agents()
+                    .get_or_add_standalone_tool(
+                        self,
+                        &owned,
+                        component_id,
+                        component.revision,
+                        golem_common::model::oplog::StandaloneToolInvocation {
+                            tool_name,
+                            command_path: tool.command_path.clone(),
+                            invocation_id,
+                            caller: caller.clone(),
+                        },
+                        &context,
+                    )
+                    .await?;
+            }
+        }
+        if let Some(component_id) = fresh_owner_component.filter(|_| !standalone)
             && mode == Mode::Schedule
             && let Some(timestamp) = request.schedule_at.as_ref()
         {
@@ -372,7 +470,7 @@ where
             )?;
             return Ok(response);
         }
-        if let Some(component_id) = fresh_owner_component {
+        if let Some(component_id) = fresh_owner_component.filter(|_| !standalone) {
             self.active_agents()
                 .get_or_add_ephemeral_external_tool(
                     self,
@@ -397,9 +495,11 @@ where
             .deleted_incarnation_as_not_found(expected_fingerprint, bound)
             .await?;
         let metadata = worker.get_latest_worker_metadata().await;
-        let key = request_key
-            .finalize(owned.agent_id, metadata.fingerprint, &operation)
-            .id();
+        let key = standalone_invocation_id.unwrap_or_else(|| {
+            request_key
+                .finalize(owned.agent_id, metadata.fingerprint, &operation)
+                .id()
+        });
         response.idempotency_key = Some(key);
         response.component_revision = Some(metadata.last_known_status.component_revision);
         response.agent_fingerprint = Some(metadata.fingerprint);

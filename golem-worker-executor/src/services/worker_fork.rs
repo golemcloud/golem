@@ -541,27 +541,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
         target_agent_id: &AgentId,
         oplog_index_cut_off: OplogIndex,
     ) -> Result<(OwnedAgentId, OwnedAgentId), WorkerExecutorError> {
-        let second_index = OplogIndex::INITIAL.next();
-
-        if oplog_index_cut_off < second_index {
-            return Err(WorkerExecutorError::invalid_request(
-                "oplog_index_cut_off must be at least 2",
-            ));
-        }
-
         let owned_target_agent_id = OwnedAgentId::new(environment_id, target_agent_id);
-
-        if source_agent_id == target_agent_id {
-            return Err(WorkerExecutorError::worker_already_exists(*target_agent_id));
-        }
-        OwnerKind::ComponentAgent
-            .validate_agent_id(target_agent_id)
-            .map_err(WorkerExecutorError::invalid_request)?;
-        if source_agent_id.type_id() != target_agent_id.type_id() {
-            return Err(WorkerExecutorError::invalid_request(
-                "Source and target must have the same agent type",
-            ));
-        }
 
         // ADMISSION: this is the only ownership check on the
         // fork path and it rejects rather than routing, so a fork started after
@@ -576,8 +556,33 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             .await?
             .ok_or(WorkerExecutorError::worker_not_found(*source_agent_id))?;
         if source_metadata.initial_worker_metadata.owner_kind != OwnerKind::ComponentAgent {
+            if matches!(
+                source_metadata.initial_worker_metadata.owner_kind,
+                OwnerKind::StandaloneTool | OwnerKind::EphemeralExternalTool
+            ) {
+                return Err(WorkerExecutorError::NotAnAgent {
+                    agent_id: *source_agent_id,
+                });
+            }
             return Err(WorkerExecutorError::invalid_request(
                 "Only component-agent owners can be forked",
+            ));
+        }
+
+        if oplog_index_cut_off < OplogIndex::INITIAL.next() {
+            return Err(WorkerExecutorError::invalid_request(
+                "oplog_index_cut_off must be at least 2",
+            ));
+        }
+        if source_agent_id == target_agent_id {
+            return Err(WorkerExecutorError::worker_already_exists(*target_agent_id));
+        }
+        OwnerKind::ComponentAgent
+            .validate_agent_id(target_agent_id)
+            .map_err(WorkerExecutorError::invalid_request)?;
+        if source_agent_id.type_id() != target_agent_id.type_id() {
+            return Err(WorkerExecutorError::invalid_request(
+                "Source and target must have the same agent type",
             ));
         }
 
@@ -690,6 +695,7 @@ impl<Ctx: WorkerCtx> DefaultWorkerFork<Ctx> {
             fingerprint: AgentFingerprint(instance_id),
             agent_mode,
             create_request: fork_request.clone(),
+            standalone_tool: None,
         };
 
         let source_oplog = self
@@ -1622,6 +1628,7 @@ mod tests {
             &InvocationContextStack::fresh_rounded(),
         );
         let entry = OplogEntry::create(Box::new(CreateParameters {
+            standalone_tool: None,
             agent_id: source,
             component_id: ComponentId(Uuid::from_u128(2)),
             agent_type_name: None,
