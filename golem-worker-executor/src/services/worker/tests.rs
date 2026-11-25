@@ -4272,16 +4272,27 @@ fn the_status_cache_expires_and_the_status_baseline_does_not() {
 /// write that sets no expiry.
 type RecordedWrite = (KeyValueStorageNamespace, Option<std::time::Duration>);
 
+/// One `compare_and_set_many` of a key-value storage: its namespace, its expected value, the
+/// fields that it sets and the fields that it deletes.
+type RecordedCompareAndSet = (
+    KeyValueStorageNamespace,
+    Option<Vec<u8>>,
+    Vec<String>,
+    Vec<String>,
+);
+
 /// An in-memory key-value storage that records the namespace and the expiry of every call that
 /// sets a value or compares and changes fields. It does not record `del`, `del_many`,
 /// `remove_from_set` and `remove_from_sorted_set`, because these calls give no expiry. It also
-/// records the namespace and the API name of every `get_all`. A `compare_and_set_many` in the
-/// namespace `failing_compare_and_set` fails.
+/// records the namespace and the API name of every `get_all`, and the arguments of every
+/// `compare_and_set_many`. A `compare_and_set_many` in the namespace `failing_compare_and_set`
+/// fails.
 #[derive(Debug, Default)]
 struct ExpiryRecordingKeyValueStorage {
     inner: InMemoryKeyValueStorage,
     writes: StdMutex<Vec<RecordedWrite>>,
     hash_reads: StdMutex<Vec<(KeyValueStorageNamespace, &'static str)>>,
+    compare_and_sets: StdMutex<Vec<RecordedCompareAndSet>>,
     failing_compare_and_set: StdMutex<Option<KeyValueStorageNamespace>>,
 }
 
@@ -4305,6 +4316,17 @@ impl ExpiryRecordingKeyValueStorage {
             .iter()
             .filter(|(read, api)| read == namespace && *api == api_name)
             .count()
+    }
+
+    /// The `compare_and_set_many` calls on `namespace`, in their order.
+    fn compare_and_sets(&self, namespace: &KeyValueStorageNamespace) -> Vec<RecordedCompareAndSet> {
+        self.compare_and_sets
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(written, ..)| written == namespace)
+            .cloned()
+            .collect()
     }
 }
 
@@ -4375,6 +4397,12 @@ impl KeyValueStorage for ExpiryRecordingKeyValueStorage {
         pairs: &[(&str, &[u8])],
     ) -> Result<bool, KeyValueStorageError> {
         self.record(&namespace, None);
+        self.compare_and_sets.lock().unwrap().push((
+            namespace.clone(),
+            expected.map(<[u8]>::to_vec),
+            pairs.iter().map(|(field, _)| field.to_string()).collect(),
+            deletes.iter().map(|field| field.to_string()).collect(),
+        ));
         if self.failing_compare_and_set.lock().unwrap().as_ref() == Some(&namespace) {
             return Err(KeyValueStorageError::other(
                 "injected compare_and_set_many failure",
@@ -4633,7 +4661,9 @@ impl KeyValueStorage for ExpiryRecordingKeyValueStorage {
 /// status cache with the expiry of a derived cache, on the full write, the delta write and the
 /// removal. The removal is `WorkerService::remove` of an incarnation that is not the current one,
 /// which deletes no oplog. The delta write of the baseline on a matching delta base publishes
-/// the delta: it reads no snapshot of the hash, which a complete reconciliation reads.
+/// the delta: one `compare_and_set_many` that expects the core of the first write, sets only the
+/// changed core and deletes nothing. It reads no snapshot of the hash, which a complete
+/// reconciliation reads.
 #[test]
 async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
     let storage = Arc::new(ExpiryRecordingKeyValueStorage::default());
@@ -4668,6 +4698,7 @@ async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
         .await
         .unwrap();
     assert_eq!(storage.hash_reads(&baseline, "update_status"), 1);
+    let first_core = serialize(&super::status::status_core(&checkpoint)).unwrap();
     service
         .write_status_checkpoint(&owned_agent_id, fingerprint, Some(&checkpoint), second)
         .await
@@ -4676,6 +4707,16 @@ async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
         storage.hash_reads(&baseline, "update_status"),
         1,
         "the delta write of the baseline on a matching delta base reads a snapshot of the hash"
+    );
+    assert_eq!(
+        storage.compare_and_sets(&baseline).last(),
+        Some(&(
+            baseline.clone(),
+            Some(first_core),
+            vec![super::status::STATUS_CORE_FIELD.to_string()],
+            Vec::new(),
+        )),
+        "the delta write of the baseline is not one compare-and-set of the changed core"
     );
     service
         .remove(
