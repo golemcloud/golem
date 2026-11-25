@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, ResolvedAgentType};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
@@ -25,6 +26,7 @@ use tracing::warn;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 struct AgentResolutionCacheKey {
+    caller_account_id: AccountId,
     app_name: String,
     env_name: String,
     agent_type_name: String,
@@ -33,6 +35,7 @@ struct AgentResolutionCacheKey {
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 struct PinnedAgentResolutionCacheKey {
+    caller_account_id: AccountId,
     app_name: String,
     env_name: String,
     agent_type_name: String,
@@ -92,6 +95,7 @@ impl AgentResolutionCache {
         auth_ctx: &AuthCtx,
     ) -> Result<Arc<ResolvedAgentType>, RegistryServiceError> {
         let key = AgentResolutionCacheKey {
+            caller_account_id: auth_ctx.access_account_id(),
             app_name: app_name.0.clone(),
             env_name: env_name.0.clone(),
             agent_type_name: agent_type_name.0.clone(),
@@ -144,6 +148,7 @@ impl AgentResolutionCache {
         auth_ctx: &AuthCtx,
     ) -> Result<Arc<ResolvedAgentType>, RegistryServiceError> {
         let key = PinnedAgentResolutionCacheKey {
+            caller_account_id: auth_ctx.access_account_id(),
             app_name: app_name.0.clone(),
             env_name: env_name.0.clone(),
             agent_type_name: agent_type_name.0.clone(),
@@ -339,6 +344,7 @@ mod tests {
 
     struct MockRegistryService {
         env_id: EnvironmentId,
+        environments_by_account: std::collections::HashMap<AccountId, EnvironmentId>,
         revision: AtomicU64,
     }
 
@@ -346,6 +352,7 @@ mod tests {
         fn new(env_id: EnvironmentId) -> Self {
             Self {
                 env_id,
+                environments_by_account: std::collections::HashMap::new(),
                 revision: AtomicU64::new(0),
             }
         }
@@ -473,12 +480,20 @@ mod tests {
             _environment_name: &EnvironmentName,
             _agent_type_name: &AgentTypeName,
             _deployment_revision: Option<DeploymentRevision>,
-            _owner_account_email: Option<&str>,
-            _auth_ctx: &AuthCtx,
+            owner_account_email: Option<&str>,
+            auth_ctx: &AuthCtx,
         ) -> Result<ResolvedAgentType, RegistryServiceError> {
             let rev = self.revision.load(Ordering::SeqCst);
+            let env_id = if owner_account_email.is_none() {
+                self.environments_by_account
+                    .get(&auth_ctx.access_account_id())
+                    .copied()
+                    .unwrap_or(self.env_id)
+            } else {
+                self.env_id
+            };
             Ok(make_resolved(
-                self.env_id,
+                env_id,
                 DeploymentRevision::new(rev).unwrap_or(DeploymentRevision::INITIAL),
             ))
         }
@@ -556,6 +571,73 @@ mod tests {
             Duration::from_secs(60),
             Duration::from_secs(60),
         )
+    }
+
+    #[test]
+    async fn test_resolution_is_scoped_to_caller_account() {
+        let alice_id = AccountId(Uuid::new_v4());
+        let bob_id = AccountId(Uuid::new_v4());
+        let alice_env = EnvironmentId(Uuid::new_v4());
+        let bob_env = EnvironmentId(Uuid::new_v4());
+        let mut registry = MockRegistryService::new(EnvironmentId(Uuid::new_v4()));
+        registry.environments_by_account = [(alice_id, alice_env), (bob_id, bob_env)].into();
+        let cache = make_cache(Arc::new(registry));
+        let app = ApplicationName("app".to_string());
+        let env = EnvironmentName("env".to_string());
+        let agent = AgentTypeName("agent".to_string());
+
+        for (account_id, email, expected_env) in [
+            (alice_id, "alice@test.com", alice_env),
+            (bob_id, "bob@test.com", bob_env),
+            (alice_id, "alice@test.com", alice_env),
+            (bob_id, "bob@test.com", bob_env),
+        ] {
+            let auth = AuthCtx::agent_with_effective_surface(
+                account_id,
+                golem_common::model::account::AccountEmail::new(email),
+                Default::default(),
+            );
+            let resolved = cache
+                .resolve(&app, &env, &agent, None, &auth)
+                .await
+                .unwrap();
+            assert_eq!(resolved.environment_id, expected_env);
+        }
+    }
+
+    #[test]
+    async fn test_pinned_resolution_is_scoped_to_caller_account() {
+        let alice_id = AccountId(Uuid::new_v4());
+        let bob_id = AccountId(Uuid::new_v4());
+        let alice_env = EnvironmentId(Uuid::new_v4());
+        let bob_env = EnvironmentId(Uuid::new_v4());
+        let mut registry = MockRegistryService::new(EnvironmentId(Uuid::new_v4()));
+        registry.environments_by_account = [(alice_id, alice_env), (bob_id, bob_env)].into();
+        let revision = DeploymentRevision::new(5).unwrap();
+        registry.set_revision(5);
+        let cache = make_cache(Arc::new(registry));
+        let app = ApplicationName("app".to_string());
+        let env = EnvironmentName("env".to_string());
+        let agent = AgentTypeName("agent".to_string());
+
+        for (account_id, email, expected_env) in [
+            (alice_id, "alice@test.com", alice_env),
+            (bob_id, "bob@test.com", bob_env),
+            (alice_id, "alice@test.com", alice_env),
+            (bob_id, "bob@test.com", bob_env),
+        ] {
+            let auth = AuthCtx::agent_with_effective_surface(
+                account_id,
+                golem_common::model::account::AccountEmail::new(email),
+                Default::default(),
+            );
+            let resolved = cache
+                .resolve_pinned(&app, &env, &agent, revision, None, &auth)
+                .await
+                .unwrap();
+            assert_eq!(resolved.environment_id, expected_env);
+            assert_eq!(resolved.deployment_revision, revision);
+        }
     }
 
     #[test]
