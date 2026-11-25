@@ -3460,7 +3460,7 @@ pub async fn test_component_upload_reference_lifetime(deps: &Deps) {
                     ComponentId(new_repo_uuid()),
                     bytes.len() as u64,
                     ComponentMetadata::default(),
-                    hash.clone(),
+                    hash,
                     None,
                     upload.object_key.clone(),
                     AccountId(account),
@@ -3476,8 +3476,7 @@ pub async fn test_component_upload_reference_lifetime(deps: &Deps) {
             bytes
         );
         if environment_id == first.revision.environment_id {
-            let _ = deps
-                .blob_storage
+            deps.blob_storage
                 .delete(
                     "test",
                     "simulate_lost_upload",

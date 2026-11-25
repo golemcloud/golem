@@ -2857,7 +2857,13 @@ Replay mirrors the live order. The invocation's anchor opens at its `AgentInvoca
 replay consumes the terminal where the guest returns
 (`get_oplog_entry_agent_invocation_terminal_in_open_anchor`), and keeps the anchor open while the
 background work replays, so `Start`/`End` entries of the invocation that follow its terminal are
-claimed under it. `close_invocation_anchor` closes it at the recorded `AgentInvocationSettled`
+claimed under it. The read stashes the terminal (`stash_replayed_invocation_terminal`), and the
+recorder at the return validates against it. Reading the terminal can put the cursor at the replay
+tail and release a background call that waits for cursor progress, which then continues live and
+switches the Store to live before the recorder runs. The stashed terminal therefore takes
+precedence over the Store's liveness in `on_agent_invocation_success` and
+`record_agent_method_failure`; only without a stash does a live Store append the terminal.
+`close_invocation_anchor` closes it at the recorded `AgentInvocationSettled`
 (`SettledAt::Recorded`) or at the replay tail (`SettledAt::ReplayTail`), where the Store goes
 live, releases the retained `Start`s it owns and appends `AgentInvocationSettled` itself. The
 abandoned-`Start` check (`replay_state/abandoned.rs`) runs at the anchor's close, not at the

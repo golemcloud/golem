@@ -809,7 +809,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         else {
             return Ok(None);
         };
-        self.clone().wait_method_session_ready(session_key).await?;
+        // A fork target's session holds no preparation of its own: its content is the prepared
+        // session of the fork source's invocation.
+        let content_key = self.stream_session_content_key(&session_key).await?;
+        self.clone().wait_method_session_ready(content_key).await?;
         let producer = self.durable_stream_producer().await?;
         let Some(slot) = producer
             .with_metadata_activity(self.resolve_stream_slot(
@@ -1330,9 +1333,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
         };
         if matches!(request.admission, StreamSlotReadAdmission::WaitReady) {
-            self.clone()
-                .wait_method_session_ready(binding.invocation_key)
+            let content_key = self
+                .stream_session_content_key(&binding.invocation_key)
                 .await?;
+            self.clone().wait_method_session_ready(content_key).await?;
         }
         let Some(mut slot) = producer
             .with_metadata_activity(self.resolve_stream_slot_by_key(

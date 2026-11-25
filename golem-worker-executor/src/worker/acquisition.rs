@@ -1735,6 +1735,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 {
                     let mut status = initial_status.load_full().as_ref().clone();
                     status.oplog_idx = oplog.current_oplog_index().await;
+                    status.state_oplog_idx = status.oplog_idx;
                     initial_status.store(Arc::new(status));
                 }
 

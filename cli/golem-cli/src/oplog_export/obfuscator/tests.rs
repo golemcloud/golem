@@ -4875,13 +4875,29 @@ fn every_entry_kind_keeps_metadata() {
 
 #[test]
 fn public_json_method_input_hides_byte_arrays_as_one_token() {
+    // Untagged public JSON, and the canonical tagged schema-value JSON that the CLI sends.
+    let tagged = br#"{"kind":"record","value":{"fields":[
+        {"kind":"list","value":{"elements":[{"kind":"u8","value":1},{"kind":"u8","value":2},
+            {"kind":"u8","value":3},{"kind":"u8","value":1},{"kind":"u8","value":2}]}},
+        {"kind":"list","value":{"elements":[{"kind":"u16","value":300},{"kind":"u16","value":7}]}},
+        {"kind":"u64","value":"7391204117"},
+        {"kind":"stream","value":{"provisionalRef":"6b1a2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"}}]}}"#;
+    for (raw, typed) in [
+        (
+            &br#"{"blob": [1, 2, 3, 1, 2], "amounts": [300, 7]}"#[..],
+            false,
+        ),
+        (&tagged[..], true),
+    ] {
+        public_json_method_input_case(raw, typed);
+    }
+}
+
+fn public_json_method_input_case(raw: &[u8], typed: bool) {
     use golem_common::model::agent::AgentMethodInput;
     use golem_common::model::oplog::*;
     let input = AgentMethodInput::PublicJson(
-        golem_common::model::invocation_session_public::JsonMethodInput::capture(
-            br#"{"blob": [1, 2, 3, 1, 2], "amounts": [300, 7]}"#,
-        )
-        .unwrap(),
+        golem_common::model::invocation_session_public::JsonMethodInput::capture(raw).unwrap(),
     )
     .to_public_value()
     .unwrap();
@@ -4949,6 +4965,20 @@ fn public_json_method_input_hides_byte_arrays_as_one_token() {
             assert!(amounts.contains_key("elements"), "{keep:?}: {amounts:?}");
         } else {
             assert!(found.is_empty(), "{keep:?}: {found:?}");
+        }
+        if typed {
+            // The tagged u64 is a number in a record, which expands: it shows only with
+            // `--keep-scalars`, and no tag of the encoding reaches the export.
+            let text = json(&input);
+            assert_eq!(
+                text.contains("7391204117"),
+                keep.scalars,
+                "{keep:?}: {text}"
+            );
+            assert!(!text.contains("\"u64\""), "{keep:?}: {text}");
+            // The stream argument is one redacted leaf; its reference does not reach the export.
+            assert!(text.contains("\"reason\":\"stream\""), "{keep:?}: {text}");
+            assert!(!text.contains("6b1a2c3d"), "{keep:?}: {text}");
         }
     }
 }

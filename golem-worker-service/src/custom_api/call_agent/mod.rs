@@ -111,7 +111,7 @@ impl CallAgentHandler {
         // For read-only methods bound to GET/HEAD routes with a revalidatable
         // cache policy, try to serve a `304 Not Modified` without invoking the
         // executor when the client's `If-None-Match` value matches the agent's
-        // current oplog index. `get_metadata` is safe here because the
+        // current state oplog index. The metadata read is safe here because the
         // executor implementation reads cached metadata / persisted oplog
         // state and does **not** wake or load the worker.
         if let Some(read_only) = behaviour.read_only.as_ref()
@@ -195,8 +195,9 @@ impl CallAgentHandler {
 
         debug!("Received agent response: {agent_response:?}");
 
-        // The executor returns the oplog index of the agent right after the
-        // invocation, paired with the per-instance agent fingerprint of the
+        // The executor returns the index of the invocation's
+        // `AgentInvocationFinished`, which is the agent's state oplog index until
+        // a later entry other than its settlement, paired with the per-instance agent fingerprint of the
         // worker that produced it. Using this index+fingerprint pair as the
         // ETag validator avoids TOCTOU: because the cached entry stores the
         // same pair, a subsequent cache hit produces the same ETag; any
@@ -305,20 +306,23 @@ impl CallAgentHandler {
         }))
     }
 
-    /// Fetch the agent's current `(fingerprint, last_oplog_index)` pair, used
+    /// Fetch the agent's current `(fingerprint, state oplog index)` pair, used
     /// as the strong-validator value for `If-None-Match` revalidation. The
     /// pair must come from the same metadata snapshot so the fingerprint and
-    /// the oplog index describe the same agent instance.
+    /// the oplog index describe the same agent instance. The state oplog index
+    /// skips `AgentInvocationSettled`: a read-only result names the index of its
+    /// `AgentInvocationFinished`, and the settlement that follows it after the
+    /// background work does not change the state the result describes.
     async fn fetch_current_validator(
         &self,
         agent_id: &OwnedAgentId,
     ) -> Result<Option<(AgentFingerprint, OplogIndex)>, RequestHandlerError> {
         match self
             .worker_service
-            .get_metadata(agent_id, None, AuthCtx::System)
+            .get_state_validator(agent_id, AuthCtx::System)
             .await
         {
-            Ok(metadata) => Ok(Some((metadata.fingerprint, metadata.last_oplog_index))),
+            Ok(validator) => Ok(Some(validator)),
             Err(err) => {
                 // Failing to fetch metadata must not block the response. We
                 // simply skip the cache-headers / 304 path and let the regular
