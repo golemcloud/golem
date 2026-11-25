@@ -613,7 +613,7 @@ mod tests {
         };
         use golem_common::base_model::api::error_code::INTERNAL_UNKNOWN;
 
-        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let now = Timestamp::new(1_700_000_000, 0).unwrap();
         let invalid_counts = std::iter::once((0_usize, "must not be 0"));
         #[cfg(target_pointer_width = "64")]
         let invalid_counts = invalid_counts.chain([
@@ -627,7 +627,7 @@ mod tests {
                     golem_common::model::ShardId::new(2),
                     ShardEpoch(9),
                 )]),
-                expires_at: now + chrono::Duration::seconds(45),
+                expires_at: now + jiff::SignedDuration::from_secs(45),
                 executor_count,
                 revision: ShardLeaseRevision(7),
             };

@@ -1120,7 +1120,7 @@ mod tests {
             decisions::renew(state.clone(), executor(9), &claims, t0(), TTL),
             Err(ShardManagerError::ShardLeaseNotFound { executor_id }) if executor_id == executor(9)
         ));
-        let renewed_at = t0() + chrono::Duration::seconds(10);
+        let renewed_at = t0() + jiff::SignedDuration::from_secs(10);
         let (state, renewed) =
             decisions::renew(state, executor(1), &claims, renewed_at, TTL).unwrap();
         assert_eq!(
@@ -1130,7 +1130,10 @@ mod tests {
         let grant = renewed.pending.stamp(state.revision);
         assert_eq!(grant.executor_count, 2);
         assert_eq!(grant.shard_epochs.len(), 2);
-        assert_eq!(grant.expires_at, renewed_at + chrono::Duration::seconds(60));
+        assert_eq!(
+            grant.expires_at,
+            renewed_at + jiff::SignedDuration::from_secs(60)
+        );
     }
 
     #[test]
