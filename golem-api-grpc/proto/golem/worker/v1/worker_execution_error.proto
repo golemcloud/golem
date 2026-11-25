@@ -54,8 +54,8 @@ message NotAnAgent {
   AgentId agent_id = 1;
 }
 
-// An oplog read reaches below the retained start of the agent's oplog: a cut removed those
-// entries.
+// An oplog read reaches below the retained start of the agent's oplog, and the oplog keeps no
+// entry before that start.
 message OplogExpired {
   AgentId agent_id = 1;
   uint64 retained_start = 2;

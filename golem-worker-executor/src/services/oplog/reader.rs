@@ -50,7 +50,8 @@ pub enum OplogReadError {
         start: OplogIndex,
         end: OplogIndex,
     },
-    /// The read reaches below the retained start of the oplog: a cut removed those entries.
+    /// The read reaches below the retained start of the oplog, and the oplog keeps no entry before
+    /// that start.
     Expired {
         retained_start: OplogIndex,
     },
