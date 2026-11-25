@@ -26,17 +26,23 @@ use golem_common::model::oplog::public_oplog_entry::AgentInvocationStartedParams
 use golem_common::model::oplog::{
     OplogIndex, PublicAgentInvocation, PublicOplogEntry, PublicOplogEntryWithIndex,
 };
-use golem_common::model::{AgentStatus, IdempotencyKey, InvocationId};
+use golem_common::model::{AgentStatus, IdempotencyKey, InvocationId, RetryConfig};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
+use golem_worker_executor::storage::keyvalue::KeyValueStorageError;
+use golem_worker_executor::storage::keyvalue::fault_injecting::{
+    FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestWorkerExecutor,
+    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, force_oplog_retained_start,
-    remove_cached_status_and_result_index, start, start_with_snapshot_policy,
+    remove_cached_status_and_result_index, start, start_with_overrides, start_with_snapshot_policy,
     stored_primary_oplog_entries,
 };
 use pretty_assertions::assert_eq;
+use std::sync::Arc;
+use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -169,17 +175,17 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
     drop(executor);
 
     force_oplog_retained_start(deps, &context, &agent_id, retained_start).await?;
-    let removed =
+    let (status_keys, _) =
         remove_cached_status_and_result_index(deps, &context, &agent_id, before.fingerprint)
             .await?;
     assert!(
-        removed > 0,
+        status_keys > 0,
         "the cached status is removed before the restart"
     );
     let executor = start_with_snapshot_policy(deps, &context, policy).await?;
 
-    // The status comes from the fold of the checkpoint and the oplog after the start: the default
-    // status has none of these values.
+    // The status comes from the fold of the checkpoint and the oplog after the start. The last
+    // oplog index after the start is a value that no default status gives.
     let after = executor.get_worker_metadata(&agent_id).await?;
     assert_eq!(after.status, AgentStatus::Idle);
     assert_eq!(after.last_oplog_index, before.last_oplog_index);
@@ -342,10 +348,11 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
 }
 
 /// The retry count and the last error of an agent whose oplog starts after index 1 come from the
-/// entries after the start. The agent recovers from its snapshot after a real restart, and a call
-/// of `fail` panics. A panic is a deterministic trap, so the executor does not retry it: the
-/// oplog has one `Error` entry after the start, the retry count is 0 and the last error is the
-/// panic text, not the expired error. Another real restart gives the same answers.
+/// entries after the start. The agent recovers from its snapshot after a real restart. The storage
+/// refuses the promise of three calls of `create_promise`. The retry policy allows three attempts,
+/// so the executor retries the call twice and then gives up: the oplog has three `Error` entries
+/// after the start, the retry count is 2 and the last error names the refused promise, not the
+/// expired error. Another real restart gives the same answers.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -375,16 +382,48 @@ async fn the_retry_count_and_the_last_error_read_from_the_retained_start(
     drop(executor);
 
     force_oplog_retained_start(deps, &context, &agent_id, retained_start).await?;
-    let executor = start_with_snapshot_policy(deps, &context, policy.clone()).await?;
+    let faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 2 };
+                // Each failure falls back to a trap, which the retry policy counts.
+                config.max_in_function_retry_delay = Duration::ZERO;
+                config.retry = RetryConfig {
+                    max_attempts: 3,
+                    min_delay: Duration::from_millis(10),
+                    max_delay: Duration::from_millis(10),
+                    multiplier: 1.0,
+                    max_jitter_factor: None,
+                };
+            })),
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = faults.clone();
+                move |storage| Arc::new(FaultInjectingKeyValueStorage::new(storage, faults.clone()))
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    faults.fail(
+        "create",
+        3,
+        KeyValueStorageError::other("the promise storage refuses the promise"),
+    );
     let failure = executor
-        .invoke_and_await_agent(&component, &agent, "fail", data_value!())
+        .invoke_and_await_agent(&component, &agent, "create_promise", data_value!())
         .await
-        .expect_err("the call panics");
+        .expect_err("the executor gives up after three attempts");
     let failure = format!("{failure:#}");
     assert!(
-        failure.contains("the json snapshot counter fails on request"),
+        failure.contains("the promise storage refuses the promise"),
         "{failure}"
     );
+    executor
+        .wait_for_status(&agent_id, AgentStatus::Failed, Duration::from_secs(20))
+        .await?;
 
     let errors = executor
         .get_oplog(&agent_id, retained_start)
@@ -392,16 +431,16 @@ async fn the_retry_count_and_the_last_error_read_from_the_retained_start(
         .iter()
         .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
         .count();
-    assert_eq!(errors, 1, "the panic records one error and no retry");
+    assert_eq!(errors, 3, "an error for each attempt");
     let check = |metadata: golem_common::model::agent::AgentMetadataDto| {
         assert_eq!(metadata.status, AgentStatus::Failed);
         assert_eq!(
-            metadata.retry_count, 0,
-            "the executor does not retry a panic"
+            metadata.retry_count, 2,
+            "the executor retried the call twice"
         );
         let last_error = metadata.last_error.unwrap_or_default();
         assert!(
-            last_error.contains("the json snapshot counter fails on request")
+            last_error.contains("the promise storage refuses the promise")
                 && !names_expired_start(&last_error, retained_start),
             "{last_error}"
         );
