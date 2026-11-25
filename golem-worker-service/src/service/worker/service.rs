@@ -9412,7 +9412,7 @@ mod tests {
         let schedule_at = JiffTimestamp::now();
         let expected_schedule_at = ::prost_types::Timestamp {
             seconds: schedule_at.as_second(),
-            nanos: schedule_at.subsec_nanosecond() as i32,
+            nanos: schedule_at.subsec_nanosecond(),
         };
         let mut request = harness.invoke_request();
         request.mode = AgentInvocationMode::Schedule;
