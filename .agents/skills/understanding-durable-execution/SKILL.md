@@ -1378,20 +1378,25 @@ The retained start of an agent oplog is the first index that the oplog keeps
 indexes never renumber, and the start only moves forward: `advance_oplog_retention` writes the
 record with a compare-and-set. Only tests write the record, so in production every oplog starts at
 index 1. `RetentionOplogService` sits directly on the base oplog service, below the plugin
-forwarding layer, and it is the only layer that reads the record. `Oplog::retention` and
+forwarding layer, and it is the only layer that reads the record. A staged oplog
+(`create_staged`) is the handle of the inner service. `create` and `create_fresh` read no record,
+so a new oplog starts at index 1; a later `open` reads the record. `Oplog::retention` and
 `OplogService::retention` give the plain `OplogRetention` value. Its pure rules give the reads:
 a walk in chunks reads with `chunk`, a public page reads with `page`, and a walk with a fixed
 start reads with `OplogRange::within`; `range`, `clamp`, `retains`, `create_read` and the agent
-checks give the rest. Three reads keep their own count. The refill of the replay buffer
+checks give the rest. Four reads keep their own count. The refill of the replay buffer
 (`raw_read_next_oplog_entry` in `replay_state/cursor/io.rs`) reads one entry also when the read
-position is after the replay target, where `within` gives no range. The whole-history walks
+position is after the replay target, where `within` gives no range. The lookup of the component
+revision of a public read (`scan_component_revision`) charges each batch to its allowance. The
+whole-history walks
 `max_issued_epoch` and the creation receipt of a fork export count from their fixed start. The replay cursor reads each deleted region from the
 retained start (`deleted_region_contains_start`), because a snapshot recovery skips the region
 from index 2 to the snapshot. Some walks need the
 whole history, because a walk from the start gives a wrong result: the full status rebuild, the
 revert preflight, the epoch fence of a stream fork revert (`max_issued_epoch`) and the creation
 receipt of a fork export. They read from index 1 or from a fixed index, so the layer gives the
-expired error when the start is above 1. A read below the start returns
+expired error when such a walk needs an entry from index 2 to the index before the start. At a
+start of 2 no such entry exists, and the walk reads with no error. A read below the start returns
 `OplogReadError::Expired { retained_start }`. The exceptions are an empty read and a read of the
 `Create` entry alone at index 1, because that entry is the identity of the agent. A read of more
 than the `Create` entry from index 1 is expired. This includes a page and a guest chunk, because a
@@ -1399,7 +1404,10 @@ page has no fixed end. `range` and `chunk` do not refuse such a start: they move
 start. A range page (a request with a `to`) is a page too, and without a `from` it starts at the
 retained start. A new guest search starts at the retained start too; its batch reads only the part
 of the authorized window at or after that start, and a start after the window moves the cursor
-with no read (`guest_search_batch`). The count-based revert walk
+with no read (`guest_search_batch`). The guest host functions only resolve the agent: the reads of
+the retention and of the oplog are in `get_guest_oplog_chunk` and `search_guest_oplog`. A search
+batch that failed or that the grant denied leaves the search as it was (`SearchOplogEntry::apply`),
+so its next batch still starts at the retained start. The count-based revert walk
 (`cut_point::cut_before_last_invocations`) takes the retention and ends at the retained start. The
 single entry read of the public oplog serves the `Create` entry. A `Gap` that ends below
 the start becomes the same error, and a gap that ends at or after the start stays a read error.
@@ -1411,7 +1419,8 @@ error. The revert walk gives no cut when the last index is below the start. The 
 the expired error typed: the consumer probe and the consumer journal check the record that
 introduced each reader, the rebuild of the session control metadata checks the reader of each
 consumer record, the producer index gives the expired error for a record that references a
-registration below the start, a handle of a stream that the index does not know is expired when
+registration below the start (every index holds the producer and the retention, and the pure
+`unknown_local_stream` picks the expired or the corrupt error), a handle of a stream that the index does not know is expired when
 the start is above 1, a cursor below the start is expired, the stream fork lineage
 (`LineageError`) keeps a read error and a reference below the start typed, and a producer request
 keeps the expired error (`DurableStreamRemoteError::from_producer`). The obfuscated CLI export
