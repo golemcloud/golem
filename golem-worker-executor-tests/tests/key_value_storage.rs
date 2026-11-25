@@ -1742,13 +1742,13 @@ async fn query_sorted_set(
     assert_eq!(result5, vec![(4.0, value4.into())]);
 }
 
-/// The live status cache is written with an expiry and the status baseline without one, as the
-/// worker service writes them: a first write with no expected core, then a write that expects
-/// the core of the first one. In every backend the baseline outlives the expiry of the cache.
-/// After both writes, the Redis backend stores the baseline hash with no TTL (`PTTL` gives -1). Namespace routing
-/// stores the baseline in its persistent backend, so its Redis backend has no key for it (`PTTL`
-/// gives -2). The SQL and in-memory backends store no expiry, so for them the test shows only
-/// that the hash stays.
+/// The test writes the live status cache with an expiry and the status baseline without one, as
+/// the worker service writes them. The test writes the baseline two times: first with no expected
+/// core, then with the core of the first write as the expected core. In every backend, the
+/// baseline outlives the expiry of the cache. After both writes, the Redis backend stores the
+/// baseline hash with no TTL (`PTTL` gives -1). Namespace routing stores the baseline in its
+/// persistent backend, so its Redis backend has no key for it (`PTTL` gives -2). The SQL and
+/// in-memory backends store no expiry. For them, the test shows only that the hash stays.
 #[test]
 async fn the_status_baseline_outlives_the_expiry_of_the_status_cache(
     _deps: &WorkerExecutorTestDependencies,

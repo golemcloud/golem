@@ -1020,7 +1020,7 @@ pub(super) fn collect_resources(
     result
 }
 
-/// True when the status keeps the oplog processor checkpoint state of `grant_id`: the plugin is
+/// True when the status keeps the [`OplogProcessorCheckpointState`] of `grant_id`: the plugin is
 /// active, or it has entries in flight (sent and not confirmed).
 fn keeps_processor_checkpoint(
     active: &HashSet<EnvironmentPluginGrantId>,
@@ -1030,7 +1030,7 @@ fn keeps_processor_checkpoint(
     active.contains(grant_id) || state.sending_up_to > state.confirmed_up_to
 }
 
-/// The oplog processor checkpoint state of a plugin that starts at the activation at `idx`.
+/// The [`OplogProcessorCheckpointState`] of a plugin that starts at the activation at `idx`.
 fn fresh_processor_checkpoint(idx: OplogIndex) -> OplogProcessorCheckpointState {
     OplogProcessorCheckpointState {
         target_agent_id: None,

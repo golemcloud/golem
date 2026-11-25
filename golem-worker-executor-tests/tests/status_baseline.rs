@@ -136,9 +136,9 @@ async fn increment(
 }
 
 /// A completed archive keeps the status baseline. After a real restart with no cached status, the
-/// status fold starts from the baseline and never reads the oplog below it: an archived chunk
-/// before the baseline that does not decode is not read, where a full fold of the oplog would
-/// fail on it.
+/// status fold starts from the baseline and never reads the oplog below it. The fold does not read
+/// an archived chunk before the baseline that does not decode. A full fold of the oplog fails on
+/// that chunk.
 ///
 /// The test reads the status through the status fold and does not ask for the metadata of the
 /// agent. The invocation result index is not part of the baseline: a cold load of the agent

@@ -981,10 +981,10 @@ pub enum KeyValueStorageNamespace {
     /// `tr:`/`ts:` fields, and the `entity-replay` marker with the per-entry
     /// `er:`/`eo:`/`ep:`/`em:`/`ec:` fields.
     ///
-    /// Only three writers write it, each at a structurally clean boundary where no jumpable oplog
-    /// region is open: the snapshot save, the throttled idle boundary, and the throttled
-    /// `checkpoint_status_mid_invocation` during a long invocation. The background status flusher
-    /// never moves it forward. Thus it always holds a baseline before any later jump region, and
+    /// Only three writers write it: the snapshot save, the throttled idle boundary, and the
+    /// throttled `checkpoint_status_mid_invocation` during a long invocation. Each one writes at a
+    /// structurally clean boundary, where no jumpable oplog region is open. The background status
+    /// flusher never moves it forward. Thus it always holds a baseline before any later jump region, and
     /// the status recompute folds forward from it. The recompute folds from index 1 when no
     /// usable baseline exists.
     ///
