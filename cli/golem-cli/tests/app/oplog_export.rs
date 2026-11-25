@@ -417,11 +417,11 @@ async fn sqlite_rows(path: &std::path::Path, table_and_filter: &str) -> i64 {
     count
 }
 
-/// Waits until the archive moved the whole oplog of `agent` to the blob layer: the primary oplog
-/// and the compressed layer of the agent hold no entry, and the blob storage of the local server
+/// Waits until the archive moved the whole oplog of `agent` to the blob layer. Then the primary
+/// oplog and the compressed layer of the agent hold no entry. The blob storage of the local server
 /// holds a compressed oplog chunk of the agent. The archive adds the entries to a layer before it
-/// drops them from the layer below, so the entries are then all in the blob layer. The local server
-/// keeps one SQLite file for each agent and layer in `kv-store`, and names the file by the
+/// drops them from the layer below. So the entries are then all in the blob layer. The local server
+/// keeps one SQLite file for each agent and layer in `kv-store`. It names the file by the
 /// environment ID and the agent ID. It keeps the blobs in `blobs`, under a path that holds the
 /// environment ID and the agent ID.
 async fn wait_until_archived(ctx: &TestContext, agent: &str) {
@@ -1376,8 +1376,8 @@ async fn oplog_export_serves_obfuscated_pages() {
 #[timeout("40 minutes")]
 async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
     let mut ctx = TestContext::new();
-    // A scan budget far below the length of the oplogs ends each search page early, and the
-    // archive interval moves the oplog of each idle agent to the archive layers.
+    // A scan budget far below the length of the oplogs ends each search page early. The archive
+    // interval moves the oplog of each idle agent to the archive layers.
     let proxy = setup_probe_app(
         &mut ctx,
         indoc! { r#"
@@ -1425,9 +1425,9 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
     assert!(paged.success_or_dump());
     assert_eq!(paged.stdout_json::<Value>(), plain);
 
-    // `--format json` prints the entries of a page before it reads the next page: the proxy holds
-    // the read of the second page, and the first documents are on stdout meanwhile. A command
-    // that keeps all entries until the last page prints nothing, and the wait for the line fails.
+    // `--format json` prints the entries of a page before it reads the next page. The proxy holds
+    // the read of the second page, and the first documents are on stdout meanwhile. A command that
+    // keeps all entries until the last page prints nothing, and the wait for the line fails.
     let (held, release) = proxy.hold(is_oplog_page_after_cursor, 0);
     ctx.add_env_var("GOLEM_HTTP_BATCH_SIZE", "2");
     let (mut streaming, first_line) = ctx
@@ -1482,8 +1482,8 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         std::fs::remove_file(&plain_file).unwrap();
     }
 
-    // The scan budget of the server (4 entries) is far below the entries before `--from`, and
-    // the export still reads its range: a range read of the export has no scan budget.
+    // The scan budget of the server (4 entries) is far below the entries before `--from`. The
+    // export still reads its range, because a range read of the export has no scan budget.
     let late_path = ctx.cwd_path_join("export/late.jsonl");
     let outputs = ctx
         .cli([

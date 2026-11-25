@@ -197,9 +197,9 @@ impl OplogReads for FakeReads {
     }
 
     /// Accounts the scan as the server does: a read without a cursor charges the entries before
-    /// `from`, which it reads to find the component revision, and every read charges the entries
-    /// of its page and `millis_per_read`. A read without an allowance has no limit, and an
-    /// allowance is clamped to the configured one.
+    /// `from`, which it reads to find the component revision. Every read charges the entries of its
+    /// page and `millis_per_read`. A read without an allowance has no limit. The fake clamps an
+    /// allowance to the configured one.
     async fn read_range_page(
         &self,
         from: u64,

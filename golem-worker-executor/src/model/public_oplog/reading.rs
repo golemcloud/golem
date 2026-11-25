@@ -141,12 +141,12 @@ pub async fn get_public_oplog_chunk(
 }
 
 /// Reads an oplog page for a remote reader. The page omits entries that are larger than
-/// `limits.max_entry_bytes`, and ends early when the next entry does not fit in
-/// `limits.max_bytes`. The entries hold claims only with `ClaimVisibility::Shown`, so only claims
-/// that the reader asked for count against the limits. The page reads from the first index of
-/// `range` in an oplog whose first entry is at `oplog_first`, and reads no entry after its end.
-/// Its `last_index` is the last index of the range in the oplog: the last index of the oplog, or
-/// the end of the range when that is earlier.
+/// `limits.max_entry_bytes`, and ends early when the next entry does not fit in `limits.max_bytes`.
+/// The entries hold claims only with `ClaimVisibility::Shown`, so only claims that the reader asked
+/// for count against the limits. The page reads from the first index of `range` in an oplog whose
+/// first entry is at `oplog_first`, and reads no entry after its end. Its `last_index` is the last
+/// index of the range in the oplog. That is the last index of the oplog, or the end of the range
+/// when that is earlier.
 pub async fn get_public_oplog_page(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -400,9 +400,9 @@ pub async fn search_public_oplog(
 }
 
 /// Searches the oplog for a remote reader. The result is an oplog page with the limits of
-/// `get_public_oplog_page`; only the matching entries count against the limits. The search
-/// reads from the first index of `range` in an oplog whose first entry is at `oplog_first`, reads
-/// no entry after its end, and stops early when `budget` is spent.
+/// `get_public_oplog_page`; only the matching entries count against the limits. The search reads
+/// from the first index of `range` in an oplog whose first entry is at `oplog_first`. It reads no
+/// entry after the end of `range`, and stops early when `budget` is spent.
 pub async fn search_public_oplog_page(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -440,12 +440,12 @@ pub async fn search_public_oplog_page(
 }
 
 /// Searches the oplog from the first index of `range` in an oplog whose first entry is at
-/// `oplog_first` until the result holds `count` matches, the page is full, the oplog or the end of
-/// `range` ends the search, or `budget` is spent. The budget counts the oplog entries that the
-/// search reads, matching or not, and the time since the call started. Each chunk reads at most
-/// as many entries as the result still needs matches, so the result never holds more than `count`
-/// matches. A search always reads at least one chunk, and the result points to the first entry it
-/// did not read.
+/// `oplog_first`. The search stops when the result holds `count` matches or the page is full. It
+/// also stops at the end of the oplog, at the end of `range`, or when `budget` is spent. The budget
+/// counts the oplog entries that the search reads, matching or not, and the time since the call
+/// started. Each chunk reads at most as many entries as the result still needs matches, so the
+/// result never holds more than `count` matches. A search always reads at least one chunk, and the
+/// result points to the first entry it did not read.
 #[allow(clippy::too_many_arguments)]
 async fn search_public_oplog_with<B: ChunkBuilder>(
     component_service: Arc<dyn ComponentService>,
@@ -643,11 +643,11 @@ pub struct PublicOplogRangePage {
     pub scan: OplogScan,
 }
 
-/// The allowance of a range read. A read without an allowance has no limit: each of its pages
-/// is still bounded by its count and its size. A read with an allowance gets `requested`,
-/// clamped to `configured`. An executor never grants more than its own configured allowance, so a
-/// reader that passes on what is left of its allowance gets no fresh allowance from a retry or
-/// another executor.
+/// The allowance of a range read. A read without an allowance has no limit: its count and its size
+/// still bound each of its pages. A read with an allowance gets `requested`, clamped to
+/// `configured`. An executor never grants more than its own configured allowance. So a reader that
+/// passes on what is left of its allowance gets no fresh allowance from a retry or another
+/// executor.
 pub fn oplog_range_allowance(
     requested: Option<OplogScanAllowance>,
     configured: ScanBudget,
@@ -793,8 +793,8 @@ pub async fn get_public_oplog_range_page(
 }
 
 /// The cursor of an oplog page of `query` whose next unread entry is `next_oplog_index`. A page has
-/// a cursor if and only if the oplog has entries after the page within its range, also when the
-/// page itself is empty because a search spent its scan budget before any match.
+/// a cursor if and only if the oplog has entries after the page within its range. This is also true
+/// when the page itself is empty, because a search spent its scan budget before any match.
 pub fn oplog_page_cursor(
     next_oplog_index: OplogIndex,
     current_component_revision: ComponentRevision,
@@ -829,19 +829,19 @@ pub fn check_oplog_cursor_query(
     }
 }
 
-/// The range that a paged oplog read of `range` reads, and the component revision to decode its
-/// first entry with: the rest of `range` from the cursor of the previous page, or else `range`
-/// with the revision in effect at its first index in an oplog whose first entry is at
-/// `oplog_first`. The caller checks the query of the cursor first, with
+/// The range that a paged oplog read of `range` reads, and the component revision that decodes its
+/// first entry. With the cursor of the previous page, it is the rest of `range` from the cursor.
+/// Without a cursor, it is `range`, with the revision in effect at its first index in an oplog
+/// whose first entry is at `oplog_first`. The caller checks the query of the cursor first, with
 /// [`check_oplog_cursor_query`]. A cursor outside `range` came from a read of another range, and
-/// is an invalid request.
+/// the function refuses it as an invalid request.
 ///
-/// A page hands out a cursor only while the oplog has entries after the page within its range,
-/// and the oplog only grows, so a cursor that points past the last entry did not come from a page
-/// of this oplog: the agent was deleted and created again since, or the cursor was made up. It is
-/// refused as stale, instead of read as an empty page, which a caller would take for the end of
-/// the oplog. The revision of the cursor is not checked, because that would scan the oplog up to
-/// the cursor on every page.
+/// A page hands out a cursor only while the oplog has entries after the page within its range. The
+/// oplog only grows. So a cursor that points past the last entry did not come from a page of this
+/// oplog. The agent was deleted and created again since, or the cursor was made up. The function
+/// refuses such a cursor as stale. It does not read it as an empty page, because a caller would
+/// take that page for the end of the oplog. The function does not check the revision of the cursor,
+/// because that check would scan the oplog up to the cursor on every page.
 pub async fn oplog_page_start(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,

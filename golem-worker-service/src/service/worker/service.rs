@@ -434,14 +434,14 @@ fn oplog_read_resource(
     Ok(oplog_resource_in(read, OplogIndex::INITIAL))
 }
 
-/// The oplog resource of the page that the executor returned for a read of at most `count`
-/// entries of `range`, when the check before the read did not know where the page starts: a read
-/// of a range without a start, without a cursor. The executor starts such a read at the first
-/// entry that the oplog holds, `first_index_in_chunk`, and the page needs the oplog from there to
-/// its last possible entry, or to the end of the range when that is earlier. A page without
-/// entries can give 0 as its first index; the page then needs the oplog from index 1. A page whose
-/// first index is after the end of the range reads no entry, so it gives `None`. The other reads
-/// give `None`, because the check before the read covers them.
+/// The oplog resource of the page that the executor returned for a read of at most `count` entries
+/// of `range`. This rule is for a read of a range without a start and without a cursor. The check
+/// before such a read did not know where its page starts. The executor starts such a read at the
+/// first entry that the oplog holds, `first_index_in_chunk`. The page needs the oplog from there to
+/// its last possible entry. When the end of the range is earlier, the page needs the oplog to the
+/// end of the range. A page without entries can give 0 as its first index; the page then needs the
+/// oplog from index 1. A page whose first index is after the end of the range reads no entry, so it
+/// gives `None`. The other reads give `None`, because the check before the read covers them.
 fn oplog_returned_page_resource(
     range: OplogRange,
     cursor: Option<&OplogCursor>,
@@ -460,7 +460,7 @@ fn oplog_returned_page_resource(
 }
 
 /// The oplog resource of the indices that a read of `read` holds in an oplog whose first entry is
-/// at `oplog_first`: from the first index of `read` to its end.
+/// at `oplog_first`. The resource goes from the first index of `read` to its end.
 fn oplog_resource_in(read: OplogRange, oplog_first: OplogIndex) -> OplogResourcePattern {
     let (_, end) = read.to_indices();
     OplogResourcePattern::range(Some(read.first_index_in(oplog_first).as_u64()), end)

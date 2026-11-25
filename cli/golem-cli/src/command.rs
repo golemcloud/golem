@@ -1966,9 +1966,9 @@ pub mod worker {
             #[arg(long, conflicts_with = "obfuscate")]
             show_claims: bool,
             /// Export the entries to FILE as JSON Lines: one `agent.oplog` document on each line,
-            /// in index order, the same documents that `--format json` prints. The export needs
-            /// the format `jsonl`: pass `--format jsonl`, or use a default format of `jsonl`. The
-            /// export reads the oplog one page at a time to the end of the range, and writes each
+            /// in index order, the same documents that `--format json` prints. The export needs the
+            /// format `jsonl`: pass `--format jsonl`, or use a default format of `jsonl`. The
+            /// export reads the oplog one page at a time to the end of the range. It writes each
             /// page before it reads the next page. The scan budget of the server does not end the
             /// export. So the export works for an oplog of any size. The export writes each entry
             /// in full, and reads in full the entries that oplog pages omit for their size. If a
@@ -1990,7 +1990,7 @@ pub mod worker {
             /// The `cursor` of the previous page: reads the page after it. Pass it back unchanged,
             /// with the same `--query` and `--to`. The cursor is opaque; use `--from` to start at
             /// an oplog index. The server refuses a cursor of another query, or one past the end of
-            /// the oplog, as stale (`STALE_CURSOR`), and a cursor after `--to` as an invalid
+            /// the oplog, as stale (`STALE_CURSOR`). It refuses a cursor after `--to` as an invalid
             /// request.
             #[arg(long, requires = "page")]
             cursor: Option<OplogCursor>,

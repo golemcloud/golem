@@ -146,12 +146,12 @@ pub enum OplogExportSelection {
     Matches,
 }
 
-/// Checks that an oplog export can write the entry at `index` after the entry at `previous`.
-/// An entry at or before `previous` is refused, because the read repeated or reordered entries.
-/// When the export holds every entry, an entry that does not directly follow `previous` is
-/// refused too, because the read left out entries. So is a first entry that is not at the start
-/// of a range with a start. The first entry of a range without a start is not checked, because
-/// only the server knows the first entry that the oplog holds.
+/// Checks that an oplog export can write the entry at `index` after the entry at `previous`. The
+/// check refuses an entry at or before `previous`, because the read repeated or reordered entries.
+/// When the export holds every entry, the check also refuses an entry that does not directly follow
+/// `previous`, because the read left out entries. It also refuses a first entry that is not at the
+/// start of a range with a start. It does not check the first entry of a range without a start,
+/// because only the server knows the first entry that the oplog holds.
 fn check_oplog_export_order(
     selection: OplogExportSelection,
     previous: Option<OplogIndex>,
@@ -181,10 +181,10 @@ fn check_oplog_export_order(
 }
 
 /// Checks that an oplog export ends at the end of its range. `last` is the index of the last
-/// written entry, and `range_last` is the last index of the range in the oplog, as the last page
-/// of the read gives it. When the export holds every entry, its last entry must be at
-/// `range_last`, because the read otherwise left out the entries at the end. An export of every
-/// entry without entries is accepted only when the range holds no index of the oplog, as
+/// written entry. `range_last` is the last index of the range in the oplog, as the last page of the
+/// read gives it. When the export holds every entry, its last entry must be at `range_last`,
+/// because the read otherwise left out the entries at the end. The check accepts an export of every
+/// entry without entries only when the range holds no index of the oplog, as
 /// [`OplogRange::is_empty_in`] gives it. An export of the matches has no end rule.
 fn check_oplog_export_end(
     selection: OplogExportSelection,
@@ -205,9 +205,9 @@ fn check_oplog_export_end(
     }
 }
 
-/// Writes an oplog export as JSON Lines: each entry is the `agent.oplog` document that
-/// `--format json` prints for it, on its own line. The writer refuses an entry that
-/// `check_oplog_export_order` refuses, and an end that `check_oplog_export_end` refuses, so that
+/// Writes an oplog export as JSON Lines: each entry is the `agent.oplog` document that `--format
+/// json` prints for it, on its own line. The writer refuses an entry that
+/// `check_oplog_export_order` refuses. It refuses an end that `check_oplog_export_end` refuses. So
 /// a wrong read fails the export and does not write a wrong file.
 pub struct OplogJsonlWriter<W: std::io::Write> {
     writer: W,
@@ -244,8 +244,8 @@ impl<W: std::io::Write> OplogJsonlWriter<W> {
         Ok(())
     }
 
-    /// Checks the end of the export against `range_last`, the last index of the range in the
-    /// oplog, flushes the written lines, and gives the inner writer and the count of the written
+    /// Checks the end of the export against `range_last`, the last index of the range in the oplog.
+    /// Then it flushes the written lines. It gives the inner writer and the count of the written
     /// entries.
     pub fn finish(mut self, range_last: OplogIndex) -> anyhow::Result<(W, u64)> {
         check_oplog_export_end(self.selection, self.last_index, range_last)?;

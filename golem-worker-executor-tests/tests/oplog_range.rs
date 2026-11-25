@@ -12,8 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-//! Oplog reads of a range, `from` to `to`, with and without a query: across the oplog layers,
-//! across pages, past the scan budget of a search page, and with entries that pages omit.
+//! Oplog reads of a range, `from` to `to`, with and without a query. The reads cross the oplog
+//! layers and the pages. They go past the scan budget of a search page. They read entries that
+//! pages omit.
 
 use crate::Tracing;
 
@@ -198,18 +199,18 @@ async fn read_pages_to(
     pages.try_concat().await
 }
 
-/// The count of entries after which the primary oplog of the second executor moves its entries
-/// to the compressed layer. The compressed layer moves its chunks to the blob layer only after
-/// this many chunks, so the second executor never moves entries to the blob layer.
+/// The count of entries after which the primary oplog of the second executor moves its entries to
+/// the compressed layer. The compressed layer moves its chunks to the blob layer only after this
+/// many chunks. So the second executor never moves entries to the blob layer.
 const TRANSFER_AFTER: u64 = 32;
 
-/// The oplog of the agent is in three layers at once: the blob layer holds the oldest entries,
-/// the compressed layer holds the next entries, and the primary oplog holds the newest entries.
-/// The first executor archives the whole history to the blob layer. After a real restart, the
-/// second executor does not archive idle agents, and moves the primary oplog to the compressed
-/// layer once, after `TRANSFER_AFTER` entries. Every range read, with and without an end, returns
-/// each index of the range once, in order, with the entries of a full read. Its pages end and
-/// start exactly at each layer boundary.
+/// The oplog of the agent is in three layers at once. The blob layer holds the oldest entries. The
+/// compressed layer holds the next entries. The primary oplog holds the newest entries. The first
+/// executor archives the whole history to the blob layer. After a real restart, the second executor
+/// does not archive idle agents. It moves the primary oplog to the compressed layer once, after
+/// `TRANSFER_AFTER` entries. Every range read, with and without an end, returns each index of the
+/// range once, in order, with the entries of a full read. Its pages end and start exactly at each
+/// layer boundary.
 #[test]
 #[timeout("4m")]
 async fn range_reads_across_the_oplog_layers_return_every_index_once_in_order(
@@ -326,8 +327,8 @@ async fn range_reads_across_the_oplog_layers_return_every_index_once_in_order(
     assert_eq!(indices(&full), (1..=last).collect::<Vec<_>>());
 
     // At each layer boundary, pages of `count` entries from `boundary + 1 - count` end exactly at
-    // the boundary, and the next page starts just after it. With an end, the range ends `count`
-    // entries after the boundary; without an end, the pages go on to the end of the oplog.
+    // the boundary. The next page starts just after it. With an end, the range ends `count` entries
+    // after the boundary. Without an end, the pages go on to the end of the oplog.
     let full = &full;
     let reads = [blob_last, compressed_last]
         .into_iter()
@@ -443,10 +444,10 @@ async fn a_search_within_a_range_returns_only_the_matching_entries_in_the_range(
     Ok(())
 }
 
-/// The scan budget ends a search page, not a read that follows the cursors: with a budget far
-/// below the length of the oplog, one search page stops at the budget, and the read of the same
-/// range and query returns every match. A range read without an allowance has no budget, also
-/// when its start is after the budget.
+/// The scan budget ends a search page, not a read that follows the cursors. With a budget far below
+/// the length of the oplog, one search page stops at the budget. The read of the same range and
+/// query returns every match. A range read without an allowance has no budget, also when its start
+/// is after the budget.
 #[test]
 #[timeout("4m")]
 async fn a_read_that_follows_the_cursors_is_not_limited_by_the_scan_budget(
@@ -518,7 +519,7 @@ async fn a_read_that_follows_the_cursors_is_not_limited_by_the_scan_budget(
         .await?;
     assert_eq!(indices(&found), started);
 
-    // A range read without an allowance has no budget: it reads the oplog before its start, which
+    // A range read without an allowance has no budget. It reads the oplog before its start, which
     // is longer than the budget, and returns every index of its range.
     let from = 1 + BUDGET + 5;
     let late = executor
@@ -528,8 +529,8 @@ async fn a_read_that_follows_the_cursors_is_not_limited_by_the_scan_budget(
     Ok(())
 }
 
-/// A range page omits an entry that is larger than the page entry limit, but keeps its index in
-/// the range, and the read of the range returns the entry in full.
+/// A range page omits an entry that is larger than the page entry limit, but keeps its index in the
+/// range. The read of the range returns the entry in full.
 #[test]
 #[timeout("4m")]
 async fn a_range_read_returns_the_entries_that_its_pages_omit_in_full(

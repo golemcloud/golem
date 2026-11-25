@@ -551,10 +551,10 @@ pub trait TestDsl: Sync {
         target: RevertWorkerTarget,
     ) -> anyhow::Result<()>;
 
-    /// Reads the oplog entries of `range` that match `query`, in full and in index order. The
-    /// read follows the cursor of each page to the end of the range, so neither the page size nor
-    /// the scan budget of a search page limits it. Without `query`, the read returns every entry
-    /// of the range.
+    /// Reads the oplog entries of `range` that match `query`, in full and in index order. The read
+    /// follows the cursor of each page to the end of the range. So the page size does not limit it,
+    /// and the scan budget of a search page does not limit it. Without `query`, the read returns
+    /// every entry of the range.
     async fn read_oplog(
         &self,
         agent_id: &OwnedAgentId,

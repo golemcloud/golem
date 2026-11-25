@@ -90,8 +90,8 @@ impl OplogRange {
 
     /// The range from `from` to `to`. Without `from`, or with `from` at index 0, the range has no
     /// start. Without `to`, the range continues to the end of the oplog. A `to` before the start
-    /// gives an error; a range without a start starts at 1 for this check, because an oplog has
-    /// no entry before index 1.
+    /// gives an error. For this check, a range without a start starts at 1, because an oplog has no
+    /// entry before index 1.
     pub fn new(
         from: Option<OplogIndex>,
         to: Option<OplogIndex>,
@@ -135,28 +135,28 @@ impl OplogRange {
         self.end.is_some()
     }
 
-    /// Whether a read of the range can give its first entry at `index`. A range with a start
-    /// gives its first entry only at its start. A range without a start can give it at any
-    /// index, because only the reader of the oplog knows the first entry that the oplog holds.
+    /// Whether a read of the range can give its first entry at `index`. A range with a start gives
+    /// its first entry only at its start. A range without a start can give it at any index. Only
+    /// the reader of the oplog knows the first entry that the oplog holds.
     pub fn can_start_at(&self, index: OplogIndex) -> bool {
         self.start.is_none_or(|start| start == index)
     }
 
-    /// The first index of the range in an oplog whose first entry is at `oplog_first`: the start
-    /// of the range, or `oplog_first` when the range has no start. An `oplog_first` of 0 counts as
-    /// 1, because an oplog has no entry before index 1.
+    /// The first index of the range in an oplog whose first entry is at `oplog_first`. It is the
+    /// start of the range, or `oplog_first` when the range has no start. An `oplog_first` of 0
+    /// counts as 1, because an oplog has no entry before index 1.
     pub fn first_index_in(&self, oplog_first: OplogIndex) -> OplogIndex {
         self.start.unwrap_or(oplog_first.max(OplogIndex::INITIAL))
     }
 
-    /// The first index that the range can hold: its start, or 1 when it has no start, because an
-    /// oplog has no entry before index 1.
+    /// The first index that the range can hold: its start, or 1 when it has no start. An oplog has
+    /// no entry before index 1.
     fn first_possible(&self) -> OplogIndex {
         self.first_index_in(OplogIndex::INITIAL)
     }
 
-    /// The last index of the range in an oplog whose last index is `oplog_last`: the end of the
-    /// range, or `oplog_last` when the range has no end or ends after it.
+    /// The last index of the range in an oplog whose last index is `oplog_last`. It is the end of
+    /// the range. It is `oplog_last` when the range has no end or ends after it.
     pub fn last_index_in(&self, oplog_last: OplogIndex) -> OplogIndex {
         self.end.map_or(oplog_last, |end| end.min(oplog_last))
     }

@@ -3160,8 +3160,8 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
     oplog.commit(CommitLevel::Always).await.unwrap();
     assert_eq!(matching[0], first_index.next());
 
-    // The time budget is long, so that a search that does not stop when its result is full
-    // hangs instead of ending at the time budget with the same result.
+    // The time budget is long. A search that does not stop when its result is full then hangs. It
+    // does not end at the time budget with the same result.
     let budget = ScanBudget {
         time: std::time::Duration::from_secs(600),
         ..ScanBudget::default()
@@ -3235,7 +3235,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
     let second = guest(first.next_oplog_index).await.unwrap();
     assert_eq!(indices(&second.entries), vec![matching[2]]);
     assert_eq!(second.last_index, matching[2]);
-    // A search from after the pinned end reads no entry, keeps its start and its revision, and
+    // A search from after the pinned end reads no entry, and keeps its start and its revision. It
     // gives the pinned end as its last index, so that the guest sees the end of the search.
     let after_the_end = guest(second.next_oplog_index).await.unwrap();
     assert!(second.next_oplog_index > matching[2]);
@@ -4398,8 +4398,8 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
         Some(indices[6].as_u64())
     );
 
-    // A read without an allowance has no limit: with a configured allowance of 2 entries and
-    // 1 ms, it still finds the revision at `from` and reads the range to `to`.
+    // A read without an allowance has no limit. With a configured allowance of 2 entries and 1 ms,
+    // it still finds the revision at `from` and reads the range to `to`.
     let configured = ScanBudget {
         entries: std::num::NonZeroU64::new(2).unwrap(),
         time: std::time::Duration::from_millis(1),

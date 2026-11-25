@@ -148,9 +148,9 @@ mod platform {
 }
 
 /// Creates the temporary file of an export to `path`, in the directory of `path`, and creates that
-/// directory when it is missing. The file gets the mode that a plain write of `path` gives it: an
-/// existing target keeps its mode, and a new file gets 0666 under the umask instead of the 0600 of
-/// a temporary file. The export renames the file to `path` when it is complete.
+/// directory when it is missing. The file gets the mode that a plain write of `path` gives it. An
+/// existing target keeps its mode. A new file gets 0666 under the umask, not the 0600 of a
+/// temporary file. The export renames the file to `path` when it is complete.
 pub(crate) fn export_temporary_file(path: &Path) -> anyhow::Result<tempfile::NamedTempFile> {
     let parent = match path.parent() {
         Some(parent) if !parent.as_os_str().is_empty() => {

@@ -435,8 +435,9 @@ async fn read_create<R: OplogReads>(
     }
 }
 
-/// Exports the oplog of one agent into the sink: the header, every entry from `options.from` that
-/// matches `options.query` in index order, then, after a final root check, the coverage.
+/// Exports the oplog of one agent into the sink. It writes the header, and then every entry from
+/// `options.from` that matches `options.query`, in index order. After a final root check, it writes
+/// the coverage.
 pub async fn export_oplog<R: OplogReads>(
     reads: R,
     key: &'static TokenKey,
@@ -486,10 +487,10 @@ const ANY_ALLOWANCE: OplogScanAllowance = OplogScanAllowance {
 
 /// Exports one closed range of the oplog of one agent as one report, built in memory.
 ///
-/// The range must be within the oplog at the pin of the root. The reads of the range share one
-/// scan allowance of the server: the first read asks for [`ANY_ALLOWANCE`], which the server
-/// clamps to its configured allowance, and each later read passes on what the reads before it
-/// left. When the allowance runs out before the end of the range, the export fails with
+/// The range must be within the oplog at the pin of the root. The reads of the range share one scan
+/// allowance of the server. The first read asks for [`ANY_ALLOWANCE`], and the server clamps it to
+/// its configured allowance. Each later read passes on what the reads before it left. When the
+/// allowance runs out before the end of the range, the export fails with
 /// [`OplogExportError::ScanBudgetExceeded`].
 ///
 /// `document_bytes` is the size of the document of a report, with its newline. When the report
