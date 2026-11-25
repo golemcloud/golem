@@ -1,12 +1,12 @@
-use chrono::{DateTime, Utc};
 use golem_rust::{Schema, agent_definition, agent_implementation, description, endpoint, prompt};
+use jiff::Timestamp;
 
 #[derive(Clone, Schema)]
 pub struct Task {
     id: usize,
     title: String,
     completed: bool,
-    created_at: DateTime<Utc>,
+    created_at: Timestamp,
 }
 
 #[derive(Schema)]
@@ -54,7 +54,7 @@ impl TaskAgent for TasksImpl {
             id,
             title: request.title,
             completed: false,
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
         };
         self.tasks.push(task.clone());
         task

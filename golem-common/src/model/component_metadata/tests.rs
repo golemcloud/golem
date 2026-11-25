@@ -138,7 +138,7 @@ fn component_metadata_grpc_roundtrip_preserves_agent_initial_permissions() {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -605,6 +605,7 @@ fn tool_deployment_state_proto_rejects_revealable_secrets_outside_readable_scope
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: crate::model::tool::ToolFilesystemAccess::Unset,
         source,
+        shell: false,
     };
     let component_id = ComponentId::new();
     let mut component_binding = binding.clone();
@@ -685,6 +686,7 @@ fn tool_deployment_state_proto_roundtrip_preserves_coherent_snapshot() {
         secret_keys_revealable: SecretKeyScope::All,
         filesystem_access: crate::model::tool::ToolFilesystemAccess::Allowed,
         source,
+        shell: false,
     };
     let component_id = ComponentId::new();
     let mut component_binding = binding.clone();

@@ -17,7 +17,7 @@ use super::{
     millis_to_datetime,
 };
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use futures::FutureExt;
 use golem_common::config::DbSqliteConfig;
 use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
@@ -64,11 +64,12 @@ impl SqliteSchedulerStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerStorage for SqliteSchedulerStorage {
     async fn insert(
         &self,
         schedule_id: ScheduleId,
-        due_at: DateTime<Utc>,
+        due_at: jiff::Timestamp,
         shard_id: ShardId,
         action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
@@ -104,7 +105,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
 
     async fn claim_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
         limit: u32,
         lease_ttl: Duration,
@@ -184,7 +185,7 @@ impl SchedulerStorage for SqliteSchedulerStorage {
 
     async fn count_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError> {
         if assignment.is_empty() {
@@ -219,16 +220,20 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
-        lease_until: DateTime<Utc>,
+        lease_until: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         let lease_until_ms = datetime_to_millis(lease_until);
         let query = sqlx::query(
-            "UPDATE scheduled_actions SET lease_until_ms = ?, available_at_ms = ? WHERE schedule_id = ? AND lease_owner = ?;",
+            "UPDATE scheduled_actions SET lease_until_ms = MAX(lease_until_ms, ?), available_at_ms = MAX(lease_until_ms, ?) WHERE schedule_id = ? AND lease_owner = ? AND lease_until_ms > ? AND ? > ?;",
         )
         .bind(lease_until_ms)
         .bind(lease_until_ms)
         .bind(schedule_id.id.to_string())
-        .bind(lease_owner.to_string());
+        .bind(lease_owner.to_string())
+        .bind(datetime_to_millis(now))
+        .bind(lease_until_ms)
+        .bind(datetime_to_millis(now));
 
         self.pool
             .with_rw("scheduler_storage", "extend_lease")
@@ -242,11 +247,13 @@ impl SchedulerStorage for SqliteSchedulerStorage {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         let query =
-            sqlx::query("DELETE FROM scheduled_actions WHERE schedule_id = ? AND lease_owner = ?;")
+            sqlx::query("DELETE FROM scheduled_actions WHERE schedule_id = ? AND lease_owner = ? AND lease_until_ms > ?;")
                 .bind(schedule_id.id.to_string())
-                .bind(lease_owner.to_string());
+                .bind(lease_owner.to_string())
+                .bind(datetime_to_millis(now));
 
         self.pool
             .with_rw("scheduler_storage", "ack")

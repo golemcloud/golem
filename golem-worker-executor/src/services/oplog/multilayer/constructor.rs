@@ -57,6 +57,7 @@ impl CreateOplogConstructor {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogConstructor for CreateOplogConstructor {
     fn shard_epoch(&self) -> Option<ShardEpoch> {
         self.shard_epoch

@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::{BearerWriteFailureStores, SessionStorePair};
-use chrono::{TimeDelta, Utc};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeRevision};
 use golem_worker_service::custom_api::model::OidcSession;
@@ -22,6 +21,7 @@ use golem_worker_service::custom_api::oidc::model::{
     PendingPkceLogin, PkceAuthorizationCode, PkceBearerCredential, PkceBinding, SessionId,
 };
 use golem_worker_service::custom_api::oidc::session_store::SessionStore;
+use jiff::{SignedDuration, Timestamp};
 use openidconnect::core::CoreIdTokenClaims;
 use openidconnect::{
     Audience, EmptyAdditionalClaims, IssuerUrl, Nonce, Scope, StandardClaims, SubjectIdentifier,
@@ -83,7 +83,7 @@ pub(crate) fn sample_pending_login() -> PendingOidcLogin {
     }
 }
 
-fn sample_claims(expires_at: chrono::DateTime<Utc>) -> CoreIdTokenClaims {
+fn sample_claims(expires_at: jiff::Timestamp) -> CoreIdTokenClaims {
     let issuer = IssuerUrl::new("https://issuer.example".to_string()).unwrap();
     let audience = Audience::new("client_id".to_string());
 
@@ -92,14 +92,14 @@ fn sample_claims(expires_at: chrono::DateTime<Utc>) -> CoreIdTokenClaims {
     CoreIdTokenClaims::new(
         issuer,
         vec![audience],
-        expires_at,
-        Utc::now(),
+        std::time::SystemTime::try_from(expires_at).unwrap().into(),
+        std::time::SystemTime::now().into(),
         standard_claims,
         EmptyAdditionalClaims {},
     )
 }
 
-pub(crate) fn sample_session(expires_at: chrono::DateTime<Utc>) -> OidcSession {
+pub(crate) fn sample_session(expires_at: jiff::Timestamp) -> OidcSession {
     OidcSession {
         subject: "sub".into(),
         issuer: "issuer".into(),
@@ -127,7 +127,7 @@ pub(crate) fn sample_binding() -> PkceBinding {
 
 pub(crate) fn sample_pending_pkce(
     binding: PkceBinding,
-    expires_at: chrono::DateTime<Utc>,
+    expires_at: jiff::Timestamp,
 ) -> PendingPkceLogin {
     PendingPkceLogin {
         binding,
@@ -141,11 +141,11 @@ pub(crate) fn sample_pending_pkce(
 
 pub(crate) fn sample_authorization_code(
     binding: PkceBinding,
-    expires_at: chrono::DateTime<Utc>,
+    expires_at: jiff::Timestamp,
 ) -> PkceAuthorizationCode {
     PkceAuthorizationCode {
         binding,
-        principal: sample_session(Utc::now() + TimeDelta::hours(2)),
+        principal: sample_session(Timestamp::now() + SignedDuration::from_hours(2)),
         redirect_uri: "https://frontend.example/callback".into(),
         code_challenge: "challenge".into(),
         expires_at,
@@ -154,11 +154,11 @@ pub(crate) fn sample_authorization_code(
 
 pub(crate) fn sample_bearer(
     binding: PkceBinding,
-    expires_at: chrono::DateTime<Utc>,
+    expires_at: jiff::Timestamp,
 ) -> PkceBearerCredential {
     PkceBearerCredential {
         binding,
-        principal: sample_session(Utc::now() + TimeDelta::hours(2)),
+        principal: sample_session(Timestamp::now() + SignedDuration::from_hours(2)),
         expires_at,
     }
 }
@@ -214,7 +214,7 @@ async fn authenticated_session_roundtrip(
 ) -> anyhow::Result<()> {
     let session_id = SessionId(Uuid::now_v7());
 
-    let session = sample_session(Utc::now() + TimeDelta::seconds(30));
+    let session = sample_session(Timestamp::now() + SignedDuration::from_secs(30));
 
     store
         .store_authenticated_session(&session_id, session.clone())
@@ -232,7 +232,7 @@ async fn authenticated_session_expiry(
     #[dimension(session_store_fast_expiry)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
     let session_id = SessionId(Uuid::now_v7());
-    let session = sample_session(Utc::now() + chrono::Duration::milliseconds(50));
+    let session = sample_session(Timestamp::now() + jiff::SignedDuration::from_millis(50));
 
     store
         .store_authenticated_session(&session_id, session)
@@ -286,8 +286,8 @@ async fn authenticated_session_overwrite(
     #[dimension(session_store)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
     let session_id = SessionId(Uuid::now_v7());
-    let session1 = sample_session(Utc::now() + chrono::Duration::seconds(60));
-    let session2 = sample_session(Utc::now() + chrono::Duration::seconds(120));
+    let session1 = sample_session(Timestamp::now() + jiff::SignedDuration::from_secs(60));
+    let session2 = sample_session(Timestamp::now() + jiff::SignedDuration::from_secs(120));
 
     store
         .store_authenticated_session(&session_id, session1.clone())
@@ -455,7 +455,7 @@ async fn pkce_records_roundtrip_delete_and_keep_namespaces_isolated(
     #[dimension(session_store)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
     let binding = sample_binding();
-    let expires_at = Utc::now() + TimeDelta::minutes(5);
+    let expires_at = Timestamp::now() + SignedDuration::from_mins(5);
     let upstream_state = Uuid::now_v7().to_string();
     store
         .store_pending_pkce_login(
@@ -520,7 +520,7 @@ async fn pkce_records_enforce_expiry_without_cleanup(
     #[dimension(session_store)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
     let binding = sample_binding();
-    let expired = Utc::now() - TimeDelta::milliseconds(1);
+    let expired = Timestamp::now() - SignedDuration::from_millis(1);
     let state = Uuid::now_v7().to_string();
     store
         .store_pending_pkce_login(&state, sample_pending_pkce(binding.clone(), expired))
@@ -558,7 +558,7 @@ async fn pkce_credentials_reject_context_and_revision_mismatch(
     #[dimension(session_store)] store: &Arc<dyn SessionStore>,
 ) -> anyhow::Result<()> {
     let binding = sample_binding();
-    let expires_at = Utc::now() + TimeDelta::minutes(5);
+    let expires_at = Timestamp::now() + SignedDuration::from_mins(5);
     let token = BearerToken::generate();
     store
         .store_bearer_credential(&token, sample_bearer(binding.clone(), expires_at))
@@ -644,7 +644,10 @@ async fn independent_store_instances_have_one_atomic_consumer(
         .first
         .store_pending_pkce_login(
             &state,
-            sample_pending_pkce(binding.clone(), Utc::now() + TimeDelta::minutes(5)),
+            sample_pending_pkce(
+                binding.clone(),
+                Timestamp::now() + SignedDuration::from_mins(5),
+            ),
         )
         .await?;
     let (first, second) = tokio::join!(
@@ -661,7 +664,7 @@ async fn independent_store_instances_have_one_atomic_consumer(
         .first
         .store_authorization_code(
             &code,
-            sample_authorization_code(binding, Utc::now() + TimeDelta::minutes(5)),
+            sample_authorization_code(binding, Timestamp::now() + SignedDuration::from_mins(5)),
         )
         .await?;
     let (first, second) = tokio::join!(
@@ -688,7 +691,10 @@ async fn bearer_storage_failure_after_consumption_requires_reauthorization(
         .healthy
         .store_authorization_code(
             &code,
-            sample_authorization_code(binding.clone(), Utc::now() + TimeDelta::minutes(5)),
+            sample_authorization_code(
+                binding.clone(),
+                Timestamp::now() + SignedDuration::from_mins(5),
+            ),
         )
         .await?;
 
@@ -704,7 +710,7 @@ async fn bearer_storage_failure_after_consumption_requires_reauthorization(
             PkceBearerCredential {
                 binding: consumed.binding,
                 principal: consumed.principal,
-                expires_at: Utc::now() + TimeDelta::hours(1),
+                expires_at: Timestamp::now() + SignedDuration::from_hours(1),
             },
         )
         .await;

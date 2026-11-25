@@ -1,0 +1,36 @@
+{
+  "tier": "pr",
+  "description": "`find`'s expression compiler and its parser's real-nesting (`(`/`!`/`-not`) depth.\n\nA flat `-a`/`-o`/`,' chain, however long, parses and compiles as a loop and so never counts\nagainst the nesting guard; only genuine parenthesised or negated nesting does, since that is\nthe shape that used to recurse once per level in both the parser and `emit`.",
+  "cases": [
+    {
+      "name": "find nesting: a flat 8000-name -o chain is not nesting",
+      "script": "mkdir w; cd w; touch f; args=(); for i in $(seq 1 8000); do args+=(-name \"nomatch$i\" -o); done; find . -maxdepth 1 \"${args[@]}\" -name f -print; echo status=$?",
+      "tags": [],
+      "options": {
+        "timeout": 60
+      }
+    },
+    {
+      "name": "find nesting: 900 levels of real parentheses still compiles",
+      "script": "mkdir w; cd w; o=$(printf \"( %.0s\" $(seq 1 900)); c=$(printf \") %.0s\" $(seq 1 900)); find . -maxdepth 0 $o -true $c; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find nesting: 1001 levels of real parentheses is refused cleanly",
+      "script": "mkdir w; cd w; o=$(printf \"( %.0s\" $(seq 1 1001)); c=$(printf \") %.0s\" $(seq 1 1001)); find . -maxdepth 0 $o -true $c; echo status=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "status=2\n"
+        },
+        "stderr": {
+          "text": "find: maximum nesting level exceeded: deeper nesting is unsupported in bash-tool\n"
+        },
+        "reason": "fixture: find's own recursive-descent parser and bytecode compiler would overflow the native stack past this depth (see README.md's Limits section); GNU findutils has no comparable limit"
+      }
+    }
+  ]
+}

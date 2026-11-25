@@ -28,6 +28,7 @@ use golem_common::model::oplog::{
     HostResponseP3KeyvalueIncomingValueStream, OplogIndex,
 };
 
+use crate::durable_host::attribution::with_import_access;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, AccessorContext, CallReplayOutcome, Cancellable, DurableCallSession,
     InvocationIdSource, import_invocation_id, resolve_current_observational_owner,
@@ -345,7 +346,8 @@ impl<U: Send + 'static, Ctx: WorkerCtx> HostOutgoingValueWithStore<U>
             if live {
                 task.run(accessor).await?;
             } else {
-                let captured = accessor.with(|mut access| access.get().attribution.capture());
+                let captured =
+                    with_import_access(accessor, |mut access| access.get().attribution.capture());
                 accessor.spawn(async move |accessor| captured.run(task.run(accessor)).await)?;
             }
         }

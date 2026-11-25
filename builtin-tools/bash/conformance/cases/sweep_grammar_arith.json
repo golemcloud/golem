@@ -1,0 +1,2828 @@
+{
+  "tier": "sweep",
+  "description": "Grammar sweep: arithmetic expansion, (( )), let, declare -i and arithmetic contexts.\n\nExpressions come from a small grammar driven by a fixed-seed arithmetic PRNG. Each generated\nexpression is kept only if its shape (operators and structure, ignoring which literal or variable\nfills a leaf) is new, so the cases differ in construct rather than in literals.",
+  "cases": [
+    {
+      "name": "gram arith generated 1 expansion: (36#z!=a[1] + 0!=z, r==z|7)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $(((36#z!=a[1] + 0!=z, r==z|7))); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 2 command: (a[x-4] ? 010 : 7)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; (((a[x-4] ? 010 : 7))); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 3 let: ((t |= z && 1) ? ((010, -2) ? 0 * 2#101 : c++) : +(($x, -2)))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '((t |= z && 1) ? ((010, -2) ? 0 * 2#101 : c++) : +(($x, -2)))'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 4 declare -i: -(r)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='-(r)'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 5 subscript: (0 ? a[x-4]<7 : 1)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[(0 ? a[x-4]<7 : 1)]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 6 legacy: ++a[0]==0 <= -(a[1]|y)|((a[1], s)-($x, x), (c = !(0x1f)))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[++a[0]==0 <= -(a[1]|y)|((a[1], s)-($x, x), (c = !(0x1f)))]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 7 expansion: +(~(7) <= y - z)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $((+(~(7) <= y - z))); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 8 command: 36#z != 2#101",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; ((36#z != 2#101)); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 9 let: 0 % 1%1*!(y)-~(7)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '0 % 1%1*!(y)-~(7)'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 10 declare -i: (2#101, r)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='(2#101, r)'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 11 subscript: (t *= 2#101)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[(t *= 2#101)]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 12 legacy: 0 <= x",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[0 <= x]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 13 expansion: ((1, 36#z), -2)/2",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $((((1, 36#z), -2)/2)); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 14 command: (c %= 3)*a[x-4]",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; (((c %= 3)*a[x-4])); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 15 let: (a[2] = x)**3",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '(a[2] = x)**3'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 16 declare -i: !(z) * 0>1",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='!(z) * 0>1'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 17 subscript: s ** 7 >= 36#z >= ((1, 1) ? $x : -(36#z))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[s ** 7 >= 36#z >= ((1, 1) ? $x : -(36#z))]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 18 legacy: ++a[0]",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[++a[0]]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 19 expansion: -(c--)**3",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $((-(c--)**3)); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 20 command: (--c ? 36#z : +(2#101))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; (((--c ? 36#z : +(2#101)))); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 21 let: (010 ? (c--, z) : 7 << 2)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '(010 ? (c--, z) : 7 << 2)'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 22 declare -i: c--",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='c--'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 23 subscript: !(a[1])",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[!(a[1])]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 24 legacy: (2#101 ? s : 1 | a[1])<36#z||0|1*z",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[(2#101 ? s : 1 | a[1])<36#z||0|1*z]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 25 expansion: ~((0, 7))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $((~((0, 7)))); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 26 command: c++",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; ((c++)); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 27 let: z^z - (a[2] <<= 3) << 1 != 36#z",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let 'z^z - (a[2] <<= 3) << 1 != 36#z'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 28 declare -i: (c *= a[1])",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='(c *= a[1])'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 29 subscript: (c %= 7)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[(c %= 7)]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 30 legacy: 0x1f--2 > z / 1 & -2 || a[1]",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[0x1f--2 > z / 1 & -2 || a[1]]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 31 expansion: (t >>= 2) ** 7<=010 != 7 | -(a[x-4])",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $(((t >>= 2) ** 7<=010 != 7 | -(a[x-4]))); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 32 command: (z % 2 ? s : 0x1f!=y)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; (((z % 2 ? s : 0x1f!=y))); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 33 let: (--c, ++a[0])",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '(--c, ++a[0])'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 34 declare -i: (1&(c >>= 2), ~(a[1]) || r)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='(1&(c >>= 2), ~(a[1]) || r)'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 35 subscript: (z, s)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[(z, s)]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 36 legacy: x << 3",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[x << 3]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 37 expansion: 36#z || 7 + a[1]",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $((36#z || 7 + a[1])); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 38 command: r<=a[1]--",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; ((r<=a[1]--)); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 39 let: z << 3",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let 'z << 3'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 40 declare -i: a[x-4]>>3",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='a[x-4]>>3'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 41 subscript: x/3",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[x/3]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 42 legacy: z>=a[x-4] / 2",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[z>=a[x-4] / 2]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 43 expansion: z&&r",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $((z&&r)); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 44 command: (c >>= 7)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; (((c >>= 7))); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 45 let: ((!(z), 0x1f) ? (a[2] = $x) <= (7 ? 7 : $x) : a[1] >> 7)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '((!(z), 0x1f) ? (a[2] = $x) <= (7 ? 7 : $x) : a[1] >> 7)'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 46 declare -i: (a[1], !(y<1))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='(a[1], !(y<1))'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 47 subscript: (36#z ? 010 : z)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[(36#z ? 010 : z)]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 48 legacy: ~(--c>>2)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[~(--c>>2)]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 49 expansion: !((c %= 2)|-(-2))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $((!((c %= 2)|-(-2)))); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 50 command: (s, ~(c-- >= 1))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; (((s, ~(c-- >= 1)))); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 51 let: (r, z)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '(r, z)'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 52 declare -i: !(a[x-4] - 1**7||+(1))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='!(a[x-4] - 1**7||+(1))'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 53 subscript: -(1)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[-(1)]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 54 legacy: (c = 010)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[(c = 010)]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 55 expansion: (t &= r)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $(((t &= r))); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 56 command: +(--c)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; ((+(--c))); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 57 let: ++a[0] < (2#101 ? 010 : y)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '++a[0] < (2#101 ? 010 : y)'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 58 declare -i: $x|x",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='$x|x'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 59 subscript: ~((2#101 ? a[1] : 0))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[~((2#101 ? a[1] : 0))]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 60 legacy: (0x1f&0 ? (z, !(a[1])) : ++a[0])",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[(0x1f&0 ? (z, !(a[1])) : ++a[0])]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 61 expansion: a[1]-- >= (c = (2#101 && 1 ? 0x1f : (r, 2#101)))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $((a[1]-- >= (c = (2#101 && 1 ? 0x1f : (r, 2#101))))); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 62 command: (($x, (a[2] += 010)) >= x&&1, r%7)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; (((($x, (a[2] += 010)) >= x&&1, r%7))); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 63 let: (a[2] &= r)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '(a[2] &= r)'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 64 declare -i: !(0)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='!(0)'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 65 subscript: +(0)**2",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[+(0)**2]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 66 legacy: (t /= 1)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[(t /= 1)]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 67 expansion: 7 == 010 | s",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $((7 == 010 | s)); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 68 command: -2 / 2",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; ((-2 / 2)); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 69 let: +((a[2] %= 3) ** 1)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '+((a[2] %= 3) ** 1)'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 70 declare -i: -(36#z)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='-(36#z)'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 71 subscript: (7, (010 ? $x : -2))|(t ^= -2-a[x-4])",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[(7, (010 ? $x : -2))|(t ^= -2-a[x-4])]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 72 legacy: +(~(a[1]))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[+(~(a[1]))]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 73 expansion: (t = 1)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $(((t = 1))); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 74 command: (a[2] ^= z)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; (((a[2] ^= z))); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 75 let: $x * x",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '$x * x'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 76 declare -i: (++a[0] ? s : +(1))==((1, 7), 36#z>>2)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='(++a[0] ? s : +(1))==((1, 7), 36#z>>2)'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 77 subscript: (t ^= (0x1f, 1) > r>c++)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[(t ^= (0x1f, 1) > r>c++)]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 78 legacy: ((y&&7, 36#z), c++ & (x ? 36#z : $x))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[((y&&7, 36#z), c++ & (x ? 36#z : $x))]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 79 expansion: (s || (t ^= y) ? z : (a[2] <<= 2) | --c)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $(((s || (t ^= y) ? z : (a[2] <<= 2) | --c))); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 80 command: !(c--+(~(010) ? x : s>r))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; ((!(c--+(~(010) ? x : s>r)))); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 81 let: (z, r)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '(z, r)'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 82 declare -i: -((y, (a[2] |= 2#101 ** 1)))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='-((y, (a[2] |= 2#101 ** 1)))'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 83 subscript: (z ? (z, 010) : x*a[1])",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[(z ? (z, 010) : x*a[1])]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 84 legacy: +(a[x-4])",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[+(a[x-4])]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 85 expansion: (a[2] %= 1)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $(((a[2] %= 1))); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 86 command: (a[2] = 36#z)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; (((a[2] = 36#z))); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 87 let: (t <<= 7)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '(t <<= 7)'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 88 declare -i: ((1 ? 0x1f : z), r - 0)>>3",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='((1 ? 0x1f : z), r - 0)>>3'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 89 subscript: -2 ^ y",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[-2 ^ y]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 90 legacy: ((a[1] ? x : a[x-4]) ? z&&010 : -2 << 7) / 3**2",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[((a[1] ? x : a[x-4]) ? z&&010 : -2 << 7) / 3**2]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 91 expansion: (y, 36#z)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $(((y, 36#z))); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 92 command: (y ? 0 : 2#101)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; (((y ? 0 : 2#101))); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 93 let: 7<(t += z)>>2",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '7<(t += z)>>2'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 94 declare -i: (36#z ? 0 : 2#101) << 2 / 1",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='(36#z ? 0 : 2#101) << 2 / 1'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 95 subscript: s||$x | 010 * -2>=a[1]%2",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[s||$x | 010 * -2>=a[1]%2]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 96 legacy: (a[1], 1) ** 3--(r)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[(a[1], 1) ** 3--(r)]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 97 expansion: (t >>= 3)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $(((t >>= 3))); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 98 command: a[x-4]**1",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; ((a[x-4]**1)); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 99 let: +(t++)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '+(t++)'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 100 declare -i: +(z) & z",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='+(z) & z'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 101 subscript: 36#z >= a[x-4]*(c |= s)^(0 ? --c : 010 | a[x-4])",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[36#z >= a[x-4]*(c |= s)^(0 ? --c : 010 | a[x-4])]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 102 legacy: x||36#z",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[x||36#z]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 103 expansion: 0x1f>>7",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $((0x1f>>7)); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 104 command: (r ? 7 : c++) / 3",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; (((r ? 7 : c++) / 3)); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 105 let: 0x1f^010",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '0x1f^010'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 106 declare -i: (-((c /= 7)) ? x * r & 7 : (r ? s : 2#101) > 010)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='(-((c /= 7)) ? x * r & 7 : (r ? s : 2#101) > 010)'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 107 subscript: a[1]-- * (r, 010)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[a[1]-- * (r, 010)]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 108 legacy: ++c != (a[2] %= 2)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[++c != (a[2] %= 2)]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 109 expansion: (t -= (a[1] ? $x : 36#z)) >= a[x-4] >> 2/2 ** 7",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $(((t -= (a[1] ? $x : 36#z)) >= a[x-4] >> 2/2 ** 7)); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 110 command: (s, $x)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; (((s, $x))); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 111 let: -(0x1f)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '-(0x1f)'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 112 declare -i: (a[2] /= 2)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='(a[2] /= 2)'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 113 subscript: (+(0) ? 010-y : --c)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[(+(0) ? 010-y : --c)]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 114 legacy: (s ? (((a[x-4], 7), (a[2] += a[1])), (a[2] %= 1)) : ~(1))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[(s ? (((a[x-4], 7), (a[2] += a[1])), (a[2] %= 1)) : ~(1))]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 115 expansion: (0 / 2 ? c++ : (c *= 36#z))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $(((0 / 2 ? c++ : (c *= 36#z)))); echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 116 command: r&-2&&t++",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; ((r&-2&&t++)); echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 117 let: $x ^ -2 > (1 ? x : 0x1f)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; let '$x ^ -2 > (1 ? x : 0x1f)'; echo \"status=$?\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 118 declare -i: -(((z, y) ? -2/1 : +(010))&a[1]--)",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; declare -i v; v='-(((z, y) ? -2/1 : +(010))&a[1]--)'; echo \"$v\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 119 subscript: (010 ? (y ? 010 : 0x1f) : +(r))",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; b=(); b[(010 ? (y ? 010 : 0x1f) : +(r))]=1 2>/dev/null; echo \"status=$? ${!b[@]}\"; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith generated 120 legacy: (y, (c /= 1)) / 7",
+      "script": "x=5 y=-3 s='x+1' r=x c=0 t=0; a=(10 20 30); unset z; echo $[(y, (c /= 1)) / 7]; echo \"x=$x c=$c t=$t a=${a[*]}\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed decimal",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((42))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed leading zeros octal",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((0017))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed octal eight",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((08))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed octal nine",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((019))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed hex upper",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((0XFF))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command hex upper",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 0XFF )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed hex empty",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((0x))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command hex empty",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 0x )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed hex bad digit",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((0xg))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base two",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((2#1010))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base two bad digit",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((2#12))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command base two bad digit",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 2#12 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base 16",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((16#ff))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base 36",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((36#Z))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base 64 at",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((64#@))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base 64 underscore",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((64#_))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command base 64 underscore",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 64#_ )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base 37 upper",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((37#A))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base 37 lower",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((37#a))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base one",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1#0))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base 65",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((65#1))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base zero",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((0#1))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command base zero",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 0#1 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base ten negative",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((10#-8))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base ten leading zeros",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((10#0010))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base no digits",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((10#))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed base with variable",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((b#11))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command base with variable",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( b#11 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed float",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1.5))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed exponent notation",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1e3))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed quoted number",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((\"5\"))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed spaces",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((' 5 '))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command spaces",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( ' 5 ' )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed max int",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((9223372036854775807))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed min int",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((-9223372036854775808))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed overflow literal",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((9223372036854775808))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed huge literal",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((99999999999999999999))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command huge literal",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 99999999999999999999 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed add overflow",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((9223372036854775807 + 1))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command add overflow",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 9223372036854775807 + 1 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed multiply overflow",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((4611686018427387904 * 4))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed min divided by minus one",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((-9223372036854775808 / -1))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command min divided by minus one",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( -9223372036854775808 / -1 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed min modulo minus one",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((-9223372036854775808 % -1))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed divide by zero",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 / 0))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed modulo by zero",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((5 % 0))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed divide assign by zero",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((t /= 0))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command divide assign by zero",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( t /= 0 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed negative exponent",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((2 ** -1))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed zero to zero",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((0 ** 0))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command zero to zero",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 0 ** 0 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed power precedence",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((-2 ** 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed power right assoc",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((2 ** 3 ** 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed negative shift",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 << -1))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed large shift",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 << 64))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed shift 63",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 << 63))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed right shift negative",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((-16 >> 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed modulo negative",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((-7 % 3))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command modulo negative",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( -7 % 3 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed division truncates",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((-7 / 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command division truncates",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( -7 / 2 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed unary chain",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((- - -3))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed not not",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((!!7))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed bitwise not",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((~0))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed comma",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1, 2, 3))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed nested ternary",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 ? 0 ? 2 : 3 : 4))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed ternary assignment",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 ? t = 4 : (c = 5)))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command ternary assignment",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 1 ? t = 4 : (c = 5) )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed ternary short circuit",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((0 ? c++ : t++))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command ternary short circuit",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 0 ? c++ : t++ )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed and short circuit",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((0 && c++))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed or short circuit",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 || c++))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed assignment to literal",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 = 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command assignment to literal",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 1 = 2 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed assignment to expression",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$(((t) = 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command assignment to expression",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( (t) = 2 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed double increment",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((c++ + ++c))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed increment literal",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((5++))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed increment expression",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((++(c)))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed empty",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$(())]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed only spaces",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((   ))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed unbalanced open",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$(((1 + 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command unbalanced open",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( (1 + 2 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed unbalanced close",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 + 2)))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed trailing operator",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 +))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed leading operator",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((* 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed two operands",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command two operands",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 1 2 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed unknown operator",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 ** * 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed string variable",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((w))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command string variable",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( w )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed recursive variable",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((rec))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command recursive variable",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( rec )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed variable with spaces",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((sp))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed dollar in name",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$(($t$t))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed array without index",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((a))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed array negative index",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((a[-1]))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed array bad negative index",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((a[-9]))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command array bad negative index",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( a[-9] )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed array star",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((a[*]))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed assoc element",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((m[k]))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed assoc string key",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((m[k]+m[j]))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed positional",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$(($1 + $2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed dollar hash",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$(($#))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed parameter expansion",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((${#a[@]} * 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command substitution",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$(($(echo 3) + 1))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed nested arithmetic",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$(($((1+1)) * 3))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed comparison chain",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 < 2 < 3))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed equality of strings",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((q == q2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed bitwise precedence",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 | 2 ^ 3 & 4))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command bitwise precedence",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 1 | 2 ^ 3 & 4 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed logical precedence",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((0 || 1 && 0))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command logical precedence",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 0 || 1 && 0 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed assign chain",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((t = c = 3))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command assign chain",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( t = c = 3 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed compound assign chain",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((t += c += 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command compound assign chain",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( t += c += 2 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed post decrement in condition",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((c-- ? 1 : 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command post decrement in condition",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( c-- ? 1 : 2 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed unset variable arithmetic",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((undefined + 1))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed readonly assignment",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((ro = 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed integer attribute string",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((iv + 1))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command integer attribute string",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( iv + 1 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed newline inside",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 +\n2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed tab inside",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1\t+\t2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed hash comment",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 # 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command hash comment",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 1 # 2 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed character constant",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$(('a'))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command character constant",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 'a' )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed backslash",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((1 \\+ 2))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed command backslash",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; (( 1 \\+ 2 )); echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "compound.arith"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith fixed unicode digit",
+      "script": "x=5 t=0 c=0 w=hello rec=rec sp='1 2' q=1 q2=1 iv=abc; readonly ro=1; declare -A m=([k]=3 [j]=4); a=(10 20 30); set -- 4 5; echo \"[$((١))]\"; echo \"status=$? t=$t c=$c\"",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error ends the shell: divide by zero",
+      "script": "rec=rec; a=(1); echo before; echo $((1/0)); echo \"after $?\"\necho next line",
+      "tags": [
+        "expansion.arithmetic",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in a command: divide by zero",
+      "script": "rec=rec; a=(1); echo before; ((1/0)); echo \"after $?\"\necho next line",
+      "tags": [
+        "compound.arith",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in let: divide by zero",
+      "script": "rec=rec; a=(1); echo before; let '1/0'; echo \"after $?\"\necho next line",
+      "tags": [
+        "builtin.let",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in a for header: divide by zero",
+      "script": "rec=rec; a=(1); echo before; for ((i=0; 1/0; i++)); do echo body; break; done; echo \"after $?\"\necho next line",
+      "tags": [
+        "compound.for-arith",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in declare -i: divide by zero",
+      "script": "rec=rec; a=(1); declare -i v; echo before; v='1/0'; echo \"after $? v=$v\"\necho next line",
+      "tags": [
+        "param.attributes",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error ends the shell: syntax",
+      "script": "rec=rec; a=(1); echo before; echo $((1 +)); echo \"after $?\"\necho next line",
+      "tags": [
+        "expansion.arithmetic",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in a command: syntax",
+      "script": "rec=rec; a=(1); echo before; ((1 +)); echo \"after $?\"\necho next line",
+      "tags": [
+        "compound.arith",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in let: syntax",
+      "script": "rec=rec; a=(1); echo before; let '1 +'; echo \"after $?\"\necho next line",
+      "tags": [
+        "builtin.let",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in a for header: syntax",
+      "script": "rec=rec; a=(1); echo before; for ((i=0; 1 +; i++)); do echo body; break; done; echo \"after $?\"\necho next line",
+      "tags": [
+        "compound.for-arith",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in declare -i: syntax",
+      "script": "rec=rec; a=(1); declare -i v; echo before; v='1 +'; echo \"after $? v=$v\"\necho next line",
+      "tags": [
+        "param.attributes",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error ends the shell: bad base",
+      "script": "rec=rec; a=(1); echo before; echo $((2#3)); echo \"after $?\"\necho next line",
+      "tags": [
+        "expansion.arithmetic",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in a command: bad base",
+      "script": "rec=rec; a=(1); echo before; ((2#3)); echo \"after $?\"\necho next line",
+      "tags": [
+        "compound.arith",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in let: bad base",
+      "script": "rec=rec; a=(1); echo before; let '2#3'; echo \"after $?\"\necho next line",
+      "tags": [
+        "builtin.let",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in a for header: bad base",
+      "script": "rec=rec; a=(1); echo before; for ((i=0; 2#3; i++)); do echo body; break; done; echo \"after $?\"\necho next line",
+      "tags": [
+        "compound.for-arith",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in declare -i: bad base",
+      "script": "rec=rec; a=(1); declare -i v; echo before; v='2#3'; echo \"after $? v=$v\"\necho next line",
+      "tags": [
+        "param.attributes",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error ends the shell: recursion",
+      "script": "rec=rec; a=(1); echo before; echo $((rec)); echo \"after $?\"\necho next line",
+      "tags": [
+        "expansion.arithmetic",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in a command: recursion",
+      "script": "rec=rec; a=(1); echo before; ((rec)); echo \"after $?\"\necho next line",
+      "tags": [
+        "compound.arith",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in let: recursion",
+      "script": "rec=rec; a=(1); echo before; let 'rec'; echo \"after $?\"\necho next line",
+      "tags": [
+        "builtin.let",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in a for header: recursion",
+      "script": "rec=rec; a=(1); echo before; for ((i=0; rec; i++)); do echo body; break; done; echo \"after $?\"\necho next line",
+      "tags": [
+        "compound.for-arith",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in declare -i: recursion",
+      "script": "rec=rec; a=(1); declare -i v; echo before; v='rec'; echo \"after $? v=$v\"\necho next line",
+      "tags": [
+        "param.attributes",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error ends the shell: bad subscript",
+      "script": "rec=rec; a=(1); echo before; echo $((a[-9])); echo \"after $?\"\necho next line",
+      "tags": [
+        "expansion.arithmetic",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in a command: bad subscript",
+      "script": "rec=rec; a=(1); echo before; ((a[-9])); echo \"after $?\"\necho next line",
+      "tags": [
+        "compound.arith",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in let: bad subscript",
+      "script": "rec=rec; a=(1); echo before; let 'a[-9]'; echo \"after $?\"\necho next line",
+      "tags": [
+        "builtin.let",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in a for header: bad subscript",
+      "script": "rec=rec; a=(1); echo before; for ((i=0; a[-9]; i++)); do echo body; break; done; echo \"after $?\"\necho next line",
+      "tags": [
+        "compound.for-arith",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in declare -i: bad subscript",
+      "script": "rec=rec; a=(1); declare -i v; echo before; v='a[-9]'; echo \"after $? v=$v\"\necho next line",
+      "tags": [
+        "param.attributes",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error ends the shell: assign to literal",
+      "script": "rec=rec; a=(1); echo before; echo $((1=2)); echo \"after $?\"\necho next line",
+      "tags": [
+        "expansion.arithmetic",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in a command: assign to literal",
+      "script": "rec=rec; a=(1); echo before; ((1=2)); echo \"after $?\"\necho next line",
+      "tags": [
+        "compound.arith",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in let: assign to literal",
+      "script": "rec=rec; a=(1); echo before; let '1=2'; echo \"after $?\"\necho next line",
+      "tags": [
+        "builtin.let",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in a for header: assign to literal",
+      "script": "rec=rec; a=(1); echo before; for ((i=0; 1=2; i++)); do echo body; break; done; echo \"after $?\"\necho next line",
+      "tags": [
+        "compound.for-arith",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith error in declare -i: assign to literal",
+      "script": "rec=rec; a=(1); declare -i v; echo before; v='1=2'; echo \"after $? v=$v\"\necho next line",
+      "tags": [
+        "param.attributes",
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith let several arguments",
+      "script": "let a=1 b=a+1 'c = b * 3'; echo $a $b $c",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith let status of zero",
+      "script": "let 0; echo $?; let 1; echo $?; let 'x=0'; echo $?",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith let no arguments",
+      "script": "let; echo status=$?",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith let with spaces unquoted",
+      "script": "let x = 1; echo status=$?",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith double parentheses status",
+      "script": "((0)); echo $?; ((-1)); echo $?; ((2-2)); echo $?",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith double parentheses assignment result",
+      "script": "((x = 0)); echo $? $x; ((x = 7)); echo $? $x",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith declare -i on assignment",
+      "script": "declare -i n; n=3+4; echo $n; n+=2; echo $n; n=n*2; echo $n",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith declare -i with string",
+      "script": "declare -i n; n=hello; echo $n; hello=9; n=hello; echo $n",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith declare -i append",
+      "script": "declare -i n=5; n+=5; echo $n; declare +i n; n+=5; echo $n",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith declare -i array",
+      "script": "declare -ai arr=(1+1 2*3); arr+=(4-1); echo ${arr[@]}",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith declare -i assoc",
+      "script": "declare -Ai m=([a]=1+1); m[b]=3*3; echo ${m[a]} ${m[b]}",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith local -i",
+      "script": "f() { local -i n=2+2; echo $n; }; f",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith integer and lowercase",
+      "script": "declare -il n=2+3; echo $n",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic for loop",
+      "script": "for ((i=0; i<3; i++)); do printf '%s ' $i; done; echo",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic for empty parts",
+      "script": "i=0; for ((;;)); do ((i++ >= 2)) && break; done; echo $i",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic for with comma",
+      "script": "for ((i=0, j=10; i<3; i++, j--)); do printf '%s:%s ' $i $j; done; echo",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic for status",
+      "script": "for ((i=0; i<0; i++)); do :; done; echo $?",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic for body status",
+      "script": "for ((i=0; i<2; i++)); do false; done; echo $?",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic for with spaces",
+      "script": "for (( i = 0 ; i < 2 ; i++ )) ; do echo $i; done",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic for with braces body",
+      "script": "for ((i=0;i<2;i++)) { echo b$i; }",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith substring offsets",
+      "script": "s=abcdef; i=1; echo ${s:i+1:i*2} ${s:(-i-1)}",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith array index arithmetic",
+      "script": "a=(a b c d); i=1; echo ${a[i+1]} ${a[i*3]} ${a[-i]}",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith assoc index is not arithmetic",
+      "script": "declare -A m; m[1+1]=x; echo ${!m[@]}",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith [[ -eq evaluates expressions",
+      "script": "x=3; [[ x+1 -eq 4 ]] && echo yes; [[ 2*3 -gt 5 ]] && echo gt",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith [ -eq rejects expressions",
+      "script": "[ 1+1 -eq 2 ]; echo status=$?",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith [[ -eq with unset",
+      "script": "unset u; [[ $u -eq 0 ]] && echo zero",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith test -lt with spaces",
+      "script": "[ ' 3 ' -lt 4 ]; echo status=$?",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith dollar bracket",
+      "script": "echo $[2*3] $[x=4] $x",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic in here-document",
+      "script": "cat <<EOF\n$((6*7))\nEOF",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic quoted",
+      "script": "echo \"$((1+2))\" '$((1+2))'",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic with quotes inside",
+      "script": "echo $(( \"1\" + '2' ))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic word splitting",
+      "script": "IFS=0; echo $((100))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith increment unset",
+      "script": "unset n; ((n++)); echo $n; ((m--)); echo $m",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith increment string variable",
+      "script": "v=abc; ((v++)); echo $v",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith increment through reference",
+      "script": "v=w; w=1; ((v++)); echo $v $w",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith assignment through reference",
+      "script": "v=w; ((v=5)); echo $v ${w-unset}",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith nameref arithmetic",
+      "script": "n=1; declare -n r=n; ((r+=4)); echo $n",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith readonly arithmetic assignment",
+      "script": "readonly k=1; ((k=2)); echo status=$? k=$k",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic in case",
+      "script": "case $((1+1)) in 2) echo two;; esac",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic in while",
+      "script": "i=0; while ((i<3)); do ((i++)); done; echo $i",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic in until",
+      "script": "i=5; until ((i==0)); do ((i--)); done; echo $i",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic in if",
+      "script": "if ((1 > 2)); then echo gt; elif ((2 > 1)); then echo lt; fi",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic negation pipeline",
+      "script": "! ((0)); echo $?",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic with set -e",
+      "script": "set -e; ((0)) || true; echo survived; ((0)); echo not-reached",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic with set -u",
+      "script": "set -u; echo $((undefined + 1)); echo after",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic with set -u in let",
+      "script": "set -u; let 'k = undefined2'; echo after $?",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic with set -u in command",
+      "script": "set -u; (( undefined3 )); echo after $?",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic assign to positional",
+      "script": "set -- 1; ((1 = 2)); echo status=$?",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic assign to special",
+      "script": "(( $ = 2 )); echo status=$?",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic long expression",
+      "script": "echo $(( 1+2+3+4+5+6+7+8+9+10+11+12+13+14+15+16+17+18+19+20 ))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic deep parentheses",
+      "script": "echo $(( ((((((((1+1)))))))) ))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic side effects order",
+      "script": "i=1; echo $(( i++ * 10 + i ))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic in brace sequence is literal",
+      "script": "echo {1..$((2))}",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic variable holding hex",
+      "script": "h=0x10; echo $((h + 1))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic variable holding octal",
+      "script": "o=010; echo $((o + 1))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic variable holding base",
+      "script": "b=2#11; echo $((b + 1))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic variable holding negative",
+      "script": "n=-5; echo $((-n)) $((n*n))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic variable holding spaces",
+      "script": "n=' 4 '; echo $((n + 1))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic variable holding empty",
+      "script": "n=; echo $((n + 1))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic variable holding assignment",
+      "script": "n='q=3'; echo $((n)) $q",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic variable holding comma",
+      "script": "n='1,2'; echo $((n))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic nested variable depth",
+      "script": "a1=a2 a2=a3 a3=a4 a4=7; echo $((a1))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic array element holding expression",
+      "script": "arr=('2*3'); echo $((arr[0] + 1))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic subscript with side effect",
+      "script": "i=0; arr[i++]=a; arr[i++]=b; echo ${#arr[@]} $i",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic with BASH_REMATCH",
+      "script": "[[ 42 =~ ([0-9]+) ]]; echo $((BASH_REMATCH[1] + 1))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic string compare",
+      "script": "echo $(( abc == abd ))",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram arith arithmetic in printf argument",
+      "script": "printf '%d\\n' $((3*3)) '5' 0x10 010",
+      "tags": [
+        "expansion.arithmetic"
+      ],
+      "options": {}
+    }
+  ]
+}

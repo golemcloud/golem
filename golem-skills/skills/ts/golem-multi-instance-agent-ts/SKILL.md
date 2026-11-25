@@ -24,7 +24,7 @@ You address another agent through the typed `client` namespace attached to its `
 ```typescript
 Def.client.upsert(id)                               // the keyed agent; created when missing
 await Def.client.create(id, { keyed?, config?, env? })  // a new agent
-await Def.client.getById(agentId)                   // an existing agent
+Def.client.getById(agentId)                         // an existing agent
 ```
 
 | Call | Description |
@@ -33,7 +33,7 @@ await Def.client.getById(agentId)                   // an existing agent
 | `await Def.client.create(id)` | Create a **new agent without a key**, with a new agent ID, after its initialization |
 | `await Def.client.create(id, { keyed: true })` | Create the keyed agent; rejects with a `conflict` `RemoteCallError` when it exists |
 | `await Def.client.create(id, { config: { foo }, env: { K: 'v' } })` | Set the new agent's non-secret config values and add environment variables (secrets stay host-provisioned) |
-| `await Def.client.getById(agentId)` | Address an **existing** agent by its ID; an unknown ID, or the ID of an agent of another type, rejects with a `not-found` `RemoteCallError` |
+| `Def.client.getById(agentId)` | Address an **existing** agent by its ID; an unknown ID, or the ID of an agent of another type, throws a `not-found` `RemoteCallError` |
 | `await client.agentId()` | The `AgentId` of the agent the client connects to |
 
 Each method on the client has, besides the awaited call: `.trigger(input)` (fire-and-forget) and `.schedule(at, input) → CancellationToken`. Cancel an awaited invocation with the normal call shape's trailing `{ signal }` option: `method(input, { signal })`, or `method({ signal })` for a method with no input.
@@ -71,13 +71,13 @@ const second = await Counter.client.create({ name: 'shared' });
 
 // Reconnect to an existing agent by its ID.
 const firstId = await first.agentId();
-const sameAgent = await Counter.client.getById(firstId);
+const sameAgent = Counter.client.getById(firstId);
 
 // A persisted ID string can be restored later.
-const restored = await Counter.client.getById(AgentId.parse(savedIdString));
+const restored = Counter.client.getById(AgentId.parse(savedIdString));
 ```
 
-Persist the agent ID yourself (as a string via `agentId.toString()`, reparsed with `AgentId.parse(...)`) whenever you need to reach an agent without a key again later.
+An `AgentId` is a branded string, so persist the agent ID yourself as text (reparsed with `AgentId.parse(...)`) whenever you need to reach an agent without a key again later.
 
 ### Agents in Another Component
 
@@ -86,7 +86,7 @@ A generated durable guest client has static `upsert`, `create`, and `getById` me
 ```typescript
 const shared = CounterAgent.upsert('shared');
 const fresh = await CounterAgent.create('shared');
-const existing = await CounterAgent.getById(await fresh.agentId());
+const existing = CounterAgent.getById(await fresh.agentId());
 ```
 
 See the `golem-call-another-agent-ts` skill for cross-component manifest, TypeScript
@@ -111,8 +111,8 @@ MyAgent.implement({
             const agentId = this.getId(); // AgentId
             const key = process.env.GOLEM_AGENT_KEY;
             return key
-                ? `I am the keyed agent ${key} with ID ${agentId.toString()}`
-                : `I am an agent without a key, with ID ${agentId.toString()}`;
+                ? `I am the keyed agent ${key} with ID ${agentId}`
+                : `I am an agent without a key, with ID ${agentId}`;
         },
     },
 });

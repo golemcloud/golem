@@ -52,6 +52,9 @@ pub trait CanStartWorker {
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
         Ok(None)
     }
+    fn invocation(&self) -> Option<golem_api_grpc::proto::golem::worker::InvocationStart> {
+        None
+    }
 }
 
 trait ProtobufInvocationDetails {
@@ -83,6 +86,9 @@ trait ProtobufInvocationDetails {
     }
     fn proto_idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
         Ok(None)
+    }
+    fn proto_invocation(&self) -> Option<golem_api_grpc::proto::golem::worker::InvocationStart> {
+        None
     }
 }
 
@@ -140,6 +146,9 @@ impl<T: ProtobufInvocationDetails> CanStartWorker for T {
 
     fn idempotency_key(&self) -> Result<Option<IdempotencyKey>, WorkerExecutorError> {
         self.proto_idempotency_key()
+    }
+    fn invocation(&self) -> Option<golem_api_grpc::proto::golem::worker::InvocationStart> {
+        self.proto_invocation()
     }
 }
 
@@ -224,6 +233,10 @@ impl ProtobufInvocationDetails
 }
 
 impl ProtobufInvocationDetails for golem_api_grpc::proto::golem::worker::InvocationStart {
+    fn proto_invocation(&self) -> Option<golem_api_grpc::proto::golem::worker::InvocationStart> {
+        Some(self.clone())
+    }
+
     fn proto_agent_id(&self) -> &Option<golem_api_grpc::proto::golem::worker::AgentId> {
         &None
     }
@@ -386,10 +399,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     pub(super) async fn get_existing_for_management(
         &self,
         owned_agent_id: &OwnedAgentId,
-        caller: Caller,
         operation: &str,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError> {
-        let worker = Worker::get_exact_existing_suspended(self, owned_agent_id, caller).await?;
+        let worker = Worker::get_exact_existing_suspended(self, owned_agent_id).await?;
         worker.ensure_component_agent_ingress(operation)?;
         if worker.answers_as_deleted().await {
             return Err(WorkerExecutorError::worker_not_found(
@@ -442,9 +454,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .await?;
                 }
             }
-            let worker =
-                Worker::get_exact_existing_suspended(self, &owned_agent_id, request.caller()?)
-                    .await?;
+            let worker = Worker::get_exact_existing_suspended(self, &owned_agent_id).await?;
             if !reserved {
                 Self::not_found_if_deleting(
                     &worker,
@@ -483,7 +493,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let response = Worker::get_exact_existing_suspended_for_response(
                 self,
                 &owned_agent_id,
-                request.caller()?,
                 expected_fingerprint,
             )
             .await?;
@@ -521,7 +530,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             request.caller()?,
             InvocationFreshnessDisposition::MayExist,
             if creates {
-                resolved.invocation_intent(None)
+                resolved.invocation_intent(None, request.invocation())
             } else {
                 CreateIntent::Existing
             },
@@ -554,7 +563,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
                 self,
                 &owned_agent_id,
-                request.caller()?,
                 Some(expected),
             )
             .await?;
@@ -627,7 +635,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             &invocation_context,
             request.caller()?,
             freshness_disposition,
-            resolved.invocation_intent(request.idempotency_key()?),
+            resolved.invocation_intent(request.idempotency_key()?, request.invocation()),
         )
         .await
     }

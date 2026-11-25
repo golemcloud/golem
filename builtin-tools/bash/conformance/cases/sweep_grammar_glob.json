@@ -1,0 +1,2789 @@
+{
+  "tier": "sweep",
+  "description": "Grammar sweep: pathname expansion on files the script creates, glob options, and pattern\nmatching in [[ ]] and case, generated from fixed tables (see sweep_grammar_param.py).",
+  "cases": [
+    {
+      "name": "gram glob pattern *: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p *",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ?: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ?",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ?: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p ?",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ??: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ??",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ??: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p ??",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ??: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p ??",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern a*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p a*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern a*: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p a*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern a*: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p a*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *c: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *c",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *c: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p *c",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *c: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p *c",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *.txt: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *.txt",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *.txt: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p *.txt",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *.txt: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p *.txt",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [ab]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [ab]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [ab]: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p [ab]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [!a]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [!a]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [!a]: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p [!a]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [^a]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [^a]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [^a]: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p [^a]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [a-c]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [a-c]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [a-c]: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p [a-c]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [a-c]: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p [a-c]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern []]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p []]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [!]a]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [!]a]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [!]a]: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p [!]a]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [!]a]: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p [!]a]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [[:upper:]]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [[:upper:]]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [[:upper:]]: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p [[:upper:]]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [[:upper:]]: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p [[:upper:]]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [[:lower:]]*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [[:lower:]]*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [[:alpha:]][[:alpha:]]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [[:alpha:]][[:alpha:]]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [[:alpha:]][[:alpha:]]: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p [[:alpha:]][[:alpha:]]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *[[:space:]]*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *[[:space:]]*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *[[:space:]]*: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p *[[:space:]]*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *[[:punct:]]*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *[[:punct:]]*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *[[:punct:]]*: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p *[[:punct:]]*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern .*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p .*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern .*: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p .*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern .*: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p .*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern */: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p */",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern */: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p */",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern */: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p */",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern */*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p */*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern d/*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p d/*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern d/*/*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p d/*/*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern d/*/*: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p d/*/*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern d/*/*: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p d/*/*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern \\*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p \\*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern \\*: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p \\*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern \\*: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p \\*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern a\\*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p a\\*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern 'a*': default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p 'a*'",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern 'a*': nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p 'a*'",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern \"a\"*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p \"a\"*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern \"a\"*: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p \"a\"*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [x]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [x]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern \\[x]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p \\[x]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern \\[x]: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p \\[x]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [[]x]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [[]x]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [[]x]: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p [[]x]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [[]x]: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p [[]x]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p [",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [a: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [a",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [a: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p [a",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [a: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p [a",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *[: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *[",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *[: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p *[",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *[: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p *[",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern /tmp/g/a*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p /tmp/g/a*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ./a*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ./a*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ./a*: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p ./a*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ../g/a*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ../g/a*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ../g/a*: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p ../g/a*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern a*/: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p a*/",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern nomatch*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p nomatch*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern nomatch*: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p nomatch*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern nomatch*: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p nomatch*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern d*/: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p d*/",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *.{txt,log}: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *.{txt,log}",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *.{txt,log}: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p *.{txt,log}",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *.{txt,log}: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p *.{txt,log}",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [a-: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [a-",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [z-a]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [z-a]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [z-a]: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p [z-a]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [z-a]: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p [z-a]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [[:nosuch:]]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [[:nosuch:]]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *\\?: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *\\?",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern q[?]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p q[?]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern q[?]: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p q[?]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [-]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [-]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [a-]: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [a-]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [a-]: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p [a-]",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern */.*: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p */.*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern */.*: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p */.*",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern .: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p .",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern .: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p .",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ..: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ..",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ..: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p ..",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ..: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p ..",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *.: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *.",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *.: dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s dotglob; p *.",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern *.: nocaseglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nocaseglob; p *.",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern [.]hid: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p [.]hid",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ?hid: default",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ?hid",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob pattern ?hid: nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s nullglob; p ?hid",
+      "tags": [
+        "expansion.glob",
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob nomatch*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob; echo before; echo nomatch*; echo \"after status=$?\"\necho next line",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob a*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob; echo before; echo a*; echo \"after status=$?\"\necho next line",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob [z]",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob; echo before; echo [z]; echo \"after status=$?\"\necho next line",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob *.none",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob; echo before; echo *.none; echo \"after status=$?\"\necho next line",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob d/*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob; echo before; echo d/*; echo \"after status=$?\"\necho next line",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob x?y",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob; echo before; echo x?y; echo \"after status=$?\"\necho next line",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob \\*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob; echo before; echo \\*; echo \"after status=$?\"\necho next line",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob nomatch*.txt",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob; echo before; echo nomatch*.txt; echo \"after status=$?\"\necho next line",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob in a for list",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob; for f in nomatch*; do echo $f; done; echo status=$?",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob in an array assignment",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob; a=(nomatch*); echo status=$? ${#a[@]}",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob in a subshell",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob; ( echo nomatch* ); echo status=$?",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob with nullglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob nullglob; echo x nomatch* y; echo status=$?",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob in a redirection",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob; echo x > nomatch*; echo status=$?",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob failglob in a function",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s failglob; f() { echo nomatch*; echo in-f; }; f; echo status=$?",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar **",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; p **",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar ** dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; shopt -s dotglob; p **",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar off **",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p **",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar **/",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; p **/",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar off **/",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p **/",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar **/h",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; p **/h",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar **/h dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; shopt -s dotglob; p **/h",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar off **/h",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p **/h",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar d/**",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; p d/**",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar d/** dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; shopt -s dotglob; p d/**",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar off d/**",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p d/**",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar d/**/",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; p d/**/",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar off d/**/",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p d/**/",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar **/*.txt",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; p **/*.txt",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar **/*.txt dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; shopt -s dotglob; p **/*.txt",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar off **/*.txt",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p **/*.txt",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar **/e/*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; p **/e/*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar **/e/* dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; shopt -s dotglob; p **/e/*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar off **/e/*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p **/e/*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar a**",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; p a**",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar off a**",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p a**",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar **x",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; p **x",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar off **x",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p **x",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar d/**/h",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; p d/**/h",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar d/**/h dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; shopt -s dotglob; p d/**/h",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar off d/**/h",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p d/**/h",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar **/.g",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; p **/.g",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar off **/.g",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p **/.g",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar */**",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; p */**",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar */** dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; shopt -s globstar; shopt -s dotglob; p */**",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob globstar off */**",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p */**",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob noglob *",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -f; p *; set +f; p *",
+      "tags": [
+        "option.noglob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob noglob a?",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -f; p a?; set +f; p a?",
+      "tags": [
+        "option.noglob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob noglob [ab]",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -f; p [ab]; set +f; p [ab]",
+      "tags": [
+        "option.noglob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob noglob *.txt",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -f; p *.txt; set +f; p *.txt",
+      "tags": [
+        "option.noglob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob noglob d/*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; set -f; p d/*; set +f; p d/*",
+      "tags": [
+        "option.noglob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '*.txt': *",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='*.txt'; p *",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '*.txt': a*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='*.txt'; p a*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '*.txt': d/*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='*.txt'; p d/*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE 'a*:b*': *",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='a*:b*'; p *",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE 'a*:b*': a*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='a*:b*'; p a*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE 'a*:b*': d/*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='a*:b*'; p d/*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '.*': *",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='.*'; p *",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '.*': a*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='.*'; p a*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '.*': d/*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='.*'; p d/*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '': *",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE=''; p *",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE 'd/*': *",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='d/*'; p *",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE 'd/*': a*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='d/*'; p a*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE 'd/*': d/*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='d/*'; p d/*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '*': *",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='*'; p *",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '*': a*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='*'; p a*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '*': d/*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='*'; p d/*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '?': *",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='?'; p *",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '?': a*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='?'; p a*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '?': d/*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='?'; p d/*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '[ab]': *",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='[ab]'; p *",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '[ab]': a*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='[ab]'; p a*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE '[ab]': d/*",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE='[ab]'; p d/*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE unset restores dot files",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE=x; p .h*; unset GLOBIGNORE; p .h*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob GLOBIGNORE set implies dotglob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; GLOBIGNORE=a; p *hid*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context in a for list",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; for f in a*; do printf '<%s>' \"$f\"; done; echo",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context in an array",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; arr=(*.txt); echo ${#arr[@]} \"${arr[1]}\"",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context in an assignment is literal",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; v=a*; echo \"$v\"",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context in declare is literal",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; declare v=a*; echo \"$v\"",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context in a case word is literal",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; case a* in 'a*') echo literal;; *) echo other;; esac",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context in [[ is literal",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; [[ a* == 'a*' ]] && echo literal",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context in a here-string is literal",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; cat <<< a*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context after variable expansion",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; v='*.txt'; echo $v \"$v\"",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context after command substitution",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo $(echo '*.log')",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context in a redirect with one match",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo hi > c.l*; cat c.log",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context in a redirect with two matches",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo hi > *.txt; echo status=$?",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context in a redirect with no match",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo hi > zz*; cat 'zz*'",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context space in a match",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; for f in sp*; do echo \"[$f]\"; done",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context dash file name",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo - *-*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context sorted order",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo *",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context directories only",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo */",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context absolute with dotdot",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo /tmp/g/d/../a*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context in a function argument",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; f() { echo $#; }; f *",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context quoted parts",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo \"a\"* 'a'\\* a\"*\"",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context brace then glob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo {a,b}*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context tilde then glob",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; HOME=/tmp/g; echo ~/a*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context escaped in variable",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; v='a\\*'; echo $v",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context bracket in variable",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; v='[ab]'; echo $v \"$v\"",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context unset variable pattern",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; unset u; echo ${u}*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context parameter default pattern",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; unset u; echo ${u:-a}*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context glob in a loop over a directory",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; for d in */; do echo \"dir:$d\"; done",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context match count",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; set -- *; echo $#",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context hidden with dot star",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; set -- .*; echo $# \"$@\"",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context nullglob array empty",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s nullglob; arr=(zz*); echo ${#arr[@]}",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context nullglob unquoted variable",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s nullglob; v='zz*'; set -- $v; echo $#",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context nocaseglob brackets",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s nocaseglob; echo [a]*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context nocaseglob lower matches upper",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; shopt -s nocaseglob; echo q* x? [z] D*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context globasciiranges",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo [A-b]; shopt -u globasciiranges; echo [A-b]; shopt -s globasciiranges",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context GLOBSORT by name reversed",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; GLOBSORT=-name; echo a*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context GLOBSORT nosort is stable",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; GLOBSORT=name; echo [abc]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context nested directory",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo d/e/*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context pattern with slash in brackets",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo d[/]f",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context star matches no leading dot in subdir",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo d/*",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context dot slash prefix is kept",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo ./[ab]",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob context double slash is kept",
+      "script": "mkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo d//f",
+      "tags": [
+        "expansion.glob"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob @(a|b)",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p @(a|b)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match @(a|b)",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == @(a|b) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob !(a*)",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p !(a*)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match !(a*)",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == !(a*) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob *(a)",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *(a)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match *(a)",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == *(a) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob +(ab)",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p +(ab)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match +(ab)",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == +(ab) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob ?(a)c",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ?(a)c",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match ?(a)c",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == ?(a)c ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob @(a|b).txt",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p @(a|b).txt",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match @(a|b).txt",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == @(a|b).txt ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob !(*.txt|*.log)",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p !(*.txt|*.log)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match !(*.txt|*.log)",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == !(*.txt|*.log) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob *(a|b)c",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *(a|b)c",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match *(a|b)c",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == *(a|b)c ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob +(a|b|c)",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p +(a|b|c)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match +(a|b|c)",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == +(a|b|c) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob a!(b)",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p a!(b)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match a!(b)",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == a!(b) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob !(a)*",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p !(a)*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match !(a)*",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == !(a)* ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob @(ab|abc)",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p @(ab|abc)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match @(ab|abc)",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == @(ab|abc) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob *.@(txt|log)",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *.@(txt|log)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match *.@(txt|log)",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == *.@(txt|log) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob !(*)",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p !(*)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match !(*)",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == !(*) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob @()",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p @()",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match @()",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == @() ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob ?(|a)b",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p ?(|a)b",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match ?(|a)b",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == ?(|a)b ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob !(.hid)",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p !(.hid)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match !(.hid)",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == !(.hid) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob @(\\*|b)",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p @(\\*|b)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match @(\\*|b)",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == @(\\*|b) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob +([[:upper:]])",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p +([[:upper:]])",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match +([[:upper:]])",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == +([[:upper:]]) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob *([!a])",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *([!a])",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match *([!a])",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == *([!a]) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob d/@(e|f)",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p d/@(e|f)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match d/@(e|f)",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == d/@(e|f) ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob @(d|D2)/*",
+      "script": "shopt -s extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p @(d|D2)/*",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob match @(d|D2)/*",
+      "script": "shopt -s extglob\nfor s in a b ab abc a.txt c.log aab ''; do [[ $s == @(d|D2)/* ]] && printf '%s ' \"[$s]\"; done; echo",
+      "tags": [
+        "expansion.glob.options",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob with dotglob @(a|b)",
+      "script": "shopt -s extglob dotglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p @(a|b)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob in trim @(a|b)",
+      "script": "shopt -s extglob\nv=aab.txt; echo ${v##@(a|b)} ${v%%@(a|b)}",
+      "tags": [
+        "expansion.glob.options",
+        "expansion.parameter.trim"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob in replace @(a|b)",
+      "script": "shopt -s extglob\nv='a b.txt ab'; echo \"${v//@(a|b)/X}\"",
+      "tags": [
+        "expansion.glob.options",
+        "expansion.parameter.replace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob in case @(a|b)",
+      "script": "shopt -s extglob\nfor s in a ab x.txt; do case $s in @(a|b)) echo \"$s yes\";; *) echo \"$s no\";; esac; done",
+      "tags": [
+        "expansion.glob.options",
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob with dotglob !(a*)",
+      "script": "shopt -s extglob dotglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p !(a*)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob in trim !(a*)",
+      "script": "shopt -s extglob\nv=aab.txt; echo ${v##!(a*)} ${v%%!(a*)}",
+      "tags": [
+        "expansion.glob.options",
+        "expansion.parameter.trim"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob in replace !(a*)",
+      "script": "shopt -s extglob\nv='a b.txt ab'; echo \"${v//!(a*)/X}\"",
+      "tags": [
+        "expansion.glob.options",
+        "expansion.parameter.replace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob in case !(a*)",
+      "script": "shopt -s extglob\nfor s in a ab x.txt; do case $s in !(a*)) echo \"$s yes\";; *) echo \"$s no\";; esac; done",
+      "tags": [
+        "expansion.glob.options",
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob with dotglob *.@(txt|log)",
+      "script": "shopt -s extglob dotglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p *.@(txt|log)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob in trim *.@(txt|log)",
+      "script": "shopt -s extglob\nv=aab.txt; echo ${v##*.@(txt|log)} ${v%%*.@(txt|log)}",
+      "tags": [
+        "expansion.glob.options",
+        "expansion.parameter.trim"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob in replace *.@(txt|log)",
+      "script": "shopt -s extglob\nv='a b.txt ab'; echo \"${v//*.@(txt|log)/X}\"",
+      "tags": [
+        "expansion.glob.options",
+        "expansion.parameter.replace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob in case *.@(txt|log)",
+      "script": "shopt -s extglob\nfor s in a ab x.txt; do case $s in *.@(txt|log)) echo \"$s yes\";; *) echo \"$s no\";; esac; done",
+      "tags": [
+        "expansion.glob.options",
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob with dotglob +(a)",
+      "script": "shopt -s extglob dotglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; p() { printf '%s' \"$#\"; printf ' <%s>' \"$@\"; echo; }; p +(a)",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob in trim +(a)",
+      "script": "shopt -s extglob\nv=aab.txt; echo ${v##+(a)} ${v%%+(a)}",
+      "tags": [
+        "expansion.glob.options",
+        "expansion.parameter.trim"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob in replace +(a)",
+      "script": "shopt -s extglob\nv='a b.txt ab'; echo \"${v//+(a)/X}\"",
+      "tags": [
+        "expansion.glob.options",
+        "expansion.parameter.replace"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob in case +(a)",
+      "script": "shopt -s extglob\nfor s in a ab x.txt; do case $s in +(a)) echo \"$s yes\";; *) echo \"$s no\";; esac; done",
+      "tags": [
+        "expansion.glob.options",
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob extglob turned off again",
+      "script": "shopt -s extglob\nshopt -u extglob\nmkdir -p /tmp/g/d/e /tmp/g/D2 && cd /tmp/g && for f in a b c ab abc a.txt b.txt c.log .hid .hid.txt Q Z Xy 'sp ace' '[x]' 'a*' 'q?' ']' - d/f d/.g d/e/h D2/i; do : > \"$f\"; done; echo *.txt",
+      "tags": [
+        "expansion.glob.options"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] a*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == a* ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case a*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in a*) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] *b",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == *b ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case *b",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in *b) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] ?b",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == ?b ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case ?b",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in ?b) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] [ab]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == [ab]* ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case [ab]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in [ab]*) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] [!a]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == [!a]* ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case [!a]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in [!a]*) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] [[:digit:]]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == [[:digit:]]* ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case [[:digit:]]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in [[:digit:]]*) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] *[[:space:]]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == *[[:space:]]* ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case *[[:space:]]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in *[[:space:]]*) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] 'a*'",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == 'a*' ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case 'a*'",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in 'a*') m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] \"a\"*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == \"a\"* ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case \"a\"*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in \"a\"*) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] a\\*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == a\\* ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case a\\*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in a\\*) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] $pat",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == $pat ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case $pat",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in $pat) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] \"$pat\"",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == \"$pat\" ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case \"$pat\"",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in \"$pat\") m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] *",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == * ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case *",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in *) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] empty",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == '' ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case empty",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in '') m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] []a]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == []a]* ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case []a]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in []a]*) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] [a-]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == [a-]* ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case [a-]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in [a-]*) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] *.*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == *.* ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case *.*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in *.*) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] \\[*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == \\[* ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case \\[*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in \\[*) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] [[:alpha:][:digit:]]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == [[:alpha:][:digit:]]* ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case [[:alpha:][:digit:]]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in [[:alpha:][:digit:]]*) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match [[ ]] [^[:alpha:]]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do [[ \"$s\" == [^[:alpha:]]* ]] && m=\"$m|$s\"; done; echo \"$m\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match case [^[:alpha:]]*",
+      "script": "pat='a*'; m=; for s in 'a*' 'ab' 'b' '1x' 'a b' '' '[x' '-y' 'a.b' ']z'; do case $s in [^[:alpha:]]*) m=\"$m|$s\";; esac; done; echo \"$m\"",
+      "tags": [
+        "compound.case"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match nocasematch [[ ]] A*",
+      "script": "shopt -s nocasematch; for s in ab AB Ab x; do [[ $s == A* ]] && echo \"$s\"; done",
+      "tags": [
+        "option.nocasematch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match nocasematch case A*",
+      "script": "shopt -s nocasematch; for s in ab AB Ab x; do case $s in A*) echo \"$s\";; esac; done",
+      "tags": [
+        "option.nocasematch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match nocasematch regex A*",
+      "script": "shopt -s nocasematch; p=A.*; for s in ab AB x; do [[ $s =~ ^$p$ ]] && echo \"$s\"; done",
+      "tags": [
+        "option.nocasematch",
+        "compound.cond.regex"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match nocasematch [[ ]] [a]*",
+      "script": "shopt -s nocasematch; for s in ab AB Ab x; do [[ $s == [a]* ]] && echo \"$s\"; done",
+      "tags": [
+        "option.nocasematch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match nocasematch case [a]*",
+      "script": "shopt -s nocasematch; for s in ab AB Ab x; do case $s in [a]*) echo \"$s\";; esac; done",
+      "tags": [
+        "option.nocasematch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match nocasematch regex [a]*",
+      "script": "shopt -s nocasematch; p=[a].*; for s in ab AB x; do [[ $s =~ ^$p$ ]] && echo \"$s\"; done",
+      "tags": [
+        "option.nocasematch",
+        "compound.cond.regex"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match nocasematch [[ ]] ?B",
+      "script": "shopt -s nocasematch; for s in ab AB Ab x; do [[ $s == ?B ]] && echo \"$s\"; done",
+      "tags": [
+        "option.nocasematch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match nocasematch case ?B",
+      "script": "shopt -s nocasematch; for s in ab AB Ab x; do case $s in ?B) echo \"$s\";; esac; done",
+      "tags": [
+        "option.nocasematch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match nocasematch regex ?B",
+      "script": "shopt -s nocasematch; p=.B; for s in ab AB x; do [[ $s =~ ^$p$ ]] && echo \"$s\"; done",
+      "tags": [
+        "option.nocasematch",
+        "compound.cond.regex"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match nocasematch [[ ]] 'AB'",
+      "script": "shopt -s nocasematch; for s in ab AB Ab x; do [[ $s == 'AB' ]] && echo \"$s\"; done",
+      "tags": [
+        "option.nocasematch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match nocasematch case 'AB'",
+      "script": "shopt -s nocasematch; for s in ab AB Ab x; do case $s in 'AB') echo \"$s\";; esac; done",
+      "tags": [
+        "option.nocasematch"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram glob match nocasematch regex 'AB'",
+      "script": "shopt -s nocasematch; p='AB'; for s in ab AB x; do [[ $s =~ ^$p$ ]] && echo \"$s\"; done",
+      "tags": [
+        "option.nocasematch",
+        "compound.cond.regex"
+      ],
+      "options": {}
+    }
+  ]
+}

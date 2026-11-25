@@ -575,6 +575,7 @@ pub(crate) async fn try_trigger_host_trap_retry(
     }
 }
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> InFunctionRetryHost for DurableWorkerCtx<Ctx> {
     fn current_retry_point(&self) -> OplogIndex {
         self.state.effective_retry_point()
@@ -1038,6 +1039,7 @@ pub struct TaskRetryContext<Ctx: WorkerCtx> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> InFunctionRetryHost for TaskRetryContext<Ctx> {
     fn current_retry_point(&self) -> OplogIndex {
         self.retry_point

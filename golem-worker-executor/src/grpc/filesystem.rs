@@ -18,7 +18,6 @@ use super::{
     UsesAllDeps, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, golem,
     validate_file_read_path,
 };
-use golem_common::model::filesystem::FileReadHead;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -94,17 +93,11 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return Ok(Err(error));
             }
         };
-        let absent = || FileReadResponse {
-            head: FileReadHead::Absent,
-            body: Box::pin(futures::stream::empty()),
-        };
-        let worker = match self.get_existing_running(&request).await {
-            Ok(worker) => worker,
-            Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(Ok(absent())),
-            Err(error) => return Err(error),
-        };
+        let worker = self.get_existing_running(&request).await?;
         match worker.read_file(path, selection).await {
-            Err(FileReadError::Lifecycle) if worker.answers_as_deleted().await => Ok(Ok(absent())),
+            Err(FileReadError::Lifecycle) if worker.answers_as_deleted().await => {
+                Err(WorkerExecutorError::worker_not_found(worker.agent_id()))
+            }
             result => Ok(result),
         }
     }

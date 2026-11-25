@@ -501,12 +501,12 @@ describe("Client 1.6 durable lifecycle", () => {
         agentIdFor("created"),
         id,
       ])
-      expect(String(ids[3])).toBe(id.uuid)
+      expect(ids[3]).toBe(id)
       expect(runtime.lifecycle).toMatchObject({ connectionOpen: 4, connectionDrop: 4 })
       expect(runtime.calls).toHaveLength(0)
 
       const invalid = yield* Counter.client
-        .getById({ uuid: "bad" } as AgentId)
+        .getById("bad" as AgentId)
         .pipe(Effect.scoped, Effect.provide(runtime.layer), Effect.result)
       expect(invalid).toMatchObject({
         _tag: "Failure",
@@ -976,6 +976,11 @@ describe("Client 1.6 config and ephemeral receipts", () => {
       const upserted = constructorOf(runtime.opens[1]?.target)!
       expect(upserted.valueNodes.filter((node) => node.tag === "record-value")).toHaveLength(2)
       expect(upserted.valueNodes).toHaveLength(5)
+      const constructorCodec = yield* compileMethodSpec(
+        "constructor",
+        method({ input: OwnerTarget.id, success: Schema.Void }),
+      )
+      expect(yield* constructorCodec.inputCodec.decode(upserted)).toEqual({ name: "main", owner })
     }),
   )
 

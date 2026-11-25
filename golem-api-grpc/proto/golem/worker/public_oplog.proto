@@ -29,6 +29,7 @@ message OplogEntry {
     AgentInvocationStartedParameters AgentInvocationStarted = 3;
     AgentInvocationFinishedParameters AgentInvocationFinished = 4;
     AgentInvocationFailedParameters AgentInvocationFailed = 71;
+    AgentInvocationSettledParameters AgentInvocationSettled = 73;
     TimestampParameter Suspend = 5;
     ErrorParameters Error = 6;
     JumpParameters Jump = 8;
@@ -148,6 +149,28 @@ message ReplayDivergence {
   ReplayStep expected = 2;
   ReplayStep actual = 3;
   repeated StartIdentityField mismatched = 4;
+  optional ReplayStart replay_start = 5;
+}
+
+// Where a recovery replay started.
+message ReplayStart {
+  oneof start {
+    // A replay from a loaded snapshot.
+    ReplaySnapshotStart snapshot = 1;
+    // A replay without a snapshot.
+    ReplayFullStart full_replay = 2;
+  }
+}
+
+// A replay from the snapshot at snapshot_index, after the recovery rejected these snapshots.
+message ReplaySnapshotStart {
+  uint64 snapshot_index = 1;
+  repeated uint64 rejected_snapshots = 2;
+}
+
+// A replay without a snapshot, after the recovery rejected these snapshots.
+message ReplayFullStart {
+  repeated uint64 rejected_snapshots = 1;
 }
 
 // One step of a replay.
@@ -169,6 +192,7 @@ message ReplayHostCall {
   optional uint64 observational_owner = 5;
   bool carries_request = 6;
   optional golem.schema.TypedSchemaValue request = 7;
+  optional uint64 driver = 8;
 }
 
 // An identity field of a recorded `Start`.
@@ -179,6 +203,7 @@ enum StartIdentityField {
   START_IDENTITY_FIELD_OBSERVATIONAL_OWNER = 3;
   START_IDENTITY_FIELD_REQUEST_PRESENCE = 4;
   START_IDENTITY_FIELD_PARENT = 5;
+  START_IDENTITY_FIELD_DRIVER = 6;
 }
 
 // Why an update failed.
@@ -202,6 +227,7 @@ message StartParameters {
   optional uint64 observational_owner = 8;
   optional SpanStarted span_started = 9;
   optional string denial = 10;
+  optional uint64 driver = 11;
 }
 
 message EndParameters {
@@ -309,15 +335,23 @@ message AgentInvocationFailedParameters {
   uint64 start_index = 4;
 }
 
+message AgentInvocationSettledParameters {
+  google.protobuf.Timestamp timestamp = 1;
+  golem.common.UUID invocation_id = 2;
+  int64 consumed_fuel = 3;
+}
+
 message PublicAgentInvocation {
+  // 3 was a save snapshot invocation without parameters.
+  reserved 3;
   oneof invocation {
     PublicAgentInitializationInvocation agent_initialization = 1;
     PublicAgentMethodInvocation agent_method = 2;
-    golem.common.Empty save_snapshot = 3;
     LoadSnapshotInvocationParameters load_snapshot = 4;
     ProcessOplogEntriesInvocationParameters process_oplog_entries = 5;
     ManualUpdateInvocationParameters manual_update = 6;
     PublicExternalToolInvocation external_tool = 7;
+    SaveSnapshotInvocationParameters save_snapshot = 8;
   }
 }
 
@@ -329,6 +363,7 @@ message PublicExternalToolInvocation {
   string trace_id = 5;
   repeated string trace_states = 6;
   repeated golem.worker.InvocationSpan invocation_context = 7;
+  golem.component.PublicCaller caller = 8;
 }
 
 message PublicAgentInitializationInvocation {
@@ -337,27 +372,40 @@ message PublicAgentInitializationInvocation {
   string trace_id = 3;
   repeated string trace_states = 4;
   repeated golem.worker.InvocationSpan invocation_context = 5;
+  golem.component.PublicCaller caller = 6;
 }
 
 message PublicAgentMethodInvocation {
   golem.common.UUID invocation_id = 1;
   string method_name = 2;
+  // Component-independent original-method-input diagnostic envelope, not the executed
+  // method's input schema. Includes captured JSON fields that execution rejects;
+  // native values are typed and host capabilities are redacted before encoding.
   golem.schema.TypedSchemaValue function_input = 3;
   string trace_id = 4;
   repeated string trace_states = 5;
   repeated golem.worker.InvocationSpan invocation_context = 6;
+  golem.component.PublicCaller caller = 7;
+}
+
+message SaveSnapshotInvocationParameters {
+  golem.component.PublicCaller caller = 1;
 }
 
 message LoadSnapshotInvocationParameters {
   SnapshotData snapshot = 1;
+  golem.component.PublicCaller caller = 2;
 }
 
 message ProcessOplogEntriesInvocationParameters {
   golem.common.UUID invocation_id = 1;
+  golem.component.PublicCaller caller = 2;
 }
 
 message ManualUpdateInvocationParameters {
   uint64 target_revision = 1;
+  // Who requested the update. Required.
+  golem.component.PublicCaller requester = 2;
 }
 
 message PublicAgentInvocationResult {
@@ -690,6 +738,9 @@ message PendingUpdateParameters {
   uint64 target_revision = 2;
   UpdateDescription update_description = 3;
   uint64 update_attempt_index = 4;
+  // Who requested the update. Required. It is never the caller of the update's snapshot save
+  // or load.
+  golem.component.PublicCaller requester = 5;
 }
 
 message SuccessfulUpdateParameters {

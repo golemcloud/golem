@@ -85,11 +85,16 @@ impl ResolvedTarget {
     }
 
     /// The create intent of an invocation of this target.
-    pub fn invocation_intent(&self, idempotency_key: Option<IdempotencyKey>) -> CreateIntent {
+    pub fn invocation_intent(
+        &self,
+        idempotency_key: Option<IdempotencyKey>,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
+    ) -> CreateIntent {
         match &self.new_owner {
             Some(owner) => CreateIntent::Invocation {
                 owner: owner.clone(),
                 idempotency_key,
+                invocation: invocation.map(Box::new),
             },
             None => CreateIntent::Existing,
         }

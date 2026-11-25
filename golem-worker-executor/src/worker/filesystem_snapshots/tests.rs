@@ -1767,6 +1767,7 @@ struct SpacedStore {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl crate::filesystem_snapshot::FilesystemSnapshotStore for SpacedStore {
     async fn save(
         &self,
@@ -2025,6 +2026,7 @@ fn update_record(name: &FilesystemSnapshotName) -> OplogEntry {
             filesystem_snapshot: Some(name.clone()),
         },
         None,
+        Box::new(golem_common::model::caller::Caller::anonymous()),
     )
 }
 
@@ -2042,6 +2044,7 @@ fn assisted_strategy_record(snapshot: u64, name: Option<&FilesystemSnapshotName>
             snapshot_bootstrap: None,
         },
         Some(OplogIndex::from_u64(snapshot + 1)),
+        Box::new(golem_common::model::caller::Caller::anonymous()),
     )
 }
 
@@ -2051,6 +2054,7 @@ fn automatic_admission_record() -> OplogEntry {
             target_revision: ComponentRevision::new(2).unwrap(),
         },
         None,
+        Box::new(golem_common::model::caller::Caller::anonymous()),
     )
 }
 

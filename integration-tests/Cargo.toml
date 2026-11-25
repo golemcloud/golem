@@ -22,7 +22,6 @@ golem-test-framework = { workspace = true }
 anyhow = { workspace = true }
 async-trait = { workspace = true }
 axum = { workspace = true }
-chrono = { workspace = true }
 opentelemetry = { workspace = true }
 opentelemetry_sdk = { workspace = true }
 base64 = { workspace = true }
@@ -32,6 +31,7 @@ clap = { workspace = true }
 futures-concurrency = { workspace = true }
 headers = { workspace = true }
 indoc = { workspace = true }
+jiff = { workspace = true }
 pretty_assertions = { workspace = true, features = [ "unstable" ] }
 prost = { workspace = true }
 rand = { workspace = true }
@@ -56,11 +56,13 @@ h2 = { workspace = true }
 http = { workspace = true }
 hyper = { workspace = true }
 redis = { workspace = true }
+rmcp = { workspace = true, features = ["client", "transport-streamable-http-client-reqwest"] }
 sqlx = { workspace = true }
 test-r = { workspace = true }
 url = { workspace = true }
 assert2 = { workspace = true }
 convert_case = { workspace = true }
+urlencoding = { workspace = true }
 
 [target.'cfg(unix)'.dev-dependencies]
 backtrace-on-stack-overflow = { workspace = true }
@@ -81,6 +83,11 @@ harness = false
 [[test]]
 name = "streaming-session-recovery"
 path = "tests/streaming_session_recovery.rs"
+harness = false
+
+[[test]]
+name = "pinned-rpc"
+path = "tests/pinned_rpc.rs"
 harness = false
 
 [[test]]

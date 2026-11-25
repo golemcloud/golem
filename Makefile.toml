@@ -57,6 +57,10 @@ condition = { env_not_set = ["TEST_R_REPORT_OPTS"] }
 value = ""
 condition = { env_not_set = ["TEST_R_BUILD_OPTS"] }
 
+[env.TEST_R_COMMAND]
+value = "cargo-test-r"
+condition = { env_not_set = ["TEST_R_COMMAND"] }
+
 [env.TEST_R_FLAKY_OPTS]
 value = "--flaky-run=5"
 condition = { env_not_set = ["TEST_R_FLAKY_OPTS"] }
@@ -69,7 +73,6 @@ JUNIT_OPTS = "${TEST_R_REPORT_OPTS}"
 WORKER_TEST_THREAD_OPTS = ""
 CLI_TEST_THREADS = "4"
 PROFILE = "dev-ci"
-CI = "true"
 # CARGO_LOG="cargo::compiler::fingerprint=trace"
 
 [tasks.default]
@@ -640,7 +643,7 @@ command = "cargo"
 args = ["fmt", "--all"]
 
 [tasks.fix-clippy]
-description = "Runs clippy checks and applies fixes"
+description = "Applies host-only Clippy fixes; review cfg-gated references before accepting deletions (see AGENTS.md)"
 install_crate = "clippy"
 command = "cargo"
 args = [
@@ -683,7 +686,7 @@ dependencies = ["prepare-js-guest-tests"]
 env = { GOLEM_JS_GUEST_BUNDLE_DIR = "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/js-guest-bundles" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-js-guest-tests --test js-guest -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-js-guest-tests --test js-guest -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.prepare-js-guest-tests]
@@ -713,7 +716,18 @@ dependencies = ["wit", "test-component-middleware-unit-tests"]
 description = "Runs unit tests only"
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --workspace --exclude golem-schema-derive --lib -- --nocapture --report-time %{JUNIT_OPTS}
+# A proc-macro crate's test binary links the toolchain's dynamic standard library. `cargo test`
+# puts it on the loader path; prebuilt binaries from --binaries-metadata need it here.
+libdir = exec --fail-on-error rustc --print target-libdir
+libdir = trim ${libdir.stdout}
+inherited = get_env LD_LIBRARY_PATH
+if is_empty ${inherited}
+    set_env LD_LIBRARY_PATH ${libdir}
+else
+    set_env LD_LIBRARY_PATH "${libdir}:${inherited}"
+end
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --workspace --exclude golem-schema-derive --exclude golem-async-trait --lib -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-async-trait --test contracts -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.test-component-middleware-unit-tests]
@@ -788,14 +802,14 @@ description = "Runs untagged, sequential storage, oplog blob archive, and servic
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-common --test agent_extraction -- --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-size-analysis --test retention -- --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:" -- --skip key_value_storage --skip indexed_storage --skip oplog_blob_archive --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor --test file_creation_mask -- --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration -- key_value_storage namespace_routed_key_value_storage indexed_storage --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration oplog_blob_archive -- --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:rdbms_service" -- %{TEST_R_FLAKY_OPTS} --report-time --nocapture %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:ignite_service" -- %{TEST_R_FLAKY_OPTS} --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-common --test agent_extraction -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-size-analysis --test retention -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:" -- --skip key_value_storage --skip indexed_storage --skip oplog_blob_archive --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor --test file_creation_mask -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration -- key_value_storage namespace_routed_key_value_storage indexed_storage --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration oplog_blob_archive -- --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:rdbms_service" -- %{TEST_R_FLAKY_OPTS} --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:ignite_service" -- %{TEST_R_FLAKY_OPTS} --report-time --nocapture %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-ignite-service]
@@ -804,7 +818,7 @@ description = "Runs ignite service worker-executor-tests (requires GOLEM_IGNITE_
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration :tag:ignite_service -- %{TEST_R_FLAKY_OPTS} --report-time --nocapture %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration :tag:ignite_service -- %{TEST_R_FLAKY_OPTS} --report-time --nocapture %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-group1]
@@ -813,7 +827,7 @@ description = "Runs worker executor tests only (group 1/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group1" -- --skip ":tag:group5" --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group1" -- --skip ":tag:group5" --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-group2]
@@ -822,9 +836,9 @@ description = "Runs worker executor tests only (group 2/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group2" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:in_function_retry" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:storage_quota" -- --report-time --nocapture --test-threads=1 %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group2" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:in_function_retry" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:storage_quota" -- --report-time --nocapture --test-threads=1 %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-group3]
@@ -833,7 +847,7 @@ description = "Runs worker executor tests only (group 3/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group3" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group3" -- --skip ":tag:latency" --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-group4]
@@ -842,7 +856,16 @@ description = "Runs worker executor tests only (group 4/4)"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group4" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group4" -- --skip ":tag:latency" --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+'''
+
+[tasks.worker-executor-tests-latency]
+dependencies = ["wit", "ensure-builtin-artifacts"]
+description = "Runs timing-sensitive worker executor tests without unrelated test contention"
+env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info" }
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:latency" -- --report-time --nocapture --test-threads=1 %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-group5]
@@ -851,7 +874,7 @@ description = "Runs branch-added group 1 worker executor tests separately"
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group1&group5" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:group1&group5" -- --report-time --nocapture %{WORKER_TEST_THREAD_OPTS} %{JUNIT_OPTS}
 '''
 
 [tasks.worker-executor-tests-tool-streaming]
@@ -860,7 +883,7 @@ description = "Runs tool streaming worker executor tests with bounded concurrenc
 env = { "RUST_MIN_STACK" = "33554432", "RUST_BACKTRACE" = "1", "WASMTIME_BACKTRACE_DETAILS" = "1", "RUST_LOG" = "info", "RUST_TEST_TIME_INTEGRATION" = "5000,30000" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:tool_streaming" -- --report-time --nocapture --test-threads=8 %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-executor-tests --test integration ":tag:tool_streaming" -- --report-time --nocapture --test-threads=8 %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests]
@@ -888,9 +911,9 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration :tag: -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group1&db_postgres" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test environment-deletion :tag:db_postgres -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration :tag: -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group1&db_postgres" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test environment-deletion :tag:db_postgres -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group2]
@@ -899,7 +922,7 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group2&db_postgres" -- --nocapture --test-threads=2 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group2&db_postgres" -- --nocapture --test-threads=2 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group3]
@@ -908,8 +931,8 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group1&db_sqlite" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test environment-deletion :tag:db_sqlite -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group1&db_sqlite" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test environment-deletion :tag:db_sqlite -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group4]
@@ -918,9 +941,10 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group2&db_sqlite" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test streaming-session-recovery -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test fault-matrix -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group2&db_sqlite" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test streaming-session-recovery -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test pinned-rpc -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test fault-matrix -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group5]
@@ -929,11 +953,11 @@ dependencies = ["wit", "ensure-builtin-artifacts"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-service-base --test "*" -- --nocapture --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-registry-service --test "*" -- --nocapture --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-worker-service --test "*" -- --nocapture --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-shard-manager --test integration -- --nocapture --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-test-framework --test signal_unreaped_child -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-service-base --test "*" -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-registry-service --test "*" -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-worker-service --test "*" -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-shard-manager --test integration -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-test-framework --test signal_unreaped_child -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group6]
@@ -942,7 +966,7 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test sharding -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test sharding -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
 # Main validation runs the sequential sharding suite as two tasks: the
@@ -953,7 +977,7 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test sharding coordinated_scenario -- --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test sharding coordinated_scenario -- --nocapture --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group6-rest]
@@ -962,7 +986,7 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test sharding -- --skip coordinated_scenario --nocapture --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test sharding -- --skip coordinated_scenario --nocapture --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group7]
@@ -971,7 +995,7 @@ dependencies = ["build-bins-non-ci", "ensure-builtin-artifacts"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration :tag:group7 -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration :tag:group7 -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group8]
@@ -980,7 +1004,7 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test agent-config-live-mutation :tag:db_postgres -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test agent-config-live-mutation :tag:db_postgres -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group9]
@@ -989,7 +1013,7 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test agent-config-live-mutation :tag:db_sqlite -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test agent-config-live-mutation :tag:db_sqlite -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group10]
@@ -998,8 +1022,8 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group10&db_postgres" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test http-handler-lifecycle -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group10&db_postgres" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test http-handler-lifecycle -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group11]
@@ -1008,7 +1032,7 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group10&db_sqlite" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group10&db_sqlite" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group12]
@@ -1017,7 +1041,7 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group12&db_postgres" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group12&db_postgres" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.integration-tests-group13]
@@ -1026,8 +1050,8 @@ dependencies = ["build-bins-non-ci"]
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group12&db_sqlite" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test memory-billing -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test integration ":tag:group12&db_sqlite" -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test memory-billing -- --nocapture --test-threads=1 --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests]
@@ -1036,7 +1060,7 @@ description = "Runs all CLI integration tests"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-dev-release]
@@ -1053,7 +1077,7 @@ description = "Runs the it-cli 'agents' shard (agents and short streaming cases,
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:agents" -- --skip ":tag:agents_guest_bridge|agents_streaming" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:agents" -- --skip ":tag:agents_guest_bridge|agents_streaming" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-agents-guest-bridge]
@@ -1062,7 +1086,7 @@ description = "Runs the it-cli 'agents_guest_bridge' shard (Rust, TypeScript and
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:agents_guest_bridge" -- --skip ":tag:agents_guest_bridge_sources" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:agents_guest_bridge" -- --skip ":tag:agents_guest_bridge_sources" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-agents-guest-bridge-sources]
@@ -1071,7 +1095,7 @@ description = "Runs the it-cli 'agents_guest_bridge_sources' shard (MCP, Effect,
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:agents_guest_bridge_sources" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:agents_guest_bridge_sources" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-agents-streaming]
@@ -1080,7 +1104,7 @@ description = "Runs the it-cli 'agents_streaming' shard (the two long generated 
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_LOG_FILTER" = "golem_worker_executor::durable_host=debug,golem_worker_executor::grpc=debug,golem_worker_service::api::invocation_session=debug" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:agents_streaming" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:agents_streaming" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-bridge]
@@ -1089,7 +1113,7 @@ description = "Runs the it-cli 'bridge_gen' shard (bridge_gen without bridge_gen
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:bridge_gen" -- --skip ":tag:bridge_gen_rust" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:bridge_gen" -- --skip ":tag:bridge_gen_rust" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-bridge-rust]
@@ -1098,7 +1122,7 @@ description = "Runs the it-cli 'bridge_gen_rust' shard (bridge_gen::rust)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:bridge_gen_rust" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:bridge_gen_rust" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-deploy]
@@ -1107,7 +1131,7 @@ description = "Runs the it-cli 'deploy' shard (component and conformance tests)"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:deploy" -- --skip ":tag:deploy_runtime" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:deploy" -- --skip ":tag:deploy_runtime" --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-deploy-runtime]
@@ -1116,7 +1140,7 @@ description = "Runs the it-cli 'deploy_runtime' shard (SSH, account, secrets, ba
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:deploy_runtime" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:deploy_runtime" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-core]
@@ -1125,7 +1149,7 @@ description = "Runs the it-cli 'core' shard (untagged application and Git differ
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}
 '''
 
 [tasks.cli-integration-tests-update-golden-files]
@@ -1133,8 +1157,8 @@ dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "build-sdk-effect"
 env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "UPDATE_GOLDENFILES" = "1" }
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration app::agents::test_ts_code_first_with_rpc_and_all_types -- --nocapture
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration app::agents::test_rust_code_first_with_rpc_and_all_types -- --nocapture
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration app::agents::test_ts_code_first_with_rpc_and_all_types -- --nocapture
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration app::agents::test_rust_code_first_with_rpc_and_all_types -- --nocapture
 '''
 
 [tasks.check-diff-model-fingerprint]
@@ -1178,7 +1202,7 @@ set_env GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS 20
 set_env GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY 1s
 
 arguments = array_join ${@} " "
-exec --fail-on-error cargo-test-r run %{TEST_R_BUILD_OPTS} --package integration-tests --test sharding %{arguments} -- --nocapture --test-threads=1
+exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test sharding %{arguments} -- --nocapture --test-threads=1
 '''
 
 [tasks.registry-repo-coverage]
@@ -1269,19 +1293,25 @@ description = "Generates openapi spec from the code, saves it to the openapi dir
 [tasks.generate-registry-service-openapi]
 description = "Generates openapi spec for registry service"
 dependencies = ["build-registry-service-non-ci"]
+script_runner = "@duckscript"
 script = '''
-target_dir=$(cargo metadata --no-deps --format-version=1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
-mkdir -pv ./target/data
-"$target_dir/debug/golem-registry-service" --dump-openapi-yaml > ./target/golem-registry-service.yaml
+exit_on_error true
+mkdir ./target/data
+yaml = exec ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-registry-service --dump-openapi-yaml
+assert_eq ${yaml.code} 0
+writefile ./target/golem-registry-service.yaml ${yaml.stdout}
 '''
 
 [tasks.generate-worker-service-openapi]
 description = "Generates openapi spec for worker service"
 dependencies = ["build-worker-service-non-ci"]
+script_runner = "@duckscript"
 script = '''
-target_dir=$(cargo metadata --no-deps --format-version=1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
-mkdir -pv ./target/data
-"$target_dir/debug/golem-worker-service" --dump-openapi-yaml > ./target/golem-worker-service.yaml
+exit_on_error true
+mkdir ./target/data
+yaml = exec ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-worker-service --dump-openapi-yaml
+assert_eq ${yaml.code} 0
+writefile ./target/golem-worker-service.yaml ${yaml.stdout}
 '''
 
 [tasks.build-openapi-generator-non-ci]
@@ -1898,25 +1928,24 @@ writefile cli/golem/config/golem-server.sample.env ${env_var.stdout}
 [tasks.generate-configs]
 description = "Generates default and example config files"
 dependencies = ["build-shard-manager-kubernetes", "generate-golem-server-configs"]
-
+script_runner = "@duckscript"
 script = '''
-export RUST_BACKTRACE=1
-target_dir=$(cargo metadata --no-deps --format-version=1 | python3 -c 'import json, sys; print(json.load(sys.stdin)["target_directory"])')
-
-"$target_dir/debug/golem-registry-service" --dump-config-default-toml > golem-registry-service/config/registry-service.toml
-"$target_dir/debug/golem-registry-service" --dump-config-default-env-var > golem-registry-service/config/registry-service.sample.env
-
-"$target_dir/debug/golem-shard-manager" --dump-config-default-toml > golem-shard-manager/config/shard-manager.toml
-"$target_dir/debug/golem-shard-manager" --dump-config-default-env-var > golem-shard-manager/config/shard-manager.sample.env
-
-"$target_dir/debug/golem-component-compilation-service" --dump-config-default-toml > golem-component-compilation-service/config/component-compilation-service.toml
-"$target_dir/debug/golem-component-compilation-service" --dump-config-default-env-var > golem-component-compilation-service/config/component-compilation-service.sample.env
-
-"$target_dir/debug/golem-worker-service" --dump-config-default-toml > golem-worker-service/config/worker-service.toml
-"$target_dir/debug/golem-worker-service" --dump-config-default-env-var > golem-worker-service/config/worker-service.sample.env
-
-"$target_dir/debug/worker-executor" --dump-config-default-toml > golem-worker-executor/config/worker-executor.toml
-"$target_dir/debug/worker-executor" --dump-config-default-env-var > golem-worker-executor/config/worker-executor.sample.env
+exit_on_error true
+set_env RUST_BACKTRACE 1
+services = array registry-service shard-manager component-compilation-service worker-service worker-executor
+for service in ${services}
+    if equals ${service} worker-executor
+        binary = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/worker-executor"
+    else
+        binary = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-${service}"
+    end
+    toml = exec ${binary} --dump-config-default-toml
+    assert_eq ${toml.code} 0
+    writefile golem-${service}/config/${service}.toml ${toml.stdout}
+    env_var = exec ${binary} --dump-config-default-env-var
+    assert_eq ${env_var.code} 0
+    writefile golem-${service}/config/${service}.sample.env ${env_var.stdout}
+end
 '''
 
 ## ** CHECK CONFIGS **
@@ -2456,18 +2485,28 @@ exec --fail-on-error ${golem} exec -P release copy
 cd ../..
 '''
 
+[tasks.prepare-builtin-bash-conformance]
+description = "Installs and checks types, lint and formatting for the Bash conformance harness"
+script_runner = "@duckscript"
+script = '''
+exec --fail-on-error bun install --cwd builtin-tools/bash/conformance --frozen-lockfile
+exec --fail-on-error bun run --cwd builtin-tools/bash/conformance check
+'''
+
 [tasks.test-builtin-bash-pipelines]
 description = "Checks the Bash shell's exact WASM outputs against recorded Bash goldens, and the feature checklist"
+dependencies = ["prepare-builtin-bash-conformance"]
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error cargo build --manifest-path builtin-tools/bash/Cargo.toml --locked --target-dir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY} -p bash-shell --example cooperative --features test-support --release --target wasm32-wasip2
-exec --fail-on-error python3 builtin-tools/bash/conformance/test_conformance.py
-exec --fail-on-error python3 builtin-tools/bash/conformance/conformance.py check --wasm ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-wasip2/release/examples/cooperative.wasm
-exec --fail-on-error python3 builtin-tools/bash/conformance/conformance.py coverage --wasm ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-wasip2/release/examples/cooperative.wasm
+exec --fail-on-error bun run --cwd builtin-tools/bash/conformance test
+exec --fail-on-error bun builtin-tools/bash/conformance/conformance.ts check --wasm ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-wasip2/release/examples/cooperative.wasm
+exec --fail-on-error bun builtin-tools/bash/conformance/conformance.ts coverage --wasm ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/wasm32-wasip2/release/examples/cooperative.wasm
 '''
 
 [tasks.test-builtin-bash-sweep]
 description = "Runs Brush's compatibility suite on the Bash shell against its baseline, and checks every matrix case (both tiers) against its recorded golden"
+dependencies = ["prepare-builtin-bash-conformance"]
 script_runner = "@shell"
 script = '''
 builtin-tools/bash/conformance/compat/ci.sh ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
@@ -2475,9 +2514,10 @@ builtin-tools/bash/conformance/compat/ci.sh ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
 
 [tasks.test-builtin-bash-oracle-drift]
 description = "Re-checks every recorded golden (both tiers) against a live Bash oracle, to catch one whose answer has since changed. `stale` only needs Docker, not a built wasm. Not run on every push -- see the Oracle drift workflow's paths/schedule triggers."
-script_runner = "@shell"
+dependencies = ["prepare-builtin-bash-conformance"]
+script_runner = "@duckscript"
 script = '''
-python3 builtin-tools/bash/conformance/conformance.py stale
+exec --fail-on-error bun builtin-tools/bash/conformance/conformance.ts stale
 '''
 
 [tasks.check-builtin-bash-deny]
@@ -3158,7 +3198,7 @@ exec --fail-on-error cargo run --profile benchmarks -p integration-tests --bin b
 [tasks.run-benchmark-suite-orb]
 description = "Builds and runs the nightly spawned benchmark suite in an Amp orb"
 script_runner = "@duckscript"
-env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.5.3" }
+env = { CI = "true", CARGO_INCREMENTAL = "false", WASI_SDK_VERSION = "25", WASI_SDK_PATH = "/opt/wasi-sdk", WASM_RQUICKJS_VERSION = "0.5.5" }
 script = '''
 exec --fail-on-error docker info
 exec --fail-on-error cargo make --profile ci build-release

@@ -28,6 +28,8 @@ use crate::storage::keyvalue::fault_injecting::{
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use async_trait::async_trait;
 use bytes::Bytes;
+use golem_common::model::InvocationRequestOperation;
+use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::Timestamp;
 use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
@@ -40,8 +42,8 @@ use golem_common::model::invocation_context::TraceId;
 use golem_common::model::oplog::{OplogPayload, PayloadId, RawOplogPayload};
 use golem_common::model::regions::{DeletedRegions, OplogRegion};
 use golem_common::model::{
-    AgentInvocationPayload, AgentInvocationResult, AgentMetadata, PendingInvocationRef,
-    PendingUpdateKind, PendingUpdateRef, ScanCursor, ShardEpoch,
+    AgentInvocationResult, AgentMetadata, PendingInvocationRef, PendingUpdateKind,
+    PendingUpdateRef, ScanCursor, ShardEpoch,
 };
 use golem_common::read_only_lock;
 use golem_service_base::model::component::Component;
@@ -276,7 +278,7 @@ fn non_agent_component(component_id: ComponentId, environment_id: EnvironmentId)
             .unwrap(),
         component_size: 1,
         metadata: golem_common::model::component_metadata::ComponentMetadata::default(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
         package_metadata: None,
         object_store_key: "test-object".to_string(),
@@ -284,6 +286,7 @@ fn non_agent_component(component_id: ComponentId, environment_id: EnvironmentId)
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for IndexTestComponentService {
     async fn get(
         &self,
@@ -329,8 +332,11 @@ fn invocation_pair(
         OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             invocation_id: *key,
-            payload: OplogPayload::Inline(Box::new(AgentInvocationPayload::ManualUpdate {
+            operation: Box::new(InvocationRequestOperation::ManualUpdate {
                 target_revision: ComponentRevision::INITIAL,
+            }),
+            payload: OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate {
+                requester: golem_common::model::caller::Caller::anonymous(),
             })),
             trace_id: TraceId::generate(),
             trace_states: Vec::new(),
@@ -354,6 +360,7 @@ fn invocation_pair(
             method_name: None,
             consumed_fuel: 0,
             component_revision: ComponentRevision::INITIAL,
+            awaits_settlement: false,
         },
     );
 }
@@ -370,6 +377,25 @@ fn result_at(terminal: u64) -> InvocationResultPosition {
     InvocationResultPosition {
         terminal: OplogIndex::from_u64(terminal),
         request: Some(OplogIndex::from_u64(terminal - 1)),
+        end: golem_common::model::InvocationEnd::Completed,
+        operation: None,
+        accepted_at: None,
+        changed_at: golem_common::model::Timestamp::from(0),
+    }
+}
+
+/// The lookup without the operation and timestamps, which `result_at` does not know.
+fn positions_only(lookup: InvocationResultIndexLookup) -> InvocationResultIndexLookup {
+    match lookup {
+        InvocationResultIndexLookup::Found(position) => {
+            InvocationResultIndexLookup::Found(InvocationResultPosition {
+                operation: None,
+                accepted_at: None,
+                changed_at: golem_common::model::Timestamp::from(0),
+                ..position
+            })
+        }
+        other => other,
     }
 }
 
@@ -859,7 +885,7 @@ fn stored_card(card_id: CardId) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -947,6 +973,7 @@ fn sample_status() -> AgentStatusRecord {
                     parent_start_index: None,
                     invocation_id: None,
                     observational_owner: None,
+                    driver: None,
                     carries_request: true,
                     request: None,
                 },
@@ -961,6 +988,7 @@ fn sample_status() -> AgentStatusRecord {
                     parent_start_index: None,
                     invocation_id: None,
                     observational_owner: None,
+                    driver: None,
                     carries_request: false,
                     request: None,
                 },
@@ -969,6 +997,7 @@ fn sample_status() -> AgentStatusRecord {
                 golem_common::model::oplog::StartIdentityField::FunctionName,
                 golem_common::model::oplog::StartIdentityField::RequestPresence,
             ],
+            replay_start: None,
         })),
     });
     status.successful_updates.push(SuccessfulUpdateRecord {
@@ -1270,6 +1299,7 @@ async fn invocation_result_index_resumes_across_calls_and_chunks() {
                 &first,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(3))
     );
@@ -1282,8 +1312,77 @@ async fn invocation_result_index_resumes_across_calls_and_chunks() {
                 &second,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(5))
+    );
+}
+
+/// The catch-up carries the settling invocation in its metadata, so a give-up in a later chunk
+/// than the result still makes the indexed result a background failure.
+#[test]
+async fn invocation_result_index_finds_a_background_failure_in_a_later_chunk() {
+    let key = idempotency_key("settling");
+    let mut entries = invocation_entries(&[key]);
+    if let Some(OplogEntry::AgentInvocationFinished {
+        awaits_settlement, ..
+    }) = entries.get_mut(&OplogIndex::from_u64(3))
+    {
+        *awaits_settlement = true;
+    }
+    entries.insert(
+        OplogIndex::from_u64(4),
+        OplogEntry::error(
+            None,
+            golem_common::model::oplog::OplogErrorKind::Invocation,
+            None,
+            golem_common::model::oplog::AgentError::Unknown("background work trapped".to_string()),
+            OplogIndex::from_u64(2),
+            Some(golem_common::model::RetryPolicyState::Terminal),
+            None,
+            None,
+        ),
+    );
+    let oplog = Arc::new(IndexTestOplogService::new(entries));
+    let mut config = GolemConfig::default();
+    config.invocation_results.physical_index_catch_up_chunk_size = 1;
+    let service = DefaultWorkerService::new(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        Arc::new(ShardServiceDefault::new()),
+        oplog,
+        Arc::new(IndexTestComponentService),
+        Arc::new(config),
+    );
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
+    let status = invocation_status(4, 0, &[(&key, 3)], 0, DeletedRegions::new());
+
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .lookup_invocation_result_index(
+                &owned_agent_id,
+                invocation_index_fingerprint(),
+                &status,
+                &key,
+            )
+            .await
+            .map(positions_only)
+            .unwrap(),
+        InvocationResultIndexLookup::Found(InvocationResultPosition {
+            end: golem_common::model::InvocationEnd::BackgroundFailed {
+                failure: OplogIndex::from_u64(4),
+            },
+            ..result_at(3)
+        })
     );
 }
 
@@ -1350,6 +1449,7 @@ async fn invocation_result_index_restarts_from_beginning_after_hash_loss() {
                 &first,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(3))
     );
@@ -1448,6 +1548,31 @@ async fn invocation_result_index_and_exact_membership_are_jointly_complete() {
             .unwrap(),
         InvocationResultIndexLookup::DefinitiveMiss
     );
+
+    // The results that left the recent results are listed from the index, each with its request.
+    let mut listed: Vec<(InvocationId, InvocationResultPosition)> = service
+        .list_invocation_result_index(&owned_agent_id, invocation_index_fingerprint(), &current)
+        .await
+        .unwrap()
+        .expect("the index is complete")
+        .into_iter()
+        .map(
+            |(key, position)| match positions_only(InvocationResultIndexLookup::Found(position)) {
+                InvocationResultIndexLookup::Found(position) => (key, position),
+                _ => unreachable!(),
+            },
+        )
+        .collect();
+    listed.sort_by_key(|(_, position)| position.terminal);
+    assert_eq!(
+        listed,
+        vec![
+            (first, result_at(3)),
+            (second, result_at(5)),
+            (third, result_at(7)),
+            (fourth, result_at(9)),
+        ]
+    );
 }
 
 #[test]
@@ -1504,6 +1629,7 @@ async fn incomplete_invocation_result_index_does_not_return_an_obsolete_result()
                 &repeated,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(5))
     );
@@ -1578,6 +1704,7 @@ async fn independent_catch_up_cannot_publish_over_newer_generation() {
                 &current,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(6))
     );
@@ -1694,6 +1821,7 @@ async fn stale_reset_cannot_delete_independent_newer_progress() {
                 &current,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(3))
     );
@@ -1779,6 +1907,7 @@ async fn concurrent_generation_catch_up_clears_reverted_results() {
                 &current,
             )
             .await
+            .map(positions_only)
             .unwrap(),
         InvocationResultIndexLookup::Found(result_at(6))
     );
@@ -2074,6 +2203,7 @@ fn tracks_workers_with_pending_invocations_for_assignment_recovery() {
         manual_update_target_revision: Some(
             golem_common::model::component::ComponentRevision::INITIAL,
         ),
+        operation: None,
     });
 
     assert!(DefaultWorkerService::should_track_for_assignment_recovery(
@@ -2393,6 +2523,7 @@ impl OplogService for FakeOplogService {
 struct UnusedComponentService;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for UnusedComponentService {
     async fn get(
         &self,
@@ -3273,4 +3404,467 @@ fn batch(cursor: &str, examined_keys: u64) -> ScanPage {
         agent_ids: vec![],
         examined_keys,
     }
+}
+
+#[test]
+async fn invocation_result_index_keeps_a_result_when_a_later_chunk_withdraws_its_duplicate() {
+    let key = idempotency_key("duplicate");
+    let mut entries = invocation_entries(&[key]);
+    entries.insert(
+        OplogIndex::from_u64(4),
+        OplogEntry::pending_agent_invocation(
+            None,
+            key,
+            Box::new(InvocationRequestOperation::ManualUpdate {
+                target_revision: ComponentRevision::INITIAL,
+            }),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate {
+                requester: golem_common::model::caller::Caller::anonymous(),
+            })),
+            TraceId::generate(),
+            Vec::new(),
+            Vec::new(),
+        ),
+    );
+    entries.insert(
+        OplogIndex::from_u64(5),
+        OplogEntry::cancel_pending_invocation(key),
+    );
+    // Chunks of two entries: the result is indexed before the chunk that withdraws the duplicate.
+    let (service, _oplog, owned_agent_id) = index_test_service(entries);
+    let status = invocation_status(5, 0, &[], 0, DeletedRegions::new());
+
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(
+        service
+            .lookup_invocation_result_index(
+                &owned_agent_id,
+                invocation_index_fingerprint(),
+                &status,
+                &key,
+            )
+            .await
+            .map(positions_only)
+            .unwrap(),
+        InvocationResultIndexLookup::Found(result_at(3))
+    );
+}
+
+#[test]
+async fn invocation_result_index_keeps_the_operation_of_a_request_with_an_external_payload() {
+    let key = idempotency_key("external");
+    let mut entries = invocation_entries(&[key]);
+    let Some(OplogEntry::AgentInvocationStarted {
+        operation, payload, ..
+    }) = entries.get_mut(&OplogIndex::from_u64(2))
+    else {
+        unreachable!("invocation_entries starts the invocation at index 2")
+    };
+    **operation = InvocationRequestOperation::AgentMethod {
+        method_name: "removed-method".to_string(),
+    };
+    *payload = OplogPayload::External {
+        payload_id: PayloadId::new(),
+        md5_hash: vec![0; 16],
+        cached: None,
+    };
+    let (service, _oplog, owned_agent_id) = index_test_service(entries);
+    let status = invocation_status(3, 0, &[], 0, DeletedRegions::new());
+
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+
+    let InvocationResultIndexLookup::Found(position) = service
+        .lookup_invocation_result_index(
+            &owned_agent_id,
+            invocation_index_fingerprint(),
+            &status,
+            &key,
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("the caught-up index holds the result");
+    };
+    assert_eq!(
+        position.operation,
+        Some(golem_common::model::InvocationOperation::Method(
+            "removed-method".to_string()
+        ))
+    );
+}
+
+#[test]
+async fn a_user_cancellation_of_a_bloom_positive_key_is_not_a_definitive_index_miss() {
+    let first = idempotency_key("bf-first");
+    let second = idempotency_key("bf-second");
+    let third = idempotency_key("bf-third");
+    let cancelled = idempotency_key("bf-cancelled");
+    let mut entries = invocation_entries(&[first, second, third]);
+    entries.insert(
+        OplogIndex::from_u64(8),
+        OplogEntry::pending_agent_invocation(
+            None,
+            cancelled,
+            Box::new(InvocationRequestOperation::ManualUpdate {
+                target_revision: ComponentRevision::INITIAL,
+            }),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate {
+                requester: golem_common::model::caller::Caller::anonymous(),
+            })),
+            TraceId::generate(),
+            Vec::new(),
+            Vec::new(),
+        ),
+    );
+    entries.insert(
+        OplogIndex::from_u64(9),
+        OplogEntry::cancel_pending_invocation(cancelled),
+    );
+    let (service, _oplog, owned_agent_id) = index_test_service(entries.clone());
+
+    // One Bloom bit: every key is a positive. One recent entry: only the last result is exact.
+    let mut invocation_results = InvocationResultMembership::new(1, 1, 1);
+    invocation_results.insert(first, result_at(3));
+    invocation_results.insert(second, result_at(5));
+    invocation_results.insert(third, result_at(7));
+    assert!(!invocation_results.is_exact_complete());
+    let before_cancel = AgentStatusRecord {
+        oplog_idx: OplogIndex::from_u64(8),
+        invocation_results,
+        pending_invocations: vec![PendingInvocationRef {
+            timestamp: Timestamp::now_utc(),
+            not_before: None,
+            oplog_index: OplogIndex::from_u64(8),
+            idempotency_key: Some(cancelled),
+            manual_update_target_revision: None,
+            operation: None,
+        }],
+        ..AgentStatusRecord::default()
+    };
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &before_cancel,
+        )
+        .await
+        .unwrap();
+
+    // The user cancellation is folded into the status as the executor does it.
+    let after_cancel = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        before_cancel,
+        BTreeMap::from([(
+            OplogIndex::from_u64(9),
+            entries[&OplogIndex::from_u64(9)].clone(),
+        )]),
+        &golem_common::model::RetryConfig::default(),
+    )
+    .unwrap()
+    .unwrap();
+    assert!(after_cancel.pending_invocations.is_empty());
+    assert!(after_cancel.invocation_results.might_contain(&cancelled));
+
+    let lookup = service
+        .lookup_invocation_result_index(
+            &owned_agent_id,
+            invocation_index_fingerprint(),
+            &after_cancel,
+            &cancelled,
+        )
+        .await
+        .unwrap();
+    assert_ne!(
+        lookup,
+        InvocationResultIndexLookup::DefinitiveMiss,
+        "the committed cancellation at 9 must not be reported as a definitive miss"
+    );
+}
+
+#[test]
+async fn evicting_the_cached_status_removes_the_result_index_and_catch_up_rebuilds_it() {
+    let first = idempotency_key("evicted-first");
+    let second = idempotency_key("evicted-second");
+    let (service, _oplog, owned_agent_id) =
+        index_test_service(invocation_entries(&[first, second]));
+    // Nothing is in the recent results, so only the persisted index can answer.
+    let status = invocation_status(5, 0, &[], 0, DeletedRegions::new());
+    let lookup = |key| {
+        let service = service.clone();
+        let owned_agent_id = owned_agent_id.clone();
+        let status = status.clone();
+        async move {
+            service
+                .lookup_invocation_result_index(
+                    &owned_agent_id,
+                    invocation_index_fingerprint(),
+                    &status,
+                    &key,
+                )
+                .await
+                .unwrap()
+        }
+    };
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+    let before = lookup(second).await;
+    assert!(matches!(before, InvocationResultIndexLookup::Found(_)));
+
+    service
+        .remove_cached_status(&owned_agent_id, invocation_index_fingerprint())
+        .await
+        .unwrap();
+    // Missing metadata is never a definitive miss, so no key with a result reads as new.
+    assert_eq!(
+        lookup(second).await,
+        InvocationResultIndexLookup::Incomplete
+    );
+
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+    assert_eq!(lookup(second).await, before);
+    assert_eq!(
+        positions_only(lookup(first).await),
+        InvocationResultIndexLookup::Found(result_at(3))
+    );
+}
+
+#[test]
+async fn a_result_index_field_that_does_not_decode_resets_the_index() {
+    let first = idempotency_key("undecodable-first");
+    let second = idempotency_key("undecodable-second");
+    let storage = Arc::new(InMemoryKeyValueStorage::new());
+    let oplog = Arc::new(IndexTestOplogService::new(invocation_entries(&[
+        first, second,
+    ])));
+    let service = index_test_service_with(storage.clone(), oplog);
+    let agent_id = AgentId::from_parts(7, 5);
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
+    let status = invocation_status(5, 0, &[], 0, DeletedRegions::new());
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+
+    // A field in a format that no longer decodes, such as one written before a format change.
+    let namespace = DefaultWorkerService::invocation_result_index_namespace(
+        &owned_agent_id,
+        invocation_index_fingerprint(),
+    );
+    storage
+        .with_entity(
+            "test",
+            "corrupt_invocation_result_index",
+            "invocation_result",
+        )
+        .set_raw(
+            namespace,
+            &invocation_result_index_field(&first),
+            &[0xff, 0x00],
+        )
+        .await
+        .unwrap();
+
+    let lookup = |key| {
+        let service = service.clone();
+        let owned_agent_id = owned_agent_id.clone();
+        let status = status.clone();
+        async move {
+            service
+                .lookup_invocation_result_index(
+                    &owned_agent_id,
+                    invocation_index_fingerprint(),
+                    &status,
+                    &key,
+                )
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(lookup(first).await, InvocationResultIndexLookup::Incomplete);
+    // The whole index is suspect now, not only the field that failed.
+    assert_eq!(
+        lookup(second).await,
+        InvocationResultIndexLookup::Incomplete
+    );
+
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &status,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        positions_only(lookup(first).await),
+        InvocationResultIndexLookup::Found(result_at(3))
+    );
+}
+
+/// A background failure changes a result at its give-up entry, after newer results. The recent
+/// results keep it as the newest change, so the persisted index from before the give-up is
+/// incomplete instead of answering with the plain result.
+#[test]
+async fn a_background_failure_after_newer_results_is_not_answered_from_an_older_index() {
+    let settling = idempotency_key("settling");
+    let first_cancelled = idempotency_key("cancelled-1");
+    let second_cancelled = idempotency_key("cancelled-2");
+
+    let pending = |key: &InvocationId| {
+        OplogEntry::pending_agent_invocation(
+            None,
+            *key,
+            Box::new(InvocationRequestOperation::ManualUpdate {
+                target_revision: ComponentRevision::INITIAL,
+            }),
+            OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::ManualUpdate {
+                requester: golem_common::model::caller::Caller::anonymous(),
+            })),
+            TraceId::generate(),
+            Vec::new(),
+            Vec::new(),
+        )
+    };
+
+    // The settling invocation records its result at the return (3). Two invocations queued during
+    // its drain are cancelled (6, 7). Then the background work gives up (8).
+    let mut entries = invocation_entries(std::slice::from_ref(&settling));
+    if let Some(OplogEntry::AgentInvocationFinished {
+        awaits_settlement, ..
+    }) = entries.get_mut(&OplogIndex::from_u64(3))
+    {
+        *awaits_settlement = true;
+    }
+    entries.insert(OplogIndex::from_u64(4), pending(&first_cancelled));
+    entries.insert(OplogIndex::from_u64(5), pending(&second_cancelled));
+    entries.insert(
+        OplogIndex::from_u64(6),
+        OplogEntry::cancel_pending_invocation(first_cancelled),
+    );
+    entries.insert(
+        OplogIndex::from_u64(7),
+        OplogEntry::cancel_pending_invocation(second_cancelled),
+    );
+    entries.insert(
+        OplogIndex::from_u64(8),
+        OplogEntry::error(
+            None,
+            golem_common::model::oplog::OplogErrorKind::Invocation,
+            None,
+            golem_common::model::oplog::AgentError::Unknown("background work trapped".to_string()),
+            OplogIndex::from_u64(2),
+            Some(golem_common::model::RetryPolicyState::Terminal),
+            None,
+            None,
+        ),
+    );
+
+    // The status comes from the real status fold, with a small recent-result capacity.
+    let initial = AgentStatusRecord {
+        invocation_results: InvocationResultMembership::new(1, 128, 3),
+        ..AgentStatusRecord::default()
+    };
+    let retry = golem_common::model::RetryConfig::default();
+    let before_give_up = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        initial,
+        entries
+            .range(..=OplogIndex::from_u64(7))
+            .map(|(index, entry)| (*index, entry.clone()))
+            .collect(),
+        &retry,
+    )
+    .unwrap()
+    .unwrap();
+    let after_give_up = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        before_give_up.clone(),
+        entries
+            .range(OplogIndex::from_u64(8)..)
+            .map(|(index, entry)| (*index, entry.clone()))
+            .collect(),
+        &retry,
+    )
+    .unwrap()
+    .unwrap();
+    let background_failed = InvocationResultPosition {
+        end: golem_common::model::InvocationEnd::BackgroundFailed {
+            failure: OplogIndex::from_u64(8),
+        },
+        ..result_at(3)
+    };
+    assert!(!after_give_up.invocation_results.is_exact_complete());
+    assert_eq!(
+        after_give_up
+            .invocation_results
+            .position(&settling)
+            .cloned()
+            .map(|position| positions_only(InvocationResultIndexLookup::Found(position))),
+        Some(InvocationResultIndexLookup::Found(
+            background_failed.clone()
+        ))
+    );
+
+    let (service, _oplog, owned_agent_id) = index_test_service(entries);
+    // A lookup before the give-up caught the index up through 7.
+    service
+        .catch_up_invocation_result_index(
+            &owned_agent_id,
+            AgentMode::Durable,
+            invocation_index_fingerprint(),
+            &before_give_up,
+        )
+        .await
+        .unwrap();
+
+    let lookup = service
+        .lookup_invocation_result_index(
+            &owned_agent_id,
+            invocation_index_fingerprint(),
+            &after_give_up,
+            &settling,
+        )
+        .await
+        .map(positions_only)
+        .unwrap();
+    assert_eq!(lookup, InvocationResultIndexLookup::Incomplete);
 }

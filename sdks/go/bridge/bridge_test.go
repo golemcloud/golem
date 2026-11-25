@@ -424,23 +424,68 @@ func TestGetByIDOfAnAgentOfAnotherTypeIsNotFound(t *testing.T) {
 	}
 }
 
-// A session names its agent by constructor arguments, which an unkeyed
-// created agent or one found by ID does not have.
-func TestOnlyAnAgentOfItsArgumentsCanStream(t *testing.T) {
-	r := newRecorder(t)
-	unkeyed := createdAgent(t, r)
-	found, err := GetByID(context.Background(), "greeter", testAgentIDValue(t), WithConfiguration(r.configuration()))
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, agent := range []*Agent{unkeyed, found} {
-		err := InvokeStreaming(context.Background(), agent, "upload", schema.RecordValue{})
-		if err == nil || !strings.Contains(err.Error(), "constructor arguments") {
-			t.Fatalf("got %v, want an error naming the constructor arguments", err)
-		}
-	}
-	if keyed := createdAgent(t, r, Keyed()); keyed.parameters == nil {
-		t.Fatal("a keyed created agent lost its constructor arguments")
+func TestSessionTargets(t *testing.T) {
+	for _, name := range []string{"upsert", "upsert-with-id", "create", "keyed-create", "get-by-id"} {
+		t.Run(name, func(t *testing.T) {
+			wantTarget := map[string]any{"kind": "id", "agentId": testAgentID, "expectedFingerprint": testFingerprint}
+			if strings.HasPrefix(name, "upsert") {
+				wantTarget = map[string]any{"kind": "key", "constructorParameters": aliceWire}
+			}
+			f := newFakeServer(t, func(c *fakeConn) {
+				start := c.expect("invocationStart")
+				want := map[string]any{
+					"application": "app", "environment": "env", "agentType": "greeter",
+					"method": "upload", "target": wantTarget,
+				}
+				if !reflect.DeepEqual(start.m["selector"], want) {
+					t.Errorf("selector = %#v, want %#v", start.m["selector"], want)
+				}
+				refs := provisionalRefs(t, start)
+				accept(c, start, "session", inputMapping(1, refs[0], "in", 0, false))
+				if got := consumeInput(c, 1); !reflect.DeepEqual(got, []any{float64(1), float64(2)}) {
+					t.Errorf("input = %v", got)
+				}
+				c.send("invocationResult", map[string]any{"mappings": []any{}, "result": map[string]any{"kind": "none"}})
+				finished(c)
+				c.waitClose()
+			})
+			r := newRecorder(t)
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				if strings.HasSuffix(req.URL.Path, sessionEndpoint) {
+					f.srv.Config.Handler.ServeHTTP(w, req)
+				} else {
+					r.server.Config.Handler.ServeHTTP(w, req)
+				}
+			}))
+			t.Cleanup(server.Close)
+			config := Configuration{Server: Custom(server.URL, "token"), AppName: "app", EnvName: "env"}
+			environmentIDs.Store(environmentKeyOf(config), testEnvironmentID)
+			t.Cleanup(func() { environmentIDs.Delete(environmentKeyOf(config)) })
+			ctx := ctxT(t)
+			var agent *Agent
+			var err error
+			switch name {
+			case "upsert", "upsert-with-id":
+				agent, err = Upsert("greeter", aliceParams, WithConfiguration(config))
+			case "create":
+				agent, err = Create(ctx, "greeter", aliceParams, WithConfiguration(config))
+			case "keyed-create":
+				agent, err = Create(ctx, "greeter", aliceParams, WithConfiguration(config), Keyed())
+			case "get-by-id":
+				agent, err = GetByID(ctx, "greeter", testAgentIDValue(t), WithConfiguration(config))
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if name == "upsert-with-id" {
+				if id, err := agent.AgentID(ctx); err != nil || id != testAgentIDValue(t) {
+					t.Fatalf("AgentID = %v, %v", id, err)
+				}
+			}
+			if err := InvokeStreaming(ctx, agent, "upload", streamParams(EncodeStream(EncodeU32)(StreamOf[uint32](1, 2)))); err != nil {
+				t.Fatal(err)
+			}
+		})
 	}
 }
 

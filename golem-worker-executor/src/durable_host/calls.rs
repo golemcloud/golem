@@ -93,7 +93,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn claim_transaction_start(
         &mut self,
         scope_name: &HostFunctionName,
-        invocation_id: Option<DurableInvocationId>,
+        owner: TransactionScopeOwner,
     ) -> Result<Option<(OplogIndex, concurrent::ReplayCallHandle)>, WorkerExecutorError> {
         loop {
             let claim = StartClaim::scope(
@@ -101,7 +101,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 &DurableFunctionType::WriteRemote,
                 self.entity_parent_start_index(),
             )
-            .with_invocation_id(invocation_id);
+            .with_invocation_id(owner.invocation_id)
+            .with_observational_owner(owner.observational_owner)
+            .with_driver(owner.driver);
             let expected = claim.expected_description();
             let store_continued_live = self.state.store_continued_live();
             match self
@@ -150,10 +152,36 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         }
     }
 
+    /// The owner fields of a `<scope:transaction>` `Start`, taken as a direct call takes them: the
+    /// invocation id of the guest import, unless `observational_owner`, the custom durable
+    /// invocation that observes the guest task (captured at the import's entry), records the call;
+    /// and the driver of code the loop's invocation does not own.
+    fn transaction_scope_owner(
+        &mut self,
+        observational_owner: Option<OplogIndex>,
+    ) -> Result<TransactionScopeOwner, WorkerExecutorError> {
+        let invocation_id = if observational_owner.is_some() {
+            None
+        } else {
+            self.direct_call_invocation_id()?
+        };
+        let driver = (self.runtime == OwnerRuntime::Agent)
+            .then(|| self.state.recording_driver())
+            .flatten();
+        Ok(TransactionScopeOwner {
+            invocation_id,
+            observational_owner,
+            driver,
+        })
+    }
+
     /// Reconstructs the recorded transaction without creating a replacement transaction.
     /// Historical statements remain replayable even when the resident transaction was lost.
+    /// `observational_owner` is the custom durable invocation that observes the calling guest
+    /// task, resolved at the entry of the guest import.
     pub async fn begin_transaction_function<Tx>(
         &mut self,
+        observational_owner: Option<OplogIndex>,
         handler: impl RemoteTransactionHandler<Tx, crate::services::rdbms::RdbmsError>,
     ) -> anyhow::Result<(OplogIndex, Tx)> {
         use concurrent::DurableContext;
@@ -166,15 +194,15 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
 
         let scope_name = HostFunctionName::Custom("<scope:transaction>".to_string());
         self.state.refuse_on_bootstrap_cursor(&scope_name)?;
-        let invocation_id = self.direct_call_invocation_id()?;
+        let owner = self.transaction_scope_owner(observational_owner)?;
+        let invocation_id = owner.invocation_id;
         // A transaction begun after the live transition claims first while unclaimed retained
         // `Start`s exist (see `WorkerState::durable_call_is_live`) and begins a fresh live
         // transaction only once replay reports that no scope `Start` remains.
         let claimed_scope = if self.state.durable_call_is_live() {
             None
         } else {
-            self.claim_transaction_start(&scope_name, invocation_id)
-                .await?
+            self.claim_transaction_start(&scope_name, owner).await?
         };
 
         let Some((scope_start_index, scope_handle)) = claimed_scope else {
@@ -185,7 +213,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 parent_start_index: self.entity_parent_start_index(),
                 function_name: scope_name,
                 invocation_id,
-                observational_owner: None,
+                observational_owner: owner.observational_owner,
+                driver: owner.driver,
                 request: None,
                 durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
@@ -440,6 +469,14 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Ok(())
         }
     }
+}
+
+/// The owner fields a `<scope:transaction>` `Start` records and its replay claim requires.
+#[derive(Clone, Copy)]
+struct TransactionScopeOwner {
+    invocation_id: Option<DurableInvocationId>,
+    observational_owner: Option<OplogIndex>,
+    driver: Option<OplogIndex>,
 }
 
 impl PrivateDurableWorkerState {

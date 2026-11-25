@@ -6,6 +6,43 @@ Build durable, fault-tolerant agents on the [Golem](https://golem.cloud) platfor
 
 This SDK lets you write Golem agents in MoonBit with minimal boilerplate. Agents are compiled to WebAssembly components and run on Golem, which provides automatic durable execution, persistent state, and agent-to-agent communication.
 
+## WebAssembly backends
+
+The SDK supports `wasm` and the opt-in `wasm-gc` backend in the same package.
+`wasm` remains the preferred target. Regenerating the bindings produces both
+implementations; MoonBit selects the source files for the requested target.
+The code generation tools emit exports for both targets without applying the
+linear runtime's heap-start setting to `wasm-gc`.
+
+Use `moon build --target wasm-gc` to select the GC backend in a consumer with
+generated Golem exports. Component embedding still uses UTF-16. GC objects live
+outside linear memory; the generated bindings copy canonical ABI values across
+that boundary. No Wasmtime changes are required.
+
+GC components can have smaller code without compiling or starting faster.
+Keep `wasm` unless measurements of your workload justify opting in.
+
+New CLI applications provide `debug-gc` and `release-gc` component presets.
+Use `golem build --preset release-gc --yes` to build GC components and
+`golem deploy --preset release-gc --yes` to deploy them. Pass the preset again
+for each command that builds, or set the environment's `componentPresets` to
+`release-gc`; a build does not change the environment's default. The existing
+`debug` and `release` presets still build `wasm`. Both presets use the same SDK
+package and generated exports; switching targets needs no source rewrite.
+
+In this repository, `cargo make validate-sdk-moonbit` checks and tests both
+backends, including empty, agent-only, tool-only, and mixed components.
+`cargo make validate-sdk-moonbit-replay` builds the worker fixture with each
+backend and requires all four coroutine and crash-recovery cases to pass. It
+requires the worker test dependencies, including Redis. The backends use separate
+fixture files. Main validation builds both through `build-components.sh moonbit`
+and runs the same cases in worker executor test group 4.
+
+Run SDK tests with `GOLEM_MOONBIT_TARGET=wasm-gc scripts/run-sdk-tests.sh` to
+exercise GC, or omit the variable for `wasm`. Packages whose tests use the fake
+host explicitly export their canonical ABI memory on GC; the compiler does not
+export it by default for that backend.
+
 ## Persistent permission derivation
 
 `@permissions.derive_from_wallet` and both typed cards' `derive_child` methods

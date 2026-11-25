@@ -15,7 +15,7 @@
 use crate::preview2::golem::rdbms::types::{
     Date, IpAddress, MacAddress, Time, Timestamp, Timestamptz, Uuid,
 };
-use chrono::{Datelike, Offset, Timelike};
+
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 
 impl From<uuid::Uuid> for Uuid {
@@ -72,45 +72,49 @@ impl From<IpAddress> for IpAddr {
     }
 }
 
-impl TryFrom<Timestamp> for chrono::DateTime<chrono::Utc> {
+impl TryFrom<Timestamp> for jiff::Timestamp {
     type Error = String;
 
     fn try_from(value: Timestamp) -> Result<Self, Self::Error> {
-        let v: chrono::NaiveDateTime = value.try_into()?;
-        Ok(v.and_utc())
+        let v: jiff::civil::DateTime = value.try_into()?;
+        v.to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .map(|v| v.timestamp())
+            .map_err(|e| e.to_string())
     }
 }
 
-impl TryFrom<Timestamp> for chrono::NaiveDateTime {
+impl TryFrom<Timestamp> for jiff::civil::DateTime {
     type Error = String;
 
     fn try_from(value: Timestamp) -> Result<Self, Self::Error> {
         let date = value.date.try_into()?;
         let time = value.time.try_into()?;
-        Ok(chrono::naive::NaiveDateTime::new(date, time))
+        Ok(jiff::civil::DateTime::from_parts(date, time))
     }
 }
 
-impl From<chrono::DateTime<chrono::Utc>> for Timestamp {
-    fn from(v: chrono::DateTime<chrono::Utc>) -> Self {
-        v.naive_utc().into()
+impl From<jiff::Timestamp> for Timestamp {
+    fn from(v: jiff::Timestamp) -> Self {
+        v.to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .datetime()
+            .into()
     }
 }
 
-impl From<chrono::NaiveDateTime> for Timestamp {
-    fn from(v: chrono::NaiveDateTime) -> Self {
+impl From<jiff::civil::DateTime> for Timestamp {
+    fn from(v: jiff::civil::DateTime) -> Self {
         let date = v.date().into();
         let time = v.time().into();
         Timestamp { date, time }
     }
 }
 
-impl From<chrono::NaiveTime> for Time {
-    fn from(v: chrono::NaiveTime) -> Self {
+impl From<jiff::civil::Time> for Time {
+    fn from(v: jiff::civil::Time) -> Self {
         let hour = v.hour() as u8;
         let minute = v.minute() as u8;
         let second = v.second() as u8;
-        let nanosecond = v.nanosecond();
+        let nanosecond = v.subsec_nanosecond() as u32;
         Time {
             hour,
             minute,
@@ -120,62 +124,88 @@ impl From<chrono::NaiveTime> for Time {
     }
 }
 
-impl TryFrom<Time> for chrono::NaiveTime {
+impl TryFrom<Time> for jiff::civil::Time {
     type Error = String;
 
     fn try_from(value: Time) -> Result<Self, Self::Error> {
-        let time = chrono::NaiveTime::from_hms_nano_opt(
-            value.hour as u32,
-            value.minute as u32,
-            value.second as u32,
-            value.nanosecond,
+        let time = jiff::civil::Time::new(
+            value
+                .hour
+                .try_into()
+                .map_err(|_| "Time value is not valid")?,
+            value
+                .minute
+                .try_into()
+                .map_err(|_| "Time value is not valid")?,
+            value
+                .second
+                .try_into()
+                .map_err(|_| "Time value is not valid")?,
+            value
+                .nanosecond
+                .try_into()
+                .map_err(|_| "Time value is not valid")?,
         )
-        .ok_or("Time value is not valid")?;
+        .map_err(|e| e.to_string())?;
         Ok(time)
     }
 }
 
-impl From<chrono::NaiveDate> for Date {
-    fn from(v: chrono::NaiveDate) -> Self {
-        let year = v.year();
+impl From<jiff::civil::Date> for Date {
+    fn from(v: jiff::civil::Date) -> Self {
+        let year = i32::from(v.year());
         let month = v.month() as u8;
         let day = v.day() as u8;
         Date { year, month, day }
     }
 }
 
-impl TryFrom<Date> for chrono::NaiveDate {
+impl TryFrom<Date> for jiff::civil::Date {
     type Error = String;
 
     fn try_from(value: Date) -> Result<Self, Self::Error> {
-        let date = chrono::naive::NaiveDate::from_ymd_opt(
-            value.year,
-            value.month as u32,
-            value.day as u32,
+        let date = jiff::civil::Date::new(
+            value
+                .year
+                .try_into()
+                .map_err(|_| "Date value is not valid")?,
+            value
+                .month
+                .try_into()
+                .map_err(|_| "Date value is not valid")?,
+            value
+                .day
+                .try_into()
+                .map_err(|_| "Date value is not valid")?,
         )
-        .ok_or("Date value is not valid")?;
+        .map_err(|e| e.to_string())?;
         Ok(date)
     }
 }
 
-impl TryFrom<Timestamptz> for chrono::DateTime<chrono::Utc> {
+impl TryFrom<Timestamptz> for jiff::Timestamp {
     type Error = String;
 
     fn try_from(value: Timestamptz) -> Result<Self, Self::Error> {
-        let datetime: chrono::NaiveDateTime = value.timestamp.try_into()?;
-        let offset = chrono::offset::FixedOffset::west_opt(value.offset)
-            .ok_or("Offset value is not valid")?;
-        let datetime = datetime
-            .checked_add_offset(offset)
-            .ok_or("Offset value is not valid")?;
-        Ok(datetime.and_utc())
+        let datetime: jiff::civil::DateTime = value.timestamp.try_into()?;
+        if !(-86_399..=86_399).contains(&value.offset) {
+            return Err("Offset value is not valid".to_string());
+        }
+        datetime
+            .checked_add(jiff::SignedDuration::from_secs(-i64::from(value.offset)))
+            .and_then(|v| v.to_zoned_datetime(jiff::tz::TimeZone::UTC))
+            .map(|v| v.timestamp())
+            .map_err(|e| e.to_string())
     }
 }
 
-impl From<chrono::DateTime<chrono::Utc>> for Timestamptz {
-    fn from(v: chrono::DateTime<chrono::Utc>) -> Self {
-        let timestamp = v.naive_utc().into();
-        let offset = v.offset().fix().local_minus_utc();
+impl From<jiff::Timestamp> for Timestamptz {
+    fn from(v: jiff::Timestamp) -> Self {
+        let timestamp = v
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .datetime()
+            .into();
+        let offset = 0;
         Timestamptz { timestamp, offset }
     }
 }

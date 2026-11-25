@@ -18,7 +18,8 @@ use crate::filesystem::sandbox::host_adapter::sandbox_provisioning::SandboxFiles
 use crate::filesystem::sandbox::{
     SandboxFilesystemAdapter, SandboxPath, SeedAccess, SeedEntry, SeedPlacement,
 };
-use crate::filesystem::volume::{AgentAccounting, file_project_id};
+use crate::filesystem::volume::AgentAccounting;
+use crate::filesystem::volume::platform::file_project_id;
 use crate::filesystem::volume::{FilesystemAllocation, FilesystemLimits};
 use crate::services::golem_config::FilesystemStorageMode;
 use std::io::{Seek as _, SeekFrom, Write as _};
@@ -80,7 +81,9 @@ async fn managed_xfs_sandbox_filesystem_owns_allocation_limits_and_cleanup() {
     let (provisioning, directories) =
         crate::services::agent_filesystem::provision_executor_directories(
             &FilesystemStorageMode::ManagedXfs {
-                xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
+                xfs_quotad_socket: crate::filesystem::volume::platform::in_process_xfs_quotad(
+                    &root,
+                ),
                 root: root.clone().into(),
             },
             RetryConfig::default(),
@@ -90,7 +93,9 @@ async fn managed_xfs_sandbox_filesystem_owns_allocation_limits_and_cleanup() {
     assert!(
         crate::services::agent_filesystem::provision_executor_directories(
             &FilesystemStorageMode::ManagedXfs {
-                xfs_quotad_socket: crate::filesystem::volume::in_process_xfs_quotad(&root),
+                xfs_quotad_socket: crate::filesystem::volume::platform::in_process_xfs_quotad(
+                    &root
+                ),
                 root: root.clone().into(),
             },
             RetryConfig::default()

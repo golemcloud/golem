@@ -31,6 +31,7 @@ harness = false
 
 [dependencies]
 golem-api-grpc = { workspace = true }
+golem-async-trait = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-mcp-import = { workspace = true }
 golem-native-tool = { workspace = true }
@@ -47,13 +48,13 @@ async-trait = { workspace = true }
 base64 = { workspace = true }
 bigdecimal = { workspace = true }
 bit-vec = { workspace = true }
+bit-vec-sqlx = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
 bytesize = { workspace = true }
 cap-fs-ext = { workspace = true }
 cap-std = { workspace = true }
 cap-time-ext = { workspace = true }                              # keep in sync with wasmtime
-chrono = { workspace = true }
 dashmap = { workspace = true }
 desert_rust = { workspace = true }
 evicting_cache_map = { workspace = true }
@@ -75,6 +76,7 @@ humantime-serde = { workspace = true }
 im = { workspace = true }
 include_dir = { workspace = true }
 itertools = { workspace = true }
+jiff = { workspace = true }
 lazy_static = { workspace = true }
 log = { workspace = true }
 mac_address = { workspace = true, features = ["serde"] }
@@ -104,6 +106,7 @@ sqlx-core = { workspace = true }
 stacker = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
+time = { workspace = true }
 tokio = { workspace = true }
 tokio-stream = { workspace = true }
 tokio-tungstenite = { workspace = true }

@@ -36,7 +36,12 @@ if (( ${#test_paths[@]} == 0 )); then
 fi
 
 real_moonrun=$(command -v moonrun)
+target="${GOLEM_MOONBIT_TARGET:-wasm}"
+case "$target" in
+  wasm|wasm-gc) ;;
+  *) echo "Unsupported MoonBit guest target: $target" >&2; exit 2 ;;
+esac
 GOLEM_MOONRUN_DISPATCH=1 \
   GOLEM_REAL_MOONRUN=$real_moonrun \
   MOONRUN_OVERRIDE=$script_dir/run-sdk-tests.sh \
-  moon test --target wasm "${test_paths[@]}"
+  moon test --target "$target" "${test_paths[@]}"

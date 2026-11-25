@@ -62,6 +62,7 @@ impl WorkerServiceRegistryInvalidationHandler {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl RegistryInvalidationHandler for WorkerServiceRegistryInvalidationHandler {
     async fn on_event(&self, event: RegistryInvalidationEvent) {
         if matches!(

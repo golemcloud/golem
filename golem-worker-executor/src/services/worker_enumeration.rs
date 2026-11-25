@@ -114,6 +114,7 @@ pub struct RunningWorkerEnumerationServiceDefault<Ctx: WorkerCtx> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> RunningWorkerEnumerationService
     for RunningWorkerEnumerationServiceDefault<Ctx>
 {
@@ -332,6 +333,7 @@ impl HasComponentService for DefaultWorkerEnumerationService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl WorkerEnumerationService for DefaultWorkerEnumerationService {
     async fn get(
         &self,

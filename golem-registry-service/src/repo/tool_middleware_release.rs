@@ -105,6 +105,7 @@ impl<Repo: ToolMiddlewareReleaseRepo> LoggedToolMiddlewareReleaseRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: ToolMiddlewareReleaseRepo> ToolMiddlewareReleaseRepo
     for LoggedToolMiddlewareReleaseRepo<Repo>
 {
@@ -437,6 +438,7 @@ impl DbToolMiddlewareReleaseRepo<PostgresPool> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ToolMiddlewareReleaseRepo for DbToolMiddlewareReleaseRepo<PostgresPool> {
     async fn create(
         &self,

@@ -147,8 +147,7 @@ describe('Caller and Principal', () => {
     const immediate = caller.immediate;
     if (immediate.kind !== 'agent') throw new Error('an agent');
     expect(immediate.agentType).toBe('Relay');
-    expect(immediate.agentId.uuid.highBits).toBe(2n);
-    expect(immediate.agentId.uuid.lowBits).toBe(7n);
+    expect(immediate.agentId).toBe('00000000-0000-0002-0000-000000000007');
   });
 
   it('prints each kind as "<kind> <ref text>" and anonymous as "anonymous"', async () => {

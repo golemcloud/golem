@@ -279,7 +279,8 @@ test "REST results validate the returned graph before the local expected schema"
   let expected = public_value_codec(
     "{\"root\":{\"kind\":\"u32\",\"value\":{\"restrictions\":{\"min\":{\"kind\":\"unsigned\",\"value\":10}}}}}",
   )
-  assert_true(raises(() => ignore(expected.encode(decoded))))
+  // Only the server checks restrictions.
+  assert_eq(expected.decode(expected.encode(decoded)), decoded)
 }
 
 ///|
@@ -432,9 +433,7 @@ test "schema resolution observes changed definitions and diagnoses aliases afres
   )
   let unrestricted = codec.defs["n"]
   ignore(codec.encode(U8Value(7)))
-  codec.defs["n"] = @json.parse(
-    "{\"kind\":\"u8\",\"value\":{\"restrictions\":{\"max\":{\"kind\":\"unsigned\",\"value\":\"6\"}}}}",
-  )
+  codec.defs["n"] = @json.parse("{\"kind\":\"string\",\"value\":{}}")
   assert_true(raises(() => ignore(codec.encode(U8Value(7)))))
   codec.defs["n"] = @json.parse("{\"kind\":\"ref\",\"value\":{\"id\":\"n\"}}")
   assert_true(raises(() => ignore(codec.encode(U8Value(7)))))
@@ -563,16 +562,19 @@ fn rejects(f : () -> Unit raise) -> Bool {
 }
 
 ///|
-test "public codec checks binary MIME restrictions like the server" {
+test "public codec leaves binary MIME restrictions to the server" {
   let codec = public_value_codec(
     "{\"root\":{\"kind\":\"binary\",\"value\":{\"restrictions\":{\"mimeTypes\":[\"image/png\"]}}}}",
   )
-  for value in [BinaryValue(b"\x01", None), BinaryValue(b"\x01", Some("image/png"))] {
+  for value in [
+    BinaryValue(b"\x01", None),
+    BinaryValue(b"\x01", Some("image/png")),
+    BinaryValue(b"\x01", Some("image/gif")),
+  ] {
     assert_eq(codec.decode(codec.encode(value)), value)
   }
-  let foreign = BinaryValue(b"\x01", Some("image/gif"))
-  assert_true(rejects(() => ignore(codec.encode(foreign))))
-  assert_true(rejects(() => ignore(codec.decode(schema_value_to_json(foreign)))))
+  let malformed = BinaryValue(b"\x01", Some("not a MIME type"))
+  assert_true(rejects(() => ignore(codec.encode(malformed))))
 }
 
 ///|

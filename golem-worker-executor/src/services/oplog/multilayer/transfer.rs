@@ -59,6 +59,7 @@ impl BackgroundTransferFromPrimary {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl BackgroundTransfer for BackgroundTransferFromPrimary {
     async fn read_source(&self) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
         let entries = self
@@ -120,6 +121,7 @@ pub(crate) async fn transfer_between_lower_layers(
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl BackgroundTransfer for BackgroundTransferBetweenLowers {
     async fn read_source(&self) -> Result<Vec<(OplogIndex, OplogEntry)>, String> {
         let entries = self

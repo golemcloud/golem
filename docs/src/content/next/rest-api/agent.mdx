@@ -44,6 +44,7 @@ precise|boolean|No|If true, calculate the most up-to-date status for each agent,
       "ownerKind": "component-agent",
       "agentTypeName": "string",
       "canonicalKey": "string",
+      "origin": "keyed",
       "constructorParameters": "string",
       "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
       "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
@@ -302,6 +303,7 @@ component_name|string|No|Restrict results to agents whose recorded component has
       "ownerKind": "component-agent",
       "agentTypeName": "string",
       "canonicalKey": "string",
+      "origin": "keyed",
       "constructorParameters": "string",
       "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
       "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
@@ -515,7 +517,10 @@ anything runs. The idempotency key comes from the `Idempotency-Key` header.
       "value": true
     }
   },
-  "componentRevision": 0
+  "componentRevision": 0,
+  "backgroundFailure": {
+    "error": "string"
+  }
 }
 ```
 

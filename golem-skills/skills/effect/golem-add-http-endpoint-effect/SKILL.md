@@ -59,7 +59,7 @@ export const TaskAgent = defineAgent({
 Mount rules:
 
 - The path starts with `/` and does not end with `/` unless it is exactly `/`.
-- Every agent id field appears as a `{variable}` in the mount path.
+- On a key mount, every agent id field appears as a `{variable}` in the mount path.
 - Variable names use the exact TypeScript `id` keys, including casing.
 - Mount paths cannot contain query parameters or `{*rest}` catch-all variables.
 - Use `{taskName}`, not `{task-name}`, for a constructor field named `taskName`. This changes only
@@ -163,6 +163,23 @@ searchItems: method({
 
 Endpoint paths start with `/`. A `{*rest}` catch-all is allowed only as the final endpoint path
 segment.
+
+## Required Agent ID Mounts and Creation
+
+Use an ID mount to address an existing durable, non-router agent without constructor inputs in the URL:
+
+```typescript
+http: Http.mount("/tasks/{instance}", {
+  agentIdBinding: Http.agentId.path("instance"),
+  createRoute: "/tasks/create",
+}),
+```
+
+For query addressing, use `Http.mount("/tasks", { agentIdBinding: Http.agentId.query("instance"), createRoute: "/tasks/create" })`. The ID is required; there is no optional binding or keyed fallback. ID mounts cannot bind constructor fields or combine with `phantomAgent` or ephemeral mode. The query ID name is reserved from explicit and implicit method query bindings and protocol controls. Keep fresh-per-request `phantomAgent` and ephemeral lifecycle policies on key mounts.
+
+`createRoute` declares a full exact POST path, not a mount suffix, and requires an ID mount. Only literals and system variables are allowed in this path. Send a JSON object with one field per user-supplied constructor parameter, as an endpoint body has one field per method parameter, for example `{"name": "first"}`; an optional parameter may be left out. Other fields, such as `env`, `config` or `keyed`, are rejected with `400`. The new agent has no key. Route authentication does not grant configuration authority. Use authorized operator REST creation or SDK creation for overrides. Creation inherits mount authentication/CORS, waits for the constructor, and returns `201 Created` with `agentId`/`agentFingerprint` JSON and an ID-mounted `Location`. Current HTTP callers have no caller scope, even with authentication, so `Idempotency-Key` is ignored; retries create new unkeyed agents.
+
+ID selection never creates an agent. File serving supports both key and ID mounts but is lookup-only: missing keys and unknown, deleted, wrong-type or wrong-environment IDs return terminal `404`, without creation or handler fallback. Missing files on an existing target retain normal mapping fallback.
 
 ## Durable Stream Route Customization
 
@@ -391,7 +408,7 @@ generated OpenAPI document at `/openapi.yaml` after deployment.
 - Import Effect APIs from `effect` and `defineAgent`, `Http`, `method`, and `Snapshot` from
   `@golemcloud/effect-golem`.
 - Do not use decorators or classes from `@golemcloud/golem-ts-sdk` in an Effect component.
-- Every agent id field must appear in the mount path with exact TypeScript casing.
+- On a key mount, every agent id field must appear in the mount path with exact TypeScript casing. ID mounts bind only the agent ID, not constructor inputs.
 - Every bound path, query, or header variable must match a method parameter.
 - Unbound bodyful-method parameters use same-named camelCase JSON body fields.
 - Handlers return Effects, not plain values or `async` functions.

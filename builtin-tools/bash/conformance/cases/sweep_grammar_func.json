@@ -1,0 +1,3899 @@
+{
+  "tier": "sweep",
+  "description": "Grammar sweep: functions (definition forms, local and dynamic scope, return, printing with\ndeclare -f), test and [[ ]] operators, getopts, declare/readonly/unset/type/command/builtin\n(see sweep_grammar_param.py for the scheme).",
+  "cases": [
+    {
+      "name": "gram func define parens with brace group",
+      "script": "f() { echo \"body $1\"; }\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print parens with brace group",
+      "script": "f() { echo \"body $1\"; }\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define function keyword with brace group",
+      "script": "function f { echo \"body $1\"; }\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print function keyword with brace group",
+      "script": "function f { echo \"body $1\"; }\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define function keyword parens with brace group",
+      "script": "function f() { echo \"body $1\"; }\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print function keyword parens with brace group",
+      "script": "function f() { echo \"body $1\"; }\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define spaced parens with brace group",
+      "script": "f ( ) { echo \"body $1\"; }\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print spaced parens with brace group",
+      "script": "f ( ) { echo \"body $1\"; }\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define parens with subshell",
+      "script": "f() ( echo \"sub $1\" )\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print parens with subshell",
+      "script": "f() ( echo \"sub $1\" )\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define function keyword with subshell",
+      "script": "function f ( echo \"sub $1\" )\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print function keyword with subshell",
+      "script": "function f ( echo \"sub $1\" )\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define function keyword parens with subshell",
+      "script": "function f() ( echo \"sub $1\" )\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print function keyword parens with subshell",
+      "script": "function f() ( echo \"sub $1\" )\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define spaced parens with subshell",
+      "script": "f ( ) ( echo \"sub $1\" )\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print spaced parens with subshell",
+      "script": "f ( ) ( echo \"sub $1\" )\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define parens with conditional",
+      "script": "f() [[ -n $1 ]]\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print parens with conditional",
+      "script": "f() [[ -n $1 ]]\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define function keyword with conditional",
+      "script": "function f [[ -n $1 ]]\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print function keyword with conditional",
+      "script": "function f [[ -n $1 ]]\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define function keyword parens with conditional",
+      "script": "function f() [[ -n $1 ]]\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print function keyword parens with conditional",
+      "script": "function f() [[ -n $1 ]]\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define spaced parens with conditional",
+      "script": "f ( ) [[ -n $1 ]]\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print spaced parens with conditional",
+      "script": "f ( ) [[ -n $1 ]]\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define parens with arithmetic",
+      "script": "f() (( $# > 0 ))\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print parens with arithmetic",
+      "script": "f() (( $# > 0 ))\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define parens with if",
+      "script": "f() if [[ $1 ]]; then echo yes; else echo no; fi\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print parens with if",
+      "script": "f() if [[ $1 ]]; then echo yes; else echo no; fi\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define function keyword with if",
+      "script": "function f if [[ $1 ]]; then echo yes; else echo no; fi\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print function keyword with if",
+      "script": "function f if [[ $1 ]]; then echo yes; else echo no; fi\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define function keyword parens with if",
+      "script": "function f() if [[ $1 ]]; then echo yes; else echo no; fi\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print function keyword parens with if",
+      "script": "function f() if [[ $1 ]]; then echo yes; else echo no; fi\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define spaced parens with if",
+      "script": "f ( ) if [[ $1 ]]; then echo yes; else echo no; fi\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print spaced parens with if",
+      "script": "f ( ) if [[ $1 ]]; then echo yes; else echo no; fi\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define parens with for",
+      "script": "f() for a in \"$@\"; do echo \"<$a>\"; done\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print parens with for",
+      "script": "f() for a in \"$@\"; do echo \"<$a>\"; done\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define parens with while",
+      "script": "f() while (( $# )); do echo \"$1\"; shift; done\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print parens with while",
+      "script": "f() while (( $# )); do echo \"$1\"; shift; done\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define parens with case",
+      "script": "f() case $1 in a) echo A;; *) echo other;; esac\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print parens with case",
+      "script": "f() case $1 in a) echo A;; *) echo other;; esac\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define parens with arith for",
+      "script": "f() for ((i=0; i<2; i++)); do echo $i; done\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print parens with arith for",
+      "script": "f() for ((i=0; i<2; i++)); do echo $i; done\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define parens with select",
+      "script": "f() select s in x; do echo \"$s\"; break; done <<< 1\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print parens with select",
+      "script": "f() select s in x; do echo \"$s\"; break; done <<< 1\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define parens with group with redirect",
+      "script": "f() { echo redirected; } > /tmp/fr\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print parens with group with redirect",
+      "script": "f() { echo redirected; } > /tmp/fr\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func define parens with multi-line group",
+      "script": "f() {\n  echo one\n  echo two\n}\nf a; echo \"status=$?\"; f; echo \"status=$?\"; [[ -f /tmp/fr ]] && cat /tmp/fr",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print parens with multi-line group",
+      "script": "f() {\n  echo one\n  echo two\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 1: echo a; echo b",
+      "script": "f() {\necho a; echo b\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 2: a=1 b=2",
+      "script": "f() {\na=1 b=2\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 3: x=1 echo y",
+      "script": "f() {\nx=1 echo y\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 4: echo \"$1\" '$2' $'\\t'",
+      "script": "f() {\necho \"$1\" '$2' $'\\t'\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 5: echo a | cat | cat",
+      "script": "f() {\necho a | cat | cat\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 6: echo a && echo b || echo c",
+      "script": "f() {\necho a && echo b || echo c\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 7: ! true",
+      "script": "f() {\n! true\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 8: ( echo sub )",
+      "script": "f() {\n( echo sub )\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 9: { echo grp; }",
+      "script": "f() {\n{ echo grp; }\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 10: echo bg & wait",
+      "script": "f() {\necho bg & wait\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 11: if true; then echo t; elif false; then echo e; els",
+      "script": "f() {\nif true; then echo t; elif false; then echo e; else echo f; fi\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 12: while false; do :; done",
+      "script": "f() {\nwhile false; do :; done\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 13: until true; do :; done",
+      "script": "f() {\nuntil true; do :; done\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 14: for i in 1 2; do echo $i; done",
+      "script": "f() {\nfor i in 1 2; do echo $i; done\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 15: for ((i=0; i<1; i++)); do :; done",
+      "script": "f() {\nfor ((i=0; i<1; i++)); do :; done\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 16: case $1 in a|b) echo ab ;; c) echo c ;& d) echo d ",
+      "script": "f() {\ncase $1 in a|b) echo ab ;; c) echo c ;& d) echo d ;;& *) ;; esac\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 17: [[ -n $1 && $1 == x* ]]",
+      "script": "f() {\n[[ -n $1 && $1 == x* ]]\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 18: (( x = 1 + 2 ))",
+      "script": "f() {\n(( x = 1 + 2 ))\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 19: echo > /tmp/o 2>&1 < /dev/null",
+      "script": "f() {\necho > /tmp/o 2>&1 < /dev/null\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 20: cat <<EOF",
+      "script": "f() {\ncat <<EOF\nhere $1\nEOF\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 21: cat <<'EOF'",
+      "script": "f() {\ncat <<'EOF'\nraw $1\nEOF\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 22: cat <<< \"str\"",
+      "script": "f() {\ncat <<< \"str\"\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 23: exec 3>&-",
+      "script": "f() {\nexec 3>&-\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 24: echo $(echo sub) `echo back`",
+      "script": "f() {\necho $(echo sub) `echo back`\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 25: echo $((1+2))",
+      "script": "f() {\necho $((1+2))\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 26: local l=1; declare -g g=2",
+      "script": "f() {\nlocal l=1; declare -g g=2\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 27: a=(1 2 3); a[4]=x",
+      "script": "f() {\na=(1 2 3); a[4]=x\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 28: declare -A m=([k]=v)",
+      "script": "f() {\ndeclare -A m=([k]=v)\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 29: echo ${v:-d} ${#v} ${v//a/b}",
+      "script": "f() {\necho ${v:-d} ${#v} ${v//a/b}\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 30: echo {a,b} ~ *",
+      "script": "f() {\necho {a,b} ~ *\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 31: time true",
+      "script": "f() {\ntime true\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 32: coproc_free=1",
+      "script": "f() {\ncoproc_free=1\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 33: echo 'it'\\''s'",
+      "script": "f() {\necho 'it'\\''s'\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 34: echo \"a\\\"b\"",
+      "script": "f() {\necho \"a\\\"b\"\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 35: echo a # comment",
+      "script": "f() {\necho a # comment\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 36: f2() { echo nested; }",
+      "script": "f() {\nf2() { echo nested; }\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 37: select s in a; do break; done",
+      "script": "f() {\nselect s in a; do break; done\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 38: echo <(true) >(true)",
+      "script": "f() {\necho <(true) >(true)\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 39: { echo x; } | { cat; }",
+      "script": "f() {\n{ echo x; } | { cat; }\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 40: echo \\$ \\\\",
+      "script": "f() {\necho \\$ \\\\\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 41: return 3",
+      "script": "f() {\nreturn 3\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 42: echo a; # trailing comment",
+      "script": "f() {\necho a; # trailing comment\n  echo b\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 43: [[ a =~ ^a(.)$ ]]",
+      "script": "f() {\n[[ a =~ ^a(.)$ ]]\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 44: test -n x && [ -z '' ]",
+      "script": "f() {\ntest -n x && [ -z '' ]\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 45: echo $@ $* $# $? $$ $!",
+      "script": "f() {\necho $@ $* $# $? $$ $!\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 46: printf -v out '%s' x",
+      "script": "f() {\nprintf -v out '%s' x\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func print body 47: trap 'echo t' EXIT",
+      "script": "f() {\ntrap 'echo t' EXIT\n}\ndeclare -f f",
+      "tags": [
+        "compound.function",
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func type of a function",
+      "script": "f() { echo x; }; type f",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func type -t kinds",
+      "script": "f() { :; }; type -t f if echo; type -t nosuch; echo status=$?",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -F",
+      "script": "f() { :; }; g() { :; }; declare -F; declare -F f",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -f of several",
+      "script": "a1() { echo 1; }; a2() { echo 2; }; declare -f a1 a2",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -f of a missing function",
+      "script": "declare -f nosuch; echo status=$?",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func printed function reloads",
+      "script": "f() { local x=$1; echo \"[$x]\"; }; src=$(declare -f f); unset -f f; eval \"$src\"; f re",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function with redirect prints it",
+      "script": "f() { echo r; } > /tmp/fo; declare -f f",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func export -f listing",
+      "script": "f() { :; }; export -f f; declare -Fx",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func readonly function",
+      "script": "f() { echo ro; }; readonly -f f; f() { echo new; }; echo status=$?; f",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func unset -f",
+      "script": "f() { :; }; unset -f f; f; echo status=$?",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func unset prefers variable",
+      "script": "f=1; f() { echo func; }; unset f; f; echo \"[${f-unset}]\"",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function named like a builtin",
+      "script": "echo() { builtin echo \"[$*]\"; }; echo hi; unset -f echo; echo plain",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function named like a keyword",
+      "script": "function if { echo kw; }; \\if 2>/dev/null; echo status=$?",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function with dashes and dots",
+      "script": "my-fn.x() { echo odd; }; my-fn.x",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function name with slash",
+      "script": "a/b() { echo slash; }; echo status=$?",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function name numeric",
+      "script": "1f() { echo num; }; 1f",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func redefinition",
+      "script": "f() { echo 1; }; f() { echo 2; }; f",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function defined in a condition",
+      "script": "if true; then f() { echo cond; }; fi; f",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function defined in a loop",
+      "script": "for n in a b; do eval \"fn_$n() { echo $n; }\"; done; fn_a; fn_b",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func recursive definition inside",
+      "script": "outer() { inner() { echo inner; }; }; inner 2>/dev/null; echo status=$?; outer; inner",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func command skips functions",
+      "script": "echo() { builtin echo func; }; command echo cmd",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func builtin with a non-builtin",
+      "script": "builtin nosuch; echo status=$?",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func command -v kinds",
+      "script": "f() { :; }; command -v f; command -v if; command -v echo",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func command -V function",
+      "script": "f() { echo x; }; command -V f",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function in a pipeline",
+      "script": "f() { read l; echo \"<$l>\"; }; echo piped | f",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function output captured",
+      "script": "f() { echo cap; }; x=$(f); echo \"$x\"",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function with a here-string",
+      "script": "f() { cat; }; f <<< hs",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function redirect each call",
+      "script": "n=0; f() { echo call; } >> /tmp/fa; f; f; cat /tmp/fa",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function redirect with expansion",
+      "script": "f() { echo x; } > \"/tmp/f$n\"; n=1; f; n=2; f; echo /tmp/f?",
+      "tags": [
+        "compound.function"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local shadows a global",
+      "script": "x=g; f() { local x=l; echo $x; }; f; echo $x",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func dynamic scope reaches callees",
+      "script": "x=g; f() { local x=f; g; }; g() { echo $x; }; f; g",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func callee assignment hits caller local",
+      "script": "x=g; f() { local x=f; g; echo $x; }; g() { x=changed; }; f; echo $x",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local without value",
+      "script": "x=g; f() { local x; echo \"[${x-unset}]\"; x=set; }; f; echo $x",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local inherits with -I",
+      "script": "x=g; f() { local -I x; echo \"[$x]\"; }; f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local of an array",
+      "script": "a=(1 2); f() { local a=(x); echo ${a[@]}; }; f; echo ${a[@]}",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local -a and -A",
+      "script": "f() { local -a ia=(1 2); local -A aa=([k]=v); echo ${ia[1]} ${aa[k]}; }; f; echo \"[${ia-}]\"",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local -i",
+      "script": "f() { local -i n=3+4; echo $n; }; f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local -r",
+      "script": "f() { local -r c=1; c=2; echo status=$?; }; f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local -x reaches children",
+      "script": "f() { local -x lx=child; bash -c 'echo ${lx-unset}'; }; f; echo ${lx-unset}",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local -n",
+      "script": "f() { local -n r=$1; r=set-by-ref; }; f target; echo $target",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local -",
+      "script": "set -u; f() { local -; set +u; echo ${nope-}inner; }; f; echo ${nope-outer}; ( echo $nope ) 2>/dev/null || echo still-u",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local twice",
+      "script": "f() { local x=1; local x=2; echo $x; }; f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func unset local reveals global",
+      "script": "x=g; f() { local x=l; unset x; echo \"[${x-unset}]\"; }; f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func unset caller local from callee",
+      "script": "x=g; f() { local x=f; g; echo \"f sees [${x-unset}]\"; }; g() { unset x; }; f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare in a function is local",
+      "script": "f() { declare d=in; }; f; echo \"[${d-unset}]\"",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -g in a function",
+      "script": "f() { declare -g d=global; }; f; echo $d",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func typeset is declare",
+      "script": "f() { typeset t=in; echo $t; }; f; echo \"[${t-unset}]\"",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local with command substitution status",
+      "script": "f() { local x=$(false); echo $?; local y; y=$(false); echo $?; }; f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local assignment splitting",
+      "script": "f() { v='a b'; local x=$v; echo \"$x\"; }; f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func local with array syntax",
+      "script": "f() { local 'arr=(1 2)'; declare -p arr; }; f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func positional parameters are per call",
+      "script": "set -- outer; f() { echo \"$# $1\"; set -- changed; }; f in; echo $1",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func shift in a function",
+      "script": "f() { shift 2; echo \"$@\"; shift 5; echo status=$?; }; f a b c",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func dollar zero in a function",
+      "script": "f() { echo $0; }; f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func FUNCNAME stack",
+      "script": "a() { b; }; b() { echo \"${FUNCNAME[*]}\"; }; a",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func FUNCNAME at top level",
+      "script": "echo \"[${FUNCNAME[*]-}] ${#FUNCNAME[@]}\"",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func BASH_LINENO",
+      "script": "f() { echo \"${BASH_LINENO[0]}\"; }\nf\n\nf",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func LINENO in a function",
+      "script": "f() {\necho $LINENO\n}\nf",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func caller",
+      "script": "f() { caller; caller 0; }; g() { f; }\ng",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func recursion factorial",
+      "script": "fact() { (( $1 <= 1 )) && { echo 1; return; }; echo $(( $1 * $(fact $(( $1 - 1 ))) )); }; fact 10",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func recursion with locals",
+      "script": "fib() { local n=$1; (( n < 2 )) && { r=$n; return; }; fib $((n-1)); local a=$r; fib $((n-2)); r=$((a + r)); }; fib 15; echo $r",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func recursion depth 200",
+      "script": "d() { (( $1 > 0 )) && d $(( $1 - 1 )) || echo bottom; }; d 200",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {},
+      "expected": {
+        "status": 1,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: line 1: d: maximum function nesting level exceeded (150): deeper nesting is unsupported in bash-tool\n"
+        },
+        "reason": "bash-tool's limit (README, Limits: Nesting): function calls and `$( )` share Wasmtime's 512 KiB native stack, so recursion ends with the nesting error (about 75 levels through an `if`, 150 bare, 50 through `$( )`); bash has no such limit"
+      }
+    },
+    {
+      "name": "gram func FUNCNEST limit",
+      "script": "FUNCNEST=3; r() { r; }; r; echo status=$?",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func return value",
+      "script": "f() { return 7; }; f; echo $?",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func return without value",
+      "script": "f() { false; return; }; f; echo $?",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func return 256",
+      "script": "f() { return 256; }; f; echo $?",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func return negative",
+      "script": "f() { return -1; }; f; echo $?",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func return non-numeric",
+      "script": "f() { return abc; }; f; echo $?",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func return too many arguments",
+      "script": "f() { return 1 2; }; f; echo $?",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func return in a subshell of a function",
+      "script": "f() { ( return 4 ); echo \"after $?\"; }; f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func return in a loop",
+      "script": "f() { for i in 1 2 3; do (( i == 2 )) && return $i; done; }; f; echo $?",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func return in a pipeline",
+      "script": "f() { echo x | return 5; echo \"after $?\"; }; f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func return from a nested function",
+      "script": "f() { g() { return 2; }; g; echo \"g=$?\"; return 1; }; f; echo $?",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function status is last command",
+      "script": "f() { true; false; }; f; echo $?",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function call with assignment prefix",
+      "script": "v=global; f() { echo $v; }; v=temp f; echo $v",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func assignment prefix persists in posix mode",
+      "script": "set -o posix; f() { :; }; v=temp f; echo \"[${v-unset}]\"",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func export -f reaches bash -c",
+      "script": "f() { echo exported; }; export -f f; bash -c f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func function arguments with spaces",
+      "script": "f() { echo $#; for a; do echo \"<$a>\"; done; }; f 'a b' '' c",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func dollar at and star in a function",
+      "script": "f() { IFS=-; echo \"$*\" \"$@\"; }; f 1 2 3",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func RETURN trap per function",
+      "script": "f() { trap 'echo ret-f' RETURN; echo in-f; }; f; f",
+      "tags": [
+        "compound.function",
+        "compound.function.local"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -n empty",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -n ''; echo \"test=$?\"; [ -n '' ]; echo \"bracket=$?\"; [[ -n '' ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -n word",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -n word; echo \"test=$?\"; [ -n word ]; echo \"bracket=$?\"; [[ -n word ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -n file",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -n /tmp/t/file; echo \"test=$?\"; [ -n /tmp/t/file ]; echo \"bracket=$?\"; [[ -n /tmp/t/file ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -n dir",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -n /tmp/t/dir; echo \"test=$?\"; [ -n /tmp/t/dir ]; echo \"bracket=$?\"; [[ -n /tmp/t/dir ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -n empty file",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -n /tmp/t/empty; echo \"test=$?\"; [ -n /tmp/t/empty ]; echo \"bracket=$?\"; [[ -n /tmp/t/empty ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -n link",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -n /tmp/t/link; echo \"test=$?\"; [ -n /tmp/t/link ]; echo \"bracket=$?\"; [[ -n /tmp/t/link ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -n missing",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -n /tmp/t/missing; echo \"test=$?\"; [ -n /tmp/t/missing ]; echo \"bracket=$?\"; [[ -n /tmp/t/missing ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -n set var",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -n sv; echo \"test=$?\"; [ -n sv ]; echo \"bracket=$?\"; [[ -n sv ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -n array elem",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -n arr[1]; echo \"test=$?\"; [ -n arr[1] ]; echo \"bracket=$?\"; [[ -n arr[1] ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -n fd",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -n 1; echo \"test=$?\"; [ -n 1 ]; echo \"bracket=$?\"; [[ -n 1 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -n devnull",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -n /dev/null; echo \"test=$?\"; [ -n /dev/null ]; echo \"bracket=$?\"; [[ -n /dev/null ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -n option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -n errexit; echo \"test=$?\"; [ -n errexit ]; echo \"bracket=$?\"; [[ -n errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -z option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -z errexit; echo \"test=$?\"; [ -z errexit ]; echo \"bracket=$?\"; [[ -z errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -e empty",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -e ''; echo \"test=$?\"; [ -e '' ]; echo \"bracket=$?\"; [[ -e '' ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -e word",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -e word; echo \"test=$?\"; [ -e word ]; echo \"bracket=$?\"; [[ -e word ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -e file",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -e /tmp/t/file; echo \"test=$?\"; [ -e /tmp/t/file ]; echo \"bracket=$?\"; [[ -e /tmp/t/file ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -e dir",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -e /tmp/t/dir; echo \"test=$?\"; [ -e /tmp/t/dir ]; echo \"bracket=$?\"; [[ -e /tmp/t/dir ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -e empty file",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -e /tmp/t/empty; echo \"test=$?\"; [ -e /tmp/t/empty ]; echo \"bracket=$?\"; [[ -e /tmp/t/empty ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -e link",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -e /tmp/t/link; echo \"test=$?\"; [ -e /tmp/t/link ]; echo \"bracket=$?\"; [[ -e /tmp/t/link ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -e missing",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -e /tmp/t/missing; echo \"test=$?\"; [ -e /tmp/t/missing ]; echo \"bracket=$?\"; [[ -e /tmp/t/missing ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -e set var",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -e sv; echo \"test=$?\"; [ -e sv ]; echo \"bracket=$?\"; [[ -e sv ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -e array elem",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -e arr[1]; echo \"test=$?\"; [ -e arr[1] ]; echo \"bracket=$?\"; [[ -e arr[1] ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -e fd",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -e 1; echo \"test=$?\"; [ -e 1 ]; echo \"bracket=$?\"; [[ -e 1 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -e devnull",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -e /dev/null; echo \"test=$?\"; [ -e /dev/null ]; echo \"bracket=$?\"; [[ -e /dev/null ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -e option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -e errexit; echo \"test=$?\"; [ -e errexit ]; echo \"bracket=$?\"; [[ -e errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -f option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -f errexit; echo \"test=$?\"; [ -f errexit ]; echo \"bracket=$?\"; [[ -f errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -d option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -d errexit; echo \"test=$?\"; [ -d errexit ]; echo \"bracket=$?\"; [[ -d errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -s option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -s errexit; echo \"test=$?\"; [ -s errexit ]; echo \"bracket=$?\"; [[ -s errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -L option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -L errexit; echo \"test=$?\"; [ -L errexit ]; echo \"bracket=$?\"; [[ -L errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -h option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -h errexit; echo \"test=$?\"; [ -h errexit ]; echo \"bracket=$?\"; [[ -h errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -v option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -v errexit; echo \"test=$?\"; [ -v errexit ]; echo \"bracket=$?\"; [[ -v errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -a option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -a errexit; echo \"test=$?\"; [ -a errexit ]; echo \"bracket=$?\"; [[ -a errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -o option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -o errexit; echo \"test=$?\"; [ -o errexit ]; echo \"bracket=$?\"; [[ -o errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -t option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -t errexit; echo \"test=$?\"; [ -t errexit ]; echo \"bracket=$?\"; [[ -t errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -p option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -p errexit; echo \"test=$?\"; [ -p errexit ]; echo \"bracket=$?\"; [[ -p errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -S option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -S errexit; echo \"test=$?\"; [ -S errexit ]; echo \"bracket=$?\"; [[ -S errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -b option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -b errexit; echo \"test=$?\"; [ -b errexit ]; echo \"bracket=$?\"; [[ -b errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -c option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -c errexit; echo \"test=$?\"; [ -c errexit ]; echo \"bracket=$?\"; [[ -c errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test -R option name",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -R errexit; echo \"test=$?\"; [ -R errexit ]; echo \"bracket=$?\"; [[ -R errexit ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary = equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc = abc ]; echo \"bracket=$?\"; [[ abc = abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary = numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 = 9 ]; echo \"bracket=$?\"; [[ 10 = 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary = glob right",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc = 'a*' ]; echo \"bracket=$?\"; [[ abc = 'a*' ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary == equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc == abc ]; echo \"bracket=$?\"; [[ abc == abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary == different words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc == abd ]; echo \"bracket=$?\"; [[ abc == abd ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary == numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 == 9 ]; echo \"bracket=$?\"; [[ 10 == 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary == case",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ B == a ]; echo \"bracket=$?\"; [[ B == a ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary != equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc != abc ]; echo \"bracket=$?\"; [[ abc != abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary != numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 != 9 ]; echo \"bracket=$?\"; [[ 10 != 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary < equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc \\< abc ]; echo \"bracket=$?\"; [[ abc < abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary < numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 \\< 9 ]; echo \"bracket=$?\"; [[ 10 < 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary < negative numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ -1 \\< -01 ]; echo \"bracket=$?\"; [[ -1 < -01 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary > equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc \\> abc ]; echo \"bracket=$?\"; [[ abc > abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary > numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 \\> 9 ]; echo \"bracket=$?\"; [[ 10 > 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary > empty left",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ '' \\> x ]; echo \"bracket=$?\"; [[ '' > x ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -eq equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc -eq abc ]; echo \"bracket=$?\"; [[ abc -eq abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -eq numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 -eq 9 ]; echo \"bracket=$?\"; [[ 10 -eq 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -eq non-numeric",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ a -eq 1 ]; echo \"bracket=$?\"; [[ a -eq 1 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -ne equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc -ne abc ]; echo \"bracket=$?\"; [[ abc -ne abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -ne numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 -ne 9 ]; echo \"bracket=$?\"; [[ 10 -ne 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -ne spaces in number",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ ' 5' -ne '5 ' ]; echo \"bracket=$?\"; [[ ' 5' -ne '5 ' ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -lt equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc -lt abc ]; echo \"bracket=$?\"; [[ abc -lt abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -lt numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 -lt 9 ]; echo \"bracket=$?\"; [[ 10 -lt 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -lt files",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ /tmp/t/file -lt /tmp/t/link ]; echo \"bracket=$?\"; [[ /tmp/t/file -lt /tmp/t/link ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -le equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc -le abc ]; echo \"bracket=$?\"; [[ abc -le abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -le numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 -le 9 ]; echo \"bracket=$?\"; [[ 10 -le 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -le glob right",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc -le 'a*' ]; echo \"bracket=$?\"; [[ abc -le 'a*' ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -gt equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc -gt abc ]; echo \"bracket=$?\"; [[ abc -gt abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -gt different words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc -gt abd ]; echo \"bracket=$?\"; [[ abc -gt abd ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -gt numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 -gt 9 ]; echo \"bracket=$?\"; [[ 10 -gt 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -gt case",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ B -gt a ]; echo \"bracket=$?\"; [[ B -gt a ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -ge equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc -ge abc ]; echo \"bracket=$?\"; [[ abc -ge abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -ge numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 -ge 9 ]; echo \"bracket=$?\"; [[ 10 -ge 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -nt equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc -nt abc ]; echo \"bracket=$?\"; [[ abc -nt abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -nt numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 -nt 9 ]; echo \"bracket=$?\"; [[ 10 -nt 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -nt negative numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ -1 -nt -01 ]; echo \"bracket=$?\"; [[ -1 -nt -01 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -ot equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc -ot abc ]; echo \"bracket=$?\"; [[ abc -ot abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -ot numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 -ot 9 ]; echo \"bracket=$?\"; [[ 10 -ot 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -ot empty left",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ '' -ot x ]; echo \"bracket=$?\"; [[ '' -ot x ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -ef equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc -ef abc ]; echo \"bracket=$?\"; [[ abc -ef abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -ef numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 -ef 9 ]; echo \"bracket=$?\"; [[ 10 -ef 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary -ef non-numeric",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ a -ef 1 ]; echo \"bracket=$?\"; [[ a -ef 1 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary =~ equal words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ abc =~ abc ]; echo \"bracket=$?\"; [[ abc =~ abc ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary =~ numbers",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ 10 =~ 9 ]; echo \"bracket=$?\"; [[ 10 =~ 9 ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test binary =~ spaces in number",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); [ ' 5' =~ '5 ' ]; echo \"bracket=$?\"; [[ ' 5' =~ '5 ' ]]; echo \"cond=$?\"",
+      "tags": [
+        "builtin.test",
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms no arguments",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test ; echo \"test=$?\"; [  ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms one empty",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test ''; echo \"test=$?\"; [ '' ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms one word",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test x; echo \"test=$?\"; [ x ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms one dash",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -; echo \"test=$?\"; [ - ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms bang",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test !; echo \"test=$?\"; [ ! ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms bang empty",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test ! ''; echo \"test=$?\"; [ ! '' ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms bang word",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test ! x; echo \"test=$?\"; [ ! x ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms two words",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test a b; echo \"test=$?\"; [ a b ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms three words and",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test a -a ''; echo \"test=$?\"; [ a -a '' ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms three words or",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test '' -o b; echo \"test=$?\"; [ '' -o b ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms parens",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test \\( x \\); echo \"test=$?\"; [ \\( x \\) ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms parens with op",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test \\( a = a \\); echo \"test=$?\"; [ \\( a = a \\) ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms bang bang",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test ! ! x; echo \"test=$?\"; [ ! ! x ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms four args",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test ! a = b; echo \"test=$?\"; [ ! a = b ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms five args",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test \\( a = a \\) -a x; echo \"test=$?\"; [ \\( a = a \\) -a x ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms precedence and or",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test x -o '' -a ''; echo \"test=$?\"; [ x -o '' -a '' ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms equals as operand",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test = = =; echo \"test=$?\"; [ = = = ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms dash n alone",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -n; echo \"test=$?\"; [ -n ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms dash z alone",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -z; echo \"test=$?\"; [ -z ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms missing bracket",
+      "script": "[ a = a; echo \"status=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms unknown binary",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test a -xx b; echo \"test=$?\"; [ a -xx b ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms integer error",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test a -eq 1; echo \"test=$?\"; [ a -eq 1 ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms too many",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test a b c d e f; echo \"test=$?\"; [ a b c d e f ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms -a as unary",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -a /tmp; echo \"test=$?\"; [ -a /tmp ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms -o option",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -o errexit; echo \"test=$?\"; [ -o errexit ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms -o unknown option",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -o nosuch; echo \"test=$?\"; [ -o nosuch ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms -v array",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -v 'arr[1]'; echo \"test=$?\"; [ -v 'arr[1]' ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms -v missing element",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -v 'arr[9]'; echo \"test=$?\"; [ -v 'arr[9]' ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func test forms -R not nameref",
+      "script": "mkdir -p /tmp/t/dir; echo x > /tmp/t/file; : > /tmp/t/empty; ln -s file /tmp/t/link; sv=1; arr=(a b); test -R sv; echo \"test=$?\"; [ -R sv ]; echo \"bracket=$?\"",
+      "tags": [
+        "builtin.test",
+        "builtin.["
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond and or precedence",
+      "script": "[[ -n '' || -n x && -z '' ]] && echo t",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond parentheses",
+      "script": "[[ ( -n x || -n '' ) && ! -z x ]] && echo t",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond negation of a group",
+      "script": "[[ ! ( a == b ) ]] && echo t",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond no word splitting",
+      "script": "v='a b'; [[ $v == 'a b' ]] && echo t",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond no globbing",
+      "script": "cd /tmp; : > gg; [[ g* == g* ]] && echo t; [[ gg == g* ]] && echo pat",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond quoted right side is literal",
+      "script": "[[ abc == \"a*\" ]] || echo literal; [[ 'a*' == \"a*\" ]] && echo eq",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond variable pattern",
+      "script": "p='a*'; [[ abc == $p ]] && echo glob; [[ abc == \"$p\" ]] || echo lit",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond single equals",
+      "script": "[[ abc = a* ]] && echo t",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond empty operands",
+      "script": "[[ '' ]] || echo empty-false; [[ x ]] && echo word-true",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond unset variable",
+      "script": "unset u; [[ $u ]] || echo f; [[ -z $u ]] && echo z",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond string less than",
+      "script": "[[ a < b ]] && echo lt; [[ B < a ]] && echo upper-first",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond numeric strings compare as strings",
+      "script": "[[ 10 < 9 ]] && echo string-order",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond arithmetic operands",
+      "script": "x=4; [[ x -eq 4 ]] && echo t; [[ 1+1 -eq 2 ]] && echo t2",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond -eq with a bad expression",
+      "script": "[[ a+ -eq 1 ]]; echo status=$?",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond newlines inside",
+      "script": "[[ a == a &&\n b == b ]] && echo t",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex match",
+      "script": "[[ abc123 =~ ^([a-z]+)([0-9]+)$ ]] && echo \"${BASH_REMATCH[0]} ${BASH_REMATCH[1]} ${BASH_REMATCH[2]}\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex no match clears",
+      "script": "[[ ab =~ (a) ]]; [[ xy =~ (a) ]]; echo \"${#BASH_REMATCH[@]}\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex quoted is literal",
+      "script": "[[ a.c =~ \"a.c\" ]] && echo t; [[ abc =~ \"a.c\" ]] || echo lit",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex from a variable",
+      "script": "re='^a.c$'; [[ abc =~ $re ]] && echo t",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex partial quoting",
+      "script": "[[ 'a.c' =~ a\".\"c ]] && echo t; [[ abc =~ a\".\"c ]] || echo lit-dot",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex with spaces",
+      "script": "[[ 'a b' =~ a\\ b ]] && echo t; re='a b'; [[ 'a b' =~ $re ]] && echo t2",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex invalid",
+      "script": "[[ a =~ ( ]]; echo status=$?",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex anchors and classes",
+      "script": "[[ x9 =~ ^[[:alpha:]][[:digit:]]$ ]] && echo t",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex alternation",
+      "script": "[[ dog =~ ^(cat|dog)$ ]] && echo \"${BASH_REMATCH[1]}\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex optional group",
+      "script": "[[ ac =~ a(b)?c ]] && echo \"[${BASH_REMATCH[1]}] ${#BASH_REMATCH[@]}\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex backreference",
+      "script": "[[ aa =~ (a)\\1 ]] && echo t; echo status=$?",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex bracket with paren",
+      "script": "[[ '(' =~ [(] ]] && echo t",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex unicode",
+      "script": "[[ é =~ ^.$ ]] && echo one-char",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex BASH_REMATCH readonly",
+      "script": "[[ a =~ a ]]; BASH_REMATCH=x; echo status=$? ${BASH_REMATCH[0]}",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex nocasematch",
+      "script": "shopt -s nocasematch; [[ ABC =~ ^abc$ ]] && echo ci",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex quoted sets BASH_REMATCH",
+      "script": "[[ abc =~ \"b\" ]]; echo $? \"${BASH_REMATCH[0]}\" ${#BASH_REMATCH[@]}; [[ abc =~ '' ]]; echo $? ${#BASH_REMATCH[@]}",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex quoted then unquoted",
+      "script": "[[ abc =~ 'a'.c ]]; echo $? \"${BASH_REMATCH[0]}\"; [[ abc =~ \"a\"(b)\"c\" ]]; echo $? \"${BASH_REMATCH[1]}\"; [[ abc =~ \"b\"* ]]; echo $? \"[${BASH_REMATCH[0]}]\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex quoted nocasematch",
+      "script": "shopt -s nocasematch; [[ ABC =~ \"b\" ]]; echo $? \"${BASH_REMATCH[0]}\"",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond regex xtrace shows the pattern",
+      "script": "set -x; [[ abc =~ \"a.c\" ]]; x=b; [[ abc =~ $x ]]; [[ abc =~ 'a'.c ]]",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond -v on arrays",
+      "script": "a=(x); declare -A m=([k]=v); [[ -v a ]] && echo a; [[ -v a[0] ]] && echo a0; [[ -v m[k] ]] && echo mk; [[ -v m ]] || echo m-no-zero",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond -v positional",
+      "script": "set -- a; [[ -v 1 ]] && echo one; [[ -v 2 ]] || echo no-two",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond file tests with dev paths",
+      "script": "[[ -e /dev/null ]] && echo e; [[ -c /dev/null ]] && echo c; [[ -f /dev/null ]] || echo not-f",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond -ef same file",
+      "script": "echo x > /tmp/a1; [[ /tmp/a1 -ef /tmp/../tmp/a1 ]] && echo same",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond -nt missing file",
+      "script": "echo x > /tmp/a2; [[ /tmp/a2 -nt /tmp/missing ]] && echo newer; [[ /tmp/missing -ot /tmp/a2 ]] && echo older",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond syntax error",
+      "script": "[[ a == ]]",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond bad unary",
+      "script": "[[ -Q x ]]",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond as a command argument",
+      "script": "echo [[ a ]]",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond status in a pipeline",
+      "script": "[[ a == b ]] | true; echo ${PIPESTATUS[0]}",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func cond with set -x",
+      "script": "set -x; [[ a == a && -n x ]]",
+      "tags": [
+        "compound.cond"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'ab:c' -c -a",
+      "script": "set -- -c -a; while getopts 'ab:c' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'ab:c' -z",
+      "script": "set -- -z; while getopts 'ab:c' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'ab:c' -b",
+      "script": "set -- -b; while getopts 'ab:c' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'ab:c' --",
+      "script": "set -- --; while getopts 'ab:c' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'ab:c' -b -a",
+      "script": "set -- -b -a; while getopts 'ab:c' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'ab:c' -y",
+      "script": "set -- -y; while getopts 'ab:c' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts ':ab:c' -ab val",
+      "script": "set -- -ab val; while getopts ':ab:c' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts ':ab:c' -a -- -b x",
+      "script": "set -- -a -- -b x; while getopts ':ab:c' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts ':ab:c' -a file -c",
+      "script": "set -- -a file -c; while getopts ':ab:c' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts ':ab:c' -",
+      "script": "set -- -; while getopts ':ab:c' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts ':ab:c' -a-b",
+      "script": "set -- -a-b; while getopts ':ab:c' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts ':ab:c' -aaa",
+      "script": "set -- -aaa; while getopts ':ab:c' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'a' -c -a",
+      "script": "set -- -c -a; while getopts 'a' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'a' -z",
+      "script": "set -- -z; while getopts 'a' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'a' -b",
+      "script": "set -- -b; while getopts 'a' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'a' --",
+      "script": "set -- --; while getopts 'a' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'a' -b -a",
+      "script": "set -- -b -a; while getopts 'a' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'a' -y",
+      "script": "set -- -y; while getopts 'a' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts ':a' -ab val",
+      "script": "set -- -ab val; while getopts ':a' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts ':a' -a -- -b x",
+      "script": "set -- -a -- -b x; while getopts ':a' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts ':a' -a file -c",
+      "script": "set -- -a file -c; while getopts ':a' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts ':a' -",
+      "script": "set -- -; while getopts ':a' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts ':a' -a-b",
+      "script": "set -- -a-b; while getopts ':a' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts ':a' -aaa",
+      "script": "set -- -aaa; while getopts ':a' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'ab::' -c -a",
+      "script": "set -- -c -a; while getopts 'ab::' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'ab::' -z",
+      "script": "set -- -z; while getopts 'ab::' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'ab::' -b",
+      "script": "set -- -b; while getopts 'ab::' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'ab::' --",
+      "script": "set -- --; while getopts 'ab::' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'ab::' -b -a",
+      "script": "set -- -b -a; while getopts 'ab::' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'ab::' -y",
+      "script": "set -- -y; while getopts 'ab::' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'x:y:' -c -a",
+      "script": "set -- -c -a; while getopts 'x:y:' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'x:y:' -z",
+      "script": "set -- -z; while getopts 'x:y:' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'x:y:' -b",
+      "script": "set -- -b; while getopts 'x:y:' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'x:y:' --",
+      "script": "set -- --; while getopts 'x:y:' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'x:y:' -b -a",
+      "script": "set -- -b -a; while getopts 'x:y:' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts 'x:y:' -y",
+      "script": "set -- -y; while getopts 'x:y:' o; do echo \"o=$o OPTARG=${OPTARG-unset} OPTIND=$OPTIND\"; done; echo \"end $? OPTIND=$OPTIND rest=$*\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts explicit arguments",
+      "script": "while getopts 'a:' o -a one extra; do echo \"$o $OPTARG\"; done; echo $OPTIND",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts reset OPTIND",
+      "script": "set -- -a; getopts a o; echo $o $OPTIND; OPTIND=1; getopts a o; echo $o $OPTIND",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts in a function",
+      "script": "f() { local OPTIND o; while getopts 'v' o; do echo \"flag $o\"; done; }; f -v; f -v",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts OPTERR zero",
+      "script": "OPTERR=0; set -- -z; getopts a o; echo \"$o ${OPTARG-unset}\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts invalid variable name",
+      "script": "set -- -a; getopts a 1bad; echo status=$?",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts no spec",
+      "script": "getopts; echo status=$?",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts digits as options",
+      "script": "set -- -1 -2; while getopts 12 o; do echo $o; done",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts colon option",
+      "script": "set -- -:; getopts ':a' o; echo \"$o ${OPTARG-}\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func getopts question mark option",
+      "script": "set -- '-?'; getopts 'a' o; echo \"$o ${OPTARG-unset}\"",
+      "tags": [
+        "builtin.getopts"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -i none",
+      "script": "declare -i v; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -i text",
+      "script": "declare -i v=MiXed; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -i compound",
+      "script": "declare -i v=(1 2); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -i assoc compound",
+      "script": "declare -i v=([k]=v); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -l none",
+      "script": "declare -l v; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -l text",
+      "script": "declare -l v=MiXed; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -l compound",
+      "script": "declare -l v=(1 2); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -l assoc compound",
+      "script": "declare -l v=([k]=v); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -u none",
+      "script": "declare -u v; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -u text",
+      "script": "declare -u v=MiXed; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -u compound",
+      "script": "declare -u v=(1 2); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -u assoc compound",
+      "script": "declare -u v=([k]=v); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -r none",
+      "script": "declare -r v; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -r text",
+      "script": "declare -r v=MiXed; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -r compound",
+      "script": "declare -r v=(1 2); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -r assoc compound",
+      "script": "declare -r v=([k]=v); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -x none",
+      "script": "declare -x v; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -x text",
+      "script": "declare -x v=MiXed; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -x compound",
+      "script": "declare -x v=(1 2); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -x assoc compound",
+      "script": "declare -x v=([k]=v); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -a none",
+      "script": "declare -a v; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -a text",
+      "script": "declare -a v=MiXed; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -a compound",
+      "script": "declare -a v=(1 2); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -a assoc compound",
+      "script": "declare -a v=([k]=v); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -A none",
+      "script": "declare -A v; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -A text",
+      "script": "declare -A v=MiXed; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -A compound",
+      "script": "declare -A v=(1 2); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -A assoc compound",
+      "script": "declare -A v=([k]=v); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -n none",
+      "script": "declare -n v; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -n text",
+      "script": "declare -n v=MiXed; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -n compound",
+      "script": "declare -n v=(1 2); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -n assoc compound",
+      "script": "declare -n v=([k]=v); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -t none",
+      "script": "declare -t v; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -t text",
+      "script": "declare -t v=MiXed; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -t compound",
+      "script": "declare -t v=(1 2); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -t assoc compound",
+      "script": "declare -t v=([k]=v); echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -il number expression",
+      "script": "declare -il v=3+4; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -ux number expression",
+      "script": "declare -ux v=3+4; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -ai number expression",
+      "script": "declare -ai v=3+4; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -Al number expression",
+      "script": "declare -Al v=3+4; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare -ri number expression",
+      "script": "declare -ri v=3+4; echo \"status=$?\"; declare -p v; v=Next; declare -p v",
+      "tags": [
+        "builtin.declare",
+        "param.attributes"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare -p of several kinds",
+      "script": "a=1; b=(x 'y z'); declare -A c=([k]='v w'); declare -i d=3; declare -p a b c d",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare -p quoting",
+      "script": "v=$'it\\'s \"q\" $x \\\\ \\t'; declare -p v",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare -p unset",
+      "script": "declare -p nosuch; echo status=$?",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare -p declared without value",
+      "script": "declare d; declare -p d; declare -a e; declare -p e",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare -p after unset element",
+      "script": "a=(1 2 3); unset 'a[1]'; declare -p a",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare +x",
+      "script": "export e=1; declare +x e; declare -p e",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare -r then assignment",
+      "script": "declare -r r=1; r=2; echo status=$?; declare -p r",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare readonly listing",
+      "script": "readonly r1=1; readonly -p | while read -r l; do [[ $l == *r1* ]] && echo \"$l\"; done",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare readonly array",
+      "script": "readonly -a ra=(1 2); ra[0]=x; echo status=$?; declare -p ra",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare readonly unset",
+      "script": "readonly r=1; unset r; echo status=$?",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare readonly without value",
+      "script": "readonly rv; rv=1; echo status=$?; declare -p rv",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare unset -v",
+      "script": "v=1; unset -v v; echo \"[${v-unset}]\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare unset several",
+      "script": "a=1 b=2; unset a b nosuch; echo \"[${a-u}${b-u}] $?\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare unset an invalid name",
+      "script": "unset 1x; echo status=$?",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare unset a special parameter",
+      "script": "unset 1; echo status=$?; unset '?'; echo status=$?",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare unset IFS default",
+      "script": "IFS=:; unset IFS; v='a b'; set -- $v; echo $#",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare unset PATH is fine",
+      "script": "unset PATH; echo still; echo status=$?",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare export listing",
+      "script": "export ex1=v; export -p | while read -r l; do [[ $l == *ex1* ]] && echo \"$l\"; done",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare export without value",
+      "script": "export ev; declare -p ev; bash -c 'echo \"[${ev-unset}]\"'",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare export an invalid name",
+      "script": "export 'a-b=1'; echo status=$?",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare export -n",
+      "script": "export en=1; export -n en; bash -c 'echo \"[${en-unset}]\"'",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare typeset -p",
+      "script": "typeset -i t=4; typeset -p t",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare conflicting options",
+      "script": "declare -a -A v; echo status=$?",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare -u then -l",
+      "script": "declare -u v=abc; declare -l v; v=XyZ; echo $v",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare -l -u together",
+      "script": "declare -lu v=MiX; echo $v",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare -t",
+      "script": "declare -t tv=1; declare -p tv",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare with += on integer",
+      "script": "declare -i n=1; declare n+=4; echo $n",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare += on array",
+      "script": "a=(1); declare a+=(2); echo ${a[@]}",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare -g at top level",
+      "script": "declare -g gv=1; echo $gv",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare -x reaches child",
+      "script": "declare -x dx=1; bash -c 'echo ${dx-unset}'",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare in a subshell",
+      "script": "( declare sd=1 ); echo \"[${sd-unset}]\"",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare invalid option",
+      "script": "declare -Z v; echo status=$?",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare name with subscript and value",
+      "script": "declare 'a[2]=x'; declare -p a",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    },
+    {
+      "name": "gram func declare declare assignment splitting",
+      "script": "v='1 2'; declare -a arr=($v); declare -p arr",
+      "tags": [
+        "builtin.declare"
+      ],
+      "options": {}
+    }
+  ]
+}

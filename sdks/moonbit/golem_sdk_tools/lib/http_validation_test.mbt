@@ -258,3 +258,44 @@ test "valid: agent without any HTTP annotations" {
   let agents = @lib.parse_agents([("simple.mbt", content)])
   @lib.validate_http_routes(agents)
 }
+
+///|
+test "query ID stream controls follow effective transport including output streams" {
+  for name in ["offset", "cursor", "live", "instance"] {
+    for shape in ["input", "output", "recordOutput", "plain"] {
+      for mode in ["", "durableStreams", "plain", "sse", "webSocket"] {
+        for options in [false, true] {
+          let mode_attr = if mode == "" { "" } else { ", mode=\"\{mode}\"" }
+          let input = if shape == "input" {
+            ", events: @schema.AgentStream[String]"
+          } else {
+            ""
+          }
+          let output = match shape {
+            "output" => "@schema.AgentStream[String]"
+            "recordOutput" => "Events"
+            _ => "String"
+          }
+          let options_attr = if options {
+            "#derive.durable_stream_slot(output=\"$result\")"
+          } else {
+            ""
+          }
+          let source = "#derive.golem_schema\nstruct Events { events: @schema.AgentStream[String] }\n#derive.agent\n#derive.mount(\"/controls\")\n#derive.mount_agent_id(query=\"\{name}\")\nstruct Selected {}\nfn Selected::new() -> Selected { {} }\n#derive.endpoint(post=\"/events\"\{mode_attr})\n\{options_attr}\npub fn Selected::events(self: Self\{input}) -> \{output} { abort(\"unused\") }"
+          let result = capture_agent_parse_error(fn() raise @lib.AgentParseError {
+            @lib.parse_agents([("selected.mbt", source)]) |> ignore
+          })
+          let reserved = name != "instance" &&
+            (mode == "durableStreams" || (mode == "" && shape != "plain"))
+          match result {
+            Err(@lib.AgentParseError(message)) => {
+              assert_true(reserved)
+              assert_true(message.contains("durable-stream control"))
+            }
+            Ok(_) => assert_false(reserved)
+          }
+        }
+      }
+    }
+  }
+}

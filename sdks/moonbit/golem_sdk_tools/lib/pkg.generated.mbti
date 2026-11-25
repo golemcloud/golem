@@ -122,7 +122,7 @@ pub fn update_pkg_link(String, Array[String]) -> String
 
 pub fn validate_config_types(Array[AgentInfo], Array[ConfigTypeInfo], agent_package? : String) -> Unit raise AgentParseError
 
-pub fn validate_http_routes(Array[AgentInfo]) -> Unit raise AgentParseError
+pub fn validate_http_routes(Array[AgentInfo], value_types? : Map[String, ValueTypeInfo]) -> Unit raise AgentParseError
 
 pub fn visible_params(Array[(String, ParamType)]) -> Array[(String, ParamType)]
 
@@ -158,6 +158,11 @@ pub suberror ToolParseError {
 } derive(@debug.Debug)
 
 // Types and methods
+pub(all) enum AgentIdBindingInfo {
+  Path(String)
+  Query(String)
+} derive(Eq, @debug.Debug)
+
 pub(all) struct AgentInfo {
   name : String
   description : String
@@ -248,7 +253,8 @@ pub(all) struct HttpMountInfo {
   path : String
   auth : Bool?
   phantom : Bool
-  phantom_id_binding : PhantomIdBindingInfo?
+  agent_id_binding : AgentIdBindingInfo?
+  create_route : String?
   cors : Array[String]
   webhook_suffix : String?
   router : Bool
@@ -309,11 +315,6 @@ pub(all) enum PathSegmentKind {
   PathVariable(String)
   RemainingPathVariable(String)
   SystemVariable(SystemVariableKind)
-} derive(Eq, @debug.Debug)
-
-pub(all) enum PhantomIdBindingInfo {
-  Path(String, Bool)
-  Query(String, Bool)
 } derive(Eq, @debug.Debug)
 
 pub(all) struct QueryVarInfo {

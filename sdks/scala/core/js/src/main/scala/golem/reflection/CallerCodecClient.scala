@@ -72,11 +72,12 @@ final class AgentClientDefinition[Capability <: AgentClientCapability, Construct
    */
   def getById(agentId: AgentId)(implicit
     canBind: CanBindAgentClient[Capability]
-  ): Future[Either[GolemReflectError, CallerCodecAgentClient]] =
-    contractName.map(Right(_)).getOrElse(Transport.typeNameOf(agentId)) match {
-      case Left(error) => Future.successful(Left(error))
-      case Right(name) => Transport.getById(name, agentId).map(_.map(new CallerCodecAgentClient(_)))
-    }
+  ): Either[GolemReflectError, CallerCodecAgentClient] =
+    contractName
+      .map(Right(_))
+      .getOrElse(Transport.typeNameOf(agentId))
+      .flatMap(Transport.getById(_, agentId))
+      .map(new CallerCodecAgentClient(_))
 }
 
 object AgentClientDefinition {
@@ -171,12 +172,10 @@ final class CallerCodecClientFactory[Constructor, Config] private[reflection] (
     }
 
   /** See [[AgentClientDefinition.getById]]. */
-  def getById(agentId: AgentId): Future[Either[GolemReflectError, CallerCodecAgentClient]] =
-    requireDurable("getById") match {
-      case Left(error) => Future.successful(Left(error))
-      case Right(_)    =>
-        Transport.getById(definition.contractName.get, agentId).map(_.map(new CallerCodecAgentClient(_)))
-    }
+  def getById(agentId: AgentId): Either[GolemReflectError, CallerCodecAgentClient] =
+    requireDurable("getById")
+      .flatMap(_ => Transport.getById(definition.contractName.get, agentId))
+      .map(new CallerCodecAgentClient(_))
 
   private def createWithOverrides(
     input: Constructor,

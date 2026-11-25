@@ -57,8 +57,8 @@ use golem_common::model::tool::{
     ToolSource,
 };
 use golem_common::model::{
-    AgentFingerprint, AgentId, AgentMetadata, AgentStatusRecord, RetryConfig, Timestamp,
-    TransactionId,
+    AgentFingerprint, AgentId, AgentInvocationPayload, AgentMetadata, AgentStatusRecord,
+    RetryConfig, Timestamp, TransactionId,
 };
 use golem_common::read_only_lock;
 use golem_common::schema::tool::{CommandTree, Tool};
@@ -504,6 +504,7 @@ fn test_tool_definition() -> Tool {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for PanicComponentService {
     async fn get(
         &self,
@@ -585,6 +586,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
     struct RevisionComponentService(Component);
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl ComponentService for RevisionComponentService {
         async fn get(
             &self,
@@ -641,6 +643,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         plugin_version: "1.0".to_string(),
         oplog_processor_component_id: Some(ComponentId::new()),
         oplog_processor_component_revision: Some(source_revision),
+        installed_by: golem_common::model::account::AccountId::new(),
     };
     let component_id = ComponentId::new();
     let environment_id = EnvironmentId::new();
@@ -669,7 +672,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
                 ..Default::default()
             },
         ),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
         package_metadata: None,
         object_store_key: String::new(),
@@ -707,6 +710,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         OwnerKind::EphemeralExternalTool,
         None,
         source_revision,
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap();
@@ -735,6 +739,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         OwnerKind::EphemeralExternalTool,
         None,
         updated_revision,
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap();
@@ -783,6 +788,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
     struct MetadataComponentService(Component);
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl ComponentService for MetadataComponentService {
         async fn get(
             &self,
@@ -860,11 +866,12 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
                     plugin_version: "1.0".to_string(),
                     oplog_processor_component_id: Some(ComponentId::new()),
                     oplog_processor_component_revision: Some(revision),
+                    installed_by: golem_common::model::account::AccountId::new(),
                 }],
                 ..Default::default()
             },
         ),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
         package_metadata: None,
         object_store_key: String::new(),
@@ -905,6 +912,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
             owner_kind,
             None,
             revision,
+            ClaimVisibility::Hidden,
         )
         .await
         .unwrap();
@@ -937,6 +945,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
             owner_kind,
             None,
             revision,
+            ClaimVisibility::Hidden,
         )
         .await;
         assert_eq!(
@@ -976,6 +985,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
         OwnerKind::OplogProcessor,
         None,
         ComponentRevision::new(9).unwrap(),
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap();
@@ -1072,6 +1082,7 @@ fn test_entity_activation(entity: &AgentEntity) -> EntityActivation {
                     component_revision,
                     component_name: ComponentName("tools".to_string()),
                 },
+                shell: false,
             }),
         },
         AgentEntity::ToolMiddleware(middleware_name) => EntityActivationPolicy::ToolMiddleware {
@@ -1213,6 +1224,7 @@ async fn public_oplog_zero_start_reads_from_initial_index() {
         ComponentRevision::INITIAL,
         OplogIndex::NONE,
         1,
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap();
@@ -1274,6 +1286,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::Custom("agent-custom-owner".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1301,6 +1314,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::GolemEntityInvoke,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(middleware_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1327,6 +1341,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::Custom("entity-child".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequestNoInput {}.into()))),
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
@@ -1345,7 +1360,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             secret_id,
             config_key: Some(vec!["database".to_string(), "password".to_string()]),
             version: 7,
-            resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            resolved_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
             category: Some("api-key".to_string()),
         }),
     );
@@ -1380,6 +1395,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::GolemEntityInvoke,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(tool_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: Some(Box::new(SpanStarted {
@@ -1484,6 +1500,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::Custom("observational-call".to_string()),
             invocation_id: None,
             observational_owner: Some(observational_owner),
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::ReadLocal,
             span_started: None,
@@ -1520,6 +1537,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::Custom("transaction".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
@@ -1596,6 +1614,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
             function_name: HostFunctionName::GolemToolInvocationRejected,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(rejected_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1636,6 +1655,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         ComponentRevision::INITIAL,
         OplogIndex::INITIAL,
         final_log.as_u64() as usize,
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap();
@@ -1819,6 +1839,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         ComponentRevision::INITIAL,
         log_index,
         1,
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap();
@@ -1843,6 +1864,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
         1,
         "last-entity-attribution-needle",
         ScanBudget::default(),
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap();
@@ -1856,7 +1878,7 @@ async fn entity_attribution_is_nested_page_independent_and_order_preserving() {
 }
 
 #[test]
-async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors() {
+async fn explicit_entity_attribution_rejects_non_start_and_non_entity_anchors() {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
     let blob_storage = Arc::new(InMemoryBlobStorage::new());
     let oplog_service = Arc::new(
@@ -1897,6 +1919,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             function_name: HostFunctionName::Custom("not-an-entity".to_string()),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: None,
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1918,6 +1941,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             function_name: HostFunctionName::GolemEntityInvoke,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(entity_request))),
             durable_function_type: DurableFunctionType::WriteLocal,
             span_started: None,
@@ -1946,35 +1970,6 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
         ))
         .await
         .unwrap();
-    let invalid_forward_index = invalid_non_entity.next();
-    let future_entity_start = invalid_forward_index.next();
-    assert_eq!(
-        oplog
-            .add(OplogEntry::remove_retry_policy(
-                Some(future_entity_start),
-                "test-policy".to_string()
-            ))
-            .await
-            .unwrap(),
-        invalid_forward_index
-    );
-    assert_eq!(
-        oplog
-            .add(OplogEntry::Start {
-                timestamp: Timestamp::now_utc(),
-                parent_start_index: None,
-                function_name: HostFunctionName::GolemEntityInvoke,
-                invocation_id: None,
-                observational_owner: None,
-                request: None,
-                durable_function_type: DurableFunctionType::WriteLocal,
-                span_started: None,
-                denial: None,
-            })
-            .await
-            .unwrap(),
-        future_entity_start
-    );
     oplog.commit(CommitLevel::Always).await.unwrap();
 
     let components: Arc<dyn ComponentService> = Arc::new(PanicComponentService);
@@ -1989,6 +1984,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
         ComponentRevision::INITIAL,
         valid,
         1,
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap();
@@ -2000,10 +1996,6 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
     for (index, expected_error) in [
         (invalid_non_start, "does not reference a Start"),
         (invalid_non_entity, "is not an entity invocation"),
-        (
-            invalid_forward_index,
-            "has non-causal entity parent Start index",
-        ),
     ] {
         let result = get_public_oplog_chunk(
             components.clone(),
@@ -2016,6 +2008,7 @@ async fn explicit_entity_attribution_rejects_non_causal_and_non_entity_anchors()
             ComponentRevision::INITIAL,
             index,
             1,
+            ClaimVisibility::Hidden,
         )
         .await;
         let Err(error) = result else {
@@ -2330,6 +2323,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(cancelled_request_payload),
             durable_function_type: DurableFunctionType::WriteRemote,
             span_started: None,
@@ -2395,6 +2389,7 @@ async fn p3_payloads_render_through_public_oplog_api_and_wit() {
             OwnerKind::ComponentAgent,
             None,
             ComponentRevision::new(1).unwrap(),
+            ClaimVisibility::Hidden,
         )
         .await
         .unwrap_or_else(|err| panic!("rendering oplog entry {index} failed: {err}"));
@@ -2619,6 +2614,87 @@ async fn open_test_oplog(
     (oplog_service, owned_agent_id, oplog)
 }
 
+#[test]
+async fn pending_and_started_methods_expose_original_input_without_component_metadata() {
+    use golem_common::model::agent::{AgentMethodInput, JsonMethodInput, PublicMethodInput};
+    use golem_common::model::caller::Caller;
+    use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::{AgentInvocationPayload, InvocationId};
+    use golem_common::schema::FromSchema;
+
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("original-input").await;
+    let key = InvocationId(Uuid::new_v4());
+    let context = InvocationContextStack::fresh();
+    let input = JsonMethodInput::capture(br#"{"rejected":1e400,"signedZero":-0.0}"#).unwrap();
+    let (operation, payload) = AgentInvocationPayload::AgentMethod {
+        method_name: "removed_method".into(),
+        allow_streams: false,
+        input: AgentMethodInput::PublicJson(input.clone()),
+        caller: Caller::anonymous(),
+        scope_card: None,
+    }
+    .into_stored();
+    let payload = oplog.upload_payload(&payload).await.unwrap();
+    let pending = OplogEntry::pending_agent_invocation(
+        None,
+        key,
+        Box::new(operation.clone()),
+        payload.clone(),
+        context.trace_id.clone(),
+        context.trace_states.clone(),
+        context.to_oplog_data(),
+    );
+    let started = OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::now_utc(),
+        invocation_id: key,
+        operation: Box::new(operation),
+        payload,
+        trace_id: context.trace_id.clone(),
+        trace_states: context.trace_states.clone(),
+        invocation_context: context.to_oplog_data(),
+        wallet_pin: Box::new(InvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: [0; 32],
+                generation: 0,
+            },
+            pinned_card_ids: Vec::new(),
+            scope_card_id: None,
+        }),
+    };
+    for entry in [pending, started] {
+        let public = PublicOplogEntry::from_oplog_entry(
+            OplogIndex::INITIAL,
+            entry,
+            oplog_service.clone(),
+            Arc::new(PanicComponentService),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            ClaimVisibility::Hidden,
+        )
+        .await
+        .unwrap();
+        let invocation = match public {
+            PublicOplogEntry::PendingAgentInvocation(params) => params.invocation,
+            PublicOplogEntry::AgentInvocationStarted(params) => params.invocation,
+            _ => panic!("expected a method invocation"),
+        };
+        let PublicAgentInvocation::AgentMethodInvocation(method) = invocation else {
+            panic!("expected original method input")
+        };
+        let PublicMethodInput::PublicJson(raw) =
+            PublicMethodInput::from_value(method.function_input.value()).unwrap()
+        else {
+            panic!("expected captured JSON")
+        };
+        assert_eq!(raw, input.as_str());
+    }
+}
+
 fn log_entry(message_size: usize) -> OplogEntry {
     OplogEntry::Log {
         timestamp: Timestamp::now_utc(),
@@ -2694,6 +2770,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
         page_revision,
         OplogIndex::INITIAL,
         page_limits(1_000_000, 1000),
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap();
@@ -2723,6 +2800,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
             None,
             omitted.oplog_index,
             Some(omitted.component_revision),
+            ClaimVisibility::Hidden,
         )
         .await
         .unwrap();
@@ -2749,6 +2827,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
         None,
         snapshot_index,
         None,
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap()
@@ -2784,6 +2863,7 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
             None,
             large_log_index.next(),
             None,
+            ClaimVisibility::Hidden,
         )
         .await
         .is_err()
@@ -2811,6 +2891,7 @@ async fn oplog_pages_end_at_the_byte_budget_and_resume_at_the_next_entry() {
             ComponentRevision::INITIAL,
             from,
             page_limits(2500, 1_000_000),
+            ClaimVisibility::Hidden,
         )
     };
 
@@ -2872,6 +2953,7 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
             },
             "needle",
             ScanBudget::default(),
+            ClaimVisibility::Hidden,
         )
     };
 
@@ -2927,6 +3009,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             },
             "needle",
             ScanBudget::default(),
+            ClaimVisibility::Hidden,
         )
     };
     let first = page(OplogIndex::INITIAL).await.unwrap();
@@ -2957,6 +3040,7 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             2,
             "needle",
             ScanBudget::default(),
+            ClaimVisibility::Hidden,
         )
     };
     let first = guest(OplogIndex::INITIAL).await.unwrap();
@@ -3077,6 +3161,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             },
             "needle",
             budget,
+            ClaimVisibility::Hidden,
         )
     };
 
@@ -3209,6 +3294,759 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
     }
 }
 
+/// Component service stub that serves the metadata of one component at every revision, for
+/// entries whose rendering reads the agent type.
+struct MetadataComponentService(Component);
+
+#[async_trait]
+impl ComponentService for MetadataComponentService {
+    async fn get(
+        &self,
+        _engine: &wasmtime::Engine,
+        _component_id: ComponentId,
+        _component_revision: ComponentRevision,
+    ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
+        panic!("rendering must not load executable components")
+    }
+
+    async fn get_metadata(
+        &self,
+        _component_id: ComponentId,
+        _forced_revision: Option<ComponentRevision>,
+    ) -> Result<Component, WorkerExecutorError> {
+        Ok(self.0.clone())
+    }
+
+    async fn resolve_component(
+        &self,
+        _component_reference: String,
+        _resolving_environment: EnvironmentId,
+        _resolving_application: golem_common::model::application::ApplicationId,
+        _resolving_account: AccountId,
+    ) -> Result<Option<ComponentId>, WorkerExecutorError> {
+        panic!("rendering must use the supplied component identity")
+    }
+
+    async fn all_cached_metadata(&self) -> Vec<Component> {
+        Vec::new()
+    }
+
+    async fn invalidate_all_metadata_for_environment(&self, _environment_id: EnvironmentId) {}
+}
+
+fn metadata_component_service(owned_agent_id: &OwnedAgentId) -> Arc<dyn ComponentService> {
+    Arc::new(MetadataComponentService(Component {
+        id: test_component_id(),
+        revision: ComponentRevision::INITIAL,
+        environment_id: owned_agent_id.environment_id,
+        component_name: ComponentName("callers".to_string()),
+        hash: golem_common::model::diff::Hash::empty(),
+        application_id: golem_common::model::application::ApplicationId::new(),
+        account_id: AccountId::new(),
+        account_email: AccountEmail::new("test@golem"),
+        application_name: "test-app".parse().unwrap(),
+        environment_name: "test-env".parse().unwrap(),
+        component_size: 100,
+        metadata: golem_common::model::component_metadata::ComponentMetadata::from_parts(
+            Default::default(),
+            Vec::new(),
+            Vec::new(),
+            BTreeMap::new(),
+        ),
+        created_at: jiff::Timestamp::now(),
+        wasm_hash: golem_common::model::diff::Hash::empty(),
+        package_metadata: None,
+        object_store_key: String::new(),
+    }))
+}
+
+fn external_tool_activation(
+    tool_name: &ToolName,
+) -> golem_common::model::tool::ToolActivationSnapshot {
+    let source = ToolSource::Component {
+        component_id: Default::default(),
+        component_revision: ComponentRevision::INITIAL,
+        component_name: "test:tool".try_into().unwrap(),
+    };
+    golem_common::model::tool::ToolActivationSnapshot {
+        registered_tool: golem_common::model::tool::ToolRegistration {
+            deployment_revision: DeploymentRevision::INITIAL,
+            release_id: None,
+            definition: test_tool_definition(),
+            provision: Default::default(),
+            source: source.clone(),
+            owner_account_id: Default::default(),
+            owner_account_email: "owner@example.com".into(),
+            metadata_version: String::new(),
+            metadata_digest: Default::default(),
+            component_bindings: Default::default(),
+        },
+        binding: CompiledToolBinding {
+            deployment_revision: DeploymentRevision::INITIAL,
+            release_id: None,
+            owner: golem_common::model::tool::ToolBindingOwner::AgentType {
+                agent_type_name: "Test".parse().unwrap(),
+            },
+            tool_name: tool_name.clone(),
+            version: "1.0.0".to_string(),
+            metadata_version: String::new(),
+            metadata_digest: Default::default(),
+            account_id: Default::default(),
+            account_email: "owner@example.com".into(),
+            parameters: NormalizedJsonValue::new(serde_json::Value::Null),
+            config_keys_readable: Default::default(),
+            secret_keys_readable: Default::default(),
+            secret_keys_revealable: Default::default(),
+            filesystem_access: ToolFilesystemAccess::Denied,
+            shell: false,
+            source,
+        },
+        filesystem: FilesystemCapability::Incapable,
+        middleware_chain: None,
+        mcp_import: None,
+    }
+}
+
+/// The recorded invocation kinds that carry a caller, each with `caller`.
+fn invocation_payloads_with_caller(
+    owned_agent_id: &OwnedAgentId,
+    caller: &golem_common::model::caller::Caller,
+) -> Vec<AgentInvocationPayload> {
+    let tool_name = ToolName::try_from("grep").unwrap();
+    vec![
+        AgentInvocationPayload::AgentMethod {
+            method_name: "run".to_string(),
+            input: SchemaValue::Record { fields: Vec::new() }
+                .try_into()
+                .unwrap(),
+            allow_streams: false,
+            caller: caller.clone(),
+            scope_card: None,
+        },
+        AgentInvocationPayload::ExternalTool {
+            tool_name: tool_name.clone(),
+            command_path: vec!["search".to_string()],
+            input: Box::new(TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::tuple(Vec::new())),
+                SchemaValue::Tuple {
+                    elements: Vec::new(),
+                },
+            )),
+            stdin: false,
+            stdout: false,
+            stderr: false,
+            activation: Box::new(external_tool_activation(&tool_name)),
+            caller: caller.clone(),
+            scope_card: None,
+        },
+        AgentInvocationPayload::ProcessOplogEntries {
+            account_id: AccountId::new(),
+            config: Vec::new(),
+            metadata: golem_common::model::oplog::payload::types::AgentMetadataForGuests {
+                agent_id: owned_agent_id.agent_id,
+                agent_type_name: None,
+                fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
+                args: Vec::new(),
+                env: Vec::new(),
+                config: BTreeMap::new(),
+                status: golem_common::model::AgentStatus::Running,
+                component_revision: ComponentRevision::INITIAL,
+                retry_count: 0,
+                environment_id: owned_agent_id.environment_id,
+            },
+            first_entry_index: OplogIndex::INITIAL,
+            entries: Vec::new(),
+            caller: caller.clone(),
+        },
+        AgentInvocationPayload::SaveSnapshot {
+            caller: caller.clone(),
+        },
+    ]
+}
+
+/// Adds a started and a pending invocation entry for each payload, and returns the indexes of the
+/// started entries.
+async fn add_invocation_entries(
+    oplog: &Arc<dyn crate::services::oplog::Oplog>,
+    payloads: Vec<AgentInvocationPayload>,
+) -> Vec<OplogIndex> {
+    let mut started = Vec::new();
+    for (ordinal, payload) in payloads.into_iter().enumerate() {
+        let (operation, stored) = payload.into_stored();
+        let bytes = golem_common::serialization::serialize(&stored).unwrap();
+        let index = oplog
+            .add(OplogEntry::AgentInvocationStarted {
+                timestamp: Timestamp::from(1_000),
+                invocation_id: Uuid::from_u128(0x100 + ordinal as u128).into(),
+                operation: Box::new(operation.clone()),
+                payload: OplogPayload::SerializedInline {
+                    bytes: bytes.clone(),
+                    cached: None,
+                },
+                trace_id: golem_common::model::invocation_context::TraceId::generate(),
+                trace_states: Vec::new(),
+                invocation_context: Vec::new(),
+                wallet_pin: Box::new(golem_common::model::card::InvocationWalletPin {
+                    wallet_token: golem_common::model::card::WalletVersionToken {
+                        wallet_id_hash: [0; 32],
+                        generation: 0,
+                    },
+                    pinned_card_ids: Vec::new(),
+                    scope_card_id: None,
+                }),
+            })
+            .await
+            .unwrap();
+        started.push(index);
+        oplog
+            .add(OplogEntry::PendingAgentInvocation {
+                timestamp: Timestamp::from(1_000),
+                not_before: None,
+                invocation_id: Uuid::from_u128(0x200 + ordinal as u128).into(),
+                operation: Box::new(operation),
+                payload: OplogPayload::SerializedInline {
+                    bytes,
+                    cached: None,
+                },
+                trace_id: golem_common::model::invocation_context::TraceId::generate(),
+                trace_states: Vec::new(),
+                invocation_context: Vec::new(),
+            })
+            .await
+            .unwrap();
+    }
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    started
+}
+
+fn public_invocation(entry: &PublicOplogEntry) -> &PublicAgentInvocation {
+    match entry {
+        PublicOplogEntry::AgentInvocationStarted(params) => &params.invocation,
+        PublicOplogEntry::PendingAgentInvocation(params) => &params.invocation,
+        other => panic!("expected an invocation entry, got {other:?}"),
+    }
+}
+
+#[test]
+async fn invocation_callers_render_through_public_oplog_api_and_wit() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("invocation-callers").await;
+    let caller = crate::test_callers::sample_caller();
+    let payloads = invocation_payloads_with_caller(&owned_agent_id, &caller);
+    let kinds = payloads.len();
+    add_invocation_entries(&oplog, payloads).await;
+    let components = metadata_component_service(&owned_agent_id);
+
+    for claims in [ClaimVisibility::Hidden, ClaimVisibility::Shown] {
+        let expected_caller = PublicCaller::new(&caller, claims);
+
+        let chunk = get_public_oplog_chunk(
+            components.clone(),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            OplogIndex::INITIAL,
+            100,
+            claims,
+        )
+        .await
+        .unwrap();
+        assert_eq!(chunk.entries.len(), 2 * kinds);
+        for entry in &chunk.entries {
+            assert_eq!(
+                public_invocation(&entry.entry).caller(),
+                Some(&expected_caller),
+                "the caller of entry {}",
+                entry.oplog_index
+            );
+        }
+
+        // The page that the worker service reads holds the same callers, and the claims only
+        // when they were asked for.
+        let page = get_public_oplog_page(
+            components.clone(),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            OplogIndex::INITIAL,
+            PublicOplogPageLimits {
+                count: 100,
+                max_bytes: 1_000_000,
+                max_entry_bytes: 1_000_000,
+            },
+            claims,
+        )
+        .await
+        .unwrap();
+        let encoded = page
+            .entries
+            .iter()
+            .flat_map(|entry| entry.encode_to_vec())
+            .collect::<Vec<u8>>();
+        let holds_claims = encoded.windows(6).any(|window| window == b"\"deep\"");
+        assert_eq!(holds_claims, claims == ClaimVisibility::Shown);
+        let page_entries = public_page_entries(&page.entries);
+        assert_eq!(page_entries.len(), 2 * kinds);
+        for (page_entry, entry) in page_entries.iter().zip(&chunk.entries) {
+            let PublicOplogPageEntry::Included(page_entry) = page_entry else {
+                panic!("expected an included entry at {}", entry.oplog_index);
+            };
+            // An invocation without a recorded context gets a fresh root span on each read, so
+            // the entries are compared by their index and their caller.
+            assert_eq!(page_entry.oplog_index, entry.oplog_index);
+            assert_eq!(
+                public_invocation(&page_entry.entry).caller(),
+                public_invocation(&entry.entry).caller()
+            );
+        }
+
+        // Guests get both roles and the tokens, never the claims.
+        for entry in chunk.entries {
+            let wit_entry =
+                crate::preview2::golem_api_1_x::oplog::PublicOplogEntry::try_from(entry.entry)
+                    .unwrap();
+            use crate::preview2::golem_api_1_x::oplog;
+            let invocation = match wit_entry {
+                oplog::PublicOplogEntry::AgentInvocationStarted(params) => params.invocation,
+                oplog::PublicOplogEntry::PendingAgentInvocation(params) => params.invocation,
+                other => panic!("expected an invocation entry, got {other:?}"),
+            };
+            let wit_caller = match invocation {
+                oplog::AgentInvocation::AgentMethodInvocation(params) => params.caller,
+                oplog::AgentInvocation::ExternalTool(params) => params.caller,
+                oplog::AgentInvocation::ProcessOplogEntries(params) => params.caller,
+                oplog::AgentInvocation::SaveSnapshot(params) => params.caller,
+                other => panic!("unexpected invocation kind {other:?}"),
+            };
+            let oplog::PublicPrincipal::User(user) = wit_caller.original else {
+                panic!("expected a user at the root");
+            };
+            assert_eq!(user.pair.subject, "user-1");
+            let oplog::PublicPrincipal::Agent(agent) = wit_caller.immediate else {
+                panic!("expected an agent as the immediate caller");
+            };
+            assert_eq!(agent.agent_type, "TestAgent");
+            assert_eq!(wit_caller.tokens.len(), 2);
+        }
+    }
+}
+
+/// A user whose claims hold `size` bytes of padding.
+fn user_with_claims_of_size(size: usize) -> golem_common::model::caller::Principal {
+    golem_common::model::caller::Principal::User(golem_common::model::caller::UserPrincipal {
+        pair: golem_common::model::caller::Pair::new("http://test-idp.com", "bob"),
+        claims: golem_common::model::caller::Claims::from_json(format!(
+            r#"{{"sub":"bob","padding":"{}"}}"#,
+            "x".repeat(size)
+        ))
+        .unwrap(),
+        authenticated_at: Timestamp::from(1_000),
+    })
+}
+
+#[test]
+async fn hidden_claims_do_not_make_an_oplog_entry_omitted() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("large-claims").await;
+    let caller = golem_common::model::caller::Caller::entry(user_with_claims_of_size(512 * 1024));
+    let payloads = invocation_payloads_with_caller(&owned_agent_id, &caller);
+    let started_index =
+        add_invocation_entries(&oplog, payloads.into_iter().take(1).collect()).await[0];
+    let components = metadata_component_service(&owned_agent_id);
+
+    let page = |claims| {
+        get_public_oplog_page(
+            components.clone(),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            started_index,
+            PublicOplogPageLimits {
+                count: 1,
+                max_bytes: 8 * 1024 * 1024,
+                max_entry_bytes: 64 * 1024,
+            },
+            claims,
+        )
+    };
+
+    let hidden = page(ClaimVisibility::Hidden).await.unwrap();
+    assert_eq!(page_indices(&hidden.entries), vec![(started_index, true)]);
+
+    let shown = page(ClaimVisibility::Shown).await.unwrap();
+    assert_eq!(page_indices(&shown.entries), vec![(started_index, false)]);
+    let PublicOplogPageEntry::Omitted(omitted) = &public_page_entries(&shown.entries)[0] else {
+        unreachable!()
+    };
+    assert!(omitted.size > 512 * 1024);
+
+    let full = get_public_oplog_entry(
+        components.clone(),
+        oplog_service.clone(),
+        &owned_agent_id,
+        AgentMode::Durable,
+        test_component_id(),
+        OwnerKind::ComponentAgent,
+        None,
+        started_index,
+        Some(omitted.component_revision),
+        ClaimVisibility::Shown,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        public_invocation(&full.entry).caller(),
+        Some(&PublicCaller::new(&caller, ClaimVisibility::Shown))
+    );
+}
+
+/// A pending update and a queued manual update show their requester in both roles with its
+/// tokens, with claims only when they are shown. The requester is not the caller of the queued
+/// manual update. Guests get both roles through the WIT, never the claims.
+#[test]
+async fn pending_update_public_form_shows_the_requester() {
+    use crate::preview2::golem_api_1_x::oplog;
+
+    let (oplog_service, owned_agent_id, raw_oplog) = open_test_oplog("update-requester").await;
+    let requester = crate::test_callers::sample_caller();
+    let target_revision = ComponentRevision::new(2).unwrap();
+    let admission_index = raw_oplog
+        .add(OplogEntry::PendingUpdate {
+            timestamp: Timestamp::from(1_000),
+            description: UpdateDescription::Automatic { target_revision },
+            update_attempt_index: None,
+            requester: Box::new(requester.clone()),
+        })
+        .await
+        .unwrap();
+    let (operation, stored) = AgentInvocationPayload::ManualUpdate {
+        target_revision,
+        requester: requester.clone(),
+    }
+    .into_stored();
+    raw_oplog
+        .add(OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::from(1_000),
+            not_before: None,
+            invocation_id: Uuid::from_u128(0x300).into(),
+            operation: Box::new(operation),
+            payload: OplogPayload::SerializedInline {
+                bytes: golem_common::serialization::serialize(&stored).unwrap(),
+                cached: None,
+            },
+            trace_id: golem_common::model::invocation_context::TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+        })
+        .await
+        .unwrap();
+    raw_oplog.commit(CommitLevel::Always).await.unwrap();
+    let components = metadata_component_service(&owned_agent_id);
+
+    for claims in [ClaimVisibility::Hidden, ClaimVisibility::Shown] {
+        let expected = PublicCaller::new(&requester, claims);
+        assert_eq!(expected.original.claims().is_some(), claims.is_shown());
+
+        let chunk = get_public_oplog_chunk(
+            components.clone(),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            OplogIndex::INITIAL,
+            100,
+            claims,
+        )
+        .await
+        .unwrap();
+        let mut seen = Vec::new();
+        for entry in &chunk.entries {
+            let wit_requester = match &entry.entry {
+                PublicOplogEntry::PendingUpdate(params) => {
+                    assert_eq!(params.requester, expected);
+                    assert_eq!(params.update_attempt_index, admission_index);
+                    seen.push("pending update");
+                    let oplog::PublicOplogEntry::PendingUpdate(wit) =
+                        oplog::PublicOplogEntry::try_from(entry.entry.clone()).unwrap()
+                    else {
+                        panic!("expected a WIT pending update");
+                    };
+                    wit.requester
+                }
+                PublicOplogEntry::PendingAgentInvocation(params) => {
+                    let PublicAgentInvocation::ManualUpdate(manual) = &params.invocation else {
+                        panic!("expected a manual update, got {:?}", params.invocation);
+                    };
+                    assert_eq!(manual.requester, expected);
+                    assert_eq!(params.invocation.caller(), None);
+                    seen.push("queued manual update");
+                    let oplog::PublicOplogEntry::PendingAgentInvocation(wit) =
+                        oplog::PublicOplogEntry::try_from(entry.entry.clone()).unwrap()
+                    else {
+                        panic!("expected a WIT pending invocation");
+                    };
+                    let oplog::AgentInvocation::ManualUpdate(wit) = wit.invocation else {
+                        panic!("expected a WIT manual update");
+                    };
+                    wit.requester
+                }
+                _ => continue,
+            };
+            let oplog::PublicPrincipal::User(user) = wit_requester.original else {
+                panic!("expected a user at the root of the requester");
+            };
+            assert_eq!(user.pair.subject, "user-1");
+            let oplog::PublicPrincipal::Agent(agent) = wit_requester.immediate else {
+                panic!("expected an agent as the immediate requester");
+            };
+            assert_eq!(agent.agent_type, "TestAgent");
+            assert_eq!(wit_requester.tokens.len(), 2);
+        }
+        assert_eq!(seen, vec!["pending update", "queued manual update"]);
+    }
+}
+
+/// A range read shows the claims of a caller exactly when the reader asks for them, as a page
+/// read does.
+#[test]
+async fn an_oplog_range_read_shows_claims_only_on_request() {
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("range-claims").await;
+    let caller = golem_common::model::caller::Caller::entry(user_with_claims_of_size(16));
+    let payloads = invocation_payloads_with_caller(&owned_agent_id, &caller);
+    let started_index =
+        add_invocation_entries(&oplog, payloads.into_iter().take(1).collect()).await[0];
+    let components = metadata_component_service(&owned_agent_id);
+
+    for claims in [ClaimVisibility::Hidden, ClaimVisibility::Shown] {
+        let page = get_public_oplog_range_page(
+            components.clone(),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            None,
+            started_index,
+            started_index,
+            PublicOplogPageLimits {
+                count: 1,
+                max_bytes: 1_000_000,
+                max_entry_bytes: 1_000_000,
+            },
+            OplogScanAllowance {
+                entries: 100,
+                millis: 600_000,
+            },
+            claims,
+        )
+        .await
+        .unwrap();
+        let entries = public_page_entries(&page.entries);
+        let PublicOplogPageEntry::Included(entry) = &entries[0] else {
+            panic!("the range read leaves out the entry: {entries:?}");
+        };
+        assert_eq!(
+            public_invocation(&entry.entry).caller(),
+            Some(&PublicCaller::new(&caller, claims)),
+            "{claims:?}"
+        );
+    }
+}
+
+/// The byte strings in the JSON form of a public entry: lists of `u8` values and binary payloads.
+fn byte_strings(value: &serde_json::Value, out: &mut Vec<Vec<u8>>) {
+    match value {
+        serde_json::Value::Array(items) => {
+            let as_u8 = |item: &serde_json::Value| {
+                let number = match item {
+                    serde_json::Value::Object(map) if map.get("kind") == Some(&"u8".into()) => {
+                        map.get("value")
+                    }
+                    other => Some(other),
+                };
+                number
+                    .and_then(serde_json::Value::as_u64)
+                    .and_then(|n| u8::try_from(n).ok())
+            };
+            match items.iter().map(as_u8).collect::<Option<Vec<u8>>>() {
+                Some(bytes) if !bytes.is_empty() => out.push(bytes),
+                _ => items.iter().for_each(|item| byte_strings(item, out)),
+            }
+        }
+        serde_json::Value::Object(map) => map.values().for_each(|item| byte_strings(item, out)),
+        _ => {}
+    }
+}
+
+/// An oplog processor passes the raw entries of its batch to `enrich-oplog-entries`, and the
+/// executor records that request in the processor's own oplog. The raw entries hold the claims of
+/// the users who called the processed agent, so the public form of the `Start` entry, in REST and
+/// in the WIT `get-oplog`, keeps only their indexes.
+#[test]
+async fn the_public_enrich_request_holds_no_raw_entries() {
+    const MARKER: &str = "claimsmarker5e2b";
+    let (oplog_service, owned_agent_id, oplog) = open_test_oplog("processor-agent").await;
+
+    // The raw `agent-invocation-started` of the processed agent, as the processor's batch holds it.
+    let bob = golem_common::model::caller::Caller::entry(
+        golem_common::model::caller::Principal::User(golem_common::model::caller::UserPrincipal {
+            pair: golem_common::model::caller::Pair::new("http://test-idp.com", "bob"),
+            claims: golem_common::model::caller::Claims::from_json(format!(
+                r#"{{"sub":"bob","email":"{MARKER}@mail.example"}}"#
+            ))
+            .unwrap(),
+            authenticated_at: Timestamp::from(1_000),
+        }),
+    );
+    let (operation, stored) = AgentInvocationPayload::AgentMethod {
+        method_name: "run".to_string(),
+        input: SchemaValue::Record { fields: Vec::new() }
+            .try_into()
+            .unwrap(),
+        allow_streams: false,
+        caller: bob,
+        scope_card: None,
+    }
+    .into_stored();
+    let raw_started = OplogEntry::AgentInvocationStarted {
+        timestamp: Timestamp::from(1_000),
+        invocation_id: Uuid::from_u128(0x100).into(),
+        operation: Box::new(operation),
+        payload: OplogPayload::Inline(Box::new(stored)),
+        trace_id: golem_common::model::invocation_context::TraceId::generate(),
+        trace_states: Vec::new(),
+        invocation_context: Vec::new(),
+        wallet_pin: Box::new(golem_common::model::card::InvocationWalletPin {
+            wallet_token: golem_common::model::card::WalletVersionToken {
+                wallet_id_hash: [0; 32],
+                generation: 0,
+            },
+            pinned_card_ids: Vec::new(),
+            scope_card_id: None,
+        }),
+    };
+    // The batch entry the guest gets, and the entry the host decodes from the guest's call, as
+    // `prepare_oplog_enrichment_entries` does.
+    let wit_entry =
+        crate::preview2::golem_api_1_x::oplog::OplogEntry::try_from(raw_started).unwrap();
+    let enrichment = golem_common::model::oplog::OplogEnrichmentEntry::try_from(wit_entry).unwrap();
+    let request_entry = golem_common::serialization::serialize(&enrichment).unwrap();
+
+    // The recorded request of the processor's `enrich-oplog-entries` call.
+    let request: golem_common::model::oplog::HostRequest =
+        golem_common::model::oplog::HostRequestGolemApiOplogEnrich {
+            environment_id: owned_agent_id.environment_id(),
+            agent_id: owned_agent_id.agent_id,
+            entries: vec![(5, request_entry)],
+            component_revision: 0,
+        }
+        .into();
+    let request_payload = oplog_service
+        .upload_payload(&owned_agent_id, AgentMode::Durable, &request)
+        .await
+        .unwrap();
+    let start_index = oplog
+        .add(OplogEntry::Start {
+            timestamp: Timestamp::now_utc(),
+            parent_start_index: None,
+            function_name: HostFunctionName::GolemApiEnrichOplogEntries,
+            invocation_id: None,
+            observational_owner: None,
+            request: Some(request_payload),
+            durable_function_type: DurableFunctionType::ReadLocal,
+            span_started: None,
+            denial: None,
+            driver: None,
+        })
+        .await
+        .unwrap();
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    let raw = oplog_service
+        .read_exact(
+            &owned_agent_id,
+            AgentMode::Durable,
+            start_index,
+            Into::<u64>::into(start_index),
+        )
+        .await
+        .unwrap();
+    let components: Arc<dyn ComponentService> = Arc::new(PanicComponentService);
+    for (index, raw_entry) in raw {
+        // The public form that a REST reader without `include=claims` gets.
+        let mut public_entry = PublicOplogEntry::from_oplog_entry(
+            index,
+            raw_entry,
+            oplog_service.clone(),
+            components.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::OplogProcessor,
+            None,
+            ComponentRevision::INITIAL,
+            ClaimVisibility::Hidden,
+        )
+        .await
+        .unwrap();
+
+        // The guest form that `get-oplog` gives to a guest that reads the processor's oplog.
+        let wit_entry =
+            crate::preview2::golem_api_1_x::oplog::PublicOplogEntry::try_from(public_entry.clone())
+                .unwrap();
+        let crate::preview2::golem_api_1_x::oplog::PublicOplogEntry::Start(wit_start) = wit_entry
+        else {
+            panic!("expected a Start entry");
+        };
+        let wit_request =
+            golem_schema::schema::wit::decode_typed(wit_start.request.as_ref().unwrap()).unwrap();
+        let mut wit_bytes = Vec::new();
+        byte_strings(
+            &serde_json::to_value(wit_request.value()).unwrap(),
+            &mut wit_bytes,
+        );
+        let wit_leaked = wit_bytes
+            .iter()
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+            .filter(|text| text.contains(MARKER))
+            .count();
+
+        public_entry.redact_host_managed_values_for_external();
+        let json = serde_json::to_value(&public_entry).unwrap();
+        let mut bytes = Vec::new();
+        byte_strings(&json, &mut bytes);
+        let leaked = bytes
+            .iter()
+            .map(|bytes| String::from_utf8_lossy(bytes).into_owned())
+            .filter(|text| text.contains(MARKER))
+            .collect::<Vec<_>>();
+        assert!(
+            leaked.is_empty(),
+            "the REST form of entry {index} holds the claims"
+        );
+        assert_eq!(
+            wit_leaked, 0,
+            "the WIT form of entry {index} holds the claims"
+        );
+        let request = &json["request"].to_string();
+        assert!(request.contains('5'), "the entry index is kept: {request}");
+    }
+}
+
 #[test]
 async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
     let (oplog_service, owned_agent_id, oplog) = open_test_oplog("range-read").await;
@@ -3253,6 +4091,7 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
                 max_entry_bytes: 1_000_000,
             },
             a,
+            ClaimVisibility::Hidden,
         )
     };
     let (from, to) = (indices[5], indices[8]);
@@ -3319,6 +4158,7 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
             max_entry_bytes: 1_000_000,
         },
         allowance(100),
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap();

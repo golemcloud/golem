@@ -18,7 +18,7 @@ use crate::base_model::diff;
 use crate::base_model::domain_registration::Domain;
 use crate::base_model::environment::EnvironmentId;
 use crate::{declare_enums, declare_revision, declare_structs, declare_unions, newtype_uuid};
-use chrono::DateTime;
+use jiff::Timestamp;
 use std::collections::BTreeMap;
 
 newtype_uuid!(HttpApiDeploymentId);
@@ -95,7 +95,13 @@ declare_structs! {
         pub openapi_endpoint_prefix: Option<String>,
         pub agents: Option<BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>>
     }
+}
 
+crate::declare_datetime_struct! {
+    crate::base_model::http_api_deployment::HttpApiDeployment,
+    [],
+    [],
+    [],
     pub struct HttpApiDeployment {
         pub id: HttpApiDeploymentId,
         pub revision: HttpApiDeploymentRevision,
@@ -106,7 +112,7 @@ declare_structs! {
         pub agents: BTreeMap<AgentTypeName, HttpApiDeploymentAgentOptions>,
         pub webhooks_prefix: String,
         pub openapi_endpoint_prefix: String,
-        pub created_at: DateTime<chrono::Utc>,
+        pub created_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
     }
 }
 

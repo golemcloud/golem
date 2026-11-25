@@ -464,7 +464,7 @@ fn detail_for(violation: ResurrectionViolation, before: u64, observed: u64) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, TimeDelta, Utc};
+
     use test_r::test;
 
     const ON_POD: &str = "chaos-s6-delete-0000";
@@ -472,10 +472,8 @@ mod tests {
     /// What a round builds an agent up to before deleting it.
     const BEFORE: u64 = 3;
 
-    fn t0() -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-08-25T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
+    fn t0() -> jiff::Timestamp {
+        str::parse::<jiff::Timestamp>("2026-08-25T12:00:00Z").unwrap()
     }
 
     fn split() -> PodSplit {
@@ -492,7 +490,7 @@ mod tests {
     fn fault() -> FaultWindow {
         FaultWindow {
             injected_at: t0(),
-            recovered_at: Some(t0() + TimeDelta::seconds(120)),
+            recovered_at: Some(t0() + jiff::SignedDuration::from_secs(120)),
         }
     }
 
@@ -503,7 +501,7 @@ mod tests {
         outcome: Outcome,
         observed: Option<u64>,
     ) -> DeleteRound {
-        let submitted_at = t0() + TimeDelta::seconds(offset_secs);
+        let submitted_at = t0() + jiff::SignedDuration::from_secs(offset_secs);
         DeleteRound {
             agent: agent.to_string(),
             round: 0,
@@ -511,7 +509,7 @@ mod tests {
             outcome,
             rejected_as_not_found: false,
             submitted_at,
-            completed_at: Some(submitted_at + TimeDelta::milliseconds(90)),
+            completed_at: Some(submitted_at + jiff::SignedDuration::from_millis(90)),
             observed_after: observed,
         }
     }
@@ -685,7 +683,7 @@ mod tests {
     #[test]
     fn deletes_unresolved_when_the_pod_died_are_reported_separately() {
         let mut caught = round(ON_POD, -1, Some(BEFORE), Outcome::Indeterminate, Some(0));
-        caught.completed_at = Some(t0() + TimeDelta::seconds(30));
+        caught.completed_at = Some(t0() + jiff::SignedDuration::from_secs(30));
         let report = build(&[caught]);
 
         let entry = report

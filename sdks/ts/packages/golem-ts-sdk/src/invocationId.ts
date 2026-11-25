@@ -40,14 +40,14 @@ export class InvocationId {
   readonly agentId: AgentId;
   readonly uuid: Uuid;
 
-  constructor(agentId: RawAgentId, uuid: RawUuid) {
-    this.agentId = AgentId.from(agentId);
+  constructor(agentId: AgentId, uuid: RawUuid) {
+    this.agentId = AgentId.parse(agentId);
     this.uuid = Uuid.from(uuid);
   }
 
   /** Formats the invocation ID as `<agent-id>.<uuid>`. */
   toString(): string {
-    return `${this.agentId.toString()}.${this.uuid.toString()}`;
+    return `${this.agentId}.${this.uuid.toString()}`;
   }
 
   /** Parses the `<agent-id>.<uuid>` text form. */
@@ -57,7 +57,7 @@ export class InvocationId {
     }
     const agentUuid = parseUuidText(value.slice(0, UUID_TEXT_LENGTH), 'agent ID');
     const uuid = parseUuidText(value.slice(UUID_TEXT_LENGTH + 1), 'UUID');
-    return new InvocationId(new AgentId(agentUuid), uuid);
+    return new InvocationId(AgentId.fromWit({ uuid: agentUuid }), uuid);
   }
 }
 
@@ -83,7 +83,7 @@ export interface CancelableScheduledInvocationReceipt {
 
 /** @internal Converts the host invocation metadata into the frozen SDK form. */
 export function invocationMetadataFromHost(metadata: HostInvocationMetadata): InvocationMetadata {
-  const agentId = AgentId.from(metadata.agentId);
+  const agentId = AgentId.fromWit(metadata.agentId);
   return Object.freeze({
     agentId,
     invocationId: new InvocationId(agentId, metadata.invocationId.id),

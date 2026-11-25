@@ -239,7 +239,7 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
                 let result = match body["method"].as_str() {
                     Some("tools/list") => projected_tools.lock().unwrap().clone().unwrap(),
                     Some("tools/call") => {
-                        let item_id = body["params"]["arguments"]["item-id"]
+                        let item_id = body["params"]["arguments"]["item_id"]
                             .as_str()
                             .unwrap()
                             .to_string();
@@ -250,7 +250,7 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
                         if item_id == "reject" {
                             json!({
                                 "isError":true,
-                                "content":[{"type":"text","text":"{\"name\":\"rejected\",\"payload\":\"reject\"}"}]
+                                "content":[{"type":"text","text":"{\"error\":\"rejected\",\"payload\":\"reject\"}"}]
                             })
                         } else {
                             json!({
@@ -331,9 +331,10 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
         .find(|tool| tool["name"] == "artifact_render")
         .unwrap();
     assert_eq!(
-        render["inputSchema"]["properties"]["item-id"]["type"],
+        render["inputSchema"]["properties"]["item_id"]["type"],
         "string"
     );
+    assert!(render["inputSchema"]["properties"].get("item-id").is_none());
     assert_eq!(
         render["inputSchema"]["properties"]["_stdin"]["type"],
         "string"
@@ -357,7 +358,7 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
         &client,
         &mcp_url,
         "tools/call",
-        json!({"name":"artifact_render","arguments":{"item-id":"direct","_stdin":"AAEC/w=="}}),
+        json!({"name":"artifact_render","arguments":{"item_id":"direct","_stdin":"AAEC/w=="}}),
     )
     .await;
     assert_exported_result(&direct, "direct", "AAEC/w==");
@@ -365,13 +366,14 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
         &client,
         &mcp_url,
         "tools/call",
-        json!({"name":"artifact_render","arguments":{"item-id":"reject","_stdin":""}}),
+        json!({"name":"artifact_render","arguments":{"item_id":"reject","_stdin":""}}),
     )
     .await;
     assert_eq!(rejected["isError"], true);
     let mapped: Value =
         serde_json::from_str(rejected["content"][0]["text"].as_str().unwrap()).unwrap();
-    assert_eq!(mapped["name"], "rejected");
+    assert_eq!(mapped["error"], "rejected");
+    assert!(mapped.get("name").is_none(), "{mapped}");
     assert_eq!(mapped["payload"], "reject");
 
     for (command, expected_fragments) in [
@@ -461,10 +463,10 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
     assert_eq!(
         observed_effects
             .iter()
-            .filter(|path| path.as_str() == "/middleware/artifact-touch/account")
+            .filter(|path| path.as_str() == "/middleware/artifact-touch/agent")
             .count(),
         2,
-        "the authenticated importing identity is visible to middleware before the MCP boundary: {:?}",
+        "the importing agent is the immediate caller that middleware sees before the MCP boundary: {:?}",
         observed_effects
     );
     assert_eq!(
@@ -529,6 +531,91 @@ async fn exported_native_tool_roundtrips_through_import_middleware_and_replays_o
         "a failed fresh invocation must not manufacture provider or middleware effects"
     );
     effect_server.shutdown().await;
+}
+
+#[test]
+#[timeout("10 minutes")]
+async fn deploy_fails_for_an_exported_command_with_an_idempotency_key_option() {
+    let mut ctx = TestContext::new();
+    ctx.start_server().await;
+    let mcp_port = ctx.mcp_port();
+    fs::create_dir_all(ctx.cwd_path_join("mcp-roundtrip")).unwrap();
+    ctx.cd("mcp-roundtrip");
+    let new_component = |component: &'static str| {
+        ctx.cli([
+            flag::YES,
+            cmd::NEW,
+            ".",
+            flag::TEMPLATE,
+            "rust",
+            flag::COMPONENT_NAME,
+            component,
+        ])
+    };
+    assert!(
+        new_component("mcp-roundtrip:provider")
+            .await
+            .success_or_dump()
+    );
+    assert!(
+        new_component("mcp-roundtrip:export-owner")
+            .await
+            .success_or_dump()
+    );
+    write_roundtrip_manifest(&ctx, mcp_port, 0, true, false);
+    fs::write_str(
+        ctx.cwd_path_join("provider/src/counter_agent.rs"),
+        indoc! {r#"
+            use golem_rust::{tool_definition, tool_implementation};
+
+            #[tool_definition(version = "1.0.0")]
+            pub trait Artifact {
+                /// Render one artifact.
+                #[arg(idempotency_key = "option", required = true)]
+                fn render(&self, idempotency_key: String) -> String;
+
+                /// Touch one artifact.
+                fn touch(&self) -> String;
+            }
+
+            struct ArtifactImpl;
+
+            #[tool_implementation]
+            impl Artifact for ArtifactImpl {
+                fn render(&self, idempotency_key: String) -> String {
+                    idempotency_key
+                }
+
+                fn touch(&self) -> String {
+                    "touched".into()
+                }
+            }
+        "#},
+    )
+    .unwrap();
+
+    let built = ctx
+        .cli([flag::YES, "--environment", "export", cmd::BUILD])
+        .await;
+    assert!(built.success_or_dump());
+    let deployed = ctx
+        .cli([flag::YES, "--environment", "export", cmd::DEPLOY])
+        .await;
+    assert!(!deployed.success());
+    [
+        "`artifact render`",
+        "`idempotency-key`",
+        "`idempotency_key`",
+    ]
+    .into_iter()
+    .for_each(|fragment| {
+        assert!(
+            says(&deployed, fragment),
+            "deploy output does not name {fragment}: {}\n{}",
+            deployed.stdout_text(),
+            deployed.stderr_text()
+        )
+    });
 }
 
 // What the MCP server of a test does after its first tool lists.
@@ -1972,28 +2059,13 @@ async fn mcp_response(client: &reqwest::Client, url: &str, method: &str, params:
         .send()
         .await
         .unwrap();
-    let session = initialize
-        .headers()
-        .get("mcp-session-id")
-        .unwrap()
-        .to_str()
-        .unwrap()
-        .to_string();
     assert!(initialize.status().is_success());
+    assert!(!initialize.headers().contains_key("mcp-session-id"));
     parse_mcp_sse(&initialize.text().await.unwrap());
-    let initialized = client
-        .post(url)
-        .header("Accept", "application/json, text/event-stream")
-        .header("mcp-session-id", &session)
-        .json(&json!({"jsonrpc":"2.0","method":"notifications/initialized"}))
-        .send()
-        .await
-        .unwrap();
-    assert!(initialized.status().is_success());
     let response = client
         .post(url)
         .header("Accept", "application/json, text/event-stream")
-        .header("mcp-session-id", session)
+        .header("MCP-Protocol-Version", "2025-03-26")
         .json(&json!({"jsonrpc":"2.0","id":2,"method":method,"params":params}))
         .send()
         .await

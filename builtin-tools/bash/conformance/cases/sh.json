@@ -1,0 +1,84 @@
+{
+  "tier": "pr",
+  "description": "`sh -c` and `bash -c`, which run a script string through this same shell as a child.\n\nIn the oracle image `sh` is BusyBox ash, not bash; these cases use only behaviour the two agree\non. Usage errors, which each shell words differently, are covered by the unit tests.",
+  "cases": [
+    {
+      "name": "sh: -c with positional arguments",
+      "script": "sh -c 'echo \"$1-$2\" $#' _ a 'b c'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "bash: -c with positional arguments",
+      "script": "bash -c 'printf \"<%s>\\n\" \"$@\"' _ one 'two words'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sh: child exit status, cwd and variables stay inside",
+      "script": "cd /tmp; sh -c 'cd /; x=1; exit 3'; echo status=$? pwd=$PWD x=${x-unset}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "bash: stdin reaches the script",
+      "script": "echo piped | bash -c 'cat; echo done'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "bash: -e stops at the first failure",
+      "script": "bash -ec 'false; echo not-reached'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "bash: -o pipefail",
+      "script": "bash -o pipefail -c 'false | true'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "bash: -u sets the nounset option",
+      "script": "bash -uc 'case $- in *u*) echo nounset;; esac; echo \"${nope-default}\"'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sh: script read from stdin with -s",
+      "script": "echo 'echo from-stdin \"$1\"' | sh -s arg",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sh: nested sh -c",
+      "script": "sh -c 'sh -c \"echo inner \\$1\" _ deep'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: exec sh -c per file",
+      "script": "mkdir -p /tmp/shx && cd /tmp/shx && touch 'a b' c && find . -type f -exec sh -c 'echo \"<$1>\"' _ {} \\; | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "find: exec bash -c batch",
+      "script": "mkdir -p /tmp/shy && cd /tmp/shy && touch x y z && find . -type f -exec bash -c 'echo $#' _ {} +",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: bash -c per item",
+      "script": "printf '1\\n2\\n3\\n' | xargs -n 1 bash -c 'echo $(( $1 * 10 ))' _",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "xargs: sh -c exit status",
+      "script": "printf 'a\\n' | xargs sh -c 'exit 7'; echo status=$?",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

@@ -259,6 +259,15 @@ impl PrimaryOplogState {
     pub(super) fn push(&mut self, entry: OplogEntry) -> OplogIndex {
         let is_hint = entry.is_hint();
         let next_index = self.last_oplog_idx.next();
+        debug_assert!(
+            entry
+                .entity_parent_start_index()
+                .is_none_or(|body| body < next_index),
+            "the entry appended at {next_index} is attributed to the entity body started at {:?}, \
+             which is not recorded before it",
+            entry.entity_parent_start_index()
+        );
+        self.owned_starts.append(next_index, &entry);
         self.durable_stream_sessions.apply_entry(next_index, &entry);
         self.buffer.push_back(entry);
         self.last_oplog_idx = next_index;

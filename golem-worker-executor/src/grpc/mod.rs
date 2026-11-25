@@ -17,7 +17,10 @@ mod invocation_session;
 pub(crate) mod stream_slots;
 
 pub(crate) use invocation::{CanStartWorker, from_proto_invocation_context};
-pub(crate) use invocation_session::{build_durable_streaming_request, decode_invocation_input};
+pub(crate) use invocation_session::{
+    TransportStreamId, build_durable_streaming_request, capture_method_input,
+    capture_session_acceptance, resumed_input_schema, stream_element_schema,
+};
 
 use crate::model::event::InternalWorkerEvent;
 use crate::model::public_oplog::{
@@ -103,7 +106,6 @@ use golem_service_base::grpc::{proto_agent_id_string, proto_promise_id_string};
 use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;
-use prost::Message;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -340,6 +342,7 @@ mod cards;
 mod durable_stream;
 mod events;
 mod filesystem;
+mod invocations;
 mod metadata;
 mod oplog;
 mod plugins;

@@ -123,6 +123,7 @@ impl DefaultDirectInvocationAuthService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
     async fn check(
         &self,
@@ -171,6 +172,7 @@ impl DirectInvocationAuthService for DefaultDirectInvocationAuthService {
 pub struct NoOpDirectInvocationAuthService;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl DirectInvocationAuthService for NoOpDirectInvocationAuthService {
     async fn check(
         &self,

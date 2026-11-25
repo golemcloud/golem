@@ -32,13 +32,18 @@ use crate::oplog_export::obfuscator::TokenKey;
 use golem_client::api::WorkerClient;
 use golem_common::model::AgentId;
 use golem_common::model::environment::EnvironmentId;
-use golem_common::model::oplog::{OplogCursor, PublicOplogPageEntry};
+use golem_common::model::oplog::{OplogCursor, OplogInclude, PublicOplogPageEntry};
 use poem::http::StatusCode;
 use poem::listener::{Acceptor, Listener, TcpListener};
 use poem::web::{Data, Html, Json, Query};
 use poem::{EndpointExt, Route, Server, get, handler};
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
+
+/// The `include` parameter of an oplog read: the claims only for `--show-claims`.
+pub fn oplog_include(show_claims: bool) -> Option<OplogInclude> {
+    show_claims.then_some(OplogInclude::Claims)
+}
 
 pub struct OplogViewerServer {
     pub ctx: Arc<Context>,
@@ -50,6 +55,8 @@ pub struct OplogViewerServer {
     pub page_size: u64,
     /// Show the entries that oplog pages omit in their omitted form instead of reading them.
     pub omit_payloads: bool,
+    /// Ask the server for the verified claims of the users among the callers.
+    pub show_claims: bool,
     /// The export session of `--serve --obfuscate`. It holds the `Start` functions for the whole
     /// server process, and the mutex serialises the page calls.
     pub export: Option<tokio::sync::Mutex<OplogExportSession<RestOplogReads>>>,
@@ -64,6 +71,7 @@ pub async fn oplog_page_entry_view(
     agent_id: &AgentId,
     page_entry: PublicOplogPageEntry,
     omit_payloads: bool,
+    show_claims: bool,
 ) -> anyhow::Result<AgentOplogEntryView> {
     let omitted = match page_entry {
         PublicOplogPageEntry::Included(entry) => return Ok(entry.into()),
@@ -81,6 +89,7 @@ pub async fn oplog_page_entry_view(
             &agent_id.0,
             omitted.oplog_index.as_u64(),
             Some(omitted.component_revision.into()),
+            oplog_include(show_claims).as_ref(),
             None,
         )
         .await
@@ -185,6 +194,7 @@ async fn oplog_page(
             count,
             cursor.as_ref(),
             query.as_deref(),
+            oplog_include(server.show_claims).as_ref(),
             None,
             None,
             None,
@@ -203,6 +213,7 @@ async fn oplog_page(
                 &server.agent_id,
                 page_entry,
                 server.omit_payloads,
+                server.show_claims,
             )
             .await
             .map_err(upstream_error)?,
@@ -326,6 +337,7 @@ pub async fn serve_oplog_export_viewer(
             page,
             page_size,
             omit_payloads: false,
+            show_claims: false,
             export: Some(tokio::sync::Mutex::new(session)),
         },
         port,
@@ -387,5 +399,47 @@ pub fn open_in_browser(url: &str) {
     match webbrowser::open(url) {
         Ok(()) => log_action("Opened", format!("{} in the default browser", url)),
         Err(error) => log_warn(format!("Could not open {url} in a browser: {error}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{OplogPage, OplogPageResponse, oplog_include};
+    use golem_common::model::oplog::OplogInclude;
+    use test_r::test;
+
+    /// A page of the live viewer (`agent oplog --show-claims --serve`) gives the claims of a
+    /// caller as a JSON object. An entry that the server gave without claims has none.
+    #[test]
+    fn a_viewer_page_gives_the_claims_of_a_caller_as_an_object() {
+        use crate::model::agent::oplog::test_support::{
+            CLAIMS, CLAIMS_POINTER, entry_of_a_signed_in_user,
+        };
+
+        // The handler answers with `poem::web::Json`, which writes the page with `serde_json`.
+        let page = |with_claims: bool| {
+            let body = serde_json::to_string(&OplogPage::Plain(OplogPageResponse {
+                entries: vec![entry_of_a_signed_in_user(with_claims)],
+                next: None,
+            }))
+            .unwrap();
+            serde_json::from_str::<serde_json::Value>(&body).unwrap()
+        };
+        let claims_pointer = format!("/entries/0{CLAIMS_POINTER}");
+
+        let shown = page(true);
+        let claims = shown.pointer(&claims_pointer).expect("the claims");
+        assert!(claims.is_object(), "{claims}");
+        assert_eq!(
+            claims,
+            &serde_json::from_str::<serde_json::Value>(CLAIMS).unwrap()
+        );
+        assert!(page(false).pointer(&claims_pointer).is_none());
+    }
+
+    #[test]
+    fn oplog_show_claims_asks_the_server_for_the_claims() {
+        assert_eq!(oplog_include(true), Some(OplogInclude::Claims));
+        assert_eq!(oplog_include(false), None);
     }
 }

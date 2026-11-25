@@ -565,8 +565,10 @@ mod tests {
         let application = Application::from_yaml_str(&template_source).unwrap();
 
         let expected_commands = [
-            ("moonbit", "debug", "agent-guest"),
-            ("moonbit", "release", "agent-guest"),
+            ("moonbit", "debug", "wasm", "debug", "agent-guest"),
+            ("moonbit", "release", "wasm", "release", "agent-guest"),
+            ("moonbit", "debug-gc", "wasm-gc", "debug", "agent-guest"),
+            ("moonbit", "release-gc", "wasm-gc", "release", "agent-guest"),
         ];
 
         let embed_command_count = application
@@ -584,7 +586,7 @@ mod tests {
             .count();
         assert_eq!(embed_command_count, expected_commands.len());
 
-        for (template_name, preset_name, world) in expected_commands {
+        for (template_name, preset_name, backend, profile, world) in expected_commands {
             let preset = &application.component_templates[template_name].presets[preset_name];
             let embed_commands = preset
                 .build
@@ -632,7 +634,7 @@ mod tests {
                     .unwrap();
                 assert_eq!(
                     rendered,
-                    format!("/app/_build/wasm/{preset_name}/build/demo/{package}")
+                    format!("/app/_build/{backend}/{profile}/build/demo/{package}")
                 );
             }
         }
@@ -683,7 +685,7 @@ mod tests {
             }
         }
 
-        // 1 component template x 2 presets x (embed + new)
-        assert_eq!(checked, 4);
+        // 1 component template x 4 presets (wasm and wasm-gc, debug and release) x (embed + new)
+        assert_eq!(checked, 8);
     }
 }

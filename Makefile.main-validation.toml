@@ -9,9 +9,13 @@ condition = { env_not_set = ["MAIN_VALIDATION_REPORT_DIR"] }
 value = "true"
 condition = { env_not_set = ["MAIN_VALIDATION_PARALLEL"] }
 
+[env.MAIN_VALIDATION_BUILD_JOBS]
+value = "32"
+condition = { env_not_set = ["MAIN_VALIDATION_BUILD_JOBS"] }
+
 [tasks.main-validation]
 description = "Validate the selected main source on a dedicated Linux executor"
-env = { GOLEM_CLI_TEST_BIN_PROFILE = "dev-release-ci", TEST_R_REPORT_OPTS = "--format ctrf --logfile ${MAIN_VALIDATION_REPORT_DIR}/ctrf.json --retry-failed 2", TEST_R_FLAKY_OPTS = "", MAIN_VALIDATION_RECOVERY_GROUP = "4" }
+env = { GOLEM_CLI_TEST_BIN_PROFILE = "dev-release-ci", TEST_R_COMMAND = "bun .github/main-validation/progress.ts test-r", TEST_R_REPORT_OPTS = "--format ctrf --logfile ${MAIN_VALIDATION_REPORT_DIR}/ctrf.json --retry-failed 2", TEST_R_FLAKY_OPTS = "", MAIN_VALIDATION_RECOVERY_GROUP = "4" }
 run_task = { name = ["main-validation-prepare", "main-validation-parallel", "main-validation-exclusive", "main-validation-result"] }
 
 [tasks.main-validation-parallel]
@@ -23,7 +27,7 @@ run_task = [
 
 [tasks.main-validation-prepare]
 private = true
-env = { MAIN_VALIDATION_TASKS = "wit main-validation-builtins main-validation-general-native unit-tests-and-checks build-cli-test-bins validate-sdk-scala validate-sdk-ts validate-sdk-effect main-validation-js-guests validate-sdk-moonbit main-validation-fixtures main-validation-executor-native" }
+env = { MAIN_VALIDATION_TASKS = "wit main-validation-builtins main-validation-general-native main-validation-unit-tests build-cli-test-bins prepare-sdk-scala prepare-sdk-ts prepare-sdk-effect main-validation-js-guests prepare-sdk-moonbit main-validation-fixtures main-validation-executor-native", CARGO_BUILD_JOBS = "${MAIN_VALIDATION_BUILD_JOBS}" }
 script_runner = "@duckscript"
 script = '''
 mkdir ${MAIN_VALIDATION_REPORT_DIR}
@@ -36,28 +40,104 @@ for endpoint in ${endpoints}
     end
 end
 rm ${MAIN_VALIDATION_REPORT_DIR}/service-build.status
-temporary = exec --fail-on-error python3 -c "import tempfile; print(tempfile.mkdtemp(prefix='golem-main-validation-'))"
+temporary = exec --fail-on-error mktemp -d
 temporary = trim ${temporary.stdout}
 writefile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt ${temporary}
-branches = array worker service recovery cli exclusive checks
+branches = array prepare worker service recovery cli root-checks source-checks rust-checks bash-checks language-checks privileged
 for branch in ${branches}
     rm ${MAIN_VALIDATION_REPORT_DIR}/${branch}.status
     mkdir ${temporary}/${branch}
 end
-# A runner without local metadata and bounded test retries must not fall back to Cargo.
-help = exec cargo-test-r run --help
-supports_metadata = contains ${help.stdout} --binaries-metadata
-if not ${supports_metadata}
-    trigger_error "Install cargo-test-r with local binaries metadata support before main validation"
+# Refuse an older runner rather than silently falling back to Cargo.
+help = exec --fail-on-error cargo-test-r run --help
+features = array --selection --events --deadline --no-fail-fast --expect-digest --binary-id
+for feature in ${features}
+    supported = contains ${help.stdout} ${feature}
+    if not ${supported}
+        trigger_error "Install cargo-test-r with the required Main validation features"
+    end
+end
+commands = array list snapshot verify exec inspect-events
+for command in ${commands}
+    help = exec --fail-on-error cargo-test-r ${command} --help
+    features = array --deadline --kill-grace
+    if eq ${command} list
+        features = array --deadline --kill-grace --cargo-metadata --expect-count --output
+    elif eq ${command} inspect-events
+        features = array --events --invocation-id --report-format
+    end
+    for feature in ${features}
+        supported = contains ${help.stdout} ${feature}
+        if not ${supported}
+            trigger_error "Install cargo-test-r with the required Main validation features"
+        end
+    end
 end
 tasks = split ${MAIN_VALIDATION_TASKS} " "
+failed = set 0
 for task in ${tasks}
-    if eq ${task} unit-tests-and-checks
-        set_env TEST_R_BUILD_OPTS "--binaries-metadata ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/general.json"
-        checks = exec --get-exit-code python3 .github/main-validation/progress.py run prepare ${task} -- cargo make --disable-check-for-updates --profile ci --skip-tasks test-component-middleware-unit-tests ${task}
-        writefile ${MAIN_VALIDATION_REPORT_DIR}/checks.status ${checks}
-    else
-        exec --fail-on-error python3 .github/main-validation/progress.py run prepare ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci ${task}
+    requirements = array wit
+    if eq ${task} wit
+        requirements = array
+    elif eq ${task} main-validation-general-native
+        requirements = array wit main-validation-builtins
+    elif eq ${task} main-validation-unit-tests
+        requirements = array main-validation-general-native
+    elif eq ${task} build-cli-test-bins
+        requirements = array wit main-validation-builtins
+    elif eq ${task} main-validation-js-guests
+        requirements = array main-validation-general-native prepare-sdk-ts prepare-sdk-effect
+    elif eq ${task} main-validation-fixtures
+        requirements = array build-cli-test-bins prepare-sdk-scala prepare-sdk-ts prepare-sdk-effect prepare-sdk-moonbit main-validation-builtins
+    elif eq ${task} main-validation-executor-native
+        requirements = array wit main-validation-builtins
+    end
+    admitted = set true
+    for requirement in ${requirements}
+        status = readfile ${MAIN_VALIDATION_REPORT_DIR}/prepare-${requirement}.status
+        if not eq ${status} 0
+            admitted = set false
+        end
+    end
+    code = set blocked
+    if ${admitted}
+        skip = set "^(wit|test-component-middleware-unit-tests)$"
+        if eq ${task} wit
+            skip = set "^test-component-middleware-unit-tests$"
+        end
+        code = exec --get-exit-code bun .github/main-validation/progress.ts run prepare ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci --skip-tasks ${skip} ${task}
+    end
+    writefile ${MAIN_VALIDATION_REPORT_DIR}/prepare-${task}.status ${code}
+    if not eq ${code} 0
+        failed = set 1
+    end
+end
+writefile ${MAIN_VALIDATION_REPORT_DIR}/prepare.status ${failed}
+'''
+
+[tasks.main-validation-unit-tests]
+private = true
+env = { TEST_R_BUILD_OPTS = "--binaries-metadata ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/general.json" }
+run_task = "unit-tests"
+
+# Admission reads only current-cycle producer results, never cached outputs.
+[tasks.main-validation-admit]
+private = true
+script_runner = "@duckscript"
+script = '''
+set_env MAIN_VALIDATION_ADMITTED true
+requirements = split ${MAIN_VALIDATION_REQUIRES} " "
+for requirement in ${requirements}
+    if not is_empty ${requirement}
+        path = set ${MAIN_VALIDATION_REPORT_DIR}/prepare-${requirement}.status
+        if is_path_exists ${path}
+            code = readfile ${path}
+            if not eq ${code} 0
+                set_env MAIN_VALIDATION_ADMITTED false
+            end
+        else
+            set_env MAIN_VALIDATION_ADMITTED false
+        end
     end
 end
 '''
@@ -104,17 +184,38 @@ run_task = "js-guest-tests"
 private = true
 script_runner = "@duckscript"
 script = '''
-rm ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
-rm ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json.manifest.json
+rm ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.digest
+rm ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.json
+rm ${MAIN_VALIDATION_REPORT_DIR}/executor-executables.sha256
 exec --fail-on-error cargo build --profile dev-ci --tests -p golem-worker-executor -p golem-worker-executor-tests -p golem-common -p golem-size-analysis
 metadata = exec --fail-on-error cargo nextest list --cargo-profile dev-ci --tests -p golem-worker-executor -p golem-worker-executor-tests -p golem-common -p golem-size-analysis --list-type binaries-only --message-format json
+assert_eq ${metadata.code} 0 "Executor metadata production failed: ${metadata.stderr}"
 echo ${metadata.stderr}
 writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-binaries.json ${metadata.stdout}
 temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
 cycle = basename ${temporary}
 snapshot = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/frozen-${cycle}
+mkdir ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation
 writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-snapshot-root.txt ${snapshot}
-exec --fail-on-error python3 .github/main-validation/freeze-binaries.py --metadata ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-binaries.json --destination ${snapshot} --output ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
+selection = exec cargo-test-r list --binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-binaries.json --deadline 10m --kill-grace 10s
+assert_eq ${selection.code} 0 "Executor selection failed: ${selection.stderr}"
+writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-selection.json ${selection.stdout}
+exec --fail-on-error cargo-test-r snapshot --selection ${MAIN_VALIDATION_REPORT_DIR}/executor-produced-selection.json --out ${snapshot} --deadline 10m --kill-grace 10s
+exec --fail-on-error chmod 0755 ${snapshot} ${snapshot}/bin
+digest = sha256sum ${snapshot}/selection.json
+exec --fail-on-error cargo-test-r verify --selection ${snapshot}/selection.json --expect-digest sha256:${digest} --deadline 10m --kill-grace 10s
+# Retain native evidence after the final join removes the copied executables.
+cp ${snapshot}/selection.json ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.json
+# Lima re-attests libraries in the guest, but must reuse these exact host bytes.
+binaries = glob_array ${snapshot}/bin/*
+checksums = set ""
+for binary in ${binaries}
+    checksum = exec --fail-on-error timeout --kill-after=10s 10m sha256sum -- ${binary}
+    assert_eq ${checksum.code} 0 "Executor transfer checksum failed: ${checksum.stderr}"
+    checksums = concat ${checksums} ${checksum.stdout}
+end
+writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-executables.sha256 ${checksums}
+writefile ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.digest sha256:${digest}
 '''
 
 [tasks.main-validation-service-native]
@@ -141,7 +242,7 @@ set_env GOLEM_TS_PRESET quick
 set_env CARGO_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation-fixture-target
 root = pwd
 set_env GOLEM_FIXTURE_CACHE ${root}/.validation-cache/fixtures-v1/completed
-exec --fail-on-error python3 .github/main-validation/fixture-cache.py begin
+exec --fail-on-error bun .github/main-validation/fixture-cache.ts begin
 cd sdks/moonbit/golem_sdk_tools
 exec --fail-on-error moon update
 cd ${root}/test-components/tool-streaming-moonbit
@@ -159,23 +260,31 @@ different = exec --get-exit-code cmp --silent test-components/it_agent_update_v3
 if not eq ${different} 1
     trigger_error "Update v3/v4 fixtures must exist and have different contents"
 end
-exec --fail-on-error python3 .github/main-validation/fixture-cache.py publish
+exec --fail-on-error bun .github/main-validation/fixture-cache.ts publish
 '''
 
 # These wrappers collect ordinary failures and return normally so cargo-make joins
 # every fork. The final task rejects failures and missing completion records.
 [tasks.main-validation-workers]
 private = true
-env = { MAIN_VALIDATION_TASKS = "misc group1 group2 group3 group4 group5 tool-streaming", GOLEM_TEST_PORT_OFFSET = "0" }
+env = { MAIN_VALIDATION_TASKS = "misc group1 group2 group3 group4 group5 tool-streaming", MAIN_VALIDATION_REQUIRES = "main-validation-executor-native main-validation-fixtures", GOLEM_TEST_PORT_OFFSET = "0" }
 script_runner = "@duckscript"
 script = '''
+cm_run_task main-validation-admit
+admitted = get_env MAIN_VALIDATION_ADMITTED
+if not ${admitted}
+    writefile ${MAIN_VALIDATION_REPORT_DIR}/worker.status blocked
+    exit
+end
 temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
 set_env TMPDIR ${temporary}/worker
-set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json"
+snapshot = readfile ${MAIN_VALIDATION_REPORT_DIR}/executor-snapshot-root.txt
+digest = readfile ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.digest
+set_env TEST_R_BUILD_OPTS "--selection ${snapshot}/selection.json --expect-digest ${digest}"
 failed = set 0
 groups = split ${MAIN_VALIDATION_TASKS} " "
 for group in ${groups}
-    code = exec --get-exit-code python3 .github/main-validation/progress.py run worker ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|ensure-builtin-artifacts)$" worker-executor-tests-${group}
+    code = exec --get-exit-code bun .github/main-validation/progress.ts run worker ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|ensure-builtin-artifacts)$" worker-executor-tests-${group}
     writefile ${MAIN_VALIDATION_REPORT_DIR}/worker-${group}.status ${code}
     if not eq ${code} 0
         failed = set 1
@@ -186,11 +295,17 @@ writefile ${MAIN_VALIDATION_REPORT_DIR}/worker.status ${failed}
 
 [tasks.main-validation-services]
 private = true
-env = { MAIN_VALIDATION_TASKS = "main-validation-service-native" }
+env = { MAIN_VALIDATION_TASKS = "main-validation-service-native", MAIN_VALIDATION_REQUIRES = "wit main-validation-builtins", CARGO_BUILD_JOBS = "20" }
 script_runner = "@duckscript"
 script = '''
-code = exec --get-exit-code python3 .github/main-validation/progress.py run service-build main-validation-service-native -- cargo make --disable-check-for-updates --allow-private --profile ci main-validation-service-native
+cm_run_task main-validation-admit
+admitted = get_env MAIN_VALIDATION_ADMITTED
+code = set blocked
+if ${admitted}
+    code = exec --get-exit-code bun .github/main-validation/progress.ts run service-build main-validation-service-native -- cargo make --disable-check-for-updates --allow-private --profile ci main-validation-service-native
+end
 writefile ${MAIN_VALIDATION_REPORT_DIR}/service-build.status ${code}
+writefile ${MAIN_VALIDATION_REPORT_DIR}/prepare-main-validation-service-native.status ${code}
 if eq ${code} 0
     cm_run_task main-validation-service-and-cli
 else
@@ -225,9 +340,15 @@ end
 
 [tasks.main-validation-service-tests]
 private = true
-env = { MAIN_VALIDATION_TASKS = "1 2 3 4 5 6-coordinated 6-rest 7 8 9 10 11 12 13", GOLEM_TEST_PORT_OFFSET = "10000", GOLEM_TEST_BIN_PROFILE = "dev-ci" }
+env = { MAIN_VALIDATION_TASKS = "1 2 3 4 5 6-coordinated 6-rest 7 8 9 10 11 12 13", MAIN_VALIDATION_REQUIRES = "main-validation-fixtures", GOLEM_TEST_PORT_OFFSET = "10000", GOLEM_TEST_BIN_PROFILE = "dev-ci" }
 script_runner = "@duckscript"
 script = '''
+cm_run_task main-validation-admit
+admitted = get_env MAIN_VALIDATION_ADMITTED
+if not ${admitted}
+    writefile ${MAIN_VALIDATION_REPORT_DIR}/service.status blocked
+    exit
+end
 temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
 set_env TMPDIR ${temporary}/service
 set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/service-binaries.json"
@@ -235,7 +356,7 @@ failed = set 0
 groups = split ${MAIN_VALIDATION_TASKS} " "
 for group in ${groups}
     if not eq ${group} ${MAIN_VALIDATION_RECOVERY_GROUP}
-        code = exec --get-exit-code python3 .github/main-validation/progress.py run service ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|ensure-builtin-artifacts)$" integration-tests-group${group}
+        code = exec --get-exit-code bun .github/main-validation/progress.ts run service ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|ensure-builtin-artifacts)$" integration-tests-group${group}
         writefile ${MAIN_VALIDATION_REPORT_DIR}/service-${group}.status ${code}
         if not eq ${code} 0
             failed = set 1
@@ -248,29 +369,41 @@ writefile ${MAIN_VALIDATION_REPORT_DIR}/service.status ${failed}
 [tasks.main-validation-recovery-tests]
 private = true
 dependencies = ["main-validation-workers-complete"]
-env = { GOLEM_TEST_PORT_OFFSET = "23000", GOLEM_TEST_BIN_PROFILE = "dev-ci" }
+env = { MAIN_VALIDATION_REQUIRES = "main-validation-fixtures", GOLEM_TEST_PORT_OFFSET = "23000", GOLEM_TEST_BIN_PROFILE = "dev-ci" }
 script_runner = "@duckscript"
 script = '''
+cm_run_task main-validation-admit
+admitted = get_env MAIN_VALIDATION_ADMITTED
+if not ${admitted}
+    writefile ${MAIN_VALIDATION_REPORT_DIR}/recovery.status blocked
+    exit
+end
 temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
 set_env TMPDIR ${temporary}/recovery
 set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/service-binaries.json"
-code = exec --get-exit-code python3 .github/main-validation/progress.py run service ${MAIN_VALIDATION_RECOVERY_GROUP} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|ensure-builtin-artifacts)$" integration-tests-group${MAIN_VALIDATION_RECOVERY_GROUP}
+code = exec --get-exit-code bun .github/main-validation/progress.ts run service ${MAIN_VALIDATION_RECOVERY_GROUP} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|ensure-builtin-artifacts)$" integration-tests-group${MAIN_VALIDATION_RECOVERY_GROUP}
 writefile ${MAIN_VALIDATION_REPORT_DIR}/service-${MAIN_VALIDATION_RECOVERY_GROUP}.status ${code}
 writefile ${MAIN_VALIDATION_REPORT_DIR}/recovery.status ${code}
 '''
 
 [tasks.main-validation-cli-tests]
 private = true
-env = { MAIN_VALIDATION_TASKS = "agents agents-guest-bridge agents-guest-bridge-sources agents-streaming bridge bridge-rust deploy deploy-runtime core", GOLEM_TEST_PORT_OFFSET = "20000" }
+env = { MAIN_VALIDATION_TASKS = "agents agents-guest-bridge agents-guest-bridge-sources agents-streaming bridge bridge-rust deploy deploy-runtime core", MAIN_VALIDATION_REQUIRES = "main-validation-fixtures build-cli-test-bins prepare-sdk-ts prepare-sdk-effect prepare-sdk-scala prepare-sdk-moonbit", GOLEM_TEST_PORT_OFFSET = "20000" }
 script_runner = "@duckscript"
 script = '''
+cm_run_task main-validation-admit
+admitted = get_env MAIN_VALIDATION_ADMITTED
+if not ${admitted}
+    writefile ${MAIN_VALIDATION_REPORT_DIR}/cli.status blocked
+    exit
+end
 temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
 set_env TMPDIR ${temporary}/cli
 set_env TEST_R_BUILD_OPTS "--binaries-metadata ${MAIN_VALIDATION_REPORT_DIR}/service-binaries.json"
 failed = set 0
 groups = split ${MAIN_VALIDATION_TASKS} " "
 for group in ${groups}
-    code = exec --get-exit-code python3 .github/main-validation/progress.py run cli ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|build-sdk-effect|ensure-builtin-artifacts)$" cli-integration-tests-${group}
+    code = exec --get-exit-code bun .github/main-validation/progress.ts run cli ${group} -- cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|build-sdk-ts|build-sdk-effect|ensure-builtin-artifacts)$" cli-integration-tests-${group}
     writefile ${MAIN_VALIDATION_REPORT_DIR}/cli-${group}.status ${code}
     if not eq ${code} 0
         failed = set 1
@@ -281,30 +414,99 @@ writefile ${MAIN_VALIDATION_REPORT_DIR}/cli.status ${failed}
 
 [tasks.main-validation-exclusive]
 private = true
-env = { MAIN_VALIDATION_TASKS = "dev-tools-tests check-shared-crates-versioning check-configs check test-component-middleware-unit-tests validate-sdk-rust-check validate-sdk-rust-tool validate-sdk-rust-ui validate-sdk-go validate-skill-harness main-validation-schema main-validation-bash main-validation-embedded main-validation-scala main-validation-xfs main-validation-docker" }
+env = { MAIN_VALIDATION_TASKS = "check-configs diff-openapi check-docs-openapi check-docs-skills check-reflection-conformance check-ai-contract check-builtin-artifacts check-clippy check-clippy-javascript-tool-process-bridge main-validation-schema main-validation-embedded check-rustfmt check-rustfmt-dev-tools check-rustfmt-javascript-tool-process-bridge check-wit test-javascript-tool-process-backend check-shared-crates-versioning validate-sdk-rust-check validate-sdk-rust-tool validate-sdk-rust-ui test-component-middleware-unit-tests main-validation-bash dev-tools-tests check-clippy-dev-tools validate-sdk-go validate-skill-harness validate-sdk-scala validate-sdk-ts validate-sdk-effect validate-sdk-moonbit main-validation-scala main-validation-latency main-validation-xfs main-validation-docker" }
+run_task = { name = ["main-validation-final-parallel", "main-validation-privileged"] }
+
+[tasks.main-validation-final-parallel]
+private = true
+run_task = [
+    { name = ["main-validation-root-checks", "main-validation-source-checks", "main-validation-rust-checks", "main-validation-bash-checks", "main-validation-language-checks"], fork = true, parallel = true, condition = { env_true = ["MAIN_VALIDATION_PARALLEL"] } },
+    { name = ["main-validation-root-checks", "main-validation-source-checks", "main-validation-rust-checks", "main-validation-bash-checks", "main-validation-language-checks"], condition = { env_false = ["MAIN_VALIDATION_PARALLEL"] } },
+]
+
+[tasks.main-validation-root-checks]
+private = true
+env = { MAIN_VALIDATION_TASKS = "check-configs diff-openapi check-docs-openapi check-docs-skills check-reflection-conformance check-ai-contract check-builtin-artifacts check-clippy check-clippy-javascript-tool-process-bridge main-validation-schema main-validation-embedded", MAIN_VALIDATION_CHECK_LANE = "root-checks", MAIN_VALIDATION_REQUIRES = "main-validation-general-native main-validation-builtins" }
+run_task = "main-validation-check-tasks"
+
+[tasks.main-validation-source-checks]
+private = true
+env = { MAIN_VALIDATION_TASKS = "check-rustfmt check-rustfmt-dev-tools check-rustfmt-javascript-tool-process-bridge check-wit test-javascript-tool-process-backend check-shared-crates-versioning", MAIN_VALIDATION_CHECK_LANE = "source-checks", MAIN_VALIDATION_REQUIRES = "" }
+run_task = "main-validation-check-tasks"
+
+[tasks.main-validation-rust-checks]
+private = true
+env = { MAIN_VALIDATION_TASKS = "validate-sdk-rust-check validate-sdk-rust-tool validate-sdk-rust-ui test-component-middleware-unit-tests", MAIN_VALIDATION_CHECK_LANE = "rust-checks", MAIN_VALIDATION_REQUIRES = "wit" }
+run_task = "main-validation-check-tasks"
+
+[tasks.main-validation-bash-checks]
+private = true
+env = { MAIN_VALIDATION_TASKS = "main-validation-bash", MAIN_VALIDATION_CHECK_LANE = "bash-checks", MAIN_VALIDATION_REQUIRES = "wit" }
+run_task = "main-validation-check-tasks"
+
+[tasks.main-validation-language-checks]
+private = true
+env = { MAIN_VALIDATION_TASKS = "dev-tools-tests check-clippy-dev-tools validate-sdk-go validate-skill-harness validate-sdk-scala validate-sdk-ts validate-sdk-effect validate-sdk-moonbit main-validation-scala", MAIN_VALIDATION_CHECK_LANE = "language-checks", MAIN_VALIDATION_REQUIRES = "" }
+run_task = "main-validation-check-tasks"
+
+[tasks.main-validation-privileged]
+private = true
+env = { MAIN_VALIDATION_TASKS = "main-validation-latency main-validation-xfs main-validation-docker", MAIN_VALIDATION_CHECK_LANE = "privileged", MAIN_VALIDATION_REQUIRES = "" }
+run_task = "main-validation-check-tasks"
+
+[tasks.main-validation-latency]
+private = true
+script_runner = "@duckscript"
+script = '''
+snapshot = readfile ${MAIN_VALIDATION_REPORT_DIR}/executor-snapshot-root.txt
+digest = readfile ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.digest
+set_env TEST_R_BUILD_OPTS "--selection ${snapshot}/selection.json --expect-digest ${digest}"
+exec --fail-on-error cargo make --disable-check-for-updates --profile ci --skip-tasks "^(wit|ensure-builtin-artifacts)$" worker-executor-tests-latency
+'''
+
+[tasks.main-validation-check-tasks]
+private = true
+env = { CARGO_BUILD_JOBS = "4", RUST_TEST_THREADS = "4", BASH_CONFORMANCE_JOBS = "4" }
 script_runner = "@duckscript"
 script = '''
 failed = set 0
 temporary = readfile ${MAIN_VALIDATION_REPORT_DIR}/temporary-root.txt
-set_env TMPDIR ${temporary}/exclusive
+set_env TMPDIR ${temporary}/${MAIN_VALIDATION_CHECK_LANE}
+lane_requirements = get_env MAIN_VALIDATION_REQUIRES
 tasks = split ${MAIN_VALIDATION_TASKS} " "
 for task in ${tasks}
-    bounded = contains " check main-validation-bash " " ${task} "
-    if ${bounded}
-        target = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
-        if eq ${task} main-validation-bash
-            target = set ${target}/main-validation-bash-target
+    set_env MAIN_VALIDATION_REQUIRES ${lane_requirements}
+    if starts_with ${task} validate-sdk-
+        if contains " validate-sdk-ts validate-sdk-effect validate-sdk-scala validate-sdk-moonbit " " ${task} "
+            producer = replace ${task} validate-sdk- prepare-sdk-
+            set_env MAIN_VALIDATION_REQUIRES ${producer}
         end
-        code = exec --get-exit-code python3 .github/main-validation/progress.py run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci --skip-tasks "^wit$" --env CARGO_TARGET_DIR=${target} --env CARGO_MAKE_CRATE_TARGET_DIRECTORY=${target} --env CARGO_BUILD_JOBS=4 --env RUST_TEST_THREADS=4 --env BASH_CONFORMANCE_JOBS=4 ${task}
-    else
-        code = exec --get-exit-code python3 .github/main-validation/progress.py run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci ${task}
+    elif eq ${task} main-validation-scala
+        set_env MAIN_VALIDATION_REQUIRES "prepare-sdk-scala prepare-sdk-ts build-cli-test-bins main-validation-service-native"
+    elif eq ${task} main-validation-latency
+        set_env MAIN_VALIDATION_REQUIRES "main-validation-executor-native main-validation-fixtures"
+    elif eq ${task} main-validation-xfs
+        set_env MAIN_VALIDATION_REQUIRES "main-validation-executor-native main-validation-fixtures"
+    elif eq ${task} main-validation-docker
+        set_env MAIN_VALIDATION_REQUIRES "main-validation-builtins"
+    end
+    cm_run_task main-validation-admit
+    admitted = get_env MAIN_VALIDATION_ADMITTED
+    code = set blocked
+    if ${admitted}
+        if eq ${task} main-validation-bash
+            target = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation-bash-target
+            code = exec --get-exit-code bun .github/main-validation/progress.ts run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci --skip-tasks "^(wit|prepare-sdk-.*)$" --env CARGO_TARGET_DIR=${target} --env CARGO_MAKE_CRATE_TARGET_DIRECTORY=${target} ${task}
+        else
+            code = exec --get-exit-code bun .github/main-validation/progress.ts run exclusive ${task} -- cargo make --disable-check-for-updates --allow-private --profile ci --skip-tasks "^(wit|prepare-sdk-.*)$" ${task}
+        end
     end
     writefile ${MAIN_VALIDATION_REPORT_DIR}/${task}.status ${code}
     if not eq ${code} 0
         failed = set 1
     end
 end
-writefile ${MAIN_VALIDATION_REPORT_DIR}/exclusive.status ${failed}
+writefile ${MAIN_VALIDATION_REPORT_DIR}/${MAIN_VALIDATION_CHECK_LANE}.status ${failed}
 '''
 
 [tasks.main-validation-result]
@@ -312,7 +514,7 @@ private = true
 script_runner = "@duckscript"
 script = '''
 failed = set false
-branches = array worker service recovery cli exclusive checks
+branches = array prepare worker service recovery cli root-checks source-checks rust-checks bash-checks language-checks privileged
 for branch in ${branches}
     file = set ${MAIN_VALIDATION_REPORT_DIR}/${branch}.status
     if is_path_exists ${file}
@@ -341,31 +543,100 @@ end
 private = true
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error node --test .github/scripts/release-channel.test.mjs
-exec --fail-on-error node --test sdks/memory-contract/check.test.mjs
-exec --fail-on-error cargo test --locked --manifest-path .github/scripts/release-tooling-tests/Cargo.toml
-exec --fail-on-error cargo build --target wasm32-wasip2 -p golem-schema --no-default-features --features guest
-exec --fail-on-error cargo test -p golem-schema --no-default-features --features guest --test owned_typed_wit -- --nocapture --report-time
-exec --fail-on-error cargo test -p golem-schema --no-default-features --features guest --test feature_matrix -- --nocapture --report-time
-exec --fail-on-error cargo test -p golem-schema --test feature_matrix -- --nocapture --report-time
-exec --fail-on-error cargo test -p golem-schema-derive --test compile_fail -- --nocapture --report-time
-exec --fail-on-error cargo build -p golem-client
+failed = exec --get-exit-code node --test .github/scripts/release-channel.test.mjs
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Schema and release tooling validation failed"
+end
+code = exec --get-exit-code node --test sdks/memory-contract/check.test.mjs
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Schema and release tooling validation failed"
+end
+code = exec --get-exit-code cargo test --locked --manifest-path .github/scripts/release-tooling-tests/Cargo.toml
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Schema and release tooling validation failed"
+end
+code = exec --get-exit-code cargo build --target wasm32-wasip2 -p golem-schema --no-default-features --features guest
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Schema and release tooling validation failed"
+end
+code = exec --get-exit-code cargo test -p golem-schema --no-default-features --features guest --test owned_typed_wit -- --nocapture --report-time
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Schema and release tooling validation failed"
+end
+code = exec --get-exit-code cargo test -p golem-schema --no-default-features --features guest --test feature_matrix -- --nocapture --report-time
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Schema and release tooling validation failed"
+end
+code = exec --get-exit-code cargo test -p golem-schema --test feature_matrix -- --nocapture --report-time
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Schema and release tooling validation failed"
+end
+code = exec --get-exit-code cargo test -p golem-schema-derive --test compile_fail -- --nocapture --report-time
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Schema and release tooling validation failed"
+end
+code = exec --get-exit-code cargo test --locked -p golem-async-trait --doc
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Schema and release tooling validation failed"
+end
+code = exec --get-exit-code cargo build -p golem-client
+failed = calc ${failed} + ${code}
+assert_eq ${failed} 0 "Schema and release tooling validation failed"
 '''
 
 [tasks.main-validation-bash]
 private = true
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error cargo fmt --manifest-path builtin-tools/bash/Cargo.toml --all -- --check
-exec --fail-on-error cargo test --manifest-path builtin-tools/bash/Cargo.toml --workspace --lib --all-features --locked
-exec --fail-on-error cargo test --manifest-path builtin-tools/bash/Cargo.toml -p bash-shell --test execution --all-features --locked
-exec --fail-on-error cargo check --manifest-path builtin-tools/bash/Cargo.toml --workspace --all-targets --all-features --locked --target wasm32-wasip2
-exec --fail-on-error cargo clippy --manifest-path builtin-tools/bash/Cargo.toml --workspace --all-targets --all-features --locked --target wasm32-wasip2 -- -D warnings
-exec --fail-on-error cargo deny --manifest-path builtin-tools/bash/Cargo.toml check sources
+failed = exec --get-exit-code cargo test --manifest-path builtin-tools/bash/Cargo.toml --workspace --lib --all-features --locked
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Bash validation failed"
+end
+code = exec --get-exit-code cargo test --manifest-path builtin-tools/bash/Cargo.toml -p bash-shell --test execution --all-features --locked
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Bash validation failed"
+end
+code = exec --get-exit-code cargo check --manifest-path builtin-tools/bash/Cargo.toml --workspace --all-targets --all-features --locked --target wasm32-wasip2
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Bash validation failed"
+end
+code = exec --get-exit-code cargo clippy --manifest-path builtin-tools/bash/Cargo.toml --workspace --all-targets --all-features --locked --target wasm32-wasip2 -- -D warnings
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Bash validation failed"
+end
+code = exec --get-exit-code cargo deny --manifest-path builtin-tools/bash/Cargo.toml check sources
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Bash validation failed"
+end
 set_env CARGO_TARGET_WASM32_WASIP2_RUNNER "wasmtime run -Sp3 -Shttp -Wcomponent-model-async=y -Wmax-wasm-stack=1048576 -Wasync-stack-size=2621440 --dir /tmp::/tmp"
-exec --fail-on-error cargo test --manifest-path builtin-tools/bash/Cargo.toml --locked --target wasm32-wasip2 -p bash-shell -p whttp --lib
-cm_run_task test-builtin-bash-pipelines
-cm_run_task test-builtin-bash-sweep
+code = exec --get-exit-code cargo test --manifest-path builtin-tools/bash/Cargo.toml --locked --target wasm32-wasip2 -p bash-shell -p whttp --lib
+failed = calc ${failed} + ${code}
+if not eq ${CI} true
+    assert_eq ${failed} 0 "Bash validation failed"
+end
+checks = array test-builtin-bash-pipelines test-builtin-bash-sweep
+for check in ${checks}
+    code = exec --get-exit-code cargo make --disable-check-for-updates --allow-private --profile ci ${check}
+    failed = calc ${failed} + ${code}
+    if not eq ${CI} true
+        assert_eq ${failed} 0 "Bash validation failed"
+    end
+end
+code = exec --get-exit-code cargo fmt --manifest-path builtin-tools/bash/Cargo.toml --all -- --check
+failed = calc ${failed} + ${code}
+assert_eq ${failed} 0 "Bash validation failed"
 '''
 
 [tasks.main-validation-embedded]
@@ -401,18 +672,21 @@ exec --fail-on-error sbt -batch "++3.8.2; integrationTests/test"
 private = true
 script_runner = "@duckscript"
 script = '''
-exec --fail-on-error python3 .github/main-validation/freeze-binaries.py --verify ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json
+snapshot = readfile ${MAIN_VALIDATION_REPORT_DIR}/executor-snapshot-root.txt
+digest = readfile ${MAIN_VALIDATION_REPORT_DIR}/executor-selection.digest
+exec --fail-on-error cargo-test-r verify --selection ${snapshot}/selection.json --expect-digest ${digest} --deadline 10m --kill-grace 10s
 exec --fail-on-error integration-tests/scripts/managed-filesystem/run-loopback-xfs.sh --self-test-initial-file-wasm
-metadata = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/xfs-binaries.json
 runner = set ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/main-validation/cargo-test-r
-cp ${MAIN_VALIDATION_REPORT_DIR}/executor-binaries.json ${metadata}
 installed_runner = exec --fail-on-error which cargo-test-r
+assert_eq ${installed_runner.code} 0 "cargo-test-r is required for XFS reuse"
 installed_runner = trim ${installed_runner.stdout}
 cp ${installed_runner} ${runner}
 set_env GOLEM_MANAGED_XFS_REUSE_TEST_BINARIES 1
 set_env GOLEM_MANAGED_XFS_TARGET_DIR ${CARGO_MAKE_CRATE_TARGET_DIRECTORY}
 set_env GOLEM_MANAGED_XFS_CARGO_TEST_R ${runner}
-set_env GOLEM_MANAGED_XFS_BINARIES_METADATA ${metadata}
+set_env GOLEM_MANAGED_XFS_SELECTION ${snapshot}/selection.json
+set_env GOLEM_MANAGED_XFS_SELECTION_DIGEST ${digest}
+set_env GOLEM_MANAGED_XFS_EXECUTABLE_CHECKSUMS ${MAIN_VALIDATION_REPORT_DIR}/executor-executables.sha256
 code = exec --get-exit-code integration-tests/scripts/managed-filesystem/run-lima.sh
 cleanup = exec --get-exit-code limactl delete --force golem-managed-xfs-v1
 if not eq ${code} 0
@@ -437,16 +711,14 @@ env = { RUST_MIN_STACK = "33554432" }
 script_runner = "@duckscript"
 script = '''
 mkdir ${MAIN_VALIDATION_REPORT_DIR}
-build = exec --fail-on-error cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib --no-run --message-format=json-render-diagnostics
+build = exec cargo test --locked -j 4 --profile dev-ci -p golem-worker-executor --features test-utils --lib --no-run --message-format=json-render-diagnostics
+assert_eq ${build.code} 0 "Native APFS compilation failed: ${build.stderr}"
 writefile ${MAIN_VALIDATION_REPORT_DIR}/apfs-cargo-messages.jsonl ${build.stdout}
-exec --fail-on-error integration-tests/scripts/managed-filesystem/test-select-cargo-test-executables.py
-selection = exec --fail-on-error python3 integration-tests/scripts/managed-filesystem/select-cargo-test-executables.py ${MAIN_VALIDATION_REPORT_DIR}/apfs-cargo-messages.jsonl ${CARGO_MAKE_WORKING_DIRECTORY} lib
-line = trim ${selection.stdout}
-fields = split ${line} "\t"
-kind = array_get ${fields} 0
-if not eq ${kind} lib
-    trigger_error "Expected exactly one native APFS library executable"
-end
-executable = array_get ${fields} 1
+metadata = exec cargo metadata --locked --no-deps --format-version 1
+assert_eq ${metadata.code} 0 "Native APFS metadata production failed: ${metadata.stderr}"
+writefile ${MAIN_VALIDATION_REPORT_DIR}/apfs-cargo-metadata.json ${metadata.stdout}
+selection = exec cargo-test-r list --cargo-messages ${MAIN_VALIDATION_REPORT_DIR}/apfs-cargo-messages.jsonl --cargo-metadata ${MAIN_VALIDATION_REPORT_DIR}/apfs-cargo-metadata.json --package golem-worker-executor --binary-id golem-worker-executor --expect-count 1 --output executable-path --deadline 10m --kill-grace 10s
+assert_eq ${selection.code} 0 "Native APFS selection failed: ${selection.stderr}"
+executable = trim ${selection.stdout}
 exec --fail-on-error bash integration-tests/scripts/apfs/run-native-tests.sh ${executable} :tag:native_apfs --include-ignored --test-threads 1 --report-time --format ctrf --logfile ${MAIN_VALIDATION_REPORT_DIR}/ctrf-apfs.json
 '''
