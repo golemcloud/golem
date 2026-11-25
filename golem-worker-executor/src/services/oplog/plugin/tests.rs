@@ -1970,3 +1970,39 @@ async fn direct_checkpoint_commits_are_returned_even_after_cache_pruning() {
     );
     assert!(oplog.commit(CommitLevel::Always).await.unwrap().is_empty());
 }
+
+/// The forwarding and the rate-limited services give the retention of the service that they wrap.
+/// A forward that gives `FULL` puts the start back at 1 on each reload through that wrapper.
+#[test]
+async fn the_forwarding_and_the_rate_limited_services_give_the_retention_of_the_inner_service() {
+    use crate::services::oplog::rate_limited::RateLimitedOplogService;
+    use crate::services::oplog::retention::test_oplog::{RetainedOplog, at};
+    use crate::services::resource_limits::ResourceLimitsDisabled;
+
+    let oplog = RetainedOplog::new().await;
+    oplog.advance(4).await;
+    let forwarding: Arc<dyn OplogService> = Arc::new(ForwardingOplogService::new(
+        oplog.service.clone(),
+        Arc::new(RecordingOplogProcessorPlugin::new()),
+        Arc::new(FakeComponentService::with_one_oplog_processor_plugin(
+            EnvironmentPluginGrantId::new(),
+        )),
+        100,
+        std::time::Duration::from_secs(3600),
+    ));
+    let rate_limited: Arc<dyn OplogService> = Arc::new(RateLimitedOplogService::new(
+        oplog.service.clone(),
+        Arc::new(ResourceLimitsDisabled),
+    ));
+    let retentions = futures::future::join_all([forwarding, rate_limited].map(|service| {
+        let owned_agent_id = oplog.owned_agent_id.clone();
+        async move {
+            service
+                .retention(&owned_agent_id, AgentMode::Durable)
+                .await
+                .map_err(|error| error.to_string())
+        }
+    }))
+    .await;
+    assert_eq!(retentions, vec![Ok(at(4)), Ok(at(4))]);
+}
