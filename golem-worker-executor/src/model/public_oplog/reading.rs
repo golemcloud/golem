@@ -672,7 +672,8 @@ pub fn oplog_range_allowance(
 /// take it past its limit, as the scan budget of a search can.
 /// When the allowance runs out before the end of the range, the page reports `exhausted`; a page
 /// that reaches the end of the range is complete, also when it spent the allowance. A cursor
-/// continues the range where the page stopped; it must be within the range.
+/// continues the range where the page stopped; it must be within the range. The `last_index` of
+/// the page is the last index of the oplog, not of the range.
 #[allow(clippy::too_many_arguments)]
 pub async fn get_public_oplog_range_page(
     components: Arc<dyn ComponentService>,

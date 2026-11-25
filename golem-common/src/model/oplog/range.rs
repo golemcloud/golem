@@ -178,13 +178,13 @@ impl OplogRange {
         usize::try_from(limit.min(in_range)).unwrap_or(usize::MAX)
     }
 
-    /// The part of the range that a page of at most `count` entries reads in an oplog whose first
-    /// entry is at `oplog_first`: from the first index of the range to the last entry of the
-    /// page, as [`Self::page_count`] counts it. A page reads at least one entry, so a `count` of 0
-    /// gives the first index only. In a range without an end, a page that reaches index
-    /// `u64::MAX`, or whose end overflows, has no end either, so that a page to the end of such a
-    /// range has one value. When the first index is after the end of the range, the range has no
-    /// page in the oplog, and the result is `None`.
+    /// The part of the range that a page of at most `count` entries reads, in an oplog whose first
+    /// entry is at `oplog_first`. The page starts at the first index of the range. It ends at the
+    /// last entry of the page, as [`Self::page_count`] counts it. A page reads at least one entry,
+    /// so a `count` of 0 gives the first index only. A range without an end can have a page that
+    /// reaches index `u64::MAX`, or a page whose end overflows. Such a page has no end either, so
+    /// a page to the end of such a range has one value. When the first index is after the end of
+    /// the range, the range has no page in the oplog, and the result is `None`.
     pub fn page_in(&self, oplog_first: OplogIndex, count: u64) -> Option<Self> {
         let start = self.first_index_in(oplog_first);
         if self.end.is_some_and(|end| end < start) {

@@ -1966,11 +1966,14 @@ pub mod worker {
             #[arg(long, conflicts_with = "obfuscate")]
             show_claims: bool,
             /// Export the entries to FILE as JSON Lines: one `agent.oplog` document on each line,
-            /// in index order, the same documents that `--format json` prints. The export reads
-            /// the oplog one page at a time to the end of the range, and writes each page before
-            /// it reads the next page. So the export works for an oplog of any size. The export
-            /// writes each entry in full, and reads in full the entries that oplog pages omit for
-            /// their size. If a read fails, the export fails and does not write FILE.
+            /// in index order, the same documents that `--format json` prints. The export needs
+            /// the format `jsonl`: pass `--format jsonl`, or use a default format of `jsonl`. The
+            /// export reads the oplog one page at a time to the end of the range, and writes each
+            /// page before it reads the next page. The scan budget of the server does not end the
+            /// export. So the export works for an oplog of any size. The export writes each entry
+            /// in full, and reads in full the entries that oplog pages omit for their size. If a
+            /// read fails, or the agent becomes another incarnation during the export, the export
+            /// fails and does not write FILE.
             #[arg(
                 long,
                 value_name = "FILE",

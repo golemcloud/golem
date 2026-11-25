@@ -103,7 +103,8 @@ pub struct GetOplogResponse {
     pub next: Option<OplogCursor>,
     pub first_index_in_chunk: u64,
     pub last_index: u64,
-    // The scan accounting of a range read, which names `to`; absent for other reads.
+    // The scan accounting of a range read, which names `to` and no `query`; absent for other
+    // reads.
     pub scan: Option<OplogScan>,
 }
 

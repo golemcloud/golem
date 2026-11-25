@@ -191,13 +191,13 @@ Each invocation entry shows its caller in three lines: `original caller:` is the
 
 ### Exporting the oplog to a file
 
-The `--output` parameter exports the oplog to a file as [JSON Lines](https://jsonlines.org/): one `agent.oplog` document per line, in index order, as `--format json` prints them. The export needs `--format jsonl`, and refuses the other formats:
+The `--output` parameter exports the oplog to a file as [JSON Lines](https://jsonlines.org/): one `agent.oplog` document per line, in index order, as `--format json` prints them. The export needs the format `jsonl`, from `--format jsonl` or from a default format of `jsonl`, and refuses the other formats:
 
 ```shell copy
 golem agent oplog 'CounterAgent("my-counter")' --format jsonl --output oplog.jsonl
 ```
 
-The export reads the oplog one page at a time, and writes each page before it reads the next page. So the export works for an oplog of any size. The export writes each entry in full, and reads in full the entries that oplog pages omit for their size. If a read fails, the export fails and does not write the file. `--from`, `--to` and `--query` select the entries that the export writes.
+The export reads the oplog one page at a time, and writes each page before it reads the next page. The scan budget of the server does not end the export. So the export works for an oplog of any size. The export writes each entry in full, and reads in full the entries that oplog pages omit for their size. If a read fails, or the agent becomes another incarnation during the export, the export fails and does not write the file. `--from`, `--to` and `--query` select the entries that the export writes.
 
 ### Viewing the oplog in a browser
 

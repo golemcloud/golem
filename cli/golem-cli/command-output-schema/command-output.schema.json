@@ -3288,7 +3288,7 @@
     },
     "agent.oplog-page": {
       "type": "object",
-      "description": "One page of an agent's oplog, emitted by `golem agent oplog --page`. Each entry is the `agent.oplog` document that `golem agent oplog` streams for it. A page can be empty and still have a cursor, when the server's scan budget ended a search before a match.",
+      "description": "One page of an agent's oplog, emitted by `golem agent oplog --page`. Each entry is the `agent.oplog` document that `golem agent oplog` streams for it. A page can be empty and still have a cursor, when the server's scan budget ended a search before a match and the range has entries after the page.",
       "x-golem-output-mode": "single",
       "x-golem-command": "agent oplog",
       "required": [
@@ -3307,7 +3307,7 @@
         },
         "cursor": {
           "type": "string",
-          "description": "The cursor of the next page, present when the oplog has entries after this page. Pass it back unchanged as `--cursor` with the same `--query`."
+          "description": "The cursor of the next page, present when the oplog has entries after this page within its range. Pass it back unchanged as `--cursor` with the same `--query` and `--to`."
         }
       },
       "additionalProperties": false

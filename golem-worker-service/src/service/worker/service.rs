@@ -411,13 +411,14 @@ enum OplogReadKind {
     Search,
 }
 
-/// The oplog resource that a read of `range` needs. The read resumes `range` at the cursor, and a
-/// cursor outside `range` is an error. A page needs the oplog only up to its last entry or the
-/// end of the range, when that is earlier. A search needs the oplog up to the end of the range.
-/// Before the read, the first entry of the oplog is not known, so a range without a start needs
-/// the oplog from index 1, the first index of an oplog. `OplogRange::new` and `OplogRange::resume`
-/// keep the end of a range at or after index 1 and its start, so a page from index 1 always
-/// exists; without one, the read needs the whole resumed range, which never asks for less.
+/// The oplog resource that a read of `range` needs. The read resumes `range` at the cursor. A
+/// cursor outside `range` is an error. A page needs the oplog up to its last entry, or up to the
+/// end of the range when that is earlier. A search needs the oplog up to the end of the range.
+/// Before the read, the first entry of the oplog is not known. So a range without a start needs
+/// the oplog from index 1, the first index of an oplog. `OplogRange::new` and
+/// `OplogRange::resume` keep the end of a range at or after index 1 and at or after its start.
+/// So the resumed range always has a page from index 1. A resumed range without such a page would
+/// need the whole resumed range, which never asks for less.
 fn oplog_read_resource(
     range: OplogRange,
     cursor: Option<&OplogCursor>,

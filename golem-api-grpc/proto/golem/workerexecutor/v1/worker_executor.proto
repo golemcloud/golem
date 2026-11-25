@@ -410,6 +410,7 @@ message GetOplogSuccessResponse {
   repeated golem.worker.OplogPageEntry entries = 1;
   optional golem.worker.OplogCursor next = 2;
   uint64 first_index_in_chunk = 3;
+  // The last index of the oplog, also for a range read.
   uint64 last_index = 5;
   // The scan accounting of a range read; absent for other reads.
   optional golem.worker.OplogScan scan = 6;
@@ -463,6 +464,8 @@ message SearchOplogResponse {
 message SearchOplogSuccessResponse {
   repeated golem.worker.OplogPageEntry entries = 1;
   optional golem.worker.OplogCursor next = 2;
+  // The last index of the range in the oplog: the smaller of `to_oplog_index` and the last index
+  // of the oplog.
   uint64 last_index = 5;
 }
 

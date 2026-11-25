@@ -1286,7 +1286,9 @@ impl WorkerLogEventStream for HttpWorkerLogEventStream {
     }
 }
 
-/// Reads the whole oplog from `from` page by page, with each omitted entry read in full.
+/// Reads the oplog entries of `range` that match `query`, page by page to the end of the range,
+/// with each omitted entry read in full. Without `query`, the read returns every entry of the
+/// range.
 async fn read_full_oplog(
     client: &(impl WorkerClient + Sync),
     agent_id: &OwnedAgentId,
