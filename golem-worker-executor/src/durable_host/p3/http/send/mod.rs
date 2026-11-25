@@ -25,8 +25,8 @@ use crate::durable_host::concurrent::{
 };
 use crate::durable_host::durability::{
     AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
-    InFunctionRetryState, TaskRetryContext, semantic_trap_retry_override_error,
-    try_trigger_host_trap_retry, wait_retry_backoff,
+    InFunctionRetryState, TaskRetryContext, is_write_side_effect,
+    semantic_trap_retry_override_error, try_trigger_host_trap_retry, wait_retry_backoff,
 };
 use crate::durable_host::http::policy::{
     apply_managed_http_headers, classify_serializable_http_error_code, golem_managed_http_headers,
@@ -40,6 +40,7 @@ use bytes::Bytes;
 use futures::future::{Either, select};
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::P3HttpClientSend;
+use golem_common::model::oplog::payload::HostPayloadPair;
 use golem_common::model::oplog::payload::types::{
     SerializableHttpMethod, SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
     SerializableP3HttpScheme,
@@ -50,7 +51,7 @@ use golem_common::model::oplog::{
     SpanStarted,
 };
 use golem_common::model::{NamedRetryPolicy, OwnedAgentId, RetryContext, RetryProperties};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::error::worker_executor::{GolemSpecificWasmTrap, WorkerExecutorError};
 use http::HeaderMap;
 use http_body_util::BodyExt as _;
 use http_body_util::combinators::UnsyncBoxBody;
@@ -125,6 +126,24 @@ where
         let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
         ctx.state.p3_http_transmissions.requests.remove(&req.rep())
     });
+    // A read-only invocation refuses the send before the replay leak guard below is spawned.
+    // The refusal traps the guest, so the Store never polls that guard again; when the
+    // instance stays, as after the save hook of a failed manual update, its tail-work activity
+    // would stay counted.
+    if is_write_side_effect(&function_type)
+        && let Err(GolemSpecificWasmTrap::WorkerReadOnlyViolation {
+            method,
+            host_function,
+        }) = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut())
+                .check_read_only_allows(P3HttpClientSend::FQFN)
+        })
+    {
+        return Err(HttpError::trap(WorkerExecutorError::ReadOnlyViolation {
+            method,
+            host_function,
+        }));
+    }
 
     // The request head is serialized (and recorded) exactly as the guest built
     // it. The send's `outgoing-http-request` invocation-context span is

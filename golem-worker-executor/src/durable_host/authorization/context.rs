@@ -847,12 +847,8 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             Utc::now(),
         );
         if !expired_root_ids.is_empty() {
-            self.apply_card_revoked_cascade(
-                self.entity_parent_start_index(),
-                &expired_root_ids,
-                true,
-            )
-            .await?;
+            self.apply_card_revoked_cascade(self.entity_parent_start_index(), &expired_root_ids)
+                .await?;
         }
         Ok(())
     }
@@ -876,7 +872,6 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         &mut self,
         entity_parent_start_index: Option<OplogIndex>,
         card_ids: &[CardId],
-        commit_immediately: bool,
     ) -> Result<(), WorkerExecutorError> {
         let mut card_ids = card_ids.to_vec();
         card_ids.sort_unstable();
@@ -924,14 +919,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             affected_wallets,
             local_wallet_generation: self.state.wallet_generation,
         };
-        if commit_immediately {
-            self.public_state
-                .worker()
-                .add_and_commit_oplog(entry)
-                .await?;
-        } else {
-            self.public_state.worker().add_to_oplog(entry).await?;
-        }
+        self.public_state
+            .worker()
+            .add_and_commit_oplog(entry)
+            .await?;
 
         Ok(())
     }

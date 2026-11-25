@@ -144,15 +144,9 @@ pub(super) async fn complete_permission_card_revoke<Ctx: WorkerCtx>(
     let entity_parent_start_index = ctx.entity_parent_start_index();
     // The cascade removes queued revocations of these cards from the pending card events, which
     // the card event boundary reads from the agent status only. A live revoke commits and folds
-    // the cascade before returning, including in a save hook; the finish commit of an ephemeral
-    // agent would not fold it.
-    let commit_immediately = !ctx.state.snapshotting_mode;
+    // the cascade before returning; the finish commit of an ephemeral agent would not fold it.
     if let Err(error) = ctx
-        .apply_card_revoked_cascade(
-            entity_parent_start_index,
-            &locally_revoked_card_ids,
-            commit_immediately,
-        )
+        .apply_card_revoked_cascade(entity_parent_start_index, &locally_revoked_card_ids)
         .await
     {
         handle.abandon_for_trap();

@@ -2796,10 +2796,11 @@ pub struct LoweredInvocation {
     /// (e.g., the agent method name "do-something")
     pub display_name: String,
     /// `Some(method_name)` when the invocation targets an `AgentMethod` whose
-    /// `read_only` metadata is set, or `Some("load-snapshot")` for the specially
-    /// restricted snapshot-loading lifecycle call. The worker-executor uses this
-    /// to enable read-only invocation strictness for the duration of the call,
-    /// trapping outgoing HTTP / RPC host calls with `AgentError::ReadOnlyViolation`.
+    /// `read_only` metadata is set, or `Some("save-snapshot")` / `Some("load-snapshot")`
+    /// for the snapshot lifecycle calls, which never support side effects. The
+    /// worker-executor uses this to enable read-only invocation strictness for the
+    /// duration of the call, trapping write host calls (outgoing HTTP, RPC and every
+    /// other `WriteLocal` / `WriteRemote` call) with `AgentError::ReadOnlyViolation`.
     pub read_only_method: Option<String>,
     /// The typed export call to perform.
     call: LoweredCall,
@@ -3223,7 +3224,7 @@ pub fn lower_invocation(
         )),
         AgentInvocation::SaveSnapshot { caller, .. } => Ok(LoweredInvocation {
             display_name: "save-snapshot".to_string(),
-            read_only_method: None,
+            read_only_method: Some("save-snapshot".to_string()),
             call: LoweredCall::SaveSnapshot { caller },
         }),
         AgentInvocation::LoadSnapshot {
@@ -4381,7 +4382,7 @@ mod tests {
     }
 
     #[test]
-    fn save_snapshot_does_not_use_read_only_strictness() {
+    fn save_snapshot_uses_read_only_strictness() {
         let lowered = lower_invocation(
             AgentInvocation::SaveSnapshot {
                 idempotency_key: InvocationId(Uuid::from_u128(3)),
@@ -4394,7 +4395,7 @@ mod tests {
         .expect("snapshot save should lower");
 
         assert_eq!(lowered.display_name, "save-snapshot");
-        assert!(lowered.read_only_method.is_none());
+        assert_eq!(lowered.read_only_method.as_deref(), Some("save-snapshot"));
     }
 
     #[test]
