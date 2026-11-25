@@ -169,6 +169,7 @@ pub(crate) fn classify_resume_response(
     }
 }
 
+/// Holds trace headers and defers key derivation until trace lookup has succeeded.
 pub(crate) struct ManagedHttpHeaders {
     headers: Vec<(String, String)>,
     idempotency_key_start: Option<OplogIndex>,
@@ -289,6 +290,31 @@ mod tests {
             golem_managed_http_headers(Vec::new(), false, false, OplogIndex::from_u64(41))
                 .resolve(|_| panic!("disabled injection must not derive a key"))
                 .is_empty()
+        );
+    }
+
+    #[test]
+    fn missing_guest_key_derives_from_the_selected_position() {
+        let mut derived = false;
+        let headers = golem_managed_http_headers(
+            vec![("traceparent".to_string(), "trace-value".to_string())],
+            true,
+            false,
+            OplogIndex::from_u64(41),
+        )
+        .resolve(|index| {
+            assert_eq!(index, OplogIndex::from_u64(41));
+            derived = true;
+            IdempotencyKey::from("operation-key")
+        });
+
+        assert!(derived);
+        assert_eq!(
+            headers,
+            vec![
+                ("traceparent".to_string(), "trace-value".to_string()),
+                ("idempotency-key".to_string(), "operation-key".to_string()),
+            ]
         );
     }
 

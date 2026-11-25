@@ -1591,16 +1591,12 @@ async fn bound_bash_recovers_a_crash_while_a_background_job_waits() {
     );
 }
 
-// a parked GET/POST checkpoint over raw HTTP, distinct from `checkpoint_server`'s sibling
-// RPC channel -- curl's own outbound wasi:http calls go through golem-worker-executor's own HTTP
-// durability layer (`is_idempotent_http_method`), not the fixture tool's checkpoint mechanism, so
-// proving crash-recovery resend behavior needs a server on that same path.
+// This raw HTTP checkpoint is distinct from `checkpoint_server`'s sibling RPC channel.
+// Curl's outbound wasi:http calls use the executor's HTTP durability layer, not the tool's
+// checkpoint mechanism. The server holds each response until the test releases it.
 struct HttpArrival {
     method: &'static str,
-    // Golem's own durability layer injects this into every outbound wasi:http request, derived
-    // from the call's own oplog `Start` index and re-derived the same way on a resend -- so a
-    // second arrival with the same value is the original call being replayed, not some unrelated
-    // second request.
+    // Each resend of the same durable call must carry the same key.
     idempotency_key: String,
     release: tokio::sync::oneshot::Sender<()>,
 }
@@ -1696,14 +1692,8 @@ async fn bound_bash_http_crash_recovery_resends_an_incomplete_request() {
     let get_result = await_completion(&ctx, &get_key).await;
     assert_result(&get_result, "status=0\n", "", 0);
 
-    // POST: Golem does not assume a POST is idempotent, so an interrupted one is recovered by
-    // running it again from the start of its request: the server sees it a second time, with a
-    // new idempotency-key (the documented at-least-once for POST/PATCH). Recovery must also leave
-    // the owner healthy: an earlier build raced a durable timer against the request, and Golem's
-    // recovery then failed and left the agent rejecting every call about 8 times in 10. Five crash
-    // cycles, each on a fresh owner and followed by an ordinary call on it, guard against that.
-    // (A second interrupted POST on the SAME owner currently crashes the executor -- an executor
-    // defect reported separately -- so each cycle uses its own owner.)
+    // Recovery resends an incomplete POST with the same key. The peer must deduplicate the
+    // effect. Each crash cycle also checks that the owner accepts a subsequent call.
     for cycle in 0..5 {
         let owner = format!(r#"BashOwner("post-crash-{cycle}")"#);
         let created = ctx
@@ -1723,9 +1713,9 @@ async fn bound_bash_http_crash_recovery_resends_an_incomplete_request() {
         drop(first_post.release);
         let resent_post = next_http_arrival(&mut arrived).await;
         assert_eq!(resent_post.method, "POST", "cycle {cycle}");
-        assert_ne!(
+        assert_eq!(
             resent_post.idempotency_key, first_post.idempotency_key,
-            "cycle {cycle}: a re-run POST gets a new key"
+            "cycle {cycle}: recovery must preserve the POST key"
         );
         resent_post.release.send(()).unwrap();
         let post_result = await_completion_on(&ctx, &owner, &post_key).await;

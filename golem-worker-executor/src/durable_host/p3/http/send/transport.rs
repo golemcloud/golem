@@ -25,6 +25,7 @@ pub(in crate::durable_host::p3::http) fn poison_p3_pooled_connection(
     }
 }
 
+/// The transport response, its I/O task and the optional pooled connection.
 type TransportResult = Result<
     (
         http::Response<UnsyncBoxBody<Bytes, wasmtime_wasi_http::Error>>,

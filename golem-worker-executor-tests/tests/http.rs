@@ -850,7 +850,7 @@ impl std::fmt::Debug for PartitionedStarts {
     }
 }
 
-async fn wait_for_oplog(
+pub(crate) async fn wait_for_oplog(
     executor: &golem_worker_executor_test_utils::TestWorkerExecutor,
     worker_id: &golem_common::model::OwnedAgentId,
     description: &str,

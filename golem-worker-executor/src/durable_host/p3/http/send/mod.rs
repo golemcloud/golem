@@ -135,17 +135,44 @@ where
     //
     // The Golem-managed headers (`traceparent`/`tracestate` and the derived
     // `idempotency-key`) are injected into the request *resource* only, after
-    // the host-call `Start` is written/claimed: like on P2 they are not part of
+    // the host-call `Start` is written/claimed. They are not part of
     // the recorded head, because they are deterministic functions of recorded
     // state — the trace context of the send span (same derived/recorded span
-    // id) and the idempotency key derived from the call's own `Start` index,
-    // which is stable across live execution and replay.
+    // id) and the idempotency key derived from the call's own `Start` index
+    // or the entity Store's logical key position.
     let serialized_request =
         serialize_request::<Ctx, U>(store, borrow_resource(&req)).map_err(|err| {
             HttpError::trap(WorkerExecutorError::runtime(format!(
                 "failed to serialize outgoing p3 HTTP request: {err}"
             )))
         })?;
+    // Reserve before the first await, in guest import order. Admission, completion and
+    // cancellation can finish in another order on replay. A denied send reserves too,
+    // but a guest key or disabled injection consumes no logical position.
+    let key_position = store
+        .with(|mut access| {
+            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+            if ctx.state.forward_trace_context_headers {
+                let invocation = ctx.state.invocation_state();
+                invocation
+                    .invocation_context
+                    .get_stack(&invocation.current_span_id)
+                    .map_err(|err| {
+                        WorkerExecutorError::runtime(format!(
+                            "parent span missing while reserving outgoing HTTP key position: {err}"
+                        ))
+                    })?;
+            }
+            let logical = if ctx.state.set_outgoing_http_idempotency_key
+                && !serialized_request.headers.contains_key("idempotency-key")
+            {
+                ctx.state.take_logical_key_position()
+            } else {
+                None
+            };
+            Ok::<_, WorkerExecutorError>(ctx.idempotency_key_position(logical))
+        })
+        .map_err(HttpError::trap)?;
     // Concurrent sends are told apart by their invocation id.
     let host_request = HostRequestP3HttpClientSend {
         request: serialized_request.clone(),
@@ -316,6 +343,14 @@ where
         .map_err(HttpError::trap)?;
     handle.close_span_on_cancellation(span.span_id.clone());
 
+    let injected_headers = golem_outgoing_http_headers::<Ctx, U>(
+        store,
+        &span.span_id,
+        send_start_index,
+        &serialized_request.headers,
+        &key_position,
+    )
+    .map_err(HttpError::trap)?;
     let mut restored_body = None;
     let mut restored_transmission = None;
     if !handle.is_live() {
@@ -373,13 +408,6 @@ where
                         // headers are re-derived from recorded state (same span,
                         // same `Start` index), so the re-issued request carries the
                         // same trace context and idempotency key as the original.
-                        let injected_headers = golem_outgoing_http_headers::<Ctx, U>(
-                            store,
-                            &span.span_id,
-                            send_start_index,
-                            &serialized_request.headers,
-                        )
-                        .map_err(HttpError::trap)?;
                         // The span stays open until the response body
                         // completes; hand it to the replayed response so the
                         // consume-body / drop paths finish it at the same
@@ -637,27 +665,14 @@ where
         return replay_send_response::<Ctx, U>(store, response.result);
     }
 
-    // Inject the Golem-managed headers into the request resource before the
-    // live send. This runs both for a fresh live call and for an
-    // incomplete-replay re-execution, and derives identical values in both
-    // cases: the trace context comes from the (recorded, replayed) span and
-    // the idempotency key from the call's own `Start` index, which the replay
-    // claim returns unchanged.
-    let (retry_method, retry_uri, injected_headers) = {
+    // Fresh sends and incomplete-call repair use the same prepared headers.
+    let (retry_method, retry_uri) = {
         let request_head = serialize_request::<Ctx, U>(store, borrow_resource(&req))?;
-        let injected = golem_outgoing_http_headers::<Ctx, U>(
-            store,
-            &span.span_id,
-            handle.start_index(),
-            &request_head.headers,
-        )
-        .map_err(HttpError::trap)?;
-        apply_headers_to_request_resource::<Ctx, U>(store, &req, &injected)
+        apply_headers_to_request_resource::<Ctx, U>(store, &req, &injected_headers)
             .map_err(HttpError::trap)?;
         (
             request_head.method.to_string(),
             outgoing_http_request_uri(&request_head),
-            injected,
         )
     };
 
@@ -1094,8 +1109,7 @@ where
                 .await
                 .map_err(HttpError::trap)?;
             // The span stays open until the response body completes (the
-            // durable consume-body terminal or an unconsumed drop), mirroring
-            // the P2 `end_http_request` span lifecycle. The resend descriptor
+            // durable consume-body terminal or an unconsumed drop). The resend descriptor
             // lets a failed live body read resume via a ranged re-send; the
             // response body itself is the real network body (no placeholder).
             register_open_response::<Ctx, U>(
@@ -1143,8 +1157,7 @@ where
             let _ = physical.final_transmission_tx.send(Err(error_code.clone()));
             let serialized_error = serialize_error_code(&error_code);
 
-            // Worker-level retry classification, mirroring the P2
-            // outgoing-handler path: a transient transport/protocol failure
+            // Worker-level retry classification: a transient transport/protocol failure
             // raises a retry trap here (the worker goes to `Retrying` per
             // its retry policy and re-executes the send from the abandoned
             // `Start` on replay) instead of surfacing as a guest-visible
