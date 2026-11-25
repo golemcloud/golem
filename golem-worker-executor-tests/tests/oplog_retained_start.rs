@@ -172,7 +172,9 @@ async fn an_agent_whose_oplog_starts_at_its_snapshot_recovers_and_answers_reads(
     assert_eq!(keyed, 4);
     let history = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
     let before = executor.get_worker_metadata(&agent_id).await?;
-    drop(executor);
+    // The release waits until the executor stopped, so it writes no cached status after the
+    // removal below.
+    executor.release().await?;
 
     force_oplog_retained_start(deps, &context, &agent_id, retained_start).await?;
     let (status_keys, _) =
