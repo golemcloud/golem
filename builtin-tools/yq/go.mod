@@ -50,7 +50,7 @@ tool github.com/bytecodealliance/componentize-go
 
 // Golem's yq fork adds stdio hooks, a wasip1 read-only check and a hook for
 // the system operator; see README.md.
-replace github.com/mikefarah/yq/v4 => github.com/golemcloud/yq/v4 v4.54.3-golem.1
+replace github.com/mikefarah/yq/v4 => github.com/golemcloud/yq/v4 v4.54.3-golem.2
 
 replace go.bytecodealliance.org/pkg => github.com/golemcloud/go-pkg v0.2.3-golem.2
 

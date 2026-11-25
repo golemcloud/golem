@@ -32,14 +32,16 @@ The IANA time-zone database is embedded for `tz()`.
 ## Source
 
 The module resolves `github.com/mikefarah/yq/v4` to the fork
-[`golemcloud/yq`](https://github.com/golemcloud/yq) at tag `v4.54.3-golem.1`, which is upstream
-`v4.54.3` plus two commits on branch `golem-yq-tool`:
+[`golemcloud/yq`](https://github.com/golemcloud/yq) at tag `v4.54.3-golem.2`, which is upstream
+`v4.54.3` plus three commits on branch `golem-yq-tool`:
 
 - `Add stdio hooks and a wasip1 read-only check for Golem`: `yqlib.Stdin`, `Stderr`,
   `StdinIsPiped` and `StdoutIsTerminal` replace the process streams, and on `wasip1` the in-place
   read-only check asks the host with a write-only open, because WASI reports no permission bits.
 - `Add a hook for the system operator's command runner`: `yqlib.RunSystemCommand` replaces
   `os/exec` for the `system` operator.
+- `Build the completion command per root command`: each `cmd.New()` gets its own `completion`
+  command, so completion scripts go to that command's output writer.
 
 yq is MIT licensed. Its module dependencies are MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause and,
 for `hashicorp/hcl/v2` only, MPL-2.0.
