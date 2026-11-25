@@ -3,10 +3,10 @@
 state_store = "postgres"
 blob_store = "s3"
 data_dir = "/var/lib/golem"
-recovery_location = "s3://golem-recovery/installation"
-recovery_horizon = "30days"
 retained_update_snapshots = 2
-outbound_sockets = false
+
+[outbound_sockets]
+enabled = false
 
 [postgres]
 host = "postgres.internal"
@@ -17,15 +17,13 @@ username = "golem"
 [object_storage]
 region = "us-east-1"
 components_bucket = "golem-components"
-artifacts_bucket = "golem-artifacts"
 data_bucket = "golem-data"
-public_endpoint_url = "https://downloads.example.com"
 
 [cache]
-type = "Disabled"
+enabled = false
 
 [internal_grpc_tls]
 enabled = false
 
 [filesystem_snapshots]
-type = "Disabled"
+enabled = false

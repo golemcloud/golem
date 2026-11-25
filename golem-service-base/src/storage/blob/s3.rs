@@ -16,9 +16,9 @@ use crate::config::S3BlobStorageConfig;
 use crate::replayable_stream::ErasedReplayableStream;
 use crate::storage::blob::{
     BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobNameError, BlobRangeError, BlobRangeStream,
-    BlobRefusal, BlobRefusedError, BlobStorageBackend, BlobStorageNamespace, DIR_MARKER,
-    ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent, agent_path_segment, blob_positions,
-    check_blob_name, join_blob_key, namespace_segments, validate_range,
+    BlobRefusal, BlobRefusedError, BlobStorage, BlobStorageBackend, BlobStorageNamespace,
+    DIR_MARKER, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent, agent_path_segment,
+    blob_positions, check_blob_name, join_blob_key, namespace_segments, validate_range,
 };
 use anyhow::{Context, Error, anyhow, ensure};
 use async_trait::async_trait;
@@ -295,6 +295,83 @@ pub struct S3BlobStorage {
     config: S3BlobStorageConfig,
 }
 
+/// The namespace kind whose prefix is checked at startup.
+#[derive(Debug, Clone, Copy)]
+pub enum S3StartupNamespace {
+    Components,
+    InitialAgentFiles,
+    OplogPayload,
+    CompilationCache,
+}
+
+pub(crate) fn startup_scope(
+    config: &S3BlobStorageConfig,
+    namespace: S3StartupNamespace,
+) -> (&str, Box<str>) {
+    let (bucket, kind) = match namespace {
+        S3StartupNamespace::Components => (&config.components_bucket, "component_store"),
+        S3StartupNamespace::InitialAgentFiles => {
+            (&config.initial_agent_files_bucket, "initial_agent_files")
+        }
+        S3StartupNamespace::OplogPayload => (&config.oplog_payload_bucket, "oplog_payload"),
+        S3StartupNamespace::CompilationCache => {
+            (&config.compilation_cache_bucket, "compilation_cache")
+        }
+    };
+    let prefix = join_blob_key(
+        &config.object_prefix,
+        if config.namespace_prefixes { kind } else { "" },
+    );
+    let prefix = if prefix.is_empty() {
+        prefix
+    } else {
+        S3BlobStorage::prefix_with_slash(&prefix)
+    };
+    (bucket, prefix.into_boxed_str())
+}
+
+pub(crate) fn startup_failure(bucket: &str, error: impl Into<Error>) -> Error {
+    error
+        .into()
+        .context(format!("S3 startup check failed for bucket {bucket}"))
+}
+
+/// Creates storage after validating its configuration and checking an owned prefix.
+/// A failure returns no storage and retains the concrete cause.
+#[async_trait]
+pub trait S3BlobStorageFactory: Send {
+    async fn create(
+        self,
+        config: S3BlobStorageConfig,
+        startup_namespace: S3StartupNamespace,
+    ) -> Result<Arc<dyn BlobStorage>, Error>;
+}
+
+pub struct ConfiguredS3BlobStorageFactory {
+    loader: aws_config::ConfigLoader,
+}
+
+impl Default for ConfiguredS3BlobStorageFactory {
+    fn default() -> Self {
+        Self {
+            loader: aws_config::defaults(BehaviorVersion::latest()),
+        }
+    }
+}
+
+#[async_trait]
+impl S3BlobStorageFactory for ConfiguredS3BlobStorageFactory {
+    async fn create(
+        self,
+        config: S3BlobStorageConfig,
+        startup_namespace: S3StartupNamespace,
+    ) -> Result<Arc<dyn BlobStorage>, Error> {
+        Ok(Arc::new(
+            S3BlobStorage::with_config_loader(config, startup_namespace, self.loader).await?,
+        ))
+    }
+}
+
 /// Records the HTTP status of the response that the SDK makes the output of a request from.
 ///
 /// The output of a request does not hold the status of its response. The SDK runs
@@ -410,23 +487,31 @@ fn cut_range(mut blob: Vec<u8>, start: u64, end: u64) -> Result<Vec<u8>, BlobRan
     Ok(blob)
 }
 
-async fn check_bucket_access(client: &Client, startup_bucket: &str) -> Result<(), Error> {
+async fn check_startup_access(client: &Client, bucket: &str, prefix: &str) -> Result<(), Error> {
     tokio::time::timeout(
         std::time::Duration::from_secs(10),
-        client.head_bucket().bucket(startup_bucket).send(),
+        client
+            .list_objects_v2()
+            .bucket(bucket)
+            .prefix(prefix)
+            .max_keys(1)
+            .send(),
     )
     .await
-    .with_context(|| format!("S3 startup check timed out for bucket {startup_bucket}"))?
-    .with_context(|| format!("S3 startup check failed for bucket {startup_bucket}"))?;
+    .with_context(|| format!("S3 startup check timed out for bucket {bucket}"))?
+    .map_err(|error| startup_failure(bucket, error))?;
     Ok(())
 }
 
 impl S3BlobStorage {
-    /// Connects to S3 and checks access to the bucket needed at startup.
-    pub async fn new(config: S3BlobStorageConfig, startup_bucket: &str) -> Result<Self, Error> {
+    /// Connects to S3 and checks access to the namespace prefix needed at startup.
+    pub async fn new(
+        config: S3BlobStorageConfig,
+        startup_namespace: S3StartupNamespace,
+    ) -> Result<Self, Error> {
         Self::with_config_loader(
             config,
-            startup_bucket,
+            startup_namespace,
             aws_config::defaults(BehaviorVersion::latest()),
         )
         .await
@@ -434,7 +519,7 @@ impl S3BlobStorage {
 
     async fn with_config_loader(
         config: S3BlobStorageConfig,
-        startup_bucket: &str,
+        startup_namespace: S3StartupNamespace,
         config_builder: aws_config::ConfigLoader,
     ) -> Result<Self, Error> {
         config.validate()?;
@@ -470,7 +555,8 @@ impl S3BlobStorage {
         }
 
         let storage = Self::with_sdk_config(config, s3_config_builder.build());
-        check_bucket_access(&storage.client, startup_bucket).await?;
+        let (bucket, prefix) = startup_scope(&storage.config, startup_namespace);
+        check_startup_access(&storage.client, bucket, &prefix).await?;
         Ok(storage)
     }
 

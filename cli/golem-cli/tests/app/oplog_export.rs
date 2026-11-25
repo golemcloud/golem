@@ -296,7 +296,7 @@ async fn setup_probe_app(ctx: &mut TestContext) -> RecordingProxy {
     std::fs::write(
         &config_file,
         indoc! { r#"
-            [worker_executor.limits]
+            [advanced.worker_executor.limits]
             max_inline_oplog_entry_size = 65536
         "# },
     )

@@ -33,8 +33,6 @@ use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ShardManagerConfig {
-    #[serde(default)]
-    pub installation: golem_common::config::self_host::InstallationConfig,
     pub tracing: TracingConfig,
     pub persistence: PersistenceConfig,
     pub worker_executors: WorkerExecutorServiceConfig,
@@ -152,7 +150,6 @@ impl SafeDisplay for ShardManagerConfig {
 impl Default for ShardManagerConfig {
     fn default() -> Self {
         Self {
-            installation: Default::default(),
             tracing: TracingConfig::local_dev("shard-manager"),
             persistence: PersistenceConfig::default(),
             worker_executors: WorkerExecutorServiceConfig::default(),

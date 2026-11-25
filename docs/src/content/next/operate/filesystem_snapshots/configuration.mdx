@@ -2,7 +2,7 @@ import { Callout } from "nextra/components"
 
 # Configure filesystem snapshots
 
-Prepare [XFS storage](/next/operate/filesystem_snapshots/xfs) before enabling snapshots on a production executor. A standalone macOS executor can use `Apfs` for development. The [local macOS server](/next/operate/filesystem_snapshots/macos) supplies the settings and key by default.
+Prepare [XFS storage](/next/operate/filesystem_snapshots/xfs) before enabling snapshots on a production executor. A standalone macOS executor can use `Apfs` for development. The [native macOS local server](/next/operate/filesystem_snapshots/macos) enables snapshots by default, supplies the storage settings, and generates a missing key.
 
 ## Create and retain the encryption key
 
@@ -20,14 +20,16 @@ Keep the key secret. Supply the same `repository_key` to every executor that can
 
 ## Configure blob storage
 
-With S3, create the bucket before starting the executor and set:
+With `blob_store = "s3"`, the supported settings store snapshots in `object_storage.data_bucket`. Namespace prefixes are enabled, so that bucket can also hold the other blob kinds. Create it before starting the executor. No separate snapshot-bucket override is needed.
+
+To select a different bucket through the advanced channel, set:
 
 ```toml
 [advanced.worker_executor.blob_storage.config]
 filesystem_snapshots_bucket = "filesystem-snapshots"
 ```
 
-The environment variable is `GOLEM_ADVANCED__WORKER_EXECUTOR__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET`. S3 configurations require this setting even when filesystem snapshots are disabled. An S3-compatible service must support conditional `PutObject` writes with `If-None-Match: *` and `CopyObject`.
+The environment variable is `GOLEM_ADVANCED__WORKER_EXECUTOR__BLOB_STORAGE__CONFIG__FILESYSTEM_SNAPSHOTS_BUCKET`. An advanced S3 configuration without namespace prefixes requires a distinct snapshot bucket even when snapshots are disabled. An S3-compatible service must support conditional `PutObject` writes with `If-None-Match: *` and `CopyObject`.
 
 <Callout type="warning">
   Without `namespace_prefixes`, every blob-storage bucket setting must name a different bucket. Sharing with custom agent blobs would let agents overwrite snapshots and would count snapshots against their blob quota. Services reject duplicate buckets even when snapshots are disabled. With `namespace_prefixes = true`, namespaces have separate key prefixes and can share a bucket. See [One bucket for all blobs](/next/operate/persistence#one-bucket-for-all-blobs).
@@ -53,9 +55,7 @@ The following is the complete configuration with default tuning values. The key 
 retained_update_snapshots = 2
 
 [filesystem_snapshots]
-type = "Enabled"
-
-[filesystem_snapshots.config]
+enabled = true
 repository_key = "<128 hex characters>"
 max_concurrent_uploads = 4
 max_concurrent_restores = 8
@@ -67,14 +67,14 @@ store_check_limit = "5s"
 capture_wait = "5s"
 max_pending_deletes_per_agent = 1024
 
-[filesystem_snapshots.config.storage_retry]
+[filesystem_snapshots.storage_retry]
 max_attempts = 5
 min_delay = "2s"
 max_delay = "2m"
 multiplier = 4.0
 ```
 
-Alternatively, supply the type and key through `GOLEM__FILESYSTEM_SNAPSHOTS__TYPE` and `GOLEM__FILESYSTEM_SNAPSHOTS__CONFIG__REPOSITORY_KEY`. Keep secret values out of committed configuration files.
+Alternatively, enable snapshots with `GOLEM__FILESYSTEM_SNAPSHOTS__ENABLED=true` and supply the key through `GOLEM__FILESYSTEM_SNAPSHOTS__REPOSITORY_KEY`. Standalone executors disable filesystem snapshots by default. Keep secret values out of committed configuration files.
 
 Enable snapshots on every executor that can run the same agents, using the same key and blob storage. `Temporary` and `Directory` do not support filesystem snapshots; enabling them on those storage modes prevents startup. Agents also need a [snapshotting policy](/next/develop/snapshotting#configuring-snapshot-based-recovery).
 
@@ -84,9 +84,9 @@ Enable snapshots on every executor that can run the same agents, using the same 
 
 ## Tune capture, upload, and restore
 
-Set `retained_update_snapshots` at the top level, or use `GOLEM__RETAINED_UPDATE_SNAPSHOTS`. Its default is `2`. It counts manual-update snapshots in addition to those protected by successful or pending updates. Retention for automatic snapshots is not a self-host setting.
+Set `retained_update_snapshots` at the top level, or use `GOLEM__RETAINED_UPDATE_SNAPSHOTS`. Its default is `2`. It counts manual-update snapshots in addition to those protected by successful or pending updates. Retention for automatic snapshots is not a server setting.
 
-The settings in the table belong to `[filesystem_snapshots.config]` and apply only when enabled. Durations use [humantime](https://docs.rs/humantime), such as `"500ms"` or `"2m"`. Counts and waits must be positive. Invalid settings prevent startup.
+The settings in the table belong directly to `[filesystem_snapshots]` and apply only when enabled. Durations use [humantime](https://docs.rs/humantime), such as `"500ms"` or `"2m"`. Counts and waits must be positive. Invalid settings prevent startup.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
@@ -110,7 +110,7 @@ Capture admission checks `[advanced.worker_executor.filesystem_storage.pressure]
 
 ## Configure storage retries
 
-Saves, restores, deletes, copies, and listings use `[filesystem_snapshots.config.storage_retry]` after blob-storage failures:
+Saves, restores, deletes, copies, and listings use `[filesystem_snapshots.storage_retry]` after blob-storage failures:
 
 | Setting | Default | Constraint |
 | --- | --- | --- |

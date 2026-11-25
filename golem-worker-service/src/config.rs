@@ -37,8 +37,6 @@ use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct WorkerServiceConfig {
-    #[serde(default)]
-    pub installation: golem_common::config::self_host::InstallationConfig,
     pub environment: String,
     pub tracing: TracingConfig,
     pub gateway_session_storage: SessionStoreConfig,
@@ -255,7 +253,6 @@ impl Default for WorkerServiceConfig {
             environment: "local".to_string(),
             gateway_session_storage: SessionStoreConfig::Redis(Default::default()),
             blob_storage: BlobStorageConfig::default(),
-            installation: Default::default(),
             tracing: TracingConfig::local_dev("worker-service"),
             bind_address: IpAddr::V4(Ipv4Addr::UNSPECIFIED),
             port: 9005,

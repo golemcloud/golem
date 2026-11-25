@@ -12,13 +12,21 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::config::S3BlobStorageConfig;
+use crate::storage::blob::s3::{
+    S3BlobStorageFactory, S3StartupNamespace, startup_failure, startup_scope,
+};
 use crate::storage::blob::{
-    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorageBackend,
+    BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageBackend,
     BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
     blob_child_path, validate_range,
 };
 use anyhow::Error;
 use async_trait::async_trait;
+use aws_sdk_s3::config::http::HttpResponse;
+use aws_sdk_s3::error::{ErrorMetadata, SdkError};
+use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error;
+use aws_sdk_s3::primitives::SdkBody;
 use bytes::Bytes;
 use futures::Stream;
 use futures::stream::BoxStream;
@@ -27,8 +35,75 @@ use std::{
     collections::{BTreeMap, HashSet},
     path::PathBuf,
     pin::Pin,
+    sync::Arc,
 };
 use tokio::sync::RwLock;
+
+/// Creates in-memory storage under an allowed bucket and prefix, or returns a prepared failure.
+#[derive(Debug)]
+pub struct InMemoryS3BlobStorageFactory {
+    result:
+        Result<(Box<str>, Box<str>, Arc<InMemoryBlobStorage>), Box<SdkError<ListObjectsV2Error>>>,
+}
+
+impl InMemoryS3BlobStorageFactory {
+    pub fn ready(
+        config: &S3BlobStorageConfig,
+        startup_namespace: S3StartupNamespace,
+        storage: Arc<InMemoryBlobStorage>,
+    ) -> Self {
+        let (bucket, prefix) = startup_scope(config, startup_namespace);
+        Self {
+            result: Ok((bucket.into(), prefix, storage)),
+        }
+    }
+
+    /// Returns the same prepared SDK failure for each valid configuration.
+    pub fn failed(error: SdkError<ListObjectsV2Error>) -> Self {
+        Self {
+            result: Err(Box::new(error)),
+        }
+    }
+}
+
+#[async_trait]
+impl S3BlobStorageFactory for InMemoryS3BlobStorageFactory {
+    async fn create(
+        self,
+        config: S3BlobStorageConfig,
+        startup_namespace: S3StartupNamespace,
+    ) -> Result<Arc<dyn BlobStorage>, Error> {
+        config.validate()?;
+        let (bucket, prefix) = startup_scope(&config, startup_namespace);
+        let (allowed_bucket, allowed_prefix, storage) = self
+            .result
+            .map_err(|error| startup_failure(bucket, *error))?;
+        let (status, error) = if bucket != allowed_bucket.as_ref() {
+            (
+                404_u16,
+                ListObjectsV2Error::NoSuchBucket(
+                    aws_sdk_s3::types::error::NoSuchBucket::builder()
+                        .meta(ErrorMetadata::builder().code("NoSuchBucket").build())
+                        .build(),
+                ),
+            )
+        } else if !prefix.starts_with(allowed_prefix.as_ref()) {
+            (
+                403_u16,
+                ListObjectsV2Error::generic(ErrorMetadata::builder().code("AccessDenied").build()),
+            )
+        } else {
+            return Ok(storage);
+        };
+        Err(startup_failure(
+            bucket,
+            SdkError::service_error(
+                error,
+                HttpResponse::new(status.try_into().unwrap(), SdkBody::empty()),
+            ),
+        ))
+    }
+}
 
 /// The place of one blob, or of one directory that `create_dir` made.
 ///

@@ -104,6 +104,9 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::storage::blob::BlobStorage;
+use golem_service_base::storage::blob::s3::{
+    ConfiguredS3BlobStorageFactory, S3BlobStorageFactory, S3StartupNamespace,
+};
 use golem_service_base::storage::blob::sqlite::SqliteBlobStorage;
 use include_dir::include_dir;
 use std::sync::Arc;
@@ -203,6 +206,7 @@ impl Services {
             config,
             join_set,
             Some((startup_progress, builtin_artifact_shutdown)),
+            ConfiguredS3BlobStorageFactory::default(),
         )
         .await
     }
@@ -212,7 +216,13 @@ impl Services {
         config: &RegistryServiceConfig,
         join_set: &mut tokio::task::JoinSet<Result<(), anyhow::Error>>,
     ) -> anyhow::Result<Self> {
-        Self::new_inner(config, join_set, None).await
+        Self::new_inner(
+            config,
+            join_set,
+            None,
+            ConfiguredS3BlobStorageFactory::default(),
+        )
+        .await
     }
 
     async fn new_inner(
@@ -222,6 +232,7 @@ impl Services {
             &StartupProgress,
             crate::services::builtin_artifact::BuiltinArtifactShutdown,
         )>,
+        blob_storage_factory: impl S3BlobStorageFactory,
     ) -> anyhow::Result<Self> {
         config.validate()?;
         let repos = make_repos(&config.db, join_set).await?;
@@ -231,7 +242,7 @@ impl Services {
         )
         .await?;
 
-        let blob_storage = make_blob_storage(&config.blob_storage).await?;
+        let blob_storage = make_blob_storage(&config.blob_storage, blob_storage_factory).await?;
 
         let initial_agent_files = Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
         let component_object_store = Arc::new(ComponentObjectStore::new(blob_storage.clone()));
@@ -855,15 +866,13 @@ async fn make_repos(
 
 async fn make_blob_storage(
     blob_storage_config: &BlobStorageConfig,
+    blob_storage_factory: impl S3BlobStorageFactory,
 ) -> anyhow::Result<Arc<dyn BlobStorage>> {
     match blob_storage_config {
         BlobStorageConfig::S3(config) => {
-            let blob_storage = golem_service_base::storage::blob::s3::S3BlobStorage::new(
-                config.clone(),
-                &config.components_bucket,
-            )
-            .await?;
-            Ok(Arc::new(blob_storage))
+            blob_storage_factory
+                .create(config.clone(), S3StartupNamespace::Components)
+                .await
         }
         BlobStorageConfig::LocalFileSystem(config) => {
             let blob_storage =
@@ -888,7 +897,8 @@ async fn make_blob_storage(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
+    use golem_service_base::config::S3BlobStorageConfig;
+    use golem_service_base::storage::blob::memory::InMemoryS3BlobStorageFactory;
     use std::time::Duration;
     use test_r::test;
 
@@ -896,12 +906,6 @@ mod tests {
     fn s3_startup_failure_stops_registry_construction() {
         figment::Jail::expect_with(|jail| {
             jail.clear_env();
-            jail.set_env("AWS_EC2_METADATA_DISABLED", true);
-            jail.create_file("aws-config", "")?;
-            jail.set_env(
-                "AWS_CONFIG_FILE",
-                jail.directory().join("aws-config").display(),
-            );
             let config = RegistryServiceConfig {
                 db: DbConfig::Sqlite(golem_common::config::DbSqliteConfig {
                     database: jail.directory().join("registry.db").display().to_string(),
@@ -910,18 +914,20 @@ mod tests {
                 }),
                 blob_storage: BlobStorageConfig::S3(S3BlobStorageConfig {
                     region: "us-east-1".to_string(),
-                    aws_endpoint_url: Some("abcde://nota#url".to_string()),
-                    aws_credentials: Some(S3BlobStorageCredentialsConfig::new(
-                        "startup-fixture",
-                        "startup-fixture",
-                        "startup-fixture",
-                    )),
+                    aws_endpoint_url: Some("http://s3.test".to_string()),
                     components_bucket: "registry-startup-only".to_string(),
                     object_prefix: "objects-not-the-bucket".to_string(),
                     ..Default::default()
                 }),
                 ..Default::default()
             };
+            let failure = aws_sdk_s3::error::SdkError::dispatch_failure(
+                aws_sdk_s3::error::ConnectorError::io(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::PermissionDenied,
+                    "selected bucket access denied",
+                ))),
+            );
+            let factory = InMemoryS3BlobStorageFactory::failed(failure);
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()
@@ -930,7 +936,7 @@ mod tests {
                 let mut tasks = tokio::task::JoinSet::new();
                 let result = tokio::time::timeout(
                     Duration::from_secs(5),
-                    Services::new_without_component_builtins(&config, &mut tasks),
+                    Services::new_inner(&config, &mut tasks, None, factory),
                 )
                 .await
                 .expect("registry startup did not stop at the S3 failure");
@@ -942,8 +948,16 @@ mod tests {
                     "S3 startup check failed for bucket registry-startup-only"
                 );
                 assert_eq!(
+                    error
+                        .chain()
+                        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                        .unwrap()
+                        .kind(),
+                    std::io::ErrorKind::PermissionDenied
+                );
+                assert_eq!(
                     error.root_cause().to_string(),
-                    "Custom endpoint `abcde://nota#url` was not a valid URI"
+                    "selected bucket access denied"
                 );
                 assert!(
                     tasks.is_empty(),

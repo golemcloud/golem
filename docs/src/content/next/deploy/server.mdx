@@ -26,7 +26,7 @@ The services also bind gRPC and metrics listeners on ports that the operating sy
 
 ## Configuration
 
-`golem server run --config <file>` reads the same supported settings as the per-service binaries. `GOLEM__<SETTING>` environment variables override the file. For example, `GOLEM__STATE_STORE=postgres` selects PostgreSQL for every state store, and `GOLEM__POSTGRES__HOST` sets its host. Unsupported settings go under `advanced.<service>` in TOML or `GOLEM_ADVANCED__<SERVICE>__<PATH>` in the environment, with their service paths unchanged:
+`golem server run --config <file>` reads the same supported settings as the per-service binaries. Within the supported channel, `GOLEM__<SETTING>` environment variables override the file. For example, `GOLEM__STATE_STORE=postgres` selects PostgreSQL for every state store, and `GOLEM__POSTGRES__HOST` sets its host. Unsupported settings go under `advanced.<service>` in TOML or `GOLEM_ADVANCED__<SERVICE>__<PATH>` in the environment, with their service paths unchanged:
 
 | Section | Service |
 | --- | --- |
@@ -37,28 +37,30 @@ The services also bind gRPC and metrics listeners on ports that the operating sy
 | `[advanced.worker_executor]` | Worker executor |
 | `[advanced.component_compilation_service]` | Component compilation service |
 
-The supported settings are shared by all binaries:
+Environment variables also override the file within the advanced channel. The advanced channel then overrides the supported settings, even when the advanced value comes from the file and the supported value comes from the environment. For example, `advanced.worker_executor.agent_sockets.enabled = true` in the file overrides `GOLEM__OUTBOUND_SOCKETS__ENABLED=false`. Command-line flags retain their higher priority.
+
+The server settings are shared by all binaries. Choices use lowercase values. Switches use an `enabled` boolean, and their settings sit directly in the section, without `type` or `config`:
 
 | Setting | Purpose |
 | --- | --- |
 | `state_store`, `postgres.*`, `data_dir` | Select `sqlite` or `postgres`. SQLite files stay below `data_dir`; PostgreSQL uses a separate schema for each store. |
 | `blob_store`, `data_disk.blob_root` | Select `data_disk` or `s3`. A failed external store stops startup; it does not select local storage. |
-| `object_storage.*` | S3 region, endpoint, path style, credentials, components bucket, artifacts bucket and data bucket. `public_endpoint_url` is optional and names the public download endpoint. |
-| `cache.type`, `cache.config.*` | Select `Disabled` or `Redis`. Redis holds cache namespaces and HTTP sessions, not the selected state store. |
-| `recovery_location`, `recovery_horizon` | Inputs retained for the recovery feature. They do not yet enable recovery records or retention. |
+| `object_storage.*` | S3 region, endpoint, path style, credentials, components bucket and data bucket. |
+| `cache.enabled`, `cache.*` | Enable Redis, default `false`. Redis holds cache namespaces and HTTP sessions, not the selected state store. Set `host`, `port` and the other Redis fields directly under `[cache]`. |
 | `retained_update_snapshots` | Number of update snapshots to keep, default `2`. |
-| `package_mirror_url` | URL retained for the package-mirror feature. It does not yet change package downloads. |
 | `internal_grpc_tls.*` | `enabled`, `cert_file`, `key_file`, `ca_cert_file` and optional `server_name`. Internal mTLS is off by default. |
 | `etcd.tls.*` | Paths to the CA certificate, client certificate and key for etcd. The shard manager's etcd backend remains an advanced setting. |
 | `logging.*`, `otlp.*` | Logging and OTLP export settings. |
-| `outbound_sockets` | Allow outbound agent sockets, default `false`. |
-| `filesystem_snapshots.*` | Enable and configure filesystem snapshots. |
+| `outbound_sockets.enabled` | Allow outbound agent sockets, default `false`. |
+| `filesystem_snapshots.enabled`, `filesystem_snapshots.*` | Enable filesystem snapshots. The native macOS local server defaults to `true` with APFS storage; other server defaults use `false`. Set `repository_key` and the store fields directly under `[filesystem_snapshots]`. |
 
-Set optional values only when needed. For example, `GOLEM__RECOVERY_HORIZON=30days` sets a duration and `GOLEM__PACKAGE_MIRROR_URL=https://mirror.example.com/golem/` sets the mirror URL. The [single-node example](https://github.com/golemcloud/golem/blob/main/cli/golem/config/self-host-single-node.toml) and [multi-node example](https://github.com/golemcloud/golem/blob/main/cli/golem/config/self-host-multi-node.toml) contain no credentials. Supply credentials separately.
+The [single-node example](https://github.com/golemcloud/golem/blob/main/cli/golem/config/self-host-single-node.toml) and [multi-node example](https://github.com/golemcloud/golem/blob/main/cli/golem/config/self-host-multi-node.toml) contain no credentials. Supply credentials separately.
+
+On macOS, explicitly set `filesystem_snapshots.enabled = false` when you select `Directory` or `Temporary` filesystem storage. These modes do not support copy-on-write snapshots.
 
 `golem --dump-config-default-toml` prints the complete default configuration, followed by a commented example that keeps all state in Postgres and the blobs in S3. `golem --dump-config-default-env-var` prints the same as environment variables. The server sets the internal ports and hosts itself, and refuses a file that sets them. See [Configuration File](/next/how-to-guides/common/golem-local-dev-server#configuration-file) for all rules.
 
-A field whose value selects a variant with `type` takes its settings from `config`. When the file selects a variant other than the default, give all settings of that variant: the defaults of the default variant do not apply to it. The examples on this page give all settings that have no default.
+Only the advanced channel uses the services' own forms. An advanced field whose value selects a variant with `type` takes its settings from `config`. When the file selects a variant other than the default, give all settings of that variant: the defaults of the default variant do not apply to it. The examples on this page give all settings that have no default.
 
 ## Secrets
 
@@ -101,7 +103,6 @@ blob_store = "s3"
 region = "us-east-1"
 data_bucket = "golem"
 components_bucket = "golem"
-artifacts_bucket = "golem"
 
 [advanced.server.router]
 management_host = "golem.example.com"
@@ -142,6 +143,8 @@ At every start, the registry service provisions Golem's built-in plugins and too
 Keep the data directory on a persistent volume, so that only the first start downloads. Without one, every start downloads again and needs GitHub.
 
 ## Container image
+
+These unreleased settings require an image built from the same checkout as the configuration. Published 1.6 images do not read them. [Build the example images](https://github.com/golemcloud/golem/blob/main/docker-examples/README.md) before using these instructions. For a hosted platform, publish that matching image to a registry you control and use its image name and tag in place of `golemservices/golem:<version>`. Build for the architecture of the platform. Do not substitute an older published image for a missing matching image.
 
 The `golemservices/golem` image runs `golem server run`. It serves everything on one port, `9881`, and these are its defaults:
 

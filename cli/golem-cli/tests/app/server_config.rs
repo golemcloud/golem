@@ -113,19 +113,19 @@ async fn configured_admin_token_replaces_well_known_token(_tracing: &Tracing) {
         &config_file,
         format!(
             r#"
-                [router]
+                [advanced.server.router]
                 address = "0.0.0.0"
 
-                [registry_service.initial_accounts.root]
+                [advanced.registry_service.initial_accounts.root]
                 token = "{ADMIN_TOKEN}"
 
-                [worker_service.webhook_callback_handler]
+                [advanced.worker_service.webhook_callback_handler]
                 hmac_key = "{WEBHOOK_KEY}"
 
-                [worker_executor.agent_webhooks_service]
+                [advanced.worker_executor.agent_webhooks_service]
                 hmac_key = "{WEBHOOK_KEY}"
 
-                [worker_service.invocation_session_tokens.active_key]
+                [advanced.worker_service.invocation_session_tokens.active_key]
                 id = "server-config-test"
                 key = "{SESSION_TOKEN_KEY}"
             "#

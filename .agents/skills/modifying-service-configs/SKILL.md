@@ -14,7 +14,7 @@ Each service has a configuration struct that implements:
 - `Serialize` / `Deserialize` — for TOML and env-var serialization
 - `SafeDisplay` — for logging without exposing secrets
 
-Services load config by merging (in order): defaults → TOML file → environment variables.
+The server settings module in `golem-common/src/config/server_settings.rs` maps supported settings onto each service. Within the supported and advanced channels, environment variables override TOML values. The advanced channel overrides supported settings, even when the advanced value comes from the file and the supported value comes from the environment. Applicable command-line flags have the highest priority. The launcher also applies platform defaults and the manifest's `localServer` section below both channels.
 
 ## Service Config Locations
 

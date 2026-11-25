@@ -1,7 +1,6 @@
 ## Generated from default config
 blob_store = "data_disk"
 data_dir = "/var/lib/golem"
-outbound_sockets = false
 retained_update_snapshots = 2
 state_store = "sqlite"
 
@@ -801,14 +800,10 @@ min_delay = "100ms"
 multiplier = 2.0
 
 [cache]
-type = "Disabled"
-
-[cache.config]
+enabled = false
 
 [filesystem_snapshots]
-type = "Disabled"
-
-[filesystem_snapshots.config]
+enabled = false
 
 [internal_grpc_tls]
 enabled = false
@@ -859,7 +854,6 @@ span_events_full = false
 without_time = false
 
 [object_storage]
-artifacts_bucket = "golem-artifacts"
 components_bucket = "golem-components"
 data_bucket = "golem-data"
 object_prefix = ""
@@ -870,6 +864,9 @@ enabled = false
 host = "localhost"
 port = 4318
 service_name = "golem"
+
+[outbound_sockets]
+enabled = false
 
 [postgres]
 database = "golem"
@@ -882,7 +879,6 @@ username = "golem"
 ## Generated from example config: Postgres and S3
 # blob_store = "s3"
 # data_dir = "/var/lib/golem"
-# outbound_sockets = false
 # retained_update_snapshots = 2
 # state_store = "postgres"
 #
@@ -1682,14 +1678,10 @@ username = "golem"
 # multiplier = 2.0
 #
 # [cache]
-# type = "Disabled"
-#
-# [cache.config]
+# enabled = false
 #
 # [filesystem_snapshots]
-# type = "Disabled"
-#
-# [filesystem_snapshots.config]
+# enabled = false
 #
 # [internal_grpc_tls]
 # enabled = false
@@ -1740,7 +1732,6 @@ username = "golem"
 # without_time = false
 #
 # [object_storage]
-# artifacts_bucket = "golem-artifacts"
 # components_bucket = "golem"
 # data_bucket = "golem"
 # object_prefix = ""
@@ -1751,6 +1742,9 @@ username = "golem"
 # host = "localhost"
 # port = 4318
 # service_name = "golem"
+#
+# [outbound_sockets]
+# enabled = false
 #
 # [postgres]
 # database = "golem"

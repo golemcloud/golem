@@ -78,7 +78,7 @@ systemd stops the old process before it starts the new one, which is what the [o
 
 ### Put Caddy in front
 
-[Install Caddy](https://caddyserver.com/docs/install) and send the management host and the deployment domains to the main API port. With `router.management_host` set, the server routes them by host:
+[Install Caddy](https://caddyserver.com/docs/install) and send the management host and the deployment domains to the main API port. With `advanced.server.router.management_host` set, the server routes them by host:
 
 ```text filename="/etc/caddy/Caddyfile" copy
 # The management host and the domains of HTTP API and MCP deployments.
@@ -112,22 +112,25 @@ This setup runs [modes 1 and 2](/next/deploy/server) from the [`golemservices/go
 
 <Steps>
 
-### Download the example
+### Build the images and prepare the example
 
-Install [Docker Engine](https://docs.docker.com/engine/install/) with Docker Compose 2.30 or newer, and download the example:
+Install [Docker Engine](https://docs.docker.com/engine/install/) with Docker Compose 2.30 or newer. These settings are unreleased; the published 1.6 images do not read them. Clone the repository so that the binaries, image files and settings come from one checkout:
 
 ```shell filename="Terminal" copy
-mkdir golem && cd golem
-for f in compose.yaml Caddyfile .env.example generate-env.sh; do
-  curl -fsSLO https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/single-node/$f
-done
-chmod +x generate-env.sh
+git clone https://github.com/golemcloud/golem.git golem-src
+cd golem-src
+```
+
+Follow [Build the example images](https://github.com/golemcloud/golem/blob/main/docker-examples/README.md) on a Linux host. Then prepare the example:
+
+```shell filename="Terminal" copy
+cd docker-examples/single-node
 cp .env.example .env
 ```
 
 ### Write the configuration
 
-Set the image version and the host names in `.env`. The example uses `v1.6.0`, including the `v`. Then write the secrets, the bucket and, for mode 2, the database to `golem.env`, and add the credentials of the bucket:
+Keep `GOLEM_IMAGE_VERSION=local` and set the host names in `.env`. Compose uses the image you built and does not pull an older Golem image. Then write the secrets, the bucket and, for mode 2, the database to `golem.env`, and add the credentials of the bucket:
 
 ```shell filename="Terminal" copy
 umask 077
@@ -158,7 +161,7 @@ curl https://golem.example.com/healthcheck
 
 The server runs as uid 65534. The `golem_data` named volume takes the owner of the data directory in the image; if you replace it with a bind mount, give the directory to that user with `sudo chown -R 65534:65534 <dir>`. See [Volume ownership](/next/deploy/server#volume-ownership).
 
-Caddy has a fixed address on the Compose network, `172.31.0.10`, which the server trusts for `X-Forwarded-Proto` and `X-Forwarded-Host`. Only Caddy publishes ports. In mode 1, the SQLite databases are in the `golem_data` volume. To upgrade, change `GOLEM_IMAGE_VERSION` and run `docker compose up -d`: Compose stops the old container before it starts the new one.
+Caddy has a fixed address on the Compose network, `172.31.0.10`, which the server trusts for `X-Forwarded-Proto` and `X-Forwarded-Host`. Only Caddy publishes ports. In mode 1, the SQLite databases are in the `golem_data` volume. To upgrade this source-built setup, rebuild the binaries and images from the new checkout, keep its matching settings, and run `docker compose up -d`. Compose stops the old container before it starts the new one.
 
 ## Fixed cluster with Docker Compose
 
@@ -170,21 +173,18 @@ This setup runs the [fixed cluster](/next/deploy/cluster) on one host: the per-s
 
 Create a Postgres database whose user can create schemas, and an S3 bucket. The services create their schemas and tables at their first start.
 
-### Download the example
+### Build the images and prepare the example
 
-Install [Docker Engine](https://docs.docker.com/engine/install/) with the Compose plugin, and download the [`production-cluster` example](https://github.com/golemcloud/golem/tree/main/docker-examples/production-cluster):
+Install [Docker Engine](https://docs.docker.com/engine/install/) with the Compose plugin. Clone the repository and follow [Build the example images](https://github.com/golemcloud/golem/blob/main/docker-examples/README.md) on a Linux host. The published 1.6 images do not read these settings. Keep the binaries, images and [`production-cluster` example](https://github.com/golemcloud/golem/tree/main/docker-examples/production-cluster) from one checkout. After the build, run these commands from the repository root:
 
 ```shell filename="Terminal" copy
-mkdir golem && cd golem
-for f in compose.yaml Caddyfile .env.example; do
-  curl -fsSLO https://raw.githubusercontent.com/golemcloud/golem/main/docker-examples/production-cluster/$f
-done
+cd docker-examples/production-cluster
 cp .env.example .env
 ```
 
 ### Fill in `.env`
 
-Set the image version, the host names, the secrets, the database and the bucket in `.env`. Generate each token with `openssl rand -hex 32` and each key with `openssl rand -base64 32`. For an S3-compatible service other than AWS S3, also uncomment the endpoint lines in `compose.yaml`.
+Keep `GOLEM_IMAGES_VERSION=local`. Set the host names, the secrets, the database and the bucket in `.env`. Generate each token with `openssl rand -hex 32` and each key with `openssl rand -base64 32`. For an S3-compatible service other than AWS S3, also uncomment the endpoint lines in `compose.yaml`.
 
 ### Start the cluster
 
@@ -206,7 +206,7 @@ The shard manager logs the address of each executor that registers: the address 
 - `WORKER_EXECUTOR_REPLICAS` sets the number of executors. Change it and run `docker compose up -d` again to scale.
 - The `default` plan has no per-agent disk limit, because the executors keep agent files in temporary directories. See [Plans](/next/deploy/cluster#plans).
 
-To upgrade, change `GOLEM_IMAGES_VERSION` and run `docker compose up -d`.
+To upgrade this source-built setup, rebuild the binaries and images from the new checkout, keep its matching settings, and run `docker compose up -d`.
 
 <Callout type="info">
   Only Caddy publishes ports. To reach a service directly for debugging, use `docker compose exec` or a temporary port mapping, not a public one: the internal ports do not authenticate their callers.

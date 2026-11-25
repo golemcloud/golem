@@ -13,7 +13,7 @@
 // limitations under the License.
 
 pub mod byte_size;
-pub mod self_host;
+pub mod server_settings;
 
 use crate::SafeDisplay;
 use crate::model::RetryConfig;
@@ -109,7 +109,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
     fn settings_defaults(&self) -> Figment {
         let defaults = self.default_figment();
         match self.service {
-            Some(service) => self_host::reference(service, &defaults),
+            Some(service) => server_settings::reference(service, &defaults),
             None => defaults,
         }
     }
@@ -134,7 +134,7 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
             .merge(Toml::file_exact(self.config_file_name.clone()))
             .merge(env_config_provider());
         let settings = match self.service {
-            Some(service) => self_host::project(service, &input),
+            Some(service) => server_settings::project(service, &input),
             None => input,
         };
         Figment::from(Serialized::defaults(T::default())).merge(settings)
@@ -616,9 +616,10 @@ impl SafeDisplay for DbPostgresConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{ConfigError, ConfigLoader, LoadOrDump, dump_config};
+    use super::{ConfigError, ConfigLoader, LoadOrDump, dump_config, server_settings};
     use crate::SafeDisplay;
     use figment::Figment;
+    use figment::providers::{Format, Toml};
     use serde::{Deserialize, Serialize};
     use test_r::test;
 
@@ -663,28 +664,119 @@ mod tests {
     }
 
     #[test]
-    fn self_host_invalid_store_is_a_load_error() {
+    fn server_settings_invalid_store_is_a_load_error() {
         [
-            "state_store = 123",
-            "blob_store = false",
-            "state_store = 'redis'",
-            "blob_store = 'memory'",
-            "[cache]\ntype = 'Memory'",
-            "[cache]\ntype = false",
-            "number_of_shards = 17",
-            "retained_periodic_snapshots = 3",
-            "[filesystem_snapshots.config]\nretained_periodic_snapshots = 3",
+            (
+                "state_store = 123",
+                "state_store must be sqlite or postgres",
+            ),
+            ("blob_store = false", "blob_store must be data_disk or s3"),
+            (
+                "state_store = 'redis'",
+                "state_store must be sqlite or postgres",
+            ),
+            (
+                "blob_store = 'memory'",
+                "blob_store must be data_disk or s3",
+            ),
+            (
+                "cache.enabled = 'Redis'",
+                "cache.enabled must be true or false",
+            ),
+            ("cache.enabled = 1", "cache.enabled must be true or false"),
+            (
+                "filesystem_snapshots.enabled = 'Enabled'",
+                "filesystem_snapshots.enabled must be true or false",
+            ),
+            (
+                "outbound_sockets.enabled = 'off'",
+                "outbound_sockets.enabled must be true or false",
+            ),
+            (
+                "internal_grpc_tls.enabled = 'on'",
+                "internal_grpc_tls.enabled must be true or false",
+            ),
+            (
+                "internal_grpc_tls = true",
+                "internal_grpc_tls must be a table",
+            ),
+            ("data_dir = false", "data_dir must be a string"),
+            ("cache = true", "cache must be a table"),
+            ("cache.retries = false", "cache.retries must be a table"),
+            (
+                "filesystem_snapshots = true",
+                "filesystem_snapshots must be a table",
+            ),
+            (
+                "filesystem_snapshots.enabled = false\nfilesystem_snapshots.storage_retry = false",
+                "filesystem_snapshots.storage_retry must be a table",
+            ),
+            ("outbound_sockets = false", "outbound_sockets must be a table"),
+            ("postgres = 5432", "postgres must be a table"),
+            ("data_disk = '/state'", "data_disk must be a table"),
+            ("object_storage = 's3'", "object_storage must be a table"),
+            (
+                "object_storage.credentials = 'credentials'",
+                "object_storage.credentials must be a table",
+            ),
+            ("logging = true", "logging must be a table"),
+            ("logging.stdout = true", "logging.stdout must be a table"),
+            (
+                "logging.stdout = [true, false, false, false, false, false, false, false, false, false, false]",
+                "logging.stdout must be a table",
+            ),
+            ("logging.stderr = false", "logging.stderr must be a table"),
+            ("logging.file = '/logs'", "logging.file must be a table"),
+            (
+                "logging.otlp = false\notlp.enabled = false",
+                "logging.otlp must be a table",
+            ),
+            ("otlp = false", "otlp must be a table"),
+            ("etcd = 'etcd.internal'", "etcd must be a table"),
+            ("etcd.tls = true", "etcd.tls must be a table"),
+            ("advanced = true", "advanced must be a table"),
+            (
+                "advanced.server = false",
+                "advanced.server must be a table",
+            ),
+            (
+                "advanced.worker_executor = false",
+                "advanced.worker_executor must be a table",
+            ),
+            ("otlp.enabled = 1", "otlp.enabled must be true or false"),
+            (
+                "number_of_shards = 17",
+                "number_of_shards is not a server setting",
+            ),
+            (
+                "retained_periodic_snapshots = 3",
+                "retained_periodic_snapshots is not a server setting",
+            ),
+            (
+                "[filesystem_snapshots]\nretained_periodic_snapshots = 3",
+                "retained_periodic_snapshots is not a server setting",
+            ),
         ]
         .into_iter()
-        .for_each(|contents| {
+        .for_each(|(contents, accepted)| {
             let (_dir, loader) = loader_with_file(contents);
-            let result = loader.for_service("worker_executor").load();
-            assert!(result.is_err(), "{contents} loaded defaults");
+            [
+                loader
+                    .for_service("worker_executor")
+                    .load()
+                    .unwrap_err()
+                    .to_string(),
+                server_settings::all_in_one(&Figment::from(Toml::string(contents)))
+                    .unwrap_err()
+                    .to_string(),
+            ]
+            .into_iter()
+            .for_each(|error| assert!(error.contains(accepted), "{error}"));
         });
     }
 
     #[test]
-    fn self_host_defaults_and_environment_choose_the_storage_root() {
+    fn server_settings_defaults_and_environment_choose_the_storage_root() {
         figment::Jail::expect_with(|jail| {
             jail.clear_env();
             jail.create_file("settings.toml", "")?;
@@ -716,7 +808,7 @@ mod tests {
     }
 
     #[test]
-    fn self_host_advanced_environment_is_scoped_and_keeps_its_path() {
+    fn server_settings_advanced_environment_is_scoped_and_keeps_its_path() {
         figment::Jail::expect_with(|jail| {
             jail.create_file(
                 "settings.toml",
@@ -739,6 +831,90 @@ mod tests {
                     .loader_test_port,
                 0
             );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn server_settings_preserve_typed_error_origins_and_advanced_precedence() {
+        #[derive(Debug, Default, Serialize, Deserialize)]
+        struct Settings {
+            tracing: crate::tracing::TracingConfig,
+            issuers: Vec<crate::model::golem_issuer::GolemIssuer>,
+        }
+
+        impl SafeDisplay for Settings {
+            fn to_safe_string(&self) -> String {
+                String::new()
+            }
+        }
+
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            let loader = ConfigLoader::<Settings>::new(std::path::Path::new("settings.toml"))
+                .for_service("worker_executor");
+            let secrets = r#"
+                [postgres]
+                password = "postgres-secret-sentinel"
+                [object_storage.credentials]
+                secret_access_key = "s3-secret-sentinel"
+                [advanced.worker_executor.filesystem_snapshots.config]
+                repository_key = "repository-secret-sentinel"
+            "#;
+            jail.create_file(
+                "settings.toml",
+                &format!("[logging.stdout]\nenabled = 'not-a-boolean'\n{secrets}"),
+            )?;
+            jail.set_env("GOLEM__LOGGING__STDERR__ENABLED", "true");
+            let error = loader.load().unwrap_err();
+            assert_eq!(error.path, ["tracing", "stdout", "enabled"]);
+            let diagnostic = error.to_string();
+            assert!(
+                diagnostic.contains("logging.stdout.enabled"),
+                "{diagnostic}"
+            );
+            assert!(diagnostic.contains("settings.toml"), "{diagnostic}");
+            assert!(!diagnostic.contains("environment variable"), "{diagnostic}");
+            [
+                "postgres-secret-sentinel",
+                "s3-secret-sentinel",
+                "repository-secret-sentinel",
+            ]
+            .into_iter()
+            .for_each(|secret| assert!(!diagnostic.contains(secret), "{diagnostic}"));
+
+            jail.set_env("GOLEM__LOGGING__STDOUT__ENABLED", "true");
+            assert!(loader.load()?.tracing.stdout.enabled);
+            jail.set_env("GOLEM__LOGGING__STDOUT__ENABLED", "not-a-boolean");
+            let diagnostic = loader.load().unwrap_err().to_string();
+            assert!(
+                diagnostic.contains("LOGGING.STDOUT.ENABLED"),
+                "{diagnostic}"
+            );
+            assert!(diagnostic.contains("environment variable"), "{diagnostic}");
+            assert!(!diagnostic.contains("settings.toml"), "{diagnostic}");
+
+            jail.set_env(
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__TRACING__STDOUT__ENABLED",
+                "true",
+            );
+            let config = loader.load()?;
+            assert!(config.tracing.stdout.enabled);
+            assert!(config.tracing.stderr.enabled);
+            assert!(config.tracing.stdout.json);
+
+            jail.set_env(
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__ISSUERS",
+                r#"["not-an-issuer"]"#,
+            );
+            let error = loader.load().unwrap_err();
+            assert_eq!(error.path, ["issuers", "0"]);
+            let diagnostic = error.to_string();
+            assert!(
+                diagnostic.contains("ADVANCED.WORKER_EXECUTOR.ISSUERS.0"),
+                "{diagnostic}"
+            );
+            assert!(diagnostic.contains("environment variable"), "{diagnostic}");
             Ok(())
         });
     }

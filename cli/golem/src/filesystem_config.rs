@@ -59,8 +59,7 @@ impl LocalPlatform {
 
     /// The settings of the worker executor that this platform changes in the local development
     /// configuration, as a config layer: on macOS, APFS storage in `<data_dir>/agents` with
-    /// filesystem snapshots. Elsewhere, agent filesystems are temporary and snapshots are disabled,
-    /// which are the defaults.
+    /// filesystem snapshots. Elsewhere, agent filesystems are temporary and snapshots are disabled.
     pub(crate) fn defaults(self, data_dir: &Path) -> serde_json::Value {
         match self {
             Self::MacOs => serde_json::json!({

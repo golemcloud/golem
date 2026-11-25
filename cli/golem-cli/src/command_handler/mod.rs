@@ -549,7 +549,7 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                 }
                 #[cfg(feature = "server-commands")]
                 GolemCliSubcommand::Server { subcommand } => {
-                    let verbosity = Hooks::override_verbosity(ctx.global_flags.verbosity());
+                    let verbosity = ctx.global_flags.verbosity();
                     let (context, hooks) = ctx.get_or_init_with_hooks().await?;
                     hooks
                         .handler_server_commands(context, subcommand, verbosity)
@@ -915,7 +915,7 @@ mod tests {
 
     #[derive(Default)]
     struct RecordingServer {
-        received: Mutex<Option<(bool, Option<tracing::Level>)>>,
+        received: Mutex<Option<(bool, bool, Option<tracing::Level>)>>,
     }
 
     impl CommandHandlerHooks for RecordingServer {
@@ -927,6 +927,7 @@ mod tests {
         ) -> anyhow::Result<()> {
             *self.received.lock().unwrap() = Some((
                 matches!(subcommand, ServerSubcommand::Run { .. }),
+                verbosity.is_present(),
                 verbosity.tracing_level(),
             ));
             Ok(())
@@ -946,7 +947,7 @@ mod tests {
     }
 
     #[test]
-    fn server_dispatch_skips_cli_tracing_only_for_run_and_forwards_overridden_verbosity() {
+    fn server_dispatch_skips_cli_tracing_only_for_run_and_preserves_raw_verbosity() {
         figment::Jail::expect_with(|jail| {
             jail.clear_env();
             jail.set_env("HOME", jail.directory().display().to_string());
@@ -955,32 +956,45 @@ mod tests {
                 .build()
                 .unwrap();
             ["run", "clean"].into_iter().for_each(|subcommand| {
-                let command = GolemCliCommand::try_parse_from_lenient(
-                    ["golem", "-X", "-L", "server", subcommand],
-                    true,
-                );
-                let hooks = Arc::new(RecordingServer::default());
-                let initialized = Cell::new(None);
-                let result = runtime.block_on(CommandHandler::handle_with_tracing(
-                    command,
-                    hooks.clone(),
-                    |verbosity, pretty| {
-                        assert!(
-                            initialized
-                                .replace(Some((verbosity.tracing_level(), pretty)))
-                                .is_none()
-                        );
-                    },
-                ));
-                assert_eq!(result, ExitCode::SUCCESS);
-                assert_eq!(
-                    *hooks.received.lock().unwrap(),
-                    Some((subcommand == "run", Some(tracing::Level::TRACE)))
-                );
-                assert_eq!(
-                    initialized.get(),
-                    (subcommand == "clean").then_some((Some(tracing::Level::TRACE), true))
-                );
+                [
+                    (&[][..], false, Some(tracing::Level::ERROR)),
+                    (&["-v"][..], true, Some(tracing::Level::WARN)),
+                    (&["-vv"][..], true, Some(tracing::Level::INFO)),
+                    (&["-vvv"][..], true, Some(tracing::Level::DEBUG)),
+                    (&["-q"][..], true, None),
+                ]
+                .into_iter()
+                .for_each(|(flags, present, level)| {
+                    let command = GolemCliCommand::try_parse_from_lenient(
+                        ["golem", "-X", "-L"]
+                            .into_iter()
+                            .chain(flags.iter().copied())
+                            .chain(["server", subcommand]),
+                        true,
+                    );
+                    let hooks = Arc::new(RecordingServer::default());
+                    let initialized = Cell::new(None);
+                    let result = runtime.block_on(CommandHandler::handle_with_tracing(
+                        command,
+                        hooks.clone(),
+                        |verbosity, pretty| {
+                            assert!(
+                                initialized
+                                    .replace(Some((verbosity.tracing_level(), pretty)))
+                                    .is_none()
+                            );
+                        },
+                    ));
+                    assert_eq!(result, ExitCode::SUCCESS);
+                    assert_eq!(
+                        *hooks.received.lock().unwrap(),
+                        Some((subcommand == "run", present, level))
+                    );
+                    assert_eq!(
+                        initialized.get(),
+                        (subcommand == "clean").then_some((Some(tracing::Level::TRACE), true))
+                    );
+                });
             });
             Ok(())
         });

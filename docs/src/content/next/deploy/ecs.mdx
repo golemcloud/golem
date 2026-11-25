@@ -124,7 +124,7 @@ The cache holds both downloaded artifacts and their extracted metadata. Replacem
 
 Run exactly one shard manager task, in Postgres mode. With minimum healthy 0% and maximum 100%, ECS stops the old task before it starts the new one, in a deploy and when it replaces a failed task. The default deployment (minimum healthy 100%, maximum 200%) starts the new task first, and for a while two shard managers could run the same agent twice. See [One shard manager](/next/deploy/modes#one-shard-manager).
 
-Do not run a second replica in etcd mode as a standby on ECS. A standby keeps its gRPC port closed, and ECS replaces a task that fails its container or load balancer health check, so it would replace the standby again and again. When the shard manager task fails, ECS starts a new one; the executors keep their shards for the length of their lease (1 minute by default) while it starts.
+This setup uses one Postgres-backed shard manager. When its task fails, ECS starts a new one; the executors keep their shards for the length of their lease (1 minute by default) while it starts. In an etcd-backed deployment, every replica opens its gRPC port, including standbys. A standby returns a retry response that names the leader once the leader is ready. Use `/readyz` for readiness rather than TCP reachability to select the leader. A standby is ready while etcd answers it and its advertised address is reachable.
 
 Set `GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS` on the executors high enough that an executor that starts during a shard manager restart keeps retrying its registration.
 

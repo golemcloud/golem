@@ -54,9 +54,11 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::grpc::client::MultiTargetGrpcClient;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use golem_service_base::service::routing_table::RoutingTableService;
+use golem_service_base::storage::blob::s3::{
+    ConfiguredS3BlobStorageFactory, S3BlobStorageFactory, S3StartupNamespace,
+};
 use golem_service_base::storage::blob::{
-    BlobStorage, fs::FileSystemBlobStorage, memory::InMemoryBlobStorage, s3::S3BlobStorage,
-    sqlite::SqliteBlobStorage,
+    BlobStorage, fs::FileSystemBlobStorage, memory::InMemoryBlobStorage, sqlite::SqliteBlobStorage,
 };
 use std::sync::Arc;
 use tonic::codec::CompressionEncoding;
@@ -90,6 +92,19 @@ impl Services {
         config: &WorkerServiceConfig,
         golem_issuer: GolemIssuer,
     ) -> anyhow::Result<Self> {
+        Self::new_with_blob_storage_factory(
+            config,
+            golem_issuer,
+            ConfiguredS3BlobStorageFactory::default(),
+        )
+        .await
+    }
+
+    async fn new_with_blob_storage_factory(
+        config: &WorkerServiceConfig,
+        golem_issuer: GolemIssuer,
+        blob_storage_factory: impl S3BlobStorageFactory,
+    ) -> anyhow::Result<Self> {
         config.http_session.validate().map_err(anyhow::Error::msg)?;
         config.validate_keep_alive().map_err(anyhow::Error::msg)?;
         config.mcp.session.validate().map_err(anyhow::Error::msg)?;
@@ -99,9 +114,11 @@ impl Services {
             .map_err(anyhow::Error::msg)?;
         config.blob_storage.validate()?;
         let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
-            BlobStorageConfig::S3(config) => Arc::new(
-                S3BlobStorage::new(config.clone(), &config.initial_agent_files_bucket).await?,
-            ),
+            BlobStorageConfig::S3(config) => {
+                blob_storage_factory
+                    .create(config.clone(), S3StartupNamespace::InitialAgentFiles)
+                    .await?
+            }
             BlobStorageConfig::LocalFileSystem(config) => {
                 Arc::new(FileSystemBlobStorage::new(&config.root).await?)
             }
@@ -431,65 +448,58 @@ mod tests {
     use golem_common::redis::RedisPool;
     use golem_service_base::db::postgres::PostgresPool;
     use golem_service_base::db::sqlite::SqlitePool;
+    use golem_service_base::storage::blob::memory::InMemoryS3BlobStorageFactory;
     use std::sync::Mutex;
     use std::time::Duration;
     use tempfile::NamedTempFile;
     use test_r::test;
 
     #[test]
-    fn s3_startup_failure_stops_worker_service_construction() {
-        figment::Jail::expect_with(|jail| {
-            jail.clear_env();
-            jail.set_env("AWS_EC2_METADATA_DISABLED", true);
-            jail.create_file("aws-config", "")?;
-            jail.set_env(
-                "AWS_CONFIG_FILE",
-                jail.directory().join("aws-config").display(),
-            );
-            let config = crate::config::WorkerServiceConfig {
-                blob_storage: golem_service_base::config::BlobStorageConfig::S3(
-                    golem_service_base::config::S3BlobStorageConfig {
-                        region: "us-east-1".to_string(),
-                        aws_endpoint_url: Some("abcde://nota#url".to_string()),
-                        aws_credentials: Some(
-                            golem_service_base::config::S3BlobStorageCredentialsConfig::new(
-                                "startup-fixture",
-                                "startup-fixture",
-                                "startup-fixture",
-                            ),
-                        ),
-                        initial_agent_files_bucket: "worker-service-startup-only".to_string(),
-                        object_prefix: "objects-not-the-bucket".to_string(),
-                        ..Default::default()
-                    },
-                ),
-                ..Default::default()
-            };
-            let runtime = tokio::runtime::Builder::new_current_thread()
-                .enable_all()
-                .build()
-                .unwrap();
-            runtime.block_on(async {
-                let result = tokio::time::timeout(
-                    Duration::from_secs(5),
-                    super::Services::new(&config, "https://id.acme.example".parse().unwrap()),
-                )
-                .await
-                .expect("worker service startup did not stop at the S3 failure");
-                let error = result
-                    .err()
-                    .expect("S3 failure must stop service construction");
-                assert_eq!(
-                    error.to_string(),
-                    "S3 startup check failed for bucket worker-service-startup-only"
-                );
-                assert_eq!(
-                    error.root_cause().to_string(),
-                    "Custom endpoint `abcde://nota#url` was not a valid URI"
-                );
-            });
-            Ok(())
-        });
+    #[test_r::timeout("5s")]
+    async fn s3_startup_failure_stops_worker_service_construction() {
+        let config = crate::config::WorkerServiceConfig {
+            blob_storage: golem_service_base::config::BlobStorageConfig::S3(
+                golem_service_base::config::S3BlobStorageConfig {
+                    region: "us-east-1".to_string(),
+                    aws_endpoint_url: Some("http://s3.test".to_string()),
+                    initial_agent_files_bucket: "worker-service-startup-only".to_string(),
+                    object_prefix: "objects-not-the-bucket".to_string(),
+                    ..Default::default()
+                },
+            ),
+            ..Default::default()
+        };
+        let failure = aws_sdk_s3::error::SdkError::dispatch_failure(
+            aws_sdk_s3::error::ConnectorError::io(Box::new(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "selected bucket access denied",
+            ))),
+        );
+        let factory = InMemoryS3BlobStorageFactory::failed(failure);
+        let error = super::Services::new_with_blob_storage_factory(
+            &config,
+            "https://id.acme.example".parse().unwrap(),
+            factory,
+        )
+        .await
+        .err()
+        .expect("S3 failure must stop service construction");
+        assert_eq!(
+            error.to_string(),
+            "S3 startup check failed for bucket worker-service-startup-only"
+        );
+        assert_eq!(
+            error
+                .chain()
+                .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                .unwrap()
+                .kind(),
+            std::io::ErrorKind::PermissionDenied
+        );
+        assert_eq!(
+            error.root_cause().to_string(),
+            "selected bucket access denied"
+        );
     }
 
     /// Opens Redis and SQLite connections like production and Postgres pools that connect only

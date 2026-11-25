@@ -153,6 +153,7 @@ harness = false
 
 [dev-dependencies]
 assert2 = { workspace = true }
+aws-sdk-s3 = { workspace = true }
 criterion = { workspace = true }
 axum = { workspace = true }
 figment = { workspace = true, features = ["test"] }

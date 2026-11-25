@@ -4,7 +4,7 @@ import { Callout } from "nextra/components"
 
 Filesystem snapshots save a durable agent's files to blob storage alongside its application snapshot. They preserve files when an agent recovers from a snapshot, performs a snapshot-based manual update, or uses a snapshot-assisted automatic update. For agent code and snapshotting policies, see [Snapshotting](/next/develop/snapshotting#agent-files-and-snapshots).
 
-The local macOS server enables filesystem snapshots by default. Standalone executors and local servers on other platforms disable them by default. Ephemeral agents do not take snapshots.
+The native macOS local server enables filesystem snapshots by default. Standalone executors and other local-server platforms disable them by default. Set `filesystem_snapshots.enabled = true` to enable them there. Ephemeral agents do not take snapshots.
 
 ## Choose a storage backend
 

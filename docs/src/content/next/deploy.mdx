@@ -18,11 +18,11 @@ The services are using the following storage backends:
 
 ## User and Permissions
 
-Every image runs its service as the user `golem`, uid and gid 65534, with the home directory `/home/golem`. The default configuration keeps local data below `/data`, which belongs to that user: SQLite databases in `/data` and file system blob storage in `/data/blob_storage`. The `golemservices/golem` image keeps its data in `/var/lib/golem`, which also belongs to that user. The services need no Linux capability.
+Every image runs its service as the user `golem`, uid and gid 65534, with the home directory `/home/golem`. The supported settings keep local data below `/var/lib/golem`, which belongs to that user. SQLite databases are below that directory, and file system blobs are below `/var/lib/golem/blobs`. Set `data_dir` or `GOLEM__DATA_DIR` to use a different data directory. Set `data_disk.blob_root` or `GOLEM__DATA_DISK__BLOB_ROOT` to use a separate blob directory. The services need no Linux capability.
 
 A path that a service writes must belong to uid 65534, or be writable by it:
 
-- A new Docker named volume mounted at `/data`, `/data/blob_storage` or `/var/lib/golem` takes the owner of that directory in the image, so it needs no change.
+- A new Docker named volume mounted at `/var/lib/golem` takes the owner of that directory in the image, so it needs no change. A volume mounted elsewhere retains data only when the configuration points to it.
 - A bind mount takes the owner of the host directory. Give the directory to the user before the first start, for example with `chown -R 65534:65534 <host directory>`.
 - In Kubernetes, set `runAsUser`, `runAsGroup` and `fsGroup` to 65534 in the pod `securityContext`. The kubelet then makes a volume that supports ownership management, such as an `emptyDir` or a persistent volume, writable by group 65534. A `hostPath` volume keeps the owner of the host directory.
 
@@ -70,7 +70,7 @@ See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-re
 
 [golem-worker-service](https://github.com/golemcloud/golem/tree/main/golem-worker-service) provides APIs and [HTTP gateway](/next/operate/architecture#the-gateway) functionality for agents and acts as a routing service for worker executors. It retrieves gateway definitions from the registry service, uses blob storage for initial agent files, and stores gateway sessions in Redis, SQLite, or PostgreSQL.
 
-With the cache disabled, `state_store = "postgres"` selects PostgreSQL for gateway sessions. The connection comes from `[postgres]`, and the schema is `golem_worker_service_session_store`, separate from the other stores. Supply the password through `GOLEM__POSTGRES__PASSWORD`, not a checked-in file. `cache.type = "Redis"` selects Redis for gateway sessions instead. To override only the session store, use the unsupported `advanced.worker_service.gateway_session_storage` section. The same settings apply to the single executable and the worker service binary.
+With the cache disabled, `state_store = "postgres"` selects PostgreSQL for gateway sessions. The connection comes from `[postgres]`, and the schema is `golem_worker_service_session_store`, separate from the other stores. Supply the password through `GOLEM__POSTGRES__PASSWORD`, not a checked-in file. `cache.enabled = true` selects Redis for gateway sessions instead. Set its connection fields directly under `[cache]`. To override only the session store, use the unsupported `advanced.worker_service.gateway_session_storage` section. The same settings apply to the single executable and the worker service binary.
 
 See also: [configuration](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.toml), [environment variables](https://github.com/golemcloud/golem/blob/main/golem-worker-service/config/worker-service.sample.env), [docker image](https://hub.docker.com/r/golemservices/golem-worker-service)
 

@@ -10,6 +10,7 @@ it("reads the shared PostgreSQL settings and refuses a different state store", a
     GOLEM__POSTGRES__DATABASE: "installation",
     GOLEM__POSTGRES__USERNAME: "billing",
     GOLEM__POSTGRES__PASSWORD: "test-password",
+    GOLEM__POSTGRES__MAX_CONNECTIONS: "37",
     GOLEM_CLOUD_BILLING_DB_SCHEMA: "billing_tables",
     BETTER_AUTH_URL: "https://billing.example.com",
     BETTER_AUTH_SECRET: "test-secret-with-at-least-32-characters",
@@ -24,6 +25,7 @@ it("reads the shared PostgreSQL settings and refuses a different state store", a
     port: 25432,
     database: "installation",
     username: "billing",
+    maxConnections: 37,
     schema: "billing_tables"
   })
   expect(Redacted.value(config.db.password)).toBe("test-password")

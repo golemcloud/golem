@@ -3491,16 +3491,17 @@ admission and write pressure recovery apply. APFS volumes in one container share
 so byte targets are approximate. Object counts are synthetic and very large, so object targets
 always pass. `Temporary` and `Directory` do not use this pressure recovery.
 
-On macOS, the local `golem server run` command defaults to `Apfs` at `<data_dir>/agents` and
-`Enabled` filesystem snapshots. No filesystem TOML or environment settings are needed. The
+On macOS, the local `golem server run` command defaults to `Apfs` at `<data_dir>/agents`.
+Filesystem snapshots are enabled by default for this native macOS local server. Other server
+defaults disable them. Set `filesystem_snapshots.enabled = true` or
+`GOLEM__FILESYSTEM_SNAPSHOTS__ENABLED=true` to enable them elsewhere. The
 `--agent-filesystem-root` option changes the default root. The filesystem settings are part of
 the server configuration, as `advanced.worker_executor.filesystem_storage` and
 `filesystem_snapshots` in the `--config` file or in the
 `GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__*` and `GOLEM__FILESYSTEM_SNAPSHOTS__*` environment variables, and `cli/golem/src/config.rs` applies the platform
-defaults as the lowest layer above the defaults. Standalone executors and local
-servers on other platforms keep disabled snapshots by default. To choose `Directory` or `Temporary`
-on macOS, also set `filesystem_snapshots.type = "Disabled"`. An agent still needs a snapshotting
-policy. Without a configured `repository_key`, the local server generates a 64-byte repository key
+defaults as the lowest layer above the defaults. To choose `Directory` or `Temporary`, explicitly set
+`filesystem_snapshots.enabled = false`. An agent still needs a snapshotting
+policy. With snapshots enabled and no configured `repository_key`, the local server generates a 64-byte repository key
 and stores its 128 hex characters in `<data_dir>/filesystem-snapshots.repository-key`, with permissions
 `0600` on Unix. Later starts use the retained repository key. A configured key takes precedence.
 Without one, a corrupt retained repository key prevents startup and is not replaced. The snapshot

@@ -1,7 +1,6 @@
 ## Generated from default config
 blob_store = "data_disk"
 data_dir = "/var/lib/golem"
-outbound_sockets = false
 retained_update_snapshots = 2
 state_store = "sqlite"
 
@@ -47,9 +46,7 @@ host = "localhost"
 port = 9090
 
 [cache]
-type = "Disabled"
-
-[cache.config]
+enabled = false
 
 [internal_grpc_tls]
 enabled = false
@@ -100,7 +97,6 @@ span_events_full = false
 without_time = false
 
 [object_storage]
-artifacts_bucket = "golem-artifacts"
 components_bucket = "golem-components"
 data_bucket = "golem-data"
 object_prefix = ""
@@ -111,6 +107,9 @@ enabled = false
 host = "localhost"
 port = 4318
 service_name = "golem"
+
+[outbound_sockets]
+enabled = false
 
 [postgres]
 database = "golem"
@@ -130,7 +129,6 @@ username = "golem"
 # type = "S3"
 #
 # [advanced.component_compilation_service.blob_storage.config]
-# artifacts_bucket = "golem-artifacts"
 # compilation_cache_bucket = "golem-compiled-components"
 # components_bucket = "component-store"
 # compressed_oplog_buckets = ["oplog-archive-1"]
@@ -187,8 +185,6 @@ username = "golem"
 # type = "Disabled"
 #
 # [advanced.component_compilation_service.grpc.tls.config]
-#
-# [advanced.component_compilation_service.installation]
 #
 # [advanced.component_compilation_service.registry_service]
 # type = "Static"

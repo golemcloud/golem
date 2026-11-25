@@ -3,6 +3,8 @@
 The `golemservices/golem` image and Caddy for TLS. The guide is
 [All-in-one image with Docker Compose](https://learn.golem.cloud/next/deploy/vm#all-in-one-image-with-docker-compose).
 
+First [build the images from this checkout](../README.md). The example uses `golemservices/golem:local`, not a published 1.6 image.
+
 Use Docker Compose 2.30 or newer. It reads `golem.env` in raw format, without expanding dollar
 signs in passwords. Write values in that file without surrounding quotes.
 

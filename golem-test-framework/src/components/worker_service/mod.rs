@@ -143,17 +143,17 @@ async fn env_vars(
         .unwrap_or("redis")
     {
         "redis" => builder
-            .with_str("GOLEM__CACHE__TYPE", "Redis")
+            .with_str("GOLEM__CACHE__ENABLED", "true")
             .with(
-                "GOLEM__CACHE__CONFIG__HOST",
+                "GOLEM__CACHE__HOST",
                 redis.private_host(),
             )
             .with(
-                "GOLEM__CACHE__CONFIG__PORT",
+                "GOLEM__CACHE__PORT",
                 redis.private_port().to_string(),
             )
             .with(
-                "GOLEM__CACHE__CONFIG__KEY_PREFIX",
+                "GOLEM__CACHE__KEY_PREFIX",
                 redis.prefix().to_string(),
             ),
         "sqlite" => builder

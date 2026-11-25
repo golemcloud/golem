@@ -9,14 +9,14 @@ x-aliases:
 services:
   # Requests for GOLEM_ROUTER_MANAGEMENT_HOST reach the management API; requests for every
   # other host reach the HTTP API and MCP deployments on the worker service's custom request port.
-  # Pull all Golem images at the same release version. The optional build definitions package
-  # prebuilt Linux binaries from one checkout; they do not compile Rust.
+  # Build all Golem images from this checkout; see ../README.md. These definitions package
+  # prebuilt Linux binaries; they do not compile Rust.
   router:
     image: golemservices/golem-router:${GOLEM_IMAGES_VERSION}
     build:
       context: ../..
       dockerfile: golem-router/docker/Dockerfile
-    pull_policy: missing
+    pull_policy: never
     ports:
       - "127.0.0.1:${GOLEM_ROUTER_PORT}:8080"
     environment:
@@ -51,7 +51,7 @@ services:
     build:
       context: ../..
       dockerfile: golem-registry-service/docker/Dockerfile
-    pull_policy: missing
+    pull_policy: never
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]
@@ -97,7 +97,7 @@ services:
     build:
       context: ../..
       dockerfile: golem-shard-manager/docker/Dockerfile
-    pull_policy: missing
+    pull_policy: never
     restart: on-failure
     environment:
       RUST_BACKTRACE: 1
@@ -129,7 +129,7 @@ services:
     build:
       context: ../..
       dockerfile: golem-worker-service/docker/Dockerfile
-    pull_policy: missing
+    pull_policy: never
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]
@@ -142,9 +142,9 @@ services:
       GOLEM_ADVANCED__WORKER_SERVICE__PORT: ${WORKER_SERVICE_HTTP_PORT}
       GOLEM_ADVANCED__WORKER_SERVICE__GRPC__PORT: ${WORKER_SERVICE_GRPC_PORT}
 
-      GOLEM__CACHE__TYPE: "Redis"
-      GOLEM__CACHE__CONFIG__HOST: redis
-      GOLEM__CACHE__CONFIG__PORT: 6379
+      GOLEM__CACHE__ENABLED: "true"
+      GOLEM__CACHE__HOST: redis
+      GOLEM__CACHE__PORT: 6379
 
       GOLEM_ADVANCED__WORKER_SERVICE__REGISTRY_SERVICE__HOST: golem-registry-service
       GOLEM_ADVANCED__WORKER_SERVICE__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
@@ -173,7 +173,7 @@ services:
     build:
       context: ../..
       dockerfile: golem-component-compilation-service/docker/Dockerfile
-    pull_policy: missing
+    pull_policy: never
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]
@@ -196,7 +196,7 @@ services:
     build:
       context: ../..
       dockerfile: golem-worker-executor/docker/Dockerfile
-    pull_policy: missing
+    pull_policy: never
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]

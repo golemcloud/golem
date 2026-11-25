@@ -14,7 +14,9 @@ A fixed cluster runs each Golem service from its own image on [Docker Hub](https
 | Component compilation service | `golemservices/golem-component-compilation-service` | 1 or more | HTTP 8084, gRPC 9010 |
 | Worker executor | `golemservices/golem-worker-executor` | N | HTTP 8082, gRPC 9000 |
 
-Every service reads the same self-host settings. `GOLEM__<SETTING>` environment variables override the TOML file. Unsupported service settings keep their paths under `advanced.<service>` or `GOLEM_ADVANCED__<SERVICE>__<PATH>`. For example, `GOLEM_ADVANCED__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES='["10.0.0.5/32"]'` sets the worker service's trusted ranges. The [Deployment](/next/deploy#golem-services) page links the generated references.
+Every service reads the same server settings. Choices use lowercase values, switches use `enabled = true` or `enabled = false`, and their settings sit directly in the section, without `type` or `config`. Unsupported service settings keep their paths and values under `advanced.<service>` or `GOLEM_ADVANCED__<SERVICE>__<PATH>`. For example, `GOLEM_ADVANCED__WORKER_SERVICE__ROUTE_RESOLVER__TRUSTED_INGRESS_ADDRESSES='["10.0.0.5/32"]'` sets the worker service's trusted ranges. The [Deployment](/next/deploy#golem-services) page links the generated references.
+
+Environment variables override the TOML file within each channel. The advanced channel overrides the supported settings, even when an advanced value comes from the file and a supported value comes from the environment. For example, `advanced.worker_executor.agent_sockets.enabled = true` in the file overrides `GOLEM__OUTBOUND_SOCKETS__ENABLED=false`.
 
 ## Storage
 
@@ -31,7 +33,7 @@ Each store has its own schema in the same database. These are the schema names t
 | Executor scheduler | `golem_worker_executor_scheduler` |
 | Worker service sessions | `golem_worker_service_session_store` |
 
-Set `GOLEM__STATE_STORE=postgres` and the common `GOLEM__POSTGRES__HOST`, `PORT`, `DATABASE`, `USERNAME`, `PASSWORD` and `MAX_CONNECTIONS` fields on each service. The module assigns these schemas. With sessions in PostgreSQL, the cluster needs no Redis. To use a Redis cache, set `GOLEM__CACHE__TYPE=Redis` and its connection under `GOLEM__CACHE__CONFIG__*`. The state remains in PostgreSQL.
+Set `GOLEM__STATE_STORE=postgres` and the common `GOLEM__POSTGRES__HOST`, `PORT`, `DATABASE`, `USERNAME`, `PASSWORD` and `MAX_CONNECTIONS` fields on each service. The module assigns these schemas. With sessions in PostgreSQL, the cluster needs no Redis. To use a Redis cache, set `GOLEM__CACHE__ENABLED=true` and its connection under `GOLEM__CACHE__*`, for example `GOLEM__CACHE__HOST`. This also selects Redis for gateway and MCP sessions. Agent state remains in PostgreSQL. Sessions stored in PostgreSQL are not read through the Redis store, and clearing Redis ends the sessions it holds.
 
 ### S3
 
@@ -41,11 +43,10 @@ The registry service, the worker service, the component compilation service and 
 GOLEM__BLOB_STORE=s3
 GOLEM__OBJECT_STORAGE__REGION=us-east-1
 GOLEM__OBJECT_STORAGE__COMPONENTS_BUCKET=golem
-GOLEM__OBJECT_STORAGE__ARTIFACTS_BUCKET=golem
 GOLEM__OBJECT_STORAGE__DATA_BUCKET=golem
 ```
 
-The module enables namespace prefixes, so the buckets can be the same. For an S3-compatible service, add `GOLEM__OBJECT_STORAGE__ENDPOINT_URL` and, if needed, `GOLEM__OBJECT_STORAGE__PATH_STYLE=true`. `GOLEM__OBJECT_STORAGE__PUBLIC_ENDPOINT_URL` supplies the optional public endpoint for downloads. The S3 client reads credentials from the standard AWS sources. An unavailable selected store stops startup and never selects local storage instead. See [Blob storage on S3](/next/operate/persistence#blob-storage-on-s3).
+The module enables namespace prefixes, so the buckets can be the same. For an S3-compatible service, add `GOLEM__OBJECT_STORAGE__ENDPOINT_URL` and, if needed, `GOLEM__OBJECT_STORAGE__PATH_STYLE=true`. The S3 client reads credentials from the standard AWS sources. An unavailable selected store stops startup and never selects local storage instead. See [Blob storage on S3](/next/operate/persistence#blob-storage-on-s3).
 
 ## Secrets
 
@@ -80,7 +81,7 @@ Run **one** shard manager replica in SQL mode (`GOLEM_ADVANCED__SHARD_MANAGER__P
 
 While the shard manager restarts, the executors keep their shards until their lease runs out (1 minute by default), but new executors cannot register. Raise `GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS` on the executors, so that an executor that starts during a shard manager restart retries its registration until the shard manager is back.
 
-etcd mode (`GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__TYPE=Etcd`) allows more than one replica, but only one of them, the leader, opens its gRPC port. Use it only where the platform sends traffic to the ready replica alone, such as Kubernetes with a readiness probe on the gRPC port. Platforms that replace a task that fails its health check, such as ECS, would replace every standby. etcd must run on volumes and on the private network, because the shard manager talks to it over plain HTTP. See [Shard Manager](/next/deploy#shard-manager).
+etcd mode (`GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__TYPE=Etcd`) allows more than one replica. Every replica opens its gRPC port. A standby returns a retry response that names the leader once the leader is ready. Use `/readyz` for readiness, not TCP reachability to select the leader. A standby is ready while etcd answers it and its advertised address is reachable. Keep etcd on persistent volumes and the private network. Configure `etcd.tls` to use TLS for its connections. See [Shard Manager](/next/deploy#shard-manager).
 
 <Callout type="warning">
   Do not move the shard manager to another store, such as from Postgres to etcd, in a cluster that already runs agents. A new store starts the shard epochs over, and the executors refuse to write the oplogs of existing agents until the epochs are cleared as [Shard Manager](/next/deploy#shard-manager) describes.

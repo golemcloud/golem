@@ -1,7 +1,6 @@
 ## Generated from default config
 blob_store = "data_disk"
 data_dir = "/var/lib/golem"
-outbound_sockets = false
 retained_update_snapshots = 2
 state_store = "sqlite"
 
@@ -341,14 +340,10 @@ wait_suspend_check_interval = "10s"
 wait_suspend_grace = "1s"
 
 [cache]
-type = "Disabled"
-
-[cache.config]
+enabled = false
 
 [filesystem_snapshots]
-type = "Disabled"
-
-[filesystem_snapshots.config]
+enabled = false
 
 [internal_grpc_tls]
 enabled = false
@@ -399,7 +394,6 @@ span_events_full = false
 without_time = false
 
 [object_storage]
-artifacts_bucket = "golem-artifacts"
 components_bucket = "golem-components"
 data_bucket = "golem-data"
 object_prefix = ""
@@ -410,6 +404,9 @@ enabled = false
 host = "localhost"
 port = 4318
 service_name = "golem"
+
+[outbound_sockets]
+enabled = false
 
 [postgres]
 database = "golem"
@@ -461,7 +458,6 @@ username = "golem"
 # type = "S3"
 #
 # [advanced.worker_executor.blob_storage.config]
-# artifacts_bucket = "golem-artifacts"
 # compilation_cache_bucket = "golem-compiled-components"
 # components_bucket = "component-store"
 # compressed_oplog_buckets = ["oplog-archive-1"]
@@ -587,8 +583,6 @@ username = "golem"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-#
-# [advanced.worker_executor.installation]
 #
 # [advanced.worker_executor.invocation_results]
 # bloom_bits = 1048576
@@ -1030,8 +1024,6 @@ username = "golem"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-#
-# [advanced.worker_executor.installation]
 #
 # [advanced.worker_executor.invocation_results]
 # bloom_bits = 1048576
@@ -1493,8 +1485,6 @@ username = "golem"
 # max_jitter_factor = 0.15
 # min_delay = "100ms"
 # multiplier = 3.0
-#
-# [advanced.worker_executor.installation]
 #
 # [advanced.worker_executor.invocation_results]
 # bloom_bits = 1048576

@@ -42,5 +42,6 @@ uuid = { workspace = true }
 wasmtime = { workspace = true }
 
 [dev-dependencies]
+aws-sdk-s3 = { workspace = true }
 figment = { workspace = true, features = ["test"] }
 test-r = { workspace = true }

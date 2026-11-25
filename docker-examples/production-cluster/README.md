@@ -4,6 +4,8 @@ The per-service images with several worker executors, Caddy for TLS, and a Postg
 an S3 bucket outside the host. The guide is
 [Fixed cluster with Docker Compose](https://learn.golem.cloud/next/deploy/vm#fixed-cluster-with-docker-compose).
 
+First [build the images from this checkout](../README.md). Every Golem image uses the local tag `local`; the example does not pull an older published image.
+
 ```sh
 cp .env.example .env   # then fill in every value
 docker compose up -d

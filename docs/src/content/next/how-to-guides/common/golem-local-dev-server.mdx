@@ -29,11 +29,11 @@ golem server run
 | `--clean` | Clean the data directory before starting | `false` |
 | `--agent-filesystem-root <PATH>` | Override the default root of the agent filesystems. Layout: `<root>/<environment_id>/<component_id>/<agent_segment>/`; the agent segment is the agent name with each character that is not an ASCII letter, a digit, `-` or `_` replaced by `_`, cut to 32 characters, then `-` and the BLAKE3 hash of the agent id | `<data_dir>/agents` on macOS; temporary directories on other platforms |
 
-On macOS, the local server defaults to `Apfs` storage at `<data_dir>/agents` and enables filesystem snapshots. APFS is for local development and tests only. It provides no per-agent disk limits or filesystem usage metering. Snapshots use blob storage at `<data_dir>/blobs`. The server generates and retains a repository key in `<data_dir>/filesystem-snapshots.repository-key` when no key is configured.
+On macOS, the native local server defaults to `Apfs` storage at `<data_dir>/agents` with filesystem snapshots enabled. APFS is for local development and tests only. It provides no per-agent disk limits or filesystem usage metering. To disable snapshots, set `filesystem_snapshots.enabled = false` or `GOLEM__FILESYSTEM_SNAPSHOTS__ENABLED=false`. Snapshots use blob storage at `<data_dir>/blobs`. With snapshots enabled, the server generates and retains a repository key in `<data_dir>/filesystem-snapshots.repository-key` when no key is configured.
 
 On other platforms, the default storage is `Temporary` and filesystem snapshots are disabled. Supplying `--agent-filesystem-root` selects `Directory` storage there, with filesystem snapshots still disabled.
 
-The filesystem settings are `[advanced.worker_executor.filesystem_storage]` and `[filesystem_snapshots]` in the `--config` file, or the `GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__*` and `GOLEM__FILESYSTEM_SNAPSHOTS__*` environment variables; see [Configuration File](#configuration-file). They override the platform defaults and `localServer.agentFilesystemRoot`, and `--agent-filesystem-root` overrides them. A storage mode that another layer selects does not keep the root of the replaced mode, so give `root` together with `type`. To use `Directory` or `Temporary` on macOS, also set `filesystem_snapshots.type = "Disabled"`.
+The filesystem settings are `[advanced.worker_executor.filesystem_storage]` and `[filesystem_snapshots]` in the `--config` file, or the `GOLEM_ADVANCED__WORKER_EXECUTOR__FILESYSTEM_STORAGE__*` and `GOLEM__FILESYSTEM_SNAPSHOTS__*` environment variables; see [Configuration File](#configuration-file). They override the platform defaults and `localServer.agentFilesystemRoot`, and `--agent-filesystem-root` overrides them. A storage mode that another layer selects does not keep the root of the replaced mode, so give `root` together with `type`. To use `Directory` or `Temporary`, keep `filesystem_snapshots.enabled = false`.
 
 #### Examples
 
@@ -142,7 +142,7 @@ localServer:
 
 `golem server run --config <FILE>` reads a TOML file that configures every service of the server. Without it, the server uses the local development setup: SQLite databases and blobs in the data directory, login disabled, an unlimited plan, and the well-known local admin token that other `golem` commands use for the built-in local preset.
 
-The file uses the same self-host settings as the standalone binaries. Set `state_store` to `"sqlite"` or `"postgres"`, and `blob_store` to `"data_disk"` or `"s3"`. The top-level `data_dir` locates local state. Unsupported settings keep their service paths below `advanced.<service>`:
+The file uses the same server settings as the standalone binaries. Choices use lowercase values: set `state_store` to `"sqlite"` or `"postgres"`, and `blob_store` to `"data_disk"` or `"s3"`. Switches use an `enabled` boolean. The default is `false` for `cache`. Filesystem snapshots default to `true` on the native macOS local server and `false` elsewhere. Set Redis fields directly under `[cache]` and snapshot store fields directly under `[filesystem_snapshots]`, without `type` or `config`. The top-level `data_dir` locates local state. Unsupported settings keep their service paths and values below `advanced.<service>`:
 
 | Section | Service |
 |---------|---------|
@@ -217,7 +217,7 @@ username = "golem"
 max_connections = 10
 ```
 
-Supply the password through `GOLEM__POSTGRES__PASSWORD`. For S3, set `blob_store = "s3"` at the top level and the `components_bucket`, `artifacts_bucket` and `data_bucket` fields in `[object_storage]`. Namespace prefixes keep blob kinds separate, so the buckets can be the same. The same settings reach every service. Plan quotas are in `[advanced.registry_service.initial_plans.default]`, and OAuth2 login is `[advanced.registry_service.login]`.
+Supply the password through `GOLEM__POSTGRES__PASSWORD`. For S3, set `blob_store = "s3"` at the top level and the `components_bucket` and `data_bucket` fields in `[object_storage]`. Namespace prefixes keep blob kinds separate, so the buckets can be the same. The same settings reach every service. Plan quotas are in `[advanced.registry_service.initial_plans.default]`, and OAuth2 login is `[advanced.registry_service.login]`.
 
 In the default SQLite setup, all state is in the data directory: `registry.db`, `shard_manager.db`, `scheduler.db` and `gateway-sessions.db`, one database per agent in `kv-store/*.db`, and the blobs in `blobs/`.
 

@@ -98,7 +98,7 @@ impl DbInfo {
     ) -> HashMap<String, String> {
         match self {
             DbInfo::Postgres(pg) => pg.env(service_namespace, private_connection),
-            DbInfo::Mysql(m) => m.env(service_namespace, private_connection),
+            DbInfo::Mysql(_) => panic!("MySQL-backed service state is not supported"),
             DbInfo::Sqlite(db_path) => [
                 ("GOLEM__STATE_STORE".to_string(), "sqlite".to_string()),
                 (
@@ -305,52 +305,6 @@ pub struct MysqlInfo {
 }
 
 impl MysqlInfo {
-    pub fn env(
-        &self,
-        service_namespace: &str,
-        private_connection: bool,
-    ) -> HashMap<String, String> {
-        HashMap::from([
-            ("GOLEM__DB__TYPE".to_string(), "Mysql".to_string()),
-            (
-                "GOLEM__DB__CONFIG__MAX_CONNECTIONS".to_string(),
-                "10".to_string(),
-            ),
-            (
-                "GOLEM__DB__CONFIG__HOST".to_string(),
-                if private_connection {
-                    self.private_host.clone()
-                } else {
-                    self.public_host.clone()
-                },
-            ),
-            (
-                "GOLEM__DB__CONFIG__PORT".to_string(),
-                if private_connection {
-                    self.private_port.to_string()
-                } else {
-                    self.public_port.to_string()
-                },
-            ),
-            (
-                "GOLEM__DB__CONFIG__SCHEMA".to_string(),
-                service_namespace.to_string(),
-            ),
-            (
-                "GOLEM__DB__CONFIG__DATABASE".to_string(),
-                self.database_name.clone(),
-            ),
-            (
-                "GOLEM__DB__CONFIG__USERNAME".to_string(),
-                self.username.clone(),
-            ),
-            (
-                "GOLEM__DB__CONFIG__PASSWORD".to_string(),
-                self.password.clone(),
-            ),
-        ])
-    }
-
     pub fn public_connection_string(&self) -> String {
         format!(
             "mysql://{}:{}@{}:{}/{}",
@@ -429,5 +383,26 @@ impl RdbConnection for MysqlInfo {
             "mysql://{}:{}@{}:{}/{}",
             self.username, self.password, self.private_host, self.private_port, self.database_name
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DbInfo, MysqlInfo};
+    use test_r::test;
+
+    #[test]
+    #[should_panic(expected = "MySQL-backed service state is not supported")]
+    fn service_environment_refuses_mysql_state() {
+        DbInfo::Mysql(MysqlInfo {
+            private_host: "mysql.internal".to_string(),
+            private_port: 3306,
+            public_host: "localhost".to_string(),
+            public_port: 13306,
+            database_name: "unused".to_string(),
+            username: "unused".to_string(),
+            password: "unused".to_string(),
+        })
+        .env("golem_worker_executor", false);
     }
 }

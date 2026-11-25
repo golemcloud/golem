@@ -31,8 +31,6 @@ use std::time::Duration;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
-    #[serde(default)]
-    pub installation: golem_common::config::self_host::InstallationConfig,
     // Tracing
     pub tracing: TracingConfig,
 
@@ -119,7 +117,6 @@ impl ServerConfig {
 impl Default for ServerConfig {
     fn default() -> Self {
         Self {
-            installation: Default::default(),
             tracing: TracingConfig::local_dev("component-compilation-service"),
             registry_service: Default::default(),
             compiled_component_service: Default::default(),

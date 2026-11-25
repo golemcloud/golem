@@ -25,6 +25,7 @@ services:
   # `docker compose up` stops the old container before it starts the new one.
   golem:
     image: golemservices/golem:${GOLEM_IMAGE_VERSION}
+    pull_policy: never
     restart: unless-stopped
     env_file:
       # Keep generated values literal, including dollar signs in database passwords.

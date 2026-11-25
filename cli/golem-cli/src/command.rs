@@ -3370,10 +3370,11 @@ pub mod server {
 
     #[derive(Debug, Args, Default)]
     pub struct RunArgs {
-        /// TOML configuration file with the common self-host settings. Unsupported settings go
+        /// TOML configuration file with the common server settings. Unsupported settings go
         /// under `advanced.<service>`, with their service paths unchanged.
         /// `GOLEM__<SETTING>` and `GOLEM_ADVANCED__<SERVICE>__<PATH>` environment variables
-        /// override the file. The flags below override both.
+        /// override the file within their channel. Advanced settings override supported settings,
+        /// even when the advanced value comes from the file. The flags below override both.
         #[clap(long, value_name = "FILE")]
         pub config: Option<PathBuf>,
 

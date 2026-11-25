@@ -313,7 +313,7 @@ impl TracingConfig {
     pub fn with_env_overrides(self) -> Self {
         Figment::new()
             .merge(Serialized::default("tracing", self))
-            .merge(crate::config::self_host::project(
+            .merge(crate::config::server_settings::project(
                 "server",
                 &env_config_provider(),
             ))
@@ -711,21 +711,7 @@ where
         layers.push(propagation_layer().boxed());
     }
 
-    if config.stdout.enabled {
-        layers.push(make_layer(
-            &config.stdout,
-            make_filter(Output::Stdout),
-            stdout,
-        ))
-    }
-
-    if config.stderr.enabled {
-        layers.push(make_layer(
-            &config.stdout,
-            make_filter(Output::Stderr),
-            stderr,
-        ))
-    }
+    layers.extend(stdio_layers(config, &make_filter, stdout, stderr));
 
     match &config.file_name {
         Some(file_name) if config.file.enabled => {
@@ -805,6 +791,31 @@ pub fn init_tracing_with_default_env_filter(config: &TracingConfig) -> Option<Sd
 
 pub fn init_tracing_with_default_debug_env_filter(config: &TracingConfig) {
     init_tracing(config, filter::for_all_outputs::default_debug_env());
+}
+
+fn stdio_layers<F, W1, W2>(
+    config: &TracingConfig,
+    make_filter: &F,
+    stdout: W1,
+    stderr: W2,
+) -> impl Iterator<Item = Box<dyn Layer<Registry> + Send + Sync>>
+where
+    F: Fn(Output) -> filter::Boxed,
+    W1: for<'writer> MakeWriter<'writer> + 'static + Send + Sync,
+    W2: for<'writer> MakeWriter<'writer> + 'static + Send + Sync,
+{
+    [
+        config
+            .stdout
+            .enabled
+            .then(|| make_layer(&config.stdout, make_filter(Output::Stdout), stdout)),
+        config
+            .stderr
+            .enabled
+            .then(|| make_layer(&config.stderr, make_filter(Output::Stderr), stderr)),
+    ]
+    .into_iter()
+    .flatten()
 }
 
 #[allow(clippy::collapsible_else_if)]
@@ -982,6 +993,127 @@ pub(crate) mod format {
 #[cfg(test)]
 pub(crate) mod test {
     use test_r::test;
+
+    #[test]
+    fn standard_streams_keep_their_own_settings_filters_and_writers() {
+        use super::{Output, OutputConfig, TracingConfig, stdio_layers};
+        use std::sync::Arc;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let assert_outputs = |stdout: OutputConfig, stderr: OutputConfig| {
+            let config = TracingConfig {
+                stdout,
+                stderr,
+                ..TracingConfig::local_dev("stdio-settings")
+            };
+            let stdout_file = tempfile::NamedTempFile::new().unwrap();
+            let stderr_file = tempfile::NamedTempFile::new().unwrap();
+            let filters = |output| -> super::filter::Boxed {
+                let target = match output {
+                    Output::Stdout => {
+                        assert!(config.stdout.enabled);
+                        "stdio_stdout_probe"
+                    }
+                    Output::Stderr => {
+                        assert!(config.stderr.enabled);
+                        "stdio_stderr_probe"
+                    }
+                    _ => panic!("only standard-stream filters are needed"),
+                };
+                Box::new(tracing_subscriber::filter::filter_fn(move |metadata| {
+                    metadata.target() == target
+                }))
+            };
+            let layers = stdio_layers(
+                &config,
+                &filters,
+                Arc::new(stdout_file.reopen().unwrap()),
+                Arc::new(stderr_file.reopen().unwrap()),
+            )
+            .collect::<Vec<_>>();
+            tracing::subscriber::with_default(tracing_subscriber::registry().with(layers), || {
+                tracing::info!(target: "stdio_stdout_probe", "stdout-marker");
+                tracing::info!(target: "stdio_stderr_probe", "stderr-marker");
+                tracing::info!(target: "stdio_rejected_probe", "rejected-marker");
+            });
+            [
+                (
+                    &stdout_file,
+                    &config.stdout,
+                    "stdout-marker",
+                    "stderr-marker",
+                ),
+                (
+                    &stderr_file,
+                    &config.stderr,
+                    "stderr-marker",
+                    "stdout-marker",
+                ),
+            ]
+            .into_iter()
+            .for_each(|(file, output, accepted, rejected)| {
+                let contents = std::fs::read_to_string(file.path()).unwrap();
+                if !output.enabled {
+                    assert!(contents.is_empty(), "disabled stream: {contents}");
+                    return;
+                }
+                assert!(
+                    contents.contains(accepted),
+                    "missing {accepted}: {contents}"
+                );
+                assert!(!contents.contains(rejected), "wrong stream: {contents}");
+                assert!(
+                    !contents.contains("rejected-marker"),
+                    "unfiltered: {contents}"
+                );
+                let json = serde_json::from_str::<serde_json::Value>(&contents);
+                if output.json {
+                    let json = json.expect("the stream must use its own JSON format");
+                    let message = if output.json_flatten {
+                        &json["message"]
+                    } else {
+                        &json["fields"]["message"]
+                    };
+                    assert_eq!(message, accepted);
+                    assert_eq!(json.get("filename").is_some(), output.json_source_location);
+                    assert_eq!(
+                        json.get("line_number").is_some(),
+                        output.json_source_location
+                    );
+                } else {
+                    assert!(json.is_err(), "the stream must use its own text format");
+                }
+            });
+        };
+
+        [(true, true), (true, false), (false, true), (false, false)]
+            .into_iter()
+            .for_each(|(stdout_enabled, stderr_enabled)| {
+                [
+                    (OutputConfig::text(), OutputConfig::json()),
+                    (OutputConfig::json(), OutputConfig::text()),
+                ]
+                .into_iter()
+                .for_each(|(mut stdout, mut stderr)| {
+                    stdout.enabled = stdout_enabled;
+                    stderr.enabled = stderr_enabled;
+                    assert_outputs(stdout, stderr);
+                });
+            });
+        [false, true].into_iter().for_each(|source_location| {
+            let stdout = OutputConfig {
+                json_source_location: source_location,
+                json_flatten: source_location,
+                ..OutputConfig::json()
+            };
+            let stderr = OutputConfig {
+                json_source_location: !source_location,
+                json_flatten: !source_location,
+                ..OutputConfig::json()
+            };
+            assert_outputs(stdout, stderr);
+        });
+    }
 
     #[test]
     fn tracing_env_overrides_use_surface_and_server_advanced_settings() {

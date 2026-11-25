@@ -27,10 +27,10 @@ x-aliases:
 services:
   # Requests for GOLEM_ROUTER_MANAGEMENT_HOST reach the management API; requests for every
   # other host reach the HTTP API and MCP deployments on the worker service's custom request port.
-  # Use the same published release for every Golem image, including the router.
+  # Build every Golem image from this checkout; see ../README.md.
   router:
     image: golemservices/golem-router:${GOLEM_IMAGES_VERSION}
-    pull_policy: missing
+    pull_policy: never
     ports:
       - "${GOLEM_ROUTER_PORT}:8080"
     environment:
@@ -94,7 +94,7 @@ services:
 
   golem-registry-service:
     image: golemservices/registry-service:${GOLEM_IMAGES_VERSION}
-    pull_policy: always
+    pull_policy: never
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]
@@ -141,7 +141,7 @@ services:
   # and each replica advertises its own service name as the host to reach it at.
   golem-shard-manager-1: &shard-manager
     image: golemservices/golem-shard-manager:${GOLEM_IMAGES_VERSION}
-    pull_policy: always
+    pull_policy: never
     restart: on-failure
     environment:
       <<: *shard-manager-env-vars
@@ -169,7 +169,7 @@ services:
 
   golem-worker-service:
     image: golemservices/golem-worker-service:${GOLEM_IMAGES_VERSION}
-    pull_policy: always
+    pull_policy: never
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]
@@ -182,9 +182,9 @@ services:
       GOLEM_ADVANCED__WORKER_SERVICE__PORT: ${WORKER_SERVICE_HTTP_PORT}
       GOLEM_ADVANCED__WORKER_SERVICE__GRPC__PORT: ${WORKER_SERVICE_GRPC_PORT}
 
-      GOLEM__CACHE__TYPE: "Redis"
-      GOLEM__CACHE__CONFIG__HOST: redis
-      GOLEM__CACHE__CONFIG__PORT: 6379
+      GOLEM__CACHE__ENABLED: "true"
+      GOLEM__CACHE__HOST: redis
+      GOLEM__CACHE__PORT: 6379
 
       GOLEM_ADVANCED__WORKER_SERVICE__REGISTRY_SERVICE__HOST: golem-registry-service
       GOLEM_ADVANCED__WORKER_SERVICE__REGISTRY_SERVICE__PORT: ${REGISTRY_SERVICE_GRPC_PORT}
@@ -214,7 +214,7 @@ services:
 
   golem-component-compilation-service:
     image: golemservices/golem-component-compilation-service:${GOLEM_IMAGES_VERSION}
-    pull_policy: always
+    pull_policy: never
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]
@@ -234,7 +234,7 @@ services:
 
   golem-worker-executor:
     image: golemservices/golem-worker-executor:${GOLEM_IMAGES_VERSION}
-    pull_policy: always
+    pull_policy: never
     restart: on-failure
     environment:
       <<: [*blob-storage-env-vars]

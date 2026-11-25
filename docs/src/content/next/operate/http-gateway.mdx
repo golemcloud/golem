@@ -75,11 +75,11 @@ such a peer must carry both headers, or it fails. So allow only the ingress pods
 connect to the custom request port and the MCP port, with a network policy whose
 ingress rule for ports 9006 and 9007 selects only the ingress proxy pods, for
 example a Kubernetes `NetworkPolicy` or a `CiliumNetworkPolicy`. For the single
-`golem` binary with `router.management_host`, restrict its router port (default
+`golem` binary with `advanced.server.router.management_host`, restrict its router port (default
 9881) in the same way.
 
 The setting applies to the custom request port, the MCP port and, in the single
-`golem` binary, the host routing of `router.management_host`.
+`golem` binary, the host routing of `advanced.server.router.management_host`.
 
 Test disconnect/reset through the actual proxy, including while waiting for a
 response head. A client timeout alone does not prove upstream cancellation. Keep
@@ -114,7 +114,7 @@ reserved_domains = ["api.golem.example.com"]
 Reserved domains match by host, ignoring case, port, and a trailing dot. Reservation
 checks apply to new registrations; existing registrations remain in place.
 
-The single `golem` executable has this router built in. Set `router.management_host`
+The single `golem` executable has this router built in. Set `advanced.server.router.management_host`
 (`GOLEM_ADVANCED__SERVER__ROUTER__MANAGEMENT_HOST`); it reserves that host itself. For the separate
 Envoy image, see [Golem Router](/next/deploy#golem-router).
 

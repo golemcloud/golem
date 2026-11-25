@@ -1104,7 +1104,7 @@ exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-
 [tasks.cli-integration-tests-agents-streaming]
 dependencies = ["build-cli-test-bins-non-ci", "build-sdk-ts", "ensure-builtin-artifacts"]
 description = "Runs the it-cli 'agents_streaming' shard (the two long generated streaming drivers)"
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM_LOG_FILTER" = "golem_worker_executor::durable_host=debug,golem_worker_executor::grpc=debug,golem_worker_service::api::invocation_session=debug" }
+env = { "RUST_LOG" = "info,golem_worker_executor::durable_host=debug,golem_worker_executor::grpc=debug,golem_worker_service::api::invocation_session=debug", "RUST_BACKTRACE" = "1", "QUIET" = "true" }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package golem-cli --test integration ":tag:agents_streaming" -- --nocapture --test-threads=%{CLI_TEST_THREADS} --report-time %{JUNIT_OPTS}

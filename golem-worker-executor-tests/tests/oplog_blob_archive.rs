@@ -99,8 +99,8 @@ impl GetBlobStorage for S3Test {
 
 impl S3Test {
     /// Gives an S3 blob storage on a new RustFS container, which this dependency keeps alive. The
-    /// container has the buckets of two levels of the compressed oplog and of the custom data of
-    /// a guest, or with `shared_bucket` one bucket for all of them.
+    /// container has buckets for oplog payloads, two compressed oplog levels and guest custom data,
+    /// or with `shared_bucket` one bucket for all of them.
     pub(crate) async fn s3_storage(&self) -> s3::S3BlobStorage {
         let s3_server = DockerRustFs::new().await;
 
@@ -124,12 +124,13 @@ impl S3Test {
         if self.shared_bucket {
             let bucket = "golem".to_string();
             config.namespace_prefixes = true;
+            config.oplog_payload_bucket = bucket.clone();
             config.compressed_oplog_buckets = vec![bucket.clone(), bucket.clone()];
             config.custom_data_bucket = bucket;
         }
         config.validate().unwrap();
         create_buckets(&s3_server, &config).await;
-        let storage = s3::S3BlobStorage::new(config.clone(), &config.oplog_payload_bucket)
+        let storage = s3::S3BlobStorage::new(config, s3::S3StartupNamespace::OplogPayload)
             .await
             .unwrap();
 
@@ -162,7 +163,7 @@ async fn create_buckets(s3_server: &dyn S3Server, config: &S3BlobStorageConfig) 
     let buckets = config
         .compressed_oplog_buckets
         .iter()
-        .chain([&config.custom_data_bucket])
+        .chain([&config.custom_data_bucket, &config.oplog_payload_bucket])
         .collect::<BTreeSet<_>>();
     for bucket in buckets {
         client.create_bucket().bucket(bucket).send().await.unwrap();

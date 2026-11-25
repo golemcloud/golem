@@ -5,6 +5,8 @@ lease state in **etcd** instead of a SQL database, which is what allows more tha
 replica to run. This example runs three (`golem-shard-manager-1` to `-3`). Every other service still
 uses Postgres.
 
+First [build the images from this checkout](../README.md). The example uses the local tag `local` for every Golem image, including the router. Published 1.6 images do not read these settings.
+
 ```sh
 docker compose up
 ```
@@ -13,8 +15,7 @@ The Golem APIs are then on `http://localhost:9881`, as in the other example. The
 requests for `localhost` (`GOLEM_ROUTER_MANAGEMENT_HOST`) to the Golem APIs, and requests for every
 other host to the HTTP API and MCP deployments.
 
-The example uses the published `v1.6.0` images. Keep `GOLEM_IMAGES_VERSION` the same for every
-Golem service, including the router.
+Keep `GOLEM_IMAGES_VERSION` the same for every Golem service, including the router.
 
 ### Checking that it runs
 
@@ -46,9 +47,6 @@ The misconfigurations described below stop a replica at startup:
 
 Golem releases that contain this change exit with status 1 on each of these. Then
 `restart: on-failure` starts the replica again, and it stops again until the configuration is fixed.
-
-Earlier releases, such as the pinned `v1.6.0`, exit with status 0 when the configuration does not
-load. With `restart: on-failure`, their container then stays stopped and looks like a clean exit.
 
 Read the reason with `docker compose logs <service>`.
 
