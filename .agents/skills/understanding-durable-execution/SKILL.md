@@ -1415,8 +1415,8 @@ the start becomes the same error, and a gap that ends at or after the start stay
 `length` counts the retained entries, and the last index does not change. A range page checks its
 `to` and its cursor against the start before it checks the range, so a range without `from` whose
 `to` or cursor is below the start is expired. When the walk of the last error reaches the start
-with no invocation boundary while the agent is failed or retrying, the last error is the expired
-error. The revert walk gives no cut when the last index is below the start. The stream readers keep
+with no invocation boundary and no error while the agent is failed or retrying, the last error is
+the expired error. The revert walk gives no cut when the last index is below the start. The stream readers keep
 the expired error typed: the consumer probe and the consumer journal check the record that
 introduced each reader, the rebuild of the session control metadata checks the reader of each
 consumer record, the producer index gives the expired error for a record that references a
