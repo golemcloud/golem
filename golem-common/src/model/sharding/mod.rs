@@ -124,7 +124,8 @@ pub struct RoutingTableEntry {
 /// assertion racing the manager. A newtype of this crate's own: the shard
 /// manager keeps a twin in `sharding::model`, and the wire's `u64` is the only
 /// bridge between them.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, BinaryCodec)]
+#[desert(transparent)]
 pub struct ShardEpoch(pub u64);
 
 impl Display for ShardEpoch {

@@ -1362,7 +1362,12 @@ async fn seed_layer(
 ) {
     let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
     let layer = archive
-        .open(&owned_agent_id, AgentMode::Ephemeral, None)
+        .open(
+            &owned_agent_id,
+            AgentMode::Ephemeral,
+            None,
+            golem_common::model::AgentFingerprint::new(),
+        )
         .await
         .unwrap();
     layer
@@ -2047,11 +2052,12 @@ impl OplogArchiveService for Miscounting {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: golem_common::model::AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         Ok(Arc::new(MiscountingArchive {
             inner: self
                 .inner
-                .open(owned_agent_id, agent_mode, shard_epoch)
+                .open(owned_agent_id, agent_mode, shard_epoch, fingerprint)
                 .await?,
             keeps_entries: self.keeps_entries,
             appends: self.appends.clone(),
@@ -2063,11 +2069,12 @@ impl OplogArchiveService for Miscounting {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         shard_epoch: Option<ShardEpoch>,
+        fingerprint: golem_common::model::AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         Ok(Arc::new(MiscountingArchive {
             inner: self
                 .inner
-                .open_fresh(owned_agent_id, agent_mode, shard_epoch)
+                .open_fresh(owned_agent_id, agent_mode, shard_epoch, fingerprint)
                 .await?,
             keeps_entries: self.keeps_entries,
             appends: self.appends.clone(),

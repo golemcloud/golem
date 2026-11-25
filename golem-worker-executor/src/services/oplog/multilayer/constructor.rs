@@ -140,6 +140,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     self.service,
                     close,
                     self.shard_epoch,
+                    fingerprint,
                 )
                 .await
                 .map_err(WorkerExecutorError::from)
@@ -156,6 +157,7 @@ impl OplogConstructor for CreateOplogConstructor {
                     &self.service,
                     self.fresh,
                     self.shard_epoch,
+                    fingerprint,
                 )
                 .await;
                 let lower = match lower {

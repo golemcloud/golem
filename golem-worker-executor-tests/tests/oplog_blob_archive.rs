@@ -22,7 +22,9 @@ use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{LogLevel, OplogEntry, OplogIndex};
 use golem_common::model::type_id::TypeId;
-use golem_common::model::{AgentId, OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch};
+use golem_common::model::{
+    AgentFingerprint, AgentId, OwnedAgentId, RetryConfig, ScanCursor, ShardEpoch,
+};
 use golem_common::redis::RedisPool;
 use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -200,7 +202,7 @@ async fn append_worker(
     agent_mode: AgentMode,
 ) {
     let archive = service
-        .open(owned_agent_id, agent_mode, None)
+        .open(owned_agent_id, agent_mode, None, AgentFingerprint::new())
         .await
         .unwrap();
     archive
@@ -476,8 +478,14 @@ async fn blob_chunk_listed_by_an_append_with_a_lost_reply_stays_readable(
         (OplogIndex::from_u64(2), log()),
     ];
 
+    let fingerprint = AgentFingerprint::new();
     let former_owner = through_relay
-        .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(5)))
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(ShardEpoch(5)),
+            fingerprint,
+        )
         .await
         .unwrap();
     let appending = tokio::spawn({
@@ -489,7 +497,12 @@ async fn blob_chunk_listed_by_an_append_with_a_lost_reply_stays_readable(
         .await
         .expect("the manifest append never reached Redis");
     let new_owner = direct
-        .open(&owned_agent_id, AgentMode::Durable, Some(ShardEpoch(6)))
+        .open(
+            &owned_agent_id,
+            AgentMode::Durable,
+            Some(ShardEpoch(6)),
+            fingerprint,
+        )
         .await
         .unwrap();
     relay.resume.notify_one();
@@ -782,6 +795,7 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
     let owned_agent_id = crate::fresh_owned_agent_id();
     let environment_id = owned_agent_id.environment_id;
     let agent_id = owned_agent_id.agent_id;
+    let fingerprint = AgentFingerprint::new();
     storage
         .put_raw(
             "blob_oplog",
@@ -792,7 +806,10 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
                 agent_mode: AgentMode::Durable,
                 level: 0,
             },
-            &std::path::Path::new(&agent_path_segment(&agent_id)).join("2"),
+            &std::path::Path::new("chunks")
+                .join(agent_path_segment(&agent_id))
+                .join(fingerprint.to_string())
+                .join("2-unlisted"),
             b"not-an-oplog-chunk",
         )
         .await
@@ -809,7 +826,7 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
         .await
         .unwrap();
     let archive = service
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(&owned_agent_id, AgentMode::Durable, None, fingerprint)
         .await
         .unwrap();
     let length = archive.length().await.unwrap();
@@ -825,7 +842,7 @@ async fn an_unlisted_blob_object_is_never_read_on_s3() {
         .await
         .unwrap();
     let appended = service
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(&owned_agent_id, AgentMode::Durable, None, fingerprint)
         .await
         .unwrap()
         .read_source(OplogIndex::INITIAL, 2)
@@ -891,6 +908,7 @@ async fn each_level_of_the_compressed_oplog_keeps_its_own_chunks(
     };
     let (first, second) = (level(0), level(1));
     let owned_agent_id = crate::fresh_owned_agent_id();
+    let fingerprint = AgentFingerprint::new();
     let log = |message: &str| {
         OplogEntry::log(
             None,
@@ -901,14 +919,14 @@ async fn each_level_of_the_compressed_oplog_keeps_its_own_chunks(
         )
     };
     first
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(&owned_agent_id, AgentMode::Durable, None, fingerprint)
         .await
         .unwrap()
         .append(&[(OplogIndex::INITIAL, log("first"))])
         .await
         .unwrap();
     second
-        .open(&owned_agent_id, AgentMode::Durable, None)
+        .open(&owned_agent_id, AgentMode::Durable, None, fingerprint)
         .await
         .unwrap()
         .append(&[

@@ -130,6 +130,7 @@ async fn open_idle_multilayer(
         service.clone(),
         Box::new(|| {}),
         None,
+        AgentFingerprint::new(),
     )
     .await
     .unwrap();
@@ -287,7 +288,7 @@ async fn observer_open_after_primary_growth(archived: u64) {
     }
     writer.commit(CommitLevel::Always).await.unwrap();
     let deep_archive = deepest
-        .open(&owned, AgentMode::Durable, None)
+        .open(&owned, AgentMode::Durable, None, AgentFingerprint::new())
         .await
         .unwrap();
     if archived > 0 {
@@ -330,6 +331,7 @@ async fn observer_open_after_primary_growth(archived: u64) {
         service,
         Box::new(|| {}),
         None,
+        AgentFingerprint::new(),
     )
     .await
     .unwrap();

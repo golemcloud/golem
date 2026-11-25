@@ -23,7 +23,7 @@ use golem_common::config::DbSqliteConfig;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{LogLevel, OplogEntry, OplogIndex};
-use golem_common::model::{AgentId, OwnedAgentId, RetryConfig, ScanCursor};
+use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId, RetryConfig, ScanCursor};
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
@@ -154,7 +154,7 @@ async fn check_that_each_agent_gets_its_own_archive(storage: Arc<dyn BlobStorage
             let service = &service;
             async move {
                 service
-                    .open(agent, MODE, None)
+                    .open(agent, MODE, None, AgentFingerprint::new())
                     .await
                     .unwrap()
                     .append(&[(OplogIndex::INITIAL, entry.clone())])
@@ -235,7 +235,10 @@ async fn an_archive_that_drop_prefix_empties_comes_back_on_the_next_append() {
     let environment_id = EnvironmentId::new();
     let agent = owned_agent_id(environment_id, 1);
     let second = log_entry("second");
-    let archive = service.open(&agent, MODE, None).await.unwrap();
+    let archive = service
+        .open(&agent, MODE, None, AgentFingerprint::new())
+        .await
+        .unwrap();
 
     archive
         .append(&[(OplogIndex::INITIAL, log_entry("first"))])
@@ -284,6 +287,7 @@ async fn a_directory_without_a_manifest_holds_no_archive() {
     let environment_id = EnvironmentId::new();
     let agent = owned_agent_id(environment_id, 1);
     let entry = log_entry("entry");
+    let fingerprint = AgentFingerprint::new();
 
     storage
         .put_raw(
@@ -295,7 +299,10 @@ async fn a_directory_without_a_manifest_holds_no_archive() {
                 agent_mode: MODE,
                 level: 0,
             },
-            &Path::new(&agent_path_segment(&agent.agent_id)).join("0-unlisted"),
+            &Path::new("chunks")
+                .join(agent_path_segment(&agent.agent_id))
+                .join(fingerprint.to_string())
+                .join("0-unlisted"),
             b"not-an-oplog-chunk",
         )
         .await
@@ -305,7 +312,7 @@ async fn a_directory_without_a_manifest_holds_no_archive() {
         scan(&service, environment_id).await,
     );
     service
-        .open(&agent, MODE, None)
+        .open(&agent, MODE, None, fingerprint)
         .await
         .unwrap()
         .append(&[(OplogIndex::INITIAL, entry.clone())])
@@ -331,4 +338,103 @@ async fn a_directory_without_a_manifest_holds_no_archive() {
             )
         )
     );
+}
+
+#[test]
+async fn chunk_paths_isolate_incarnations_and_manifest_reads_need_no_fingerprint() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let storage = Arc::new(InMemoryBlobStorage::new());
+        let service = blob_archive(storage.clone());
+        let agent = owned_agent_id(EnvironmentId::new(), 1);
+        let old_fingerprint = AgentFingerprint::new();
+        let new_fingerprint = AgentFingerprint::new();
+        let old = service
+            .open(&agent, mode, None, old_fingerprint)
+            .await
+            .unwrap();
+        old.append(&[(OplogIndex::INITIAL, log_entry("old"))])
+            .await
+            .unwrap();
+
+        // Retire the old manifest while leaving its objects for delayed cleanup.
+        service.manifest(&agent, mode).delete().await.unwrap();
+        let new = service
+            .open_fresh(&agent, mode, None, new_fingerprint)
+            .await
+            .unwrap();
+        let entry = log_entry("new");
+        new.append(&[(OplogIndex::INITIAL, entry.clone())])
+            .await
+            .unwrap();
+
+        let namespace = super::BlobOplogArchive::blob_namespace(&agent, mode, 0);
+        let chunks = Path::new("chunks").join(agent_path_segment(&agent.agent_id));
+        for fingerprint in [old_fingerprint, new_fingerprint] {
+            let prefix = chunks.join(fingerprint.to_string());
+            let objects = storage
+                .list_dir("test", "test", namespace.clone(), &prefix)
+                .await
+                .unwrap();
+            assert_eq!(objects.len(), 1);
+            assert_eq!(objects[0].parent(), Some(prefix.as_path()));
+            let filename = objects[0].file_name().unwrap().to_str().unwrap();
+            let uuid = filename
+                .strip_prefix(&format!("{}-", OplogIndex::INITIAL))
+                .unwrap();
+            uuid::Uuid::parse_str(uuid).unwrap();
+        }
+
+        storage
+            .delete_dir(
+                "test",
+                "test",
+                namespace.clone(),
+                &chunks.join(old_fingerprint.to_string()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            service
+                .read_source(&agent, mode, OplogIndex::INITIAL, 1)
+                .await
+                .unwrap(),
+            BTreeMap::from([(OplogIndex::INITIAL, entry)])
+        );
+        service.delete(&agent, mode).await.unwrap();
+        assert!(
+            storage
+                .list_blobs_below("test", "test", namespace, &chunks)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+    }
+}
+
+// Persisted verification must read storage even after the writing handle cached the entries.
+#[test]
+async fn verify_persisted_reopens_and_detects_missing_incarnation_chunk() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let storage = Arc::new(InMemoryBlobStorage::new());
+        let service = blob_archive(storage.clone());
+        let agent = owned_agent_id(EnvironmentId::new(), 812);
+        let archive = service
+            .open(&agent, mode, None, AgentFingerprint::new())
+            .await
+            .unwrap();
+        let entries = vec![(OplogIndex::INITIAL, log_entry("persisted"))];
+        archive.append(&entries).await.unwrap();
+        archive.verify_persisted(&entries).await.unwrap();
+        assert_eq!(
+            archive.read_source(OplogIndex::INITIAL, 1).await.unwrap(),
+            entries.iter().cloned().collect()
+        );
+        let namespace = super::BlobOplogArchive::blob_namespace(&agent, mode, 0);
+        let prefix = Path::new("chunks").join(agent_path_segment(&agent.agent_id));
+        storage
+            .delete_dir("test", "test", namespace, &prefix)
+            .await
+            .unwrap();
+        assert!(archive.verify_persisted(&entries).await.is_err());
+    }
 }

@@ -173,6 +173,7 @@ impl OplogArchiveService for SingletonArchiveService {
         _: &OwnedAgentId,
         _: AgentMode,
         _: Option<ShardEpoch>,
+        _: AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         Ok(self.0.clone())
     }
@@ -181,6 +182,7 @@ impl OplogArchiveService for SingletonArchiveService {
         _: &OwnedAgentId,
         _: AgentMode,
         _: Option<ShardEpoch>,
+        _: AgentFingerprint,
     ) -> OplogArchiveResult<Arc<dyn OplogArchive + Send + Sync>> {
         Ok(self.0.clone())
     }

@@ -86,6 +86,8 @@ mod open;
 mod owned_starts;
 mod payload;
 mod scan;
+pub(crate) mod seal;
+mod sealed_reader;
 
 pub(crate) use epoch::{
     epoch_record_service, epoch_record_verdict, record_epoch_verdict, record_owning_epoch,
