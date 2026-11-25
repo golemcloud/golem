@@ -23,9 +23,11 @@
 //! [`StatusCheckpointer`] maintains a *separate* copy of the status — the checkpoint — written only
 //! at structurally clean boundaries where no jumpable region is open: at snapshot save, at
 //! throttled idle boundaries, and at throttled boundaries during a long invocation
-//! (`checkpoint_status_mid_invocation`). Because it is never advanced into an open region, it
-//! always holds a baseline that predates any later jump, so the recompute can fold forward from it
-//! (see [`crate::worker::status::calculate_last_known_status_with_checkpoint`]).
+//! (`checkpoint_status_mid_invocation`). The boundary check does not test oplog regions: it tests
+//! that the worker does not replay, has no host call in flight and takes no snapshot. No
+//! production code appends a `Jump`, so no later `Jump` covers a written checkpoint. The
+//! recompute folds forward from it (see
+//! [`crate::worker::status::calculate_last_known_status_with_checkpoint`]).
 //!
 //! The checkpoint is the durable status baseline of the agent. It has no expiry, and an archive of
 //! the oplog keeps it. Its namespace contains the fingerprint of the agent, so a re-created agent
@@ -160,10 +162,11 @@ impl StatusCheckpointer {
     /// Never written once [`Self::begin_delete`] has run, so an in-flight write cannot resurrect the
     /// checkpoint after it is deleted.
     ///
-    /// Best-effort: a write failure is logged and metered, the stored baseline stays as it was,
-    /// and the worker continues. Every oplog keeps its entries from index 1, so an older or
-    /// missing baseline makes a later fold longer. Under the same executor configuration (`retry`
-    /// and `invocation_results`), it does not change the status.
+    /// Best-effort: a write failure is logged and metered, and the worker continues. A failed write
+    /// can come after the storage applied the new baseline, when a retry lost the response. Every
+    /// oplog keeps its entries from index 1, so an older or missing baseline makes a later fold
+    /// longer. Under the same executor configuration (`retry` and `invocation_results`), it does
+    /// not change the status.
     pub async fn maybe_checkpoint(&self, status: &AgentStatusRecord, reason: CheckpointReason) {
         if self.is_ephemeral || !self.enabled || self.writes_stopped() {
             return;

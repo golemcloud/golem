@@ -586,9 +586,8 @@ impl DefaultWorkerService {
         .await
     }
 
-    /// Reads the split status record of `hash`, reassembling it
-    /// from the `core` / `membership` / `regions` / `updates` / `tr:{transfer_id}` /
-    /// `ts:{transfer_id}` fields. Returns `None` if `core` is missing (cache miss / torn write) or
+    /// Reads the split status record of `hash`, reassembling it from the fields that
+    /// [`SplitStatusHash`] lists. Returns `None` if `core` is missing (cache miss / torn write) or
     /// any field cannot be deserialized in the current format.
     ///
     /// `agent_mode` is `#[transient]` and not part of `core`, so the returned record carries the
@@ -598,8 +597,8 @@ impl DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         hash: SplitStatusHash<'_>,
     ) -> Result<Option<AgentStatusRecord>, WorkerExecutorError> {
-        // Single atomic read of every field of the per-agent status hash (`core`, `membership`,
-        // `regions`, `updates`, `tr:{transfer_id}`, `ts:{transfer_id}`). This is one round-trip
+        // Single atomic read of every field of the per-agent status hash (the fields that
+        // `SplitStatusHash` lists). This is one round-trip
         // (Redis `HGETALL`, a single `SELECT ... WHERE namespace`, or one locked scan in memory)
         // that observes a consistent snapshot, so it cannot reassemble a torn, mixed-generation
         // record. (A naive `keys` + `get_many` would be two round-trips, leaving a window where a
@@ -629,8 +628,9 @@ impl DefaultWorkerService {
     /// Writes the split status fields for an agent, sending only the parts that changed.
     ///
     /// `core` is always written (it carries the `oplog_idx` marker that versions the whole record).
-    /// `membership`/`regions`/`updates` are written only when they differ from `delta_base`, and
-    /// received and source card transfers are written per key (only newly added/changed keys).
+    /// `membership`/`regions`/`updates`/`resolved-names`/`followed-lookups` are written only when
+    /// they differ from `delta_base`. Received and source card transfers and the entity-replay
+    /// fields are written per key (only newly added/changed keys).
     ///
     /// Publication compares the exact serialized `core` of the delta base and atomically applies
     /// all sets, stale-field deletions, and the expiry of the namespace of `target`. The status

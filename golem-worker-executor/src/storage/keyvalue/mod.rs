@@ -984,9 +984,10 @@ pub enum KeyValueStorageNamespace {
     /// Only three writers write it: the snapshot save, the throttled idle boundary, and the
     /// throttled `checkpoint_status_mid_invocation` during a long invocation. Each one writes at a
     /// structurally clean boundary, where no jumpable oplog region is open. The background status
-    /// flusher never moves it forward. Thus it always holds a baseline before any later jump region, and
-    /// the status recompute folds forward from it. The recompute folds from index 1 when no
-    /// usable baseline exists.
+    /// flusher never moves it forward. The boundary check does not test oplog regions, but no
+    /// production code appends a `Jump`. Thus no later jump region covers the baseline, and the
+    /// status recompute folds forward from it. The recompute folds from index 1 when no usable
+    /// baseline exists.
     ///
     /// This namespace is not a cache. It has no expiry, an archive of the oplog keeps it, and
     /// namespace routing stores it in the persistent backend. Only the deletion of the agent
