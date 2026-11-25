@@ -1486,10 +1486,10 @@ pub mod tool {
     #[derive(Debug, Args)]
     #[command(group(ArgGroup::new("target").required(true).multiple(false).args(["agent", "component"])))]
     pub struct ToolInvokeArgs {
-        /// Existing agent; for --lookup use the receipt's agent ID
+        /// Existing agent
         #[arg(long)]
         pub agent: Option<RawAgentId>,
-        /// Component used to create a fresh ephemeral invocation owner without constructing an agent
+        /// Component used as the baseline of a standalone tool invocation
         #[arg(long)]
         pub component: Option<ComponentName>,
         /// Deployed tool name
@@ -1513,15 +1513,12 @@ pub mod tool {
         #[arg(long, requires = "stderr")]
         pub stderr_output: Option<std::path::PathBuf>,
         /// Enqueue without waiting
-        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output", "stderr", "stderr_output"])]
+        #[arg(long, conflicts_with_all = ["stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub trigger: bool,
-        /// Look up the receipt's final invocation UUID and owner without starting execution or input
-        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output", "stderr", "stderr_output"])]
-        pub lookup: bool,
         /// Schedule execution at an RFC 3339 timestamp
         #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub schedule_at: Option<DateTime<Utc>>,
-        /// Request seed; `-` generates a fresh seed. With --lookup, the receipt's final invocation UUID
+        /// Idempotency key; `-` generates a fresh key
         #[arg(long, short)]
         pub idempotency_key: Option<IdempotencyKey>,
     }
@@ -2764,12 +2761,12 @@ pub mod invocation {
 
     #[derive(Debug, Args)]
     pub struct InvocationSelector {
-        /// Invocation ID, `<agent ID>.<UUID>`, as listed by
-        /// `invocation list`. It is resolved in the current environment; select another one with
+        /// Invocation ID, `<agent ID>.<UUID>` or `<tool name>.<UUID>`.
+        /// It is resolved in the current environment; select another one with
         /// `--environment`. Mutually exclusive with `--agent` and `--idempotency-key`.
         #[arg(
-            required_unless_present = "agent",
-            conflicts_with_all = ["agent", "idempotency_key", "method"]
+            required_unless_present_any = ["agent", "tool"],
+            conflicts_with_all = ["agent", "tool", "idempotency_key", "method", "command"]
         )]
         pub invocation_id: Option<String>,
         /// The agent that received the invocation; requires `--idempotency-key`
@@ -2781,8 +2778,14 @@ pub mod invocation {
             verbatim_doc_comment,
         )]
         pub agent: Option<RawAgentId>,
-        /// The idempotency key the invocation was made with; requires `--agent`
-        #[arg(long, requires = "agent")]
+        /// The tool; with `--agent`, finds invocations hosted on that agent
+        #[arg(long, requires = "idempotency_key", conflicts_with = "method")]
+        pub tool: Option<String>,
+        /// The tool command path, for example `x y`; without it, finds every matching command
+        #[arg(long, requires = "tool")]
+        pub command: Option<String>,
+        /// The idempotency key the invocation was made with
+        #[arg(long)]
         pub idempotency_key: Option<String>,
         /// The method or `tool:<tool>/<command path>`, when the same key was used for more than
         /// one operation on the agent
@@ -3738,9 +3741,7 @@ mod test {
             &["--trigger", "--stdin", "-"][..],
             &["--trigger", "--stdout"][..],
             &["--trigger", "--stderr"][..],
-            &["--lookup", "--input", "{}"][..],
-            &["--lookup", "--stdin", "-"][..],
-            &["--lookup", "--stderr-output", "errors.bin"][..],
+            &["--lookup"][..],
             &["--output", "result.bin"][..],
             &["--stderr-output", "errors.bin"][..],
         ] {

@@ -37,7 +37,7 @@ use self::completion::{Completions, Fetch};
 pub(crate) use self::contract::NOT_RUN_EXIT;
 use self::contract::{
     BashResult, CallFailure, CancelOutcome, Gathered, INTERRUPTED_EXIT, InputMode, LocalCommand,
-    Outcome, PromptPart, RUN, banner, check_run_contract, classify_cancel, classify_live_error,
+    Outcome, PromptPart, banner, check_run_contract, classify_cancel, classify_live_error,
     decode_live_result, decode_result, decorated, dimmed, ended, exit_code, failed_agent_notice,
     global_args, help_text, input_mode, interrupted_message, local_command, lookup_command, prompt,
     run_argv, run_can_be_stopped, runs_nothing, sandboxed_agent_notice, strip_cursor_reports,
@@ -62,9 +62,8 @@ use crate::log::{
 use crate::model::agent::RawAgentId;
 use anyhow::anyhow;
 use golem_client::api::{InvocationClient, WorkerClient};
-use golem_client::model::NativeToolInvocationMode;
 use golem_common::base_model::tool::ToolName;
-use golem_common::model::{AgentStatus, IdempotencyKey};
+use golem_common::model::AgentStatus;
 use golem_common::schema::ExternalTypedSchemaValue;
 use golem_common::schema::tool::Tool;
 use golem_schema::tool::argv::{self, ParsedToolArguments};
@@ -943,19 +942,17 @@ impl SshCommandHandler {
     /// cannot be had in time, which leaves the lookup command to the user.
     async fn finished_result(&self, session: &Session, key: &CallKey) -> Option<BashResult> {
         let accepted = key.accepted()?;
-        let accepted_key = IdempotencyKey::new(accepted.to_string());
-        let tool_handler = self.ctx.tool_handler();
-        let lookup = tool_handler.invoke_tool_scalar(
-            &session.owner,
-            &session.tool,
-            vec![RUN.to_string()],
-            None,
-            &accepted_key,
-            NativeToolInvocationMode::Lookup,
-            None,
-        );
+        let clients = self.ctx.golem_clients().await.ok()?;
+        let id = golem_common::model::OwnedInvocationId::new(session.owner.agent_id?, accepted)
+            .to_string();
+        let lookup = clients
+            .invocation
+            .get_invocation(&session.owner.environment.environment_id.0, &id);
         let response = tokio::time::timeout(CANCEL_WAIT, lookup).await.ok()?.ok()?;
-        decode_result(response.result).ok()
+        let Some(golem_client::model::InvocationOutcome::Tool(result)) = response.result else {
+            return None;
+        };
+        decode_result(Some(result.result)).ok()
     }
 
     /// Says so when another agent answers than the one the session started on: it was deleted
@@ -1119,9 +1116,12 @@ impl SshCommandHandler {
             lookup_command(
                 &crate::command_name(),
                 &self.global_args(),
-                &session.agent,
+                &session
+                    .owner
+                    .agent_id
+                    .expect("SSH has an agent owner")
+                    .to_string(),
                 &accepted.to_string(),
-                &session.tool,
             )
         ));
     }
