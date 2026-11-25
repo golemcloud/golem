@@ -14,15 +14,17 @@
 
 use super::*;
 use crate::services::shard::ShardServiceDefault;
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::quota::{ResourceDefinitionId, ResourceName};
-use golem_common::model::{AgentId, RoutingTable, ShardLeaseRevision};
+use golem_api_grpc::proto::golem::shardmanager::v1::{
+    RenewShardLeaseResponse, ShardLease as WireShardLease, renew_shard_lease_response,
+};
+use golem_common::model::protobuf::shard_epochs_to_proto;
+use golem_common::model::{AgentId, RetryConfig, ShardLeaseRevision};
 use golem_service_base::clients::shard_manager::{
-    BatchRenewalEntry, QuotaError, ShardLease, ShardManager, ShardRegistration,
+    InMemoryShardLeaseClient, ShardLease, ShardLeaseClient, ShardRegistration,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::quota_lease::{PendingReservation, QuotaLease};
 use std::collections::{BTreeMap, HashSet};
+use std::num::NonZeroUsize;
 use std::sync::Mutex as StdMutex;
 use std::sync::atomic::AtomicUsize;
 use std::time::Instant;
@@ -70,7 +72,7 @@ fn registration(
     ShardRegistration {
         number_of_shards: SHARDS as u32,
         lease: ShardLease {
-            executor_count,
+            executor_count: NonZeroUsize::new(executor_count).unwrap(),
             shard_epochs: epoch_map(shard_epochs),
             expires_at,
             revision: revision_of(MANAGER, 1),
@@ -108,9 +110,7 @@ type RenewFn = Box<
         + Sync,
 >;
 
-/// The `ShardManager` client double, modelled on the `MockShardManager`
-/// harness in `services/quota.rs`: every quota method is unreachable here,
-/// and the three shard-lease methods are scripted and recorded.
+/// Scripts lease faults and records coordinator calls without a transport.
 struct MockShardManager {
     register_fn: StdMutex<Option<RegisterFn>>,
     renew_fn: StdMutex<Option<RenewFn>>,
@@ -205,11 +205,7 @@ impl MockShardManager {
 
 #[async_trait]
 #[golem_async_trait::region_simple]
-impl ShardManager for MockShardManager {
-    async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
-        unimplemented!()
-    }
-
+impl ShardLeaseClient for MockShardManager {
     async fn register(
         &self,
         endpoint: ExecutorEndpoint,
@@ -275,51 +271,13 @@ impl ShardManager for MockShardManager {
         }
         Ok(())
     }
-
-    async fn acquire_quota_lease(
-        &self,
-        _environment_id: EnvironmentId,
-        _resource_name: ResourceName,
-        _endpoint: ExecutorEndpoint,
-    ) -> Result<QuotaLease, QuotaError> {
-        unimplemented!()
-    }
-
-    async fn renew_quota_lease(
-        &self,
-        _resource_definition_id: ResourceDefinitionId,
-        _endpoint: ExecutorEndpoint,
-        _epoch: u64,
-        _unused: u64,
-        _pending_reservations: Vec<PendingReservation>,
-    ) -> Result<QuotaLease, QuotaError> {
-        unimplemented!()
-    }
-
-    async fn batch_renew_quota_leases(
-        &self,
-        _endpoint: ExecutorEndpoint,
-        _renewals: Vec<BatchRenewalEntry>,
-    ) -> Result<Vec<Result<QuotaLease, QuotaError>>, ShardManagerError> {
-        unimplemented!()
-    }
-
-    async fn release_quota_lease(
-        &self,
-        _resource_definition_id: ResourceDefinitionId,
-        _endpoint: ExecutorEndpoint,
-        _epoch: u64,
-        _unused: u64,
-    ) -> Result<(), QuotaError> {
-        unimplemented!()
-    }
 }
 
 /// A service wired to the mock, with no renewal loop running: every test
 /// drives `renew_shard_lease()` itself, exactly as the quota tests drive
 /// `renew_all()`.
 fn make_service(
-    mock: Arc<MockShardManager>,
+    mock: Arc<dyn ShardLeaseClient>,
     shutdown: Shutdown,
 ) -> (Arc<GrpcShardManagerService>, Arc<ShardServiceDefault>) {
     let shard_service = Arc::new(ShardServiceDefault::new());
@@ -390,7 +348,7 @@ async fn a_shutdown_during_an_in_flight_renewal_still_deregisters() {
             .with_register(move |_| Ok(registration(expiry, [(0, 1)], 1)))
             .with_renew(move |_, held| {
                 Ok(ShardLease {
-                    executor_count: 1,
+                    executor_count: NonZeroUsize::MIN,
                     shard_epochs: held,
                     expires_at: expiry,
                     revision: revision_of(MANAGER, 1),
@@ -407,7 +365,7 @@ async fn a_shutdown_during_an_in_flight_renewal_still_deregisters() {
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        assignment.executor_count,
+        NonZeroUsize::new(assignment.executor_count).unwrap(),
     );
 
     // The renewal has been sent and is parked in the gate.
@@ -449,7 +407,7 @@ async fn a_registration_granting_zero_shards_is_refused() {
         Ok(ShardRegistration {
             number_of_shards: 0,
             lease: ShardLease {
-                executor_count: 1,
+                executor_count: NonZeroUsize::MIN,
                 shard_epochs: BTreeMap::new(),
                 expires_at: expiry,
                 revision: revision_of(MANAGER, 1),
@@ -457,8 +415,11 @@ async fn a_registration_granting_zero_shards_is_refused() {
         })
     }));
     let (service, shard_service) = make_service(mock, Shutdown::new());
-    let backoff = Duration::from_secs(9);
-    *service.retry_backoff.write().unwrap() = backoff;
+    let retry = RenewalRetryState {
+        backoff: Duration::from_secs(9),
+        granted_cadence: None,
+    };
+    *service.retry.write().unwrap() = retry;
 
     let result = service.register(ENDPOINT, None).await;
 
@@ -471,8 +432,7 @@ async fn a_registration_granting_zero_shards_is_refused() {
         "a refused registration must install nothing"
     );
     assert!(!service.renewal_loop_started.load(Ordering::SeqCst));
-    assert_eq!(*service.retry_backoff.read().unwrap(), backoff);
-    assert_eq!(*service.granted_cadence.read().unwrap(), None);
+    assert_eq!(*service.retry.read().unwrap(), retry);
 }
 
 #[test]
@@ -489,7 +449,7 @@ async fn a_renewal_that_never_answers_times_out_and_the_loop_keeps_going() {
             .with_register(move |_| Ok(registration(expiry, [(0, 1)], 1)))
             .with_renew(move |_, held| {
                 Ok(ShardLease {
-                    executor_count: 1,
+                    executor_count: NonZeroUsize::MIN,
                     shard_epochs: held,
                     expires_at: expiry,
                     revision: revision_of(MANAGER, 1),
@@ -512,7 +472,7 @@ async fn a_renewal_that_never_answers_times_out_and_the_loop_keeps_going() {
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        assignment.executor_count,
+        NonZeroUsize::new(assignment.executor_count).unwrap(),
     );
 
     // Cadence 1 s, deadline 200 ms, first backoff 1 s: a second renewal within a few seconds
@@ -550,14 +510,14 @@ async fn a_reply_that_arrives_after_its_renewal_was_given_up_on_is_never_applied
                         // The old manager's answer to the first renewal, which the loop has
                         // given up on by the time it is released.
                         ShardLease {
-                            executor_count: 1,
+                            executor_count: NonZeroUsize::MIN,
                             shard_epochs: epoch_map([(1, 7)]),
                             expires_at: Instant::now() + Duration::from_secs(3),
                             revision: revision_of(old_manager, 11),
                         }
                     } else {
                         ShardLease {
-                            executor_count: 1,
+                            executor_count: NonZeroUsize::MIN,
                             shard_epochs: epoch_map([(0, 2)]),
                             expires_at: Instant::now() + Duration::from_secs(3),
                             revision: revision_of(new_manager, 1),
@@ -579,7 +539,7 @@ async fn a_reply_that_arrives_after_its_renewal_was_given_up_on_is_never_applied
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        assignment.executor_count,
+        NonZeroUsize::new(assignment.executor_count).unwrap(),
     );
 
     let follows = |manager: Uuid| {
@@ -635,7 +595,7 @@ async fn a_re_registration_that_never_answers_times_out_and_is_tried_again() {
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        assignment.executor_count,
+        NonZeroUsize::new(assignment.executor_count).unwrap(),
     );
     mock.hang_next_registrations(1);
 
@@ -671,7 +631,7 @@ async fn a_slow_assignment_changed_hook_does_not_stall_the_renewal_loop() {
             .with_register(move |_| Ok(registration(Instant::now() + ttl, [(0, 1)], 1)))
             .with_renew(move |_, _held| {
                 Ok(ShardLease {
-                    executor_count: 1,
+                    executor_count: NonZeroUsize::MIN,
                     // Always the widened set: the first grant is a real assignment change,
                     // and every later one only echoes it back (it now matches what was
                     // held), so only the first renewal ever owes an announcement.
@@ -706,7 +666,7 @@ async fn a_slow_assignment_changed_hook_does_not_stall_the_renewal_loop() {
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        assignment.executor_count,
+        NonZeroUsize::new(assignment.executor_count).unwrap(),
     );
 
     // The first renewal widens the set, so its announcement enters the hook and blocks
@@ -725,8 +685,7 @@ async fn a_slow_assignment_changed_hook_does_not_stall_the_renewal_loop() {
 
     // Several renewal periods pass (cadence is ~1s) while the hook stays blocked: the loop
     // must keep renewing rather than waiting on the sweep. Each of these renewals also finds
-    // `recovery_outstanding` still set by the first
-    // one - the sweep has not reported back yet - and asks for the announcement again; that
+    // recovery debt still owed from the first one and asks for the announcement again; that
     // is correct (an unchanged grant re-runs a recovery still owed), and the single-flight
     // coalesces every one of these requests into exactly one rerun, asserted below.
     for _ in 0..100 {
@@ -849,7 +808,7 @@ async fn a_deregister_that_never_answers_gives_up_inside_the_shutdown_grace() {
         MockShardManager::new()
             .with_renew(move |_, held| {
                 Ok(ShardLease {
-                    executor_count: 1,
+                    executor_count: NonZeroUsize::MIN,
                     shard_epochs: held,
                     expires_at: expiry,
                     revision: revision_of(MANAGER, 1),
@@ -863,7 +822,7 @@ async fn a_deregister_that_never_answers_gives_up_inside_the_shutdown_grace() {
         &epochs([(0, 1)]),
         Some(expiry),
         revision_of(MANAGER, 1),
-        1,
+        NonZeroUsize::MIN,
     );
 
     let started = std::time::Instant::now();
@@ -898,7 +857,7 @@ async fn a_push_that_recovers_agents_clears_a_failed_renewal_recovery() {
     let expiry = Instant::now() + Duration::from_secs(300);
     let mock = Arc::new(MockShardManager::new().with_renew(move |_, _| {
         Ok(ShardLease {
-            executor_count: 1,
+            executor_count: NonZeroUsize::MIN,
             shard_epochs: epoch_map([(0, 1), (1, 1)]),
             expires_at: expiry,
             revision: revision_of(MANAGER, 2),
@@ -910,7 +869,7 @@ async fn a_push_that_recovers_agents_clears_a_failed_renewal_recovery() {
         &epochs([(0, 1)]),
         Some(expiry),
         revision_of(MANAGER, 1),
-        1,
+        NonZeroUsize::MIN,
     );
 
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -949,7 +908,7 @@ async fn a_failed_recovery_is_retried_on_the_next_grant_even_if_the_set_is_uncha
     let expiry = Instant::now() + Duration::from_secs(300);
     let mock = Arc::new(MockShardManager::new().with_renew(move |_, _| {
         Ok(ShardLease {
-            executor_count: 1,
+            executor_count: NonZeroUsize::MIN,
             shard_epochs: epoch_map([(0, 1), (1, 1)]),
             expires_at: expiry,
             revision: revision_of(MANAGER, 2),
@@ -961,7 +920,7 @@ async fn a_failed_recovery_is_retried_on_the_next_grant_even_if_the_set_is_uncha
         &epochs([(0, 1)]),
         Some(expiry),
         revision_of(MANAGER, 1),
-        1,
+        NonZeroUsize::MIN,
     );
 
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -1002,7 +961,7 @@ async fn a_deferred_recovery_runs_on_the_grant_that_revives_the_lease() {
     let expiry = Instant::now() + Duration::from_secs(300);
     let mock = Arc::new(MockShardManager::new().with_renew(move |_, held| {
         Ok(ShardLease {
-            executor_count: 1,
+            executor_count: NonZeroUsize::MIN,
             shard_epochs: held,
             expires_at: expiry,
             revision: revision_of(MANAGER, 2),
@@ -1015,7 +974,7 @@ async fn a_deferred_recovery_runs_on_the_grant_that_revives_the_lease() {
         &epochs([(0, 1)]),
         Some(Instant::now()),
         revision_of(MANAGER, 1),
-        1,
+        NonZeroUsize::MIN,
     );
     assert!(!shard_service.is_ready());
 
@@ -1063,7 +1022,7 @@ async fn a_registration_whose_lease_arrived_lapsed_is_recovered_by_the_renewal_t
             .with_register(move |_| Ok(registration(lapsed, [(0, 1), (1, 1)], 1)))
             .with_renew(move |_, held| {
                 Ok(ShardLease {
-                    executor_count: 1,
+                    executor_count: NonZeroUsize::MIN,
                     shard_epochs: held,
                     expires_at: live,
                     revision: revision_of(MANAGER, 2),
@@ -1089,7 +1048,7 @@ async fn a_registration_whose_lease_arrived_lapsed_is_recovered_by_the_renewal_t
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        assignment.executor_count,
+        NonZeroUsize::new(assignment.executor_count).unwrap(),
     );
     assert!(
         !shard_service.is_ready(),
@@ -1119,7 +1078,7 @@ async fn a_recovery_that_finishes_after_a_newer_deferral_leaves_that_one_owed() 
     let expiry = Instant::now() + Duration::from_secs(300);
     let mock = Arc::new(MockShardManager::new().with_renew(move |_, held| {
         Ok(ShardLease {
-            executor_count: 1,
+            executor_count: NonZeroUsize::MIN,
             shard_epochs: held,
             expires_at: expiry,
             revision: revision_of(MANAGER, 2),
@@ -1131,7 +1090,7 @@ async fn a_recovery_that_finishes_after_a_newer_deferral_leaves_that_one_owed() 
         &epochs([(0, 1)]),
         Some(expiry),
         revision_of(MANAGER, 1),
-        1,
+        NonZeroUsize::MIN,
     );
     let calls = Arc::new(AtomicUsize::new(0));
     let hook_calls = calls.clone();
@@ -1159,6 +1118,17 @@ async fn a_recovery_that_finishes_after_a_newer_deferral_leaves_that_one_owed() 
     // That run was the newest attempt, so nothing is owed any more.
     service.renew_shard_lease().await;
     assert_eq!(calls.load(Ordering::SeqCst), 1);
+
+    let earlier = service.recovery_deferred();
+    let newer = service.recovery_deferred();
+    service.recovery_succeeded(earlier);
+    service.recovery_succeeded(newer);
+    service.renew_shard_lease().await;
+    assert_eq!(
+        calls.load(Ordering::SeqCst),
+        1,
+        "completion of the newer ticket retires the debt left by the older completion"
+    );
 }
 
 #[test]
@@ -1167,7 +1137,7 @@ async fn a_recovery_the_hook_deferred_is_run_again_on_the_next_grant() {
     let expiry = Instant::now() + Duration::from_secs(300);
     let mock = Arc::new(MockShardManager::new().with_renew(move |_, _| {
         Ok(ShardLease {
-            executor_count: 1,
+            executor_count: NonZeroUsize::MIN,
             shard_epochs: epoch_map([(0, 1), (1, 1)]),
             expires_at: expiry,
             revision: revision_of(MANAGER, 2),
@@ -1179,7 +1149,7 @@ async fn a_recovery_the_hook_deferred_is_run_again_on_the_next_grant() {
         &epochs([(0, 1)]),
         Some(expiry),
         revision_of(MANAGER, 1),
-        1,
+        NonZeroUsize::MIN,
     );
 
     let calls = Arc::new(AtomicUsize::new(0));
@@ -1233,7 +1203,7 @@ async fn a_renewal_sends_the_last_received_set_and_adopts_the_granted_expiry() {
     let granted_expiry = Instant::now() + Duration::from_secs(300);
     let mock = Arc::new(MockShardManager::new().with_renew(move |_, held| {
         Ok(ShardLease {
-            executor_count: 1,
+            executor_count: NonZeroUsize::MIN,
             shard_epochs: held,
             expires_at: granted_expiry,
             revision: revision_of(MANAGER, 1),
@@ -1245,7 +1215,7 @@ async fn a_renewal_sends_the_last_received_set_and_adopts_the_granted_expiry() {
         &epochs([(0, 7), (3, 2)]),
         Some(Instant::now() + Duration::from_secs(10)),
         revision_of(MANAGER, 1),
-        1,
+        NonZeroUsize::MIN,
     );
 
     let delay = service.renew_shard_lease().await;
@@ -1306,7 +1276,7 @@ async fn a_lost_lease_re_registers_with_a_fresh_uuid_and_announces_the_new_assig
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        assignment.executor_count,
+        NonZeroUsize::new(assignment.executor_count).unwrap(),
     );
     let original_executor_id = mock.register_calls()[0];
 
@@ -1350,7 +1320,7 @@ async fn a_re_registration_keeps_the_advertised_endpoint() {
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        assignment.executor_count,
+        NonZeroUsize::new(assignment.executor_count).unwrap(),
     );
     service.renew_shard_lease().await;
 
@@ -1383,7 +1353,7 @@ async fn a_re_registration_with_a_manager_that_lost_its_history_adopts_its_low_r
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        assignment.executor_count,
+        NonZeroUsize::new(assignment.executor_count).unwrap(),
     );
 
     service.renew_shard_lease().await;
@@ -1410,7 +1380,7 @@ async fn a_renewal_answered_by_a_manager_restored_from_a_backup_adopts_its_low_r
             .with_register(move |_| Ok(registration_from(old_manager, 10_000, expiry, [(2, 5)], 1)))
             .with_renew(move |_, _| {
                 Ok(ShardLease {
-                    executor_count: 1,
+                    executor_count: NonZeroUsize::MIN,
                     shard_epochs: epoch_map([(2, 6)]),
                     expires_at: expiry,
                     revision: revision_of(new_manager, 3),
@@ -1424,7 +1394,7 @@ async fn a_renewal_answered_by_a_manager_restored_from_a_backup_adopts_its_low_r
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        assignment.executor_count,
+        NonZeroUsize::new(assignment.executor_count).unwrap(),
     );
 
     service.renew_shard_lease().await;
@@ -1442,7 +1412,7 @@ async fn a_renewal_answered_by_a_manager_restored_from_a_backup_adopts_its_low_r
             SHARDS,
             &epochs([(2, 5)]),
             revision_of(old_manager, 10_001),
-            1,
+            NonZeroUsize::MIN,
         )
         .unwrap();
     assert!(
@@ -1466,7 +1436,7 @@ async fn renew_now_runs_a_renewal_ahead_of_its_timer() {
             .with_register(move |_| Ok(registration(expiry, [(0, 1)], 1)))
             .with_renew(move |_, held| {
                 Ok(ShardLease {
-                    executor_count: 1,
+                    executor_count: NonZeroUsize::MIN,
                     shard_epochs: held,
                     expires_at: expiry,
                     revision: revision_of(MANAGER, 1),
@@ -1481,7 +1451,7 @@ async fn renew_now_runs_a_renewal_ahead_of_its_timer() {
         &assignment.shard_epochs,
         assignment.expires_at,
         assignment.revision.expect("a grant names its revision"),
-        assignment.executor_count,
+        NonZeroUsize::new(assignment.executor_count).unwrap(),
     );
     assert!(
         mock.renew_calls().is_empty(),
@@ -1504,29 +1474,56 @@ async fn renew_now_runs_a_renewal_ahead_of_its_timer() {
 /// delivery still owes it. A count-only update does not create recovery debt.
 #[test]
 async fn a_renewal_recovers_a_changed_set_or_an_unchanged_set_with_recovery_owed() {
-    let granted_expiry = Instant::now() + Duration::from_secs(300);
     // `None` echoes the held set; `Some` is the manager correcting it.
     let correction: Arc<StdMutex<Option<BTreeMap<ShardId, ShardEpoch>>>> =
         Arc::new(StdMutex::new(None));
     let correct = correction.clone();
     let executor_count = Arc::new(AtomicUsize::new(3));
     let granted_count = executor_count.clone();
-    let mock = Arc::new(MockShardManager::new().with_renew(move |_, held| {
-        let shard_epochs = correct.lock().unwrap().clone().unwrap_or(held);
-        Ok(ShardLease {
-            executor_count: granted_count.load(Ordering::SeqCst),
-            shard_epochs,
-            expires_at: granted_expiry,
-            revision: revision_of(MANAGER, 1),
-        })
-    }));
+    let next_revision = AtomicU64::new(2);
+    let mock = Arc::new(InMemoryShardLeaseClient::new(
+        RetryConfig::default(),
+        |_| async {
+            Err(ShardManagerError::internal_client_error(
+                "unexpected registration",
+            ))
+        },
+        move |request| {
+            let shard_epochs = correct
+                .lock()
+                .unwrap()
+                .clone()
+                .map(shard_epochs_to_proto)
+                .unwrap_or(request.shard_epochs);
+            let lease = WireShardLease {
+                executor_count: granted_count.load(Ordering::SeqCst) as u32,
+                shard_epochs,
+                lease_ttl: Some(prost_types::Duration {
+                    seconds: 300,
+                    nanos: 0,
+                }),
+                revision: next_revision.fetch_add(1, Ordering::SeqCst),
+                incarnation_id: MANAGER.to_string(),
+            };
+            async move {
+                Ok(RenewShardLeaseResponse {
+                    result: Some(renew_shard_lease_response::Result::Success(lease)),
+                })
+            }
+        },
+        |_| async {
+            Err(ShardManagerError::internal_client_error(
+                "unexpected deregistration",
+            ))
+        },
+    ));
     let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
     shard_service.register(
         SHARDS,
         &epochs([(0, 7), (3, 2)]),
         Some(Instant::now() + Duration::from_secs(30)),
         revision_of(MANAGER, 1),
-        1,
+        NonZeroUsize::MIN,
     );
 
     let announced = Arc::new(AtomicUsize::new(0));
@@ -1557,11 +1554,17 @@ async fn a_renewal_recovers_a_changed_set_or_an_unchanged_set_with_recovery_owed
         1,
         "a count-only grant must still run the recovery owed from an earlier delivery"
     );
+
+    executor_count.store(2, Ordering::SeqCst);
     service.renew_shard_lease().await;
+    assert_eq!(shard_service.executor_count(), Some(2));
+    let assignment = shard_service.current_assignment().unwrap();
+    assert_eq!(assignment.revision, Some(revision_of(MANAGER, 4)));
+    assert_eq!(assignment.shard_epochs, epochs([(0, 7), (3, 2)]));
     assert_eq!(
         announced.load(Ordering::SeqCst),
         1,
-        "a completed recovery leaves no debt for the next unchanged grant"
+        "a lower count with an unchanged set creates no new recovery debt"
     );
 
     // wider: a shard this executor never knew it owned
@@ -1617,14 +1620,14 @@ fn renewal_recovery_follows_the_delivery_outcome_and_existing_debt() {
     ]
     .into_iter()
     .for_each(|(outcome, expected)| {
-        [0, 7]
+        [RecoveryDebt::NoDebt, RecoveryDebt::Owed(RecoveryTicket(7))]
             .into_iter()
             .zip(expected)
             .for_each(|(debt, expected)| {
                 assert_eq!(
-                    renewal_recovery_owed(outcome.as_ref(), debt),
-                    expected,
-                    "outcome={outcome:?}, debt={debt}"
+                    recovery_debt_transition(debt, RecoveryDebtEvent::LeaseAdopted(outcome)),
+                    (debt, expected),
+                    "outcome={outcome:?}, debt={debt:?}"
                 );
             });
     });
@@ -1640,7 +1643,7 @@ async fn a_stale_renewal_keeps_the_pushed_set_and_moves_the_lease_clock() {
     let granted_expiry = Instant::now() + Duration::from_secs(300);
     let mock = Arc::new(MockShardManager::new().with_renew(move |_, _| {
         Ok(ShardLease {
-            executor_count: 1,
+            executor_count: NonZeroUsize::MIN,
             shard_epochs: epoch_map([(0, 7)]),
             expires_at: granted_expiry,
             revision: revision_of(MANAGER, 4),
@@ -1653,7 +1656,7 @@ async fn a_stale_renewal_keeps_the_pushed_set_and_moves_the_lease_clock() {
         &epochs([(0, 7), (4, 9)]),
         Some(Instant::now() + Duration::from_secs(30)),
         revision_of(MANAGER, 5),
-        1,
+        NonZeroUsize::MIN,
     );
 
     let announced = Arc::new(AtomicBool::new(false));
@@ -1710,7 +1713,7 @@ async fn a_lost_lease_leaves_the_assignment_lapsed_until_a_grant_replaces_it() {
         &epochs([(0, 1)]),
         Some(Instant::now() + Duration::from_secs(60)),
         revision_of(MANAGER, 1),
-        1,
+        NonZeroUsize::MIN,
     );
 
     service.renew_shard_lease().await;
@@ -1747,7 +1750,7 @@ async fn a_transport_failure_serves_until_the_local_expiry_and_then_fences() {
         &epochs([(0, 1)]),
         Some(Instant::now() + Duration::from_secs(1)),
         revision_of(MANAGER, 1),
-        1,
+        NonZeroUsize::MIN,
     );
 
     let first = service.renew_shard_lease().await;
@@ -1790,7 +1793,7 @@ async fn failed_renewals_back_off_exponentially_and_reset_on_a_grant() {
         let call = seen.fetch_add(1, Ordering::SeqCst) + 1;
         if call == grant_at.load(Ordering::SeqCst) {
             Ok(ShardLease {
-                executor_count: 1,
+                executor_count: NonZeroUsize::MIN,
                 shard_epochs: held,
                 expires_at: Instant::now() + Duration::from_secs(30),
                 revision: revision_of(MANAGER, 1),
@@ -1805,7 +1808,7 @@ async fn failed_renewals_back_off_exponentially_and_reset_on_a_grant() {
         &epochs([(0, 1)]),
         Some(Instant::now() + Duration::from_secs(300)),
         revision_of(MANAGER, 1),
-        1,
+        NonZeroUsize::MIN,
     );
 
     let mut delays = Vec::new();

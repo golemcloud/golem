@@ -19,6 +19,7 @@ use super::{
     retired_by_assignment, shard_epochs_from_proto,
 };
 use crate::services::shard::ShardService;
+use std::num::NonZeroUsize;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -197,38 +198,29 @@ fn apply_assignment_request(
             "AssignShardsRequest.number_of_shards must not be 0",
         ));
     }
-    if request.executor_count == 0 {
-        return Err(WorkerExecutorError::invalid_request(
-            "AssignShardsRequest.executor_count must not be 0",
-        ));
-    }
+    let executor_count = NonZeroUsize::new(request.executor_count as usize).ok_or_else(|| {
+        WorkerExecutorError::invalid_request("AssignShardsRequest.executor_count must not be 0")
+    })?;
     let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
         .map_err(|error| {
             WorkerExecutorError::invalid_request(format!("AssignShardsRequest.{error}"))
         })?;
-    service.assign_shards(
-        number_of_shards,
-        &shard_epochs,
-        revision,
-        request.executor_count as usize,
-    )
+    service.assign_shards(number_of_shards, &shard_epochs, revision, executor_count)
 }
 
 fn apply_revoke_request(
     service: &dyn ShardService,
     request: golem::workerexecutor::v1::RevokeShardsRequest,
 ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
-    if request.executor_count == 0 {
-        return Err(WorkerExecutorError::invalid_request(
-            "RevokeShardsRequest.executor_count must not be 0",
-        ));
-    }
+    let executor_count = NonZeroUsize::new(request.executor_count as usize).ok_or_else(|| {
+        WorkerExecutorError::invalid_request("RevokeShardsRequest.executor_count must not be 0")
+    })?;
     let shard_ids = request.shard_ids.into_iter().map(ShardId::from).collect();
     let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
         .map_err(|error| {
             WorkerExecutorError::invalid_request(format!("RevokeShardsRequest.{error}"))
         })?;
-    service.revoke_shards(&shard_ids, revision, request.executor_count as usize)
+    service.revoke_shards(&shard_ids, revision, executor_count)
 }
 
 #[cfg(test)]
@@ -250,7 +242,13 @@ mod tests {
         };
         let expiry = Instant::now() + Duration::from_secs(60);
         let epochs = HashMap::from([(ShardId::new(0), ShardEpoch(7))]);
-        service.register(8, &epochs, Some(expiry), revision, 2);
+        service.register(
+            8,
+            &epochs,
+            Some(expiry),
+            revision,
+            NonZeroUsize::new(2).unwrap(),
+        );
 
         let request = golem::workerexecutor::v1::AssignShardsRequest {
             number_of_shards: 8,
@@ -300,7 +298,7 @@ mod tests {
                     number: 3,
                     ..revision
                 },
-                5,
+                NonZeroUsize::new(5).unwrap(),
             )
             .unwrap();
         let held = service.current_assignment().unwrap();
@@ -324,7 +322,13 @@ mod tests {
         };
         let expiry = Instant::now() + Duration::from_secs(60);
         let epochs = HashMap::from([(ShardId::new(0), ShardEpoch(7))]);
-        service.register(8, &epochs, Some(expiry), revision, 2);
+        service.register(
+            8,
+            &epochs,
+            Some(expiry),
+            revision,
+            NonZeroUsize::new(2).unwrap(),
+        );
         let assign = golem::workerexecutor::v1::AssignShardsRequest {
             number_of_shards: 8,
             shard_epochs: vec![],

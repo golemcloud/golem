@@ -18,6 +18,7 @@ mod tests;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::net::{IpAddr, SocketAddr};
+use std::num::NonZeroUsize;
 use std::time::Instant;
 
 use desert_rust::BinaryCodec;
@@ -142,7 +143,7 @@ impl Display for ShardEpoch {
 /// The numbers of two manager processes are not comparable: one that failed
 /// over, or came back on a wiped or restored store, counts from a state this
 /// executor's last applied number says nothing about. So this has no `Ord`, and
-/// [`ShardAssignment`] is the one place the two halves are read together. The
+/// [`transition_shard_assignment`] compares both parts together. The
 /// executor's own type; it never imports the shard manager's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct ShardLeaseRevision {
@@ -200,13 +201,12 @@ pub enum ShardDeliveryOutcome {
     },
 }
 
-/// The shards this executor currently holds, with the epoch each was granted
-/// at, and when the lease over them lapses on this executor's own clock, if
-/// it lapses at all.
+/// A transfer snapshot of the held shards, their epochs and the local lease deadline.
+/// This value is not installed lifecycle state.
 #[derive(Clone, Debug, Default)]
 pub struct ShardAssignment {
     pub number_of_shards: usize,
-    /// The executor lease count from the last accepted grant or assignment.
+    /// The executor lease count from the last accepted grant, assignment or revoke.
     pub executor_count: usize,
     /// Exactly the shards this executor holds. The shard manager pushes the
     /// complete set; anything absent from it has been dropped.
@@ -215,14 +215,12 @@ pub struct ShardAssignment {
     /// Only a grant moves it - the answer to this executor's own registration
     /// or renewal - and the grant is anchored where that request was sent, so
     /// the shard manager's copy of the lease is never earlier than this one.
-    /// A push carries no lease. `None` means the lease never expires
-    /// (single-shard mode and the pre-registration placeholder).
+    /// A push carries no lease. `None` means the lease never expires.
     pub expires_at: Option<Instant>,
     /// The revision of the delivery this set came from, and the shard manager
     /// process this executor follows. A delivery older than this, or pushed
     /// by another process, is ignored; see [`ShardLeaseRevision`]. `None`
-    /// until a delivery has been applied, and for good on the single-shard
-    /// assignment, which no shard manager delivers.
+    /// means no manager delivery has been applied.
     pub revision: Option<ShardLeaseRevision>,
 }
 
@@ -289,6 +287,33 @@ impl ShardAssignment {
     }
 }
 
+/// The installed assignment lifecycle. Only the transition can install or replace a phase.
+#[derive(Clone, Debug, Default)]
+pub struct ShardAssignmentState {
+    phase: ShardAssignmentPhase,
+}
+
+#[derive(Clone, Debug, Default)]
+enum ShardAssignmentPhase {
+    #[default]
+    Absent,
+    Standalone(ShardAssignment),
+    Managed {
+        assignment: ShardAssignment,
+        revision: ShardLeaseRevision,
+    },
+}
+
+impl ShardAssignmentState {
+    pub fn as_ref(&self) -> Option<&ShardAssignment> {
+        match &self.phase {
+            ShardAssignmentPhase::Absent => None,
+            ShardAssignmentPhase::Standalone(assignment)
+            | ShardAssignmentPhase::Managed { assignment, .. } => Some(assignment),
+        }
+    }
+}
+
 /// An input to the executor's assignment transition. Maps and sets are borrowed for one
 /// operation; the transition owns the current assignment and never clones it to change it.
 #[derive(Clone, Copy, Debug)]
@@ -298,24 +323,24 @@ pub enum ShardAssignmentEvent<'a> {
         shard_epochs: &'a HashMap<ShardId, ShardEpoch>,
         expires_at: Option<Instant>,
         revision: ShardLeaseRevision,
-        executor_count: usize,
+        executor_count: NonZeroUsize,
     },
     Assign {
         number_of_shards: usize,
         shard_epochs: &'a HashMap<ShardId, ShardEpoch>,
         revision: ShardLeaseRevision,
-        executor_count: usize,
+        executor_count: NonZeroUsize,
     },
     Renew {
         shard_epochs: &'a HashMap<ShardId, ShardEpoch>,
         expires_at: Instant,
         revision: ShardLeaseRevision,
-        executor_count: usize,
+        executor_count: NonZeroUsize,
     },
     Revoke {
         shard_ids: &'a HashSet<ShardId>,
         revision: ShardLeaseRevision,
-        executor_count: usize,
+        executor_count: NonZeroUsize,
     },
     InstallUnexpiring {
         number_of_shards: usize,
@@ -326,10 +351,10 @@ pub enum ShardAssignmentEvent<'a> {
     },
 }
 
-/// Returns the assignment after one event and the delivery outcome, if the event delivered
-/// anything. `None` is the outcome of a clear, or of a delivery refused before registration;
-/// the latter also leaves the assignment absent. Registration and standalone installation
-/// always return an assignment and an outcome.
+/// Returns the state after one event and the delivery outcome, if the event delivered
+/// anything. Clear has no delivery outcome. Assign, Renew and Revoke have no outcome in
+/// the absent phase and leave it absent. Registration installs a managed assignment.
+/// Standalone installation installs an assignment without manager lineage.
 ///
 /// Revisions order sets within one manager incarnation. Equal revisions apply, including the
 /// full assignment sent after a revoke. A reply adopts another manager's incarnation, while a
@@ -340,10 +365,11 @@ pub enum ShardAssignmentEvent<'a> {
 /// independently of the set's revision. A push or revoke never changes expiry. Clear removes
 /// the set and lapses the lease without discarding the last revision or executor count.
 pub fn transition_shard_assignment(
-    state: Option<ShardAssignment>,
+    mut state: ShardAssignmentState,
     event: ShardAssignmentEvent<'_>,
-) -> (Option<ShardAssignment>, Option<ShardDeliveryOutcome>) {
+) -> (ShardAssignmentState, Option<ShardDeliveryOutcome>) {
     use ShardAssignmentEvent as E;
+    use ShardAssignmentPhase as P;
 
     match event {
         E::InstallUnexpiring {
@@ -354,33 +380,70 @@ pub fn transition_shard_assignment(
                 .as_ref()
                 .is_none_or(|current| current.shard_epochs != *shard_epochs);
             return (
-                Some(ShardAssignment {
-                    number_of_shards,
-                    executor_count: 1,
-                    shard_epochs: shard_epochs.clone(),
-                    expires_at: None,
-                    revision: None,
-                }),
+                ShardAssignmentState {
+                    phase: P::Standalone(ShardAssignment {
+                        number_of_shards,
+                        executor_count: 1,
+                        shard_epochs: shard_epochs.clone(),
+                        expires_at: None,
+                        revision: None,
+                    }),
+                },
                 Some(ShardDeliveryOutcome::Applied { set_changed }),
             );
         }
         E::Clear { now } => {
-            return (
-                state.map(|mut current| {
+            match &mut state.phase {
+                P::Absent => {}
+                P::Standalone(current)
+                | P::Managed {
+                    assignment: current,
+                    ..
+                } => {
                     current.shard_epochs.clear();
                     current.expires_at = Some(now);
-                    current
-                }),
-                None,
-            );
+                }
+            }
+            return (state, None);
         }
         _ => {}
     }
 
-    let mut current = match state {
-        Some(current) => current,
-        None if matches!(event, E::Register { .. }) => ShardAssignment::default(),
-        None => return (None, None),
+    let (mut current, applied) = match state.phase {
+        P::Absent => {
+            let E::Register {
+                number_of_shards,
+                shard_epochs,
+                expires_at,
+                revision,
+                executor_count,
+            } = event
+            else {
+                return (ShardAssignmentState::default(), None);
+            };
+            return (
+                ShardAssignmentState {
+                    phase: P::Managed {
+                        assignment: ShardAssignment {
+                            number_of_shards,
+                            executor_count: executor_count.get(),
+                            shard_epochs: shard_epochs.clone(),
+                            expires_at,
+                            revision: Some(revision),
+                        },
+                        revision,
+                    },
+                },
+                Some(ShardDeliveryOutcome::Applied {
+                    set_changed: !shard_epochs.is_empty(),
+                }),
+            );
+        }
+        P::Standalone(current) => (current, None),
+        P::Managed {
+            assignment,
+            revision,
+        } => (assignment, Some(revision)),
     };
     let (number_of_shards, shard_epochs, revision, path, executor_count) = match event {
         E::Register {
@@ -444,7 +507,7 @@ pub fn transition_shard_assignment(
         ),
         E::Clear { .. } | E::InstallUnexpiring { .. } => unreachable!(),
     };
-    if let Some(applied) = current.revision {
+    if let Some(applied) = applied {
         let refused = if revision.incarnation != applied.incarnation {
             (path == ShardDeliveryPath::Push).then_some(ShardDeliveryOutcome::FromAnotherManager {
                 delivered: revision,
@@ -457,7 +520,15 @@ pub fn transition_shard_assignment(
             })
         };
         if let Some(outcome) = refused {
-            return (Some(current), Some(outcome));
+            return (
+                ShardAssignmentState {
+                    phase: P::Managed {
+                        assignment: current,
+                        revision: applied,
+                    },
+                },
+                Some(outcome),
+            );
         }
     }
     let set_changed = if let Some(shard_epochs) = shard_epochs {
@@ -478,10 +549,15 @@ pub fn transition_shard_assignment(
     if let Some(number_of_shards) = number_of_shards {
         current.number_of_shards = number_of_shards;
     }
-    current.executor_count = executor_count;
+    current.executor_count = executor_count.get();
     current.revision = Some(revision);
     (
-        Some(current),
+        ShardAssignmentState {
+            phase: P::Managed {
+                assignment: current,
+                revision,
+            },
+        },
         Some(ShardDeliveryOutcome::Applied { set_changed }),
     )
 }

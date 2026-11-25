@@ -192,6 +192,7 @@ use regex::Regex;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::{Debug, Formatter};
 use std::future::Future;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{Receiver, SyncSender, sync_channel};
@@ -8899,7 +8900,7 @@ impl ShardService for FakeOwnership {
         number_of_shards: usize,
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         revision: ShardLeaseRevision,
-        executor_count: usize,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.inner
             .assign_shards(number_of_shards, shard_epochs, revision, executor_count)
@@ -8911,7 +8912,7 @@ impl ShardService for FakeOwnership {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: Option<std::time::Instant>,
         revision: ShardLeaseRevision,
-        executor_count: usize,
+        executor_count: NonZeroUsize,
     ) -> ShardDeliveryOutcome {
         self.inner.register(
             number_of_shards,
@@ -8935,7 +8936,7 @@ impl ShardService for FakeOwnership {
         &self,
         shard_ids: &HashSet<ShardId>,
         revision: ShardLeaseRevision,
-        executor_count: usize,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.inner
             .revoke_shards(shard_ids, revision, executor_count)
@@ -8946,7 +8947,7 @@ impl ShardService for FakeOwnership {
         shard_epochs: &HashMap<ShardId, ShardEpoch>,
         expires_at: std::time::Instant,
         revision: ShardLeaseRevision,
-        executor_count: usize,
+        executor_count: NonZeroUsize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.inner
             .update_lease(shard_epochs, expires_at, revision, executor_count)

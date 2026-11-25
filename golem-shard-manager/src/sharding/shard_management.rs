@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod decisions;
+
 use super::error::ShardManagerError;
 use super::healthcheck::{HealthCheck, get_unhealthy_executors_within};
 use super::model::{
@@ -358,47 +360,34 @@ impl ShardManagement {
         let now = Timestamp::now();
         let lease_ttl = self.lease_ttl;
 
-        let ((already_known, replaced, number_of_shards, pending), stored_at) = self
+        let (decision, stored_at) = self
             .persist_for_request(move |shard_state| {
-                let already_known = shard_state.has_executor(executor_id);
-                let replaced =
-                    shard_state.add_executor(executor_id, addr, pod_name, now, lease_ttl);
-                let pending = shard_state.lease_grant_for(executor_id).ok_or_else(|| {
-                    ShardManagerError::Internal(format!(
-                        "executor {executor_id} holds no lease right after being registered"
-                    ))
-                })?;
-                Ok((
-                    already_known,
-                    replaced,
-                    shard_state.number_of_shards,
-                    pending,
-                ))
+                decisions::register(shard_state, executor_id, addr, pod_name, now, lease_ttl)
             })
             .await?;
         // The grant was read off the clone before the persist bumped its revision; the ack names
         // the revision the state holding this set was actually stored under.
         let ack = RegisterAck {
-            number_of_shards,
-            grant: pending.stamp(stored_at),
+            number_of_shards: decision.number_of_shards,
+            grant: decision.pending.stamp(stored_at),
         };
 
-        if let Some(replaced) = replaced {
-            // A restarted instance inherited its predecessor's shards, so it has to be told the
-            // whole set it now holds.
-            info!(
-                executor_id = %executor_id,
-                replaced_executor_id = %replaced,
-                addr = %addr,
-                "Executor replaced at address"
-            );
-            self.updates.lock().await.retry_full_assignment(executor_id);
-        } else if already_known {
-            // A retried registration. The lease clock restarts and the same set comes back; the
-            // shards are not touched, so their epochs do not move.
-            info!(executor_id = %executor_id, addr = %addr, "Executor lease refreshed");
-        } else {
-            info!(executor_id = %executor_id, addr = %addr, "Executor added");
+        match decision.registration {
+            decisions::Registration::Replaced { previous, push_to } => {
+                info!(
+                    executor_id = %executor_id,
+                    replaced_executor_id = %previous,
+                    addr = %addr,
+                    "Executor replaced at address"
+                );
+                self.updates.lock().await.retry_full_assignment(push_to);
+            }
+            decisions::Registration::Refreshed => {
+                info!(executor_id = %executor_id, addr = %addr, "Executor lease refreshed");
+            }
+            decisions::Registration::Added => {
+                info!(executor_id = %executor_id, addr = %addr, "Executor added");
+            }
         }
 
         self.change.notify_one();
@@ -442,15 +431,15 @@ impl ShardManagement {
         // common path still costs a single write.
         let (expired, _stored_at) = self
             .persist_for_request(move |shard_state| {
-                let expired = shard_state.housekeep(now);
-                for (expired_id, released) in &expired {
+                let (shard_state, expired) = decisions::reap_expired(shard_state, now);
+                expired.iter().for_each(|(expired_id, released)| {
                     warn!(
                         executor_id = %expired_id,
                         released_shards = released.len(),
                         "Shard lease expired; releasing its shards"
                     );
-                }
-                Ok(expired.len())
+                });
+                Ok((shard_state, expired.len()))
             })
             .await?;
         // Counted once the removal is stored: a write that fails leaves the lease in place, and
@@ -459,51 +448,18 @@ impl ShardManagement {
 
         let (pending, stored_at) = self
             .persist_for_request(move |shard_state| {
-            if !shard_state.has_executor(executor_id) {
-                return Err(ShardManagerError::ShardLeaseNotFound { executor_id });
-            }
-
-            // The claim is what the executor believes it holds, not a condition of the renewal.
-            // A claim that does not match is an executor that missed a push, and the grant this
-            // returns is the manager's set, which the executor adopts - so the renewal is the
-            // guaranteed second delivery path for a push that was lost. Refusing it would only
-            // hold the executor on a picture the manager already knows is wrong. The mismatch is
-            // logged because it is the one signal that pushes to this executor are not landing.
-            let mismatched: Vec<ShardId> = claimed
-                .iter()
-                .filter(|(shard_id, provided)| {
-                    shard_state
-                        .shard_assignments
-                        .get(*shard_id)
-                        .filter(|entry| entry.executor_id == executor_id)
-                        .map(|entry| entry.epoch)
-                        != Some(**provided)
-                })
-                .map(|(shard_id, _)| *shard_id)
-                .collect();
-            if !mismatched.is_empty() {
-                warn!(
-                    executor_id = %executor_id,
-                    mismatched_shards = mismatched.iter().join(", "),
-                    "Shard lease claim does not match the manager's view; renewing and correcting"
-                );
-            }
-
-            if !shard_state.renew_lease(executor_id, now, lease_ttl) {
-                return Err(ShardManagerError::Internal(format!(
-                    "executor {executor_id} holds no lease right after it was found"
-                )));
-            }
-
-            // Read off the mutated clone, so the grant this returns is exactly the state that is
-            // about to be stored - never a state that a failed write then rolls back.
-            shard_state.lease_grant_for(executor_id).ok_or_else(|| {
-                ShardManagerError::Internal(format!(
-                    "executor {executor_id} holds no lease right after it was renewed"
-                ))
+                let (shard_state, decision) =
+                    decisions::renew(shard_state, executor_id, &claimed, now, lease_ttl)?;
+                if !decision.mismatched.is_empty() {
+                    warn!(
+                        executor_id = %executor_id,
+                        mismatched_shards = decision.mismatched.iter().join(", "),
+                        "Shard lease claim does not match the manager's view; renewing and correcting"
+                    );
+                }
+                Ok((shard_state, decision.pending))
             })
-        })
-        .await?;
+            .await?;
         // Read off the clone before its revision was bumped; stamped with the revision the state
         // was then stored at, so the grant names exactly the persisted state it describes.
         Ok(pending.stamp(stored_at))
@@ -529,13 +485,13 @@ impl ShardManagement {
             "Deregistering executor"
         );
 
-        self.persist_for_request(move |shard_state| {
+        self.persist_for_request(move |mut shard_state| {
             if !shard_state.has_executor(executor_id) {
                 debug!(
                     executor_id = %executor_id,
                     "Deregistered executor holds no lease; nothing to release"
                 );
-                return Ok(());
+                return Ok((shard_state, ()));
             }
 
             let stale: Vec<ShardId> = claimed
@@ -565,7 +521,7 @@ impl ShardManagement {
                 released_shards = released.len(),
                 "Executor deregistered"
             );
-            Ok(())
+            Ok((shard_state, ()))
         })
         .await
         .map(|((), _stored_at)| ())
@@ -690,14 +646,8 @@ impl ShardManagement {
             // the full set sent alongside it makes the rest of that executor's picture current at
             // that revision; or it is owed an authoritative copy after a registration or a failed
             // delivery.
-            let push_to: BTreeSet<ExecutorId> = rebalance
-                .get_assignments()
-                .assignments
-                .keys()
-                .chain(rebalance.get_unassignments().unassignments.keys())
-                .copied()
-                .chain(full_assignment_executors.iter().copied())
-                .collect();
+            let push_to =
+                decisions::full_assignment_recipients(&rebalance, &full_assignment_executors);
 
             let failures = Self::execute_rebalance(
                 worker_executors.clone(),
@@ -712,28 +662,20 @@ impl ShardManagement {
             // so an executor that missed a delivery is pushed the set it is recorded as holding.
             // Its own next renewal carries that same set, which bounds the repair even if the push
             // fails again.
-            let mut needs_retry = false;
-            let unreached: BTreeSet<ExecutorId> = failures
-                .failed_unassignments
-                .iter()
-                .chain(failures.failed_assignments.iter())
-                .copied()
-                .collect();
-            if !unreached.is_empty() {
+            if let Some(unreached) = decisions::repair_failed_deliveries(
+                failures.failed_assignments,
+                failures.failed_unassignments,
+            ) {
                 warn!(
                     failed_executors = unreached.iter().join(", "),
                     "Some executors could not be given their shard set and will be pushed it again"
                 );
                 {
                     let mut updates_guard = self.updates.lock().await;
-                    for executor_id in &unreached {
-                        updates_guard.retry_full_assignment(*executor_id);
-                    }
+                    unreached
+                        .into_iter()
+                        .for_each(|executor_id| updates_guard.retry_full_assignment(executor_id));
                 }
-                needs_retry = true;
-            }
-
-            if needs_retry {
                 self.change.notify_one();
             }
 
@@ -783,9 +725,12 @@ impl ShardManagement {
     where
         F: FnOnce(&mut ShardLeaseState) -> Result<T, ShardManagerError>,
     {
-        self.try_mutate_and_persist_stamped(mutate)
-            .await
-            .map(|(outcome, _stored_at)| outcome)
+        self.try_mutate_and_persist_stamped(|mut shard_state| {
+            let outcome = mutate(&mut shard_state)?;
+            Ok((shard_state, outcome))
+        })
+        .await
+        .map(|(outcome, _stored_at)| outcome)
     }
 
     /// [`Self::try_mutate_and_persist`] for a writer that runs inside a request handler.
@@ -803,7 +748,9 @@ impl ShardManagement {
         mutate: F,
     ) -> Result<(T, ShardLeaseRevision), ShardManagerError>
     where
-        F: FnOnce(&mut ShardLeaseState) -> Result<T, ShardManagerError> + Send + 'static,
+        F: FnOnce(ShardLeaseState) -> Result<(ShardLeaseState, T), ShardManagerError>
+            + Send
+            + 'static,
         T: Send + 'static,
     {
         // Must not be called while holding `shard_state`: the spawned task takes the write lock
@@ -834,14 +781,14 @@ impl ShardManagement {
         mutate: F,
     ) -> Result<(T, ShardLeaseRevision), ShardManagerError>
     where
-        F: FnOnce(&mut ShardLeaseState) -> Result<T, ShardManagerError>,
+        F: FnOnce(ShardLeaseState) -> Result<(ShardLeaseState, T), ShardManagerError>,
     {
         let mut current_shard_state = self.shard_state.write().await;
         let mut external_revision = self.external_revision.lock().await;
 
-        let mut next_shard_state = current_shard_state.clone();
+        let next_shard_state = current_shard_state.clone();
         let prev_external_revision = *external_revision;
-        let outcome = mutate(&mut next_shard_state)?;
+        let (mut next_shard_state, outcome) = mutate(next_shard_state)?;
 
         // Nothing changed, so there is nothing to store. Without this the periodic tick would
         // write a fresh full blob for an idle cluster every period forever, each one a new

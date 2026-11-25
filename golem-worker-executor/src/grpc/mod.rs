@@ -109,6 +109,7 @@ use golem_service_base::model::auth::AuthCtx;
 use std::cmp::min;
 use std::collections::HashMap;
 use std::marker::PhantomData;
+use std::num::NonZeroUsize;
 use std::pin::Pin;
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -211,7 +212,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 &shard_assignment.shard_epochs,
                 shard_assignment.expires_at,
                 revision,
-                shard_assignment.executor_count,
+                NonZeroUsize::new(shard_assignment.executor_count).ok_or_else(|| {
+                    Error::msg("Registered shard assignment executor_count must not be 0")
+                })?,
             ),
             // The single-shard executor: no shard manager delivered this assignment, so there is
             // nothing to order it against.
