@@ -1394,9 +1394,10 @@ retained start (`deleted_region_contains_start`), because a snapshot recovery sk
 from index 2 to the snapshot. Some walks need the
 whole history, because a walk from the start gives a wrong result: the full status rebuild, the
 revert preflight, the epoch fence of a stream fork revert (`max_issued_epoch`) and the creation
-receipt of a fork export. They read from index 1 or from a fixed index, so the layer gives the
-expired error when such a walk needs an entry from index 2 to the index before the start. At a
-start of 2 no such entry exists, and the walk reads with no error. A read below the start returns
+receipt of a fork export. The full status rebuild, the revert preflight and `max_issued_epoch`
+with no earlier fork cut read more than the `Create` entry from index 1, so they fail as expired at
+any start above 1. Only the creation receipt reads the `Create` entry alone and then from index 2,
+so it reads with no error at a start of 2. A read below the start returns
 `OplogReadError::Expired { retained_start }`. The exceptions are an empty read and a read of the
 `Create` entry alone at index 1, because that entry is the identity of the agent. A read of more
 than the `Create` entry from index 1 is expired. This includes a page and a guest chunk, because a

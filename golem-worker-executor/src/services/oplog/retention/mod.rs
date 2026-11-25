@@ -38,10 +38,11 @@
 //!
 //! Some walks need the whole history, because a walk from the start gives a wrong result: the
 //! full status rebuild, the revert preflight, the epoch fence of a stream fork revert
-//! (`max_issued_epoch`) and the creation receipt of a fork export. They read from index 1 or from
-//! a fixed index, so the layer gives the expired error when such a walk needs an entry from index
-//! 2 to the index before the start. At a start of 2 no such entry exists: the walk reads the
-//! `Create` entry alone and then the retained entries, with no error.
+//! (`max_issued_epoch`) and the creation receipt of a fork export. The full status rebuild, the
+//! revert preflight and `max_issued_epoch` with no earlier fork cut read more than the `Create`
+//! entry from index 1, so they fail as expired at any start above 1. Only the creation receipt
+//! reads the `Create` entry alone and then from index 2, so it reads with no error at a start of
+//! 2.
 
 mod layer;
 #[cfg(test)]
