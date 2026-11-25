@@ -1929,7 +1929,7 @@ pub mod worker {
             #[command(flatten)]
             agent_id: AgentIdArgs,
         },
-        /// Queries and streams an agent's full oplog.
+        /// Queries and streams an agent's oplog from its retained start.
         /// Structured formats emit one output document per oplog entry; with `--page`, one
         /// `agent.oplog-page` document with one page of entries and the cursor of the next page.
         /// With `--obfuscate`, structured formats emit one header document, one document per entry and one coverage document.
@@ -1937,7 +1937,7 @@ pub mod worker {
         Oplog {
             #[command(flatten)]
             agent_id: AgentIdArgs,
-            /// Index of the first oplog entry to get. If missing, the whole oplog is returned. Mutually exclusive with --query and --cursor.
+            /// Index of the first oplog entry to get. If missing, the oplog is returned from its retained start, the first entry that the oplog keeps. An index below the retained start is expired. Mutually exclusive with --query and --cursor.
             #[arg(long, conflicts_with_all = ["query", "cursor"])]
             from: Option<u64>,
             #[arg(

@@ -217,7 +217,6 @@ pub fn export_failure(error: &anyhow::Error) -> Option<(&'static str, String, Ma
         }
         OplogExportError::StaleCursor => ("stale-cursor", Map::new()),
         OplogExportError::RootChanged
-        | OplogExportError::CreateTooLarge { .. }
         | OplogExportError::CreateMissing
         | OplogExportError::ReadFailed { .. }
         | OplogExportError::ReadFailedWithoutResponse

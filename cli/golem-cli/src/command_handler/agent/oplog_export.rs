@@ -145,6 +145,24 @@ impl OplogReads for RestOplogReads {
             .map_service_error()
             .map_err(read_failed)?)
     }
+
+    async fn read_create_entry(&self) -> anyhow::Result<PublicOplogEntryWithIndex> {
+        let clients = self.ctx.golem_clients().await.map_err(read_failed)?;
+        Ok(clients
+            .worker
+            .get_oplog_entry(
+                &self.environment_id.0,
+                &self.agent_id.0,
+                1,
+                None,
+                // An export never asks for claims.
+                None,
+                None,
+            )
+            .await
+            .map_service_error()
+            .map_err(read_failed)?)
+    }
 }
 
 /// The error of a failed read of the export: a fixed text with the HTTP status, if any. The raw
