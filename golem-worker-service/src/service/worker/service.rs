@@ -7275,7 +7275,16 @@ mod tests {
 
         harness
             .worker_service
-            .get_oplog(&owned, None, None, 3, None, None, auth_ctx.clone())
+            .get_oplog(
+                &owned,
+                None,
+                None,
+                3,
+                None,
+                None,
+                ClaimVisibility::Hidden,
+                auth_ctx.clone(),
+            )
             .await
             .unwrap();
 
@@ -7283,7 +7292,16 @@ mod tests {
         assert!(
             harness
                 .worker_service
-                .get_oplog(&owned, None, None, 3, None, None, auth_ctx)
+                .get_oplog(
+                    &owned,
+                    None,
+                    None,
+                    3,
+                    None,
+                    None,
+                    ClaimVisibility::Hidden,
+                    auth_ctx,
+                )
                 .await
                 .is_err(),
             "the oplog starts at index 10, after the range of the permission"
@@ -7309,7 +7327,16 @@ mod tests {
         *harness.worker_client.oplog_page_first_index.lock().unwrap() = 10;
         let page = harness
             .worker_service
-            .get_oplog(&owned, None, None, 3, None, None, auth_ctx)
+            .get_oplog(
+                &owned,
+                None,
+                None,
+                3,
+                None,
+                None,
+                ClaimVisibility::Hidden,
+                auth_ctx,
+            )
             .await
             .unwrap();
         assert_eq!(page.first_index_in_chunk, 10);
@@ -7402,7 +7429,7 @@ mod tests {
                 .worker_service
                 .get_oplog(
                     &owned,
-                    OplogIndex::INITIAL,
+                    Some(OplogIndex::INITIAL),
                     None,
                     10,
                     None,
@@ -7432,7 +7459,7 @@ mod tests {
                     .worker_service
                     .get_oplog(
                         &owned,
-                        OplogIndex::INITIAL,
+                        Some(OplogIndex::INITIAL),
                         None,
                         10,
                         None,

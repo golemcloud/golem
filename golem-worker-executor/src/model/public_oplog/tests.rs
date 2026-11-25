@@ -3563,6 +3563,7 @@ async fn invocation_callers_render_through_public_oplog_api_and_wit() {
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
@@ -3590,6 +3591,7 @@ async fn invocation_callers_render_through_public_oplog_api_and_wit() {
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
@@ -3685,6 +3687,7 @@ async fn hidden_claims_do_not_make_an_oplog_entry_omitted() {
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
@@ -3781,6 +3784,7 @@ async fn pending_update_public_form_shows_the_requester() {
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
@@ -3855,6 +3859,7 @@ async fn an_oplog_range_read_shows_claims_only_on_request() {
             oplog_service.clone(),
             &owned_agent_id,
             AgentMode::Durable,
+            OplogRetention::FULL,
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
@@ -4448,6 +4453,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             max_bytes: 1_000_000,
             max_entry_bytes: 1_000_000,
         },
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap();
@@ -4470,6 +4476,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             None,
             OplogIndex::from_u64(index),
             None,
+            ClaimVisibility::Hidden,
         )
     };
     assert_eq!(entry(3).await.unwrap_err(), expired);
@@ -4501,6 +4508,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
                 max_bytes: 1_000_000,
                 max_entry_bytes: 1_000_000,
             },
+            ClaimVisibility::Hidden,
         )
     };
     assert_eq!(
@@ -4530,6 +4538,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         },
         "anything",
         ScanBudget::default(),
+        ClaimVisibility::Hidden,
     )
     .await
     .err()
@@ -4554,6 +4563,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
             ComponentRevision::INITIAL,
             OplogIndex::INITIAL,
             count,
+            ClaimVisibility::Hidden,
         )
     };
     assert_eq!(
@@ -4622,6 +4632,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         10,
         "context",
         ScanBudget::default(),
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap();
@@ -4657,6 +4668,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
                 entries: 100,
                 millis: 600_000,
             },
+            ClaimVisibility::Hidden,
         )
     };
     let range = range_page(retained_start.as_u64(), None).await.unwrap();
@@ -4716,6 +4728,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
                 entries: 1,
                 millis: 600_000,
             },
+            ClaimVisibility::Hidden,
         )
         .await
         .err(),
@@ -4795,6 +4808,7 @@ impl RetainedAttribution {
                 durable_function_type: DurableFunctionType::WriteLocal,
                 span_started: None,
                 denial: None,
+                driver: None,
             })
             .await
             .unwrap()
@@ -4834,6 +4848,7 @@ impl RetainedAttribution {
             ComponentRevision::INITIAL,
             from,
             count,
+            ClaimVisibility::Hidden,
         )
         .await
         .unwrap()
@@ -5077,6 +5092,7 @@ async fn a_read_from_index_0_of_a_full_oplog_starts_at_index_1() {
         None,
         OplogIndex::NONE,
         None,
+        ClaimVisibility::Hidden,
     )
     .await;
     assert!(
@@ -5115,6 +5131,7 @@ async fn a_guest_search_that_ends_before_its_start_reads_nothing() {
         10,
         "context",
         ScanBudget::default(),
+        ClaimVisibility::Hidden,
     )
     .await
     .unwrap();

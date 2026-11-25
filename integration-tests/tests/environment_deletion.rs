@@ -597,6 +597,7 @@ async fn get_oplog_starts_at_the_retained_start(
             None,
             None,
             None,
+            None,
         )
         .await?;
     assert_eq!(page.first_index_in_chunk, retained_start.as_u64());
@@ -618,6 +619,7 @@ async fn get_oplog_starts_at_the_retained_start(
             &agent_id.agent_id.0,
             Some(OplogIndex::INITIAL.as_u64()),
             100,
+            None,
             None,
             None,
             None,
