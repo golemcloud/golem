@@ -4274,12 +4274,14 @@ type RecordedWrite = (KeyValueStorageNamespace, Option<std::time::Duration>);
 
 /// An in-memory key-value storage that records the namespace and the expiry of every call that
 /// sets a value or compares and changes fields. It does not record `del`, `del_many`,
-/// `remove_from_set` and `remove_from_sorted_set`, because these calls give no expiry. A
-/// `compare_and_set_many` in the namespace `failing_compare_and_set` fails.
+/// `remove_from_set` and `remove_from_sorted_set`, because these calls give no expiry. It also
+/// records the namespace and the API name of every `get_all`. A `compare_and_set_many` in the
+/// namespace `failing_compare_and_set` fails.
 #[derive(Debug, Default)]
 struct ExpiryRecordingKeyValueStorage {
     inner: InMemoryKeyValueStorage,
     writes: StdMutex<Vec<RecordedWrite>>,
+    hash_reads: StdMutex<Vec<(KeyValueStorageNamespace, &'static str)>>,
     failing_compare_and_set: StdMutex<Option<KeyValueStorageNamespace>>,
 }
 
@@ -4293,6 +4295,16 @@ impl ExpiryRecordingKeyValueStorage {
 
     fn writes(&self) -> Vec<RecordedWrite> {
         self.writes.lock().unwrap().clone()
+    }
+
+    /// The number of `get_all` reads of `namespace` with the API name `api_name`.
+    fn hash_reads(&self, namespace: &KeyValueStorageNamespace, api_name: &str) -> usize {
+        self.hash_reads
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(read, api)| read == namespace && *api == api_name)
+            .count()
     }
 }
 
@@ -4458,6 +4470,10 @@ impl KeyValueStorage for ExpiryRecordingKeyValueStorage {
         entity_name: &'static str,
         namespace: KeyValueStorageNamespace,
     ) -> Result<Vec<(String, Bytes)>, KeyValueStorageError> {
+        self.hash_reads
+            .lock()
+            .unwrap()
+            .push((namespace.clone(), api_name));
         self.inner
             .get_all(svc_name, api_name, entity_name, namespace)
             .await
@@ -4616,28 +4632,10 @@ impl KeyValueStorage for ExpiryRecordingKeyValueStorage {
 /// The worker service writes and removes the status baseline with no expiry, and the live
 /// status cache with the expiry of a derived cache, on the full write, the delta write and the
 /// removal. The removal is `WorkerService::remove` of an incarnation that is not the current one,
-/// which deletes no oplog. The delta write of the baseline on a matching delta base counts a
-/// `delta_match` publication of the baseline.
+/// which deletes no oplog. The delta write of the baseline on a matching delta base publishes
+/// the delta: it reads no snapshot of the hash, which a complete reconciliation reads.
 #[test]
 async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
-    fn baseline_delta_matches() -> f64 {
-        prometheus::gather()
-            .into_iter()
-            .filter(|family| family.name() == "status_cache_publication_total")
-            .flat_map(|family| family.get_metric().to_vec())
-            .filter(|metric| {
-                [("cache", "checkpoint"), ("event", "delta_match")]
-                    .iter()
-                    .all(|(name, value)| {
-                        metric
-                            .get_label()
-                            .iter()
-                            .any(|label| label.name() == *name && label.value() == *value)
-                    })
-            })
-            .map(|metric| metric.get_counter().value())
-            .sum()
-    }
     let storage = Arc::new(ExpiryRecordingKeyValueStorage::default());
     let (service, owned_agent_id, _) = status_baseline_test_service(storage.clone());
     let fingerprint = AgentFingerprint(Uuid::new_v4());
@@ -4669,15 +4667,15 @@ async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
         .write_status_checkpoint(&owned_agent_id, fingerprint, None, first)
         .await
         .unwrap();
-    let delta_matches_before = baseline_delta_matches();
+    assert_eq!(storage.hash_reads(&baseline, "update_status"), 1);
     service
         .write_status_checkpoint(&owned_agent_id, fingerprint, Some(&checkpoint), second)
         .await
         .unwrap();
-    // Other tests of the process can only raise the count.
-    assert!(
-        baseline_delta_matches() > delta_matches_before,
-        "the delta write of the baseline is not a delta match"
+    assert_eq!(
+        storage.hash_reads(&baseline, "update_status"),
+        1,
+        "the delta write of the baseline on a matching delta base reads a snapshot of the hash"
     );
     service
         .remove(
