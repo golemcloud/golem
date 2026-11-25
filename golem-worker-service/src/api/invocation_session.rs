@@ -102,7 +102,7 @@ mod oversize_tests;
 
 struct AdmittedRequest {
     request: InvocationRequest,
-    _admission: InboundAdmission,
+    _admission: Option<InboundAdmission>,
 }
 
 struct AdmittedMessage {
@@ -1612,7 +1612,7 @@ async fn handle_client_messages<S>(
                     Ok(message) => translate_client_text(message, &state).await,
                     Err(error) => Err(AdapterError::from(error)),
                 }
-                .map(|request| (request, admission, text.len().max(1)))
+                .map(|request| (request.into_iter().collect(), admission, text.len().max(1)))
             }
             message @ Message::Binary(_) => {
                 if message_size(&message) > MAX_WEBSOCKET_MESSAGE_SIZE {
@@ -1630,7 +1630,7 @@ async fn handle_client_messages<S>(
                 .map(|request| (request, admission, size))
             }
         };
-        let (request, admission, _frame_size) = match request {
+        let (translated, admission, _frame_size): (Vec<TranslatedRequest>, _, _) = match request {
             Ok(request) => request,
             Err(error) => {
                 let safe_message = match error.code {
@@ -1651,61 +1651,67 @@ async fn handle_client_messages<S>(
                 return;
             }
         };
-        let Some(TranslatedRequest {
-            request,
-            input,
-            cancelled_output,
-        }) = request
-        else {
-            continue;
-        };
-        if let Some(channel) = cancelled_output {
-            outbound.cancel_output(channel).await;
-        }
-        if let Some(input) = input {
-            let admission = match acquire_input_admission(
-                &budgets,
-                input.terminal,
-                input.channel,
-                input.byte_charge,
-            )
-            .await
-            {
-                Ok(admission) => admission,
-                Err(error) => {
-                    let safe_message = safe_rejection_message(error.code);
-                    send_rejection(
+        // The frame admission is released with the last request that the frame produced.
+        let mut admission = Some(admission);
+        let count = translated.len();
+        for (index, translated) in translated.into_iter().enumerate() {
+            let TranslatedRequest {
+                request,
+                input,
+                cancelled_output,
+            } = translated;
+            if let Some(channel) = cancelled_output {
+                outbound.cancel_output(channel).await;
+            }
+            if let Some(input) = input {
+                let admission = match acquire_input_admission(
+                    &budgets,
+                    input.terminal,
+                    input.channel,
+                    input.byte_charge,
+                )
+                .await
+                {
+                    Ok(admission) => admission,
+                    Err(error) => {
+                        let safe_message = safe_rejection_message(error.code);
+                        send_rejection(
+                            &outbound,
+                            Some(attempt_id),
+                            error.code,
+                            safe_message.clone(),
+                        )
+                        .await;
+                        close_protocol(&outbound, &safe_message).await;
+                        return;
+                    }
+                };
+                let mut state = state.lock().await;
+                let Some(channel) = state.channels.get_mut(&input.channel) else {
+                    drop(state);
+                    close_protocol(
                         &outbound,
-                        Some(attempt_id),
-                        error.code,
-                        safe_message.clone(),
+                        "input channel disappeared while admitting a frame",
                     )
                     .await;
-                    close_protocol(&outbound, &safe_message).await;
                     return;
-                }
-            };
-            let mut state = state.lock().await;
-            let Some(channel) = state.channels.get_mut(&input.channel) else {
-                drop(state);
-                close_protocol(
-                    &outbound,
-                    "input channel disappeared while admitting a frame",
-                )
-                .await;
+                };
+                channel.pending_input.push_back(admission);
+            }
+            if requests
+                .send(AdmittedRequest {
+                    request,
+                    _admission: if index + 1 == count {
+                        admission.take()
+                    } else {
+                        None
+                    },
+                })
+                .await
+                .is_err()
+            {
                 return;
-            };
-            channel.pending_input.push_back(admission);
-        }
-        if requests
-            .send(AdmittedRequest {
-                request,
-                _admission: admission,
-            })
-            .await
-            .is_err()
-        {
-            return;
+            }
         }
     }
 }
@@ -1869,16 +1875,21 @@ async fn translate_client_text(
     }
 }
 
+/// Translates a client binary message into private requests. A packed `u8` frame with an invalid
+/// byte forwards the bytes before it and then ends the input at the invalid byte. No request means
+/// that the frame is dropped: it is a frame of an input that ended at an invalid item.
 async fn translate_client_binary(
     message: BinaryMessage,
     state: &Arc<Mutex<AdapterState>>,
-) -> Result<Option<TranslatedRequest>, AdapterError> {
+) -> Result<Vec<TranslatedRequest>, AdapterError> {
     let mut state = state.lock().await;
     let channel = message.metadata.channel;
     let sequence = message.metadata.sequence.0;
+    let mut item_count = message.metadata.item_count.0;
+    let mut invalid_byte = None;
     let (transport_id, durable_stream_id, epoch, schema) = input_channel(&state, channel)?;
     if state.channels[&channel].invalid_input.is_some() {
-        return Ok(None);
+        return Ok(Vec::new());
     }
     let graph = state.graph.as_ref().unwrap();
     let lane = binary_lane(graph, &schema);
@@ -1891,24 +1902,24 @@ async fn translate_client_binary(
                         "u8 binary item count does not match payload size",
                     ));
                 }
-                if let Err(error) = validate_packed_u8(
-                    graph,
-                    &schema,
-                    &message.payload,
-                    PublicErrorCode::ValidationError,
-                ) {
-                    break 'validated Err(error);
+                let mut payload = message.payload;
+                match validate_packed_u8(graph, &schema, &payload, PublicErrorCode::ValidationError)
+                {
+                    Ok(()) => {}
+                    Err((0, error)) => break 'validated Err(error),
+                    Err((index, error)) => {
+                        payload.truncate(index);
+                        item_count = index as u64;
+                        invalid_byte = Some(error);
+                    }
                 }
-                let byte_charge = message.payload.len().checked_mul(2).ok_or_else(|| {
+                let byte_charge = payload.len().checked_mul(2).ok_or_else(|| {
                     AdapterError::new(
                         PublicErrorCode::ResourceExhausted,
                         "u8 byte charge overflow",
                     )
                 })?;
-                (
-                    input_stream_item::Payload::PackedU8(message.payload),
-                    byte_charge,
-                )
+                (input_stream_item::Payload::PackedU8(payload), byte_charge)
             }
             (Some(BinaryMessageKind::InputBinary), BinaryMessageKind::InputBinary) => {
                 if message.metadata.item_count.0 != 1 {
@@ -1942,13 +1953,16 @@ async fn translate_client_binary(
     };
     let (payload, byte_charge) = match translated {
         Ok(translated) => translated,
-        Err(error) => return end_input_at_invalid_item(&mut state, channel, sequence, error),
+        Err(error) => {
+            return Ok(
+                end_input_at_invalid_item(&mut state, channel, sequence, error)?
+                    .into_iter()
+                    .collect(),
+            );
+        }
     };
-    let next_input_sequence = message
-        .metadata
-        .sequence
-        .0
-        .checked_add(message.metadata.item_count.0)
+    let next_input_sequence = sequence
+        .checked_add(item_count)
         .ok_or_else(|| AdapterError::new(PublicErrorCode::InvalidSequence, "sequence overflow"))?;
     let request = request(invocation_request::Request::InputItem(InputStreamItem {
         transport_stream_id: transport_id,
@@ -1962,10 +1976,10 @@ async fn translate_client_binary(
         .validate_trusted_request(&request)
         .map_err(request_protocol_error)?;
     let channel_state = state.channels.get_mut(&channel).unwrap();
-    if message.metadata.sequence.0 == channel_state.next_input_sequence {
+    if sequence == channel_state.next_input_sequence {
         channel_state.next_input_sequence = next_input_sequence;
     }
-    Ok(Some(TranslatedRequest {
+    let mut translated = vec![TranslatedRequest {
         request,
         input: Some(PendingInput {
             channel,
@@ -1973,7 +1987,16 @@ async fn translate_client_binary(
             byte_charge,
         }),
         cancelled_output: None,
-    }))
+    }];
+    if let Some(error) = invalid_byte {
+        translated.extend(end_input_at_invalid_item(
+            &mut state,
+            channel,
+            next_input_sequence,
+            error,
+        )?);
+    }
+    Ok(translated)
 }
 
 async fn handle_private_responses<S>(
@@ -2722,7 +2745,8 @@ fn translate_output_item(
             &schema,
             &item.packed_u8,
             PublicErrorCode::ProtocolError,
-        )?;
+        )
+        .map_err(|(_, error)| error)?;
         let byte_charge = item.packed_u8.len().checked_mul(2).ok_or_else(|| {
             AdapterError::new(
                 PublicErrorCode::ResourceExhausted,
@@ -3293,17 +3317,20 @@ fn validate_direct_value(
     })
 }
 
+/// Validates each byte of a packed `u8` payload. An error carries the index of the first invalid
+/// byte.
 fn validate_packed_u8(
     graph: &SchemaGraph,
     schema: &SchemaType,
     payload: &[u8],
     code: PublicErrorCode,
-) -> Result<(), AdapterError> {
+) -> Result<(), (usize, AdapterError)> {
     let mut validated = [false; 256];
-    for byte in payload {
+    for (position, byte) in payload.iter().enumerate() {
         let index = *byte as usize;
         if !validated[index] {
-            validate_direct_value(graph, schema, &SchemaValue::U8(*byte), code)?;
+            validate_direct_value(graph, schema, &SchemaValue::U8(*byte), code)
+                .map_err(|error| (position, error))?;
             validated[index] = true;
         }
     }
@@ -3866,13 +3893,19 @@ mod tests {
     /// Asserts that `translated` ends the input at `sequence` with a terminal that carries
     /// `diagnostic`, and returns the terminal message.
     fn assert_ends_input_at_invalid_item(
-        translated: Option<TranslatedRequest>,
+        translated: impl IntoIterator<Item = TranslatedRequest>,
         sequence: u64,
         diagnostic: &str,
     ) -> String {
         use golem_common::model::durable_stream::{StreamError, StreamTerminal};
-        let translated =
-            translated.expect("the invalid item was dropped instead of ending the input");
+        let mut translated = translated.into_iter().collect::<Vec<_>>();
+        assert!(
+            translated.len() <= 1,
+            "the invalid item produced several requests"
+        );
+        let translated = translated
+            .pop()
+            .expect("the invalid item was dropped instead of ending the input");
         assert!(translated.input.unwrap().terminal);
         let Some(invocation_request::Request::StreamEnd(end)) = translated.request.request else {
             panic!("the invalid item did not end the input")
@@ -4007,6 +4040,88 @@ mod tests {
             panic!("an invalid item after a gap was accepted")
         };
         assert_eq!(gap.code, PublicErrorCode::InputGap);
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn packed_u8_frame_ends_the_input_at_its_invalid_byte() {
+        let state = active_input_state_with_schema(restricted_u8());
+        let keyring = keyring();
+        let bindings = token_bindings(&AuthCtx::system());
+        let mut translated = translate_client_binary(
+            BinaryMessage {
+                metadata: BinaryMessageMetadata {
+                    channel: 1,
+                    cursor_token: None,
+                    item_count: DecimalU64(4),
+                    kind: BinaryMessageKind::InputU8,
+                    mime_type: None,
+                    sequence: DecimalU64(0),
+                    version: 1,
+                },
+                // Items 0 and 1 are valid, item 2 is below the minimum, item 3 is valid again.
+                payload: vec![11, 12, 9, 13],
+            },
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(translated.len(), 2);
+        let end = translated.pop();
+        let prefix = translated.pop().unwrap();
+        assert!(!prefix.input.unwrap().terminal);
+        let Some(invocation_request::Request::InputItem(item)) = prefix.request.request else {
+            panic!("the valid bytes before the invalid byte were not forwarded")
+        };
+        assert_eq!(item.sequence, 0);
+        assert_eq!(
+            item.payload,
+            Some(input_stream_item::Payload::PackedU8(vec![11, 12]))
+        );
+        assert_ends_input_at_invalid_item(end, 2, "below minimum 10");
+
+        admit_input(&state, false).await;
+        admit_input(&state, true).await;
+        let ack = |sequence, logical_item_count| {
+            let mut response = input_ack(sequence, durable_offset(sequence + 1));
+            if let Some(invocation_response::Response::InputAck(ack)) = &mut response.response {
+                ack.logical_item_count = logical_item_count;
+            }
+            translate_private_response(
+                response,
+                &state,
+                &keyring,
+                &bindings,
+                keyring.active_key_id(),
+                Uuid::from_u128(2),
+            )
+        };
+        let frames = ack(1, 2).await.unwrap();
+        let PublicServerMessage::InputStreamAck {
+            highest_contiguous_sequence,
+            terminal,
+            ..
+        } = decode_frame(&frames[0])
+        else {
+            panic!("the forwarded bytes were not acknowledged")
+        };
+        assert_eq!(highest_contiguous_sequence, DecimalU64(2));
+        assert!(!terminal);
+        let frames = ack(2, 1).await.unwrap();
+        let PublicServerMessage::StreamEnd {
+            sequence, outcome, ..
+        } = decode_frame(&frames[0])
+        else {
+            panic!("the end of the invalid input is not a stream-end")
+        };
+        assert_eq!(sequence, DecimalU64(2));
+        let PublicStreamOutcome::Failed {
+            error: PublicStreamError::Interrupted { message },
+        } = outcome
+        else {
+            panic!("unexpected outcome {outcome:?}")
+        };
+        assert!(message.starts_with("input item 2 "), "{message}");
     }
 
     #[test]
@@ -5148,6 +5263,7 @@ mod tests {
         )
         .await
         .unwrap()
+        .pop()
         .unwrap();
         let pending = maximum_binary.input.unwrap();
         assert_eq!(pending.byte_charge, MAX_LOGICAL_VALUE_SIZE);
