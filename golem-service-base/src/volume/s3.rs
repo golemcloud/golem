@@ -387,7 +387,7 @@ impl VolumeClient for S3Volume {
         if object_key.is_empty() {
             return Err(VolumeError::NotFound);
         }
-        full_key(&object_key)?;
+        full_key(0, &object_key)?;
         let slash_key = object_key.ends_with('/');
         let status = StatusObserver::default();
         let result = self
@@ -461,7 +461,7 @@ impl VolumeClient for S3Volume {
                     if !object_key.starts_with(&requested_prefix) {
                         return Err(VolumeError::InvalidResponse);
                     }
-                    if full_key(&object_key).is_err() {
+                    if full_key(0, &object_key).is_err() {
                         return Ok(objects);
                     }
                     let key = object_key
@@ -508,7 +508,7 @@ impl VolumeClient for S3Volume {
         if object_key.is_empty() {
             return Err(VolumeError::NotFound);
         }
-        full_key(&object_key)?;
+        full_key(0, &object_key)?;
         let slash_key = object_key.ends_with('/');
         let status = StatusObserver::default();
         let result = self
@@ -656,7 +656,7 @@ impl VolumeClient for S3Volume {
         validate_delete(&key, reference)?;
         check_not_marker(&key, reference.size == 0)?;
         let object_key = [self.config.prefix.as_ref(), key.as_ref()].concat();
-        full_key(&object_key)?;
+        full_key(0, &object_key)?;
         let etag = reference.version.etag.as_ref();
         let (if_match, _) = condition_headers(WriteCondition::Matches(etag))?;
         let result = self

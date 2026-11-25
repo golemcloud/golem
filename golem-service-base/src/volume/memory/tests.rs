@@ -23,28 +23,36 @@ use std::sync::Arc;
 use test_r::test;
 
 fn client(versioned: bool, page_size: usize) -> Arc<dyn VolumeClient> {
-    Arc::new(InMemoryVolume::new(versioned, page_size).unwrap())
+    Arc::new(InMemoryVolume::new(versioned, page_size, "").unwrap())
 }
 
 #[test]
-fn zero_page_size_is_invalid() {
-    assert_eq!(
-        InMemoryVolume::new(false, 0).unwrap_err(),
-        VolumeError::InvalidRequest
-    );
+fn invalid_page_size_or_prefix_is_rejected() {
+    [(0, ""), (2, "/"), (2, "corpus"), (2, "./"), (2, "a/../")]
+        .into_iter()
+        .for_each(|(page_size, prefix)| {
+            assert_eq!(
+                InMemoryVolume::new(false, page_size, prefix).unwrap_err(),
+                VolumeError::InvalidRequest
+            );
+        });
 }
 
 #[test]
 async fn every_object_operation_rejects_full_keys_over_1024_utf8_bytes() {
     use futures::stream;
-    stream::iter([false, true])
-        .then(|is_probe| async move {
-            let volume = client(false, 2);
-            let name = if is_probe {
-                format!("{}x", "é".repeat(508))
-            } else {
-                "é".repeat(512)
-            };
+    stream::iter([("", 1024), ("corpus/", 1017), ("tenant/é/", 1014)])
+        .flat_map(|(prefix, bytes)| {
+            stream::iter([false, true]).map(move |is_probe| (prefix, bytes, is_probe))
+        })
+        .then(|(prefix, bytes, is_probe)| async move {
+            let volume = InMemoryVolume::new(false, 2, prefix).unwrap();
+            let name_bytes = bytes - if is_probe { 7 } else { 0 };
+            let name = format!(
+                "{}{}",
+                "é".repeat(name_bytes / 2),
+                "x".repeat(name_bytes % 2)
+            );
             let target = if is_probe {
                 WriteTarget::Probe(&name)
             } else {

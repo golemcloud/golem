@@ -23,8 +23,11 @@ pub(super) fn relative_key(key: &str) -> Result<(), VolumeError> {
     }
 }
 
-pub(super) fn full_key(key: &str) -> Result<(), VolumeError> {
-    if key.is_empty() || key.len() > 1024 {
+pub(super) fn full_key(prefix_len: usize, key: &str) -> Result<(), VolumeError> {
+    if prefix_len
+        .checked_add(key.len())
+        .is_none_or(|len| len == 0 || len > 1024)
+    {
         Err(VolumeError::InvalidRequest)
     } else {
         Ok(())
@@ -42,7 +45,7 @@ pub(super) fn write_key(prefix: &str, target: WriteTarget<'_>) -> Result<Box<str
         return Err(VolumeError::InvalidRequest);
     }
     let key = [prefix, reserved, key].concat().into_boxed_str();
-    full_key(&key)?;
+    full_key(0, &key)?;
     Ok(key)
 }
 

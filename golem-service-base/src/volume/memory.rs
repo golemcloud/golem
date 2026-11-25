@@ -35,6 +35,7 @@ use uuid::Uuid;
 pub struct InMemoryVolume {
     versioned: bool,
     page_size: usize,
+    prefix_len: usize,
     state: Mutex<State>,
 }
 
@@ -105,13 +106,15 @@ enum UploadEvent {
 }
 
 impl InMemoryVolume {
-    pub fn new(versioned: bool, page_size: usize) -> Result<Self, VolumeError> {
-        if page_size == 0 {
+    pub fn new(versioned: bool, page_size: usize, prefix: &str) -> Result<Self, VolumeError> {
+        relative_key(prefix)?;
+        if page_size == 0 || (!prefix.is_empty() && !prefix.ends_with('/')) {
             return Err(VolumeError::InvalidRequest);
         }
         Ok(Self {
             versioned,
             page_size,
+            prefix_len: prefix.len(),
             state: Mutex::new(State::default()),
         })
     }
@@ -425,10 +428,10 @@ impl VolumeClient for InMemoryVolume {
         version_id: Option<&str>,
     ) -> Result<ObjectMetadata, VolumeError> {
         relative_key(key)?;
-        if key.is_empty() {
+        if key.is_empty() && self.prefix_len == 0 {
             return Err(VolumeError::NotFound);
         }
-        full_key(key)?;
+        full_key(self.prefix_len, key)?;
         let state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
         let (key, object) = select(&state, key, version_id)?;
         check_visible(key, object)?;
@@ -447,10 +450,10 @@ impl VolumeClient for InMemoryVolume {
     ) -> Result<ObjectRead, VolumeError> {
         relative_key(key)?;
         validate_read(reference, range.as_ref())?;
-        if key.is_empty() {
+        if key.is_empty() && self.prefix_len == 0 {
             return Err(VolumeError::NotFound);
         }
-        full_key(key)?;
+        full_key(self.prefix_len, key)?;
         let state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
         let (_, object) = select(&state, key, reference.version_id.as_deref())?;
         check_reference(reference, &object.version)?;
@@ -486,6 +489,7 @@ impl VolumeClient for InMemoryVolume {
         body: Bytes,
     ) -> Result<ObjectVersion, VolumeError> {
         let key: Arc<str> = write_key("", target)?.into();
+        full_key(self.prefix_len, &key)?;
         check_not_marker(&key, body.is_empty())?;
         validate_condition(condition)?;
         let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
@@ -509,6 +513,7 @@ impl VolumeClient for InMemoryVolume {
         let key: Arc<str> = write_key("", target)?.into();
         validate_delete(&key, reference)?;
         check_not_marker(&key, reference.size == 0)?;
+        full_key(self.prefix_len, &key)?;
         let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
         check_condition(
             state.objects.get(&key).and_then(current_object),
@@ -530,6 +535,7 @@ impl VolumeClient for InMemoryVolume {
         target: WriteTarget<'_>,
     ) -> Result<ResponseValue<Arc<str>>, VolumeError> {
         let key: Arc<str> = write_key("", target)?.into();
+        full_key(self.prefix_len, &key)?;
         let id: Arc<str> = Uuid::new_v4().to_string().into();
         let result = ResponseValue::new(id.clone());
         let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
@@ -551,6 +557,7 @@ impl VolumeClient for InMemoryVolume {
         body: Bytes,
     ) -> Result<UploadedPart, VolumeError> {
         let key = write_key("", target)?;
+        full_key(self.prefix_len, &key)?;
         let metadata = UploadedPart {
             number,
             etag: format!("\"{}\"", Uuid::new_v4()).into(),
@@ -579,6 +586,7 @@ impl VolumeClient for InMemoryVolume {
         validate_parts(parts)?;
         validate_condition(condition)?;
         let key = write_key("", target)?;
+        full_key(self.prefix_len, &key)?;
         check_not_marker(&key, parts.iter().all(|part| part.size == 0))?;
         let publication_key = multipart_publication_key(&key);
         let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
@@ -614,6 +622,7 @@ impl VolumeClient for InMemoryVolume {
         upload_id: &str,
     ) -> Result<(), VolumeError> {
         let key = write_key("", target)?;
+        full_key(self.prefix_len, &key)?;
         let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
         let upload = upload(&mut state, &key, upload_id)?;
         let next = upload_transition(upload, UploadEvent::Abort)?;

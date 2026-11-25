@@ -1351,170 +1351,282 @@ async fn probes_and_invalid_paths(volume: &dyn VolumeClient, versioned: bool) {
     );
 }
 
-async fn root_key_contract(volume: &dyn VolumeClient) {
-    stream::iter([
-        ("a".repeat(1024), format!("{}x", "a".repeat(1024))),
-        ("é".repeat(512), format!("{}x", "é".repeat(512))),
-    ])
-    .then(|(key, invalid)| async move {
-        let key = key.into_boxed_str();
-        let invalid = invalid.into_boxed_str();
-        assert_eq!(key.len(), 1024);
-        assert_eq!(invalid.len(), 1025);
-        let target = WriteTarget::File(&key);
-        let first = volume
-            .put(
-                target,
-                WriteCondition::Absent,
-                Bytes::from_static(b"root-seed-A7"),
-            )
-            .await
-            .unwrap();
-        let mut metadata = volume.stat(&key, None).await.unwrap();
-        assert_eq!(metadata.key.as_ref(), key.as_ref());
-        assert_eq!(metadata.size, 12);
-        assert_eq!(metadata.version, first);
-        assert_read(volume, &key, &first, None, b"root-seed-A7").await;
-        assert_eq!(volume.stat("", None).await, Err(VolumeError::NotFound));
-        assert_eq!(
-            volume.read("", &first, None).await.unwrap_err(),
-            VolumeError::NotFound
-        );
-        assert_eq!(
-            volume
-                .read("", &first, Some(RangeInclusive::new(2, 1)))
-                .await
-                .unwrap_err(),
-            VolumeError::InvalidRequest
-        );
-        let mut invalid_reference = first.clone();
-        invalid_reference.etag = "not-a-strong-etag".into();
-        assert_eq!(
-            volume.read("", &invalid_reference, None).await.unwrap_err(),
-            VolumeError::InvalidRequest
-        );
-        let upload = volume.start_multipart(target).await.unwrap();
-        let part = volume
-            .upload_part(
-                target,
-                upload.payload(),
-                1,
-                Bytes::from_static(b"root-publish-Q9"),
-            )
-            .await
-            .unwrap();
-        let invalid_target = WriteTarget::File(&invalid);
-        assert_eq!(
-            volume.stat(&invalid, None).await,
-            Err(VolumeError::InvalidRequest)
-        );
-        assert_eq!(
-            volume.read(&invalid, &first, None).await.unwrap_err(),
-            VolumeError::InvalidRequest
-        );
-        assert_eq!(
-            volume
+async fn key_byte_contract(volume: &dyn VolumeClient, key_bytes: usize) {
+    stream::iter([false, true])
+        .flat_map(|is_probe| {
+            let name_bytes = key_bytes - if is_probe { 7 } else { 0 };
+            stream::iter([
+                "a".repeat(name_bytes),
+                format!(
+                    "{}{}",
+                    "é".repeat(name_bytes / 2),
+                    "a".repeat(name_bytes % 2)
+                ),
+            ])
+            .map(move |name| (is_probe, name))
+        })
+        .then(|(is_probe, name)| async move {
+            let key = if is_probe {
+                format!(".golem/{name}").into_boxed_str()
+            } else {
+                name.into_boxed_str()
+            };
+            let invalid = format!("{key}x").into_boxed_str();
+            assert_eq!(key.len(), key_bytes);
+            assert_eq!(invalid.len(), key_bytes + 1);
+            let target = if is_probe {
+                WriteTarget::Probe(&key[7..])
+            } else {
+                WriteTarget::File(&key)
+            };
+            let first = volume
                 .put(
-                    invalid_target,
+                    target,
                     WriteCondition::Absent,
-                    Bytes::from_static(b"invalid")
+                    Bytes::from_static(b"root-seed-A7"),
                 )
-                .await,
-            Err(VolumeError::InvalidRequest)
-        );
-        assert_eq!(
-            volume.start_multipart(invalid_target).await,
-            Err(VolumeError::InvalidRequest)
-        );
-        assert_eq!(
-            volume
+                .await
+                .unwrap();
+            let mut metadata = volume.stat(&key, None).await.unwrap();
+            assert_eq!(metadata.key.as_ref(), key.as_ref());
+            assert_eq!(metadata.size, 12);
+            assert_eq!(metadata.version, first);
+            assert_read(volume, &key, &first, None, b"root-seed-A7").await;
+            let upload = volume.start_multipart(target).await.unwrap();
+            let part = volume
                 .upload_part(
-                    invalid_target,
+                    target,
                     upload.payload(),
                     1,
-                    Bytes::from_static(b"invalid")
+                    Bytes::from_static(b"root-publish-Q9"),
                 )
-                .await,
-            Err(VolumeError::InvalidRequest)
-        );
-        assert_eq!(
-            volume
+                .await
+                .unwrap();
+            let invalid_target = if is_probe {
+                WriteTarget::Probe(&invalid[7..])
+            } else {
+                WriteTarget::File(&invalid)
+            };
+            assert_eq!(
+                volume.stat(&invalid, None).await,
+                Err(VolumeError::InvalidRequest)
+            );
+            assert_eq!(
+                volume.read(&invalid, &first, None).await.unwrap_err(),
+                VolumeError::InvalidRequest
+            );
+            assert_eq!(
+                volume
+                    .put(
+                        invalid_target,
+                        WriteCondition::Absent,
+                        Bytes::from_static(b"invalid")
+                    )
+                    .await,
+                Err(VolumeError::InvalidRequest)
+            );
+            assert_eq!(
+                volume.start_multipart(invalid_target).await,
+                Err(VolumeError::InvalidRequest)
+            );
+            assert_eq!(
+                volume
+                    .upload_part(
+                        invalid_target,
+                        upload.payload(),
+                        1,
+                        Bytes::from_static(b"invalid")
+                    )
+                    .await,
+                Err(VolumeError::InvalidRequest)
+            );
+            assert_eq!(
+                volume
+                    .complete_multipart(
+                        invalid_target,
+                        upload.payload(),
+                        std::slice::from_ref(&part),
+                        WriteCondition::Absent
+                    )
+                    .await,
+                Err(VolumeError::InvalidRequest)
+            );
+            assert_eq!(
+                volume
+                    .abort_multipart(invalid_target, upload.payload())
+                    .await,
+                Err(VolumeError::InvalidRequest)
+            );
+            metadata.key = invalid.as_ref().into();
+            assert_eq!(
+                volume.delete(invalid_target, &metadata).await,
+                Err(VolumeError::InvalidRequest)
+            );
+            let page = volume.list(&invalid, None).await.unwrap();
+            assert!(page.objects.is_empty());
+            assert!(page.continuation.is_none());
+            let unchanged = volume.stat(&key, None).await.unwrap();
+            assert_eq!(unchanged.key.as_ref(), key.as_ref());
+            assert_eq!(unchanged.version, first);
+            assert_eq!(unchanged.size, 12);
+            assert_read(volume, &key, &first, None, b"root-seed-A7").await;
+            let published = volume
                 .complete_multipart(
-                    invalid_target,
+                    target,
                     upload.payload(),
-                    std::slice::from_ref(&part),
-                    WriteCondition::Absent
+                    &[part],
+                    WriteCondition::Matches(&first.etag),
                 )
-                .await,
-            Err(VolumeError::InvalidRequest)
-        );
-        assert_eq!(
+                .await
+                .unwrap();
+            let metadata = volume.stat(&key, None).await.unwrap();
+            assert_eq!(metadata.key.as_ref(), key.as_ref());
+            assert_eq!(metadata.size, 15);
+            assert_eq!(metadata.version, published);
+            assert_read(volume, &key, &published, None, b"root-publish-Q9").await;
+            let page = volume.list(&key, None).await.unwrap();
+            assert!(page.continuation.is_none());
+            assert_eq!(
+                page.objects.as_ref(),
+                [ListedObject {
+                    key: key.as_ref().into(),
+                    size: 15,
+                    etag: published.etag
+                }]
+            );
+            volume.delete(target, &metadata).await.unwrap();
+            assert_eq!(volume.stat(&key, None).await, Err(VolumeError::NotFound));
+            let aborted = volume.start_multipart(target).await.unwrap();
+            let part = volume
+                .upload_part(
+                    target,
+                    aborted.payload(),
+                    1,
+                    Bytes::from_static(b"aborted-part"),
+                )
+                .await
+                .unwrap();
             volume
-                .abort_multipart(invalid_target, upload.payload())
-                .await,
-            Err(VolumeError::InvalidRequest)
-        );
-        metadata.key = invalid.as_ref().into();
-        assert_eq!(
-            volume.delete(invalid_target, &metadata).await,
-            Err(VolumeError::InvalidRequest)
-        );
-        let page = volume.list(&invalid, None).await.unwrap();
-        assert!(page.objects.is_empty());
-        assert!(page.continuation.is_none());
-        let published = volume
-            .complete_multipart(
-                target,
-                upload.payload(),
-                &[part],
-                WriteCondition::Matches(&first.etag),
-            )
+                .abort_multipart(target, aborted.payload())
+                .await
+                .unwrap();
+            assert_eq!(
+                volume
+                    .complete_multipart(target, aborted.payload(), &[part], WriteCondition::Absent)
+                    .await,
+                Err(VolumeError::NotFound)
+            );
+            assert_eq!(volume.stat(&key, None).await, Err(VolumeError::NotFound));
+        })
+        .collect::<()>()
+        .await;
+}
+
+async fn empty_key_contract(volume: &dyn VolumeClient, expected: VolumeError) {
+    let reference = ObjectVersion {
+        etag: "\"missing-reference\"".into(),
+        version_id: None,
+    };
+    assert_eq!(volume.stat("", None).await, Err(expected));
+    assert_eq!(
+        volume.read("", &reference, None).await.unwrap_err(),
+        expected
+    );
+    assert_eq!(
+        volume
+            .read("", &reference, Some(RangeInclusive::new(2, 1)))
             .await
-            .unwrap();
-        let metadata = volume.stat(&key, None).await.unwrap();
-        assert_eq!(metadata.key.as_ref(), key.as_ref());
-        assert_eq!(metadata.size, 15);
-        assert_eq!(metadata.version, published);
-        assert_read(volume, &key, &published, None, b"root-publish-Q9").await;
-        let page = volume.list(&key, None).await.unwrap();
-        assert!(page.continuation.is_none());
-        assert_eq!(
-            page.objects.as_ref(),
-            [ListedObject {
-                key: key.as_ref().into(),
-                size: 15,
-                etag: published.etag
-            }]
-        );
-        volume.delete(target, &metadata).await.unwrap();
-        assert_eq!(volume.stat(&key, None).await, Err(VolumeError::NotFound));
-    })
-    .collect::<()>()
-    .await;
+            .unwrap_err(),
+        VolumeError::InvalidRequest
+    );
+    let invalid = ObjectVersion {
+        etag: "not-a-strong-etag".into(),
+        version_id: None,
+    };
+    assert_eq!(
+        volume.read("", &invalid, None).await.unwrap_err(),
+        VolumeError::InvalidRequest
+    );
+    let page = volume.list(&"x".repeat(1025), None).await.unwrap();
+    assert!(page.objects.is_empty());
+    assert!(page.continuation.is_none());
+}
+
+fn empty_key_prefixes() -> [(Box<str>, VolumeError); 5] {
+    [
+        ("".into(), VolumeError::NotFound),
+        (
+            format!("{}/", "p".repeat(1023)).into_boxed_str(),
+            VolumeError::NotFound,
+        ),
+        (
+            format!("{}/", "p".repeat(1024)).into_boxed_str(),
+            VolumeError::InvalidRequest,
+        ),
+        (
+            format!("{}a/", "é".repeat(511)).into_boxed_str(),
+            VolumeError::NotFound,
+        ),
+        (
+            format!("{}/", "é".repeat(512)).into_boxed_str(),
+            VolumeError::InvalidRequest,
+        ),
+    ]
+}
+
+async fn memory_contract(versioned: bool) {
+    stream::iter([("", 1024), ("corpus/", 1017), ("tenant/é/", 1014)])
+        .then(|(prefix, bytes)| async move {
+            let volume: Arc<dyn VolumeClient> =
+                Arc::new(InMemoryVolume::new(versioned, 1000, prefix).unwrap());
+            if prefix == "corpus/" {
+                volume_contract(volume.as_ref(), versioned).await;
+            }
+            key_byte_contract(volume.as_ref(), bytes).await;
+            empty_key_contract(volume.as_ref(), VolumeError::NotFound).await;
+        })
+        .collect::<()>()
+        .await;
+    stream::iter(empty_key_prefixes())
+        .then(|(prefix, expected)| async move {
+            let volume = InMemoryVolume::new(versioned, 1000, &prefix).unwrap();
+            empty_key_contract(&volume, expected).await;
+        })
+        .collect::<()>()
+        .await;
 }
 
 #[test]
 #[timeout("30s")]
 async fn memory_versioned_volume_contract() {
-    let volume: Arc<dyn VolumeClient> = Arc::new(InMemoryVolume::new(true, 1000).unwrap());
-    volume_contract(volume.as_ref(), true).await;
-    root_key_contract(volume.as_ref()).await;
+    memory_contract(true).await;
 }
 
 #[test]
 #[timeout("30s")]
 async fn memory_unversioned_volume_contract() {
-    let volume: Arc<dyn VolumeClient> = Arc::new(InMemoryVolume::new(false, 1000).unwrap());
-    volume_contract(volume.as_ref(), false).await;
-    root_key_contract(volume.as_ref()).await;
+    memory_contract(false).await;
 }
 
 async fn rustfs_contract(versioned: bool) {
     rustfs_case(versioned, async |server, setup, bucket| {
         let client: Arc<dyn VolumeClient> = Arc::new(volume(server, bucket, "corpus/", None));
         volume_contract(client.as_ref(), versioned).await;
-        let root = volume(server, bucket, "", None);
-        root_key_contract(&root).await;
+        stream::iter([("", 1024), ("corpus/", 1017), ("tenant/é/", 1014)])
+            .then(|(prefix, bytes)| async move {
+                let client = volume(server, bucket, prefix, None);
+                key_byte_contract(&client, bytes).await;
+                empty_key_contract(&client, VolumeError::NotFound).await;
+            })
+            .collect::<()>()
+            .await;
+        stream::iter(empty_key_prefixes())
+            .then(|(prefix, expected)| async move {
+                let client = volume(server, bucket, &prefix, None);
+                empty_key_contract(&client, expected).await;
+            })
+            .collect::<()>()
+            .await;
         let uploads = setup
             .list_multipart_uploads()
             .bucket(bucket)
