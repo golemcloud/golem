@@ -1379,13 +1379,13 @@ indexes never renumber, and the start only moves forward: `advance_oplog_retenti
 record with a compare-and-set. Only tests write the record, so in production every oplog starts at
 index 1. `RetentionOplogService` sits directly on the base oplog service, below the plugin
 forwarding layer, and it is the only layer that reads the record. `Oplog::retention` and
-`OplogService::retention` give the plain `OplogRetention` value. Every reader of the retained
-entries uses its pure rules: a walk in chunks reads with `chunk`, a public page reads with `page`,
-and a walk with a fixed start reads with `OplogRange::within`; `range`, `clamp`, `retains`,
-`create_read` and the agent checks give the rest. A read of one entry is not a walk and keeps its
-count of 1. For example, the refill of the replay buffer (`raw_read_next_oplog_entry` in
-`replay_state/cursor/io.rs`) reads one entry also when the read position is after the replay
-target, where `within` gives no range. The replay cursor reads each deleted region from the
+`OplogService::retention` give the plain `OplogRetention` value. Its pure rules give the reads:
+a walk in chunks reads with `chunk`, a public page reads with `page`, and a walk with a fixed
+start reads with `OplogRange::within`; `range`, `clamp`, `retains`, `create_read` and the agent
+checks give the rest. Three reads keep their own count. The refill of the replay buffer
+(`raw_read_next_oplog_entry` in `replay_state/cursor/io.rs`) reads one entry also when the read
+position is after the replay target, where `within` gives no range. The whole-history walks
+`max_issued_epoch` and the creation receipt of a fork export count from their fixed start. The replay cursor reads each deleted region from the
 retained start (`deleted_region_contains_start`), because a snapshot recovery skips the region
 from index 2 to the snapshot. Some walks need the
 whole history, because a walk from the start gives a wrong result: the full status rebuild, the
@@ -1403,7 +1403,19 @@ with no read (`guest_search_batch`). The count-based revert walk
 (`cut_point::cut_before_last_invocations`) takes the retention and ends at the retained start. The
 single entry read of the public oplog serves the `Create` entry. A `Gap` that ends below
 the start becomes the same error, and a gap that ends at or after the start stays a read error.
-`length` counts the retained entries, and the last index does not change. The expired error becomes
+`length` counts the retained entries, and the last index does not change. A range page checks its
+`to` and its cursor against the start before it checks the range, so a range without `from` whose
+`to` or cursor is below the start is expired. When the walk of the last error reaches the start
+with no invocation boundary while the agent is failed or retrying, the last error is the expired
+error. The revert walk gives no cut when the last index is below the start. The stream readers keep
+the expired error typed: the consumer probe and the consumer journal check the record that
+introduced each reader, the rebuild of the session control metadata checks the reader of each
+consumer record, the producer index gives the expired error for a record that references a
+registration below the start, a handle of a stream that the index does not know is expired when
+the start is above 1, a cursor below the start is expired, the stream fork lineage
+(`LineageError`) keeps a read error and a reference below the start typed, and a producer request
+keeps the expired error (`DurableStreamRemoteError::from_producer`). The obfuscated CLI export
+reads the `Create` entry alone (`read_create_entry`). The expired error becomes
 `WorkerExecutorError::OplogFailed` with the cause `OplogFailure::Expired`. It crosses gRPC as
 `OplogExpired` and REST as HTTP 400 `OPLOG_EXPIRED`, and the guest oplog API gives it as
 `internal-error` whose text names the expired cause and the retained start
