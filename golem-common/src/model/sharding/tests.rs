@@ -696,6 +696,16 @@ fn a_lease_without_an_expiry_is_always_live() {
 }
 
 #[test]
+fn an_unexpiring_snapshot_keeps_the_shard_count_and_zero_epochs() {
+    let assignment = super::ShardAssignment::unexpiring(8, [ShardId::new(2), ShardId::new(5)]);
+    assert_eq!(assignment.number_of_shards, 8);
+    assert_eq!(assignment.executor_count, 1);
+    assert_eq!(assignment.shard_epochs, epochs([(2, 0), (5, 0)]));
+    assert_eq!(assignment.expires_at, None);
+    assert_eq!(assignment.revision, None);
+}
+
+#[test]
 fn every_first_manager_delivery_establishes_lineage_from_standalone() {
     let held = epochs([(0, 0)]);
     let empty_revoke = HashSet::new();

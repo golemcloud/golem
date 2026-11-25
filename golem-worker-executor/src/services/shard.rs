@@ -394,6 +394,9 @@ mod tests {
             NonZeroUsize::new(2).unwrap(),
         );
         assert_eq!(service.executor_count(), Some(2));
+        let snapshot = service.try_get_current_assignment().unwrap();
+        assert_eq!(snapshot.executor_count, 2);
+        assert_eq!(snapshot.shard_epochs, held);
         service
             .assign_shards(
                 SHARDS,
