@@ -869,8 +869,6 @@ mod tests {
         })
     }
 
-    /// The enrichment of a failed update reads the recorded `Start` at the index of its
-    /// divergence, which the guest supplies, so the oplog grant must cover that index too.
     /// A first batch of a new search that failed, or that the grant denied, leaves the search
     /// new. The next batch starts the search at the retained start 5, and not at the index that
     /// the guest gave. A batch that read moves the search to its response.
@@ -953,6 +951,8 @@ mod tests {
         );
     }
 
+    /// The enrichment of a failed update reads the recorded `Start` at the index of its
+    /// divergence, which the guest supplies, so the oplog grant must cover that index too.
     #[test]
     fn enrichment_authorizes_the_divergence_index_of_a_failed_update() {
         let indexes =
