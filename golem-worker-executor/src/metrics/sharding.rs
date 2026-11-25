@@ -258,8 +258,9 @@ mod tests {
             .into_iter()
             .zip(before)
             .for_each(|(delivery, before)| {
-                assert!(
-                    shard_delivery_attempt_count(delivery) >= before,
+                assert_eq!(
+                    shard_delivery_attempt_count(delivery),
+                    before,
                     "re-registration must not reset a delivery total"
                 );
             });

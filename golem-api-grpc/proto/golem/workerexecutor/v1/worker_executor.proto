@@ -220,6 +220,8 @@ message RevokeShardsRequest {
   uint64 revision = 2;
   // See golem.shardmanager.v1.RegisterSuccess.incarnation_id.
   string incarnation_id = 3;
+  // See golem.shardmanager.v1.RegisterSuccess.executor_count.
+  uint32 executor_count = 4;
 }
 
 message RevokeShardsResponse {

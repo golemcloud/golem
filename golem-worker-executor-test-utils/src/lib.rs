@@ -8935,8 +8935,10 @@ impl ShardService for FakeOwnership {
         &self,
         shard_ids: &HashSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
-        self.inner.revoke_shards(shard_ids, revision)
+        self.inner
+            .revoke_shards(shard_ids, revision, executor_count)
     }
 
     fn update_lease(

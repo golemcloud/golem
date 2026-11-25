@@ -17,7 +17,7 @@ use crate::error::{ShardLeaseTraceErrorKind, ShardManagerTraceErrorKind};
 use crate::quota::QuotaService;
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::shard_management::ShardManagement;
-use crate::sharding::{ExecutorAddr, ExecutorId, RegisterAck, ShardEpoch};
+use crate::sharding::{ExecutorAddr, ExecutorId, RegisterAck, ShardEpoch, ShardLeaseGrant};
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerService;
 use golem_common::model::protobuf::{ip_addr_from_proto, lease_ttl_to_proto};
@@ -120,14 +120,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
 
         let result = match response {
             Ok(ack) => record.succeed(golem::shardmanager::v1::register_response::Result::Success(
-                golem::shardmanager::v1::RegisterSuccess {
-                    number_of_shards: ack.number_of_shards as u32,
-                    shard_epochs: shard_epoch_entries(&ack.grant.shard_epochs),
-                    executor_count: ack.grant.executor_count as u32,
-                    lease_ttl: Some(lease_ttl_to_proto(ack.grant.expires_at, Timestamp::now())),
-                    revision: ack.grant.revision.0,
-                    incarnation_id: crate::sharding::incarnation_id(),
-                },
+                registration_to_proto(ack, Timestamp::now()),
             )),
             Err(error) => {
                 let error: golem::shardmanager::v1::ShardManagerError = error.into();
@@ -166,13 +159,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
         let result = match response {
             Ok(grant) => record.succeed(
                 golem::shardmanager::v1::renew_shard_lease_response::Result::Success(
-                    golem::shardmanager::v1::ShardLease {
-                        shard_epochs: shard_epoch_entries(&grant.shard_epochs),
-                        executor_count: grant.executor_count as u32,
-                        lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, Timestamp::now())),
-                        revision: grant.revision.0,
-                        incarnation_id: crate::sharding::incarnation_id(),
-                    },
+                    lease_to_proto(grant, Timestamp::now()),
                 ),
             ),
             Err(error) => {
@@ -516,16 +503,90 @@ fn resolve_pod(
     Ok(Pod { ip, port })
 }
 
+fn registration_to_proto(
+    ack: RegisterAck,
+    now: Timestamp,
+) -> golem::shardmanager::v1::RegisterSuccess {
+    golem::shardmanager::v1::RegisterSuccess {
+        number_of_shards: ack.number_of_shards as u32,
+        shard_epochs: shard_epoch_entries(&ack.grant.shard_epochs),
+        executor_count: ack.grant.executor_count as u32,
+        lease_ttl: Some(lease_ttl_to_proto(ack.grant.expires_at, now)),
+        revision: ack.grant.revision.0,
+        incarnation_id: crate::sharding::incarnation_id(),
+    }
+}
+
+fn lease_to_proto(
+    grant: ShardLeaseGrant,
+    now: Timestamp,
+) -> golem::shardmanager::v1::ShardLease {
+    golem::shardmanager::v1::ShardLease {
+        shard_epochs: shard_epoch_entries(&grant.shard_epochs),
+        executor_count: grant.executor_count as u32,
+        lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, now)),
+        revision: grant.revision.0,
+        incarnation_id: crate::sharding::incarnation_id(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::resolve_pod;
+    use super::{lease_to_proto, registration_to_proto, resolve_pod};
+    use crate::sharding::{RegisterAck, ShardEpoch, ShardLeaseGrant, ShardLeaseRevision};
     use golem_api_grpc::proto::golem::shardmanager::v1::ExecutorEndpoint;
     use golem_common::model::Pod;
     use golem_common::model::protobuf::ip_addr_to_proto;
+    use jiff::Timestamp;
+    use prost::Message;
+    use std::collections::BTreeMap;
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
     use test_r::test;
 
     const EXECUTOR_V4: Ipv4Addr = Ipv4Addr::new(10, 0, 0, 5);
+
+    #[test]
+    fn registration_and_renewal_encode_the_granted_executor_count() {
+        let now = Timestamp::new(1_700_000_000, 0).unwrap();
+        let grant = ShardLeaseGrant {
+            shard_epochs: BTreeMap::from([(golem_common::model::ShardId::new(2), ShardEpoch(9))]),
+            expires_at: now + jiff::SignedDuration::from_secs(45),
+            executor_count: 4,
+            revision: ShardLeaseRevision(7),
+        };
+        let registration = registration_to_proto(
+            RegisterAck {
+                number_of_shards: 8,
+                grant: grant.clone(),
+            },
+            now,
+        );
+        let bytes = registration.encode_to_vec();
+        let decoded = golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess::decode(
+            bytes.as_slice(),
+        )
+        .unwrap();
+        assert_eq!(decoded.executor_count, 4);
+        assert_eq!(decoded.number_of_shards, 8);
+        assert_eq!(decoded.revision, 7);
+        assert_eq!(decoded.lease_ttl.unwrap().seconds, 45);
+
+        let renewal = lease_to_proto(
+            ShardLeaseGrant {
+                executor_count: 3,
+                revision: ShardLeaseRevision(8),
+                ..grant
+            },
+            now,
+        );
+        let bytes = renewal.encode_to_vec();
+        let decoded =
+            golem_api_grpc::proto::golem::shardmanager::v1::ShardLease::decode(bytes.as_slice())
+                .unwrap();
+        assert_eq!(decoded.executor_count, 3);
+        assert_eq!(decoded.revision, 8);
+        assert_eq!(decoded.lease_ttl.unwrap().seconds, 45);
+    }
 
     fn endpoint(port: i32, advertised_ip: Option<IpAddr>) -> Option<ExecutorEndpoint> {
         Some(ExecutorEndpoint {

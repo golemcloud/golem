@@ -61,6 +61,7 @@ pub trait WorkerExecutorService: Send + Sync {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> Result<(), ShardManagerError>;
 }
 
@@ -72,6 +73,7 @@ pub async fn revoke_shards(
     worker_executors: Arc<dyn WorkerExecutorService + Send + Sync>,
     unassignments: &Unassignments,
     revision: ShardLeaseRevision,
+    executor_count: usize,
     addrs: &ExecutorAddrs,
 ) -> BTreeSet<ExecutorId> {
     fan_out(
@@ -82,7 +84,7 @@ pub async fn revoke_shards(
             let worker_executors = worker_executors.clone();
             Box::pin(async move {
                 worker_executors
-                    .revoke_shards(&pod, shard_ids, revision)
+                    .revoke_shards(&pod, shard_ids, revision, executor_count)
                     .await
             })
         },
@@ -216,6 +218,7 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> Result<(), ShardManagerError> {
         info!(
             revoked_shards = shard_assignments_to_string(pod, None, shard_ids.iter()),
@@ -228,9 +231,9 @@ impl WorkerExecutorService for WorkerExecutorServiceDefault {
             "revoke_shards",
             Some(format!("{pod}")),
             &self.config.retries,
-            &(pod, shard_ids, revision),
-            |(pod, shard_ids, revision)| {
-                Box::pin(self.revoke_shards_internal(pod, shard_ids, *revision))
+            &(pod, shard_ids, revision, executor_count),
+            |(pod, shard_ids, revision, executor_count)| {
+                Box::pin(self.revoke_shards_internal(pod, shard_ids, *revision, *executor_count))
             },
         )
         .await
@@ -298,6 +301,7 @@ impl WorkerExecutorServiceDefault {
         pod: &Pod,
         shard_ids: &BTreeSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> Result<(), ShardManagerError> {
         let revoke_shards_request = golem::workerexecutor::v1::RevokeShardsRequest {
             shard_ids: shard_ids
@@ -307,6 +311,7 @@ impl WorkerExecutorServiceDefault {
                 .collect(),
             revision: revision.0,
             incarnation_id: super::model::incarnation_id(),
+            executor_count: executor_count as u32,
         };
 
         let revoke_shards_response = timeout(

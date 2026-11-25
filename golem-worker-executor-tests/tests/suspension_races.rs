@@ -138,6 +138,7 @@ async fn run_retirement_during_insert(
                 shard_ids: vec![golem_api_grpc::proto::golem::shardmanager::ShardId { value: 0 }],
                 revision: 1,
                 incarnation_id: incarnation.into(),
+                executor_count: 1,
             }),
         )
         .await??

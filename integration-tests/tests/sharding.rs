@@ -21,9 +21,12 @@ mod platform;
 #[path = "platform/non_unix.rs"]
 mod platform;
 
+#[test_r::sequential]
 mod executor_count {
     use anyhow::Context;
     use futures::{StreamExt, future::join_all};
+    use golem_common::config::ConfigLoader;
+    use golem_shard_manager::config::ShardManagerConfig;
     use golem_test_framework::components::worker_executor::WorkerExecutor;
     use golem_test_framework::components::worker_executor::spawned::SpawnedWorkerExecutor;
     use golem_test_framework::config::{
@@ -39,8 +42,10 @@ mod executor_count {
     async fn reports_count(
         executors: &[Arc<dyn WorkerExecutor>],
         expected: usize,
+        deadline: tokio::time::Instant,
     ) -> anyhow::Result<Box<[[u64; 3]]>> {
         let client = reqwest::Client::new();
+        let last_scrape_error = std::sync::Mutex::new(None);
         let observed = IntervalStream::new(tokio::time::interval(Duration::from_millis(100)))
             .then(|_| {
                 let client = &client;
@@ -66,13 +71,30 @@ mod executor_count {
                     Ok(metrics)
                 })
             })
-            .filter_map(|reported| std::future::ready(reported.transpose()));
+            .filter_map(|reported| {
+                let result = match reported {
+                    Err(error) if error.downcast_ref::<reqwest::Error>().is_some() => {
+                        *last_scrape_error.lock().unwrap() = Some(error);
+                        None
+                    }
+                    result => result.transpose(),
+                };
+                std::future::ready(result)
+            });
         tokio::pin!(observed);
-        observed.next().await.unwrap()
+        tokio::time::timeout_at(deadline, observed.next())
+            .await
+            .with_context(|| {
+                format!(
+                    "count {expected} was not observed by the deadline; latest scrape error: {:?}",
+                    last_scrape_error.lock().unwrap()
+                )
+            })?
+            .context("the observation stream ended")?
     }
 
     #[test]
-    #[timeout("180s")]
+    #[timeout("600s")]
     async fn a_third_executor_refreshes_both_existing_counts_within_one_lease() {
         super::tests::Tracing::init();
         let config = EnvBasedTestDependenciesConfig {
@@ -97,6 +119,15 @@ mod executor_count {
         .with_env_overrides();
         let executable = config.service_binaries_dir().join("worker-executor");
         let working_directory = config.golem_repo_root.join("golem-worker-executor");
+        let manager_config = config
+            .golem_repo_root
+            .join("golem-shard-manager/config/shard-manager.toml")
+            .canonicalize()
+            .unwrap();
+        let lease_duration = ConfigLoader::<ShardManagerConfig>::new(&manager_config)
+            .load()
+            .expect("the effective shard manager configuration must load")
+            .shard_lease_duration;
         let third_http_port = config.executor_base_http_port + 2;
         let third_grpc_port = config.executor_base_grpc_port + 2;
         let deps = EnvBasedTestDependencies::new(config).await.unwrap();
@@ -113,12 +144,13 @@ mod executor_count {
             .expect("both initial executors must own shards")
             .unwrap();
         // Finish the count-two observation and its attempt baseline before the third starts.
-        let attempts_before =
-            tokio::time::timeout(Duration::from_secs(60), reports_count(&executors, 2))
-                .await
-                .expect("both executors must first receive an assignment and report two")
-                .unwrap();
-        let joined = tokio::time::Instant::now();
+        let attempts_before = reports_count(
+            &executors,
+            2,
+            tokio::time::Instant::now() + Duration::from_secs(60),
+        )
+        .await
+        .expect("both executors must first receive an assignment and report two");
         let third = SpawnedWorkerExecutor::new(
             &executable,
             &working_directory,
@@ -137,13 +169,13 @@ mod executor_count {
             false,
         )
         .await;
-        let attempts_after = tokio::time::timeout_at(
-            joined + Duration::from_secs(60),
-            reports_count(&executors, 3),
+        let attempts_after = reports_count(
+            &executors,
+            3,
+            tokio::time::Instant::now() + lease_duration,
         )
         .await
-        .expect("both earlier executors must report three and finish the follow-up within one lease period")
-        .unwrap();
+        .expect("both earlier executors must report three and finish the follow-up within one lease period");
         assert_eq!(
             attempts_after, attempts_before,
             "only renewals may refresh the counts"

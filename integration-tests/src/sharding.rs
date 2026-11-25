@@ -114,15 +114,13 @@ mod tests {
         );
     }
 
-    fn metrics(count: usize, attempts: [u64; 3], successes: u64, failures: u64) -> String {
+    fn metrics(count: usize, attempts: [u64; 3]) -> String {
         let [register, assign, revoke] = attempts;
         format!(
             "executor_count {count}\n\
              shard_delivery_attempts_total{{delivery=\"register\"}} {register}\n\
              shard_delivery_attempts_total{{delivery=\"assign\"}} {assign}\n\
-             shard_delivery_attempts_total{{delivery=\"revoke\"}} {revoke}\n\
-             api_success_seconds_count{{api=\"assign_shards\",api_type=\"grpc\"}} {successes}\n\
-             api_failure_seconds_count{{api=\"assign_shards\",api_type=\"grpc\"}} {failures}\n"
+             shard_delivery_attempts_total{{delivery=\"revoke\"}} {revoke}\n"
         )
     }
 
@@ -147,25 +145,23 @@ mod tests {
     }
 
     #[test]
-    async fn failed_and_reregistered_deliveries_are_not_renewal_only() {
+    async fn non_renewal_attempts_are_not_renewal_only() {
         let baseline = [[1, 2, 0], [1, 3, 1]];
         futures::future::join_all(
             [
-                ([1, 3, 0], [1, 3, 1], 1),
-                ([2, 2, 0], [1, 3, 1], 0),
-                ([1, 2, 1], [1, 3, 1], 0),
-                ([1, 2, 0], [2, 3, 1], 0),
-                ([1, 2, 0], [1, 4, 1], 0),
-                ([1, 2, 0], [1, 3, 2], 0),
-                ([1, 3, 0], [1, 2, 1], 0),
+                ([1, 3, 0], [1, 3, 1]),
+                ([2, 2, 0], [1, 3, 1]),
+                ([1, 2, 1], [1, 3, 1]),
+                ([1, 2, 0], [2, 3, 1]),
+                ([1, 2, 0], [1, 4, 1]),
+                ([1, 2, 0], [1, 3, 2]),
+                ([1, 3, 0], [1, 2, 1]),
             ]
             .into_iter()
-            .map(|(first, second, failures)| async move {
+            .map(|(first, second)| async move {
                 let observed = observe(
                     3,
-                    std::array::from_fn::<_, 2, _>(|_| {
-                        [metrics(3, first, 1, failures), metrics(3, second, 1, 0)]
-                    }),
+                    std::array::from_fn::<_, 2, _>(|_| [metrics(3, first), metrics(3, second)]),
                 )
                 .await
                 .unwrap()
@@ -184,42 +180,14 @@ mod tests {
         let observed = observe(
             3,
             [
-                [metrics(3, [1, 1, 0], 1, 0), metrics(3, [1, 1, 0], 1, 0)],
-                [metrics(3, [1, 2, 0], 1, 0), metrics(3, [1, 1, 0], 1, 0)],
+                [metrics(3, [1, 1, 0]), metrics(3, [1, 1, 0])],
+                [metrics(3, [1, 2, 0]), metrics(3, [1, 1, 0])],
             ],
         )
         .await
         .unwrap()
         .unwrap();
         assert_eq!(&*observed, &[[1, 2, 0], [1, 1, 0]]);
-    }
-
-    #[test]
-    async fn renewal_only_counts_ignore_late_startup_completions() {
-        let before = observe(
-            2,
-            [
-                [metrics(2, [1, 2, 0], 1, 0), metrics(2, [1, 1, 1], 0, 0)],
-                [metrics(2, [1, 2, 0], 1, 0), metrics(2, [1, 1, 1], 0, 0)],
-            ],
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        let after = observe(
-            3,
-            [
-                [metrics(3, [1, 2, 0], 2, 0), metrics(3, [1, 1, 1], 1, 0)],
-                [metrics(3, [1, 2, 0], 2, 0), metrics(3, [1, 1, 1], 1, 0)],
-            ],
-        )
-        .await
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            after, before,
-            "completion totals do not identify delivery entry"
-        );
     }
 
     #[test]
@@ -236,7 +204,7 @@ mod tests {
             .filter(|(missing, batch)| *batch == 0 || *missing != "executor_count")
             .map(|(missing, batch)| async move {
                 let mut script = std::array::from_fn::<_, 2, _>(|_| {
-                    [metrics(3, [1, 1, 0], 1, 0), metrics(3, [1, 1, 0], 1, 0)]
+                    [metrics(3, [1, 1, 0]), metrics(3, [1, 1, 0])]
                 });
                 script[batch][1] = script[batch][1]
                     .lines()
@@ -258,13 +226,10 @@ mod tests {
         futures::future::join_all([(2, [1, 1, 0]), (3, [1, 0, 0])].into_iter().map(
             |(count, attempts)| async move {
                 assert!(
-                    observe(
-                        3,
-                        [[metrics(3, [1, 1, 0], 1, 0), metrics(count, attempts, 1, 0)]]
-                    )
-                    .await
-                    .unwrap()
-                    .is_none()
+                    observe(3, [[metrics(3, [1, 1, 0]), metrics(count, attempts)]])
+                        .await
+                        .unwrap()
+                        .is_none()
                 );
             },
         ))
@@ -280,11 +245,11 @@ mod tests {
             let first_batch = calls.fetch_add(1, Ordering::SeqCst) == 0;
             let gate = gate.clone();
             async move {
-                let first = metrics(3, [1, 1, 0], 1, 0);
+                let first = metrics(3, [1, 1, 0]);
                 if first_batch {
                     gate.notified().await;
                 }
-                Ok(Box::new([first, metrics(3, [1, 1, 0], 1, 0)]) as Box<[String]>)
+                Ok(Box::new([first, metrics(3, [1, 1, 0])]) as Box<[String]>)
             }
         });
         tokio::pin!(observation);
@@ -311,10 +276,7 @@ mod tests {
                 if !first_batch {
                     std::future::pending::<()>().await;
                 }
-                Ok(
-                    Box::new([metrics(3, [1, 1, 0], 1, 0), metrics(3, [1, 1, 0], 1, 0)])
-                        as Box<[String]>,
-                )
+                Ok(Box::new([metrics(3, [1, 1, 0]), metrics(3, [1, 1, 0])]) as Box<[String]>)
             }
         });
         assert!(

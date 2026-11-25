@@ -1418,6 +1418,7 @@ async fn filesystem_full_replay_survives_lifecycle_transitions_impl(
             shard_ids: vec![shard],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
