@@ -775,13 +775,6 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                     stdin_open = false;
                     input_terminal = true;
                 }
-                if matches!(
-                    &server_frame,
-                    ServerFrame::Message(PublicServerMessage::InvocationFinished { .. })
-                ) && output_streams.values().any(|stream| !stream.terminal)
-                {
-                    bail!("invocation finished before all output streams became terminal");
-                }
                 match handle_response(
                     server_frame,
                     &args.agent_type.schema,
@@ -2294,6 +2287,11 @@ async fn handle_response(
         }
         ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome, .. }) => {
             let (outcome, error, stderr) = match outcome {
+                PublicInvocationOutcome::Success
+                    if output_streams.values().any(|stream| !stream.terminal) =>
+                {
+                    bail!("invocation finished before all output streams became terminal");
+                }
                 PublicInvocationOutcome::Success => ("success".to_string(), None, None),
                 PublicInvocationOutcome::Failure {
                     code,
@@ -3576,6 +3574,69 @@ mod public_tests {
             vec![cancel_output(4, "invocation interrupted")]
         );
         assert!(cancel_announced_outputs(&result, &mut ended, "invocation interrupted").is_empty());
+    }
+
+    #[test]
+    async fn invocation_failure_reaches_the_caller_with_an_open_output() {
+        let (tx, _rx) = mpsc::channel(1);
+        let output = OutputChannel {
+            tx,
+            interrupt: CancellationToken::new(),
+            input_failed: CancellationToken::new(),
+        };
+        let mut streams = HashMap::from([(
+            4,
+            OutputStream {
+                item_type: SchemaType::u8(),
+                parent_stream_id: None,
+                path: "$".to_string(),
+                raw_kind: None,
+                next_offset: Some(3),
+                terminal: false,
+            },
+        )]);
+        let mut failure = None;
+        let mut finish = async |outcome| {
+            handle_response(
+                ServerFrame::Message(PublicServerMessage::InvocationFinished {
+                    version: INVOCATION_SESSION_VERSION,
+                    outcome,
+                }),
+                &pending_start_input_graph(),
+                &OutputSchema::Unit,
+                &SourceLanguage::Rust,
+                InvocationStdoutFormat::Value,
+                false,
+                "invocation-key",
+                &SessionIdentity {
+                    agent_id: "counter".to_string(),
+                },
+                &DeliveryTracker::default(),
+                &mut streams,
+                &output,
+                &mut failure,
+            )
+            .await
+        };
+        assert_eq!(
+            finish(PublicInvocationOutcome::Success)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "invocation finished before all output streams became terminal"
+        );
+        assert!(
+            finish(PublicInvocationOutcome::Failure {
+                code: PublicErrorCode::InvocationFailed,
+                message: "invocation failed".to_string(),
+                stderr: None,
+            })
+            .await
+            .unwrap()
+        );
+
+        assert_eq!(failure.unwrap().code, PublicErrorCode::InvocationFailed);
+        assert!(!streams[&4].terminal);
     }
 
     #[test]

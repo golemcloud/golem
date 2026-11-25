@@ -532,7 +532,7 @@ mod activation {
             .count();
         assert_eq!(suspends_before, 1);
         assert!(matches!(
-            worker.lookup_invocation_result(&stored_key).await,
+            worker.lookup_invocation_result(&stored_key).await?,
             golem_worker_executor::model::LookupResult::Pending
         ));
         executor.resume(&id, false).await?;
@@ -657,7 +657,7 @@ mod activation {
                 _ => None,
             })
             .context("reserved constructor invocation")?;
-        match worker.lookup_invocation_result(&constructor_key).await {
+        match worker.lookup_invocation_result(&constructor_key).await? {
             LookupResult::Complete(result) => {
                 result?;
             }

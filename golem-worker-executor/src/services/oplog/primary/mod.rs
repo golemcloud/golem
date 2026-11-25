@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durable_stream::SessionError;
 use crate::metrics::oplog::{
     record_oplog_call, record_oplog_epoch_fence, record_oplog_storage_retry,
 };
@@ -238,7 +239,7 @@ enum OplogJob {
         session_key: golem_common::model::durable_stream::StreamSessionKey,
         expected_watermark: OplogIndex,
         expected_committed: OplogIndex,
-        status: Box<Result<Option<DurableStreamSessionStatus>, String>>,
+        status: Box<Result<Option<DurableStreamSessionStatus>, SessionError>>,
         done: tokio::sync::oneshot::Sender<Option<super::RawDurableStreamSessionStatus>>,
     },
     LastAddedNonHintEntry {
@@ -259,7 +260,7 @@ struct RawSessionLookup {
     watermark: OplogIndex,
     committed: OplogIndex,
     buffer: VecDeque<OplogEntry>,
-    cached: Option<Result<Option<DurableStreamSessionStatus>, String>>,
+    cached: Option<Result<Option<DurableStreamSessionStatus>, SessionError>>,
 }
 
 /// Snapshot of the state needed to upload/download oplog payload blobs outside the actor.

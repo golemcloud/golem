@@ -165,7 +165,7 @@ async fn late_rejection_after_cancel(
     } else {
         WorkerExecutorError::invalid_request("Agent method 'gone' not found")
     };
-    let warm = worker.lookup_invocation_result(&key).await;
+    let warm = worker.lookup_invocation_result(&key).await?;
     assert_eq!(
         format!("{warm:?}"),
         format!("{:?}", LookupResult::Complete(Err(expected.clone()))),
@@ -179,7 +179,7 @@ async fn late_rejection_after_cancel(
         .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
         .await?;
     let worker = executor.active_agent(&owned).await.unwrap().primary();
-    let cold = worker.lookup_invocation_result(&key).await;
+    let cold = worker.lookup_invocation_result(&key).await?;
     assert_eq!(
         format!("{cold:?}"),
         format!("{:?}", LookupResult::Complete(Err(expected))),
@@ -510,7 +510,7 @@ async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
         Some(InvocationState::Completed),
         "after the withdrawn duplicate: {listed:?}"
     );
-    let lookup = worker.lookup_invocation_result(&finished).await;
+    let lookup = worker.lookup_invocation_result(&finished).await?;
     assert!(
         matches!(lookup, LookupResult::Complete(Ok(_))),
         "lookup of the key after the withdrawn duplicate: {lookup:?}"
@@ -523,7 +523,7 @@ async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
         .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
         .await?;
     let worker = executor.active_agent(&owned).await.unwrap().primary();
-    let lookup = worker.lookup_invocation_result(&finished).await;
+    let lookup = worker.lookup_invocation_result(&finished).await?;
     assert!(
         matches!(lookup, LookupResult::Complete(Ok(_))),
         "lookup of the key after a restart: {lookup:?}"
@@ -658,14 +658,14 @@ async fn cancel_decides_before_reading_recent_results(
             },
         )
         .await;
-    let fail_fast = worker.lookup_invocation_result(&queued).await;
+    let fail_fast = worker.lookup_invocation_result(&queued).await?;
     assert!(
         matches!(fail_fast, LookupResult::Complete(Err(_))),
         "the queued invocation has a warm fail-fast error: {fail_fast:?}"
     );
     assert!(executor.cancel_invocation(&target, &queued).await?);
     assert_eq!(
-        format!("{:?}", worker.lookup_invocation_result(&queued).await),
+        format!("{:?}", worker.lookup_invocation_result(&queued).await?),
         format!(
             "{:?}",
             LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled))

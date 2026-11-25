@@ -150,7 +150,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 CreateIntent::Invocation {
                     owner,
                     idempotency_key: request.idempotency_key.map(Into::into),
-                    invocation: request.invocation,
+                    invocation: request.invocation.map(Box::new),
                 }
             } else {
                 CreateIntent::Create {
@@ -449,7 +449,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         // A deletion, even one that failed later and left the generation cached, can have
         // stopped its state actor. The lookup then fails, and the deletion answers instead.
         let lookup = match worker.try_lookup_invocation_result(&idempotency_key).await {
-            Err(_)
+            Err(WorkerExecutorError::Runtime { .. })
                 if !worker.retired_for_lost_shard() && worker.deletion_owns_retirement().await =>
             {
                 Err(WorkerExecutorError::invalid_request(

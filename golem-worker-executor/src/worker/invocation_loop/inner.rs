@@ -517,7 +517,8 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         .await;
 
         match outcome {
-            CommandOutcome::Continue => {
+            Err(error) => self.unreadable_oplog_outcome(&error).await,
+            Ok(CommandOutcome::Continue) => {
                 if self.on_external_invocation_completed().await {
                     return CommandOutcome::Continue;
                 }
@@ -541,7 +542,7 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                 // Revisit commands that arrived during execution before entering idle.
                 CommandOutcome::Continue
             }
-            other => other,
+            Ok(other) => other,
         }
     }
 }

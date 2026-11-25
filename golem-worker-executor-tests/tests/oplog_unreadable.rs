@@ -96,7 +96,14 @@ async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_
         blob_storage_layers: 0,
         ..Default::default()
     };
-    let executor = start_with_oplog_config(deps, &context, Some(config.clone())).await?;
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(move |runtime| {
+            runtime.oplog = config.clone();
+            runtime.suspend.suspend_after = Duration::from_secs(300);
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
@@ -112,7 +119,11 @@ async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_
         executor.invoke_and_await_agent(&component, &healthy, "increment", data_value!()),
     )?;
     assert_eq!(healthy_result.into_typed::<u32>()?, 1);
-    drop(executor);
+    futures::try_join!(
+        executor.wait_for_status(&unreadable_id, AgentStatus::Idle, Duration::from_secs(30)),
+        executor.wait_for_status(&healthy_id, AgentStatus::Idle, Duration::from_secs(30)),
+    )?;
+    executor.release().await?;
 
     let storage_config = sqlite_storage_config(deps, &context);
     let indexed_config =
@@ -123,27 +134,6 @@ async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_
         agent_mode: AgentMode::Durable,
     };
     let key = unreadable_id.storage_key();
-    let mut corrupt = indexed
-        .with_entity("test", "corrupt_version", "entry")
-        .read_raw(namespace.clone(), &key, 2, 2)
-        .await?
-        .pop()
-        .expect("the invocation must have stored a second entry")
-        .1;
-    assert_eq!(corrupt[0], 3);
-    corrupt[0] = 255;
-    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", indexed_config.database)).await?;
-    assert_eq!(
-        sqlx::query("UPDATE index_storage SET value = ? WHERE namespace = 'durable-worker-oplog' AND key = ? AND id = 2")
-            .bind(&corrupt)
-            .bind(&key)
-            .execute(&pool)
-            .await?
-            .rows_affected(),
-        1
-    );
-    pool.close().await;
-
     let (_, OplogEntry::Create { parameters, .. }) = indexed
         .with_entity("test", "read_identity", "entry")
         .first::<OplogEntry>(
@@ -168,7 +158,45 @@ async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_
         .await
         .map_err(anyhow::Error::msg)?;
 
-    let executor = start_with_oplog_config(deps, &context, Some(config)).await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &healthy, "count", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        1
+    );
+    let generation = Arc::downgrade(&executor.active_agent(&healthy_id).await.unwrap().primary());
+    let loads = executor.instance_load_count(&healthy_id.agent_id);
+    assert!(loads > 0);
+    assert!(executor.worker_is_loaded(&healthy_id).await);
+    assert!(executor.active_agent(&unreadable_id).await.is_none());
+    executor
+        .remove_cached_status(&unreadable_id.agent_id)
+        .await?;
+    assert!(executor.active_agent(&unreadable_id).await.is_none());
+
+    let mut corrupt = indexed
+        .with_entity("test", "corrupt_version", "entry")
+        .read_raw(namespace.clone(), &key, 2, 2)
+        .await?
+        .pop()
+        .expect("the invocation must have stored a second entry")
+        .1;
+    assert_eq!(corrupt[0], 3);
+    corrupt[0] = 255;
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}", indexed_config.database)).await?;
+    assert_eq!(
+        sqlx::query("UPDATE index_storage SET value = ? WHERE namespace = 'durable-worker-oplog' AND key = ? AND id = 2")
+            .bind(&corrupt)
+            .bind(&key)
+            .execute(&pool)
+            .await?
+            .rows_affected(),
+        1
+    );
+    pool.close().await;
+
     let error = executor
         .invoke_and_await_agent(&component, &unreadable, "increment", data_value!())
         .await
@@ -183,6 +211,11 @@ async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_
         message.contains(&unreadable_id.agent_id.to_string()),
         "{message}"
     );
+    assert!(generation.ptr_eq(&Arc::downgrade(
+        &executor.active_agent(&healthy_id).await.unwrap().primary()
+    )));
+    assert!(executor.worker_is_loaded(&healthy_id).await);
+    assert_eq!(executor.instance_load_count(&healthy_id.agent_id), loads);
     assert_eq!(
         executor
             .invoke_and_await_agent(&component, &healthy, "increment", data_value!())
@@ -190,6 +223,11 @@ async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_
             .into_typed::<u32>()?,
         2
     );
+    assert!(generation.ptr_eq(&Arc::downgrade(
+        &executor.active_agent(&healthy_id).await.unwrap().primary()
+    )));
+    assert!(executor.worker_is_loaded(&healthy_id).await);
+    assert_eq!(executor.instance_load_count(&healthy_id.agent_id), loads);
     let rebuilt = kv
         .with_entity("test", "read_cache", "status")
         .get_raw(cache_namespace, "core")
@@ -221,11 +259,11 @@ fn archiving_config() -> OplogConfig {
     }
 }
 
-/// Asserts that the invocation failed with the cause of the unreadable oplog: the agent, the
-/// archive layer and the decode error.
+/// Checks that the invocation failure names the agent, the archive chunk and the codec version.
 fn assert_fails_with_the_decode_error<T: std::fmt::Debug>(
     result: anyhow::Result<T>,
     agent_id: &AgentId,
+    chunk_end: u64,
 ) {
     let error = result.expect_err("an agent whose oplog does not read must not run");
     let error = format!("{error:#}");
@@ -233,9 +271,11 @@ fn assert_fails_with_the_decode_error<T: std::fmt::Debug>(
     assert!(
         (error.contains(&agent) || error.contains(&agent.escape_debug().to_string()))
             && error.contains("archive layer 1")
-            && error.contains("failed to decode compressed oplog chunk")
-            && error.contains("Input ended unexpectedly"),
-        "the failure does not name the agent, the archive layer and the decode error: {error}"
+            && error.contains(&format!(
+                "failed to decode compressed oplog chunk ending at {chunk_end}:"
+            ))
+            && error.contains("invalid data for serialization version 3"),
+        "the failure does not name the agent, the archive chunk and the codec version: {error}"
     );
 }
 
@@ -303,6 +343,7 @@ async fn an_undecodable_archive_chunk_fails_only_its_agent(
             .invoke_and_await_agent(&component, &unreadable, "increment", data_value!())
             .await,
         &unreadable_id.agent_id,
+        corrupt[0].0,
     );
 
     assert_eq!(
@@ -420,6 +461,7 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
         )
         .await?,
         &unreadable_id.agent_id,
+        chunks.last().unwrap().0,
     );
 
     assert_eq!(
@@ -1276,7 +1318,7 @@ async fn a_failed_rebuild_does_not_fail_a_committed_invocation_whose_result_left
             .status,
         AgentStatus::Failed
     );
-    let lookup = worker.lookup_invocation_result(&committed).await;
+    let lookup = worker.lookup_invocation_result(&committed).await?;
     assert!(
         matches!(lookup, LookupResult::Complete(Ok(_))),
         "the committed invocation must read as its success: {lookup:?}"

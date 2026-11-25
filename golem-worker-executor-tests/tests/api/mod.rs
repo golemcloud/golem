@@ -8726,7 +8726,7 @@ async fn invoke_with_non_existing_function(
     );
     let worker = executor.active_agent(&worker_id).await.unwrap().primary();
     assert_eq!(
-        worker.lookup_invocation_result(&rejected_key).await,
+        worker.lookup_invocation_result(&rejected_key).await?,
         LookupResult::Complete(Err(rejection.clone()))
     );
     let rejected_entries = |entries: Vec<OplogEntry>| {
@@ -8757,7 +8757,7 @@ async fn invoke_with_non_existing_function(
         before_retry
     );
     assert_eq!(
-        worker.lookup_invocation_result(&cancelled_key).await,
+        worker.lookup_invocation_result(&cancelled_key).await?,
         LookupResult::Complete(Err(WorkerExecutorError::invalid_request(
             "Invocation was cancelled before execution"
         )))
@@ -10428,7 +10428,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         receipt
     );
     assert_eq!(
-        worker.lookup_invocation_result(&key).await,
+        worker.lookup_invocation_result(&key).await?,
         LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled))
     );
     let fresh_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
@@ -10438,7 +10438,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
     let result = tokio::time::timeout(Duration::from_secs(60), async {
         loop {
             if let LookupResult::Complete(result) =
-                worker.lookup_invocation_result(&fresh_key).await
+                worker.lookup_invocation_result(&fresh_key).await?
             {
                 break result;
             }
@@ -10456,7 +10456,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
     // A redundant cancellation must not replace a completed invocation's result.
     worker.cancel_invocation(fresh_key).await?;
     assert_eq!(
-        worker.lookup_invocation_result(&fresh_key).await,
+        worker.lookup_invocation_result(&fresh_key).await?,
         LookupResult::Complete(Ok(result))
     );
     assert_eq!(
@@ -10562,7 +10562,7 @@ async fn scheduled_cancellation_by_another_agent_is_refused(
     // The call completes with a successful result: it was not cancelled.
     tokio::time::timeout(Duration::from_secs(60), async {
         loop {
-            if let LookupResult::Complete(result) = worker.lookup_invocation_result(&key).await {
+            if let LookupResult::Complete(result) = worker.lookup_invocation_result(&key).await? {
                 break result;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;

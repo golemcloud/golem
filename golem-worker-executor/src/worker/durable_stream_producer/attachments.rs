@@ -12,7 +12,48 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::services::oplog::{OplogReadError, OplogReadSource};
 use crate::worker::*;
+
+#[derive(Default)]
+pub(in crate::worker) struct TopologyRecoveryPass {
+    needs_retry: bool,
+    unreadable: HashMap<StreamSessionKey, UnreadableTopology>,
+}
+
+struct UnreadableTopology {
+    covered_through: OplogIndex,
+    retryable: bool,
+}
+
+impl TopologyRecoveryPass {
+    fn isolate_read_failure(
+        &mut self,
+        maintenance: bool,
+        key: &StreamSessionKey,
+        covered_through: OplogIndex,
+        error: SessionError,
+    ) -> Result<(), SessionError> {
+        let error = match error {
+            SessionError::Unreadable(error) if maintenance => error,
+            error => return Err(error),
+        };
+        warn!(
+            agent_id = %error.agent_id,
+            invocation_id = %key.idempotency_key,
+            %error,
+            "Skipped stream topology with unreadable history"
+        );
+        self.unreadable.insert(
+            key.clone(),
+            UnreadableTopology {
+                covered_through,
+                retryable: error.is_transient(),
+            },
+        );
+        Ok(())
+    }
+}
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(in crate::worker) fn durable_stream_consumer_auth_ctx(
@@ -66,9 +107,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mut needs_retry = false;
         if !producer.deletion_started().await {
             match self.recover_durable_stream_topologies(true, None).await {
-                Ok(pending) => {
-                    needs_retry |= pending;
-                    if let Err(error) = self.recover_finished_durable_streaming_sessions().await {
+                Ok(pass) => {
+                    needs_retry |= pass.needs_retry;
+                    if let Err(error) = self
+                        .recover_finished_durable_streaming_sessions(|key| {
+                            pass.unreadable.contains_key(
+                                &producer
+                                    .qualify_session(&StreamRegistrationInvocation::Local(*key)),
+                            )
+                        })
+                        .await
+                    {
                         if self.retire_if_shard_lost(&error) {
                             return false;
                         }
@@ -99,10 +148,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         retry_remote_cancellations: bool,
         session: Option<&StreamSessionKey>,
-    ) -> Result<bool, WorkerExecutorError> {
+    ) -> Result<TopologyRecoveryPass, WorkerExecutorError> {
         let status = self.state_actor.try_status().await?;
         if !self.durable_stream_producer.has_history() && !status.has_durable_stream_history {
-            return Ok(false);
+            return Ok(TopologyRecoveryPass::default());
         }
         let cache = self.durable_topology_recovery.clone();
         let oplog = self.oplog.clone();
@@ -111,6 +160,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let mode = self.agent_mode();
         let fingerprint = self.initial_worker_metadata.fingerprint;
         let current = status.oplog_idx;
+        let maintenance = session.is_none();
         let session = session.cloned();
         let refresh = tokio::spawn(async move {
             let mut cache = cache.lock().await;
@@ -145,6 +195,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
             .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        let mut pass = TopologyRecoveryPass::default();
         let mut recoverable = Vec::new();
         let mut first_error = None;
         for (key, metadata) in sessions {
@@ -153,21 +204,34 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             } else {
                 StreamRegistrationInvocation::Remote(key.clone())
             };
+            let producer = self.durable_stream_producer().await?;
             let streams = StreamSession::new(
-                self.durable_stream_producer().await?,
+                producer.clone(),
                 self.oplog.clone(),
                 session_reference.clone(),
                 std::iter::empty(),
             );
-            streams
-                .reconcile_local_cancellation_intents(None)
-                .await
-                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
-            let mut cancellations_done = !streams
-                .current_control_metadata()
-                .await
-                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
-                .has_cancellation_intents();
+            let cancellation_status = async {
+                streams.reconcile_local_cancellation_intents(None).await?;
+                Ok::<_, SessionError>(
+                    !streams
+                        .current_control_metadata()
+                        .await?
+                        .has_cancellation_intents(),
+                )
+            }
+            .await;
+            let covered_through = metadata.covered_through();
+            let mut cancellations_done = match cancellation_status {
+                Ok(done) => done,
+                Err(error) => {
+                    pass.isolate_read_failure(maintenance, &key, covered_through, error)
+                        .map_err(|error| {
+                            error.into_worker_executor_error(WorkerExecutorError::runtime)
+                        })?;
+                    continue;
+                }
+            };
             if retry_remote_cancellations && !cancellations_done {
                 let result = streams
                     .with_rpc(self.rpc())
@@ -179,7 +243,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 match result {
                     Ok(()) => cancellations_done = true,
                     Err(error) => {
-                        first_error.get_or_insert(error);
+                        match pass.isolate_read_failure(maintenance, &key, covered_through, error) {
+                            Ok(()) => continue,
+                            Err(error) => {
+                                first_error.get_or_insert(error);
+                            }
+                        }
                     }
                 }
             }
@@ -195,120 +264,151 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 continue;
             }
-            if matches!(session_reference, StreamRegistrationInvocation::Local(_)) {
-                if let Some(status) = self
-                    .oplog
-                    .raw_durable_stream_session_status(&key)
+            if matches!(session_reference, StreamRegistrationInvocation::Local(_))
+                && let Err(error) = self
+                    .read_local_topology_authority(&producer, &key, &metadata)
                     .await
-                    .status
-                    .map_err(WorkerExecutorError::runtime)?
-                    && let Some(error) = status.lifecycle_error
-                {
-                    return Err(WorkerExecutorError::runtime(error));
-                }
-                let prepared = self
-                    .read_stream_session_record(metadata.prepared_position().ok_or_else(|| {
-                        WorkerExecutorError::runtime(
-                            "local durable topology has no Prepared session authority",
-                        )
-                    })?)
-                    .await?;
-                let attached = self
-                    .read_stream_session_record(metadata.attached_position().ok_or_else(|| {
-                        WorkerExecutorError::runtime(
-                            "local durable topology has no attachment authority",
-                        )
-                    })?)
-                    .await?;
-                let (
-                    StreamSessionRecord::Prepared(prepared),
-                    StreamSessionRecord::Attached(attached),
-                ) = (prepared, attached)
-                else {
-                    return Err(WorkerExecutorError::runtime(
-                        "durable session index references incorrect control records",
-                    ));
-                };
-                if prepared.session_key != key.idempotency_key
-                    || attached.session_key != key.idempotency_key
-                    || attached.attempt_id != prepared.attempt.attempt_id
-                    || attached.epoch == 0
-                    || attached.attachment_id != prepared.attempt.attachment_id
-                    || !matches!(self.oplog.read(attached.pending_invocation_oplog_index).await?,
-                        OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. } if idempotency_key == key.idempotency_key)
-                {
-                    return Err(WorkerExecutorError::runtime(
-                        "durable Attached record does not exactly identify its Prepared attempt and pending invocation",
-                    ));
-                }
+            {
+                pass.isolate_read_failure(maintenance, &key, covered_through, error)
+                    .map_err(|error| {
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
+                    })?;
+                continue;
             }
             recoverable.push((
                 key,
                 session_reference,
-                metadata.covered_through(),
+                covered_through,
                 topologies,
                 cancellations_done,
             ));
         }
-        if recoverable.is_empty() {
-            if let Some(error) = first_error {
-                return Err(error.into_worker_executor_error(WorkerExecutorError::runtime));
-            }
-            return Ok(self.durable_topology_recovery.lock().await.needs_recovery());
-        }
-        let producer = self.durable_stream_producer().await?;
-        let auth_ctx = self.durable_stream_consumer_auth_ctx()?;
-        for (session_key, session_reference, covered_through, topologies, cancellations_done) in
-            recoverable
-        {
-            let mut succeeded = cancellations_done;
-            for topology in topologies {
-                let attachment = topology.attachment_key;
-                let mapping = topology.mapping;
-                let control = RoutedStreamAttachmentControl::new(
-                    self.rpc(),
-                    mapping.clone(),
-                    auth_ctx.clone(),
-                );
-                let streams = StreamSession::new(
-                    producer.clone(),
-                    self.oplog.clone(),
-                    session_reference.clone(),
-                    std::iter::empty(),
-                )
-                .with_consumer_invocation(attachment.consumer_invocation.clone())
-                .with_rpc(self.rpc())
-                .with_consumer_journal(self.durable_stream_consumer_journal())
-                .with_auth_ctx(auth_ctx.clone());
-                if let Err(error) = streams.require_local_session_attachment(&attachment).await {
-                    succeeded = false;
-                    first_error.get_or_insert(error);
-                    continue;
-                }
-                if let Err(error) = streams
-                    .activate_forwarded_mapping(
-                        attachment,
-                        mapping,
-                        Arc::new(control),
-                        Timestamp::now_utc().to_millis(),
+        if !recoverable.is_empty() {
+            let producer = self.durable_stream_producer().await?;
+            let auth_ctx = self.durable_stream_consumer_auth_ctx()?;
+            'recovery: for (
+                session_key,
+                session_reference,
+                covered_through,
+                topologies,
+                cancellations_done,
+            ) in recoverable
+            {
+                let mut succeeded = cancellations_done;
+                for topology in topologies {
+                    let attachment = topology.attachment_key;
+                    let mapping = topology.mapping;
+                    let control = RoutedStreamAttachmentControl::new(
+                        self.rpc(),
+                        mapping.clone(),
+                        auth_ctx.clone(),
+                    );
+                    let streams = StreamSession::new(
+                        producer.clone(),
+                        self.oplog.clone(),
+                        session_reference.clone(),
+                        std::iter::empty(),
                     )
-                    .await
-                {
-                    succeeded = false;
-                    first_error.get_or_insert(error);
+                    .with_consumer_invocation(attachment.consumer_invocation.clone())
+                    .with_rpc(self.rpc())
+                    .with_consumer_journal(self.durable_stream_consumer_journal())
+                    .with_auth_ctx(auth_ctx.clone());
+                    let activation = async {
+                        streams
+                            .require_local_session_attachment(&attachment)
+                            .await?;
+                        streams
+                            .activate_forwarded_mapping(
+                                attachment,
+                                mapping,
+                                Arc::new(control),
+                                Timestamp::now_utc().to_millis(),
+                            )
+                            .await
+                    }
+                    .await;
+                    if let Err(error) = activation {
+                        match pass.isolate_read_failure(
+                            maintenance,
+                            &session_key,
+                            covered_through,
+                            error,
+                        ) {
+                            Ok(()) => continue 'recovery,
+                            Err(error) => {
+                                succeeded = false;
+                                first_error.get_or_insert(error);
+                            }
+                        }
+                    }
                 }
-            }
-            if succeeded {
-                self.durable_topology_recovery
-                    .lock()
-                    .await
-                    .acknowledge_recovery(&session_key, covered_through);
+                if succeeded {
+                    self.durable_topology_recovery
+                        .lock()
+                        .await
+                        .acknowledge_recovery(&session_key, covered_through);
+                }
             }
         }
         if let Some(error) = first_error {
             return Err(error.into_worker_executor_error(WorkerExecutorError::runtime));
         }
-        Ok(self.durable_topology_recovery.lock().await.needs_recovery())
+        pass.needs_retry = self
+            .durable_topology_recovery
+            .lock()
+            .await
+            .needs_recovery(&pass.unreadable);
+        Ok(pass)
+    }
+
+    async fn read_local_topology_authority(
+        &self,
+        producer: &DurableStreamStore,
+        key: &StreamSessionKey,
+        metadata: &SessionControlMetadata,
+    ) -> Result<(), SessionError> {
+        if let Some(status) = self
+            .oplog
+            .raw_durable_stream_session_status(key)
+            .await
+            .status?
+            && let Some(error) = status.lifecycle_error
+        {
+            return Err(error.into());
+        }
+        let prepared = producer
+            .read_session_record(
+                metadata
+                    .prepared_position()
+                    .ok_or("local durable topology has no Prepared session authority")?,
+            )
+            .await?;
+        let attached = producer
+            .read_session_record(
+                metadata
+                    .attached_position()
+                    .ok_or("local durable topology has no attachment authority")?,
+            )
+            .await?;
+        let (StreamSessionRecord::Prepared(prepared), StreamSessionRecord::Attached(attached)) =
+            (prepared, attached)
+        else {
+            return Err("durable session index references incorrect control records".into());
+        };
+        if prepared.session_key != key.idempotency_key
+            || attached.session_key != key.idempotency_key
+            || attached.attempt_id != prepared.attempt.attempt_id
+            || attached.epoch == 0
+            || attached.attachment_id != prepared.attempt.attachment_id
+            || !matches!(self.oplog.read(attached.pending_invocation_oplog_index).await?,
+                OplogEntry::PendingAgentInvocation { invocation_id: idempotency_key, .. } if idempotency_key == key.idempotency_key)
+        {
+            return Err(
+                "durable Attached record does not exactly identify its Prepared attempt and pending invocation"
+                    .into(),
+            );
+        }
+        Ok(())
     }
     pub(crate) async fn control_durable_stream_attachment(
         &self,
@@ -471,10 +571,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         })?
                         .direction()
                         == SessionStreamRole::Output
-                    && let Some(prepared) = self
-                        .prepared_stream_session(&source.idempotency_key)
+                    && self
+                        .stream_output_consumer_is_observer(&source.idempotency_key, &key)
                         .await?
-                    && stream_output_consumer_is_observer(&prepared.attempt, &key)?
                 {
                     return producer
                         .finalize_attachment(
@@ -746,8 +845,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 }
 
 impl DurableTopologyRecoveryCache {
-    pub(in crate::worker) fn needs_recovery(&self) -> bool {
-        !self.consumer_deleting && !self.dirty.is_empty()
+    fn needs_recovery(&self, unreadable: &HashMap<StreamSessionKey, UnreadableTopology>) -> bool {
+        !self.consumer_deleting
+            && self.dirty.iter().any(|key| {
+                !unreadable.get(key).is_some_and(|failed| {
+                    !failed.retryable
+                        && self.sessions.get(key).is_some_and(|control| {
+                            control.covered_through() == failed.covered_through
+                        })
+                })
+            })
     }
 
     pub(in crate::worker) fn acknowledge_recovery(
@@ -826,7 +933,19 @@ impl DurableTopologyRecoveryCache {
                 let OplogEntry::StreamSession { record, .. } = entry else {
                     continue;
                 };
-                let record = oplog.download_payload(record.clone()).await?;
+                let record = oplog
+                    .download_payload_classified(record.clone())
+                    .await
+                    .map_err(|error| {
+                        UnreadableOplog::new(
+                            &owner.agent_id,
+                            OplogReadError::of_payload(
+                                OplogReadSource::Other("stream topology history payload"),
+                                *index,
+                                error,
+                            ),
+                        )
+                    })?;
                 if !record.has_supported_format() {
                     return Err(
                         "unsupported or malformed durable Stream Session record version".into(),

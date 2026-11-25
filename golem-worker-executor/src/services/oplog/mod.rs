@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durable_stream::SessionError;
 use crate::metrics::oplog::record_oplog_epoch_fence;
 use crate::model::ExecutionStatus;
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
@@ -616,9 +617,9 @@ impl std::error::Error for OplogError {}
 /// commit fails the same way, so a path that cannot report the refusal leaves it to the next write
 /// that can.
 ///
-/// `Unreadable` is not latched. Only the commit of the status task gives it, after the entries of
-/// that commit were stored, when the status could not be rebuilt because the oplog does not read.
-/// A later write can succeed, so the caller that receives it fails the agent with the cause.
+/// `Unreadable` is not latched. A commit report can fail to read history after storage or ordered
+/// writer handoff succeeds. Status reconstruction can also return it. `ReportOnly` stores no
+/// buffered entries. A later report or rebuild can succeed.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogRefusal {
     Fenced(OplogFence),
@@ -679,7 +680,7 @@ pub type OplogAddPairReceipt = BoxFuture<'static, Result<(OplogIndex, OplogIndex
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RawDurableStreamSessionStatus {
     pub watermark: OplogIndex,
-    pub status: Result<Option<DurableStreamSessionStatus>, String>,
+    pub status: Result<Option<DurableStreamSessionStatus>, SessionError>,
 }
 
 /// An open oplog providing write access
@@ -789,7 +790,10 @@ pub trait Oplog: Any + Debug + Send + Sync {
         Ok(self.drop_prefix(last_dropped_id).await)
     }
 
-    /// Commits the buffered entries to the oplog
+    /// Commits buffered entries at the requested level and reports the committed entries.
+    /// `Unreadable` means report collection failed after the storage or ordered-handoff milestone
+    /// succeeded. For a durable primary oplog, `ReportOnly` reports prior commits without storing
+    /// the buffered tail. For an ephemeral oplog it returns an empty report.
     async fn commit(
         &self,
         level: CommitLevel,

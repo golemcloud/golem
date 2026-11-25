@@ -7284,7 +7284,7 @@ async fn unreadable_delivery_snapshots_refold_caches_and_fail_authoritative_hist
             cached.oplog_processor_checkpoints.insert(
                 grant,
                 OplogProcessorCheckpointState {
-                    target_agent_id: Some(test_case.owned_agent_id.agent_id.clone()),
+                    target_agent_id: Some(test_case.owned_agent_id.agent_id),
                     confirmed_up_to: OplogIndex::NONE,
                     sending_up_to: OplogIndex::INITIAL,
                     last_batch_start: OplogIndex::INITIAL,
@@ -7305,7 +7305,7 @@ async fn unreadable_delivery_snapshots_refold_caches_and_fail_authoritative_hist
                 oplog_entry: OplogEntry::OplogProcessorCheckpoint {
                     timestamp: Timestamp::now_utc(),
                     plugin_grant_id: grant,
-                    target_agent_id: test_case.owned_agent_id.agent_id.clone(),
+                    target_agent_id: test_case.owned_agent_id.agent_id,
                     confirmed_up_to: OplogIndex::NONE,
                     sending_up_to: OplogIndex::INITIAL,
                     last_batch_start: OplogIndex::INITIAL,

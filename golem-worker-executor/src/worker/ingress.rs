@@ -22,6 +22,17 @@ use chrono::{DateTime, Utc};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{IdempotencyKey, ScheduleId, ScheduledAction};
 
+use super::state_actor::InvocationAppendOutcome;
+
+pub(super) enum EnqueueInvocationOutcome {
+    Existing,
+    Stored {
+        index: OplogIndex,
+        read_only_epoch: Option<u64>,
+    },
+    StoredButUnreadable(UnreadableOplog),
+}
+
 impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn enqueue_oplog_processor<T>(
         deps: &T,
@@ -192,10 +203,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
                 // For ReadOnly the helper returns the epoch captured under the
                 // enqueue lock; using any other epoch could store stale data.
-                let captured = self
-                    .enqueue_worker_invocation_with_attachment(invocation, effect, None, attachment)
+                let captured = match self
+                    .enqueue_worker_invocation_with_effect(invocation, effect, None, attachment)
                     .await?
-                    .0;
+                {
+                    EnqueueInvocationOutcome::Existing => None,
+                    EnqueueInvocationOutcome::Stored {
+                        read_only_epoch, ..
+                    } => read_only_epoch,
+                    EnqueueInvocationOutcome::StoredButUnreadable(error) => {
+                        return Err(self
+                            .resolve_committed_invocation_failure(error.into())
+                            .await);
+                    }
+                };
                 (ResultOrSubscription::Pending(subscription), captured)
             }
         };
@@ -329,9 +350,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
             let payload = self
                 .oplog
-                .download_request(*operation, payload)
+                .download_request_classified(*operation, payload)
                 .await
-                .map_err(WorkerExecutorError::runtime)?;
+                .map_err(|error| {
+                    self.invocation_payload_read_error(
+                        "accepted invocation request payload",
+                        index,
+                        error,
+                    )
+                })?;
             let AgentInvocationPayload::ExternalTool { activation, .. } = payload else {
                 return Err(WorkerExecutorError::invalid_request(
                     "invocation key is already bound to an agent method",
@@ -534,9 +561,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     Ok(LookupResult::New) => Err(WorkerExecutorError::unknown(
                         "Unexpected missing result after invoke",
                     )),
-                    Err(recv_error) => Err(WorkerExecutorError::unknown(format!(
-                        "Failed waiting for invocation result: {recv_error}"
-                    ))),
+                    Err(error) => Err(error),
                 };
             }
             _ => {}
@@ -1076,22 +1101,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .oplog
                     .download_request_classified(operation.clone(), payload.clone())
                     .await
-                    .map_err(|error| match error {
-                        OplogPayloadDownloadError::Backend(error) => {
-                            WorkerExecutorError::recovery_required(format!(
-                                "failed to download the pending agent invocation payload at oplog index {}: {error:#}",
-                                pending.oplog_index
-                            ))
-                        }
-                        OplogPayloadDownloadError::Corrupt(error) => {
-                            WorkerExecutorError::oplog_failed(
-                                self.agent_id(),
-                                format!(
-                                    "corrupt pending agent invocation payload at oplog index {}: {error:#}",
-                                    pending.oplog_index
-                                ),
-                            )
-                        }
+                    .map_err(|error| {
+                        self.invocation_payload_read_error(
+                            "pending invocation request payload",
+                            pending.oplog_index,
+                            error,
+                        )
                     })?;
                 let invocation_context = InvocationContextStack::from_oplog_data(
                     trace_id,
@@ -1122,15 +1137,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         invocation: AgentInvocation,
     ) -> Result<OplogIndex, WorkerExecutorError> {
-        self.enqueue_worker_invocation_with_effect(
-            invocation,
-            read_only_cache::InvocationEffect::UnknownAssumeMutating,
-            None,
-        )
-        .await
-        .map(|(_, oplog_index)| {
-            oplog_index.expect("keyless manual update admission always appends an oplog entry")
-        })
+        match self
+            .enqueue_worker_invocation_with_effect(
+                invocation,
+                read_only_cache::InvocationEffect::UnknownAssumeMutating,
+                None,
+                None,
+            )
+            .await?
+        {
+            EnqueueInvocationOutcome::Stored { index, .. } => Ok(index),
+            EnqueueInvocationOutcome::StoredButUnreadable(error) => Err(error.into()),
+            EnqueueInvocationOutcome::Existing => {
+                unreachable!("keyless manual update admission always appends an oplog entry")
+            }
+        }
     }
     pub(in crate::worker) async fn pending_invocation_entry(
         &self,
@@ -1170,28 +1191,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// For `ReadOnly`, returns the epoch captured before admission. Populating
     /// the cache later must use this captured epoch, not the current one, to
     /// avoid storing a stale result under a post-mutation epoch.
-    pub(crate) async fn enqueue_worker_invocation_with_effect(
-        &self,
-        invocation: AgentInvocation,
-        read_only_cache_effect: read_only_cache::InvocationEffect,
-        not_before: Option<Timestamp>,
-    ) -> Result<(Option<u64>, Option<OplogIndex>), WorkerExecutorError> {
-        self.enqueue_worker_invocation_with_attachment(
-            invocation,
-            read_only_cache_effect,
-            not_before,
-            None,
-        )
-        .await
-    }
-
-    pub(in crate::worker) async fn enqueue_worker_invocation_with_attachment(
+    pub(in crate::worker) async fn enqueue_worker_invocation_with_effect(
         &self,
         invocation: AgentInvocation,
         read_only_cache_effect: read_only_cache::InvocationEffect,
         not_before: Option<Timestamp>,
         attachment: Option<StreamSessionAttachedRecord>,
-    ) -> Result<(Option<u64>, Option<OplogIndex>), WorkerExecutorError> {
+    ) -> Result<EnqueueInvocationOutcome, WorkerExecutorError> {
         self.ensure_invocation_owner(&invocation)?;
         // Carried on the span so the two sides of the hand-off share a searchable
         // key: the execution runs in its own trace, linked rather than nested, so
@@ -1232,7 +1238,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             }
 
             if let Some(idempotency_key) = invocation.idempotency_key()
-                && self.lookup_invocation_result(idempotency_key).await != LookupResult::New
+                && self.lookup_invocation_result(idempotency_key).await? != LookupResult::New
             {
                 self.ensure_matching_invocation_payload(
                     idempotency_key,
@@ -1242,7 +1248,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 if let Some(attachment) = &attachment {
                     self.ensure_matching_stream_attachment(attachment).await?;
                 }
-                return Ok((None, None));
+                return Ok(EnqueueInvocationOutcome::Existing);
             }
 
             let caller_payload = invocation.clone().into_parts().1;
@@ -1278,7 +1284,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         if let Some(attachment) = &attachment {
                             self.ensure_matching_stream_attachment(attachment).await?;
                         }
-                        return Ok((None, None));
+                        return Ok(EnqueueInvocationOutcome::Existing);
                     }
                     let current = self.last_known_status.load();
                     if current.invocation_results.change_generation()
@@ -1327,7 +1333,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             continue;
                         }
                     }
-                    if !self
+                    match self
                         .state_actor
                         .append_invocation_if_version(
                             entry.clone(),
@@ -1339,20 +1345,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         )
                         .await?
                     {
-                        continue;
+                        InvocationAppendOutcome::Retry => continue,
+                        InvocationAppendOutcome::Stored(index) => break index,
+                        InvocationAppendOutcome::StoredButUnreadable(error) => {
+                            return Ok(EnqueueInvocationOutcome::StoredButUnreadable(error));
+                        }
                     }
-                    break;
                 }
-                None
             } else {
-                Some(
-                    self.add_and_commit_oplog_internal(
-                        caller_instance_guard.as_ref().unwrap(),
-                        entry,
-                        None,
-                    )
-                    .await?,
+                self.add_and_commit_oplog_internal(
+                    caller_instance_guard.as_ref().unwrap(),
+                    entry,
+                    None,
                 )
+                .await?
             };
 
             if let Some(idempotency_key) = semantic_idempotency_key {
@@ -1379,7 +1385,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
             drop(caller_instance_guard);
 
-            Ok((read_only_epoch_snapshot, admission_index))
+            Ok(EnqueueInvocationOutcome::Stored {
+                index: admission_index,
+                read_only_epoch: read_only_epoch_snapshot,
+            })
         }
         .instrument(span)
         .await
@@ -1408,18 +1417,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             );
         // A same-key retry returns the original receipt, also from an ephemeral agent that has
         // already begun its execution and accepts nothing new.
-        if self.lookup_matching_invocation(&invocation).await? == LookupResult::New {
-            self.enqueue_worker_invocation_with_effect(
-                invocation,
-                read_only_cache::InvocationEffect::UnknownAssumeMutating,
-                Some(Timestamp::from(millis)),
-            )
-            .await?;
+        let deadline = Timestamp::from(millis);
+        if self.lookup_matching_invocation(&invocation).await? == LookupResult::New
+            && let EnqueueInvocationOutcome::StoredButUnreadable(error) = self
+                .enqueue_worker_invocation_with_effect(
+                    invocation,
+                    read_only_cache::InvocationEffect::UnknownAssumeMutating,
+                    Some(deadline),
+                    None,
+                )
+                .await?
+        {
+            // This request's own commit stored this deadline even though its report failed.
+            self.register_invocation_wake(key, deadline).await;
+            return Err(error.into());
         }
         // A local caller holds no task-scope bind, so a deletion or a retirement may have stopped
         // the state actor after the enqueue. Failing here leaves the wake to a same-key retry,
         // which returns this receipt and registers the wake of the committed invocation.
-        let status = self.try_get_last_known_status().await?;
+        let status = self.try_get_repaired_status().await?;
         if let Some(pending) = status
             .pending_invocations
             .iter()

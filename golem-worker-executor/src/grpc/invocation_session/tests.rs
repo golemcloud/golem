@@ -508,25 +508,43 @@ fn a_rejection_for_an_unreadable_oplog_carries_the_agent_failure() {
 }
 
 #[test]
-async fn a_protocol_failure_for_an_unreadable_oplog_finishes_as_the_agent_failure() {
-    let unreadable = unreadable();
-    let (responses, mut received) = mpsc::channel(1);
-    send_protocol_failure(&responses, SessionError::Unreadable(unreadable.clone())).await;
+async fn an_unreadable_oplog_ends_observation_with_an_open_output() {
+    let (streams, state, handle) = routed_stream_session(SessionStreamRole::Output).await;
+    let unreadable = UnreadableOplog {
+        agent_id: handle.producer,
+        error: OplogReadError::corruption(
+            crate::services::oplog::OplogReadSource::Primary,
+            "oplog entry 43 has unknown serialization version 255",
+        ),
+    };
+    let mut detach = Some(streams.clone());
+    let (responses, mut received) = mpsc::channel(2);
+    end_attachment_on_failure(
+        &streams,
+        &responses,
+        &HashMap::new(),
+        &mut detach,
+        SessionError::Unreadable(unreadable.clone()),
+        async { panic!("an observation failure must not drain the output") },
+    )
+    .await;
     drop(responses);
 
     let expected = WorkerExecutorError::from(unreadable);
-    let Some(InvocationResponse {
-        response:
-            Some(invocation_response::Response::Finished(InvocationSessionCompletion {
-                outcome: Some(invocation_session_completion::Outcome::Failure(failure)),
-            })),
-    }) = received.recv().await
-    else {
-        panic!("the session must finish with a failure");
-    };
+    let frame = received
+        .recv()
+        .await
+        .expect("the attachment must emit a failure");
+    let mut state = state.lock().await;
+    state.validate_response(&frame).unwrap();
+    assert!(state.is_complete());
+    let failure = failure_of(std::slice::from_ref(&frame));
     assert_eq!(failure.kind, InvocationFailureKind::Execution as i32);
     assert_eq!(failure.message, expected.to_string());
     assert_eq!(failure.worker_error, Some(expected.into()));
+    assert!(received.recv().await.is_none());
+    assert!(detach.is_none());
+    assert_eq!(streams.persisted_finished().await.unwrap(), None);
 }
 
 async fn local_session(oplog: Arc<TestOplog>) -> StreamSession {
@@ -554,17 +572,30 @@ async fn local_session(oplog: Arc<TestOplog>) -> StreamSession {
     )
 }
 
-/// Ends the attachment on `error` and returns the responses it sent, whether it drained the
-/// outputs, and the session terminal it left in the history.
+/// Ends the attachment on `error` and returns the responses, output drain, terminal and detach
+/// obligation.
 async fn end_attachment(
     error: SessionError,
-) -> (Vec<InvocationResponse>, bool, Option<Result<(), Vec<u8>>>) {
+) -> (
+    Vec<InvocationResponse>,
+    bool,
+    Option<Result<(), Vec<u8>>>,
+    bool,
+) {
     let streams = local_session(Arc::default()).await;
+    let mut detach = Some(streams.clone());
     let (responses, mut received) = mpsc::channel(8);
     let drained = std::sync::atomic::AtomicBool::new(false);
-    end_attachment_on_failure(&streams, &responses, &HashMap::new(), error, async {
-        drained.store(true, std::sync::atomic::Ordering::SeqCst);
-    })
+    end_attachment_on_failure(
+        &streams,
+        &responses,
+        &HashMap::new(),
+        &mut detach,
+        error,
+        async {
+            drained.store(true, std::sync::atomic::Ordering::SeqCst);
+        },
+    )
     .await;
     drop(responses);
     let mut sent = Vec::new();
@@ -575,6 +606,7 @@ async fn end_attachment(
         sent,
         drained.into_inner(),
         streams.persisted_finished().await.unwrap(),
+        detach.is_some(),
     )
 }
 
@@ -602,16 +634,18 @@ async fn only_a_protocol_violation_records_a_failed_session_terminal() {
         ),
         ..unreadable()
     };
-    let (sent, drained, terminal) = end_attachment(SessionError::Unreadable(transient)).await;
+    let (sent, drained, terminal, detach) =
+        end_attachment(SessionError::Unreadable(transient)).await;
     assert!(
         sent.is_empty(),
         "the client reattaches on the closed stream"
     );
     assert!(!drained);
     assert_eq!(terminal, None);
+    assert!(!detach);
 
     let permanent = unreadable();
-    let (sent, drained, terminal) =
+    let (sent, drained, terminal, detach) =
         end_attachment(SessionError::Unreadable(permanent.clone())).await;
     let failure = failure_of(&sent);
     assert_eq!(failure.kind, InvocationFailureKind::Execution as i32);
@@ -621,9 +655,10 @@ async fn only_a_protocol_violation_records_a_failed_session_terminal() {
     );
     assert!(!drained);
     assert_eq!(terminal, None);
+    assert!(!detach);
 
     let fence = crate::durable_host::durable_stream::tests::test_fence();
-    let (sent, drained, terminal) = end_attachment(SessionError::Fenced(fence.clone())).await;
+    let (sent, drained, terminal, _) = end_attachment(SessionError::Fenced(fence.clone())).await;
     assert_eq!(
         failure_of(&sent).worker_error,
         Some(WorkerExecutorError::from(OplogError::Fenced(fence)).into())
@@ -632,7 +667,8 @@ async fn only_a_protocol_violation_records_a_failed_session_terminal() {
     assert_eq!(terminal, None);
 
     let stream_id = golem_common::model::durable_stream::StreamId(uuid::Uuid::from_u128(73));
-    let (sent, drained, terminal) = end_attachment(SessionError::IncompleteOutput(stream_id)).await;
+    let (sent, drained, terminal, _) =
+        end_attachment(SessionError::IncompleteOutput(stream_id)).await;
     let expected = WorkerExecutorError::recovery_required(format!(
         "schema output {stream_id} stopped before its terminal became durable"
     ));
@@ -641,12 +677,13 @@ async fn only_a_protocol_violation_records_a_failed_session_terminal() {
     assert_eq!(terminal, None);
 
     let violation = "input item arrived after its stream ended";
-    let (sent, drained, terminal) = end_attachment(SessionError::from(violation)).await;
+    let (sent, drained, terminal, detach) = end_attachment(SessionError::from(violation)).await;
     let failure = failure_of(&sent);
     assert_eq!(failure.kind, InvocationFailureKind::Protocol as i32);
     assert_eq!(failure.message, violation);
     assert!(drained);
     assert_eq!(terminal, Some(Err(violation.as_bytes().to_vec())));
+    assert!(detach);
 }
 
 #[test]

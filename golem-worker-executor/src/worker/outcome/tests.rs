@@ -1,8 +1,209 @@
 use super::*;
+use crate::durable_host::durable_stream::tests::TestOplog;
+use crate::services::oplog::{Oplog, OplogReadError};
 use crate::worker::interrupt::Interrupts;
 use crate::worker::{InterruptEstablishment, PendingWorkerInterrupt, UnloadReason, UnloadRequest};
 use golem_common::model::Timestamp;
+use golem_common::model::oplog::payload::OplogPayload;
 use test_r::test;
+
+struct ResultServices(Arc<TestOplog>);
+
+impl HasOplog for ResultServices {
+    fn oplog(&self) -> Arc<dyn Oplog> {
+        self.0.clone()
+    }
+}
+
+impl HasOplogService for ResultServices {
+    fn oplog_service(&self) -> Arc<dyn crate::services::oplog::OplogService> {
+        panic!("finished results need no service read")
+    }
+}
+
+impl HasConfig for ResultServices {
+    fn config(&self) -> Arc<GolemConfig> {
+        panic!("finished results need no config")
+    }
+}
+
+impl HasComponentService for ResultServices {
+    fn component_service(&self) -> Arc<dyn crate::services::component::ComponentService> {
+        panic!("finished results need no component lookup")
+    }
+}
+
+async fn lazy_result(
+    payload: OplogPayload<AgentInvocationResult>,
+) -> (
+    ResultServices,
+    InvocationResult,
+    OplogIndex,
+    OwnedAgentId,
+    AgentFingerprint,
+) {
+    let services = ResultServices(Arc::new(TestOplog::default()));
+    services.0.add(OplogEntry::suspend()).await.unwrap();
+    let index = services
+        .0
+        .add(OplogEntry::AgentInvocationFinished {
+            timestamp: Timestamp::now_utc(),
+            invocation_id: InvocationId(uuid::Uuid::new_v4()),
+            result: payload,
+            method_name: Some("count".into()),
+            consumed_fuel: 17,
+            component_revision: ComponentRevision::INITIAL,
+            awaits_settlement: false,
+        })
+        .await
+        .unwrap();
+    assert!(index > OplogIndex::INITIAL);
+    let id = OwnedAgentId::new(
+        golem_common::model::environment::EnvironmentId::new(),
+        &golem_common::model::AgentId::from_parts(7, 42),
+    );
+    (
+        services,
+        InvocationResult::Lazy {
+            oplog_idx: index,
+            background_failure: None,
+        },
+        index,
+        id,
+        AgentFingerprint(uuid::Uuid::new_v4()),
+    )
+}
+
+#[test]
+async fn lazy_invocation_result_returns_unknown_payload_version() {
+    let (services, mut result, index, id, fingerprint) =
+        lazy_result(OplogPayload::SerializedInline {
+            bytes: [vec![255], b"private payload".to_vec()].concat(),
+            cached: None,
+        })
+        .await;
+    let error = result
+        .cache(&id, AgentMode::Durable, fingerprint, &services)
+        .await
+        .unwrap_err();
+    assert_eq!(error.agent_id, id.agent_id);
+    assert!(matches!(error.error, OplogReadError::Corruption { .. }));
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!("oplog index {index}")),
+        "{message}"
+    );
+    assert!(message.contains("version: 255"), "{message}");
+    assert!(!message.contains("private payload"), "{message}");
+    assert!(matches!(
+        WorkerExecutorError::from(error),
+        WorkerExecutorError::OplogFailed { .. }
+    ));
+    assert!(matches!(
+        result,
+        InvocationResult::Lazy { oplog_idx, background_failure: None } if oplog_idx == index
+    ));
+}
+
+#[test]
+async fn lazy_invocation_result_returns_missing_payload_version() {
+    let (services, mut result, index, id, fingerprint) =
+        lazy_result(OplogPayload::SerializedInline {
+            bytes: vec![],
+            cached: None,
+        })
+        .await;
+    let error = result
+        .cache(&id, AgentMode::Durable, fingerprint, &services)
+        .await
+        .unwrap_err();
+    assert_eq!(error.agent_id, id.agent_id);
+    assert!(matches!(error.error, OplogReadError::Corruption { .. }));
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!("oplog index {index}")),
+        "{message}"
+    );
+    assert!(
+        message.contains("missing serialization version"),
+        "{message}"
+    );
+    assert!(matches!(
+        WorkerExecutorError::from(error),
+        WorkerExecutorError::OplogFailed { .. }
+    ));
+    assert!(matches!(
+        result,
+        InvocationResult::Lazy { oplog_idx, background_failure: None } if oplog_idx == index
+    ));
+}
+
+#[test]
+async fn lazy_invocation_result_preserves_temporary_payload_failure() {
+    let (services, mut result, index, id, fingerprint) = lazy_result(OplogPayload::External {
+        payload_id: golem_common::model::oplog::PayloadId(uuid::Uuid::new_v4()),
+        md5_hash: vec![],
+        cached: None,
+    })
+    .await;
+    let error = result
+        .cache(&id, AgentMode::Durable, fingerprint, &services)
+        .await
+        .unwrap_err();
+    assert_eq!(error.agent_id, id.agent_id);
+    assert!(matches!(
+        error.error,
+        OplogReadError::SourceUnavailable { .. }
+    ));
+    assert!(error.is_transient());
+    let message = error.to_string();
+    assert!(
+        message.contains(&format!("oplog index {index}")),
+        "{message}"
+    );
+    assert!(matches!(
+        WorkerExecutorError::from(error),
+        WorkerExecutorError::RecoveryRequired { .. }
+    ));
+    assert!(matches!(
+        result,
+        InvocationResult::Lazy { oplog_idx, background_failure: None } if oplog_idx == index
+    ));
+}
+
+#[test]
+async fn lazy_invocation_result_hydrates_a_valid_payload_once() {
+    let invocation = AgentInvocationResult::AgentMethod {
+        output: golem_common::schema::SchemaValue::U32(42),
+    };
+    let (services, mut result, index, id, fingerprint) =
+        lazy_result(OplogPayload::SerializedInline {
+            bytes: golem_common::serialization::serialize(&invocation).unwrap(),
+            cached: None,
+        })
+        .await;
+    result
+        .cache(&id, AgentMode::Durable, fingerprint, &services)
+        .await
+        .unwrap();
+    let InvocationResult::Cached { result: Ok(output) } = &result else {
+        panic!("expected cached result");
+    };
+    assert_eq!(output.result, invocation);
+    assert_eq!(output.consumed_fuel, Some(17));
+    assert_eq!(output.component_revision, Some(ComponentRevision::INITIAL));
+    assert_eq!(output.oplog_index, Some(index));
+    assert_eq!(output.agent_fingerprint, Some(fingerprint));
+    let expected = output.clone();
+    services.0.make_reads_unavailable([index]);
+    result
+        .cache(&id, AgentMode::Durable, fingerprint, &services)
+        .await
+        .unwrap();
+    assert!(
+        matches!(result, InvocationResult::Cached { result: Ok(output) } if output == expected)
+    );
+}
 
 #[test]
 fn invocation_rejection_lookup_preserves_the_typed_error() {

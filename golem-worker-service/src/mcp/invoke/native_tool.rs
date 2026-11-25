@@ -5,7 +5,9 @@
 use crate::service::worker::{PublicToolSessionStart, StartedPublicAgentSession, WorkerService};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use futures::StreamExt;
-use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
+use golem_api_grpc::invocation_session_protocol::{
+    InvocationSessionState, OPLOG_UNREADABLE_FAILURE_CODE,
+};
 use golem_api_grpc::proto::golem::worker::{
     InputStreamItem, InvocationAccepted, InvocationRequest, StreamDirection, StreamEnd,
     StreamTerminalAuthor, ToolByteStreamRole, input_stream_item, invocation_request,
@@ -288,10 +290,16 @@ async fn collect_session(
                             result = Some(PublicExternalToolResult::try_from(value).map_err(invalid)?);
                         }
                         Some(invocation_response::Response::Finished(completion)) => {
-                            if !stdout_done || !stderr_done { return Err(invalid("native session completed before tool output")); }
                             if let Some(invocation_session_completion::Outcome::Failure(failure)) = completion.outcome {
-                                return Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(failure.message)), stdout, stderr));
+                                let message = if failure.code == OPLOG_UNREADABLE_FAILURE_CODE {
+                                    tracing::warn!(error = %failure.message, "Native tool invocation history is unreadable");
+                                    "native tool invocation failed".to_string()
+                                } else {
+                                    failure.message
+                                };
+                                return Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(message)), stdout, stderr));
                             }
+                            if !stdout_done || !stderr_done { return Err(invalid("native session completed before tool output")); }
                             let result = result.ok_or_else(|| invalid("native tool completed without a result"))?;
                             if matches!(result, PublicExternalToolResult::Success(_)) && let Some(error) = stdout_error {
                                 return Ok((PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(error)), stdout, stderr));
@@ -915,6 +923,56 @@ mod tests {
         assert!(matches!(result, PublicExternalToolResult::Success(_)));
         assert_eq!(stdout, b"out");
         assert_eq!(stderr, b"error");
+    }
+
+    #[test]
+    async fn unreadable_history_finishes_with_open_stdout_without_exposing_storage_details() {
+        use golem_api_grpc::proto::golem::worker::v1::{
+            RuntimeError, WorkerExecutionError, worker_execution_error,
+        };
+        use golem_api_grpc::proto::golem::worker::{
+            InvocationFailure, InvocationFailureKind, InvocationResponse,
+            InvocationSessionCompletion,
+        };
+
+        let (mut session, accepted) = byte_session(false);
+        let detail = "oplog entry 43 has unknown serialization version 255".to_string();
+        let frames = [
+            invocation_response::Response::Accepted(accepted),
+            output_frame(b"partial output".to_vec(), 0),
+            invocation_response::Response::Finished(InvocationSessionCompletion {
+                outcome: Some(invocation_session_completion::Outcome::Failure(
+                    InvocationFailure {
+                        kind: InvocationFailureKind::Execution as i32,
+                        code: OPLOG_UNREADABLE_FAILURE_CODE.to_string(),
+                        message: detail.clone(),
+                        worker_error: Some(WorkerExecutionError {
+                            error: Some(worker_execution_error::Error::RuntimeError(
+                                RuntimeError { details: detail },
+                            )),
+                        }),
+                    },
+                )),
+            }),
+        ];
+        session.responses = Box::pin(stream::iter(frames.into_iter().map(|response| {
+            Ok(InvocationResponse {
+                response: Some(response),
+            })
+        })));
+        let (sender, mut receiver) = mpsc::channel(2);
+        let (result, stdout, stderr) =
+            collect_session(session, sender, None, true, false, CancellationToken::new())
+                .await
+                .unwrap();
+
+        assert!(matches!(result,
+            PublicExternalToolResult::Failure(SerializableToolRpcError::RemoteInternalError(message))
+                if message == "native tool invocation failed"
+        ));
+        assert_eq!(stdout, b"partial output");
+        assert!(stderr.is_empty());
+        assert!(receiver.recv().await.is_none());
     }
 
     #[test]

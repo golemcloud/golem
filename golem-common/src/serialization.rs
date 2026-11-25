@@ -80,10 +80,9 @@ pub fn decode_with_version<T: BinaryDeserializer>(
         SERIALIZATION_VERSION_V1 | SERIALIZATION_VERSION_V2 => {
             Err(DecodeError::UnsupportedVersion(version))
         }
-        SERIALIZATION_VERSION_V3 => desert_rust::deserialize(data).map_err(|error| {
-            DecodeError::InvalidData(format!(
-                "invalid data for serialization version {version}: {error}"
-            ))
+        // A decoder error can include values from the stored payload.
+        SERIALIZATION_VERSION_V3 => desert_rust::deserialize(data).map_err(|_| {
+            DecodeError::InvalidData(format!("invalid data for serialization version {version}"))
         }),
         _ => Err(DecodeError::UnknownVersion(version)),
     }
@@ -223,9 +222,9 @@ mod tests {
         }
         let error = decode::<String>(&[SERIALIZATION_VERSION_V3]).unwrap_err();
         assert!(matches!(error, DecodeError::InvalidData(_)));
-        assert!(
-            error.to_string().contains("serialization version 3"),
-            "{error}"
+        assert_eq!(
+            error.to_string(),
+            "invalid data for serialization version 3"
         );
         assert_eq!(
             super::deserialize::<String>(&[SERIALIZATION_VERSION_V3]),

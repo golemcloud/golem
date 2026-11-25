@@ -102,7 +102,7 @@ macro_rules! create_oplog_entry {
     };
 }
 
-fn create_test_entry(
+pub(crate) fn create_test_entry(
     agent_id: AgentId,
     agent_mode: AgentMode,
     component_revision: ComponentRevision,
@@ -281,7 +281,7 @@ pub(super) fn test_type_id() -> golem_common::model::type_id::TypeId {
     golem_common::model::type_id::TypeId::try_from(7u32).unwrap()
 }
 
-pub(super) fn make_agent_metadata(
+pub(crate) fn make_agent_metadata(
     agent_id: AgentId,
     created_by: AccountId,
     environment_id: EnvironmentId,
@@ -323,14 +323,14 @@ fn invocation_wallet_pin() -> InvocationWalletPin {
     }
 }
 
-pub(super) fn default_last_known_status()
+pub(crate) fn default_last_known_status()
 -> read_only_lock::arc_swap::ReadOnlyView<AgentStatusRecord> {
     read_only_lock::arc_swap::ReadOnlyView::new(Arc::new(arc_swap::ArcSwap::from_pointee(
         AgentStatusRecord::default(),
     )))
 }
 
-pub(super) fn default_execution_status(
+pub(crate) fn default_execution_status(
     agent_mode: AgentMode,
 ) -> read_only_lock::std::ReadOnlyLock<ExecutionStatus> {
     read_only_lock::std::ReadOnlyLock::new(Arc::new(RwLock::new(ExecutionStatus::Suspended {
@@ -728,7 +728,7 @@ pub(crate) struct ReadCountingIndexedStorage {
     inner: InMemoryIndexedStorage,
     reads: AtomicUsize,
     discard_compressed_appends: bool,
-    read_error: Option<IndexedStorageError>,
+    read_error: RwLock<Option<IndexedStorageError>>,
     read_failures: StdMutex<VecDeque<IndexedStorageError>>,
     hidden_reads: AtomicUsize,
     append_failures: StdMutex<VecDeque<InjectedAppendFailure>>,
@@ -743,6 +743,7 @@ pub(crate) struct ReadCountingIndexedStorage {
     fail_length_once: AtomicBool,
     fail_exists_once: AtomicBool,
     miss_closest_once: AtomicBool,
+    primary_last_id_error: StdMutex<Option<IndexedStorageError>>,
     /// Fails every `last_id` of a compressed archive level with this error.
     archive_last_id_error: Option<IndexedStorageError>,
     /// Fails every epoch record of a compressed archive level with this error.
@@ -765,9 +766,13 @@ impl ReadCountingIndexedStorage {
 
     fn failing_reads(error: IndexedStorageError) -> Self {
         Self {
-            read_error: Some(error),
+            read_error: RwLock::new(Some(error)),
             ..Self::default()
         }
+    }
+
+    pub(crate) fn set_read_error(&self, error: Option<IndexedStorageError>) {
+        *self.read_error.write().unwrap() = error;
     }
 
     pub(crate) fn reads(&self) -> usize {
@@ -1169,7 +1174,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         end_id: u64,
     ) -> Result<Vec<(u64, Vec<u8>)>, IndexedStorageError> {
         self.count_read();
-        if let Some(error) = &self.read_error {
+        if let Some(error) = self.read_error.read().unwrap().as_ref() {
             return Err(error.clone());
         }
         if let Some(error) = self.read_failures.lock().unwrap().pop_front() {
@@ -1232,6 +1237,11 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         key: &str,
     ) -> Result<Option<u64>, IndexedStorageError> {
         self.count_read();
+        if matches!(&namespace, IndexedStorageNamespace::OpLog { .. })
+            && let Some(error) = self.primary_last_id_error.lock().unwrap().as_ref()
+        {
+            return Err(error.clone());
+        }
         if let (Some(error), IndexedStorageNamespace::CompressedOpLog { .. }) =
             (&self.archive_last_id_error, &namespace)
         {
@@ -1252,7 +1262,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
         id: u64,
     ) -> Result<Option<(u64, Vec<u8>)>, IndexedStorageError> {
         self.count_read();
-        if let Some(error) = &self.read_error {
+        if let Some(error) = self.read_error.read().unwrap().as_ref() {
             return Err(error.clone());
         }
         if let Some(error) = self.read_failures.lock().unwrap().pop_front() {
@@ -3812,6 +3822,71 @@ async fn exhausted_primary_read_retries_remain_transient(_tracing: &Tracing) {
     .await;
     assert!(error.is_transient());
     assert_eq!(indexed_storage.reads(), 3);
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn oplog_horizon_preserves_primary_read_failure_classification(_tracing: &Tracing) {
+    let storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service =
+        cold_ambiguity_service(storage.clone(), Arc::new(InMemoryBlobStorage::new()), None).await;
+    let (agent_id, owner, metadata) = archive_open_agent("primary-horizon-read");
+    let mode = AgentMode::Durable;
+    let create = create_test_entry(
+        agent_id,
+        mode,
+        ComponentRevision::INITIAL,
+        owner.environment_id,
+        metadata.created_by,
+        metadata.fingerprint.0,
+    );
+    let _oplog = service
+        .create_fresh(
+            &mut service.lock_lifecycle(&agent_id).await,
+            &owner,
+            mode,
+            create,
+            metadata,
+            default_last_known_status(),
+            default_execution_status(mode),
+            None,
+        )
+        .await
+        .unwrap();
+
+    storage.reset();
+    *storage.primary_last_id_error.lock().unwrap() =
+        Some(IndexedStorageError::Transient("injected outage".into()));
+    let error = assert_unreadable(service.get_last_index(&owner, mode)).await;
+    assert_eq!(error.agent_id, agent_id);
+    assert!(matches!(
+        error.error,
+        OplogReadError::SourceUnavailable {
+            source: OplogReadSource::Primary,
+            ..
+        }
+    ));
+    assert_eq!(storage.reads(), 3);
+
+    storage.reset();
+    *storage.primary_last_id_error.lock().unwrap() =
+        Some(IndexedStorageError::Other("injected schema failure".into()));
+    let error = assert_unreadable(service.get_last_index(&owner, mode)).await;
+    assert_eq!(error.agent_id, agent_id);
+    assert!(matches!(
+        error.error,
+        OplogReadError::SourceFailure {
+            source: OplogReadSource::Primary,
+            ..
+        }
+    ));
+    assert_eq!(storage.reads(), 1);
+
+    *storage.primary_last_id_error.lock().unwrap() = None;
+    assert_eq!(
+        service.get_last_index(&owner, mode).await.unwrap(),
+        OplogIndex::INITIAL
+    );
 }
 
 #[test]

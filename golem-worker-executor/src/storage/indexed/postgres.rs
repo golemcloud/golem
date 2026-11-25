@@ -38,6 +38,21 @@ static DB_MIGRATIONS: include_dir::Dir = include_dir!("$CARGO_MANIFEST_DIR/db/mi
 
 const DB_TYPE: &str = "postgres";
 
+fn classify_read_error(error: RepoError) -> IndexedStorageError {
+    let cancelled = match &error {
+        RepoError::InternalError(error) => error
+            .downcast_ref::<sqlx::Error>()
+            .and_then(sqlx::Error::as_database_error)
+            .is_some_and(|error| error.code().as_deref() == Some("57014")),
+        _ => false,
+    };
+    if cancelled {
+        IndexedStorageError::Transient(error.to_string())
+    } else {
+        PostgresIndexedStorage::classify_repo_error_general(error)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PostgresIndexedStorage {
     pool: PostgresPool,
@@ -360,7 +375,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_one_as(query)
             .await
             .map(|row| row.0)
-            .map_err(Self::classify_repo_error_general)
+            .map_err(classify_read_error)
     }
 
     async fn scan_stable(
@@ -428,7 +443,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                     .map(|(env, agent)| format!("{env}/{agent}"))
                     .collect::<Vec<String>>()
             })
-            .map_err(Self::classify_repo_error_general)?;
+            .map_err(classify_read_error)?;
 
         Ok((super::last_key_resume(&keys, count), keys))
     }
@@ -853,7 +868,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_one_as(query)
             .await
             .map(|row| row.0 as u64)
-            .map_err(Self::classify_repo_error_general)
+            .map_err(classify_read_error)
     }
 
     async fn delete(
@@ -911,7 +926,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_all_as::<DBIdValue, _>(query)
             .await
             .map(|vec| vec.into_iter().map(|row| row.into_pair()).collect())
-            .map_err(Self::classify_repo_error_general)
+            .map_err(classify_read_error)
     }
 
     async fn first(
@@ -937,7 +952,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
-            .map_err(Self::classify_repo_error_general)
+            .map_err(classify_read_error)
     }
 
     async fn last(
@@ -963,7 +978,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
-            .map_err(Self::classify_repo_error_general)
+            .map_err(classify_read_error)
     }
 
     async fn last_id(
@@ -989,7 +1004,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_optional_as::<(i64,), _>(query)
             .await
             .map(|op| op.map(|row| row.0 as u64))
-            .map_err(Self::classify_repo_error_general)
+            .map_err(classify_read_error)
     }
 
     async fn closest(
@@ -1018,7 +1033,7 @@ impl IndexedStorage for PostgresIndexedStorage {
             .fetch_optional_as::<DBIdValue, _>(query)
             .await
             .map(|op| op.map(|row| row.into_pair()))
-            .map_err(Self::classify_repo_error_general)
+            .map_err(classify_read_error)
     }
 
     async fn drop_prefix(
@@ -1109,7 +1124,71 @@ impl DBIdValue {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sqlx::error::{DatabaseError, ErrorKind};
+    use std::borrow::Cow;
+    use std::error::Error as StdError;
     use test_r::test;
+
+    #[derive(Debug)]
+    struct TestDatabaseError(&'static str);
+
+    impl std::fmt::Display for TestDatabaseError {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("database error")
+        }
+    }
+
+    impl StdError for TestDatabaseError {}
+
+    impl DatabaseError for TestDatabaseError {
+        fn message(&self) -> &str {
+            "database error"
+        }
+
+        fn code(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(self.0))
+        }
+
+        fn as_error(&self) -> &(dyn StdError + Send + Sync + 'static) {
+            self
+        }
+
+        fn as_error_mut(&mut self) -> &mut (dyn StdError + Send + Sync + 'static) {
+            self
+        }
+
+        fn into_error(self: Box<Self>) -> Box<dyn StdError + Send + Sync + 'static> {
+            self
+        }
+
+        fn kind(&self) -> ErrorKind {
+            ErrorKind::Other
+        }
+    }
+
+    #[test]
+    fn only_cancelled_reads_are_transient_without_changing_write_classification() {
+        let error =
+            |code| RepoError::from(sqlx::Error::Database(Box::new(TestDatabaseError(code))));
+        assert!(matches!(
+            classify_read_error(error("57014")),
+            IndexedStorageError::Transient(_)
+        ));
+        assert!(matches!(
+            classify_read_error(error("42P01")),
+            IndexedStorageError::Other(_)
+        ));
+        ["57014", "42P01"].into_iter().for_each(|code| {
+            assert!(matches!(
+                PostgresIndexedStorage::classify_repo_error_general(error(code)),
+                IndexedStorageError::Other(_)
+            ));
+            assert!(matches!(
+                PostgresIndexedStorage::classify_repo_error_oplog_insert(error(code)),
+                IndexedStorageError::Other(_)
+            ));
+        });
+    }
 
     #[test]
     fn primary_oplog_insert_classifies_pool_timeout_as_safe_to_retry() {

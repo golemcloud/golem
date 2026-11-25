@@ -28,7 +28,7 @@ impl TryFrom<SchemaValue> for AgentMethodInput {
     type Error = String;
 
     fn try_from(value: SchemaValue) -> Result<Self, Self::Error> {
-        let value = value.try_into().map_err(|error| format!("{error}"))?;
+        let value = value.try_into()?;
         let (input, _) = NativeMethodInput::capture(value, Vec::new())?;
         Ok(Self::Native(input))
     }

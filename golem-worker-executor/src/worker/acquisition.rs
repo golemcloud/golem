@@ -18,6 +18,7 @@ use uuid::Uuid;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::InvocationId;
 
+use crate::worker::state_actor::InvocationAppendOutcome;
 use crate::worker::*;
 
 #[derive(Clone, Debug)]
@@ -1308,11 +1309,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
                 .await?;
             let status = worker.state_actor.status().await;
-            // Returned rather than ignored: an agent created at an epoch another executor has
-            // already claimed is refused here with `OplogFenced`, which its caller retries on the
-            // shard's owner. Nothing is lost by returning early, since the next load repeats this
-            // check against the same short oplog.
-            worker
+            // A write refusal aborts construction. If the constructor was stored but cannot be
+            // observed, abort construction with the read error as well. The next load reconstructs
+            // from the oplog rather than publishing this worker with a detached status.
+            if let InvocationAppendOutcome::StoredButUnreadable(unreadable) = worker
                 .state_actor
                 .append_invocation_if_version(
                     entry,
@@ -1322,7 +1322,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     status.invocation_results.revert_generation(),
                     self.instance.clone().lock_owned().await,
                 )
-                .await?;
+                .await?
+            {
+                return Err(unreadable.into());
+            }
         }
         if worker.last_known_status.load().has_durable_stream_history
             && !self

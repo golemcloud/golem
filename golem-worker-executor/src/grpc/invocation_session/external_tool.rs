@@ -182,7 +182,7 @@ where
             };
             response.component_revision = Some(metadata.last_known_status.component_revision);
             response.agent_fingerprint = Some(metadata.fingerprint);
-            match worker.lookup_invocation_result(&key).await {
+            match worker.lookup_invocation_result(&key).await? {
                 LookupResult::Complete(Ok(mut output)) => {
                     output.agent_id = response.agent_id;
                     output.idempotency_key = response.idempotency_key;
@@ -432,7 +432,7 @@ where
             .await?;
         if !streaming
             && !(mode == Mode::Schedule && request.schedule_at.is_some())
-            && worker.lookup_invocation_result(&key).await != LookupResult::New
+            && worker.lookup_invocation_result(&key).await? != LookupResult::New
         {
             publish_acceptance(
                 acceptance_committed,

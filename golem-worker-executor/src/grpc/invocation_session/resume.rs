@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::attachment::preserve_attachment_on_read_failure;
 use super::{
     Arc, HasAll, HashMap, InvocationAccepted, InvocationRejected, InvocationRequest,
     InvocationResponse, InvocationSessionResult, InvocationSessionState, InvocationStart,
@@ -21,8 +22,9 @@ use super::{
     invocation_response, is_attachment_termination, mpsc, persisted_result_and_finished,
     pre_acceptance_rejection_reason, resumed_input_schema, route_durable_request,
     send_attachment_revocation, send_protocol_failure, send_resumed_finished,
-    until_response_closed,
+    send_unvalidated_rejection, until_response_closed,
 };
+use crate::worker::InvocationObservationFailure;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -112,13 +114,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     }
                 }.await;
                 if let Err(error) = wait {
-                    detach_durable_attachment(Some(streams)).await;
+                    if InvocationObservationFailure::classify(&error).is_none() {
+                        detach_durable_attachment(Some(streams)).await;
+                    }
                     return Err(error);
                 }
-                if streams.ensure_current_attachment().await.is_err() {
-                    send_attachment_revocation(&outward, Ok(())).await;
+                if let Err(error) = streams.ensure_current_attachment().await {
+                    send_attachment_revocation(&outward, Err(error)).await;
                     attachment_ended = true;
-                    return Err(WorkerExecutorError::runtime("queued resume attachment was fenced"));
+                    return Err(WorkerExecutorError::runtime("queued resume attachment ended"));
                 }
             }
             worker.resume_durable_streaming_invocation(attempt).await
@@ -158,8 +162,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
         };
-        let durable_attachment = acceptance.streams.clone();
-        *response_lease.lock().unwrap() = durable_attachment.response_lease();
+        *response_lease.lock().unwrap() = acceptance.streams.response_lease();
+        let mut durable_attachment = Some(acceptance.streams.clone());
         let forwarder_stopped = tokio_util::sync::CancellationToken::new();
         until_response_closed(&outward, &forwarder_stopped, async {
             let result = async {
@@ -208,6 +212,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let (acceptance, cursor_map, terminal_cursor_stream_ids) = match result {
             Ok(result) => result,
             Err(error) => {
+                if InvocationObservationFailure::classify(&error).is_some() {
+                    durable_attachment = None;
+                }
+                if was_queued {
+                    super::send_worker_failure(&outward, error).await;
+                    return;
+                }
                 tracing::warn!(
                     agent_id = ?resume.agent_id,
                     attempt_id = ?resume.attempt_id,
@@ -264,7 +275,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let high_waters = match streams.input_high_waters().await {
             Ok(high_waters) => high_waters,
             Err(error) => {
-                send_protocol_failure(&responses, error).await;
+                preserve_attachment_on_read_failure(&mut durable_attachment, &error);
+                if was_queued {
+                    send_protocol_failure(&responses, error).await;
+                } else {
+                    send_unvalidated_rejection(
+                        &responses,
+                        super::InvocationRejectionReason::Internal,
+                        error.to_string(),
+                        rejection_identity.0,
+                        rejection_identity.1,
+                        super::rejection_worker_error(&error),
+                    ).await;
+                }
                 drop(responses);
                 let _ = forwarder.await;
                 return;
@@ -336,18 +359,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         {
             return;
         }
-        if acceptance.replayed && streams.ensure_current_attachment().await.is_err() {
-            let _ = responses
-                .send(InvocationResponse {
-                    response: Some(invocation_response::Response::AttachmentRevoked(
-                        golem_api_grpc::proto::golem::worker::AttachmentRevoked {
-                            details:
-                                "the replayed attachment attempt has been fenced by a later epoch"
-                                    .to_string(),
-                        },
-                    )),
-                })
-                .await;
+        if acceptance.replayed && let Err(error) = streams.ensure_current_attachment().await {
+            durable_attachment = None;
+            send_attachment_revocation(&responses, Err(error)).await;
             drop(responses);
             let _ = forwarder.await;
             return;
@@ -382,6 +396,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 match persisted_result_and_finished(&streams, native_tool).await {
                     Ok(outcome) => outcome,
                     Err(error) => {
+                        preserve_attachment_on_read_failure(&mut durable_attachment, &error);
                         send_protocol_failure(&responses, error).await;
                         return;
                     }
@@ -396,6 +411,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         .map_err(|error| SessionError::from(format!("durable output pump task failed: {error}")))
                         .and_then(|result| result);
                     if let Err(error) = result {
+                        preserve_attachment_on_read_failure(&mut durable_attachment, &error);
                         if !ends_only_the_attachment(&error) {
                             send_protocol_failure(&responses, error).await;
                         }
@@ -405,6 +421,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 request = inbound.message() => match request {
                     Ok(Some(request)) => {
                         if let Err(error) = route_durable_request(&streams, &responses, &state, request).await {
+                            preserve_attachment_on_read_failure(&mut durable_attachment, &error);
                             if !ends_only_the_attachment(&error) {
                                 send_protocol_failure(&responses, error).await;
                             }
@@ -414,6 +431,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     Ok(None) | Err(_) => return,
                 },
                 revocation = &mut attachment_revoked => {
+                    durable_attachment = None;
                     send_attachment_revocation(&responses, revocation).await;
                     return;
                 },
@@ -453,6 +471,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let root_output_mapping_ids = match streams.session_root_output_mapping_ids().await {
             Ok(root_output_mapping_ids) => root_output_mapping_ids,
             Err(error) => {
+                preserve_attachment_on_read_failure(&mut durable_attachment, &error);
                 send_protocol_failure(&responses, error).await;
                 return;
             }
@@ -484,6 +503,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         match result {
                             Err(error) if is_attachment_termination(&error) => {}
                             Err(error) => {
+                                preserve_attachment_on_read_failure(&mut durable_attachment, &error);
                                 if !ends_only_the_attachment(&error) {
                                     send_protocol_failure(&responses, error).await;
                                 }
@@ -496,6 +516,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     request = inbound.message() => match request {
                         Ok(Some(request)) => {
                             if let Err(error) = route_durable_request(&streams, &responses, &state, request).await {
+                                preserve_attachment_on_read_failure(&mut durable_attachment, &error);
                                 if !ends_only_the_attachment(&error) {
                                     send_protocol_failure(&responses, error).await;
                                 }
@@ -508,6 +529,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         },
                     },
                     revocation = &mut attachment_revoked => {
+                        durable_attachment = None;
                         output_pump.shutdown().await;
                         send_attachment_revocation(&responses, revocation).await;
                         return;
@@ -522,12 +544,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             return;
         }
         if let Err(error) = streams.complete().await {
+            preserve_attachment_on_read_failure(&mut durable_attachment, &error);
             send_protocol_failure(&responses, error).await;
             drop(responses);
             let _ = forwarder.await;
             return;
         }
         if let Err(error) = streams.pump_input_cancellations(&responses, &high_waters).await {
+            preserve_attachment_on_read_failure(&mut durable_attachment, &error);
             send_protocol_failure(&responses, error).await;
             drop(responses);
             let _ = forwarder.await;
@@ -541,6 +565,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 request = inbound.message() => match request {
                     Ok(Some(request)) => {
                         if let Err(error) = route_durable_request(&streams, &responses, &state, request).await {
+                            preserve_attachment_on_read_failure(&mut durable_attachment, &error);
                             if !ends_only_the_attachment(&error) {
                                 send_protocol_failure(&responses, error).await;
                             }
@@ -550,6 +575,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     Ok(None) | Err(_) => return,
                 },
                 revocation = &mut attachment_revoked => {
+                    durable_attachment = None;
                     send_attachment_revocation(&responses, revocation).await;
                     return;
                 },
@@ -557,12 +583,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         };
         match result {
             Ok(result) => send_resumed_finished(&responses, result).await,
-            Err(error) => send_protocol_failure(&responses, error).await,
+            Err(error) => {
+                preserve_attachment_on_read_failure(&mut durable_attachment, &error);
+                send_protocol_failure(&responses, error).await;
+            }
         }
         drop(responses);
         let _ = forwarder.await;
         })
         .await;
-        detach_durable_attachment(Some(durable_attachment)).await;
+        detach_durable_attachment(durable_attachment).await;
     }
 }

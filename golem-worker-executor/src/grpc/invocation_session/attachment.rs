@@ -24,6 +24,15 @@ pub(super) async fn detach_durable_attachment(streams: Option<StreamSession>) {
     }
 }
 
+pub(super) fn preserve_attachment_on_read_failure(
+    attachment: &mut Option<StreamSession>,
+    error: &SessionError,
+) {
+    if matches!(error, SessionError::Unreadable(_)) {
+        *attachment = None;
+    }
+}
+
 pub(super) async fn until_response_closed<T>(
     outward: &mpsc::Sender<InvocationResponse>,
     forwarder_stopped: &tokio_util::sync::CancellationToken,
@@ -59,9 +68,11 @@ pub(super) async fn end_attachment_on_failure(
     streams: &StreamSession,
     responses: &mpsc::Sender<InvocationResponse>,
     high_waters: &HashMap<u64, golem_common::base_model::durable_stream::InputStreamHighWater>,
+    detach: &mut Option<StreamSession>,
     error: SessionError,
     drain_outputs: impl Future<Output = ()>,
 ) {
+    preserve_attachment_on_read_failure(detach, &error);
     if ends_only_the_attachment(&error) {
         if matches!(error, SessionError::Unreadable(_)) {
             tracing::warn!(
@@ -76,6 +87,7 @@ pub(super) async fn end_attachment_on_failure(
         return;
     }
     if let Err(finish_error) = streams.fail_protocol(error.to_string()).await {
+        preserve_attachment_on_read_failure(detach, &finish_error);
         send_protocol_failure(responses, finish_error).await;
         return;
     }

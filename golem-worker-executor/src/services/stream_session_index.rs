@@ -26,7 +26,7 @@ use crate::services::oplog::{
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::services::worker::DERIVED_CACHE_EXPIRY;
 use crate::services::worker::DurableStreamRecoveryMetadata;
-use crate::services::worker_fork::lineage::StreamForkLineage;
+use crate::services::worker_fork::lineage::{StreamForkLineage, entry_requires_lineage_discovery};
 use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
@@ -43,6 +43,7 @@ use golem_common::model::{
     OwnedAgentId,
 };
 use golem_common::serialization::{DecodeError, decode, serialize};
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex, Weak};
 use tokio::sync::Mutex as AsyncMutex;
@@ -53,6 +54,17 @@ const SESSION_FIELD_PREFIX: &str = "session:";
 const PUBLIC_BINDING_FIELD_PREFIX: &str = "public-binding:";
 pub(crate) const CONSUMER_JOURNAL_INDEX_PAGE_SIZE: u64 = 256;
 const RECOVERY_CATALOGUE_PAGE_SIZE: u64 = 256;
+
+// A decode error requests a refold. Keep other errors for the snapshot check.
+fn cache_read_or_refold<T>(
+    result: Result<T, ProjectionError>,
+) -> Option<Result<T, Box<SessionError>>> {
+    match result {
+        Ok(value) => Some(Ok(value)),
+        Err(ProjectionError::Other(error)) => Some(Err(error)),
+        Err(ProjectionError::CacheDecode) => None,
+    }
+}
 
 fn recovery_catalogue_field(page: u64) -> String {
     format!("recovery:{page}")
@@ -154,9 +166,10 @@ impl StreamSessionIndexService {
                     .with_entity("stream_session_index", "read_cache", "snapshot")
                     .get_many_raw(namespace.clone(), fields.clone())
                     .await?;
-                match decode_fields(&values) {
-                    Ok(value) => Ok(Some(value)),
-                    Err(_) => {
+                let result = decode_fields(&values).map_err(|_| ProjectionError::CacheDecode);
+                match cache_read_or_refold(result) {
+                    Some(result) => result.map(Some).map_err(|error| *error),
+                    None => {
                         let expected = values.first().and_then(Option::as_deref);
                         let rebuild_through = expected
                             .and_then(|bytes| decode::<Metadata>(bytes).ok())
@@ -261,24 +274,25 @@ impl StreamSessionIndexService {
                 if covered < horizon {
                     return Err("producer metadata coverage is unavailable".into());
                 }
-                let result = async {
-                    let mut rows = Vec::with_capacity(keys.len());
-                    for (key, value) in keys.iter().zip(values) {
-                        if matches!(key, ProducerMetadataKey::Lineage) {
-                            rows.push(Some(ProducerMetadataRow::Lineage(
+                let result = keys
+                    .iter()
+                    .zip(values)
+                    .try_fold(Vec::with_capacity(keys.len()), |mut rows, (key, value)| {
+                        let row = if matches!(key, ProducerMetadataKey::Lineage) {
+                            Some(ProducerMetadataRow::Lineage(
                                 metadata
                                     .as_ref()
                                     .map(|metadata| metadata.stream_fork_lineage.through(covered))
                                     .transpose()?
                                     .unwrap_or_default(),
-                            )));
-                            continue;
-                        }
-                        rows.push(value);
-                    }
-                    Ok::<_, SessionError>((covered, rows))
-                }
-                .await;
+                            ))
+                        } else {
+                            value
+                        };
+                        rows.push(row);
+                        Ok::<_, SessionError>(rows)
+                    })
+                    .map(|rows| (covered, rows));
                 let current = this
                     .kv
                     .with_entity("stream_session_index", "lookup_producer", "metadata")
@@ -389,19 +403,21 @@ impl StreamSessionIndexService {
                         continue;
                     }
                     let mut keys = Vec::new();
-                    for (page, entries) in pages.into_iter().take(needed_pages as usize).enumerate()
-                    {
-                        let entries = entries.ok_or("recovery catalogue page is missing")?;
-                        let needed = (metadata.recovery_session_count
-                            - page as u64 * RECOVERY_CATALOGUE_PAGE_SIZE)
-                            .min(RECOVERY_CATALOGUE_PAGE_SIZE);
-                        if entries.len() as u64 != needed {
-                            return Err(
-                                "recovery catalogue page does not match its coverage".into()
-                            );
-                        }
-                        keys.extend(entries);
-                    }
+                    pages
+                        .into_iter()
+                        .take(needed_pages as usize)
+                        .enumerate()
+                        .try_for_each(|(page, entries)| {
+                            let entries = entries.ok_or("recovery catalogue page is missing")?;
+                            let needed = (metadata.recovery_session_count
+                                - page as u64 * RECOVERY_CATALOGUE_PAGE_SIZE)
+                                .min(RECOVERY_CATALOGUE_PAGE_SIZE);
+                            if entries.len() as u64 != needed {
+                                return Err("recovery catalogue page does not match its coverage");
+                            }
+                            keys.extend(entries);
+                            Ok(())
+                        })?;
                     break (metadata.covered_through, keys, deleting);
                 };
                 let mut sessions = Vec::with_capacity(keys.len());
@@ -433,11 +449,12 @@ impl StreamSessionIndexService {
                     if coverage.covered_through != covered_through {
                         continue 'snapshot;
                     }
-                    for (key, value) in keys.iter().zip(values) {
+                    keys.iter().zip(values).try_for_each(|(key, value)| {
                         let mut control = value.ok_or("recovery catalogue session is missing")?;
                         control.advance_coverage(coverage.covered_through);
                         sessions.push((key.clone(), control));
-                    }
+                        Ok::<_, &str>(())
+                    })?;
                 }
                 return Ok(DurableStreamRecoveryMetadata {
                     covered_through,
@@ -566,30 +583,26 @@ impl StreamSessionIndexService {
                 .with_entity("stream_session_index", "read_consumer_journal", "metadata")
                 .get_raw(namespace.clone(), METADATA_FIELD)
                 .await?;
-            let result = match self
+            let result = self
                 .read_consumer_page_inner(&namespace, key, reader, page)
-                .await
-            {
-                Ok(row) => Ok(row),
-                Err(ProjectionError::CacheDecode) => {
-                    let horizon = self
-                        .oplog
-                        .upgrade()
-                        .ok_or("oplog service is unavailable")?
-                        .get_last_index(id, mode)
-                        .await?;
-                    self.refold_and_publish(
-                        id,
-                        mode,
-                        fingerprint,
-                        horizon,
-                        &namespace,
-                        expected.as_deref(),
-                    )
+                .await;
+            let Some(result) = cache_read_or_refold(result) else {
+                let horizon = self
+                    .oplog
+                    .upgrade()
+                    .ok_or("oplog service is unavailable")?
+                    .get_last_index(id, mode)
                     .await?;
-                    continue;
-                }
-                Err(ProjectionError::Other(error)) => Err(*error),
+                self.refold_and_publish(
+                    id,
+                    mode,
+                    fingerprint,
+                    horizon,
+                    &namespace,
+                    expected.as_deref(),
+                )
+                .await?;
+                continue;
             };
             let current = self
                 .kv
@@ -597,7 +610,9 @@ impl StreamSessionIndexService {
                 .get_raw(namespace.clone(), METADATA_FIELD)
                 .await?;
             if current == expected {
-                return result?.ok_or_else(|| "consumer journal index page is missing".into());
+                return result
+                    .map_err(|error| *error)?
+                    .ok_or_else(|| "consumer journal index page is missing".into());
             }
         }
     }
@@ -964,20 +979,22 @@ impl StreamSessionIndexService {
                 }
                 expected = Some(initial.into());
             }
-            let mut metadata = match decode::<Metadata>(expected.as_ref().unwrap()) {
-                Ok(metadata) => metadata,
-                Err(_) => {
-                    self.refold_and_publish(
-                        id,
-                        mode,
-                        fingerprint,
-                        horizon,
-                        &namespace,
-                        expected.as_deref(),
-                    )
-                    .await?;
-                    continue;
-                }
+            let decoded = decode::<Metadata>(expected.as_ref().unwrap())
+                .map_err(|_| ProjectionError::CacheDecode);
+            let Some(mut metadata) = cache_read_or_refold(decoded)
+                .transpose()
+                .map_err(|error| *error)?
+            else {
+                self.refold_and_publish(
+                    id,
+                    mode,
+                    fingerprint,
+                    horizon,
+                    &namespace,
+                    expected.as_deref(),
+                )
+                .await?;
+                continue;
             };
             if metadata.covered_through >= horizon {
                 return Ok(());
@@ -1006,26 +1023,18 @@ impl StreamSessionIndexService {
                 let rebuild = if metadata.lineage_discovered_through == OplogIndex::NONE {
                     true
                 } else if entries.keys().max().is_some_and(|index| *index >= horizon) {
-                    let mut found = false;
-                    for (_, entry) in
-                        entries.range(metadata.lineage_discovered_through.next()..=horizon)
-                    {
-                        if matches!(entry, OplogEntry::Revert { .. }) {
-                            found = true;
-                            break;
-                        }
-                        // The full loader resolves later deletions before it reads payloads.
-                        if let OplogEntry::StreamSession { record, .. } = entry
-                            && matches!(
-                                oplog.download_payload(id, mode, record.clone()).await,
-                                Ok(StreamSessionRecord::ForkCut(_)) | Err(_)
-                            )
-                        {
-                            found = true;
-                            break;
-                        }
-                    }
-                    found
+                    futures::stream::iter(
+                        entries.range(metadata.lineage_discovered_through.next()..=horizon),
+                    )
+                    .any(|(_, entry)| {
+                        entry_requires_lineage_discovery(
+                            oplog.as_ref(),
+                            id,
+                            mode,
+                            Cow::Borrowed(entry),
+                        )
+                    })
+                    .await
                 } else {
                     StreamForkLineage::suffix_contains_fork_cut(
                         oplog.as_ref(),
@@ -1459,9 +1468,9 @@ impl StreamSessionIndexService {
                 Ok::<_, ProjectionError>(fields)
             }
             .await;
-            let fields = match fields {
-                Ok(fields) => fields,
-                Err(ProjectionError::CacheDecode) => {
+            let fields = match cache_read_or_refold(fields) {
+                Some(Ok(fields)) => fields,
+                None => {
                     self.refold_and_publish(
                         id,
                         mode,
@@ -1473,7 +1482,7 @@ impl StreamSessionIndexService {
                     .await?;
                     continue;
                 }
-                Err(ProjectionError::Other(error)) => {
+                Some(Err(error)) => {
                     // Separate row reads may straddle another executor's atomic update.
                     let current = self
                         .kv

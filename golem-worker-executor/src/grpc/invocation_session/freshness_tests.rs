@@ -819,9 +819,24 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
     }
     let fork_attempt = build(&fork);
     assert_ne!(original, fork_attempt);
-    assert!(same_origin_stream_invocation(&original, &fork_attempt));
-    assert!(same_origin_stream_invocation(&fork_attempt, &original));
-    assert!(same_origin_stream_invocation(&original, &original));
+    assert_eq!(
+        same_origin_stream_invocation(&original, &fork_attempt),
+        Ok(true)
+    );
+    assert_eq!(
+        same_origin_stream_invocation(&fork_attempt, &original),
+        Ok(true)
+    );
+    assert_eq!(
+        same_origin_stream_invocation(&original, &original),
+        Ok(true)
+    );
+    let mut unreadable = original.clone();
+    unreadable.invocation.execution_config = vec![99];
+    assert_eq!(
+        same_origin_stream_invocation(&unreadable, &fork_attempt),
+        Err(golem_common::serialization::DecodeError::UnknownVersion(99))
+    );
     for change in 0..4 {
         let mut changed = fork.clone();
         let AuthCtx::Agent(mut authority) = authority_for(fork_agent_id) else {
@@ -846,8 +861,9 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
             _ => unreachable!(),
         }
         changed.auth_ctx = Some(AuthCtx::Agent(authority).into());
-        assert!(
-            !same_origin_stream_invocation(&original, &build(&changed)),
+        assert_eq!(
+            same_origin_stream_invocation(&original, &build(&changed)),
+            Ok(false),
             "changed authority field {change}"
         );
     }
@@ -879,8 +895,9 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
             }
             _ => unreachable!(),
         }
-        assert!(
-            !same_origin_stream_invocation(&original, &build(&changed)),
+        assert_eq!(
+            same_origin_stream_invocation(&original, &build(&changed)),
+            Ok(false),
             "changed execution field {change}"
         );
     }
@@ -901,8 +918,9 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
             }
             _ => unreachable!(),
         }
-        assert!(
-            !same_origin_stream_invocation(&original, &changed),
+        assert_eq!(
+            same_origin_stream_invocation(&original, &changed),
+            Ok(false),
             "changed descriptor field {change}"
         );
     }

@@ -507,7 +507,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         };
         let mut origins = self.external_invocation_origins.write().await;
         let keys_to_fail = invocation_keys_to_fail(&status, None, true);
-        // A later lookup of a failed key must return the error its waiters received.
+        // Read failures explain why this generation stopped, not how its pending invocations
+        // ended. Tell their waiters without manufacturing a result that blocks later pickup.
+        let observer_only = lost_shard
+            || matches!(
+                error,
+                WorkerExecutorError::OplogFailed { .. }
+                    | WorkerExecutorError::RecoveryRequired { .. }
+            );
         let (cached_error, cached_stderr) = match &error {
             WorkerExecutorError::InvocationFailed { error, stderr } => {
                 (error.clone(), stderr.clone())
@@ -523,7 +530,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             if invocation_results.is_complete(idempotency_key, &status) {
                 continue;
             }
-            if lost_shard {
+            if observer_only {
                 self.publish_completion(idempotency_key, Err(error.clone()));
                 origins.remove(idempotency_key);
                 continue;

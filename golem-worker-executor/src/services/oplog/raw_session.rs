@@ -12,11 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::durable_host::durable_stream::SessionError;
+use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
 use crate::services::stream_session_index::StreamSessionIndexService;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{StreamInvocationId, StreamSessionRecord};
 use golem_common::model::oplog::{OplogEntry, OplogIndex, OplogPayload};
-use golem_common::model::{AgentFingerprint, DurableStreamSessionStatus, OwnedAgentId};
+use golem_common::model::{AgentFingerprint, AgentId, DurableStreamSessionStatus, OwnedAgentId};
 use std::borrow::Cow;
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
@@ -27,16 +29,17 @@ use std::sync::Arc;
 pub(super) struct RawSessionCache {
     entries: HashMap<StreamInvocationId, (Option<DurableStreamSessionStatus>, u64)>,
     clock: u64,
-    payload_error: Option<String>,
+    payload_error: Option<Box<OplogReadError>>,
 }
 
 impl RawSessionCache {
     pub fn cached(
         &mut self,
+        agent_id: &AgentId,
         key: &StreamInvocationId,
-    ) -> Result<Option<Option<DurableStreamSessionStatus>>, String> {
-        if let Some(error) = &self.payload_error {
-            return Err(error.clone());
+    ) -> Result<Option<Option<DurableStreamSessionStatus>>, SessionError> {
+        if let Some(error) = self.payload_error.as_deref() {
+            return Err(UnreadableOplog::new(agent_id, error.clone()).into());
         }
         self.clock += 1;
         Ok(self.entries.get_mut(key).map(|(status, accessed)| {
@@ -53,15 +56,14 @@ impl RawSessionCache {
         committed: OplogIndex,
         buffer: &VecDeque<OplogEntry>,
         key: &StreamInvocationId,
-    ) -> Result<Option<DurableStreamSessionStatus>, String> {
+    ) -> Result<Option<DurableStreamSessionStatus>, SessionError> {
         if key.callee_environment_id != id.environment_id || key.callee != id.agent_id {
             return Ok(None);
         }
-        let service = service.ok_or_else(|| "stream session index is not installed".to_string())?;
+        let service = service.ok_or("stream session index is not installed")?;
         let mut status = service
             .lookup_persisted(id, mode, fingerprint, committed, &key.idempotency_key)
-            .await
-            .map_err(|error| error.to_string())?;
+            .await?;
         for (offset, entry) in buffer.iter().enumerate() {
             let index = OplogIndex::from_u64(committed.as_u64() + offset as u64 + 1);
             if let OplogEntry::PendingAgentInvocation {
@@ -81,7 +83,8 @@ impl RawSessionCache {
                 }
                 continue;
             }
-            if let Some(record) = record(entry)?
+            if let Some(record) =
+                record(index, entry).map_err(|error| UnreadableOplog::new(&id.agent_id, error))?
                 && (matches!(record.as_ref(), StreamSessionRecord::ForkCut(_))
                     || record
                         .local_session_key()
@@ -128,11 +131,11 @@ impl RawSessionCache {
             }
             return;
         }
-        let record = match record(entry) {
+        let record = match record(index, entry) {
             Ok(Some(record)) => record,
             Ok(None) => return,
             Err(error) => {
-                self.payload_error = Some(error);
+                self.payload_error = Some(Box::new(error));
                 self.entries.clear();
                 return;
             }
@@ -172,10 +175,14 @@ fn apply(
     }
 }
 
-fn record(entry: &OplogEntry) -> Result<Option<Cow<'_, StreamSessionRecord>>, String> {
+fn record(
+    index: OplogIndex,
+    entry: &OplogEntry,
+) -> Result<Option<Cow<'_, StreamSessionRecord>>, OplogReadError> {
     let OplogEntry::StreamSession { record, .. } = entry else {
         return Ok(None);
     };
+    let source = OplogReadSource::Other("stream session buffer");
     Ok(Some(match record {
         OplogPayload::Inline(record) => Cow::Borrowed(record.as_ref()),
         OplogPayload::SerializedInline {
@@ -189,11 +196,19 @@ fn record(entry: &OplogEntry) -> Result<Option<Cow<'_, StreamSessionRecord>>, St
         OplogPayload::SerializedInline {
             bytes,
             cached: None,
-        } => Cow::Owned(
-            golem_common::serialization::decode(bytes).map_err(|error| error.to_string())?,
-        ),
+        } => Cow::Owned(golem_common::serialization::decode(bytes).map_err(|error| {
+            OplogReadError::corruption(
+                source,
+                format!("cannot decode stream session record at oplog index {index}: {error}"),
+            )
+        })?),
         OplogPayload::External { cached: None, .. } => {
-            return Err("uncached external stream session record cannot be folded".into());
+            return Err(OplogReadError::corruption(
+                source,
+                format!(
+                    "uncached external stream session record at oplog index {index} cannot be folded"
+                ),
+            ));
         }
     }))
 }

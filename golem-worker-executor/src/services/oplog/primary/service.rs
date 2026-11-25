@@ -208,24 +208,26 @@ impl PrimaryOplogService {
         retry_config: &RetryConfig,
     ) -> Result<OplogIndex, String> {
         let key = Self::oplog_key(owned_agent_id);
-        let ns_owner = owned_agent_id.clone();
-        Ok(OplogIndex::from_u64(
-            retry_storage_op_result(retry_config, "get_last_index", &key, || {
-                let ns = IndexedStorageNamespace::OpLog {
-                    owned_agent_id: ns_owner.clone(),
-                    agent_mode,
-                };
-                let key = key.clone();
-                async move {
-                    indexed_storage
-                        .with_entity("oplog", "get_last_index", "entry")
-                        .last_id(ns, &key)
-                        .await
-                }
-            })
-            .await?
-            .unwrap_or_default(),
-        ))
+        retry_storage_op_result(retry_config, "get_last_index", &key, || {
+            Self::read_last_index(
+                indexed_storage,
+                Self::namespace(owned_agent_id, agent_mode),
+                &key,
+            )
+        })
+        .await
+    }
+
+    async fn read_last_index(
+        indexed_storage: &(dyn IndexedStorage + Send + Sync),
+        namespace: IndexedStorageNamespace,
+        key: &str,
+    ) -> Result<OplogIndex, IndexedStorageError> {
+        let last_id = indexed_storage
+            .with_entity("oplog", "get_last_index", "entry")
+            .last_id(namespace, key)
+            .await?;
+        Ok(OplogIndex::from_u64(last_id.unwrap_or_default()))
     }
 
     /// The agents of the storage keys that a scan of the environment returned. A key that is no
@@ -624,13 +626,16 @@ impl OplogService for PrimaryOplogService {
         agent_mode: AgentMode,
     ) -> Result<OplogIndex, UnreadableOplog> {
         record_oplog_call("get_last_index");
-        Ok(Self::get_last_index_from_storage(
-            &*self.indexed_storage,
-            owned_agent_id,
-            agent_mode,
-            &self.retry_config,
-        )
-        .await)
+        let key = Self::oplog_key(owned_agent_id);
+        retry_maintenance_storage_op(&self.retry_config, "get_last_index", &key, || {
+            Self::read_last_index(
+                self.indexed_storage.as_ref(),
+                Self::namespace(owned_agent_id, agent_mode),
+                &key,
+            )
+        })
+        .await
+        .map_err(|error| UnreadableOplog::new(&owned_agent_id.agent_id, primary_read_error(error)))
     }
 
     async fn try_get_last_index(

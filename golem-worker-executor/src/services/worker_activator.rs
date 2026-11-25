@@ -587,9 +587,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         };
         match delivery {
             ExactExistingDelivery::WakeInvocation(key) => {
-                // A deletion that failed after stopping the state actor leaves the generation
-                // cached. The wake then fails and stays scheduled.
-                let status = worker.try_get_last_known_status().await?;
+                // A stopped actor or a detached projection that still cannot be repaired
+                // cannot prove that the scheduled work is no longer pending.
+                let status = worker.try_get_repaired_status().await?;
                 let now = golem_common::model::Timestamp::now_utc();
                 let pending = status.pending_invocations.iter().find(|pending| {
                     pending.has_idempotency_key(&key) && pending.not_before.is_some()

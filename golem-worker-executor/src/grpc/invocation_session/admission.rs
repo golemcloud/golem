@@ -109,7 +109,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     worker
                         .deleted_incarnation_as_not_found(expected_fingerprint, bound)
                         .await?;
-                    match worker.lookup_invocation_result(&ik).await {
+                    match worker.lookup_invocation_result(&ik).await? {
                         crate::model::LookupResult::Complete(Ok(mut output)) => {
                             publish_acceptance(
                                 acceptance_committed,
@@ -234,7 +234,16 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 let observable =
                                     match worker.try_lookup_invocation_result(&ik).await {
                                         Ok(crate::model::LookupResult::Complete(Ok(_))) => true,
-                                        Ok(crate::model::LookupResult::New) | Err(_) => false,
+                                        Ok(crate::model::LookupResult::New)
+                                        | Err(WorkerExecutorError::Runtime { .. }) => false,
+                                        Err(lookup_error) => {
+                                            return worker
+                                                .deleted_incarnation_as_not_found(
+                                                    expected_fingerprint,
+                                                    Err(lookup_error),
+                                                )
+                                                .await;
+                                        }
                                         Ok(_) => request.origin_invocation.is_some(),
                                     };
                                 if !observable {
@@ -274,48 +283,50 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     caller,
                     scope_card,
                 };
-                let retained_origin = if request.allow_streams
-                    && request.origin_invocation.is_some()
-                {
-                    let producer = worker.durable_stream_producer().await?;
-                    let key = producer.qualify_session(
-                        &golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
-                            ik,
-                        ),
-                    );
-                    if worker.prepared_stream_session(&ik).await?.is_none()
-                        && let Some(attached) = worker
-                        .stream_session_records(&key, None)
-                        .await?
-                        .into_iter()
-                        .find_map(|record| {
-                            if let golem_common::model::durable_stream::StreamSessionRecord::Attached(record) = record { Some(record) } else { None }
-                        })
-                    {
-                        let requested = super::request::capture_session_acceptance(request,
-                            self.services.config().limits.live_stream_event_broadcast_capacity.get())?;
-                        let original = worker.accepted_invocation_payload(&ik).await?
-                            .ok_or_else(|| WorkerExecutorError::runtime("stream attachment has no retained request"))?;
-                        if !crate::worker::same_origin_queued_request(&original, &invocation.clone().into_parts().1, &attached.acceptance, &requested) {
-                            return Err(WorkerExecutorError::invalid_request("IdempotencyConflict: queued observer differs from the retained origin request"));
+                let retained_origin =
+                    if request.allow_streams && request.origin_invocation.is_some() {
+                        if let Some((attached, streams)) = worker
+                            .retained_queued_stream_observer(&invocation, || {
+                                super::request::capture_session_acceptance(
+                                    request,
+                                    self.services
+                                        .config()
+                                        .limits
+                                        .live_stream_event_broadcast_capacity
+                                        .get(),
+                                )
+                            })
+                            .await?
+                        {
+                            let _ = acceptance_committed.send(());
+                            accepted
+                                .send(AcceptedInvocation {
+                                    agent_id: final_agent_id,
+                                    idempotency_key: ik,
+                                    component_revision: None,
+                                    durable_streams: Some(streams),
+                                    prepared: None,
+                                    durable_replayed: true,
+                                    joined_origin_observer: true,
+                                    queued: Some((
+                                        attached,
+                                        Box::pin(worker.clone().wait_method_session_ready(ik)),
+                                    )),
+                                })
+                                .map_err(|_| {
+                                    WorkerExecutorError::runtime(
+                                        "invocation session ended before observer acceptance",
+                                    )
+                                })?;
+                            let mut output = worker.await_enqueued_invocation(ik).await?;
+                            output.agent_id = Some(final_agent_id);
+                            output.idempotency_key = Some(ik);
+                            return Ok(output);
                         }
-                        let streams = worker.queued_method_session(ik, attached.epoch, attached.attempt_id).await?;
-                        let _ = acceptance_committed.send(());
-                        accepted.send(AcceptedInvocation {
-                            agent_id: final_agent_id, idempotency_key: ik,
-                            component_revision: None, durable_streams: Some(streams), prepared: None,
-                            durable_replayed: true, joined_origin_observer: true,
-                            queued: Some((attached, Box::pin(worker.clone().wait_method_session_ready(ik)))),
-                        }).map_err(|_| WorkerExecutorError::runtime("invocation session ended before observer acceptance"))?;
-                        let mut output = worker.await_enqueued_invocation(ik).await?;
-                        output.agent_id = Some(final_agent_id);
-                        output.idempotency_key = Some(ik);
-                        return Ok(output);
-                    }
-                    worker.prepared_stream_session(&ik).await?
-                } else {
-                    None
-                };
+                        worker.prepared_stream_session(&ik).await?
+                    } else {
+                        None
+                    };
                 if request.allow_streams
                     && request.origin_invocation.is_some()
                     && let Some(prepared) = retained_origin
@@ -431,22 +442,27 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         Some(attached.clone()),
                     );
                     tokio::pin!(invocation);
+                    use crate::worker::read_only_cache::AdmissionSignal;
                     let completed = tokio::select! {
                         biased;
-                        signal = &mut admission_rx => {
-                            if let Ok(crate::worker::read_only_cache::AdmissionSignal::Failure(error)) = signal { return Err(error); }
-                            None
+                        signal = &mut admission_rx => match signal {
+                            Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate) => None,
+                            Ok(AdmissionSignal::Failure(error)) => return Err(error),
+                            Ok(AdmissionSignal::Waiting) => unreachable!("waiting admission is never published"),
+                            Err(_) => return Err(invocation.await.err().unwrap_or_else(|| {
+                                WorkerExecutorError::runtime("streaming invocation completed without an admission signal")
+                            })),
                         },
                         result = &mut invocation => {
-                            if result.is_err() && !matches!(admission_rx.try_recv(), Ok(crate::worker::read_only_cache::AdmissionSignal::Queued | crate::worker::read_only_cache::AdmissionSignal::Immediate)) {
-                                return result;
+                            if !matches!(admission_rx.try_recv(), Ok(AdmissionSignal::Queued | AdmissionSignal::Immediate)) {
+                                result?;
+                                return Err(WorkerExecutorError::runtime("streaming invocation completed without an admission signal"));
                             }
                             Some(result)
                         },
                     };
-                    let retained = worker.stream_session_records(&session_key, None).await?
-                        .into_iter().find_map(|record| if let golem_common::model::durable_stream::StreamSessionRecord::Attached(record) = record { Some(record) } else { None });
-                    let (streams, queued) = if let Some(retained) = retained {
+                    let retained = worker.retained_stream_attachment(&session_key).await?;
+                    let (streams, queued) = if let Some((_, retained)) = retained {
                         if retained.acceptance != attached.acceptance
                             || retained.attempt_id != attempt_id
                         {

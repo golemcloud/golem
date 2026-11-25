@@ -89,7 +89,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn try_get_last_known_status(
         &self,
     ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
-        match self.state_actor.try_status().await {
+        self.resolve_status_read(self.state_actor.try_status().await)
+            .await
+    }
+    /// Reads repaired status even when deletion can stop the actor during the read.
+    pub(crate) async fn try_get_repaired_status(
+        &self,
+    ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        let status = self
+            .state_actor
+            .observe_repaired_status()
+            .await
+            .and_then(|status| {
+                status.ok_or_else(|| WorkerExecutorError::runtime("Worker status actor stopped"))
+            });
+        self.resolve_status_read(status).await
+    }
+    async fn resolve_status_read(
+        &self,
+        status: Result<Arc<AgentStatusRecord>, WorkerExecutorError>,
+    ) -> Result<Arc<AgentStatusRecord>, WorkerExecutorError> {
+        match status {
             Err(_) if self.retired_for_lost_shard() => Err(self.retirement_error()),
             Err(_) if self.deletion_owns_retirement().await => Err(
                 WorkerExecutorError::invalid_request("Worker is being deleted"),

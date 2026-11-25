@@ -40,6 +40,8 @@ use test_r::{define_matrix_dimension, inherit_test_dep, test, test_dep};
 use url::Url;
 use uuid::Uuid;
 
+mod read_cancellation;
+
 type OpenIndexedStorage =
     Box<dyn Fn() -> BoxFuture<'static, Arc<dyn IndexedStorage + Send + Sync>> + Send + Sync>;
 

@@ -1518,6 +1518,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 region_end.next(),
                 OplogEntry::revert(dropped_region.clone()),
             );
+            let prospective_deleted = crate::worker::status::deleted_regions(
+                last_known_status.deleted_regions.clone(),
+                &prospective_entries,
+            );
             let retained_status = AgentStatusRecord {
                 invocation_results: self.config().invocation_results.membership(),
                 ..Default::default()
@@ -1527,7 +1531,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 self,
                 &self.owned_agent_id,
                 self.agent_mode(),
-                &last_known_status.deleted_regions,
+                &prospective_deleted,
                 &mut prospective_entries,
             )
             .await?;
@@ -1536,7 +1540,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 &self.owned_agent_id,
                 self.agent_mode(),
                 &retained_status,
-                &last_known_status.deleted_regions,
+                &prospective_deleted,
                 &mut prospective_entries,
             )
             .await?;

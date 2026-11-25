@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use crate::proto::golem::worker::input_stream_item::Payload;
+use crate::proto::golem::worker::v1::worker_execution_error;
 use crate::proto::golem::worker::{
     AgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey, InputStreamAck,
     InputStreamItem, InvocationAccepted, InvocationFailureKind, InvocationRejectionReason,
@@ -29,6 +30,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 
 type StreamBinding = (u64, (u64, u64));
 const MAX_PACKED_U8_STREAM_ITEM_SIZE: usize = 1024 * 1024;
+
+/// A permanent oplog read failure ends observation without requiring stream terminals.
+pub const OPLOG_UNREADABLE_FAILURE_CODE: &str = "oplog-unreadable";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionPhase {
@@ -1595,7 +1599,7 @@ impl InvocationSessionState {
     }
 
     fn finish(&mut self, finished: &InvocationSessionCompletion) -> Result<(), String> {
-        match finished.outcome.as_ref() {
+        let oplog_unreadable = match finished.outcome.as_ref() {
             Some(invocation_session_completion::Outcome::Success(_)) if !self.has_result => {
                 return Err(
                     "invocation completed successfully before publishing a result".to_string(),
@@ -1612,11 +1616,26 @@ impl InvocationSessionState {
                         "worker execution details require an execution failure kind".to_string()
                     );
                 }
+                let oplog_unreadable = failure.code == OPLOG_UNREADABLE_FAILURE_CODE;
+                if oplog_unreadable
+                    && !matches!(
+                        failure
+                            .worker_error
+                            .as_ref()
+                            .and_then(|error| error.error.as_ref()),
+                        Some(worker_execution_error::Error::RuntimeError(_))
+                    )
+                {
+                    return Err(
+                        "an unreadable oplog failure requires worker execution details".into(),
+                    );
+                }
+                oplog_unreadable
             }
-            Some(invocation_session_completion::Outcome::Success(_)) => {}
+            Some(invocation_session_completion::Outcome::Success(_)) => false,
             None => return Err("invocation completion has no outcome".to_string()),
-        }
-        if self.joined_origin_observer || self.queued_acceptance.is_some() {
+        };
+        if oplog_unreadable || self.joined_origin_observer || self.queued_acceptance.is_some() {
             self.phase = SessionPhase::Complete;
             return Ok(());
         }
@@ -4645,6 +4664,88 @@ mod tests {
         state
             .validate_response(&failure(InvocationFailureKind::Execution))
             .unwrap();
+    }
+
+    #[test]
+    fn an_unreadable_oplog_can_end_an_attachment_with_open_streams() {
+        use crate::proto::golem::worker::v1::{RuntimeError, WorkerExecutionError};
+
+        let failure_frame = |code: &str, kind: InvocationFailureKind, worker_error| {
+            response(invocation_response::Response::Finished(
+                InvocationSessionCompletion {
+                    outcome: Some(invocation_session_completion::Outcome::Failure(
+                        InvocationFailure {
+                            kind: kind as i32,
+                            code: code.to_string(),
+                            message: "unknown serialization version at oplog entry".to_string(),
+                            worker_error,
+                        },
+                    )),
+                },
+            ))
+        };
+        let start = (public_start(stream(7)), accepted_with_inputs(&[7]));
+        let resume = (
+            resume_attach(Vec::new()),
+            resumed_acceptance(vec![mapping(8, StreamMappingRole::Output)]),
+        );
+        [(start, true), (resume, false)].into_iter().for_each(
+            |((request, acceptance), pending_input_ack)| {
+                let mut state = InvocationSessionState::default();
+                state.validate_public_request(&request).unwrap();
+                state.validate_response(&acceptance).unwrap();
+                if pending_input_ack {
+                    state
+                        .validate_trusted_request(&trusted_request(
+                            invocation_request::Request::StreamEnd(input_end(7, 0)),
+                        ))
+                        .unwrap();
+                    assert!(state.all_inputs_terminal());
+                }
+                state.validate_response(&result(scalar(1))).unwrap();
+                assert!(state.validate_response(&success()).is_err());
+
+                let worker_error = Some(WorkerExecutionError {
+                    error: Some(worker_execution_error::Error::RuntimeError(RuntimeError {
+                        details: "oplog entry 43 has unknown serialization version 255".to_string(),
+                    })),
+                });
+                [
+                    failure_frame(
+                        "worker-execution",
+                        InvocationFailureKind::Execution,
+                        worker_error.clone(),
+                    ),
+                    failure_frame(
+                        OPLOG_UNREADABLE_FAILURE_CODE,
+                        InvocationFailureKind::Protocol,
+                        worker_error.clone(),
+                    ),
+                    failure_frame(
+                        OPLOG_UNREADABLE_FAILURE_CODE,
+                        InvocationFailureKind::Execution,
+                        Some(WorkerExecutionError::default()),
+                    ),
+                    failure_frame(
+                        OPLOG_UNREADABLE_FAILURE_CODE,
+                        InvocationFailureKind::Execution,
+                        None,
+                    ),
+                ]
+                .into_iter()
+                .for_each(|response| assert!(state.validate_response(&response).is_err()));
+
+                state
+                    .validate_response(&failure_frame(
+                        OPLOG_UNREADABLE_FAILURE_CODE,
+                        InvocationFailureKind::Execution,
+                        worker_error,
+                    ))
+                    .unwrap();
+                assert!(state.is_complete());
+                assert!(state.validate_response(&success()).is_err());
+            },
+        );
     }
 
     fn round_trip<M>(message: M)

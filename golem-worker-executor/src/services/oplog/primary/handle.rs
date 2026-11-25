@@ -309,7 +309,7 @@ impl PrimaryOplog {
                     OplogJob::RawDurableStreamSessionStatus { session_key, done } => {
                         let cached = state
                             .durable_stream_sessions
-                            .cached(&session_key)
+                            .cached(&state.owned_agent_id.agent_id, &session_key)
                             .transpose();
                         let _ = done.send(RawSessionLookup {
                             watermark: state.last_oplog_idx,

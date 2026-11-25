@@ -46,8 +46,8 @@
 //!   its caller, but the status task never acquires those locks itself.
 //!
 //! The status task is also the **only writer** of the worker's published status
-//! (`last_known_status`, an `ArcSwap`) and its `detached` flag; every other component reads them
-//! lock-free.
+//! (`last_known_status`, an `ArcSwap`). It owns the attachment phase and publishes it through
+//! the shared detached flag. Every other component reads these publications lock-free.
 
 use super::owner_wallet::{CardEventBoundary, OwnerWallet, WalletCommit, WalletPublicationFailure};
 use super::status::{
@@ -60,7 +60,9 @@ use super::{
 };
 use crate::services::agent_filesystem_snapshots::ConfirmOutcome;
 use crate::services::linear_memory::LinearMemoryTracker;
-use crate::services::oplog::{CommitLevel, Oplog, OplogError, OplogFence, OplogRefusal};
+use crate::services::oplog::{
+    CommitLevel, Oplog, OplogError, OplogFence, OplogRefusal, UnreadableOplog,
+};
 use crate::services::{
     All, HasActiveAgents, HasConfig, HasSchedulerService, HasShardService, HasWorkerService,
 };
@@ -173,12 +175,13 @@ pub(crate) struct OwnerCommitController {
     owned_agent_id: OwnedAgentId,
 }
 
-/// Who hears that a commit landed, ahead of the fold behind it.
+/// The storage or ordered-handoff milestone, answered before the status fold.
 pub enum CommitReceipt {
-    /// Signalled on a commit and dropped on a refusal, which its waiter reads as "nothing was
-    /// committed".
+    /// Signalled when storage or handoff succeeds, also when report collection fails.
+    /// Dropped when storage refuses the commit.
     Plain(oneshot::Sender<()>),
-    /// Answered either way, so a refusal reaches the waiter as the refusal itself.
+    /// Answers storage or handoff success, or its typed refusal. A report or rebuild failure
+    /// is returned by the full transaction instead.
     Refusable(oneshot::Sender<Result<(), OplogRefusal>>),
 }
 
@@ -199,6 +202,12 @@ impl CommitReceipt {
             let _ = receipt.send(Err(refusal.clone()));
         }
     }
+}
+
+pub(super) enum InvocationAppendOutcome {
+    Retry,
+    Stored(OplogIndex),
+    StoredButUnreadable(UnreadableOplog),
 }
 
 /// A request processed by the status task, which exclusively owns the commit + status-fold
@@ -232,12 +241,12 @@ enum StatusJob {
     },
     AppendInvocationIfVersion {
         entry: Box<OplogEntry>,
-        attachment: Option<golem_common::model::durable_stream::StreamSessionAttachedRecord>,
+        attachment: Option<Box<golem_common::model::durable_stream::StreamSessionAttachedRecord>>,
         idempotency_key: InvocationId,
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
-        done: oneshot::Sender<Result<bool, WorkerExecutorError>>,
+        done: oneshot::Sender<Result<InvocationAppendOutcome, WorkerExecutorError>>,
     },
     /// Folds the entries that the oplog committed by itself, on its commit threshold, into the
     /// published status. Commits nothing. The oplog queues it through its auto-commit listener.
@@ -316,6 +325,55 @@ enum LifecycleJob<Ctx: WorkerCtx> {
     },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AttachmentPhase {
+    Attached,
+    Detached,
+}
+
+enum AttachmentEvent {
+    ProjectionUnusable,
+    FoldReady,
+    StatusPublished,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum AttachmentEffect {
+    None,
+    DetachAndInvalidate,
+    PublishIncremental,
+    PublishReplacement,
+    ReattachAndFlush,
+}
+
+/// Gives the attachment phase and effects after an observed projection event.
+fn attachment_transition(
+    phase: AttachmentPhase,
+    event: AttachmentEvent,
+) -> (AttachmentPhase, AttachmentEffect) {
+    match (phase, event) {
+        (_, AttachmentEvent::ProjectionUnusable) => (
+            AttachmentPhase::Detached,
+            AttachmentEffect::DetachAndInvalidate,
+        ),
+        (AttachmentPhase::Attached, AttachmentEvent::FoldReady) => (
+            AttachmentPhase::Attached,
+            AttachmentEffect::PublishIncremental,
+        ),
+        (AttachmentPhase::Detached, AttachmentEvent::FoldReady) => (
+            AttachmentPhase::Detached,
+            AttachmentEffect::PublishReplacement,
+        ),
+        (AttachmentPhase::Attached, AttachmentEvent::StatusPublished) => {
+            (AttachmentPhase::Attached, AttachmentEffect::None)
+        }
+        (AttachmentPhase::Detached, AttachmentEvent::StatusPublished) => (
+            AttachmentPhase::Attached,
+            AttachmentEffect::ReattachAndFlush,
+        ),
+    }
+}
+
 /// The state exclusively owned by the status task.
 struct StatusState<Ctx: WorkerCtx> {
     deps: All<Ctx>,
@@ -330,9 +388,9 @@ struct StatusState<Ctx: WorkerCtx> {
     /// Last committed prefix preceding the current invocation. Retained in memory only; repair
     /// validates it through the same Jump/Revert checks as persisted checkpoint baselines.
     invocation_start_status: arc_swap::ArcSwapOption<AgentStatusRecord>,
-    /// Whether the published status is detached from the oplog (no longer incrementally
-    /// foldable). Written only by this task; read lock-free elsewhere.
-    detached: Arc<AtomicBool>,
+    attachment_phase: AttachmentPhase,
+    /// The attachment phase published to lock-free readers. Internal decisions use the phase.
+    published_detached: Arc<AtomicBool>,
     metrics_status: Arc<WorkerStatusMetric>,
     status_flusher: Arc<AgentStatusFlusher>,
     /// Monotonically publishes committed authority changes after the matching
@@ -412,7 +470,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             })
         };
         oplog.set_auto_commit_listener(Arc::downgrade(&auto_commit_listener));
-        let state = StatusState {
+        let mut state = StatusState {
             deps,
             owned_agent_id: owned_agent_id.clone(),
             fingerprint,
@@ -421,7 +479,8 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             oplog,
             last_known_status,
             invocation_start_status: arc_swap::ArcSwapOption::empty(),
-            detached,
+            attachment_phase: AttachmentPhase::Attached,
+            published_detached: detached,
             metrics_status,
             status_flusher: status_flusher.clone(),
             published_authority_generation,
@@ -533,7 +592,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                             async {
                                 // A detached status is not a fold of the oplog, so the key is
                                 // checked only against a repaired one.
-                                if state.detached.load(Ordering::Acquire) {
+                                if state.attachment_phase == AttachmentPhase::Detached {
                                     state
                                         .commit_and_update_state(CommitLevel::Always, None)
                                         .await?;
@@ -545,7 +604,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     expected_result_generation,
                                     expected_revert_generation,
                                 ) {
-                                    return Ok(false);
+                                    return Ok(InvocationAppendOutcome::Retry);
                                 }
                                 // Acquiring the worker does not reserve admission: its constructor
                                 // may have failed since acquisition. Check health in this serialized
@@ -558,38 +617,37 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 )
                                 .await?;
                                 drop(status);
-                                // Returned rather than reported as a moved version: the caller
-                                // retries on `false`, and a fenced oplog refuses every retry.
-                                let appended = if let Some(mut attachment) = attachment {
+                                let appended = if let Some(attachment) = attachment {
+                                    let mut attachment = *attachment;
                                     state.oplog.add_pair(*entry, Box::new(move |index| {
                                         attachment.pending_invocation_oplog_index = index;
                                         let record = golem_common::model::durable_stream::StreamSessionRecord::Attached(attachment);
                                         let summary = DurableStreamEventSummary::session(&record);
                                         OplogEntry::stream_session(None, golem_common::model::oplog::OplogPayload::Inline(Box::new(record)), summary)
-                                    })).await.map(|_| ())
+                                    })).await.map(|(pending_index, _)| pending_index)
                                 } else {
-                                    state.oplog.add(*entry).await.map(|_| ())
+                                    state.oplog.add(*entry).await
                                 };
-                                if let Err(error) = appended {
-                                    if let OplogError::Fenced(fence) = &error {
+                                let index = appended.inspect_err(|error| {
+                                    if let OplogError::Fenced(fence) = error {
                                         state.retire_fenced_agent(fence.clone());
                                     }
-                                    return Err(error.into());
-                                }
-                                // The entry is only buffered until this commit, which is where a
-                                // takeover is found. The key has not reached the status, so nothing
-                                // that fails pending invocations can answer its caller: the enqueue
-                                // itself has to be refused.
-                                if let Err(refusal) = state
+                                })?;
+                                // This commit establishes storage even if its report or fold fails.
+                                let outcome = match state
                                     .commit_and_update_state(CommitLevel::Always, None)
                                     .await
                                 {
-                                    return Err(refusal.into());
-                                }
+                                    Ok(_) => InvocationAppendOutcome::Stored(index),
+                                    Err(OplogRefusal::Unreadable(unreadable)) => {
+                                        InvocationAppendOutcome::StoredButUnreadable(unreadable)
+                                    }
+                                    Err(refusal) => return Err(refusal.into()),
+                                };
                                 if let WorkerInstance::Running(running) = instance_guard.state() {
                                     running.sender.send(WorkerCommand::WorkAvailable).unwrap();
                                 }
-                                Ok(true)
+                                Ok(outcome)
                             },
                             done,
                         )
@@ -624,7 +682,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     StatusJob::RepairedStatus { done } => {
                         complete_status_job(
                             async {
-                                if state.detached.load(Ordering::Acquire)
+                                if state.attachment_phase == AttachmentPhase::Detached
                                     && state
                                         .commit_and_update_state(CommitLevel::Always, None)
                                         .await?
@@ -915,7 +973,9 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         }
     }
 
-    pub async fn append_invocation_if_version(
+    /// Reports a stored invocation with an unreadable status only if this job appended it.
+    /// A failed repair before the append remains an error.
+    pub(super) async fn append_invocation_if_version(
         &self,
         entry: OplogEntry,
         attachment: Option<golem_common::model::durable_stream::StreamSessionAttachedRecord>,
@@ -923,11 +983,11 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         expected_result_generation: u64,
         expected_revert_generation: u64,
         instance_guard: OwnedMutexGuard<WorkerLifecycle>,
-    ) -> Result<bool, WorkerExecutorError> {
+    ) -> Result<InvocationAppendOutcome, WorkerExecutorError> {
         self.commit
             .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
                 entry: Box::new(entry),
-                attachment,
+                attachment: attachment.map(Box::new),
                 idempotency_key,
                 expected_result_generation,
                 expected_revert_generation,
@@ -1278,9 +1338,9 @@ pub(super) fn reconstructed_status(
     }
 }
 
-/// Settles a commit of the status task: answers the receipt, and gives the committed entries or
-/// the refusal. A refused commit committed nothing, and the oplog refuses every later write. Any
-/// other write error is fail-stop.
+/// Answers the storage or ordered-handoff receipt and returns the report or typed failure.
+/// An unreadable report follows the successful storage milestone. Fenced and ArchiveWrite
+/// refuse that milestone and latch later writes. Other write errors are fail-stop.
 fn settle_commit(
     result: Result<BTreeMap<OplogIndex, OplogEntry>, OplogError>,
     committed: Option<CommitReceipt>,
@@ -1295,7 +1355,10 @@ fn settle_commit(
         Err(error) => match error.into_refusal() {
             Ok(refusal) => {
                 if let Some(committed) = committed {
-                    committed.refused(&refusal);
+                    match &refusal {
+                        OplogRefusal::Unreadable(_) => committed.committed(),
+                        _ => committed.refused(&refusal),
+                    }
                 }
                 Err(refusal)
             }
@@ -1310,6 +1373,27 @@ async fn complete_status_job<R>(transaction: impl Future<Output = R>, done: ones
 }
 
 impl<Ctx: WorkerCtx> StatusState<Ctx> {
+    async fn apply_attachment_event(&mut self, event: AttachmentEvent) -> AttachmentEffect {
+        let (phase, effect) = attachment_transition(self.attachment_phase, event);
+        self.attachment_phase = phase;
+        match effect {
+            AttachmentEffect::DetachAndInvalidate => {
+                self.published_detached.store(true, Ordering::Release);
+                self.status_flusher.invalidate_baseline().await;
+            }
+            AttachmentEffect::ReattachAndFlush => {
+                self.published_detached.store(false, Ordering::Release);
+                if let Err(error) = self.status_flusher.flush(FlushReason::Forced).await {
+                    debug!(agent_id = %self.owned_agent_id, %error, "Reconstructed status cache flush failed; background flusher will retry");
+                }
+            }
+            AttachmentEffect::None
+            | AttachmentEffect::PublishIncremental
+            | AttachmentEffect::PublishReplacement => {}
+        }
+        effect
+    }
+
     /// The confirmation job of a filesystem snapshot. It commits, checks that the status is
     /// attached and that the last automatic snapshot record has `name`, checks that this executor
     /// still admits work of the agent, appends the confirmation record, commits, and decides from
@@ -1318,7 +1402,10 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// archive write and an append that fails for another cause also give `Deferred`. A commit that
     /// fails for a cause other than a refusal panics in `commit_and_update_state`, as every commit
     /// of the status task does.
-    async fn confirm_filesystem_snapshot(&self, name: FilesystemSnapshotName) -> ConfirmOutcome {
+    async fn confirm_filesystem_snapshot(
+        &mut self,
+        name: FilesystemSnapshotName,
+    ) -> ConfirmOutcome {
         if self
             .commit_and_update_state(CommitLevel::Always, None)
             .await
@@ -1336,7 +1423,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         };
         match reply_before_append(
             confirmation_before_append(
-                self.detached.load(Ordering::Acquire),
+                self.attachment_phase == AttachmentPhase::Detached,
                 &self.last_known_status.load(),
                 &name,
             ),
@@ -1371,7 +1458,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                     return ConfirmOutcome::Deferred;
                 }
                 confirmation_after_append(
-                    self.detached.load(Ordering::Acquire),
+                    self.attachment_phase == AttachmentPhase::Detached,
                     &self.last_known_status.load(),
                     &name,
                 )
@@ -1427,11 +1514,11 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     /// A commit the oplog refused, because the shard has a new owner or an archive layer did not
     /// store the entries, is returned as the refusal rather than folded into "unchanged": a caller
     /// whose entry was only buffered until this commit must not report it as written. A commit
-    /// whose status cannot be rebuilt because the oplog does not read is returned as
-    /// `OplogRefusal::Unreadable`: its entries were stored, but the agent cannot go on. The status
-    /// stays detached until a later fold or rebuild succeeds; the refusal itself is not latched.
+    /// whose report or status rebuild cannot read the oplog returns `OplogRefusal::Unreadable`.
+    /// Its storage or ordered-handoff milestone succeeded. The status stays detached until a
+    /// later fold or rebuild succeeds; the refusal itself is not latched.
     async fn commit_and_update_state(
-        &self,
+        &mut self,
         commit_level: CommitLevel,
         committed: Option<CommitReceipt>,
     ) -> Result<bool, OplogRefusal> {
@@ -1441,7 +1528,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
     }
 
     async fn commit_and_update_state_with_wallet(
-        &self,
+        &mut self,
         commit_level: CommitLevel,
         committed: Option<CommitReceipt>,
         wallet_commit: Option<&WalletCommit>,
@@ -1450,10 +1537,16 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         // Reading the index is not a write, so a fenced oplog still answers it; the sample is
         // only consumed on the path where the commit below succeeded.
         let appended_through = self.oplog.current_oplog_index().await;
-        // Only a failed rebuild leaves the status detached between status jobs.
-        let repairing = self.detached.load(Ordering::Acquire);
-        let new_entries = settle_commit(self.oplog.commit(commit_level).await, committed)
-            .map_err(|refusal| self.refused(refusal))?;
+        let new_entries = match settle_commit(self.oplog.commit(commit_level).await, committed) {
+            Ok(entries) => entries,
+            Err(refusal) => {
+                if matches!(&refusal, OplogRefusal::Unreadable(_)) {
+                    self.apply_attachment_event(AttachmentEvent::ProjectionUnusable)
+                        .await;
+                }
+                return Err(self.refused(refusal));
+            }
+        };
 
         let mut authority_change_count = new_entries
             .values()
@@ -1478,14 +1571,12 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             new_entries,
         )
         .await;
-        let (updated_status, reconstructed) = match updated_status {
-            // A status that an earlier rebuild left detached is repaired by this fold: it is
-            // published, attached and flushed as a rebuilt one.
-            Ok(Some(status)) => (status, repairing),
+        let updated_status = match updated_status {
+            Ok(Some(status)) => status,
             Ok(None) | Err(_) => {
                 // Suppress background cache writes until the replacement projection is installed.
-                self.detached.store(true, Ordering::Release);
-                self.status_flusher.invalidate_baseline().await;
+                self.apply_attachment_event(AttachmentEvent::ProjectionUnusable)
+                    .await;
                 let reader = StatusOplogReader::new(
                     &self.deps,
                     &self.owned_agent_id,
@@ -1506,9 +1597,13 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
                             None
                         })
                 }).await;
-                (reconstructed_status(status)?, true)
+                reconstructed_status(status)?
             }
         };
+        let reconstructed = self
+            .apply_attachment_event(AttachmentEvent::FoldReady)
+            .await
+            == AttachmentEffect::PublishReplacement;
         if receipt_gap || reconstructed {
             // Repair may expose authority changes absent from the commit receipt.
             authority_change_count = authority_change_count.max(1);
@@ -1524,12 +1619,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         updated_status.oplog_idx = updated_index;
         let changed = if fields_changed || updated_index != old_status.oplog_idx {
             let updated_status = self.update_last_known_status(updated_status).await;
-            if reconstructed {
-                self.detached.store(false, Ordering::Release);
-                if let Err(error) = self.status_flusher.flush(FlushReason::Forced).await {
-                    debug!(agent_id = %self.owned_agent_id, %error, "Reconstructed status cache flush failed; background flusher will retry");
-                }
-            }
+            self.apply_attachment_event(AttachmentEvent::StatusPublished)
+                .await;
             self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
                 .await;
             true
@@ -1667,6 +1758,9 @@ fn can_append_invocation(
             .iter()
             .any(|invocation| invocation.has_idempotency_key(idempotency_key))
 }
+
+#[cfg(test)]
+mod report_tests;
 
 #[cfg(test)]
 mod tests {

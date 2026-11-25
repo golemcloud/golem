@@ -19,6 +19,7 @@ use super::{
     WorkerExecutionError, WorkerExecutorError, decode_recursive_stream_value, invocation_response,
     invocation_session_completion, invocation_session_result, mpsc,
 };
+use golem_api_grpc::invocation_session_protocol::OPLOG_UNREADABLE_FAILURE_CODE;
 
 pub(super) async fn persisted_invocation_result(
     streams: &StreamSession,
@@ -81,21 +82,21 @@ pub(super) async fn send_attachment_revocation(
     responses: &mpsc::Sender<InvocationResponse>,
     revocation: Result<(), SessionError>,
 ) {
-    match revocation {
-        Ok(()) => {
-            let _ = responses
-                .send(InvocationResponse {
-                    response: Some(invocation_response::Response::AttachmentRevoked(
-                        golem_api_grpc::proto::golem::worker::AttachmentRevoked {
-                            details: "the durable attachment was fenced by a later epoch"
-                                .to_string(),
-                        },
-                    )),
-                })
-                .await;
-        }
-        Err(error) => send_protocol_failure(responses, error).await,
+    if let Err(error) = revocation
+        && !error.starts_with("StaleEpoch:")
+    {
+        send_protocol_failure(responses, error).await;
+        return;
     }
+    let _ = responses
+        .send(InvocationResponse {
+            response: Some(invocation_response::Response::AttachmentRevoked(
+                golem_api_grpc::proto::golem::worker::AttachmentRevoked {
+                    details: "the durable attachment was fenced by a later epoch".to_string(),
+                },
+            )),
+        })
+        .await;
 }
 
 pub(super) async fn send_resumed_finished(
@@ -317,12 +318,16 @@ pub(super) async fn send_worker_failure(
     responses: &mpsc::Sender<InvocationResponse>,
     error: WorkerExecutorError,
 ) {
-    let message = error.to_string();
+    let code = if matches!(error, WorkerExecutorError::OplogFailed { .. }) {
+        OPLOG_UNREADABLE_FAILURE_CODE
+    } else {
+        "worker-execution"
+    };
     send_failure(
         responses,
         InvocationFailureKind::Execution,
-        "worker-execution",
-        message,
+        code,
+        error.to_string(),
         Some(error.into()),
     )
     .await;

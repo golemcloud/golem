@@ -1164,12 +1164,13 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
     use golem_common::model::durable_stream::StreamForkCutRecord;
     use golem_common::model::regions::OplogRegion;
 
-    for (warm, padding, corrupt_suffix) in [
+    futures::stream::iter([
         (false, 2050, false),
         (true, 2050, false),
         (true, 0, true),
         (true, 2050, true),
-    ] {
+    ])
+    .for_each(|(warm, padding, corrupt_suffix)| async move {
         let (service, _, oplog_service) = service_with_oplog().await;
         let id = owned_agent("reverted-session");
         let key = test_invocation_id("discarded".into());
@@ -1219,9 +1220,11 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
         } else {
             append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
         }
-        for _ in 0..padding {
-            append_memory_hint(oplog.as_ref()).await;
-        }
+        futures::stream::iter(0..padding)
+            .for_each(|_| async {
+                append_memory_hint(oplog.as_ref()).await;
+            })
+            .await;
         oplog.commit(CommitLevel::Always).await.unwrap();
         let end = oplog.current_oplog_index().await;
         if warm && !corrupt_suffix {
@@ -1294,7 +1297,8 @@ async fn reverted_session_is_absent_from_warm_and_cold_indexes_across_empty_chun
                 .len(),
             1
         );
-    }
+    })
+    .await;
 }
 
 #[test]
@@ -5090,6 +5094,95 @@ async fn indexed_raw_authority_cold_and_warm_lookups_do_not_read_oplog_history()
         storage.reads(),
         0,
         "warm authority must fold raw appends without storage reads"
+    );
+}
+
+#[test]
+async fn raw_authority_preserves_history_and_buffer_read_errors() {
+    use crate::durable_host::durable_stream::SessionError;
+    use crate::services::oplog::tests::ReadCountingIndexedStorage;
+    use crate::services::oplog::{OplogReadError, OplogReadSource};
+    use crate::storage::indexed::IndexedStorageError;
+
+    let storage = Arc::new(ReadCountingIndexedStorage::new());
+    let service = Arc::new(
+        PrimaryOplogService::new(
+            storage.clone(),
+            Arc::new(InMemoryBlobStorage::new()),
+            10000,
+            10000,
+            100,
+            32,
+            RetryConfig {
+                max_attempts: 2,
+                min_delay: std::time::Duration::ZERO,
+                max_delay: std::time::Duration::ZERO,
+                ..Default::default()
+            },
+        )
+        .await,
+    );
+    let _worker_service = DefaultWorkerService::new(
+        Arc::new(InMemoryKeyValueStorage::new()),
+        Arc::new(ShardServiceDefault::new()),
+        service.clone(),
+        Arc::new(UnusedComponentService),
+        Arc::new(GolemConfig::default()),
+    );
+    let id = owned_agent("raw-authority-read-failure");
+    let oplog = create_oplog(service.as_ref(), &id).await;
+    let key = test_invocation_id("session".into());
+    let session = session_key(&id, &key);
+    let prepared = append_session(oplog.as_ref(), prepared_record(&id, &key)).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+
+    storage.set_read_error(Some(IndexedStorageError::Transient(
+        "read unavailable".into(),
+    )));
+    let result = oplog.raw_durable_stream_session_status(&session).await;
+    assert!(matches!(result.status, Err(SessionError::Unreadable(error))
+        if error.agent_id == id.agent_id && error.is_transient()));
+
+    storage.set_read_error(Some(IndexedStorageError::Other("read refused".into())));
+    let result = oplog.raw_durable_stream_session_status(&session).await;
+    assert!(matches!(result.status, Err(SessionError::Unreadable(error))
+        if error.agent_id == id.agent_id && !error.is_transient()));
+
+    storage.set_read_error(None);
+    let result = oplog.raw_durable_stream_session_status(&session).await;
+    assert_eq!(
+        result.status.unwrap().unwrap().first_prepared,
+        Some(prepared)
+    );
+    assert_eq!(oplog.current_oplog_index().await, prepared);
+
+    let mut bytes = vec![255];
+    bytes.extend_from_slice(b"private payload");
+    let broken_index = oplog
+        .add(OplogEntry::stream_session(
+            None,
+            OplogPayload::SerializedInline {
+                bytes,
+                cached: None,
+            },
+            None,
+        ))
+        .await
+        .unwrap();
+    let result = oplog.raw_durable_stream_session_status(&session).await;
+    let Err(SessionError::Unreadable(error)) = result.status else {
+        panic!("buffer decode failure must remain an unreadable oplog");
+    };
+    assert_eq!(error.agent_id, id.agent_id);
+    let OplogReadError::Corruption { source, detail } = error.error else {
+        panic!("buffer decode failure must be permanent");
+    };
+    assert_eq!(source, OplogReadSource::Other("stream session buffer"));
+    assert_eq!(
+        detail,
+        format!(
+            "cannot decode stream session record at oplog index {broken_index}: unknown serialization version: 255"
+        )
     );
 }
 

@@ -354,14 +354,7 @@ pub async fn invoke_live_observed_and_traced<Ctx: WorkerCtx>(
                     .await?
                     .is_some()
             {
-                let execution_input = worker
-                    .rehydrate_durable_streaming_input(&original)
-                    .await
-                    .map_err(|error| {
-                        WorkerExecutorError::runtime(format!(
-                            "committed input reconstruction failed: {error}"
-                        ))
-                    })?;
+                let execution_input = worker.rehydrate_durable_streaming_input(&original).await?;
                 lowered = lower_invocation(
                     original,
                     &store.data().component_metadata().metadata,
