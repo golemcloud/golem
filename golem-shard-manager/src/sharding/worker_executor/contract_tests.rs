@@ -103,22 +103,7 @@ impl Fixture {
                     faults: KeyValueStorageFaults::default(),
                 };
                 let mut runtime = ExecutorRuntime::default();
-                let config = local_executor_config();
-                let run = bootstrap_and_run_worker_executor(
-                    &bootstrap,
-                    config,
-                    prometheus::Registry::new(),
-                    tokio::runtime::Handle::current(),
-                    runtime.tasks.as_mut().unwrap(),
-                    false,
-                )
-                .await
-                .unwrap();
-                let pod = Pod {
-                    ip: "127.0.0.1".parse().unwrap(),
-                    port: run.grpc_port,
-                };
-                runtime.run = Some(run);
+                let pod = runtime.start_executor(&bootstrap).await;
                 let faults = bootstrap.faults;
                 Self {
                     service: Arc::new(WorkerExecutorServiceDefault::new(client_config())),
@@ -143,7 +128,7 @@ impl Fixture {
 
     async fn finish(mut self) {
         drop(self.service);
-        self.runtime.cleanup().await.unwrap();
+        self.runtime.cleanup().unwrap().await.unwrap();
     }
 }
 
@@ -238,24 +223,163 @@ impl Bootstrap<Context> for ContractBootstrap {
     }
 }
 
+enum ExecutorRuntimePhase {
+    Preparing(JoinSet<anyhow::Result<()>>),
+    Running {
+        run: Box<RunDetails>,
+        tasks: JoinSet<anyhow::Result<()>>,
+    },
+    Released,
+}
+
+enum ExecutorRuntimeEvent {
+    Started(Box<RunDetails>),
+    Release,
+}
+
+struct ExecutorCleanup {
+    run: Option<Box<RunDetails>>,
+    tasks: JoinSet<anyhow::Result<()>>,
+}
+
+fn transition_executor_runtime(
+    phase: ExecutorRuntimePhase,
+    event: ExecutorRuntimeEvent,
+) -> (ExecutorRuntimePhase, Option<ExecutorCleanup>) {
+    match (phase, event) {
+        (ExecutorRuntimePhase::Preparing(tasks), ExecutorRuntimeEvent::Started(run)) => {
+            (ExecutorRuntimePhase::Running { run, tasks }, None)
+        }
+        (ExecutorRuntimePhase::Preparing(tasks), ExecutorRuntimeEvent::Release) => (
+            ExecutorRuntimePhase::Released,
+            Some(ExecutorCleanup { run: None, tasks }),
+        ),
+        (ExecutorRuntimePhase::Running { run, tasks }, ExecutorRuntimeEvent::Release) => (
+            ExecutorRuntimePhase::Released,
+            Some(ExecutorCleanup {
+                run: Some(run),
+                tasks,
+            }),
+        ),
+        (ExecutorRuntimePhase::Released, ExecutorRuntimeEvent::Release) => {
+            (ExecutorRuntimePhase::Released, None)
+        }
+        (_, ExecutorRuntimeEvent::Started(_)) => {
+            unreachable!("executor already started or released")
+        }
+    }
+}
+
 struct ExecutorRuntime {
-    run: Option<RunDetails>,
-    tasks: Option<JoinSet<anyhow::Result<()>>>,
+    phase: ExecutorRuntimePhase,
 }
 
 impl Default for ExecutorRuntime {
     fn default() -> Self {
         Self {
-            run: None,
-            tasks: Some(JoinSet::new()),
+            phase: ExecutorRuntimePhase::Preparing(JoinSet::new()),
         }
     }
 }
 
 impl ExecutorRuntime {
-    fn cleanup(&mut self) -> tokio::task::JoinHandle<()> {
-        let run = self.run.take();
-        let mut tasks = self.tasks.take().unwrap();
+    fn apply(&mut self, event: ExecutorRuntimeEvent) -> Option<ExecutorCleanup> {
+        let phase = std::mem::replace(&mut self.phase, ExecutorRuntimePhase::Released);
+        let (next, cleanup) = transition_executor_runtime(phase, event);
+        self.phase = next;
+        cleanup
+    }
+
+    async fn start_executor(&mut self, bootstrap: &ContractBootstrap) -> Pod {
+        let ExecutorRuntimePhase::Preparing(tasks) = &mut self.phase else {
+            unreachable!("executor already started or released")
+        };
+        let run = bootstrap_and_run_worker_executor(
+            bootstrap,
+            local_executor_config(),
+            prometheus::Registry::new(),
+            tokio::runtime::Handle::current(),
+            tasks,
+            false,
+        )
+        .await
+        .unwrap();
+        let pod = Pod {
+            ip: "127.0.0.1".parse().unwrap(),
+            port: run.grpc_port,
+        };
+        drop(self.apply(ExecutorRuntimeEvent::Started(Box::new(run))));
+        pod
+    }
+
+    async fn start_health(
+        &mut self,
+        health: InMemoryWorkerExecutorHealth,
+        entered: Arc<Notify>,
+        release: CancellationToken,
+    ) -> Pod {
+        let ExecutorRuntimePhase::Preparing(tasks) = &mut self.phase else {
+            unreachable!("executor already started or released")
+        };
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let (reporter, service) = tonic_health::server::health_reporter();
+        reporter
+            .set_service_status(
+                "",
+                match health {
+                    InMemoryWorkerExecutorHealth::NotServing => {
+                        tonic_health::ServingStatus::NotServing
+                    }
+                    _ => tonic_health::ServingStatus::Serving,
+                },
+            )
+            .await;
+        let service = HealthResponseGate {
+            inner: service,
+            entered,
+            release,
+        };
+        tasks.spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(service)
+                .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
+                .await
+                .map_err(anyhow::Error::from)
+        });
+        Pod {
+            ip: address.ip(),
+            port: address.port(),
+        }
+    }
+
+    fn observe_shutdown(&mut self) -> impl Future<Output = ()> + use<> {
+        let ExecutorRuntimePhase::Running { run, tasks } = &mut self.phase else {
+            unreachable!("executor is not running")
+        };
+        let stopped = CancellationToken::new();
+        let signal = stopped.clone().drop_guard();
+        tasks.spawn(async move {
+            let _signal = signal;
+            std::future::pending::<anyhow::Result<()>>().await
+        });
+        let shutdown = run.shutdown.clone();
+        async move {
+            assert!(shutdown.token().is_cancelled());
+            stopped.cancelled().await;
+            shutdown.join_tracked().await;
+        }
+    }
+
+    fn cleanup(&mut self) -> Option<tokio::task::JoinHandle<()>> {
+        self.apply(ExecutorRuntimeEvent::Release)
+            .map(ExecutorCleanup::start)
+    }
+}
+
+impl ExecutorCleanup {
+    fn start(self) -> tokio::task::JoinHandle<()> {
+        let Self { run, mut tasks } = self;
         if let Some(run) = run.as_ref() {
             run.shutdown.cancel();
         }
@@ -273,9 +397,7 @@ impl ExecutorRuntime {
 
 impl Drop for ExecutorRuntime {
     fn drop(&mut self) {
-        if self.tasks.is_some() {
-            drop(self.cleanup());
-        }
+        drop(self.cleanup());
     }
 }
 
@@ -613,22 +735,14 @@ async fn cancelling_the_grpc_fixture_owner_stops_its_executor_and_servers() {
         registered(Uuid::parse_str(&incarnation_id()).unwrap()),
     )
     .await;
-    let shutdown = fixture.runtime.run.as_ref().unwrap().shutdown.clone();
-    let stopped = CancellationToken::new();
-    let signal = stopped.clone().drop_guard();
-    fixture.runtime.tasks.as_mut().unwrap().spawn(async move {
-        let _signal = signal;
-        std::future::pending::<anyhow::Result<()>>().await
-    });
+    let shutdown = fixture.runtime.observe_shutdown();
     let owner = tokio::spawn(async move {
         let _fixture = fixture;
         std::future::pending::<()>().await;
     });
     owner.abort();
     assert!(owner.await.unwrap_err().is_cancelled());
-    assert!(shutdown.token().is_cancelled());
-    stopped.cancelled().await;
-    shutdown.join_tracked().await;
+    shutdown.await;
 }
 
 async fn recovery_index_outage_contract(adapter: Adapter) {
@@ -829,43 +943,12 @@ async fn health_contract(adapter: Adapter, health: InMemoryWorkerExecutorHealth)
             (pod, Arc::new(service))
         }
         Adapter::Grpc => {
-            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-            let address = listener.local_addr().unwrap();
-            let (reporter, service) = tonic_health::server::health_reporter();
-            reporter
-                .set_service_status(
-                    "",
-                    match health {
-                        InMemoryWorkerExecutorHealth::NotServing => {
-                            tonic_health::ServingStatus::NotServing
-                        }
-                        _ => tonic_health::ServingStatus::Serving,
-                    },
-                )
-                .await;
-            let service = HealthResponseGate {
-                inner: service,
-                entered: entered.clone(),
-                release,
-            };
-            runtime.tasks.as_mut().unwrap().spawn(async move {
-                tonic::transport::Server::builder()
-                    .add_service(service)
-                    .serve_with_incoming(tokio_stream::wrappers::TcpListenerStream::new(listener))
-                    .await
-                    .map_err(anyhow::Error::from)
-            });
+            let pod = runtime.start_health(health, entered.clone(), release).await;
             let config = WorkerExecutorServiceConfig {
                 health_check_timeout: Duration::from_secs(1),
                 ..client_config()
             };
-            (
-                Pod {
-                    ip: address.ip(),
-                    port: address.port(),
-                },
-                Arc::new(WorkerExecutorServiceDefault::new(config)),
-            )
+            (pod, Arc::new(WorkerExecutorServiceDefault::new(config)))
         }
     };
     futures::stream::iter([(), ()])
@@ -881,7 +964,7 @@ async fn health_contract(adapter: Adapter, health: InMemoryWorkerExecutorHealth)
         .await;
     drop(service);
     drop(release_on_drop);
-    runtime.cleanup().await.unwrap();
+    runtime.cleanup().unwrap().await.unwrap();
 }
 
 #[derive(Clone)]
