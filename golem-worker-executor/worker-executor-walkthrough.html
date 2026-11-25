@@ -1990,7 +1990,7 @@ fn charge_card(order: &amp;Order) -&gt; Result&lt;Receipt, PaymentError&gt; {
 </table>
 </div>
 
-<p><strong>One budget.</strong> The attempt count is the in-memory <code>retry_count</code> of this host call <em>plus</em> the number of recorded <code>Error</code> entries with the same <code>retry_from</code> (<code>count_oplog_errors_for</code>, <code>current_retry_state_for</code>). After a trap and replay the in-memory count resets but the oplog count does not, so a policy exhausted inline stays exhausted.</p>
+<p><strong>One budget.</strong> The attempt count is the in-memory <code>retry_count</code> of this host call <em>plus</em> the retry count of the policy state that the last recorded <code>Error</code> entry with the same <code>retry_from</code> holds. The status fold keeps that state in <code>current_retry_state</code>, and <code>current_retry_state_for</code> reads it. After a trap and replay the in-memory count resets but the oplog count does not, so a policy exhausted inline stays exhausted.</p>
 
 <p><strong>Host HTTP retry remains.</strong> P3 HTTP preserves request identity and completed body chunks. Eligible response resumption uses Range or verifies the delivered prefix before exposing new bytes; a mismatched response ends with <code>HttpResponseIncomplete</code>. Retry policy and interruption handling remain host-owned. Preview 2 HTTP is unsupported; Rust uses <code>golem_rust::http</code>.</p>
 

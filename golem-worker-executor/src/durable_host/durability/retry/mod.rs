@@ -971,9 +971,7 @@ pub(crate) async fn sleep_unless_interrupted(
 }
 
 /// Counts the number of `OplogEntry::Error` entries in the oplog whose `retry_from`
-/// matches the given `retry_point`. This is used to initialize `base_retry_count`
-/// when spawning background retry tasks, so that the retry budget accounts for
-/// errors already recorded before the task was spawned.
+/// matches the given `retry_point`. Only tests call it.
 ///
 /// Such an error comes after its retry point, so the count reads from the retry point, or from
 /// the retained start of the oplog when the retry point is below it.
