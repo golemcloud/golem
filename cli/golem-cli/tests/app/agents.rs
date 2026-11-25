@@ -6989,8 +6989,8 @@ async fn test_agent_oplog_served_viewer() {
 }
 
 /// `--show-claims` shows the verified claims of a signed-in user on every output of the oplog
-/// that is not obfuscated: the text output, the JSON output, one page, the HTML export, the live
-/// viewer and the MCP `agent_oplog` tool. Each structured output gives the claims as a JSON
+/// that is not obfuscated: the text output, the JSON output, the JSON Lines export, one page, the
+/// HTML export, the live viewer and the MCP `agent_oplog` tool. Each structured output gives the claims as a JSON
 /// object. Without the flag, no output shows claims.
 #[test]
 #[timeout("20 minutes")]
@@ -7111,6 +7111,35 @@ async fn test_agent_oplog_shows_claims_on_request_on_every_output() {
     };
     assert_shown("json", &json(true).await);
     assert_hidden("json", &json(false).await);
+
+    // JSON Lines export to a file.
+    let export = |show_claims: bool| {
+        let ctx = &ctx;
+        async move {
+            let path = ctx.cwd_path_join(format!("oplog-claims-{show_claims}.jsonl"));
+            let args = [
+                cmd::AGENT,
+                "oplog",
+                agent,
+                flag::FORMAT,
+                "jsonl",
+                "--output",
+                path.to_str().unwrap(),
+            ]
+            .into_iter()
+            .chain(show_claims.then_some("--show-claims"))
+            .collect::<Vec<_>>();
+            let outputs = ctx.cli(args).await;
+            assert!(outputs.success_or_dump());
+            fs::read_to_string(&path)
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert_shown("jsonl export", &export(true).await);
+    assert_hidden("jsonl export", &export(false).await);
 
     // JSON output: one page.
     let page = |show_claims: bool| {
