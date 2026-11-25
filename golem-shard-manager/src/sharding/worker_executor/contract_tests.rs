@@ -1081,7 +1081,7 @@ fn registration() -> crate::sharding::model::RegisterAck {
         number_of_shards: 12,
         grant: crate::sharding::model::ShardLeaseGrant {
             shard_epochs: BTreeMap::from([(ShardId::new(3), ShardEpoch(19))]),
-            expires_at: chrono::DateTime::from_timestamp(1_764_000_000, 0).unwrap(),
+            expires_at: jiff::Timestamp::new(1_764_000_000, 0).unwrap(),
             executor_count: 4,
             revision: ShardLeaseRevision(7),
         },

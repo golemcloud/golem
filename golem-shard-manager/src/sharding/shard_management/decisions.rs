@@ -15,8 +15,8 @@
 use super::super::error::ShardManagerError;
 use super::super::model::{ExecutorAddr, ExecutorId, PendingGrant, ShardEpoch, ShardLeaseState};
 use super::super::rebalancing::Rebalance;
-use chrono::{DateTime, Utc};
 use golem_common::model::ShardId;
+use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::time::Duration;
 
@@ -40,7 +40,7 @@ pub(super) fn register(
     executor_id: ExecutorId,
     addr: ExecutorAddr,
     pod_name: Option<String>,
-    now: DateTime<Utc>,
+    now: Timestamp,
     lease_ttl: Duration,
 ) -> Result<(ShardLeaseState, RegistrationDecision), ShardManagerError> {
     let already_known = state.has_executor(executor_id);
@@ -68,7 +68,7 @@ pub(super) fn register(
 
 pub(super) fn reap_expired(
     mut state: ShardLeaseState,
-    now: DateTime<Utc>,
+    now: Timestamp,
 ) -> (ShardLeaseState, Vec<(ExecutorId, BTreeSet<ShardId>)>) {
     let expired = state.housekeep(now);
     (state, expired)
@@ -83,7 +83,7 @@ pub(super) fn renew(
     mut state: ShardLeaseState,
     executor_id: ExecutorId,
     claimed: &BTreeMap<ShardId, ShardEpoch>,
-    now: DateTime<Utc>,
+    now: Timestamp,
     lease_ttl: Duration,
 ) -> Result<(ShardLeaseState, RenewalDecision), ShardManagerError> {
     if !state.has_executor(executor_id) {

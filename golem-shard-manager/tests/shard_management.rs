@@ -798,7 +798,7 @@ async fn settled_and_stopped_pair(
         startup
             .executor_leases
             .values()
-            .all(|lease| lease.expires_at > Utc::now())
+            .all(|lease| lease.expires_at > Timestamp::now())
     );
     startup.check_invariants().unwrap();
     stop_worker(join_set).await;
@@ -905,7 +905,7 @@ async fn the_first_renewals_after_a_shardless_join_use_the_committed_count() {
 #[test_r::timeout("30s")]
 async fn a_renewal_that_reaps_a_peer_returns_the_post_reap_count() {
     let mut initial = balanced_pair();
-    let survivor_expiry = Utc::now() + Duration::from_secs(3600);
+    let survivor_expiry = Timestamp::now() + Duration::from_secs(3600);
     initial
         .executor_leases
         .values_mut()
@@ -953,14 +953,14 @@ async fn a_renewal_that_reaps_a_peer_returns_the_post_reap_count() {
     assert!(peer_expiry < survivor_expiry);
 
     let expired = IntervalStream::new(tokio::time::interval(Duration::from_millis(10)))
-        .filter(|_| std::future::ready(Utc::now() >= peer_expiry));
+        .filter(|_| std::future::ready(Timestamp::now() >= peer_expiry));
     tokio::pin!(expired);
     tokio::time::timeout(Duration::from_secs(5), expired.next())
         .await
         .expect("the recorded peer expiry must elapse without another manager request")
         .unwrap();
     assert_eq!(persistence.latest().await, joined_state);
-    let now = Utc::now();
+    let now = Timestamp::now();
     assert!(peer_expiry <= now);
     assert!(expiry_of(&joined_state, executor(1)) > now);
     assert!(expiry_of(&joined_state, executor(2)) > now);
