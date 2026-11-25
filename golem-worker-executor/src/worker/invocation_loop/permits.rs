@@ -69,15 +69,29 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             let span = agent_phase_span!(self, "acquire_concurrent_agent_permit");
             let agent_id = self.owned_agent_id.agent_id();
             let registered_concurrent_account = self.parent.registered_concurrent_account.clone();
+            let parent = self.parent.clone();
             let deferred_wakeups = &mut *self.deferred_wakeups;
             let acquisition = acquire_permit_or_interrupt(
                 &self.interrupts,
                 self.receiver,
                 || {
                     let account = registered_concurrent_account.clone();
+                    let parent = parent.clone();
                     async move {
                         debug!("Re-acquiring concurrent-agent permit (waking from idle)");
-                        account.acquire(agent_id).await
+                        let permit = account.acquire(agent_id);
+                        tokio::pin!(permit);
+                        // A deferred settlement does not wait behind other agents of the
+                        // account: when the permit is not free at once, it is committed first.
+                        if parent.settlement_commit_deferred() {
+                            if let Some(permit) = futures::FutureExt::now_or_never(&mut permit) {
+                                return permit;
+                            }
+                            if let Err(error) = parent.commit_deferred_settlement().await {
+                                debug!(%error, "Deferred invocation settlement not committed before the permit wait");
+                            }
+                        }
+                        permit.await
                     }
                 },
                 |command| InvocationLoop::<Ctx>::defer_wakeup(deferred_wakeups, command),

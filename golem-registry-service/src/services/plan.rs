@@ -255,6 +255,7 @@ mod tests {
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl PlanRepo for InMemoryPlanRepo {
         async fn create_or_update(&self, plan: PlanRecord) -> RepoResult<()> {
             self.plans.lock().unwrap().insert(plan.plan_id, plan);

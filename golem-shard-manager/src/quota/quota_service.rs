@@ -648,6 +648,7 @@ fn state_from_store(
     Ok(QuotaState::from_persisted(
         record.definition.into_value(),
         record.remaining.into(),
+        record.deficit.into(),
         record.last_refilled_at.into(),
         record.last_refreshed_at.into(),
         pod_leases,

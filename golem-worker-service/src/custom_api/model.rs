@@ -19,9 +19,9 @@ use golem_common::model::deployment::DeploymentRevision;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::schema::SchemaValue;
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, MountBehaviour, OpenApiSpecBehaviour,
-    OpenApiSpecFormat, RouteMatch, SecuritySchemeDetails, SessionFromHeaderRouteSecurity,
-    WebhookCallbackBehaviour,
+    CallAgentBehaviour, CorsOptions, CorsPreflightBehaviour, CreateAgentBehaviour, MountBehaviour,
+    OpenApiSpecBehaviour, OpenApiSpecFormat, RouteMatch, SecuritySchemeDetails,
+    SessionFromHeaderRouteSecurity, WebhookCallbackBehaviour,
 };
 use golem_service_base::custom_api::{PathSegment, RouteBehaviour, RouteId};
 use http::{HeaderMap, StatusCode};
@@ -78,6 +78,7 @@ pub struct RichCompiledRoute {
 #[derive(Debug)]
 pub enum RichRouteBehaviour {
     CallAgent(CallAgentBehaviour),
+    CreateAgent(CreateAgentBehaviour),
     CorsPreflight(CorsPreflightBehaviour),
     WebhookCallback(WebhookCallbackBehaviour),
     OpenApiSpec(OpenApiSpecBehaviour),
@@ -91,6 +92,7 @@ impl From<RouteBehaviour> for RichRouteBehaviour {
     fn from(value: RouteBehaviour) -> Self {
         match value {
             RouteBehaviour::CallAgent(inner) => Self::CallAgent(inner),
+            RouteBehaviour::CreateAgent(inner) => Self::CreateAgent(inner),
             RouteBehaviour::CorsPreflight(inner) => Self::CorsPreflight(inner),
             RouteBehaviour::WebhookCallback(inner) => Self::WebhookCallback(inner),
             RouteBehaviour::OpenApiSpec(inner) => Self::OpenApiSpec(inner),

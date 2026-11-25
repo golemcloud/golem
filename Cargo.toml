@@ -4,6 +4,7 @@ resolver = "2"
 members = [
     "golem-ai-contract",
     "golem-api-grpc",
+    "golem-async-trait",
     "golem-client",
     "golem-common",
     "test-components/human-approval-service",
@@ -48,6 +49,7 @@ license-file = "LICENSE"
 
 [workspace.dependencies]
 golem-api-grpc = { version = "=0.0.0", path = "golem-api-grpc" }
+golem-async-trait = { version = "=0.0.0", path = "golem-async-trait" }
 golem-cli = { version = "=0.0.0", path = "cli/golem-cli" }
 golem-client = { version = "=0.0.0", path = "golem-client" }
 golem-common = { version = "=0.0.0", path = "golem-common", default-features = false }
@@ -348,7 +350,7 @@ warp = "0.3.7"
 wasip2 = "1.0.2"
 wasm-encoder = "0.251.0"
 wasm-metadata = { version = "0.251.0", features = ["oci"] }
-wasm-rquickjs = { version = "0.5.3", features = ["optimize", "use-golem-wasmtime"] }
+wasm-rquickjs = { version = "0.5.4", features = ["optimize", "use-golem-wasmtime"] }
 wasm-wave = "0.251"
 wasmparser = "0.251.0"
 wasmprinter = "0.251.0"

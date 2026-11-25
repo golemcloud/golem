@@ -4,6 +4,7 @@ import {
   defineConfig,
   DurableStreams,
   method,
+  Schema as GolemSchema,
   WitTypes,
 } from "@golemcloud/effect-golem"
 
@@ -63,7 +64,9 @@ defineAgent({
         yield* writer.append(new Uint8Array([3, 249, 17]))
         yield* writer.close
         const sink = yield* Sink.client.upsert({ name })
-        const source = DurableStreams.readBytes({ url, auth })
+        const source = DurableStreams.readBytes({ url, auth }).pipe(
+          Stream.mapError(GolemSchema.StreamError.from),
+        )
         const context = yield* Effect.context<Stream.Services<typeof source>>()
         return yield* sink.collect({ bytes: source.pipe(Stream.provideContext(context)) })
       }).pipe(Effect.orDie, Effect.scoped),

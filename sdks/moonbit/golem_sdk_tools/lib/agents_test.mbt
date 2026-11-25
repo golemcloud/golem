@@ -2044,7 +2044,8 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
         path: "/api/{city}/weather",
         auth: Some(false),
         phantom: false,
-        phantom_id_binding: None,
+        agent_id_binding: None,
+        create_route: None,
         cors: ["https://app.acme.com"],
         webhook_suffix: None,
         router: false,
@@ -2092,7 +2093,7 @@ test "generate_agent_registration emits HTTP endpoint + mount metadata" {
   )
   assert_true(output.contains("auth_details: Some({ required: false"))
   assert_true(output.contains("phantom_agent: false"))
-  assert_true(output.contains("phantom_id_binding: None"))
+  assert_true(output.contains("agent_id_binding: None"))
   assert_true(output.contains("allowed_patterns: [\"https://app.acme.com\"]"))
   assert_true(output.contains("static_bindings: []"))
   assert_true(output.contains("filesystem_bindings: []"))
@@ -2138,7 +2139,8 @@ test "generate_agent_registration emits remaining/system path vars, required aut
         path: "/files",
         auth: Some(true),
         phantom: true,
-        phantom_id_binding: None,
+        agent_id_binding: None,
+        create_route: None,
         cors: [],
         webhook_suffix: Some("/events/{id}"),
         router: false,
@@ -2315,23 +2317,19 @@ test "durable stream attributes reject conflicts, duplicates, and malformed prop
 }
 
 ///|
-test "phantom selector annotations preserve source requiredness and constructor coverage" {
-  for
-    item in [
-      ("path", "/c/{customer}/{instance}", "Path"),
-      ("query", "/c/{customer}", "Query"),
-    ] {
+test "agent ID annotations preserve exclusive selection and full create paths" {
+  for item in [("path", "/c/{instance}", "Path"), ("query", "/c", "Query")] {
     let (source, path, variant) = item
-    for optional in [false, true] {
-      let text = "#derive.agent\n#derive.mount(\"\{path}\")\n#derive.mount_phantom_id(\{source}=\"instance\",optional=\{optional})\nstruct Selected { customer: String }\nfn Selected::new(customer: String) -> Selected { { customer } }\n#derive.endpoint(get=\"/read\")\npub fn Selected::read(self: Self) -> String { self.customer }"
+    for create in ["", "#derive.mount_create(\"/new/{agent-type}\")"] {
+      let text = "#derive.agent\n#derive.mount(\"\{path}\")\n#derive.mount_agent_id(\{source}=\"instance\")\n\{create}\n#derive.expose_files(\"/*\",\"/public/$1\")\nstruct Selected { customer: String }\nfn Selected::new(customer: String) -> Selected { { customer } }\n#derive.endpoint(get=\"/read\")\npub fn Selected::read(self: Self) -> String { self.customer }"
       let agents = parse_agents([("selected.mbt", text)])
-      let binding = agents[0].http_mount.unwrap().phantom_id_binding
+      let binding = agents[0].http_mount.unwrap().agent_id_binding
       assert_eq(
         binding,
         if source == "path" {
-          Some(Path("instance", optional))
+          Some(Path("instance"))
         } else {
-          Some(Query("instance", optional))
+          Some(Query("instance"))
         },
       )
       let output = strip_whitespace(
@@ -2339,7 +2337,17 @@ test "phantom selector annotations preserve source requiredness and constructor 
       )
       assert_true(
         output.contains(
-          "phantom_id_binding:Some(@common.PhantomIdBinding::\{variant}({name:\"instance\",optional:\{optional}})",
+          "agent_id_binding:Some(@common.AgentIdBinding::\{variant}({name:\"instance\",})",
+        ),
+        msg=output,
+      )
+      assert_true(
+        output.contains(
+          if create == "" {
+            "create_route:None"
+          } else {
+            "create_route:Some([@common.PathSegment::Segment(@coreHttp.PathSegment::Literal(\"new\")),@common.PathSegment::SystemVariable(@common.SystemVariable::AGENT_TYPE,),],)"
+          },
         ),
         msg=output,
       )
@@ -2348,29 +2356,36 @@ test "phantom selector annotations preserve source requiredness and constructor 
 }
 
 ///|
-test "phantom selectors reject malformed declarations and invalid ownership" {
+test "agent ID bindings reject malformed declarations and invalid ownership" {
   for
     item in [
-      ("#derive.mount_phantom_id()", "/c", ""),
-      ("#derive.mount_phantom_id(query=\"\")", "/c", ""),
+      ("#derive.mount_agent_id()", "/c", ""),
+      ("#derive.mount_agent_id(query=\"\")", "/c", ""),
+      ("#derive.mount_agent_id(path=\"instance\",query=\"instance\")", "/c", ""),
+      ("#derive.mount_agent_id(query=\"instance\",optional=true)", "/c", ""),
       (
-        "#derive.mount_phantom_id(path=\"instance\",query=\"instance\")", "/c", "",
-      ),
-      (
-        "#derive.mount_phantom_id(query=\"instance\",optional=\"true\")", "/c", "",
-      ),
-      (
-        "#derive.mount_phantom_id(query=\"instance\")\n#derive.mount_phantom_id(query=\"instance\")",
+        "#derive.mount_agent_id(query=\"instance\")\n#derive.mount_agent_id(query=\"instance\")",
         "/c", "",
       ),
-      ("#derive.mount_phantom_id(path=\"instance\")", "/c", ""),
+      ("#derive.mount_agent_id(path=\"instance\")", "/c", ""),
+      ("#derive.mount_agent_id(path=\"instance\")", "/c/{instance}/{other}", ""),
+      ("#derive.mount_agent_id(query=\"instance\")", "/c/{instance}", ""),
+      ("#derive.mount_agent_id(query=\"instance\")", "/c", "\"ephemeral\""),
       (
-        "#derive.mount_phantom_id(path=\"instance\")", "/c/{instance}/{other}", "",
+        "#derive.mount_agent_id(query=\"instance\")\n#derive.mount_phantom(true)",
+        "/c", "",
       ),
-      ("#derive.mount_phantom_id(query=\"instance\")", "/c/{instance}", ""),
-      ("#derive.mount_phantom_id(query=\"instance\")", "/c", "\"ephemeral\""),
+      ("#derive.mount_create(\"/new\")", "/c", ""),
       (
-        "#derive.mount_phantom_id(query=\"instance\")\n#derive.expose_files(\"/*\",\"/public/$1\")",
+        "#derive.mount_agent_id(query=\"instance\")\n#derive.mount_create(\"/new/{key}\")",
+        "/c", "",
+      ),
+      (
+        "#derive.mount_agent_id(query=\"instance\")\n#derive.mount_create(\"/new/{*rest}\")",
+        "/c", "",
+      ),
+      (
+        "#derive.mount_agent_id(query=\"instance\")\n#derive.mount_create(\"/new?x={x}\")",
         "/c", "",
       ),
     ] {
@@ -2380,6 +2395,99 @@ test "phantom selectors reject malformed declarations and invalid ownership" {
       capture_agent_parse_error(() => parse_agents([("selected.mbt", text)]))
       is Err(_),
       msg=text,
+    )
+  }
+}
+
+///|
+test "query ID permits body inputs and reserves implicit query inputs" {
+  for method in ["get", "head", "delete", "post", "put", "patch"] {
+    let source = "#derive.agent\n#derive.mount(\"/c\")\n#derive.mount_agent_id(query=\"instance\")\nstruct Selected {}\nfn Selected::new(customer: String) -> Selected { {} }\n#derive.endpoint(\{method}=\"/read\")\npub fn Selected::read(self: Self, instance: String) -> String { instance }"
+    let result = capture_agent_parse_error(() => {
+      parse_agents([("selected.mbt", source)])
+    })
+    if ["get", "head", "delete"].contains(method) {
+      assert_true(result is Err(_), msg=source)
+    } else {
+      assert_true(result is Ok(_), msg=source)
+    }
+  }
+}
+
+///|
+test "query ID excludes native stream inputs but reserves explicit query wire names" {
+  for method in ["get", "head", "delete"] {
+    for stream in ["AgentStream[String]", "@schema.AgentStream[Byte]"] {
+      let source = "#derive.agent\n#derive.mount(\"/c\")\n#derive.mount_agent_id(query=\"instance\")\nstruct Selected {}\nfn Selected::new(customer: String) -> Selected { {} }\n#derive.endpoint(\{method}=\"/read\")\npub fn Selected::read(self: Self, instance: \{stream}) -> Unit { () }"
+      let agents = parse_agents([("selected.mbt", source)])
+      @lib.validate_http_routes(agents)
+      let explicit = source.replace(
+        old="/read",
+        new="/read?instance={instance}",
+      )
+      assert_true(
+        capture_agent_parse_error(() => {
+          parse_agents([("selected.mbt", explicit)])
+        })
+        is Err(_),
+      )
+    }
+  }
+}
+
+///|
+test "query ID rejects explicit query wire name conflicts for every method" {
+  for method in ["get", "head", "delete", "post", "put", "patch"] {
+    let source = "#derive.agent\n#derive.mount(\"/c\")\n#derive.mount_agent_id(query=\"instance\")\nstruct Selected {}\nfn Selected::new(customer: String) -> Selected { {} }\n#derive.endpoint(\{method}=\"/read?instance={value}\")\npub fn Selected::read(self: Self, value: String) -> String { value }"
+    assert_true(
+      capture_agent_parse_error(() => parse_agents([("selected.mbt", source)]))
+      is Err(_),
+      msg=source,
+    )
+  }
+}
+
+///|
+test "query ID permits inputs explicitly bound to other sources" {
+  for method in ["get", "head", "delete", "post", "put", "patch"] {
+    for
+      binding in [
+        "#derive.endpoint(\{method}=\"/read/{instance}\")",
+        "#derive.endpoint(\{method}=\"/read\")\n#derive.endpoint_header(\"X-Instance\",\"instance\")",
+        "#derive.endpoint(\{method}=\"/read?other={instance}\")",
+      ] {
+      let source = "#derive.agent\n#derive.mount(\"/c\")\n#derive.mount_agent_id(query=\"instance\")\nstruct Selected {}\nfn Selected::new(customer: String) -> Selected { {} }\n\{binding}\npub fn Selected::read(self: Self, instance: String) -> String { instance }"
+      assert_true(
+        capture_agent_parse_error(() => parse_agents([("selected.mbt", source)]))
+        is Ok(_),
+        msg=source,
+      )
+    }
+  }
+}
+
+///|
+test "ID and create annotations require a mount and reject malformed create declarations" {
+  for
+    annotation in [
+      "#derive.mount_agent_id(query=\"id\")", "#derive.mount_create(\"/new\")",
+    ] {
+    let source = "#derive.agent\n\{annotation}\nstruct Selected {}\nfn Selected::new() -> Selected { {} }"
+    assert_true(
+      capture_agent_parse_error(() => parse_agents([("selected.mbt", source)]))
+      is Err(_),
+    )
+  }
+  for
+    create in [
+      "#derive.mount_create()", "#derive.mount_create(true)", "#derive.mount_create(\"relative\")",
+      "#derive.mount_create(\"/new\")\n#derive.mount_create(\"/other\")",
+    ] {
+    let source = "#derive.agent\n#derive.mount(\"/c\")\n#derive.mount_agent_id(query=\"id\")\n\{create}\nstruct Selected {}\nfn Selected::new() -> Selected { {} }"
+    assert_true(
+      capture_agent_parse_error(() => parse_agents([("selected.mbt", source)]))
+      is Err(_),
+      msg=source,
     )
   }
 }

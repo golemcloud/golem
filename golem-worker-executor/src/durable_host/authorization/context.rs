@@ -620,6 +620,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .entries()
             .map(|(key, entry)| {
                 let wallet = self.authority_wallet_cards();
+                let admitted_surface = match &self.runtime {
+                    OwnerRuntime::Agent => entry.authority.hidden_scope_card().map(|card| {
+                        golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
+                            &context,
+                            self.authority_wallet_cards(),
+                            Some(card),
+                        )
+                    }),
+                    OwnerRuntime::Entity(_) => None,
+                };
                 let surface = match &self.runtime {
                     OwnerRuntime::Agent => {
                         golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
@@ -641,15 +651,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
                     },
                 };
-                (*key, surface)
+                (*key, surface, admitted_surface)
             })
             .collect::<Vec<_>>();
-        for (key, surface) in surfaces {
-            self.state
-                .invocations
-                .entry_mut(key)
-                .authority
-                .replace_surface(surface);
+        for (key, surface, admitted_surface) in surfaces {
+            let authority = &mut self.state.invocations.entry_mut(key).authority;
+            authority.replace_surface(surface);
+            authority.replace_admitted_surface(admitted_surface);
         }
     }
 

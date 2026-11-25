@@ -53,6 +53,17 @@ impl MessageWithFields for InvocationGetView {
             Some(InvocationOutcome::Failure(failure)) => {
                 fields.push(("Error".to_string(), format_error(&failure.error)))
             }
+            Some(InvocationOutcome::BackgroundFailure(failure)) => {
+                if let Some(value) = &failure.value {
+                    fields.push((
+                        "Result".to_string(),
+                        pretty_json(&serde_json::to_value(value).ok().and_then(|mut value| {
+                            value.get_mut("value").map(serde_json::Value::take)
+                        })),
+                    ));
+                }
+                fields.push(("Error".to_string(), format_error(&failure.error)))
+            }
             None => {}
         }
         fields

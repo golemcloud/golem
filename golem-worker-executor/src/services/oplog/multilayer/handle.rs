@@ -418,6 +418,7 @@ impl Debug for MultiLayerOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for MultiLayerOplog {
     fn executor_shutdown_handle(&self) -> crate::services::oplog::OplogShutdownHandle {
         let retired = self.retired.clone();

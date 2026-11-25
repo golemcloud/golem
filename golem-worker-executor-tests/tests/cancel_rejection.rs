@@ -205,7 +205,8 @@ async fn late_rejection_after_cancel(
     let invocation = |key: &InvocationId, value: u64| AgentInvocation::AgentMethod {
         idempotency_key: *key,
         method_name: "inc_global_by".to_string(),
-        input: data_value!(value).into_parts().1,
+        input: data_value!(value).into_parts().1.try_into().unwrap(),
+        allow_streams: false,
         invocation_context: InvocationContextStack::fresh(),
         caller: callers::agent(
             owner.agent_id,
@@ -398,7 +399,8 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
     let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
         idempotency_key: *key,
         method_name: "inc_global_by".to_string(),
-        input: data_value!(1u64).into_parts().1,
+        input: data_value!(1u64).into_parts().1.try_into().unwrap(),
+        allow_streams: false,
         invocation_context: InvocationContextStack::fresh(),
         caller: callers::agent(
             owner.agent_id,
@@ -540,7 +542,8 @@ async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
     let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
         idempotency_key: *key,
         method_name: "inc_global_by".to_string(),
-        input: data_value!(1u64).into_parts().1,
+        input: data_value!(1u64).into_parts().1.try_into().unwrap(),
+        allow_streams: false,
         invocation_context: InvocationContextStack::fresh(),
         caller: caller.clone(),
         scope_card: None,
@@ -611,7 +614,8 @@ async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
                 method_name: "inc_global_by".to_string(),
             }),
             OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
-                input: data_value!(1u64).into_parts().1,
+                input: data_value!(1u64).into_parts().1.try_into().unwrap(),
+                allow_streams: false,
                 caller: caller.clone(),
                 scope_card: None,
             })),
@@ -752,7 +756,8 @@ async fn cancel_decides_before_reading_recent_results(
     let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
         idempotency_key: *key,
         method_name: "inc_global_by".to_string(),
-        input: data_value!(1u64).into_parts().1,
+        input: data_value!(1u64).into_parts().1.try_into().unwrap(),
+        allow_streams: false,
         invocation_context: InvocationContextStack::fresh(),
         caller: callers::agent(
             owner.agent_id,

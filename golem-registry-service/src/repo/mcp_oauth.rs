@@ -141,6 +141,7 @@ const RETURNING: &str = "environment_id, security_scheme_id, security_scheme_rev
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl McpOAuthGrantRepo for DbMcpOAuthGrantRepo<PostgresPool> {
     async fn begin_authorization(
         &self,

@@ -94,9 +94,9 @@ pub(super) fn invocation_agent_id(
     }
 }
 
-/// The create intent of the test DSL's invocation of `method` on `name` under `key`, so an agent
-/// acquired with it is the one that invocation creates: the keyed agent of `name` when `durable`,
-/// otherwise the instance without a key whose ID derives from the invocation's owner key.
+/// Explicitly prepares the agent targeted by the test DSL's invocation of `method` under `key`:
+/// the keyed agent of `name` when durable, otherwise the instance without a key whose ID derives
+/// from the invocation's owner key. This setup does not submit method arguments.
 pub(super) fn invocation_create_intent(
     executor: &TestWorkerExecutor,
     component_id: golem_common::model::component::ComponentId,
@@ -107,13 +107,15 @@ pub(super) fn invocation_create_intent(
 ) -> golem_worker_executor::worker::CreateIntent {
     use golem_worker_executor::worker::{CreateIntent, NewOwner};
     if durable {
-        CreateIntent::Invocation {
+        CreateIntent::Create {
             owner: NewOwner::keyed(component_id, name.clone()),
             idempotency_key: None,
+            exclusive: false,
         }
     } else {
-        CreateIntent::Invocation {
+        CreateIntent::Create {
             owner: NewOwner::unkeyed(component_id, name.clone()),
+            exclusive: false,
             idempotency_key: Some(
                 golem_common::model::InvocationRequestKey::external(
                     executor.auth_ctx().idempotency_scope(),

@@ -997,6 +997,7 @@ impl RegistryServiceGrpcApi {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::RegistryService
     for RegistryServiceGrpcApi
 {

@@ -455,6 +455,7 @@ impl ResourceLimitsGrpc {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ResourceLimits for ResourceLimitsGrpc {
     async fn initialize_account(
         &self,

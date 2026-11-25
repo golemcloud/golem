@@ -17,6 +17,7 @@ use crate::repo::{Deps, TestDb};
 use golem_common::config::DbSqliteConfig;
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_resource_override::DbAccountResourceOverrideRepo;
+use golem_registry_service::repo::account_tree::{DbAccountTreeRepo, preview_schema};
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::agent_secret::DbAgentSecretRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
@@ -30,6 +31,7 @@ use golem_registry_service::repo::installation::DbInstallationRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::plan::DbPlanRepo;
+use golem_registry_service::repo::plan_storage::DbPlanStorageRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::DbRegistryChangeRepo;
 use golem_registry_service::repo::retry_policy::DbRetryPolicyRepo;
@@ -78,6 +80,14 @@ impl SqliteDb {
         )
         .await
         .unwrap();
+        {
+            use sqlx::{ConnectOptions, Connection};
+            let mut conn = db_config.connect_options().connect().await.unwrap();
+            for script in preview_schema::SQLITE {
+                sqlx::raw_sql(script).execute(&mut conn).await.unwrap();
+            }
+            conn.close().await.unwrap();
+        }
 
         let pool = SqlitePool::configured(&db_config).await.unwrap();
 
@@ -111,6 +121,8 @@ async fn deps(db: &SqliteDb) -> Deps {
         account_resource_override_repo: std::sync::Arc::new(DbAccountResourceOverrideRepo::new(
             db.pool.clone(),
         )),
+        account_tree_repo: std::sync::Arc::new(DbAccountTreeRepo::logged(db.pool.clone())),
+        plan_storage_repo: std::sync::Arc::new(DbPlanStorageRepo::logged(db.pool.clone())),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(db.pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(db.pool.clone())),
         installation_repo: Box::new(DbInstallationRepo::logged(db.pool.clone())),
@@ -627,4 +639,105 @@ async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Deps) {
 #[test]
 async fn test_environment_type_ids_rollback_and_environment_isolation(deps: &Deps) {
     crate::repo::common::test_environment_type_ids_rollback_and_environment_isolation(deps).await;
+}
+
+#[test]
+async fn test_account_tree_has_one_root(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_has_one_root(deps).await;
+}
+
+#[test]
+async fn test_account_tree_sibling_keys(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_sibling_keys(deps).await;
+}
+
+#[test]
+async fn test_account_tree_failed_writes_leave_no_partial_state(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_failed_writes_leave_no_partial_state(deps).await;
+}
+
+#[test]
+async fn test_account_tree_maximum_bounds_and_rename(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_maximum_bounds_and_rename(deps).await;
+}
+
+#[test]
+async fn test_account_tree_grace_reserves_name_until_purge(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_grace_reserves_name_until_purge(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_follows_ancestor_changes(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_follows_ancestor_changes(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_rejects_delayed_load(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_rejects_delayed_load(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_expiry_backup(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_expiry_backup(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_eviction_and_lag(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_eviction_and_lag(deps).await;
+}
+
+#[test]
+async fn test_plan_definitions_are_versioned_and_owner_scoped(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_definitions_are_versioned_and_owner_scoped(deps).await;
+}
+
+#[test]
+async fn test_plan_assignment_follows_owner_and_latest_revision(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_assignment_follows_owner_and_latest_revision(deps).await;
+}
+
+#[test]
+async fn test_plan_writes_refuse_impossible_ranges(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_writes_refuse_impossible_ranges(deps).await;
+}
+
+#[test]
+async fn test_plan_opposing_writes_cannot_commit_impossible_range(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_opposing_writes_cannot_commit_impossible_range(deps).await;
+}
+
+#[test]
+async fn test_plan_retire_races_assignment(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_retire_races_assignment(deps).await;
+}
+
+#[test]
+async fn test_plan_seed_keeps_later_edits(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_seed_keeps_later_edits(deps).await;
+}
+
+#[test]
+async fn test_plan_operating_defaults_are_validated(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_operating_defaults_are_validated(deps).await;
+}
+
+#[test]
+async fn test_plan_bounds_round_trip_above_i64_max(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_bounds_round_trip_above_i64_max(deps).await;
+}
+
+#[test]
+async fn test_plan_edit_scales_with_members(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_edit_scales_with_members(deps).await;
+}
+
+#[test]
+async fn test_tree_purge_releases_plan_records(deps: &Deps) {
+    crate::repo::plan_storage::test_tree_purge_releases_plan_records(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_keeps_newer_install_over_delayed_load(deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_keeps_newer_install_over_delayed_load(deps)
+        .await;
 }

@@ -1,6 +1,8 @@
 use super::*;
 use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::{CommitLevel, OplogAddReceipt, OrderedOplogStart, PendingUpload};
+use crate::services::worker_fork::ForkCallOwner;
+use crate::services::worker_fork::publication::write_guest_result;
 use async_trait::async_trait;
 use golem_common::model::InvocationRequestOperation;
 use golem_common::model::StoredAgentInvocationPayload;
@@ -63,6 +65,7 @@ impl std::fmt::Debug for InMemoryOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for InMemoryOplog {
     fn task_owner(&self) -> Option<&crate::worker::tasks::WorkerTasks> {
         Some(&self.tasks)
@@ -191,8 +194,8 @@ impl Oplog for InMemoryOplog {
         Ok(self.entries.lock().unwrap().len() as u64)
     }
 
-    async fn upload_raw_payload(&self, _data: Vec<u8>) -> Result<RawOplogPayload, String> {
-        unimplemented!()
+    async fn upload_raw_payload(&self, data: Vec<u8>) -> Result<RawOplogPayload, String> {
+        Ok(RawOplogPayload::SerializedInline(data))
     }
 
     async fn download_raw_payload(
@@ -284,6 +287,7 @@ fn start_now() -> OplogEntry {
         function_name: HostFunctionName::MonotonicClockNow,
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
             HostRequestNoInput {},
         )))),
@@ -328,6 +332,7 @@ fn rejected_tool_reconstruction_start(parent_start_index: OplogIndex) -> OplogEn
         function_name: HostFunctionName::GolemToolInvocationRejected,
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(OplogPayload::Inline(Box::new(request))),
         durable_function_type: DurableFunctionType::WriteLocal,
         span_started: None,
@@ -392,8 +397,18 @@ fn custom_request(value: i32) -> HostRequest {
     HostRequest::Custom(value.into_typed_schema_value().unwrap())
 }
 
+/// An invocation id anchored at the `AgentInvocationStarted` the fixtures record at index 2,
+/// which [`enter_invocation`] consumes.
 fn test_invocation_id(ordinal: u64) -> DurableInvocationId {
-    DurableInvocationId::new(OplogIndex::from_u64(1), ordinal)
+    DurableInvocationId::new(OplogIndex::from_u64(2), ordinal)
+}
+
+/// Consumes the `AgentInvocationStarted` at the head of `rs`.
+async fn enter_invocation(rs: &ReplayState) {
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("an invocation starts");
 }
 
 fn divergence_of(error: &WorkerExecutorError) -> &ReplayDivergence {
@@ -474,6 +489,7 @@ fn custom_start_with_request(
         function_name: HostFunctionName::Custom(name.to_string()),
         invocation_id: Some(test_invocation_id(invocation_id)),
         observational_owner: None,
+        driver: None,
         request: Some(OplogPayload::Inline(Box::new(request))),
         durable_function_type: DurableFunctionType::ReadRemote,
         span_started: None,
@@ -549,12 +565,14 @@ async fn completed_custom_invocation_drains_nested_custom_subtree() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start("outer", 1, None, 1),
-        custom_start("inner", 2, Some(2), 2),
-        custom_end(3, 20),
-        custom_end(2, 10),
+        custom_start("inner", 2, Some(3), 2),
+        custom_end(4, 20),
+        custom_end(3, 10),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let claimed = claim_custom_start(
         &rs,
@@ -567,7 +585,7 @@ async fn completed_custom_invocation_drains_nested_custom_subtree() {
     .unwrap();
     match rs.await_resolution_outcome(claimed.handle).await.unwrap() {
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. }) => {
-            assert_eq!(end_idx, OplogIndex::from_u64(5));
+            assert_eq!(end_idx, OplogIndex::from_u64(6));
         }
         other => panic!("expected completed custom subtree, got {other:?}"),
     }
@@ -580,11 +598,13 @@ async fn incomplete_custom_invocation_drains_completed_descendants_then_reexecut
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start("outer", 1, None, 1),
-        custom_start("inner", 2, Some(2), 2),
-        custom_end(3, 20),
+        custom_start("inner", 2, Some(3), 2),
+        custom_end(4, 20),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let claimed = claim_custom_start(
         &rs,
@@ -595,7 +615,7 @@ async fn incomplete_custom_invocation_drains_completed_descendants_then_reexecut
     )
     .await
     .unwrap();
-    assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(2));
+    assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(3));
     assert!(matches!(
         rs.await_resolution_outcome(claimed.handle).await.unwrap(),
         ResolutionOutcome::Incomplete
@@ -608,11 +628,13 @@ async fn ordinary_claim_never_claims_observational_start() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start("outer", 1, None, 1),
-        observational_start_now(2, None),
+        observational_start_now(3, None),
         start_now(),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let handle = rs
         .claim_concurrent_start(
@@ -622,7 +644,7 @@ async fn ordinary_claim_never_claims_observational_start() {
         .await
         .unwrap();
 
-    assert_eq!(handle.start_idx(), OplogIndex::from_u64(4));
+    assert_eq!(handle.start_idx(), OplogIndex::from_u64(5));
 }
 
 #[test]
@@ -631,14 +653,16 @@ async fn custom_replay_skips_interleaved_observational_tree_without_stealing_sib
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start("outer", 1, None, 1),
-        observational_start_now(2, None),
-        start_now(),
-        end_for(4, 42),
-        end_for(3, 99),
-        custom_end(2, 10),
+        observational_start_now(3, None),
+        anchored_start(2, 2),
+        end_for(5, 42),
+        end_for(4, 99),
+        custom_end(3, 10),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let custom = claim_custom_start(
         &rs,
@@ -649,24 +673,18 @@ async fn custom_replay_skips_interleaved_observational_tree_without_stealing_sib
     )
     .await
     .unwrap();
-    let sibling = rs
-        .claim_concurrent_start(
-            &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::ReadLocal,
-        )
-        .await
-        .unwrap();
-    assert_eq!(sibling.start_idx(), OplogIndex::from_u64(4));
+    let sibling = claim_anchored(&rs, 2, 2).await;
+    assert_eq!(sibling.start_idx(), OplogIndex::from_u64(5));
 
     assert!(matches!(
         rs.await_resolution_outcome(sibling).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(5)
+            if end_idx == OplogIndex::from_u64(6)
     ));
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(7)
+            if end_idx == OplogIndex::from_u64(8)
     ));
 }
 
@@ -676,15 +694,17 @@ async fn custom_replay_skips_nested_observational_calls_and_stream_frames_by_ide
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start("outer", 1, None, 1),
-        observational_start_now(2, None),
-        owned_start_now(3),
-        stream_frame(4),
-        end_for(4, 42),
-        end_for(3, 99),
-        custom_end(2, 10),
+        observational_start_now(3, None),
+        owned_start_now(4),
+        stream_frame(5),
+        end_for(5, 42),
+        end_for(4, 99),
+        custom_end(3, 10),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let custom = claim_custom_start(
         &rs,
@@ -699,7 +719,7 @@ async fn custom_replay_skips_nested_observational_calls_and_stream_frames_by_ide
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(8)
+            if end_idx == OplogIndex::from_u64(9)
     ));
     assert!(rs.at_replay_tail());
 }
@@ -710,14 +730,16 @@ async fn outer_custom_replay_skips_observational_calls_owned_by_nested_custom_in
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start("outer", 1, None, 1),
-        custom_start("nested", 2, Some(2), 2),
-        observational_start_now(3, None),
-        end_for(4, 42),
-        custom_end(3, 20),
-        custom_end(2, 10),
+        custom_start("nested", 2, Some(3), 2),
+        observational_start_now(4, None),
+        end_for(5, 42),
+        custom_end(4, 20),
+        custom_end(3, 10),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let outer = claim_custom_start(
         &rs,
@@ -732,7 +754,7 @@ async fn outer_custom_replay_skips_observational_calls_owned_by_nested_custom_in
     assert!(matches!(
         rs.await_resolution_outcome(outer.handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(7)
+            if end_idx == OplogIndex::from_u64(8)
     ));
     assert!(rs.at_replay_tail());
 }
@@ -743,10 +765,12 @@ async fn incomplete_observational_tree_does_not_block_custom_live_fallback() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start("outer", 1, None, 1),
-        observational_start_now(2, None),
+        observational_start_now(3, None),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let custom = claim_custom_start(
         &rs,
@@ -771,13 +795,15 @@ async fn delivered_observational_completion_does_not_block_custom_live_fallback(
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start("outer", 1, None, 1),
-        observational_start_now(2, None),
-        end_for(3, 42),
-        delivered_for(3),
-        observational_start_now(2, None),
+        observational_start_now(3, None),
+        end_for(4, 42),
+        delivered_for(4),
+        observational_start_now(3, None),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let custom = claim_custom_start(
         &rs,
@@ -802,13 +828,15 @@ async fn observational_call_finishing_after_custom_terminal_is_still_skipped() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start("outer", 1, None, 1),
-        custom_end(2, 10),
-        observational_start_now(2, None),
-        end_for(4, 99),
+        custom_end(3, 10),
+        observational_start_now(3, None),
+        end_for(5, 99),
         remove_retry_policy(),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let custom = claim_custom_start(
         &rs,
@@ -822,14 +850,14 @@ async fn observational_call_finishing_after_custom_terminal_is_still_skipped() {
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(3)
+            if end_idx == OplogIndex::from_u64(4)
     ));
 
     let next = rs
         .try_get_oplog_entry(|entry| matches!(entry, OplogEntry::RemoveRetryPolicy { .. }))
         .await
         .unwrap();
-    assert_eq!(next.map(|(idx, _)| idx), Some(OplogIndex::from_u64(6)));
+    assert_eq!(next.map(|(idx, _)| idx), Some(OplogIndex::from_u64(7)));
 }
 
 #[test]
@@ -838,12 +866,14 @@ async fn custom_replay_skips_observational_cancellation() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start("outer", 1, None, 1),
-        observational_start_now(2, None),
-        cancelled_for(3),
-        custom_end(2, 10),
+        observational_start_now(3, None),
+        cancelled_for(4),
+        custom_end(3, 10),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let custom = claim_custom_start(
         &rs,
@@ -858,7 +888,7 @@ async fn custom_replay_skips_observational_cancellation() {
     assert!(matches!(
         rs.await_resolution_outcome(custom.handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(5)
+            if end_idx == OplogIndex::from_u64(6)
     ));
     assert!(rs.at_replay_tail());
 }
@@ -870,12 +900,14 @@ async fn custom_claim_matches_identical_generators_by_invocation_id_in_reverse_o
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start_with_request("generator", no_input.clone(), None, 1),
         custom_start_with_request("generator", no_input.clone(), None, 2),
-        custom_end(2, 10),
-        custom_end(3, 20),
+        custom_end(3, 10),
+        custom_end(4, 20),
     ])
     .await;
+    enter_invocation(&rs).await;
     let name = HostFunctionName::Custom("generator".to_string());
     let second = claim_custom_start(
         &rs,
@@ -895,17 +927,17 @@ async fn custom_claim_matches_identical_generators_by_invocation_id_in_reverse_o
     )
     .await
     .unwrap();
-    assert_eq!(first.handle.start_idx(), OplogIndex::from_u64(2));
-    assert_eq!(second.handle.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(first.handle.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(second.handle.start_idx(), OplogIndex::from_u64(4));
     assert!(matches!(
         rs.await_resolution_outcome(first.handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(4)
+            if end_idx == OplogIndex::from_u64(5)
     ));
     assert!(matches!(
         rs.await_resolution_outcome(second.handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(5)
+            if end_idx == OplogIndex::from_u64(6)
     ));
 }
 
@@ -916,10 +948,12 @@ async fn custom_claim_rejects_start_without_invocation_id() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start_without_invocation_id("generator", no_input.clone(), None),
-        custom_end(2, 10),
+        custom_end(3, 10),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let result = claim_custom_start(
         &rs,
@@ -935,7 +969,7 @@ async fn custom_claim_rejects_start_without_invocation_id() {
     let generator = HostFunctionName::Custom("generator".to_string());
     assert_start_divergence(
         &err,
-        2,
+        3,
         generator.clone(),
         generator,
         &[StartIdentityField::InvocationId],
@@ -953,17 +987,19 @@ async fn custom_claim_never_claims_observational_start_with_same_invocation_id()
     else {
         unreachable!();
     };
-    *observational_owner = Some(OplogIndex::from_u64(2));
+    *observational_owner = Some(OplogIndex::from_u64(3));
 
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start("owner", 0, None, 1),
         observational,
         custom_start_with_request("operation", request.clone(), None, 2),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let claimed = claim_custom_start(
         &rs,
@@ -975,7 +1011,7 @@ async fn custom_claim_never_claims_observational_start_with_same_invocation_id()
     .await
     .unwrap();
 
-    assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(4));
+    assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(5));
 }
 
 #[test]
@@ -985,12 +1021,14 @@ async fn custom_claim_ignores_start_without_invocation_id_before_exact_match() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start_without_invocation_id("operation", request.clone(), None),
         custom_start_with_request("operation", request.clone(), None, 2),
-        custom_end(2, 10),
-        custom_end(3, 20),
+        custom_end(3, 10),
+        custom_end(4, 20),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let claimed = claim_custom_start(
         &rs,
@@ -1001,7 +1039,7 @@ async fn custom_claim_ignores_start_without_invocation_id_before_exact_match() {
     )
     .await
     .unwrap();
-    assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(claimed.handle.start_idx(), OplogIndex::from_u64(4));
 }
 
 #[test]
@@ -1011,9 +1049,11 @@ async fn custom_claim_rejects_wrong_metadata_for_exact_id() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start_with_request("different-operation", request.clone(), None, 2),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let result = claim_custom_start(
         &rs,
@@ -1028,7 +1068,7 @@ async fn custom_claim_rejects_wrong_metadata_for_exact_id() {
     };
     assert_start_divergence(
         &err,
-        2,
+        3,
         HostFunctionName::Custom("different-operation".to_string()),
         HostFunctionName::Custom("operation".to_string()),
         &[StartIdentityField::FunctionName],
@@ -1041,10 +1081,12 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         custom_start("operation", 1, None, 1),
-        custom_end(2, 10),
+        custom_end(3, 10),
     ];
     let rs = replay_state_over(entries.clone()).await;
+    enter_invocation(&rs).await;
     let name = HostFunctionName::Custom("operation".to_string());
     let invocation_id = test_invocation_id(1);
 
@@ -1064,6 +1106,7 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
 
     drop(rs);
     let rs = replay_state_over(entries).await;
+    enter_invocation(&rs).await;
     let claimed_again = claim_custom_start(
         &rs,
         &name,
@@ -1073,7 +1116,7 @@ async fn custom_claim_id_can_be_reused_after_replay_restart() {
     )
     .await
     .unwrap();
-    assert_eq!(claimed_again.handle.start_idx(), OplogIndex::from_u64(2));
+    assert_eq!(claimed_again.handle.start_idx(), OplogIndex::from_u64(3));
 }
 
 fn remove_retry_policy() -> OplogEntry {
@@ -1126,6 +1169,7 @@ fn fork_start() -> OplogEntry {
         function_name: HostFunctionName::GolemApiFork,
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
             HostRequestNoInput {},
         )))),
@@ -1565,7 +1609,7 @@ async fn held_completed_reconstruction() -> (
     Arc<InMemoryOplog>,
     crate::durable_host::concurrent::HistoricalReconstruction,
 ) {
-    let parent = OplogIndex::from_u64(1);
+    let parent = OplogIndex::from_u64(2);
     let start = rejected_tool_reconstruction_start(parent);
     let oplog = Arc::new(InMemoryOplog::new());
     oplog
@@ -1574,8 +1618,9 @@ async fn held_completed_reconstruction() -> (
         })
         .await
         .unwrap();
+    oplog.add(unpinned_invocation_started()).await.unwrap();
     oplog.add(start).await.unwrap();
-    oplog.add(end_for(2, 1)).await.unwrap();
+    oplog.add(end_for(3, 1)).await.unwrap();
     let replay = test_replay_state(
         test_agent_id(),
         oplog.clone(),
@@ -1584,6 +1629,8 @@ async fn held_completed_reconstruction() -> (
     )
     .await
     .expect("failed to build replay state");
+    enter_invocation(&replay).await;
+    replay.take_new_replay_events();
     let mut handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let mut reconstruction = handle
         .take_historical_reconstruction()
@@ -1614,6 +1661,7 @@ async fn initializer_enumeration_preserves_growth_before_native_publication() ->
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl ResourceLimiterAsync for Allocation {
         async fn memory_growing(
             &mut self,
@@ -1909,7 +1957,7 @@ async fn growing_replay_target_revokes_an_active_settling_transition() {
 #[test]
 async fn claim_retried_after_replay_resumed_claims_the_grown_start() {
     let (replay, oplog, reconstruction) = held_completed_reconstruction().await;
-    let parent = OplogIndex::from_u64(1);
+    let parent = OplogIndex::from_u64(2);
     let claim = || {
         StartClaim::tool_invocation(
             &HostFunctionName::GolemEntityInvoke,
@@ -2024,15 +2072,17 @@ async fn historical_revision_updates_remain_for_root_after_entity_drain() {
 
 #[test]
 async fn primary_transition_releases_an_incomplete_reconstruction_fence() {
-    let parent = OplogIndex::from_u64(1);
+    let parent = OplogIndex::from_u64(2);
     let start = rejected_tool_reconstruction_start(parent);
     let replay = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         start,
     ])
     .await;
+    enter_invocation(&replay).await;
     let mut handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let start_index = handle.start_idx();
     let mut reconstruction = handle
@@ -2062,7 +2112,7 @@ async fn primary_transition_releases_an_incomplete_reconstruction_fence() {
 
 #[test]
 async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
-    let parent = OplogIndex::from_u64(1);
+    let parent = OplogIndex::from_u64(2);
     let first_start = rejected_tool_reconstruction_start(parent);
     let second_start = rejected_tool_reconstruction_start(parent);
     let oplog = Arc::new(InMemoryOplog::new());
@@ -2072,9 +2122,10 @@ async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
         })
         .await
         .unwrap();
+    oplog.add(unpinned_invocation_started()).await.unwrap();
     oplog.add(first_start).await.unwrap();
     oplog.add(second_start).await.unwrap();
-    oplog.add(end_for(3, 2)).await.unwrap();
+    oplog.add(end_for(4, 2)).await.unwrap();
     let replay = test_replay_state(
         test_agent_id(),
         oplog.clone(),
@@ -2083,6 +2134,7 @@ async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
     )
     .await
     .expect("failed to build replay state");
+    enter_invocation(&replay).await;
     let mut first = claim_rejected_tool_reconstruction(&replay, parent).await;
     let mut first_reconstruction = first
         .take_historical_reconstruction()
@@ -2114,7 +2166,7 @@ async fn target_growth_does_not_misclassify_a_reconstruction_as_incomplete() {
         "the incomplete candidate bypassed the completed reconstruction fence"
     );
 
-    let new_target = oplog.add(end_for(2, 1)).await.unwrap();
+    let new_target = oplog.add(end_for(3, 1)).await.unwrap();
     replay
         .set_replay_target(new_target)
         .await
@@ -2474,16 +2526,17 @@ async fn owner_lifecycle_interrupts_scope_resolution_without_crossing_delivery()
 async fn cancelled_owner_failure_unregister_keeps_historical_fence() {
     use crate::durable_host::tool::operation::{OwnerFailureWinner, OwnerToolOperations};
 
-    let parent = OplogIndex::from_u64(1);
+    let parent = OplogIndex::from_u64(2);
     let start = rejected_tool_reconstruction_start(parent);
     let oplog = Arc::new(InMemoryOplog::new());
     *oplog.entries.lock().unwrap() = vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         start,
         remove_retry_policy(),
-        end_for(2, 1),
+        end_for(3, 1),
         remove_retry_policy(),
     ];
     let owner = OwnerToolOperations::new();
@@ -2499,6 +2552,7 @@ async fn cancelled_owner_failure_unregister_keeps_historical_fence() {
     )
     .await
     .unwrap();
+    enter_invocation(&replay).await;
     let handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let start_index = handle.start_idx();
     let claims = replay.cursor.reconstruction_claims.clone();
@@ -2708,6 +2762,7 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         OplogEntry::CardInstalled {
             timestamp: Timestamp::now_utc(),
             entity_parent_start_index: None,
@@ -2716,9 +2771,10 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
             wallet_generation: 7,
         },
         custom_start("durable-operation", 41, None, 1),
-        custom_end(3, 42),
+        custom_end(4, 42),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let claimed = claim_custom_start(
         &rs,
@@ -2755,6 +2811,10 @@ async fn recorded_success_replays_without_live_expiry_or_authority_inputs() {
     assert_eq!(
         rs.take_new_replay_events(),
         vec![
+            ReplayEvent::InvocationWalletPinned {
+                oplog_index: OplogIndex::from_u64(2),
+                wallet_pin: unpinned_wallet_pin(),
+            },
             ReplayEvent::CardInstalled {
                 card,
                 wallet_generation: 7,
@@ -3610,6 +3670,7 @@ async fn dropped_scan_ahead_claim_leaves_no_residue_once_cursor_passes() {
             function_name: HostFunctionName::MonotonicClockNow,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
             )))),
@@ -3816,6 +3877,7 @@ fn start_with_parent(parent_start_index: u64) -> OplogEntry {
         function_name: HostFunctionName::MonotonicClockNow,
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
             HostRequestNoInput {},
         )))),
@@ -3837,6 +3899,7 @@ fn invocation_finished_for(invocation_id: golem_common::model::InvocationId) -> 
         method_name: None,
         consumed_fuel: 0,
         component_revision: ComponentRevision::INITIAL,
+        awaits_settlement: false,
     }
 }
 
@@ -3849,16 +3912,23 @@ async fn invocation_local_terminal_survives_the_final_host_call_and_replay_targe
     let rs = replay_state_over(vec![
         OplogEntry::recovery_succeeded(),
         unpinned_invocation_started(),
-        start_now(),
+        owned_start_now(2),
         end_for(3, 42),
-        OplogEntry::agent_invocation_failed(None, replayed_invocation_id(), error.clone(), anchor),
+        OplogEntry::agent_invocation_failed(
+            None,
+            replayed_invocation_id(),
+            error.clone(),
+            anchor,
+            false,
+        ),
         unpinned_invocation_started(),
         invocation_finished(),
     ])
     .await;
     assert_eq!(
         rs.invocation_finish_before(OplogIndex::from_u64(6)),
-        Some(terminal)
+        Some(anchor),
+        "the invocation's own AgentInvocationStarted is a boundary before the cursor reaches it"
     );
     assert_eq!(
         rs.recorded_local_failure_of_invocation(anchor),
@@ -3871,14 +3941,24 @@ async fn invocation_local_terminal_survives_the_final_host_call_and_replay_targe
         rs.recorded_local_failure_of_invocation(anchor),
         Some(terminal)
     );
+    assert!(
+        rs.recorded_local_failure_of_invocation(OplogIndex::from_u64(6))
+            .is_none(),
+        "the next invocation's boundary is its own Finished, not a local failure"
+    );
     rs.get_oplog_entry_agent_invocation_started()
         .await
         .unwrap()
         .unwrap();
+    assert_eq!(
+        rs.invocation_finish_before(OplogIndex::from_u64(6)),
+        Some(terminal)
+    );
     let call = rs
-        .claim_concurrent_start(
+        .claim_owned_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
         )
         .await
         .unwrap();
@@ -3914,24 +3994,28 @@ async fn invocation_local_terminal_rejects_a_different_identity_outcome_anchor_p
             golem_common::model::InvocationId(uuid::Uuid::from_u128(99)),
             error.clone(),
             anchor,
+            false,
         ),
         OplogEntry::agent_invocation_failed(
             Some(OplogIndex::INITIAL),
             replayed_invocation_id(),
             error.clone(),
             anchor,
+            false,
         ),
         OplogEntry::agent_invocation_failed(
             None,
             replayed_invocation_id(),
             error.clone(),
             anchor.next(),
+            false,
         ),
         OplogEntry::agent_invocation_failed(
             None,
             replayed_invocation_id(),
             AgentError::InternalError("other".into()),
             anchor,
+            false,
         ),
     ] {
         let rs = replay_state_over(vec![
@@ -3964,6 +4048,7 @@ async fn invocation_local_terminal_rejects_a_different_identity_outcome_anchor_p
                 replayed_invocation_id(),
                 error.clone(),
                 anchor,
+                false,
             ),
         ])
         .await;
@@ -4102,7 +4187,7 @@ async fn replay_invocation_with_error(
     let rs = replay_state_over(vec![
         remove_retry_policy(),
         invocation_started(test_invocation_wallet_pin()),
-        start_now(),
+        owned_start_now(2),
         invocation_error_for(error_invocation_id, 3),
         end_for(3, 42),
         invocation_finished(),
@@ -4112,9 +4197,10 @@ async fn replay_invocation_with_error(
         .await?
         .expect("expected invocation start");
     let handle = rs
-        .claim_concurrent_start(
+        .claim_owned_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
         )
         .await?;
     rs.await_resolution(handle).await?;
@@ -4229,17 +4315,22 @@ async fn invocation_boundary_tolerates_nested_abandoned_scope() {
 
 #[test]
 async fn invocation_boundary_rejects_unclosed_abandoned_start() {
-    // [RecoverySucceeded, Start(2), AgentInvocationFinished(3)] — a dangling abandoned Start with no
-    // terminal before the finished marker stays fatal: the closed-tail structural validation
-    // fails.
+    // [RecoverySucceeded, AgentInvocationStarted(2), Start(3), AgentInvocationFinished(4)] — a
+    // dangling abandoned Start of the invocation with no terminal before the finished marker
+    // stays fatal: the closed-tail structural validation fails.
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
-        start_now(),
+        unpinned_invocation_started(),
+        anchored_start(2, 0),
         invocation_finished(),
     ])
     .await;
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("an invocation starts");
     let err = read_invocation_finished(&rs)
         .await
         .expect_err("unclosed abandoned Start must be fatal");
@@ -4405,11 +4496,11 @@ async fn invocation_boundary_tolerates_abandoned_child_of_claimed_start() {
 }
 
 #[test]
-async fn invocation_boundary_tolerates_abandoned_start_with_unknown_parent() {
-    // [RecoverySucceeded, Start(2, parent=99), End(2→3), AgentInvocationFinished(4)] — an abandoned
-    // Start whose parent lies outside the walked records (a claimed scope, or a region
-    // deleted by a jump/revert) is treated as a root of the abandoned tail: the parent
-    // linkage is informational, only the closed-tail structure is validated.
+async fn invocation_boundary_rejects_abandoned_start_with_unknown_parent() {
+    // [RecoverySucceeded, Start(2, parent=99), End(2→3), AgentInvocationFinished(4)] — no
+    // producer records a parent the walked records do not hold: a jump or a revert deletes a
+    // suffix of the oplog, so no later record references a deleted Start. The orphaned parent of
+    // the abandoned Start is a divergence.
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
@@ -4419,11 +4510,13 @@ async fn invocation_boundary_tolerates_abandoned_start_with_unknown_parent() {
         invocation_finished(),
     ])
     .await;
-    let result = read_invocation_finished(&rs).await.unwrap();
-    assert!(matches!(
-        result,
-        Some(AgentInvocationResult::AgentInitialization)
-    ));
+    let err = read_invocation_finished(&rs)
+        .await
+        .expect_err("an abandoned Start with an unknown parent must be fatal");
+    assert!(
+        err.to_string().contains("references the later entry 99"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]
@@ -4491,18 +4584,19 @@ async fn invocation_boundary_rejects_terminal_of_resolved_claimed_start() {
 
 #[test]
 async fn invocation_boundary_rejects_unclaimed_fork_pair() {
-    // [RecoverySucceeded, Start(2, GolemApiFork), End(2→3, Forked), AgentInvocationFinished(4)] — an
-    // unclaimed fork pair is a dedicated-positional-consumer record that the replayed guest
-    // never requested. It must stay fatal at the invocation boundary, and no replay event may
-    // be applied for it.
+    // [RecoverySucceeded, AgentInvocationStarted(2), Start(3, GolemApiFork), End(3→4, Forked),
+    // AgentInvocationFinished(5)] — an unclaimed fork pair is a dedicated-positional-consumer
+    // record that the replayed guest never requested. It must stay fatal at the invocation
+    // boundary, and no replay event may be applied for it.
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
-        fork_start(),
+        unpinned_invocation_started(),
+        with_invocation_id(fork_start(), 2, 0),
         OplogEntry::End {
             timestamp: Timestamp::now_utc(),
-            start_index: OplogIndex::from_u64(2),
+            start_index: OplogIndex::from_u64(3),
             response: Some(OplogPayload::Inline(Box::new(HostResponse::GolemApiFork(
                 HostResponseGolemApiFork {
                     forked_agent_id: Some(AgentId::from_parts(7, 1)),
@@ -4516,6 +4610,12 @@ async fn invocation_boundary_rejects_unclaimed_fork_pair() {
         invocation_finished(),
     ])
     .await;
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("an invocation starts");
+    // The invocation's wallet pin is the only event before the fork pair.
+    rs.take_new_replay_events();
 
     let err = read_invocation_finished(&rs)
         .await
@@ -4528,6 +4628,108 @@ async fn invocation_boundary_rejects_unclaimed_fork_pair() {
     assert!(
         rs.take_new_replay_events().is_empty(),
         "no replay event may be emitted for the rejected fork pair"
+    );
+}
+
+/// The target of a fork that an entity body called: the copied prefix, which ends at the body's
+/// entity `Start` (3) under the invocation started at 2, then the fork call pair that
+/// `write_guest_result` copies with `owner`.
+async fn entity_fork_target(owner: ForkCallOwner) -> (ReplayState, Arc<InMemoryOplog>) {
+    let oplog = Arc::new(InMemoryOplog::new());
+    for entry in [
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        unpinned_invocation_started(),
+        with_parent(start_named(HostFunctionName::GolemEntityInvoke), 2),
+    ] {
+        oplog.add(entry).await.unwrap();
+    }
+    write_guest_result(oplog.as_ref(), owner, &AgentId::from_parts(7, 1))
+        .await
+        .unwrap();
+    let rs = test_replay_state(
+        test_agent_id(),
+        oplog.clone() as Arc<dyn Oplog>,
+        DeletedRegions::default(),
+        None,
+    )
+    .await
+    .unwrap();
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("an invocation starts");
+    let body = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::GolemEntityInvoke,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    assert_eq!(body.start_idx(), OplogIndex::from_u64(3));
+    (rs, oplog)
+}
+
+/// The fork call of the entity body at 3, as the body replays it.
+fn entity_fork_claim(fork_id: DurableInvocationId) -> StartClaim {
+    StartClaim::owned(
+        &HostFunctionName::GolemApiFork,
+        &DurableFunctionType::WriteRemote,
+        OplogIndex::from_u64(3),
+    )
+    .with_invocation_id(Some(fork_id))
+}
+
+#[test]
+async fn a_fork_copy_repeats_the_entity_parent_its_target_replay_claims() {
+    let fork_id = DurableInvocationId::new(OplogIndex::from_u64(3), 0);
+    let (rs, oplog) = entity_fork_target(ForkCallOwner {
+        parent_start_index: Some(OplogIndex::from_u64(3)),
+        invocation_id: Some(fork_id),
+        ..ForkCallOwner::default()
+    })
+    .await;
+    assert!(matches!(
+        oplog.read(OplogIndex::from_u64(4)).await.unwrap(),
+        OplogEntry::Start {
+            function_name: HostFunctionName::GolemApiFork,
+            parent_start_index: Some(parent),
+            invocation_id: Some(id),
+            ..
+        } if parent == OplogIndex::from_u64(3) && id == fork_id
+    ));
+
+    let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
+        .claim_start_or_replay_end(entity_fork_claim(fork_id))
+        .await
+        .unwrap()
+    else {
+        panic!("the entity body claims the copied fork call");
+    };
+    assert!(matches!(
+        rs.await_resolution_outcome(handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(5)
+    ));
+}
+
+#[test]
+async fn a_fork_copy_without_the_entity_parent_is_not_claimed_by_the_body() {
+    let fork_id = DurableInvocationId::new(OplogIndex::from_u64(3), 0);
+    let (rs, _) = entity_fork_target(ForkCallOwner {
+        invocation_id: Some(fork_id),
+        ..ForkCallOwner::default()
+    })
+    .await;
+    let outcome = rs
+        .claim_start_or_replay_end(entity_fork_claim(fork_id))
+        .await;
+    assert!(
+        !matches!(outcome, Ok(ReplayStartClaimOutcome::Claimed { .. })),
+        "a copy without the parent does not match the body's claim: {:?}",
+        outcome.err()
     );
 }
 
@@ -4558,6 +4760,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             function_name: HostFunctionName::P3HttpClientConsumeBody,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
             )))),
@@ -4571,6 +4774,7 @@ async fn invocation_boundary_tolerates_abandoned_consume_body_scope_shape() {
             function_name: HostFunctionName::P3HttpClientConsumeBodyChunk,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
             )))),
@@ -5876,10 +6080,12 @@ async fn completed_entity_body_detects_unconsumed_attachment_read() {
 #[test_r::timeout("10s")]
 async fn custom_subtree_attachment_observation_does_not_block_resolution() {
     let mut entries = attachment_terminal_prefix();
+    let invocation_id = DurableInvocationId::new(OplogIndex::from_u64(4), 1);
     entries.extend([
-        custom_start("outer", 1, None, 1),
-        attachment_terminal_observation(true, Some(OplogIndex::from_u64(4))),
-        custom_end(4, 10),
+        unpinned_invocation_started(),
+        with_invocation_id(custom_start("outer", 1, None, 1), 4, 1),
+        attachment_terminal_observation(true, Some(OplogIndex::from_u64(5))),
+        custom_end(5, 10),
     ]);
     let rs = replay_state_over(entries).await;
     let terminal = rs
@@ -5890,17 +6096,18 @@ async fn custom_subtree_attachment_observation_does_not_block_resolution() {
         .await
         .unwrap();
     rs.await_resolution(terminal).await.unwrap();
+    enter_invocation(&rs).await;
     let claimed = claim_custom_start(
         &rs,
         &HostFunctionName::Custom("outer".into()),
         &DurableFunctionType::ReadRemote,
         None,
-        test_invocation_id(1),
+        invocation_id,
     )
     .await
     .unwrap();
     assert_eq!(
-        rs.unconsumed_scope_head(OplogIndex::from_u64(4), HashSet::new())
+        rs.unconsumed_scope_head(OplogIndex::from_u64(5), HashSet::new())
             .await
             .unwrap(),
         None
@@ -5924,20 +6131,22 @@ async fn custom_subtree_guest_observation_does_not_block_resolution() {
         {
             record.observation =
                 golem_common::model::durable_stream::StreamConsumerObservation::Guest {
-                    parent_start_index: Some(OplogIndex::from_u64(2)),
+                    parent_start_index: Some(OplogIndex::from_u64(3)),
                 };
         }
         let mut entries = vec![
             OplogEntry::RecoverySucceeded {
                 timestamp: Timestamp::now_utc(),
             },
+            unpinned_invocation_started(),
             custom_start("outer", 1, None, 1),
             observation,
         ];
         if complete {
-            entries.push(custom_end(2, 10));
+            entries.push(custom_end(3, 10));
         }
         let rs = replay_state_over(entries).await;
+        enter_invocation(&rs).await;
         let claimed = claim_custom_start(
             &rs,
             &HostFunctionName::Custom("outer".to_string()),
@@ -6180,17 +6389,19 @@ async fn guest_stream_observation_waits_for_unreached_direct_calls() {
             OplogEntry::RecoverySucceeded {
                 timestamp: Timestamp::now_utc(),
             },
+            unpinned_invocation_started(),
             start,
-            end_for(2, 42),
+            end_for(3, 42),
             consumer_observation(0, true, terminal),
             remove_retry_policy(),
         ])
         .await;
+        enter_invocation(&rs).await;
         let order = GuestReadOrder {
-            anchor: OplogIndex::from_u64(1),
+            anchor: OplogIndex::from_u64(2),
         };
         let mut delivery =
-            Box::pin(rs.await_guest_stream_observation(OplogIndex::from_u64(4), Some(order)));
+            Box::pin(rs.await_guest_stream_observation(OplogIndex::from_u64(5), Some(order)));
         assert!(
             tokio::time::timeout(Duration::from_millis(50), delivery.as_mut())
                 .await
@@ -6212,12 +6423,12 @@ async fn guest_stream_observation_waits_for_unreached_direct_calls() {
         let barrier = delivery.await.unwrap();
         // A direct call can finish with the native read holding the advance gate.
         assert!(
-            matches!(rs.await_resolution(call).await.unwrap(), Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(3))
+            matches!(rs.await_resolution(call).await.unwrap(), Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(4))
         );
         barrier.acknowledge();
         assert_eq!(
             rs.get_oplog_entry(None).await.unwrap().0,
-            OplogIndex::from_u64(5)
+            OplogIndex::from_u64(6)
         );
     }
 }
@@ -6235,17 +6446,19 @@ async fn guest_stream_observation_waits_for_same_invocation_claims_only() {
             OplogEntry::RecoverySucceeded {
                 timestamp: Timestamp::now_utc(),
             },
+            unpinned_invocation_started(),
             start,
-            end_for(2, 42),
+            end_for(3, 42),
             consumer_observation(0, true, false),
             remove_retry_policy(),
         ])
         .await;
+        enter_invocation(&rs).await;
         let order = GuestReadOrder {
-            anchor: OplogIndex::from_u64(if same_invocation { 1 } else { 10 }),
+            anchor: OplogIndex::from_u64(if same_invocation { 2 } else { 10 }),
         };
         let mut delivery =
-            Box::pin(rs.await_guest_stream_observation(OplogIndex::from_u64(4), Some(order)));
+            Box::pin(rs.await_guest_stream_observation(OplogIndex::from_u64(5), Some(order)));
         if same_invocation {
             assert!(
                 tokio::time::timeout(Duration::from_millis(50), delivery.as_mut())
@@ -6282,36 +6495,39 @@ async fn guest_stream_observation_waits_for_same_invocation_claims_only() {
 async fn guest_stream_observation_waits_for_host_internal_claims_or_adoption() {
     for cancelled in [false, true] {
         let mut outer = start_named(HostFunctionName::P3MonotonicClockWaitFor);
-        let mut child = owned_start_now(2);
+        let mut child = owned_start_now(3);
         for start in [&mut outer, &mut child] {
             let OplogEntry::Start { invocation_id, .. } = start else {
                 unreachable!()
             };
             *invocation_id = Some(test_invocation_id(7));
         }
-        // Recovery, Start A=2, Start B=3 (parent A), End B=4, terminal A=5,
-        // observation=6. Both Starts carry the same import id, including its ordinal.
+        // Recovery, AgentInvocationStarted=2, Start A=3, Start B=4 (parent A), End B=5,
+        // terminal A=6, observation=7. Both Starts carry the same import id, including its
+        // ordinal.
         let rs = replay_state_over(vec![
             OplogEntry::RecoverySucceeded {
                 timestamp: Timestamp::now_utc(),
             },
+            unpinned_invocation_started(),
             outer,
             child,
-            end_for(3, 43),
+            end_for(4, 43),
             if cancelled {
-                cancelled_for(2)
+                cancelled_for(3)
             } else {
-                end_for(2, 42)
+                end_for(3, 42)
             },
             consumer_observation(0, true, true),
             remove_retry_policy(),
         ])
         .await;
+        enter_invocation(&rs).await;
         let order = GuestReadOrder {
-            anchor: OplogIndex::from_u64(1),
+            anchor: OplogIndex::from_u64(2),
         };
         let mut delivery =
-            Box::pin(rs.await_guest_stream_observation(OplogIndex::from_u64(6), Some(order)));
+            Box::pin(rs.await_guest_stream_observation(OplogIndex::from_u64(7), Some(order)));
         assert!(futures::poll!(delivery.as_mut()).is_pending());
         let ReplayStartClaimOutcome::Claimed { handle: outer, .. } = rs
             .claim_start_or_replay_end(
@@ -6327,7 +6543,7 @@ async fn guest_stream_observation_waits_for_host_internal_claims_or_adoption() {
         else {
             panic!("recorded import must be claimed")
         };
-        assert_eq!(outer.start_idx(), OplogIndex::from_u64(2));
+        assert_eq!(outer.start_idx(), OplogIndex::from_u64(3));
         if !cancelled {
             assert!(futures::poll!(delivery.as_mut()).is_pending());
             let ReplayStartClaimOutcome::Claimed { handle: child, .. } = rs
@@ -6335,7 +6551,7 @@ async fn guest_stream_observation_waits_for_host_internal_claims_or_adoption() {
                     StartClaim::owned(
                         &HostFunctionName::MonotonicClockNow,
                         &DurableFunctionType::ReadLocal,
-                        OplogIndex::from_u64(2),
+                        OplogIndex::from_u64(3),
                     )
                     .with_invocation_id(Some(test_invocation_id(7))),
                 )
@@ -6344,9 +6560,9 @@ async fn guest_stream_observation_waits_for_host_internal_claims_or_adoption() {
             else {
                 panic!("recorded internal call must be claimed")
             };
-            assert_eq!(child.start_idx(), OplogIndex::from_u64(3));
+            assert_eq!(child.start_idx(), OplogIndex::from_u64(4));
             assert!(
-                matches!(rs.await_resolution(child).await.unwrap(), Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(4))
+                matches!(rs.await_resolution(child).await.unwrap(), Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(5))
             );
         }
         let barrier = delivery.await.unwrap();
@@ -6354,14 +6570,14 @@ async fn guest_stream_observation_waits_for_host_internal_claims_or_adoption() {
             Resolution::Cancelled { partial: None, .. } => assert!(cancelled),
             Resolution::Completed { end_idx, .. } => {
                 assert!(!cancelled);
-                assert_eq!(end_idx, OplogIndex::from_u64(5));
+                assert_eq!(end_idx, OplogIndex::from_u64(6));
             }
             other => panic!("unexpected import resolution {other:?}"),
         }
         barrier.acknowledge();
         assert_eq!(
             rs.get_oplog_entry(None).await.unwrap().0,
-            OplogIndex::from_u64(7)
+            OplogIndex::from_u64(8)
         );
     }
 }
@@ -6936,15 +7152,19 @@ async fn await_natural_tail_end_park_restores_activity_on_error_and_drop() {
     }
 }
 
-fn unpinned_invocation_started() -> OplogEntry {
-    invocation_started(InvocationWalletPin {
+fn unpinned_wallet_pin() -> InvocationWalletPin {
+    InvocationWalletPin {
         wallet_token: WalletVersionToken {
             wallet_id_hash: [3; 32],
             generation: 0,
         },
         pinned_card_ids: Vec::new(),
         scope_card_id: None,
-    })
+    }
+}
+
+fn unpinned_invocation_started() -> OplogEntry {
+    invocation_started(unpinned_wallet_pin())
 }
 
 #[test]
@@ -6959,7 +7179,7 @@ async fn completion_delivery_marker_in_later_invocation_parks_only_until_its_inv
             timestamp: Timestamp::now_utc(),
         },
         unpinned_invocation_started(),
-        start_now(),
+        owned_start_now(2),
         end_for(3, 42),
         invocation_finished(),
         unpinned_invocation_started(),
@@ -6972,9 +7192,10 @@ async fn completion_delivery_marker_in_later_invocation_parks_only_until_its_inv
         .unwrap()
         .expect("invocation A starts");
     let handle = rs
-        .claim_concurrent_start(
+        .claim_owned_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
         )
         .await
         .unwrap();
@@ -7006,8 +7227,8 @@ async fn completion_delivery_marker_in_later_invocation_parks_only_until_its_inv
     );
     assert_eq!(
         tracker.active_count(),
-        1,
-        "the wait is active again once its marker belongs to the current invocation"
+        0,
+        "the next invocation's AgentInvocationStarted still lies before the marker"
     );
 
     rs.get_oplog_entry_agent_invocation_started()
@@ -7016,7 +7237,11 @@ async fn completion_delivery_marker_in_later_invocation_parks_only_until_its_inv
         .expect("invocation B starts");
     let barrier = delivery.await.unwrap();
     assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(7));
-    assert_eq!(tracker.active_count(), 1);
+    assert_eq!(
+        tracker.active_count(),
+        1,
+        "the wait is active once its marker belongs to the current invocation"
+    );
     barrier.acknowledge();
     assert!(read_invocation_finished(&rs).await.unwrap().is_some());
     drop(activity);
@@ -7033,7 +7258,7 @@ async fn completion_delivery_marker_in_same_invocation_stays_active() {
             timestamp: Timestamp::now_utc(),
         },
         unpinned_invocation_started(),
-        start_now(),
+        owned_start_now(2),
         end_for(3, 42),
         remove_retry_policy(),
         delivered_for(3),
@@ -7045,9 +7270,10 @@ async fn completion_delivery_marker_in_same_invocation_stays_active() {
         .unwrap()
         .expect("invocation starts");
     let handle = rs
-        .claim_concurrent_start(
+        .claim_owned_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
         )
         .await
         .unwrap();
@@ -7097,7 +7323,7 @@ async fn delivery_waits_sharing_a_later_invocation_boundary_park_without_oplog_r
         unpinned_invocation_started(),
     ];
     for call in 0..CALLS {
-        entries.push(start_now());
+        entries.push(owned_start_now(2));
         entries.push(end_for(start_of(call).as_u64(), call));
     }
     entries.extend((0..TAIL).map(|_| remove_retry_policy()));
@@ -7115,9 +7341,10 @@ async fn delivery_waits_sharing_a_later_invocation_boundary_park_without_oplog_r
         .expect("invocation A starts");
     for _ in 0..CALLS {
         let handle = rs
-            .claim_concurrent_start(
+            .claim_owned_concurrent_start(
                 &HostFunctionName::MonotonicClockNow,
                 &DurableFunctionType::ReadLocal,
+                OplogIndex::from_u64(2),
             )
             .await
             .unwrap();
@@ -7168,7 +7395,11 @@ async fn delivery_waits_sharing_a_later_invocation_boundary_park_without_oplog_r
         assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
     }
     assert!(read_invocation_finished(&rs).await.unwrap().is_some());
-    assert_eq!(rs.invocation_finish_before(marker_of(0)), None);
+    assert_eq!(
+        rs.invocation_finish_before(marker_of(0)),
+        Some(finish.next()),
+        "the next invocation's AgentInvocationStarted is the boundary after the finish"
+    );
     for delivery in &mut deliveries {
         assert!(
             tokio::time::timeout(Duration::from_millis(5), delivery.as_mut())
@@ -7178,17 +7409,23 @@ async fn delivery_waits_sharing_a_later_invocation_boundary_park_without_oplog_r
     }
     assert_eq!(
         tracker.active_count(),
-        CALLS as usize,
-        "every wait is active once its marker belongs to the current invocation"
+        0,
+        "every wait stays passive until the next invocation starts"
     );
 
     rs.get_oplog_entry_agent_invocation_started()
         .await
         .unwrap()
         .expect("invocation B starts");
+    assert_eq!(rs.invocation_finish_before(marker_of(0)), None);
     for delivery in deliveries {
         delivery.await.unwrap().acknowledge();
     }
+    assert_eq!(
+        tracker.active_count(),
+        CALLS as usize,
+        "every wait is active once its marker belongs to the current invocation"
+    );
     assert!(read_invocation_finished(&rs).await.unwrap().is_some());
     drop(activities);
     assert_eq!(tracker.active_count(), 0);
@@ -7206,7 +7443,7 @@ async fn delivery_wait_behind_a_deleted_invocation_finish_stays_active() {
             timestamp: Timestamp::now_utc(),
         },
         unpinned_invocation_started(),
-        start_now(),
+        owned_start_now(2),
         end_for(3, 42),
         invocation_finished(),
         unpinned_invocation_started(),
@@ -7216,6 +7453,11 @@ async fn delivery_wait_behind_a_deleted_invocation_finish_stays_active() {
     ];
     let marker = OplogIndex::from_u64(8);
     let visible = replay_state_over(entries.clone()).await;
+    visible
+        .get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation starts");
     assert_eq!(
         visible.invocation_finish_before(marker),
         Some(OplogIndex::from_u64(5))
@@ -7233,16 +7475,16 @@ async fn delivery_wait_behind_a_deleted_invocation_finish_stays_active() {
     )
     .await
     .unwrap();
-    assert_eq!(rs.invocation_finish_before(marker), None);
-
     rs.get_oplog_entry_agent_invocation_started()
         .await
         .unwrap()
         .expect("invocation starts");
+    assert_eq!(rs.invocation_finish_before(marker), None);
     let handle = rs
-        .claim_concurrent_start(
+        .claim_owned_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
         )
         .await
         .unwrap();
@@ -7273,7 +7515,7 @@ async fn delivery_wait_behind_a_deleted_invocation_finish_stays_active() {
 
 #[test]
 #[test_r::timeout("30s")]
-async fn invocation_finishes_follow_replay_target_shrink_and_regrowth() {
+async fn invocation_boundaries_follow_replay_target_shrink_and_regrowth() {
     use crate::durable_host::tail_work::TailWorkTracker;
 
     let (rs, oplog) = replay_state_and_oplog_over(vec![
@@ -7281,7 +7523,7 @@ async fn invocation_finishes_follow_replay_target_shrink_and_regrowth() {
             timestamp: Timestamp::now_utc(),
         },
         unpinned_invocation_started(),
-        start_now(),
+        owned_start_now(2),
         end_for(3, 42),
         invocation_finished(),
         unpinned_invocation_started(),
@@ -7291,6 +7533,15 @@ async fn invocation_finishes_follow_replay_target_shrink_and_regrowth() {
     .await;
     let finish = OplogIndex::from_u64(5);
     let marker = OplogIndex::from_u64(7);
+    // The invocation's own AgentInvocationStarted is a boundary until the cursor consumed it.
+    assert_eq!(
+        rs.invocation_finish_before(marker),
+        Some(OplogIndex::from_u64(2))
+    );
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("invocation A starts");
     assert_eq!(rs.invocation_finish_before(marker), Some(finish));
 
     rs.set_replay_target(OplogIndex::from_u64(4)).await.unwrap();
@@ -7305,14 +7556,11 @@ async fn invocation_finishes_follow_replay_target_shrink_and_regrowth() {
     rs.set_replay_target(OplogIndex::from_u64(8)).await.unwrap();
     assert_eq!(rs.invocation_finish_before(marker), Some(finish));
 
-    rs.get_oplog_entry_agent_invocation_started()
-        .await
-        .unwrap()
-        .expect("invocation A starts");
     let handle = rs
-        .claim_concurrent_start(
+        .claim_owned_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
         )
         .await
         .unwrap();
@@ -8286,45 +8534,43 @@ async fn mismatched_invocation_rejects_before_later_delivery_but_waits_for_earli
                 OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
                 },
-                start_now(),
+                unpinned_invocation_started(),
+                with_invocation_id(start_now(), 2, 1),
                 recorded,
-                end_for(2, 42),
-                end_for(3, 43),
-                delivered_for(3),
+                end_for(3, 42),
+                end_for(4, 43),
+                delivered_for(4),
             ]
         } else if earlier_delivery {
             vec![
                 OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
                 },
-                start_now(),
-                end_for(2, 42),
-                delivered_for(2),
+                unpinned_invocation_started(),
+                with_invocation_id(start_now(), 2, 1),
+                end_for(3, 42),
+                delivered_for(3),
                 recorded,
-                start_resolution(),
-                end_for(6, 44),
-                end_for(5, 43),
-                delivered_for(5),
+                with_invocation_id(start_resolution(), 2, 2),
+                end_for(7, 44),
+                end_for(6, 43),
+                delivered_for(6),
             ]
         } else {
             vec![
                 OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
                 },
+                unpinned_invocation_started(),
                 recorded,
-                end_for(2, 43),
-                delivered_for(2),
+                end_for(3, 43),
+                delivered_for(3),
             ]
         };
         let rs = replay_state_over(entries).await;
+        enter_invocation(&rs).await;
         if retain_conflict {
-            let first = rs
-                .claim_concurrent_start(
-                    &HostFunctionName::MonotonicClockNow,
-                    &DurableFunctionType::ReadLocal,
-                )
-                .await
-                .unwrap();
+            let first = claim_anchored(&rs, 2, 1).await;
             rs.await_resolution(first).await.unwrap();
             assert!(rs.has_unclaimed_retained_starts());
         }
@@ -8340,25 +8586,21 @@ async fn mismatched_invocation_rejects_before_later_delivery_but_waits_for_earli
                 "an earlier guest delivery still gates the claim",
             )
             .await;
-            let first = rs
-                .claim_concurrent_start(
-                    &HostFunctionName::MonotonicClockNow,
-                    &DurableFunctionType::ReadLocal,
-                )
-                .await
-                .unwrap();
+            let first = claim_anchored(&rs, 2, 1).await;
             rs.await_resolution(first).await.unwrap();
-            rs.await_completion_delivery(OplogIndex::from_u64(2), OplogIndex::from_u64(4), None)
+            rs.await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5), None)
                 .await
                 .unwrap()
                 .acknowledge();
-            let sibling = rs
-                .claim_concurrent_start(
+            let sibling = claimed(
+                &rs,
+                StartClaim::unowned(
                     &HostFunctionName::MonotonicClockResolution,
                     &DurableFunctionType::ReadLocal,
                 )
-                .await
-                .unwrap();
+                .with_invocation_id(Some(test_invocation_id(2))),
+            )
+            .await;
             rs.await_resolution(sibling).await.unwrap();
             assert!(rs.has_unclaimed_retained_starts());
         }
@@ -8389,16 +8631,18 @@ async fn same_invocation_sibling_does_not_hide_a_matching_start_after_delivery()
             OplogEntry::RecoverySucceeded {
                 timestamp: Timestamp::now_utc(),
             },
+            unpinned_invocation_started(),
             sibling,
-            end_for(2, 41),
-            start_now(),
-            end_for(4, 42),
-            delivered_for(4),
+            end_for(3, 41),
+            with_invocation_id(start_now(), 2, 8),
+            end_for(5, 42),
+            delivered_for(5),
             matching,
-            end_for(7, 43),
-            delivered_for(7),
+            end_for(8, 43),
+            delivered_for(8),
         ])
         .await;
+        enter_invocation(&rs).await;
         let claim = StartClaim::unowned(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
@@ -8413,14 +8657,8 @@ async fn same_invocation_sibling_does_not_hide_a_matching_start_after_delivery()
                 "a same-id sibling must not bypass the delivery"
             );
         }
-        let control = rs
-            .claim_concurrent_start(
-                &HostFunctionName::MonotonicClockNow,
-                &DurableFunctionType::ReadLocal,
-            )
-            .await
-            .unwrap();
-        assert_eq!(control.start_idx(), OplogIndex::from_u64(4));
+        let control = claim_anchored(&rs, 2, 8).await;
+        assert_eq!(control.start_idx(), OplogIndex::from_u64(5));
         rs.await_resolution(control).await.unwrap();
         assert!(rs.has_unclaimed_retained_starts());
         assert!(
@@ -8429,14 +8667,14 @@ async fn same_invocation_sibling_does_not_hide_a_matching_start_after_delivery()
                 .is_err(),
             "a retained sibling must not reject a later full match"
         );
-        rs.await_completion_delivery(OplogIndex::from_u64(4), OplogIndex::from_u64(6), None)
+        rs.await_completion_delivery(OplogIndex::from_u64(5), OplogIndex::from_u64(7), None)
             .await
             .unwrap()
             .acknowledge();
         let ReplayStartClaimOutcome::Claimed { handle, .. } = matching.await.unwrap() else {
             panic!("the matching Start must be claimed");
         };
-        assert_eq!(handle.start_idx(), OplogIndex::from_u64(7));
+        assert_eq!(handle.start_idx(), OplogIndex::from_u64(8));
         rs.await_resolution(handle).await.unwrap();
         let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
             .claim_start_or_replay_end(
@@ -8451,7 +8689,7 @@ async fn same_invocation_sibling_does_not_hide_a_matching_start_after_delivery()
         else {
             panic!("the sibling must remain claimable");
         };
-        assert_eq!(handle.start_idx(), OplogIndex::from_u64(2));
+        assert_eq!(handle.start_idx(), OplogIndex::from_u64(3));
         rs.await_resolution(handle).await.unwrap();
     }
 }
@@ -8459,7 +8697,7 @@ async fn same_invocation_sibling_does_not_hide_a_matching_start_after_delivery()
 #[test]
 async fn retained_invocation_identity_is_checked_before_live_continuation() {
     let invocation_id = DurableInvocationId {
-        anchor: OplogIndex::INITIAL,
+        anchor: OplogIndex::from_u64(2),
         ordinal: 1,
     };
     let correct = StartClaim::unowned(
@@ -8480,22 +8718,18 @@ async fn retained_invocation_identity_is_checked_before_live_continuation() {
                 OplogEntry::RecoverySucceeded {
                     timestamp: Timestamp::now_utc(),
                 },
-                start_now(),
+                unpinned_invocation_started(),
+                with_invocation_id(start_now(), 2, 3),
                 retained,
-                end_for(2, 42),
-                end_for(3, 43),
+                end_for(3, 42),
+                end_for(4, 43),
             ];
             if !exhausted {
                 entries.push(remove_retry_policy());
             }
             let rs = replay_state_over(entries).await;
-            let first = rs
-                .claim_concurrent_start(
-                    &HostFunctionName::MonotonicClockNow,
-                    &DurableFunctionType::ReadLocal,
-                )
-                .await
-                .unwrap();
+            enter_invocation(&rs).await;
+            let first = claim_anchored(&rs, 2, 3).await;
             rs.await_resolution(first).await.unwrap();
             assert_eq!(rs.at_replay_tail(), exhausted);
             let position = rs.last_replayed_index();
@@ -8559,9 +8793,9 @@ async fn retained_invocation_identity_is_checked_before_live_continuation() {
             else {
                 panic!("the original identity must still claim its retained Start");
             };
-            assert_eq!(handle.start_idx(), OplogIndex::from_u64(3));
+            assert_eq!(handle.start_idx(), OplogIndex::from_u64(4));
             assert!(matches!(rs.await_resolution(handle).await.unwrap(),
-                Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(5)));
+                Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(6)));
         }
     }
 }
@@ -9047,111 +9281,12 @@ async fn claim_of_a_call_cancelled_before_delivery_drains_its_host_internal_call
             other => panic!("unexpected resolution {other:?}"),
         }
         assert_eq!(
-            rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
-                .await
-                .unwrap(),
-            read_left.then(|| OplogIndex::from_u64(3)),
+            rs.has_unclaimed_retained_starts(),
+            read_left,
             "read closed: {read_closed}, wait cancelled: {wait_cancelled:?}, \
              host-internal calls: {host_internal_calls}, abandoned: {abandoned}"
         );
     }
-}
-
-#[test]
-async fn unclaimed_retained_descendant_reports_only_settled_subtrees() {
-    // [RecoverySucceeded, Start(root=2), Start(child=3 ← 2), Start(grandchild=4 ← 3), End(2→5), End(3→6),
-    // End(4→7)] — root and child are claimed; awaiting root retains the grandchild. While the
-    // child's body is still active, the grandchild is that body's own pending call and is not
-    // reported; once no body is active it is the earliest unclaimed descendant of the root.
-    let rs = replay_state_over(vec![
-        OplogEntry::RecoverySucceeded {
-            timestamp: Timestamp::now_utc(),
-        },
-        start_now(),
-        owned_start_now(2),
-        owned_start_now(3),
-        end_for(2, 42),
-        end_for(3, 43),
-        end_for(4, 44),
-    ])
-    .await;
-    let root = rs
-        .claim_concurrent_start(
-            &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::ReadLocal,
-        )
-        .await
-        .unwrap();
-    assert_eq!(root.start_idx(), OplogIndex::from_u64(2));
-    let child = rs
-        .claim_owned_concurrent_start(
-            &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::ReadLocal,
-            OplogIndex::from_u64(2),
-        )
-        .await
-        .unwrap();
-    assert_eq!(child.start_idx(), OplogIndex::from_u64(3));
-    assert_eq!(
-        rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
-            .await
-            .unwrap(),
-        None
-    );
-
-    match rs.await_resolution(root).await.unwrap() {
-        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(5)),
-        other => panic!("expected Completed, got {other:?}"),
-    }
-    assert!(rs.has_unclaimed_retained_starts());
-    assert_eq!(
-        rs.unclaimed_retained_descendant(
-            OplogIndex::from_u64(2),
-            HashSet::from([OplogIndex::from_u64(3)])
-        )
-        .await
-        .unwrap(),
-        None,
-        "a retained Start owned by a still active body is not the root's divergence"
-    );
-    assert_eq!(
-        rs.unclaimed_retained_descendant(OplogIndex::from_u64(2), HashSet::new())
-            .await
-            .unwrap(),
-        Some(OplogIndex::from_u64(4))
-    );
-    assert_eq!(
-        rs.unclaimed_retained_descendant(OplogIndex::from_u64(3), HashSet::new())
-            .await
-            .unwrap(),
-        Some(OplogIndex::from_u64(4)),
-        "the grandchild is also a descendant of the child"
-    );
-    assert_eq!(
-        rs.unclaimed_retained_descendant(OplogIndex::from_u64(4), HashSet::new())
-            .await
-            .unwrap(),
-        None
-    );
-
-    let grandchild = rs
-        .claim_owned_concurrent_start(
-            &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::ReadLocal,
-            OplogIndex::from_u64(3),
-        )
-        .await
-        .unwrap();
-    assert_eq!(grandchild.start_idx(), OplogIndex::from_u64(4));
-    match rs.await_resolution(child).await.unwrap() {
-        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(6)),
-        other => panic!("expected Completed, got {other:?}"),
-    }
-    match rs.await_resolution(grandchild).await.unwrap() {
-        Resolution::Completed { end_idx, .. } => assert_eq!(end_idx, OplogIndex::from_u64(7)),
-        other => panic!("expected Completed, got {other:?}"),
-    }
-    assert!(!rs.has_unclaimed_retained_starts());
 }
 
 #[test]
@@ -9916,16 +10051,18 @@ async fn awaiter_reaching_tail_across_retained_start_is_incomplete() {
 
 #[test]
 async fn reconstruction_claim_is_barrier_visible_when_atomic_claim_returns() {
-    let parent = OplogIndex::from_u64(1);
+    let parent = OplogIndex::from_u64(2);
     let start = rejected_tool_reconstruction_start(parent);
     let replay = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         start,
-        end_for(2, 1),
+        end_for(3, 1),
     ])
     .await;
+    enter_invocation(&replay).await;
     let handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let claim_state = replay.cursor.reconstruction_claims.clone();
     let start_index = handle.start_idx();
@@ -9947,15 +10084,17 @@ async fn reconstruction_claim_is_barrier_visible_when_atomic_claim_returns() {
 
 #[test]
 async fn incomplete_reconstruction_resolution_removes_only_its_fence() {
-    let parent = OplogIndex::from_u64(1);
+    let parent = OplogIndex::from_u64(2);
     let start = rejected_tool_reconstruction_start(parent);
     let replay = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         start,
     ])
     .await;
+    enter_invocation(&replay).await;
     let mut handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let start_index = handle.start_idx();
     let mut reconstruction = handle
@@ -9978,16 +10117,18 @@ async fn incomplete_reconstruction_resolution_removes_only_its_fence() {
 
 #[test]
 async fn consumed_reconstruction_terminal_blocks_until_body_validation() {
-    let parent = OplogIndex::from_u64(1);
+    let parent = OplogIndex::from_u64(2);
     let start = rejected_tool_reconstruction_start(parent);
     let replay = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         start,
-        end_for(2, 1),
+        end_for(3, 1),
     ])
     .await;
+    enter_invocation(&replay).await;
     let mut handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let start_index = handle.start_idx();
     let mut reconstruction = handle
@@ -10017,16 +10158,18 @@ async fn consumed_reconstruction_terminal_blocks_until_body_validation() {
 
 #[test]
 async fn replay_generation_install_check_rejects_leaked_fence_or_body() {
-    let parent = OplogIndex::from_u64(1);
+    let parent = OplogIndex::from_u64(2);
     let start = rejected_tool_reconstruction_start(parent);
     let replay = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         start,
-        end_for(2, 1),
+        end_for(3, 1),
     ])
     .await;
+    enter_invocation(&replay).await;
     let mut handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let mut reconstruction = handle
         .take_historical_reconstruction()
@@ -10047,9 +10190,11 @@ async fn replay_generation_install_check_rejects_leaked_fence_or_body() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         start,
     ])
     .await;
+    enter_invocation(&replay).await;
     let mut handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let mut reconstruction = handle
         .take_historical_reconstruction()
@@ -10068,18 +10213,20 @@ async fn replay_generation_install_check_rejects_leaked_fence_or_body() {
 #[test]
 #[test_r::timeout("10s")]
 async fn cancelled_resolution_settles_reconstruction_after_owned_cursor_cleanup() {
-    let parent = OplogIndex::from_u64(1);
+    let parent = OplogIndex::from_u64(2);
     let start = rejected_tool_reconstruction_start(parent);
     let (replay, oplog) = replay_state_and_oplog_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         start,
         remove_retry_policy(),
-        end_for(2, 1),
+        end_for(3, 1),
         remove_retry_policy(),
     ])
     .await;
+    enter_invocation(&replay).await;
     let handle = claim_rejected_tool_reconstruction(&replay, parent).await;
     let start_index = handle.start_idx();
     assert!(!handle.resolution_ready());
@@ -10109,7 +10256,7 @@ async fn cancelled_resolution_settles_reconstruction_after_owned_cursor_cleanup(
         assert!(
             state
                 .starts
-                .owns_terminal(start_index, OplogIndex::from_u64(4))
+                .owns_terminal(start_index, OplogIndex::from_u64(5))
         );
     }
     // The same admission check used by OwnerExecution now permits a fresh replay generation.
@@ -10121,6 +10268,7 @@ async fn cancelled_resolution_settles_reconstruction_after_owned_cursor_cleanup(
     )
     .await
     .unwrap();
+    enter_invocation(&replacement).await;
     let handle = claim_rejected_tool_reconstruction(&replacement, parent).await;
     assert_eq!(handle.start_idx(), start_index);
     drop(handle);
@@ -10752,6 +10900,7 @@ fn transaction_scope_start(parent: Option<u64>) -> OplogEntry {
         function_name: HostFunctionName::Custom("<scope:transaction>".to_string()),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
@@ -10946,6 +11095,7 @@ async fn rdbms_incomplete_stream_repair_reconstructs_typed_loss_at_original_star
             function_name: function.clone(),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
                 HostRequestNoInput {},
             )))),
@@ -11848,6 +11998,7 @@ fn batched_scope_start() -> OplogEntry {
         function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
@@ -11894,6 +12045,7 @@ fn batched_child_start(parent: u64) -> OplogEntry {
         function_name: HostFunctionName::MonotonicClockNow,
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
             HostRequestNoInput {},
         )))),
@@ -12122,9 +12274,9 @@ async fn wallet_replay_fixture(
 async fn wallet_replay_batches_share_membership_and_release_retained_prefixes() {
     for count in [512, 2048] {
         for delayed_entity in [false, true] {
-            let parent = OplogIndex::INITIAL;
-            let start = OplogIndex::from_u64(3);
-            let mut entries = vec![remove_retry_policy(), remove_retry_policy()];
+            let parent = OplogIndex::from_u64(2);
+            let start = OplogIndex::from_u64(4);
+            let mut entries = vec![remove_retry_policy(), start_now(), remove_retry_policy()];
             if delayed_entity {
                 entries.push(rejected_tool_reconstruction_start(parent));
             }
@@ -12144,15 +12296,24 @@ async fn wallet_replay_batches_share_membership_and_release_retained_prefixes() 
                 });
             }
             if delayed_entity {
-                entries.push(end_for(3, 1));
+                entries.push(end_for(4, 1));
             }
+            entries.push(end_for(2, 0));
             entries.push(remove_retry_policy());
             let target = entries.len() as u64;
             let (rs, wallet, oplog, _interest) =
                 wallet_replay_fixture(entries, target, Arc::new(tokio::sync::Mutex::new(()))).await;
+            let owner = rs
+                .claim_concurrent_start(
+                    &HostFunctionName::MonotonicClockNow,
+                    &DurableFunctionType::ReadLocal,
+                )
+                .await
+                .unwrap();
+            assert_eq!(owner.start_idx(), parent);
             assert_eq!(
                 rs.get_oplog_entry(None).await.unwrap().0,
-                OplogIndex::from_u64(2)
+                OplogIndex::from_u64(3)
             );
             if delayed_entity {
                 let mut tx = rs.cursor.tx().await.unwrap();
@@ -12252,28 +12413,38 @@ async fn wallet_replay_batches_share_membership_and_release_retained_prefixes() 
 #[test_r::timeout("10s")]
 async fn entity_wallet_prefix_is_bound_to_consumption_not_store_construction() {
     for (claim_early, body_before_start) in [(true, false), (false, false), (true, true)] {
-        let parent = OplogIndex::INITIAL;
-        let start = OplogIndex::from_u64(4);
+        let parent = OplogIndex::from_u64(2);
+        let start = OplogIndex::from_u64(5);
         let first = stored_test_card(CardId::new());
         let second = stored_test_card(CardId::new());
         let (rs, wallet, _oplog, _interest) = wallet_replay_fixture(
             vec![
                 remove_retry_policy(),
+                start_now(),
                 if body_before_start {
-                    anchored_remove_retry_policy(4)
+                    anchored_remove_retry_policy(5)
                 } else {
                     remove_retry_policy()
                 },
                 OplogEntry::card_installed(None, None, Box::new(first), 1),
                 rejected_tool_reconstruction_start(parent),
                 OplogEntry::card_installed(None, None, Box::new(second), 2),
-                end_for(4, 1),
+                end_for(5, 1),
+                end_for(2, 0),
                 remove_retry_policy(),
             ],
-            7,
+            9,
             Arc::new(tokio::sync::Mutex::new(())),
         )
         .await;
+        let owner = rs
+            .claim_concurrent_start(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+            )
+            .await
+            .unwrap();
+        assert_eq!(owner.start_idx(), parent);
         let mut handle = if claim_early {
             Some(claim_rejected_tool_reconstruction(&rs, parent).await)
         } else {
@@ -12298,7 +12469,7 @@ async fn entity_wallet_prefix_is_bound_to_consumption_not_store_construction() {
             .get_oplog_entry(body_before_start.then_some(start))
             .await
             .unwrap();
-        assert_eq!(index, OplogIndex::from_u64(2));
+        assert_eq!(index, OplogIndex::from_u64(3));
         // Ordinary draining passes the entity Start and its later wallet mutation. A late claim
         // and delayed Store construction must still use the earlier entity prefix.
         let mut tx = rs.cursor.tx().await.unwrap();
@@ -12333,66 +12504,6 @@ async fn entity_wallet_prefix_is_bound_to_consumption_not_store_construction() {
             entity.receipt().result.await.unwrap().wallet.generation,
             if body_before_start { 0 } else { 1 }
         );
-    }
-}
-
-#[test]
-#[test_r::timeout("10s")]
-async fn entity_wallet_prefix_retains_preclaim_hints_and_prunes_future_starts() {
-    let start = OplogIndex::from_u64(4);
-    for prune in [false, true] {
-        let (rs, wallet, _oplog, _interest) = wallet_replay_fixture(
-            vec![
-                remove_retry_policy(),
-                OplogEntry::card_installed(
-                    Some(start),
-                    None,
-                    Box::new(stored_test_card(CardId::new())),
-                    1,
-                ),
-                OplogEntry::card_installed(
-                    None,
-                    None,
-                    Box::new(stored_test_card(CardId::new())),
-                    2,
-                ),
-                rejected_tool_reconstruction_start(OplogIndex::INITIAL),
-                end_for(4, 1),
-                remove_retry_policy(),
-            ],
-            6,
-            Arc::new(tokio::sync::Mutex::new(())),
-        )
-        .await;
-        // Construction skips the hints before any entity claim exists.
-        assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
-        let entity = wallet.entity_replay_wallet(start).unwrap();
-        assert_eq!(entity.receipt().result.await.unwrap().wallet.generation, 0);
-        assert_eq!(
-            wallet
-                .latest_replay_receipt()
-                .result
-                .await
-                .unwrap()
-                .wallet
-                .generation,
-            2
-        );
-        if prune {
-            rs.set_replay_target(OplogIndex::from_u64(3)).await.unwrap();
-        } else {
-            let mut handle = claim_rejected_tool_reconstruction(&rs, OplogIndex::INITIAL).await;
-            let mut reconstruction = handle.take_historical_reconstruction().unwrap();
-            assert!(Arc::ptr_eq(
-                &entity,
-                &wallet.entity_replay_wallet(start).unwrap()
-            ));
-            rs.await_resolution(handle).await.unwrap();
-            assert_eq!(entity.receipt().result.await.unwrap().wallet.generation, 0);
-            reconstruction.body_settled();
-            drop(reconstruction);
-        }
-        assert!(wallet.entity_replay_wallet(start).is_err());
     }
 }
 
@@ -12572,12 +12683,19 @@ async fn custom_claim_rejects_invocation_id_collision() {
         function_name: scope_name.clone(),
         invocation_id: Some(test_invocation_id(7)),
         observational_owner: None,
+        driver: None,
         request: None,
         durable_function_type: DurableFunctionType::ReadLocal,
         span_started: None,
         denial: None,
     };
-    let rs = replay_state_over(vec![remove_retry_policy(), conflicting_start]).await;
+    let rs = replay_state_over(vec![
+        remove_retry_policy(),
+        unpinned_invocation_started(),
+        conflicting_start,
+    ])
+    .await;
+    enter_invocation(&rs).await;
 
     let result = rs
         .claim_custom_start_for_store(
@@ -12596,7 +12714,7 @@ async fn custom_claim_rejects_invocation_id_collision() {
     // Only the identity differs: the recorded scope has the same name and invocation id.
     assert_start_divergence(
         &error,
-        2,
+        3,
         scope_name.clone(),
         scope_name,
         &[
@@ -12609,13 +12727,14 @@ async fn custom_claim_rejects_invocation_id_collision() {
 
 #[test]
 async fn entity_owned_scope_claim_requires_the_recorded_parent() {
-    let parent = OplogIndex::from_u64(7);
+    let parent = OplogIndex::from_u64(2);
     let scope_start = OplogEntry::Start {
         timestamp: Timestamp::now_utc(),
         parent_start_index: Some(parent),
         function_name: HostFunctionName::Custom("<scope:batched-write>".to_string()),
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
@@ -12625,10 +12744,19 @@ async fn entity_owned_scope_claim_requires_the_recorded_parent() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        start_now(),
         scope_start,
-        batched_scope_end(2),
+        batched_scope_end(3),
     ])
     .await;
+    let owner = rs
+        .claim_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    assert_eq!(owner.start_idx(), parent);
     let scope_name = HostFunctionName::Custom("<scope:batched-write>".to_string());
 
     rs.claim_scope_start(
@@ -12643,7 +12771,7 @@ async fn entity_owned_scope_claim_requires_the_recorded_parent() {
         .claim_scope_start(&scope_name, &DurableFunctionType::WriteRemote, Some(parent))
         .await
         .unwrap();
-    assert_eq!(scope_index, OplogIndex::from_u64(2));
+    assert_eq!(scope_index, OplogIndex::from_u64(3));
     assert!(matches!(
         rs.await_resolution_outcome(handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { .. })
@@ -12660,6 +12788,7 @@ fn start_claim_requires_the_recorded_observational_owner() {
         function_name: scope_name.clone(),
         invocation_id: None,
         observational_owner: Some(owner),
+        driver: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
@@ -12683,6 +12812,7 @@ fn start_claim_requires_the_recorded_observational_owner() {
         function_name: HostFunctionName::MonotonicClockNow,
         invocation_id: None,
         observational_owner: Some(owner),
+        driver: None,
         request: Some(OplogPayload::Inline(Box::new(HostRequest::NoInput(
             HostRequestNoInput {},
         )))),
@@ -12737,7 +12867,7 @@ fn start_claim_expected_descriptions_are_stable() {
         .with_invocation_id(Some(test_invocation_id(3)))
         .expected_description(),
         format!(
-            "Start {{ {name}, ReadRemote, request: Some(..), parent_start_index: Some(OplogIndex(7)) }} with invocation id 1#3"
+            "Start {{ {name}, ReadRemote, request: Some(..), parent_start_index: Some(OplogIndex(7)) }} with invocation id 2#3"
         )
     );
     assert_eq!(
@@ -12786,33 +12916,35 @@ async fn assert_pending<T: std::fmt::Debug>(
 
 #[test]
 async fn interleaved_positional_markers_are_consumed_only_by_the_recording_store() {
-    // An entity body (root Start 2) and its owner both remove retry policies while
-    // sharing the cursor:
-    //   [RecoverySucceeded(1), Start(entity=2), RemoveRetryPolicy(3, entity 2), Start(4, parent 2), End(4→5),
-    //    CompletionDelivered(4→6), RemoveRetryPolicy(7), RemoveRetryPolicy(8, entity 2),
-    //    RemoveRetryPolicy(9), End(2→10)]
-    // The owner asks for its `RemoveRetryPolicy` first. It must not take the entity's marker at 3
-    // (which would leave the entity reader to retain its own Start(4) and park forever at that
-    // call's delivery marker): it parks until the entity consumed 3, retains 4 for the entity,
-    // parks at 6 until the entity delivers 4, and only then receives 7. The same holds in the
-    // other direction for the entity's `RemoveRetryPolicy` read behind the owner's marker at 7.
-    let parent = OplogIndex::from_u64(1);
+    // An entity body (Start 3) and its owner both remove retry policies while sharing the
+    // cursor:
+    //   [RecoverySucceeded(1), AgentInvocationStarted(2), Start(entity=3, parent 2),
+    //    RemoveRetryPolicy(4, entity 3), Start(5, parent 3), End(5→6), CompletionDelivered(5→7),
+    //    RemoveRetryPolicy(8), RemoveRetryPolicy(9, entity 3), RemoveRetryPolicy(10), End(3→11)]
+    // The owner asks for its `RemoveRetryPolicy` first. It must not take the entity's marker at 4
+    // (which would leave the entity reader to retain its own Start(5) and park forever at that
+    // call's delivery marker): it parks until the entity consumed 4, retains 5 for the entity,
+    // parks at 7 until the entity delivers 5, and only then receives 8. The same holds in the
+    // other direction for the entity's `RemoveRetryPolicy` read behind the owner's marker at 8.
+    let parent = OplogIndex::from_u64(2);
     let entity_start = rejected_tool_reconstruction_start(parent);
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         entity_start,
-        entity_remove_retry_policy(2),
-        start_with_parent(2),
-        end_for(4, 44),
-        delivered_for(4),
+        entity_remove_retry_policy(3),
+        start_with_parent(3),
+        end_for(5, 44),
+        delivered_for(5),
         remove_retry_policy(),
-        entity_remove_other_retry_policy(2),
+        entity_remove_other_retry_policy(3),
         remove_other_retry_policy(),
-        end_for(2, 1),
+        end_for(3, 1),
     ])
     .await;
+    enter_invocation(&rs).await;
     let mut entity_handle = claim_rejected_tool_reconstruction(&rs, parent).await;
     let mut reconstruction = entity_handle
         .take_historical_reconstruction()
@@ -12822,21 +12954,21 @@ async fn interleaved_positional_markers_are_consumed_only_by_the_recording_store
     assert_pending(&mut owner_begin, "the owner's RemoveRetryPolicy read").await;
     assert_eq!(
         rs.last_replayed_index(),
-        OplogIndex::from_u64(2),
+        OplogIndex::from_u64(3),
         "a parked positional reader must not advance past the other Store's marker"
     );
 
     let (idx, entry) = rs
-        .get_oplog_entry(Some(OplogIndex::from_u64(2)))
+        .get_oplog_entry(Some(OplogIndex::from_u64(3)))
         .await
         .unwrap();
-    assert_eq!(idx, OplogIndex::from_u64(3));
+    assert_eq!(idx, OplogIndex::from_u64(4));
     assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
 
     assert_pending(&mut owner_begin, "the owner's RemoveRetryPolicy read").await;
     assert_eq!(
         rs.last_replayed_index(),
-        OplogIndex::from_u64(5),
+        OplogIndex::from_u64(6),
         "the owner's reader retains the entity's Start(4), attaches End(5) and parks at the marker"
     );
     assert!(rs.has_unclaimed_retained_starts());
@@ -12845,32 +12977,32 @@ async fn interleaved_positional_markers_are_consumed_only_by_the_recording_store
         .claim_owned_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
-            OplogIndex::from_u64(2),
+            OplogIndex::from_u64(3),
         )
         .await
         .unwrap();
-    assert_eq!(call.start_idx(), OplogIndex::from_u64(4));
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(5));
     match rs.await_resolution(call).await.unwrap() {
         Resolution::Completed {
             end_idx,
             delivery_marker,
             ..
         } => {
-            assert_eq!(end_idx, OplogIndex::from_u64(5));
-            assert_eq!(delivery_marker, Some(OplogIndex::from_u64(6)));
+            assert_eq!(end_idx, OplogIndex::from_u64(6));
+            assert_eq!(delivery_marker, Some(OplogIndex::from_u64(7)));
         }
         other => panic!("expected the entity call to complete, got {other:?}"),
     }
-    rs.await_completion_delivery(OplogIndex::from_u64(4), OplogIndex::from_u64(6), None)
+    rs.await_completion_delivery(OplogIndex::from_u64(5), OplogIndex::from_u64(7), None)
         .await
         .unwrap()
         .acknowledge();
 
-    let mut entity_end = Box::pin(rs.get_oplog_entry(Some(OplogIndex::from_u64(2))));
+    let mut entity_end = Box::pin(rs.get_oplog_entry(Some(OplogIndex::from_u64(3))));
     assert_pending(&mut entity_end, "the entity's RemoveRetryPolicy read").await;
 
     let (idx, entry) = owner_begin.await.unwrap();
-    assert_eq!(idx, OplogIndex::from_u64(7));
+    assert_eq!(idx, OplogIndex::from_u64(8));
     assert!(matches!(
         entry,
         OplogEntry::RemoveRetryPolicy {
@@ -12880,17 +13012,17 @@ async fn interleaved_positional_markers_are_consumed_only_by_the_recording_store
     ));
 
     let (idx, entry) = entity_end.await.unwrap();
-    assert_eq!(idx, OplogIndex::from_u64(8));
+    assert_eq!(idx, OplogIndex::from_u64(9));
     assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
 
     let (idx, entry) = rs.get_oplog_entry(None).await.unwrap();
-    assert_eq!(idx, OplogIndex::from_u64(9));
+    assert_eq!(idx, OplogIndex::from_u64(10));
     assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
 
     assert!(matches!(
         rs.await_resolution_outcome(entity_handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(10)
+            if end_idx == OplogIndex::from_u64(11)
     ));
     reconstruction.body_settled();
     assert!(!rs.has_unclaimed_retained_starts());
@@ -12929,9 +13061,7 @@ async fn positional_reader_rejects_marker_of_an_entity_body_nobody_reconstructs(
         .await
         .expect_err("a marker of an unreconstructed entity body must be fatal");
     assert!(
-        error
-            .to_string()
-            .contains("neither retained, claimed nor replaying"),
+        error.to_string().contains("can no longer consume it"),
         "unexpected error: {error}"
     );
 }
@@ -12943,7 +13073,7 @@ async fn positional_reader_waits_for_a_retained_entity_start_to_be_claimed() {
     // next positional read reaches the body entry at 4 while 3 is still unclaimed: the owner is
     // going to claim 3, so the reader waits rather than failing, and receives 7 once the entity
     // body consumed 4.
-    let parent = OplogIndex::from_u64(1);
+    let parent = OplogIndex::from_u64(2);
     let entity_start = rejected_tool_reconstruction_start(parent);
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
@@ -13006,50 +13136,6 @@ async fn positional_reader_waits_for_a_retained_entity_start_to_be_claimed() {
 }
 
 #[test]
-async fn positional_reader_waits_for_entity_entry_recorded_before_its_start() {
-    // The entity body reserved Start(3), then appended its RemoveRetryPolicy(2) before the asynchronous Start
-    // write completed. The owner's reader must leave 2 for the body while its reconstruction
-    // claim scans ahead to 3, rather than rejecting the forward attribution as orphaned history.
-    let parent = OplogIndex::from_u64(1);
-    let entity_start = rejected_tool_reconstruction_start(parent);
-    let rs = replay_state_over(vec![
-        OplogEntry::RecoverySucceeded {
-            timestamp: Timestamp::now_utc(),
-        },
-        anchored_remove_retry_policy(3),
-        entity_start,
-        end_for(3, 1),
-        remove_retry_policy(),
-    ])
-    .await;
-
-    let mut owner_read = Box::pin(rs.get_oplog_entry(None));
-    assert_pending(&mut owner_read, "the owner's positional read").await;
-    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
-
-    let mut entity_handle = claim_rejected_tool_reconstruction(&rs, parent).await;
-    let mut reconstruction = entity_handle
-        .take_historical_reconstruction()
-        .expect("reconstruction guard");
-    let (idx, entry) = rs
-        .get_oplog_entry(Some(OplogIndex::from_u64(3)))
-        .await
-        .unwrap();
-    assert_eq!(idx, OplogIndex::from_u64(2));
-    assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
-
-    assert!(matches!(
-        rs.await_resolution_outcome(entity_handle).await.unwrap(),
-        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(4)
-    ));
-    reconstruction.body_settled();
-    let (idx, entry) = owner_read.await.unwrap();
-    assert_eq!(idx, OplogIndex::from_u64(5));
-    assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
-}
-
-#[test]
 async fn positional_reader_rejects_forward_body_owner_that_is_not_an_entity_start() {
     // The future Start at 3 is an ordinary monotonic-clock call, so no entity body can ever claim
     // it and consume the RemoveRetryPolicy attributed to it at 2. Treating every retainable future Start as an
@@ -13070,31 +13156,32 @@ async fn positional_reader_rejects_forward_body_owner_that_is_not_an_entity_star
         .expect("an ordinary future Start must not leave the positional reader parked")
         .expect_err("an entry attributed to a non-entity Start must be rejected");
     assert!(
-        error
-            .to_string()
-            .contains("neither retained, claimed nor replaying"),
+        error.to_string().contains("can no longer consume it"),
         "unexpected error: {error}"
     );
 }
 
 #[test]
 async fn invocation_boundary_rejects_unconsumed_entity_body_entry() {
-    // [RecoverySucceeded(1), Start(entity=2), End(2→3), RemoveRetryPolicy(4, entity 2),
-    //  AgentInvocationFinished(5)] — the entity body settled without consuming its own marker at
-    // 4. Every entity body of the invocation has terminated by the time the boundary reader runs,
-    // so nobody can consume 4 anymore: the walk must fail instead of parking at it.
-    let parent = OplogIndex::from_u64(1);
+    // [RecoverySucceeded(1), AgentInvocationStarted(2), Start(entity=3, parent 2), End(3→4),
+    //  RemoveRetryPolicy(5, entity 3), AgentInvocationFinished(6)] — the entity body settled
+    // without consuming its own marker at 5. Every entity body of the invocation has terminated
+    // by the time the boundary reader runs, so nobody can consume 5 anymore: the walk must fail
+    // instead of parking at it.
+    let parent = OplogIndex::from_u64(2);
     let entity_start = rejected_tool_reconstruction_start(parent);
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         entity_start,
-        end_for(2, 1),
-        entity_remove_retry_policy(2),
+        end_for(3, 1),
+        entity_remove_retry_policy(3),
         invocation_finished(),
     ])
     .await;
+    enter_invocation(&rs).await;
     let mut handle = claim_rejected_tool_reconstruction(&rs, parent).await;
     let mut reconstruction = handle
         .take_historical_reconstruction()
@@ -13133,9 +13220,10 @@ fn head_owner_names_the_store_that_consumes_the_head() {
     assert_eq!(head_owner(&delivered_for(2)), HeadOwner::Unattributed);
 }
 
-/// Replays `[RecoverySucceeded(1), entity Start(2), body entries..]` up to the state of a tool call whose
-/// completed reconstruction is claimed while its supervisor has not drained the cursor yet: the
-/// entity `Start` is claimed ahead of the cursor, nothing drained it yet, and the body is active.
+/// Replays `[RecoverySucceeded(1), AgentInvocationStarted(2), entity Start(3, parent 2), body
+/// entries..]` up to the state of a tool call whose completed reconstruction is claimed while its
+/// supervisor has not drained the cursor yet: the entity `Start` is claimed ahead of the cursor,
+/// nothing drained it yet, and the body is active.
 async fn replay_with_undrained_reconstruction(
     body_entries: Vec<OplogEntry>,
 ) -> (
@@ -13144,21 +13232,23 @@ async fn replay_with_undrained_reconstruction(
     crate::durable_host::concurrent::HistoricalReconstruction,
     Arc<InMemoryOplog>,
 ) {
-    let parent = OplogIndex::from_u64(1);
+    let parent = OplogIndex::from_u64(2);
     let entity_start = rejected_tool_reconstruction_start(parent);
     let mut entries = vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         entity_start,
     ];
     entries.extend(body_entries);
     let (rs, oplog) = replay_state_and_oplog_over(entries).await;
+    enter_invocation(&rs).await;
     let mut handle = claim_rejected_tool_reconstruction(&rs, parent).await;
     let reconstruction = handle
         .take_historical_reconstruction()
         .expect("reconstruction guard");
-    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(1));
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(2));
     (rs, handle, reconstruction, oplog)
 }
 
@@ -13202,14 +13292,14 @@ async fn finished_claim<T>(
 
 #[test]
 async fn missing_start_claim_waits_while_an_active_body_owns_the_head_start() {
-    // [RecoverySucceeded(1), Start(entity=2), Start(3, parent 2), End(3→4), End(2→5)] — the primary claims
+    // [RecoverySucceeded(1), AgentInvocationStarted(2), Start(entity=3), Start(4, parent 3), End(4→5), End(3→6)] — the primary claims
     // a clock call that was never recorded. Its head path consumes the claimed entity Start and
-    // stops at the body's Start(3). The body is active, so the claim waits, and after the
+    // stops at the body's Start(4). The body is active, so the claim waits, and after the
     // reconstruction drained the cursor it reports the end of replay.
     let (rs, handle, mut reconstruction, _oplog) = replay_with_undrained_reconstruction(vec![
-        start_with_parent(2),
-        end_for(3, 1),
-        end_for(2, 2),
+        start_with_parent(3),
+        end_for(4, 1),
+        end_for(3, 2),
     ])
     .await;
     let mut claim = spawn_start_claim(
@@ -13224,7 +13314,7 @@ async fn missing_start_claim_waits_while_an_active_body_owns_the_head_start() {
     assert!(matches!(
         rs.await_resolution_outcome(handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(5)
+            if end_idx == OplogIndex::from_u64(6)
     ));
     assert!(matches!(
         finished_claim(claim).await.unwrap(),
@@ -13235,14 +13325,14 @@ async fn missing_start_claim_waits_while_an_active_body_owns_the_head_start() {
 
 #[test]
 async fn blocked_claim_task_ends_when_the_owner_tasks_stop() {
-    // [RecoverySucceeded(1), Start(entity=2), Start(3, parent 2), End(3→4), End(2→5)] — a claim
+    // [RecoverySucceeded(1), AgentInvocationStarted(2), Start(entity=3), Start(4, parent 3), End(4→5), End(3→6)] — a claim
     // task waits for the active body, as when executor shutdown drops the Store that replays.
     // Nothing drives the body afterwards, so only the stop of the owner's tasks can end the wait;
     // otherwise the owner's retirement never completes.
     let (rs, _handle, mut reconstruction, oplog) = replay_with_undrained_reconstruction(vec![
-        start_with_parent(2),
-        end_for(3, 1),
-        end_for(2, 2),
+        start_with_parent(3),
+        end_for(4, 1),
+        end_for(3, 2),
     ])
     .await;
     let tasks = oplog.tasks.clone();
@@ -13275,11 +13365,11 @@ async fn blocked_claim_task_ends_when_the_owner_tasks_stop() {
 
 #[test]
 async fn missing_numbered_claim_waits_while_an_active_body_owns_the_head_entry() {
-    // [RecoverySucceeded(1), Start(entity=2), RemoveRetryPolicy(3, entity 2), End(2→4)] — the head is a positional entry
+    // [RecoverySucceeded(1), AgentInvocationStarted(2), Start(entity=3), RemoveRetryPolicy(4, entity 3), End(3→5)] — the head is a positional entry
     // of the active body. The claim of a numbered call waits until the body consumed it, then
     // the entity terminal drains and the claim reports the end of replay.
     let (rs, handle, mut reconstruction, _oplog) =
-        replay_with_undrained_reconstruction(vec![anchored_remove_retry_policy(2), end_for(2, 2)])
+        replay_with_undrained_reconstruction(vec![anchored_remove_retry_policy(3), end_for(3, 2)])
             .await;
     let mut claim = spawn_start_claim(
         &rs,
@@ -13292,10 +13382,10 @@ async fn missing_numbered_claim_waits_while_an_active_body_owns_the_head_entry()
     wait_until_claim_parked(&rs, &mut claim, 1).await;
 
     let (idx, _) = rs
-        .get_oplog_entry(Some(OplogIndex::from_u64(2)))
+        .get_oplog_entry(Some(OplogIndex::from_u64(3)))
         .await
         .unwrap();
-    assert_eq!(idx, OplogIndex::from_u64(3));
+    assert_eq!(idx, OplogIndex::from_u64(4));
     assert!(matches!(
         finished_claim(claim).await.unwrap(),
         ReplayStartClaimOutcome::ReplayEnded
@@ -13310,9 +13400,9 @@ async fn missing_numbered_claim_waits_while_an_active_body_owns_the_head_entry()
 #[test]
 async fn missing_start_claim_is_divergence_when_the_owning_body_settles_without_consuming_it() {
     let (rs, _handle, mut reconstruction, _oplog) = replay_with_undrained_reconstruction(vec![
-        start_with_parent(2),
-        end_for(3, 1),
-        end_for(2, 2),
+        start_with_parent(3),
+        end_for(4, 1),
+        end_for(3, 2),
     ])
     .await;
     let mut claim = spawn_start_claim(
@@ -13331,20 +13421,20 @@ async fn missing_start_claim_is_divergence_when_the_owning_body_settles_without_
     };
     assert_eq!(
         divergence_of(&error).oplog_index,
-        OplogIndex::from_u64(3),
+        OplogIndex::from_u64(4),
         "missing replay claim must be strict divergence at the unconsumed Start: {error}"
     );
 }
 
 #[test]
 async fn missing_start_claim_retains_a_top_level_sibling_start_while_a_body_is_active() {
-    // [RecoverySucceeded(1), Start(entity=2), Start(3, top level), End(3), End(2)] — an active body exists,
+    // [RecoverySucceeded(1), AgentInvocationStarted(2), Start(entity=3), Start(4, top level), End(4), End(3)] — an active body exists,
     // and the head is another top-level call of the primary. The claim retains that sibling for
     // its owner and reaches the replay target.
     let (rs, _handle, mut reconstruction, _oplog) = replay_with_undrained_reconstruction(vec![
         wait_for_start(300_000_000, Some(2)),
-        end_for(3, 1),
-        end_for(2, 2),
+        end_for(4, 1),
+        end_for(3, 2),
     ])
     .await;
     let claim = spawn_start_claim(
@@ -13367,14 +13457,14 @@ async fn missing_start_claim_of_the_owning_body_does_not_wait_on_its_own_head() 
     // The body itself claims a call that it never recorded while its own entry is at the head.
     // Nothing but the body can consume that entry, so the claim is decided at once.
     let (rs, _handle, mut reconstruction, _oplog) =
-        replay_with_undrained_reconstruction(vec![anchored_remove_retry_policy(2), end_for(2, 2)])
+        replay_with_undrained_reconstruction(vec![anchored_remove_retry_policy(3), end_for(3, 2)])
             .await;
     let claim = spawn_start_claim(
         &rs,
         StartClaim::owned(
             &HostFunctionName::WallClockNow,
             &DurableFunctionType::ReadLocal,
-            OplogIndex::from_u64(2),
+            OplogIndex::from_u64(3),
         ),
     );
     assert!(
@@ -13434,27 +13524,27 @@ fn missing_start_waits_for_the_body_enclosing_the_head_unless_it_issued_the_clai
 
 #[test]
 async fn missing_start_claim_waits_while_a_scope_of_an_active_body_owns_the_head() {
-    // [RecoverySucceeded(1), Start(entity=2), Start(scope 3, parent 2), Start(4, parent 3), End(4→5),
-    //  End(3→6), End(2→7)] — the body claimed its scope Start(3), so the head is the child
-    // Start(4). It names the scope, not the entity, as its parent; the claim still waits for the
+    // [RecoverySucceeded(1), AgentInvocationStarted(2), Start(entity=3), Start(scope 4, parent 3), Start(5, parent 4), End(5→6),
+    //  End(4→7), End(3→8)] — the body claimed its scope Start(4), so the head is the child
+    // Start(5). It names the scope, not the entity, as its parent; the claim still waits for the
     // body that encloses the scope.
     let (rs, handle, mut reconstruction, oplog) = replay_with_undrained_reconstruction(vec![
-        start_with_parent(2),
         start_with_parent(3),
-        end_for(4, 1),
-        end_for(3, 2),
-        end_for(2, 3),
+        start_with_parent(4),
+        end_for(5, 1),
+        end_for(4, 2),
+        end_for(3, 3),
     ])
     .await;
     let scope = rs
         .claim_owned_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
-            OplogIndex::from_u64(2),
+            OplogIndex::from_u64(3),
         )
         .await
         .unwrap();
-    assert_eq!(scope.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(scope.start_idx(), OplogIndex::from_u64(4));
     oplog.reads.lock().unwrap().clear();
 
     let mut claim = spawn_start_claim(
@@ -13469,14 +13559,14 @@ async fn missing_start_claim_waits_while_a_scope_of_an_active_body_owns_the_head
     // or the entity Start again.
     let reads = oplog.reads.lock().unwrap().clone();
     assert!(
-        reads.iter().all(|index| *index > OplogIndex::from_u64(3)),
+        reads.iter().all(|index| *index > OplogIndex::from_u64(4)),
         "the parked claim read already consumed ancestors: {reads:?}"
     );
 
     assert!(matches!(
         rs.await_resolution_outcome(handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(7)
+            if end_idx == OplogIndex::from_u64(8)
     ));
     assert!(matches!(
         finished_claim(claim).await.unwrap(),
@@ -13490,18 +13580,18 @@ async fn missing_start_claim_waits_while_a_scope_of_an_active_body_owns_the_head
 async fn missing_start_claim_from_a_scope_of_the_owning_body_does_not_wait_on_its_own_head() {
     // As above, but the body itself claims a call under its scope that it never recorded.
     let (rs, _handle, mut reconstruction, _oplog) = replay_with_undrained_reconstruction(vec![
-        start_with_parent(2),
         start_with_parent(3),
-        end_for(4, 1),
-        end_for(3, 2),
-        end_for(2, 3),
+        start_with_parent(4),
+        end_for(5, 1),
+        end_for(4, 2),
+        end_for(3, 3),
     ])
     .await;
     let _scope = rs
         .claim_owned_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
-            OplogIndex::from_u64(2),
+            OplogIndex::from_u64(3),
         )
         .await
         .unwrap();
@@ -13510,7 +13600,7 @@ async fn missing_start_claim_from_a_scope_of_the_owning_body_does_not_wait_on_it
         StartClaim::owned(
             &HostFunctionName::WallClockNow,
             &DurableFunctionType::ReadLocal,
-            OplogIndex::from_u64(3),
+            OplogIndex::from_u64(4),
         ),
     );
     assert!(
@@ -13523,13 +13613,13 @@ async fn missing_start_claim_from_a_scope_of_the_owning_body_does_not_wait_on_it
 #[test]
 async fn missing_custom_invocation_claim_waits_while_an_active_body_owns_the_head() {
     // The guest starts a custom durable invocation whose Start was never recorded while the
-    // completed reconstruction has not drained the body's Start(3). Nothing is buffered at the
+    // completed reconstruction has not drained the body's Start(4). Nothing is buffered at the
     // head, as after a positional read: the claim classifies the head from its own scan and
     // waits for the body.
     let (rs, handle, mut reconstruction, _oplog) = replay_with_undrained_reconstruction(vec![
-        start_with_parent(2),
-        end_for(3, 1),
-        end_for(2, 2),
+        start_with_parent(3),
+        end_for(4, 1),
+        end_for(3, 2),
     ])
     .await;
     rs.cursor.state.lock().await.replay_buffer.clear();
@@ -13561,44 +13651,46 @@ async fn missing_custom_invocation_claim_waits_while_an_active_body_owns_the_hea
 
 #[test]
 async fn missing_start_claim_of_a_nested_entity_waits_while_the_enclosing_body_owns_the_head() {
-    // [RecoverySucceeded(1), Start(entity A=2), Start(3, parent 2), Start(entity C=4, parent 2), End(3→5),
-    //  End(4→6), End(2→7)] — body A invoked the nested entity C. Both reconstructions are
-    // claimed, and nothing drained A's Start(3) at the head. C claims a call that was never recorded while A's Start(3) is
+    // [RecoverySucceeded(1), AgentInvocationStarted(2), Start(entity A=3), Start(4, parent 3), Start(entity C=5, parent 3), End(4→6),
+    //  End(5→7), End(3→8)] — body A invoked the nested entity C. Both reconstructions are
+    // claimed, and nothing drained A's Start(4) at the head. C claims a call that was never recorded while A's Start(4) is
     // at the head. C is another Store than A, so the claim waits until A's reconstruction drained
     // the cursor, and then reports the end of replay.
-    let parent = OplogIndex::from_u64(1);
+    let parent = OplogIndex::from_u64(2);
     let outer_start = rejected_tool_reconstruction_start(parent);
-    let nested_parent = OplogIndex::from_u64(2);
+    let nested_parent = OplogIndex::from_u64(3);
     let nested_start = rejected_tool_reconstruction_start(nested_parent);
     let rs = replay_state_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         outer_start,
-        start_with_parent(2),
+        start_with_parent(3),
         nested_start,
-        end_for(3, 1),
-        end_for(4, 2),
-        end_for(2, 3),
+        end_for(4, 1),
+        end_for(5, 2),
+        end_for(3, 3),
     ])
     .await;
+    enter_invocation(&rs).await;
     let mut outer = claim_rejected_tool_reconstruction(&rs, parent).await;
     let mut outer_reconstruction = outer
         .take_historical_reconstruction()
         .expect("outer reconstruction guard");
     let mut nested = claim_rejected_tool_reconstruction(&rs, nested_parent).await;
-    assert_eq!(nested.start_idx(), OplogIndex::from_u64(4));
+    assert_eq!(nested.start_idx(), OplogIndex::from_u64(5));
     let mut nested_reconstruction = nested
         .take_historical_reconstruction()
         .expect("nested reconstruction guard");
-    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(2));
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(3));
 
     let mut claim = spawn_start_claim(
         &rs,
         StartClaim::owned(
             &HostFunctionName::WallClockNow,
             &DurableFunctionType::ReadLocal,
-            OplogIndex::from_u64(4),
+            OplogIndex::from_u64(5),
         ),
     );
     wait_until_claim_parked(&rs, &mut claim, 1).await;
@@ -13606,7 +13698,7 @@ async fn missing_start_claim_of_a_nested_entity_waits_while_the_enclosing_body_o
     assert!(matches!(
         rs.await_resolution_outcome(outer).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(7)
+            if end_idx == OplogIndex::from_u64(8)
     ));
     assert!(matches!(
         finished_claim(claim).await.unwrap(),
@@ -13622,35 +13714,37 @@ async fn missing_start_claim_of_a_nested_entity_waits_while_the_enclosing_body_o
 
 #[test]
 async fn missing_start_claim_waits_for_a_nested_entity_after_the_outer_body_settles() {
-    // [RecoverySucceeded(1), Start(entity A=2), Start(entity C=3, parent 2), Start(scope S=4, parent 3),
-    //  Start(5, parent 4), End(5→6), End(4→7), End(3→8), End(2→9)] — C claimed its scope S, so
-    // the head is the child Start(5). A's body settled, C's body is still active. The claim
+    // [RecoverySucceeded(1), AgentInvocationStarted(2), Start(entity A=3), Start(entity C=4, parent 3), Start(scope S=5, parent 4),
+    //  Start(6, parent 5), End(6→7), End(5→8), End(4→9), End(3→10)] — C claimed its scope S, so
+    // the head is the child Start(6). A's body settled, C's body is still active. The claim
     // waits for C, which encloses the head through S, and resolves C from the claims the cursor
     // holds, without reading S or C again.
-    let outer_parent = OplogIndex::from_u64(1);
+    let outer_parent = OplogIndex::from_u64(2);
     let outer_start = rejected_tool_reconstruction_start(outer_parent);
-    let nested_parent = OplogIndex::from_u64(2);
+    let nested_parent = OplogIndex::from_u64(3);
     let nested_start = rejected_tool_reconstruction_start(nested_parent);
     let (rs, oplog) = replay_state_and_oplog_over(vec![
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         outer_start,
         nested_start,
-        start_with_parent(3),
         start_with_parent(4),
-        end_for(5, 1),
-        end_for(4, 2),
-        end_for(3, 3),
-        end_for(2, 4),
+        start_with_parent(5),
+        end_for(6, 1),
+        end_for(5, 2),
+        end_for(4, 3),
+        end_for(3, 4),
     ])
     .await;
+    enter_invocation(&rs).await;
     let mut outer = claim_rejected_tool_reconstruction(&rs, outer_parent).await;
     let mut outer_reconstruction = outer
         .take_historical_reconstruction()
         .expect("outer reconstruction guard");
     let mut nested = claim_rejected_tool_reconstruction(&rs, nested_parent).await;
-    assert_eq!(nested.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(nested.start_idx(), OplogIndex::from_u64(4));
     let mut nested_reconstruction = nested
         .take_historical_reconstruction()
         .expect("nested reconstruction guard");
@@ -13658,11 +13752,11 @@ async fn missing_start_claim_waits_for_a_nested_entity_after_the_outer_body_sett
         .claim_owned_concurrent_start(
             &HostFunctionName::MonotonicClockNow,
             &DurableFunctionType::ReadLocal,
-            OplogIndex::from_u64(3),
+            OplogIndex::from_u64(4),
         )
         .await
         .unwrap();
-    assert_eq!(scope.start_idx(), OplogIndex::from_u64(4));
+    assert_eq!(scope.start_idx(), OplogIndex::from_u64(5));
     outer_reconstruction.body_settled();
     oplog.reads.lock().unwrap().clear();
 
@@ -13676,14 +13770,14 @@ async fn missing_start_claim_waits_for_a_nested_entity_after_the_outer_body_sett
     wait_until_claim_parked(&rs, &mut claim, 1).await;
     let reads = oplog.reads.lock().unwrap().clone();
     assert!(
-        reads.iter().all(|index| *index > OplogIndex::from_u64(4)),
+        reads.iter().all(|index| *index > OplogIndex::from_u64(5)),
         "the parked claim read already consumed ancestors: {reads:?}"
     );
 
     assert!(matches!(
         rs.await_resolution_outcome(outer).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(9)
+            if end_idx == OplogIndex::from_u64(10)
     ));
     assert!(matches!(
         finished_claim(claim).await.unwrap(),
@@ -13697,8 +13791,9 @@ async fn missing_start_claim_waits_for_a_nested_entity_after_the_outer_body_sett
     nested_reconstruction.body_settled();
 }
 
-/// `[RecoverySucceeded(1), Start(entity=2), RemoveRetryPolicy(3, entity 2), custom root Start(4, parent), End(4→5),
-/// End(2→6)]`: the tool body records a positional entry and then a root custom invocation.
+/// `[RecoverySucceeded(1), AgentInvocationStarted(2), Start(entity=3), RemoveRetryPolicy(4, entity 3),
+/// custom root Start(5, parent), End(5→6), End(3→7)]`: the tool body records a positional entry and
+/// then a root custom invocation.
 async fn replay_with_body_entry_before_custom_root(
     custom_root_parent: Option<u64>,
 ) -> (
@@ -13708,10 +13803,10 @@ async fn replay_with_body_entry_before_custom_root(
     tokio::task::JoinHandle<Result<ReplayStartClaimOutcome, WorkerExecutorError>>,
 ) {
     let (rs, handle, reconstruction, _oplog) = replay_with_undrained_reconstruction(vec![
-        anchored_remove_retry_policy(2),
+        anchored_remove_retry_policy(3),
         custom_start("entity-custom-root", 1, custom_root_parent, 7),
-        custom_end(4, 1),
-        end_for(2, 2),
+        custom_end(5, 1),
+        end_for(3, 2),
     ])
     .await;
     let mut claim = spawn_start_claim(
@@ -13725,10 +13820,10 @@ async fn replay_with_body_entry_before_custom_root(
 
     // The body consumes its positional entry, which wakes the parked claim.
     let (idx, _) = rs
-        .get_oplog_entry(Some(OplogIndex::from_u64(2)))
+        .get_oplog_entry(Some(OplogIndex::from_u64(3)))
         .await
         .unwrap();
-    assert_eq!(idx, OplogIndex::from_u64(3));
+    assert_eq!(idx, OplogIndex::from_u64(4));
     (rs, handle, reconstruction, claim)
 }
 
@@ -13738,14 +13833,14 @@ async fn missing_start_claim_keeps_waiting_on_a_custom_root_of_the_active_body()
     // claim runs again, that custom Start is at the head and still belongs to the active body,
     // so the claim waits a second time instead of reporting a divergence.
     let (rs, handle, mut reconstruction, mut claim) =
-        replay_with_body_entry_before_custom_root(Some(2)).await;
+        replay_with_body_entry_before_custom_root(Some(3)).await;
     wait_until_claim_parked(&rs, &mut claim, 2).await;
 
     let custom = rs
         .claim_custom_start_for_store(
             &HostFunctionName::Custom("entity-custom-root".to_string()),
             &DurableFunctionType::ReadRemote,
-            Some(OplogIndex::from_u64(2)),
+            Some(OplogIndex::from_u64(3)),
             test_invocation_id(7),
             false,
         )
@@ -13755,7 +13850,7 @@ async fn missing_start_claim_keeps_waiting_on_a_custom_root_of_the_active_body()
     assert!(matches!(
         rs.await_resolution_outcome(handle).await.unwrap(),
         ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
-            if end_idx == OplogIndex::from_u64(6)
+            if end_idx == OplogIndex::from_u64(7)
     ));
     assert!(matches!(
         finished_claim(claim).await.unwrap(),
@@ -13782,7 +13877,7 @@ async fn missing_start_claim_retains_a_top_level_custom_root_after_the_body_entr
 #[test]
 async fn admission_refusal_probe_preserves_repeated_calls_across_delivery() {
     let numbered_start = || {
-        let mut entry = start_with_parent(2);
+        let mut entry = start_with_parent(3);
         let OplogEntry::Start { invocation_id, .. } = &mut entry else {
             unreachable!()
         };
@@ -13793,27 +13888,23 @@ async fn admission_refusal_probe_preserves_repeated_calls_across_delivery() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
-        start_now(),
+        unpinned_invocation_started(),
+        with_invocation_id(start_now(), 2, 1),
         numbered_start(),
-        end_for(3, 41),
-        delivered_for(3),
+        end_for(4, 41),
+        delivered_for(4),
         numbered_start(),
-        end_for(6, 42),
-        delivered_for(6),
-        end_for(2, 43),
+        end_for(7, 42),
+        delivered_for(7),
+        end_for(3, 43),
     ])
     .await;
-    let root = rs
-        .claim_concurrent_start(
-            &HostFunctionName::MonotonicClockNow,
-            &DurableFunctionType::ReadLocal,
-        )
-        .await
-        .unwrap();
+    enter_invocation(&rs).await;
+    let root = claim_anchored(&rs, 2, 1).await;
     let claim = StartClaim::owned(
         &HostFunctionName::MonotonicClockNow,
         &DurableFunctionType::ReadLocal,
-        OplogIndex::from_u64(2),
+        OplogIndex::from_u64(3),
     )
     .with_invocation_id(Some(test_invocation_id(7)));
     let ReplayStartClaimOutcome::Claimed { handle: first, .. } = rs
@@ -13825,7 +13916,7 @@ async fn admission_refusal_probe_preserves_repeated_calls_across_delivery() {
     };
     rs.await_resolution(first).await.unwrap();
     let barrier = rs
-        .await_completion_delivery(OplogIndex::from_u64(3), OplogIndex::from_u64(5), None)
+        .await_completion_delivery(OplogIndex::from_u64(4), OplogIndex::from_u64(6), None)
         .await
         .unwrap();
     let position = rs.last_replayed_index();
@@ -13834,7 +13925,7 @@ async fn admission_refusal_probe_preserves_repeated_calls_across_delivery() {
             claim
                 .clone()
                 .with_invocation_id(Some(test_invocation_id(8))),
-            OplogIndex::from_u64(9),
+            OplogIndex::from_u64(10),
         )
         .await
         .unwrap()
@@ -13842,14 +13933,14 @@ async fn admission_refusal_probe_preserves_repeated_calls_across_delivery() {
     assert!(
         tokio::time::timeout(
             Duration::from_secs(1),
-            rs.has_unclaimed_start_before(claim.clone(), OplogIndex::from_u64(9),)
+            rs.has_unclaimed_start_before(claim.clone(), OplogIndex::from_u64(10),)
         )
         .await
         .expect("visibility must not wait on the delivery gate")
         .unwrap()
     );
     assert!(
-        !rs.has_unclaimed_start_before(claim.clone(), OplogIndex::from_u64(6))
+        !rs.has_unclaimed_start_before(claim.clone(), OplogIndex::from_u64(7))
             .await
             .unwrap()
     );
@@ -13862,14 +13953,14 @@ async fn admission_refusal_probe_preserves_repeated_calls_across_delivery() {
     else {
         panic!("second recorded occurrence must be claimed");
     };
-    assert_eq!(second.start_idx(), OplogIndex::from_u64(6));
+    assert_eq!(second.start_idx(), OplogIndex::from_u64(7));
     assert!(
-        !rs.has_unclaimed_start_before(claim, OplogIndex::from_u64(9))
+        !rs.has_unclaimed_start_before(claim, OplogIndex::from_u64(10))
             .await
             .unwrap()
     );
     rs.await_resolution(second).await.unwrap();
-    rs.await_completion_delivery(OplogIndex::from_u64(6), OplogIndex::from_u64(8), None)
+    rs.await_completion_delivery(OplogIndex::from_u64(7), OplogIndex::from_u64(9), None)
         .await
         .unwrap()
         .acknowledge();
@@ -14611,6 +14702,7 @@ fn wait_for_start(duration_in_nanos: u64, invocation_id: Option<u64>) -> OplogEn
         function_name: HostFunctionName::P3MonotonicClockWaitFor,
         invocation_id: invocation_id.map(test_invocation_id),
         observational_owner: None,
+        driver: None,
         request: Some(OplogPayload::Inline(Box::new(
             HostRequestMonotonicClockDuration { duration_in_nanos }.into(),
         ))),
@@ -14640,11 +14732,16 @@ async fn missing_start_claim_retains_the_start_of_a_sibling_recorded_before_a_cr
     // The guest made wait-for 1 and wait-for 2 concurrently, and only wait-for 2 recorded its
     // Start before the crash, with and without its End. Wait-for 1 claims first on replay.
     for sibling_end in [false, true] {
-        let mut entries = vec![remove_retry_policy(), wait_for_start(300_000_000, Some(2))];
+        let mut entries = vec![
+            remove_retry_policy(),
+            unpinned_invocation_started(),
+            wait_for_start(300_000_000, Some(2)),
+        ];
         if sibling_end {
-            entries.push(end_for(2, 0));
+            entries.push(end_for(3, 0));
         }
         let rs = replay_state_over(entries).await;
+        enter_invocation(&rs).await;
 
         let outcome = rs.claim_start_or_replay_end(wait_for_claim(Some(1))).await;
         assert!(
@@ -14654,12 +14751,12 @@ async fn missing_start_claim_retains_the_start_of_a_sibling_recorded_before_a_cr
         assert!(rs.has_unclaimed_retained_starts());
 
         let sibling = claimed(&rs, wait_for_claim(Some(2))).await;
-        assert_eq!(sibling.start_idx(), OplogIndex::from_u64(2));
+        assert_eq!(sibling.start_idx(), OplogIndex::from_u64(3));
         assert!(!rs.has_unclaimed_retained_starts());
         if sibling_end {
             assert!(matches!(
                 rs.await_resolution(sibling).await.unwrap(),
-                Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(3)
+                Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(4)
             ));
         }
     }
@@ -14680,7 +14777,7 @@ async fn missing_start_claim_does_not_depend_on_how_far_the_sibling_claimed() {
         else {
             unreachable!();
         };
-        *parent_start_index = Some(OplogIndex::from_u64(2));
+        *parent_start_index = Some(OplogIndex::from_u64(3));
         *id = Some(invocation_id);
         entry
     };
@@ -14688,19 +14785,21 @@ async fn missing_start_claim_does_not_depend_on_how_far_the_sibling_claimed() {
         StartClaim::owned(
             &HostFunctionName::P3MonotonicClockWaitFor,
             &DurableFunctionType::ReadLocal,
-            OplogIndex::from_u64(2),
+            OplogIndex::from_u64(3),
         )
         .with_invocation_id(Some(test_invocation_id(2)))
     };
     for sibling_claimed_first in [false, true] {
         let rs = replay_state_over(vec![
             remove_retry_policy(),
+            unpinned_invocation_started(),
             wait_for_start(300_000_000, Some(2)),
             nested_wait_for(test_invocation_id(2)),
+            end_for(4, 0),
             end_for(3, 0),
-            end_for(2, 0),
         ])
         .await;
+        enter_invocation(&rs).await;
         let sibling = if sibling_claimed_first {
             Some(claimed(&rs, wait_for_claim(Some(2))).await)
         } else {
@@ -14719,9 +14818,9 @@ async fn missing_start_claim_does_not_depend_on_how_far_the_sibling_claimed() {
             Some(sibling) => sibling,
             None => claimed(&rs, wait_for_claim(Some(2))).await,
         };
-        assert_eq!(sibling.start_idx(), OplogIndex::from_u64(2));
+        assert_eq!(sibling.start_idx(), OplogIndex::from_u64(3));
         let nested = claimed(&rs, nested_claim()).await;
-        assert_eq!(nested.start_idx(), OplogIndex::from_u64(3));
+        assert_eq!(nested.start_idx(), OplogIndex::from_u64(4));
         assert!(!rs.has_unclaimed_retained_starts());
     }
 
@@ -14730,12 +14829,14 @@ async fn missing_start_claim_does_not_depend_on_how_far_the_sibling_claimed() {
     for sibling_claimed_first in [false, true] {
         let rs = replay_state_over(vec![
             remove_retry_policy(),
+            unpinned_invocation_started(),
             wait_for_start(300_000_000, Some(2)),
-            nested_wait_for(DurableInvocationId::new(OplogIndex::from_u64(2), 0)),
+            nested_wait_for(test_invocation_id(0)),
+            end_for(4, 0),
             end_for(3, 0),
-            end_for(2, 0),
         ])
         .await;
+        enter_invocation(&rs).await;
         let _sibling = if sibling_claimed_first {
             Some(claimed(&rs, wait_for_claim(Some(2))).await)
         } else {
@@ -14744,7 +14845,7 @@ async fn missing_start_claim_does_not_depend_on_how_far_the_sibling_claimed() {
         assert!(
             matches!(
                 rs.claim_start_or_replay_end(wait_for_claim(Some(1))).await,
-                Err(error) if divergence_of(&error).oplog_index == OplogIndex::from_u64(3)
+                Err(error) if divergence_of(&error).oplog_index == OplogIndex::from_u64(4)
             ),
             "sibling_claimed_first = {sibling_claimed_first}"
         );
@@ -14758,14 +14859,16 @@ async fn missing_start_claim_retains_the_observed_calls_of_a_sibling_custom_invo
     for sibling_claimed_first in [false, true] {
         let rs = replay_state_over(vec![
             remove_retry_policy(),
+            unpinned_invocation_started(),
             custom_start("outer", 1, None, 2),
-            observational_start_now(2, None),
-            owned_start_now(3),
+            observational_start_now(3, None),
+            owned_start_now(4),
+            end_for(5, 0),
             end_for(4, 0),
-            end_for(3, 0),
-            custom_end(2, 10),
+            custom_end(3, 10),
         ])
         .await;
+        enter_invocation(&rs).await;
         let outer = HostFunctionName::Custom("outer".to_string());
         let claim_custom = || {
             claim_custom_start(
@@ -14802,20 +14905,22 @@ async fn missing_start_claim_waits_for_the_body_of_a_retained_entity_invocation(
     // The sibling guest call (id 2) dispatched a tool whose body recorded a positional entry
     // before the crash; guest call 1 recorded nothing. The body consumes its entry only after
     // its invocation is claimed, so the missing claim waits instead of reporting divergence.
-    let mut entity_start = rejected_tool_reconstruction_start(OplogIndex::from_u64(2));
+    let mut entity_start = rejected_tool_reconstruction_start(OplogIndex::from_u64(3));
     let OplogEntry::Start { invocation_id, .. } = &mut entity_start else {
         unreachable!();
     };
     *invocation_id = Some(test_invocation_id(2));
     let rs = replay_state_over(vec![
         remove_retry_policy(),
+        unpinned_invocation_started(),
         wait_for_start(300_000_000, Some(2)),
         entity_start,
-        anchored_remove_retry_policy(3),
+        anchored_remove_retry_policy(4),
+        end_for(4, 0),
         end_for(3, 0),
-        end_for(2, 0),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let claim = spawn_start_claim(&rs, wait_for_claim(Some(1)));
     tokio::time::sleep(Duration::from_millis(200)).await;
@@ -14831,20 +14936,20 @@ async fn missing_start_claim_waits_for_the_body_of_a_retained_entity_invocation(
             &HostFunctionName::GolemEntityInvoke,
             &HostFunctionName::GolemToolInvocationRejected,
             &DurableFunctionType::WriteLocal,
-            OplogIndex::from_u64(2),
+            OplogIndex::from_u64(3),
         )
         .with_invocation_id(Some(test_invocation_id(2))),
     )
     .await;
-    assert_eq!(entity.start_idx(), OplogIndex::from_u64(3));
+    assert_eq!(entity.start_idx(), OplogIndex::from_u64(4));
     let mut reconstruction = entity
         .take_historical_reconstruction()
         .expect("reconstruction guard");
     let (idx, _) = rs
-        .get_oplog_entry(Some(OplogIndex::from_u64(3)))
+        .get_oplog_entry(Some(OplogIndex::from_u64(4)))
         .await
         .unwrap();
-    assert_eq!(idx, OplogIndex::from_u64(4));
+    assert_eq!(idx, OplogIndex::from_u64(5));
 
     assert!(matches!(
         finished_claim(claim).await.unwrap(),
@@ -14860,18 +14965,20 @@ async fn missing_start_claim_with_the_invocation_id_of_an_unclaimed_start_is_div
     for retained in [false, true] {
         let rs = replay_state_over(vec![
             remove_retry_policy(),
+            unpinned_invocation_started(),
             custom_start("recorded", 1, None, 1),
             wait_for_start(300_000_000, Some(2)),
             remove_retry_policy(),
         ])
         .await;
+        enter_invocation(&rs).await;
         if retained {
             let Err(error) = rs.claim_start_or_replay_end(wait_for_claim(Some(3))).await else {
                 panic!("a claim with no recorded Start must diverge");
             };
             assert_entry_divergence(
                 &error,
-                4,
+                5,
                 "RemoveRetryPolicy",
                 HostFunctionName::P3MonotonicClockWaitFor,
             );
@@ -14894,7 +15001,7 @@ async fn missing_start_claim_with_the_invocation_id_of_an_unclaimed_start_is_div
         // The divergence names the recorded Start, whether it is retained or still ahead.
         assert_start_divergence(
             &error,
-            2,
+            3,
             HostFunctionName::Custom("recorded".to_string()),
             HostFunctionName::Custom("claimed".to_string()),
             &[StartIdentityField::FunctionName],
@@ -14906,10 +15013,12 @@ async fn missing_start_claim_with_the_invocation_id_of_an_unclaimed_start_is_div
 async fn missing_start_claim_is_divergence_at_a_positional_entry_after_a_sibling_start() {
     let rs = replay_state_over(vec![
         remove_retry_policy(),
+        unpinned_invocation_started(),
         wait_for_start(300_000_000, Some(2)),
         remove_retry_policy(),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let error = match rs.claim_start_or_replay_end(wait_for_claim(Some(1))).await {
         Err(error) => error,
@@ -14918,13 +15027,13 @@ async fn missing_start_claim_is_divergence_at_a_positional_entry_after_a_sibling
     // The retained sibling Start is not the divergence; the positional entry behind it is.
     assert_entry_divergence(
         &error,
-        3,
+        4,
         "RemoveRetryPolicy",
         HostFunctionName::P3MonotonicClockWaitFor,
     );
 
     let sibling = claimed(&rs, wait_for_claim(Some(2))).await;
-    assert_eq!(sibling.start_idx(), OplogIndex::from_u64(2));
+    assert_eq!(sibling.start_idx(), OplogIndex::from_u64(3));
 }
 
 #[test]
@@ -14934,18 +15043,20 @@ async fn concurrent_calls_claim_their_own_start_by_invocation_id_in_any_order() 
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         wait_for_start(300_000_000, Some(1)),
         wait_for_start(600_000_000_000, Some(2)),
-        end_for(2, 0),
+        end_for(3, 0),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     // The watchdog's host task reaches its claim first.
     let watchdog = claimed(&rs, wait_for_claim(Some(2))).await;
     let nap = claimed(&rs, wait_for_claim(Some(1))).await;
 
-    assert_eq!(watchdog.start_idx(), OplogIndex::from_u64(3));
-    assert_eq!(nap.start_idx(), OplogIndex::from_u64(2));
+    assert_eq!(watchdog.start_idx(), OplogIndex::from_u64(4));
+    assert_eq!(nap.start_idx(), OplogIndex::from_u64(3));
 }
 
 #[test]
@@ -14954,17 +15065,19 @@ async fn calls_with_equal_requests_claim_their_own_start_by_invocation_id() {
         OplogEntry::RecoverySucceeded {
             timestamp: Timestamp::now_utc(),
         },
+        unpinned_invocation_started(),
         wait_for_start(1_000_000_000, Some(1)),
         wait_for_start(1_000_000_000, Some(2)),
-        end_for(2, 0),
+        end_for(3, 0),
     ])
     .await;
+    enter_invocation(&rs).await;
 
     let second = claimed(&rs, wait_for_claim(Some(2))).await;
     let first = claimed(&rs, wait_for_claim(Some(1))).await;
 
-    assert_eq!(second.start_idx(), OplogIndex::from_u64(3));
-    assert_eq!(first.start_idx(), OplogIndex::from_u64(2));
+    assert_eq!(second.start_idx(), OplogIndex::from_u64(4));
+    assert_eq!(first.start_idx(), OplogIndex::from_u64(3));
 }
 
 #[test]
@@ -14992,6 +15105,7 @@ fn scope_claim_requires_the_recorded_invocation_id() {
         function_name: scope_name.clone(),
         invocation_id: invocation_id.map(test_invocation_id),
         observational_owner: None,
+        driver: None,
         request: None,
         durable_function_type: DurableFunctionType::WriteRemote,
         span_started: None,
@@ -15014,6 +15128,7 @@ struct WalletComponentService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl crate::services::component::ComponentService for WalletComponentService {
     async fn get(
         &self,
@@ -15953,4 +16068,2785 @@ fn unclosed_abandoned_starts_diverge_at_the_lowest_open_index() {
             divergence.actual
         );
     }
+}
+
+fn invocation_settled_for(invocation_id: golem_common::model::InvocationId) -> OplogEntry {
+    OplogEntry::agent_invocation_settled(invocation_id, 0)
+}
+
+fn other_invocation_id() -> golem_common::model::InvocationId {
+    uuid::Uuid::from_u128(2).into()
+}
+
+/// A `MonotonicClockNow` `Start` recorded by the guest call `ordinal` of the invocation whose
+/// `AgentInvocationStarted` is at `anchor`.
+fn anchored_start(anchor: u64, ordinal: u64) -> OplogEntry {
+    let mut entry = start_now();
+    let OplogEntry::Start { invocation_id, .. } = &mut entry else {
+        unreachable!();
+    };
+    *invocation_id = Some(DurableInvocationId::new(
+        OplogIndex::from_u64(anchor),
+        ordinal,
+    ));
+    entry
+}
+
+fn anchored_claim(anchor: u64, ordinal: u64) -> StartClaim {
+    StartClaim::unowned(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+    )
+    .with_invocation_id(Some(DurableInvocationId::new(
+        OplogIndex::from_u64(anchor),
+        ordinal,
+    )))
+}
+
+async fn claim_anchored(rs: &ReplayState, anchor: u64, ordinal: u64) -> ReplayCallHandle {
+    let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
+        .claim_start_or_replay_end(anchored_claim(anchor, ordinal))
+        .await
+        .unwrap()
+    else {
+        panic!("the Start of guest call {ordinal} of anchor {anchor} must be claimed");
+    };
+    handle
+}
+
+/// Consumes the next `AgentInvocationStarted` and opens its invocation anchor.
+async fn start_open_invocation(rs: &ReplayState) -> OplogIndex {
+    start_open_invocation_with_handle(rs).await.0
+}
+
+/// [`start_open_invocation`], also returning the anchor's [`ExportReturned`] handle.
+async fn start_open_invocation_with_handle(rs: &ReplayState) -> (OplogIndex, ExportReturned) {
+    let started = rs
+        .get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("an invocation starts");
+    let export_returned = ExportReturned::default();
+    rs.open_invocation_anchor(started.oplog_index, export_returned.clone())
+        .await
+        .unwrap();
+    (started.oplog_index, export_returned)
+}
+
+async fn read_open_anchor_terminal(
+    rs: &ReplayState,
+    invocation_id: golem_common::model::InvocationId,
+) -> Result<Option<(OplogIndex, OplogEntry)>, WorkerExecutorError> {
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id, || ()),
+    )
+    .await
+    .expect("the open-anchor terminal read must not hang")
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn open_anchor_keeps_retained_starts_claimable_after_the_invocation_terminal() {
+    // A background Start recorded before Finished is still unclaimed when the primary Store reads
+    // Finished; its End and another background call follow Finished, then the settlement.
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        anchored_start(2, 0),
+        invocation_finished(),
+        end_for(3, 41),
+        anchored_start(2, 1),
+        end_for(6, 42),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    assert_eq!(anchor, OplogIndex::from_u64(2));
+
+    let (index, entry) = read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .expect("the invocation terminal is recorded");
+    assert_eq!(index, OplogIndex::from_u64(4));
+    assert!(matches!(entry, OplogEntry::AgentInvocationFinished { .. }));
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "the background Start recorded before Finished stays retained for its claim"
+    );
+
+    let first = claim_anchored(&rs, 2, 0).await;
+    assert_eq!(first.start_idx(), OplogIndex::from_u64(3));
+    assert!(matches!(
+        rs.await_resolution(first).await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(5)
+    ));
+    let second = claim_anchored(&rs, 2, 1).await;
+    assert_eq!(second.start_idx(), OplogIndex::from_u64(6));
+    rs.await_resolution(second).await.unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
+    assert_eq!(
+        rs.last_replayed_index(),
+        OplogIndex::from_u64(8),
+        "the settlement is skipped as a hint before the anchor is closed"
+    );
+
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(8))
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn ordinary_reader_waits_for_the_open_anchor_terminal_once_the_export_returned() {
+    // After the export returned, background work replaying past an agent entry cannot consume
+    // the terminal of its own open invocation: its positional read waits until the primary
+    // Store read the terminal.
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        remove_retry_policy(),
+        invocation_finished(),
+        remove_retry_policy(),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    let invocation_id = replayed_invocation_id();
+    let mut terminal = Box::pin(
+        rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id, || ()),
+    );
+    assert_pending(&mut terminal, "the terminal read behind an agent entry").await;
+
+    let (index, _) = rs.get_oplog_entry(None).await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(3));
+    let mut background = Box::pin(rs.get_oplog_entry(None));
+    assert_pending(
+        &mut background,
+        "a positional read behind the open terminal",
+    )
+    .await;
+
+    let (index, _) = terminal.await.unwrap().unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    let (index, entry) = background.await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(5));
+    assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(6))
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn ordinary_reader_reaching_the_open_terminal_before_the_export_returned_does_not_wait() {
+    // Before the export returned, a positional read that reaches the terminal is the guest's
+    // own divergent read: it receives the terminal, which its caller rejects, instead of
+    // waiting for a terminal read the blocked primary Store never makes.
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    start_open_invocation(&rs).await;
+    let (index, entry) = tokio::time::timeout(Duration::from_secs(2), rs.get_oplog_entry(None))
+        .await
+        .expect("a positional read before the export returned must not hang")
+        .unwrap();
+    assert_eq!(index, OplogIndex::from_u64(3));
+    assert!(matches!(entry, OplogEntry::AgentInvocationFinished { .. }));
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_tolerates_a_never_claimed_closed_start_before_the_settlement() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        anchored_start(2, 0),
+        end_for(4, 42),
+        invocation_settled_for(replayed_invocation_id()),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(6))
+    );
+    assert!(
+        !rs.has_unclaimed_retained_starts(),
+        "the abandoned Start is dropped at the settlement"
+    );
+    let next = rs
+        .get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("the next invocation starts");
+    assert_eq!(next.oplog_index, OplogIndex::from_u64(7));
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_rejects_history_that_ended_background_work_cannot_consume() {
+    // A never-claimed Start without a terminal before the settlement, and the next invocation
+    // started without a settlement, are divergences rather than the replay tail.
+    for entries in [
+        vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            invocation_finished(),
+            anchored_start(2, 0),
+            invocation_settled_for(replayed_invocation_id()),
+            end_for(4, 42),
+        ],
+        vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            invocation_finished(),
+            invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        ],
+        vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            invocation_finished(),
+            remove_retry_policy(),
+            invocation_settled_for(other_invocation_id()),
+            invocation_settled_for(replayed_invocation_id()),
+        ],
+    ] {
+        let rs = replay_state_over(entries).await;
+        let anchor = start_open_invocation(&rs).await;
+        read_open_anchor_terminal(&rs, replayed_invocation_id())
+            .await
+            .unwrap()
+            .unwrap();
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            rs.close_invocation_anchor(anchor, &replayed_invocation_id()),
+        )
+        .await
+        .expect("closing an anchor must not hang");
+        assert!(
+            matches!(
+                result,
+                Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+            ),
+            "expected a divergence, got {result:?}"
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn open_anchor_terminal_read_rejects_an_invocation_boundary_before_its_terminal() {
+    for (head, then) in [
+        (invocation_finished_for(other_invocation_id()), None),
+        (
+            invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+            None,
+        ),
+        (
+            invocation_settled_for(other_invocation_id()),
+            Some(invocation_finished()),
+        ),
+        (
+            invocation_settled_for(replayed_invocation_id()),
+            Some(invocation_finished()),
+        ),
+    ] {
+        let mut entries = vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            head,
+        ];
+        entries.extend(then);
+        let rs = replay_state_over(entries).await;
+        start_open_invocation(&rs).await;
+        let result = read_open_anchor_terminal(&rs, replayed_invocation_id()).await;
+        assert!(
+            matches!(
+                result,
+                Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+            ),
+            "expected a divergence, got {result:?}"
+        );
+    }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_at_the_replay_tail_keeps_the_retained_starts() {
+    // The recorded run crashed between Finished and the settlement.
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        anchored_start(2, 0),
+        invocation_finished(),
+        end_for(3, 41),
+        anchored_start(2, 1),
+        end_for(6, 42),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let call = claim_anchored(&rs, 2, 0).await;
+    rs.await_resolution(call).await.unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::ReplayTail
+    );
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "the live invocation end releases the Start left unclaimed at the replay tail"
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_finds_a_settlement_skipped_with_the_terminal() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.last_replayed_index(),
+        OplogIndex::from_u64(4),
+        "the settlement hint is skipped together with the terminal"
+    );
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(4))
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn interleaved_starts_of_two_anchors_are_claimed_by_their_own_invocations() {
+    // A store task of invocation A resumes while B drives it and records a Start with A's
+    // invocation id and B as its driver; B's own call is recorded after it, and their terminals
+    // interleave.
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        anchored_start(2, 0),
+        invocation_finished(),
+        end_for(3, 41),
+        invocation_settled_for(replayed_invocation_id()),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        driven_start(2, 1, 7),
+        anchored_start(7, 0),
+        end_for(9, 43),
+        end_for(8, 42),
+        invocation_finished_for(other_invocation_id()),
+        invocation_settled_for(other_invocation_id()),
+    ])
+    .await;
+    let anchor_a = start_open_invocation(&rs).await;
+    let call = claim_anchored(&rs, 2, 0).await;
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(3));
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    rs.await_resolution(call).await.unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor_a, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(6))
+    );
+
+    let anchor_b = start_open_invocation(&rs).await;
+    assert_eq!(anchor_b, OplogIndex::from_u64(7));
+    let call_b = claim_anchored(&rs, 7, 0).await;
+    assert_eq!(call_b.start_idx(), OplogIndex::from_u64(9));
+    let call_a = claim_driven(&rs, 2, 1, 7).await;
+    assert_eq!(call_a.start_idx(), OplogIndex::from_u64(8));
+    assert!(matches!(
+        rs.await_resolution(call_b).await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(10)
+    ));
+    assert!(matches!(
+        rs.await_resolution(call_a).await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(11)
+    ));
+    let (index, _) = read_open_anchor_terminal(&rs, other_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(index, OplogIndex::from_u64(12));
+    assert_eq!(
+        rs.close_invocation_anchor(anchor_b, &other_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(13))
+    );
+}
+
+/// A `MonotonicClockNow` `Start` that a store task of the invocation anchored at `anchor`
+/// records as its call `ordinal` while the invocation started at `driver` drives it.
+fn driven_start(anchor: u64, ordinal: u64, driver: u64) -> OplogEntry {
+    let mut entry = anchored_start(anchor, ordinal);
+    let OplogEntry::Start {
+        driver: recorded, ..
+    } = &mut entry
+    else {
+        unreachable!();
+    };
+    *recorded = Some(OplogIndex::from_u64(driver));
+    entry
+}
+
+fn driven_claim(anchor: u64, ordinal: u64, driver: u64) -> StartClaim {
+    anchored_claim(anchor, ordinal).with_driver(Some(OplogIndex::from_u64(driver)))
+}
+
+async fn claim_driven(
+    rs: &ReplayState,
+    anchor: u64,
+    ordinal: u64,
+    driver: u64,
+) -> ReplayCallHandle {
+    let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
+        .claim_start_or_replay_end(driven_claim(anchor, ordinal, driver))
+        .await
+        .unwrap()
+    else {
+        panic!("the driven Start {anchor}/{ordinal} must be claimed");
+    };
+    handle
+}
+
+/// [`assert_pending`] for a future whose output is not `Debug`.
+async fn assert_parked<F: Future>(future: &mut std::pin::Pin<Box<F>>, what: &str) {
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), future.as_mut())
+            .await
+            .is_err(),
+        "{what} must stay parked"
+    );
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn delivery_marker_in_the_next_invocation_parks_until_that_invocation_starts() {
+    use crate::durable_host::tail_work::TailWorkTracker;
+
+    // Invocation A records the End at 4 and finishes at 5; its background work records 6 before
+    // A settles at 7. Invocation B starts at 8, consumes the result and records the marker at 9.
+    // The cursor passes A's Finished and the settlement hint while A drains, so only B's
+    // AgentInvocationStarted keeps the wait passive until the drain ended.
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        owned_start_now(2),
+        end_for(3, 42),
+        invocation_finished(),
+        remove_retry_policy(),
+        invocation_settled_for(replayed_invocation_id()),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        delivered_for(3),
+        invocation_finished_for(other_invocation_id()),
+        invocation_settled_for(other_invocation_id()),
+    ])
+    .await;
+    let anchor_a = start_open_invocation(&rs).await;
+    let handle = rs
+        .claim_owned_concurrent_start(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+            OplogIndex::from_u64(2),
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(handle).await.unwrap();
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(rs.last_replayed_index(), OplogIndex::from_u64(5));
+
+    let tracker = TailWorkTracker::new();
+    let activity = tracker.activity();
+    let mut delivery = Box::pin(rs.await_completion_delivery(
+        OplogIndex::from_u64(3),
+        OplogIndex::from_u64(9),
+        Some(&activity),
+    ));
+    assert_parked(&mut delivery, "a delivery wait while A drains").await;
+    assert_eq!(tracker.active_count(), 0);
+
+    let (_, entry) = rs.get_oplog_entry(None).await.unwrap();
+    assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+    assert_eq!(
+        rs.last_replayed_index(),
+        OplogIndex::from_u64(7),
+        "the settlement hint is skipped during the drain"
+    );
+    assert_parked(&mut delivery, "a delivery wait after the settlement hint").await;
+    assert_eq!(
+        tracker.active_count(),
+        0,
+        "a marker in the next invocation must not keep the draining invocation active"
+    );
+    assert_eq!(
+        rs.close_invocation_anchor(anchor_a, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(7))
+    );
+    assert_parked(&mut delivery, "a delivery wait before B starts").await;
+    assert_eq!(tracker.active_count(), 0);
+
+    let anchor_b = start_open_invocation(&rs).await;
+    delivery.await.unwrap().acknowledge();
+    assert_eq!(tracker.active_count(), 1);
+    read_open_anchor_terminal(&rs, other_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor_b, &other_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(11))
+    );
+    drop(activity);
+    assert_eq!(tracker.active_count(), 0);
+}
+
+/// The invocation's own guest code, before the export returns, asks for a host call that has
+/// no recorded `Start` while the next recorded entry is the invocation's terminal. Every call
+/// made before the export returned precedes the terminal, so this is a divergence with or
+/// without an open anchor, not a wait for the terminal read of the blocked primary Store.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_missing_start_before_the_export_returned_is_a_divergence_at_the_terminal() {
+    for open in [false, true] {
+        let rs = replay_state_over(vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            invocation_finished(),
+            invocation_settled_for(replayed_invocation_id()),
+        ])
+        .await;
+        if open {
+            start_open_invocation(&rs).await;
+        } else {
+            rs.get_oplog_entry_agent_invocation_started()
+                .await
+                .unwrap()
+                .unwrap();
+        }
+        let result = tokio::time::timeout(
+            Duration::from_secs(2),
+            rs.claim_start_or_replay_end(anchored_claim(2, 0)),
+        )
+        .await;
+        assert!(
+            matches!(
+                result,
+                Ok(Err(WorkerExecutorError::UnexpectedOplogEntry { .. }))
+            ),
+            "open anchor = {open}: expected a divergence, got {:?}",
+            result.map(|r| r.map(|_| ()))
+        );
+    }
+}
+
+/// Once the export returned and the primary Store is reading the terminal, a background call
+/// whose `Start` is missing at the terminal waits for that read, then diverges at the next
+/// entry.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_missing_background_start_waits_for_the_open_terminal_then_diverges() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        remove_retry_policy(),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+    ])
+    .await;
+    start_open_invocation(&rs).await;
+    let invocation_id = replayed_invocation_id();
+    let mut terminal = Box::pin(
+        rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id, || ()),
+    );
+    assert_pending(&mut terminal, "the terminal read behind an agent entry").await;
+    let (index, _) = rs.get_oplog_entry(None).await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(3));
+
+    let mut claim = Box::pin(rs.claim_start_or_replay_end(anchored_claim(2, 0)));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), claim.as_mut())
+            .await
+            .is_err(),
+        "a missing background Start at the returned open terminal waits for the terminal read"
+    );
+    let (index, _) = terminal.await.unwrap().unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    let result = tokio::time::timeout(Duration::from_secs(2), claim)
+        .await
+        .expect("the claim is decided once the terminal was read");
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "expected a divergence at the next invocation's start, got {:?}",
+        result.map(|_| ())
+    );
+}
+
+/// Once the export returned, a background call whose `Start` is recorded after the terminal is
+/// claimed, and its result resolves after the primary Store read the terminal.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_background_start_after_the_open_terminal_resolves_once_the_terminal_is_read() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        remove_retry_policy(),
+        invocation_finished(),
+        anchored_start(2, 1),
+        end_for(5, 42),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    let invocation_id = replayed_invocation_id();
+    let mut terminal = Box::pin(
+        rs.get_oplog_entry_agent_invocation_terminal_in_open_anchor(&invocation_id, || ()),
+    );
+    assert_pending(&mut terminal, "the terminal read behind an agent entry").await;
+    rs.get_oplog_entry(None).await.unwrap();
+
+    let call = tokio::time::timeout(Duration::from_secs(2), claim_anchored(&rs, 2, 1))
+        .await
+        .expect("a recorded background Start after the terminal is claimed");
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(5));
+    let mut resolution = Box::pin(rs.await_resolution(call));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(50), resolution.as_mut())
+            .await
+            .is_err(),
+        "the End after the open terminal resolves only once the terminal was read"
+    );
+    let (index, _) = terminal.await.unwrap().unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    assert!(matches!(
+        resolution.await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(6)
+    ));
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(7))
+    );
+}
+
+/// The close runs after every guest task exited, and only a guest read consumes a reserved
+/// delivery marker, so a marker before the settlement is a divergence rather than a wait.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_rejects_a_reserved_delivery_marker_before_the_settlement() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        anchored_start(2, 0),
+        end_for(4, 42),
+        delivered_for(4),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let call = claim_anchored(&rs, 2, 0).await;
+    rs.await_resolution(call).await.unwrap();
+    let error = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id()),
+    )
+    .await
+    .expect("closing an anchor must not wait at a delivery marker")
+    .expect_err("an unconsumed delivery marker before the settlement is a divergence");
+    assert!(
+        error.to_string().contains("CompletionDelivered"),
+        "unexpected error: {error}"
+    );
+}
+
+/// An entity body replays in its own Store and can outlive the primary Store's guest tasks, so
+/// closing the anchor waits for the body to consume its entry before the settlement.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_waits_for_an_entity_body_that_can_still_consume_the_head() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        entity_remove_retry_policy(4),
+        end_for(4, 42),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let (body, mut reconstruction) = claim_replaying_body(&rs, 2).await;
+    let invocation_id = replayed_invocation_id();
+    let mut close = Box::pin(rs.close_invocation_anchor(anchor, &invocation_id));
+    assert_pending(&mut close, "closing the anchor behind an entity body entry").await;
+
+    let (index, entry) = rs
+        .get_oplog_entry(Some(OplogIndex::from_u64(4)))
+        .await
+        .unwrap();
+    assert_eq!(index, OplogIndex::from_u64(5));
+    assert!(matches!(entry, OplogEntry::RemoveRetryPolicy { .. }));
+    rs.await_resolution(body).await.unwrap();
+    reconstruction.body_settled();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), close)
+            .await
+            .expect("the close is decided once the body consumed its entry")
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(7))
+    );
+}
+
+/// An entry of an entity body nobody replays before the settlement is a divergence.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_rejects_an_entry_of_an_entity_body_nobody_replays() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        entity_remove_retry_policy(2),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id()),
+    )
+    .await
+    .expect("closing an anchor must not wait for an entity body nobody replays");
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "expected a divergence, got {result:?}"
+    );
+}
+
+/// The driver marks the export as returned before the primary Store reads the terminal. From
+/// then on background work at the terminal waits for the terminal read instead of reporting a
+/// divergence: a positional read does not take the terminal, a claim whose `Start` is missing
+/// at the terminal waits, and a call whose `Start` is recorded after the terminal is claimed
+/// and resolves once the terminal was read.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_marked_export_makes_background_work_wait_for_the_open_terminal_read() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        remove_retry_policy(),
+        anchored_start(2, 1),
+        end_for(5, 42),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let (anchor, export_returned) = start_open_invocation_with_handle(&rs).await;
+    export_returned.mark();
+
+    let mut background = Box::pin(rs.get_oplog_entry(None));
+    assert_pending(
+        &mut background,
+        "a positional read at the marked open terminal",
+    )
+    .await;
+    let mut missing = Box::pin(rs.claim_start_or_replay_end(anchored_claim(2, 2)));
+    assert_parked(
+        &mut missing,
+        "a claim missing its Start at the marked open terminal",
+    )
+    .await;
+    drop(missing);
+    let call = tokio::time::timeout(Duration::from_secs(2), claim_anchored(&rs, 2, 1))
+        .await
+        .expect("a recorded background Start after the terminal is claimed");
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(5));
+
+    let (index, _) = read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(index, OplogIndex::from_u64(3));
+    let (index, _) = tokio::time::timeout(Duration::from_secs(2), background)
+        .await
+        .expect("the positional read continues once the terminal was read")
+        .unwrap();
+    assert_eq!(index, OplogIndex::from_u64(4));
+    assert!(matches!(
+        rs.await_resolution(call).await.unwrap(),
+        Resolution::Completed { end_idx, .. } if end_idx == OplogIndex::from_u64(6)
+    ));
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(7))
+    );
+}
+
+fn with_parent(mut entry: OplogEntry, parent: u64) -> OplogEntry {
+    let OplogEntry::Start {
+        parent_start_index, ..
+    } = &mut entry
+    else {
+        unreachable!();
+    };
+    *parent_start_index = Some(OplogIndex::from_u64(parent));
+    entry
+}
+
+fn with_invocation_id(mut entry: OplogEntry, anchor: u64, ordinal: u64) -> OplogEntry {
+    let OplogEntry::Start { invocation_id, .. } = &mut entry else {
+        unreachable!();
+    };
+    *invocation_id = Some(DurableInvocationId::new(
+        OplogIndex::from_u64(anchor),
+        ordinal,
+    ));
+    entry
+}
+
+fn invocation_owner(anchor: u64, body: Option<u64>) -> owners::RecordOwner {
+    owners::RecordOwner {
+        invocation: owners::InvocationOwner::Anchor(OplogIndex::from_u64(anchor)),
+        body: body.map(OplogIndex::from_u64),
+    }
+}
+
+/// An owner map over: the invocation started at 2, its call at 3, its entity `Start` at 4 with a
+/// body call at 5 and a nested call of that body call at 6, and its custom root at 7 with a
+/// member at 8.
+fn owner_map_of_one_invocation() -> owners::OwnerMap {
+    let mut map = owners::OwnerMap::default();
+    map.commit_invocation_started(OplogIndex::from_u64(2), replayed_invocation_id());
+    for (index, entry) in [
+        (3, anchored_start(2, 0)),
+        (
+            4,
+            with_invocation_id(start_named(HostFunctionName::GolemEntityInvoke), 2, 1),
+        ),
+        (5, with_parent(anchored_start(4, 0), 4)),
+        (6, owned_start_now(5)),
+        (
+            7,
+            with_invocation_id(custom_start("custom", 1, None, 0), 2, 2),
+        ),
+        (8, observational_start_now(7, None)),
+    ] {
+        map.commit_start(OplogIndex::from_u64(index), &entry)
+            .unwrap();
+    }
+    map
+}
+
+#[test]
+fn record_owner_resolves_ids_parents_observers_and_agent_level_records() {
+    let map = owner_map_of_one_invocation();
+    let owner = |index: u64| map.owner(OplogIndex::from_u64(index)).expect("committed");
+    assert_eq!(owner(3), invocation_owner(2, None));
+    assert_eq!(owner(4), invocation_owner(2, None));
+    assert_eq!(owner(5), invocation_owner(2, Some(4)));
+    assert_eq!(owner(6), invocation_owner(2, Some(4)));
+    assert_eq!(owner(7), invocation_owner(2, None));
+    assert_eq!(owner(8), invocation_owner(2, None));
+    assert_eq!(
+        map.record_owner(
+            OplogIndex::from_u64(9),
+            &with_invocation_id(start_now(), 7, 1),
+            false
+        ),
+        Ok(invocation_owner(2, None)),
+        "a call numbered under a custom root takes the root's owner"
+    );
+    assert_eq!(
+        map.record_owner(OplogIndex::from_u64(9), &start_now(), false),
+        Ok(owners::RecordOwner {
+            invocation: owners::InvocationOwner::AgentLevel,
+            body: None,
+        })
+    );
+}
+
+#[test]
+fn record_owner_takes_the_driver_and_keeps_the_nearest_body() {
+    let mut map = owner_map_of_one_invocation();
+    map.commit_invocation_started(OplogIndex::from_u64(9), replayed_invocation_id());
+    let driven = with_parent(driven_start(4, 1, 9), 5);
+    assert_eq!(
+        map.record_owner(OplogIndex::from_u64(10), &driven, false),
+        Ok(invocation_owner(9, Some(4)))
+    );
+}
+
+#[test]
+fn record_owner_reports_orphans() {
+    let mut map = owner_map_of_one_invocation();
+    let orphan = |map: &owners::OwnerMap, index: u64, entry: OplogEntry, what: &str| {
+        assert!(
+            map.record_owner(OplogIndex::from_u64(index), &entry, false)
+                .is_err(),
+            "{what} is an orphan"
+        );
+    };
+    orphan(
+        &map,
+        9,
+        anchored_start(12, 0),
+        "an id anchored at a later entry",
+    );
+    orphan(
+        &map,
+        9,
+        anchored_start(1, 0),
+        "an id anchored at an uncommitted entry",
+    );
+    orphan(
+        &map,
+        9,
+        anchored_start(3, 0),
+        "an id anchored at an ordinary Start",
+    );
+    orphan(&map, 9, owned_start_now(11), "a later parent");
+    orphan(&map, 9, owned_start_now(1), "an uncommitted parent");
+    orphan(
+        &map,
+        9,
+        driven_start(2, 3, 3),
+        "a driver that is no invocation",
+    );
+    orphan(&map, 9, driven_start(2, 3, 12), "a later driver");
+    map.truncate_after(OplogIndex::from_u64(4));
+    orphan(
+        &map,
+        9,
+        owned_start_now(5),
+        "a parent beyond a shrunk replay target",
+    );
+    assert_eq!(
+        map.record_owner(OplogIndex::from_u64(9), &owned_start_now(4), false),
+        Ok(invocation_owner(2, Some(4))),
+        "the entries up to the shrunk target stay"
+    );
+}
+
+/// A parent or observational owner that resolves to no owner is an orphan even when the
+/// invocation id resolves, unless it is pruned, a committed `Start` whose owner its invocation's
+/// close dropped: a later entry, an earlier entry that was never committed, the creation entry and
+/// an entry inside a closed invocation that is no `Start` are orphans. A pruned one gives way to
+/// the id. The cursor tells the map which unresolved references are pruned.
+#[test]
+fn record_owner_refuses_a_never_committed_reference_beside_a_resolved_id() {
+    let mut map = owner_map_of_one_invocation();
+    let index = OplogIndex::from_u64(10);
+    for (entry, what) in [
+        (with_parent(anchored_start(2, 3), 11), "a later parent"),
+        (
+            with_invocation_id(observational_start_now(11, None), 2, 3),
+            "a later observational owner",
+        ),
+        (
+            with_parent(anchored_start(2, 3), 9),
+            "an earlier parent that was never committed",
+        ),
+        (
+            with_parent(anchored_start(2, 3), 1),
+            "the creation entry as a parent",
+        ),
+        (
+            with_invocation_id(observational_start_now(1, None), 2, 3),
+            "the creation entry as an observational owner",
+        ),
+    ] {
+        assert!(
+            map.record_owner(index, &entry, false).is_err(),
+            "{what} beside a resolved id is an orphan"
+        );
+        assert!(
+            map.commit_start(index, &entry).is_err(),
+            "committing {what} beside a resolved id is a divergence"
+        );
+        assert_eq!(map.owner(index), None, "{what} records no owner");
+    }
+    assert!(
+        map.record_owner(
+            OplogIndex::from_u64(9),
+            &with_parent(anchored_start(2, 3), 11),
+            false
+        )
+        .is_err()
+    );
+
+    // The invocation started at 2 closes at 12; the entries 9 to 11 inside it are no `Start`s.
+    map.close(OplogIndex::from_u64(2), OplogIndex::from_u64(12), |_| false);
+    map.commit_invocation_started(OplogIndex::from_u64(13), replayed_invocation_id());
+    assert_eq!(
+        map.record_owner(
+            OplogIndex::from_u64(14),
+            &with_driver(with_parent(anchored_start(2, 3), 3), 13),
+            true
+        ),
+        Ok(invocation_owner(13, None)),
+        "a parent pruned at its invocation's close gives way to the id"
+    );
+    for (entry, what) in [
+        (
+            with_parent(anchored_start(13, 0), 1),
+            "the creation entry as a parent",
+        ),
+        (
+            with_invocation_id(observational_start_now(1, None), 13, 0),
+            "the creation entry as an observational owner",
+        ),
+        (
+            with_parent(anchored_start(13, 0), 10),
+            "an entry inside the closed invocation that is no Start, as a parent",
+        ),
+    ] {
+        assert!(
+            map.record_owner(OplogIndex::from_u64(14), &entry, false)
+                .is_err(),
+            "{what} was never pruned, so it is an orphan beside a resolved id"
+        );
+    }
+}
+
+fn with_driver(mut entry: OplogEntry, driver: u64) -> OplogEntry {
+    let OplogEntry::Start {
+        driver: recorded, ..
+    } = &mut entry
+    else {
+        unreachable!();
+    };
+    *recorded = Some(OplogIndex::from_u64(driver));
+    entry
+}
+
+/// Committing a `Start` whose invocation id, parent or observational owner is an orphan is a
+/// divergence, with or without a valid driver, and records no owner.
+#[test]
+fn commit_start_refuses_orphans_with_and_without_a_driver() {
+    let mut map = owner_map_of_one_invocation();
+    map.commit_invocation_started(OplogIndex::from_u64(9), replayed_invocation_id());
+    let index = OplogIndex::from_u64(10);
+    for (entry, what) in [
+        (anchored_start(3, 0), "an id anchored at an ordinary Start"),
+        (owned_start_now(1), "an uncommitted parent"),
+        (
+            observational_start_now(1, None),
+            "an uncommitted observational owner",
+        ),
+    ] {
+        for driver in [None, Some(9)] {
+            let entry = match driver {
+                Some(driver) => with_driver(entry.clone(), driver),
+                None => entry.clone(),
+            };
+            assert!(
+                map.commit_start(index, &entry).is_err(),
+                "{what} with the driver {driver:?} is a divergence"
+            );
+            assert_eq!(map.owner(index), None, "{what} records no owner");
+        }
+    }
+    map.commit_start(index, &with_driver(owned_start_now(5), 9))
+        .unwrap();
+    assert_eq!(map.owner(index), Some(invocation_owner(9, Some(4))));
+}
+
+#[test]
+fn closed_set_handles_out_of_order_closes() {
+    let mut map = owners::OwnerMap::default();
+    for anchor in [10, 20, 30] {
+        map.commit_invocation_started(OplogIndex::from_u64(anchor), replayed_invocation_id());
+    }
+    map.close(OplogIndex::from_u64(30), OplogIndex::from_u64(35), |_| {
+        false
+    });
+    map.close(OplogIndex::from_u64(10), OplogIndex::from_u64(15), |_| {
+        false
+    });
+    assert!(map.is_closed(OplogIndex::from_u64(10)));
+    assert!(
+        !map.is_closed(OplogIndex::from_u64(20)),
+        "an anchor below a closed one is not closed by it"
+    );
+    assert!(map.is_closed(OplogIndex::from_u64(30)));
+}
+
+/// X starts at 2, claims a send `Start` at 3 and settles at 6. B starts at 7, and a store task
+/// of X records a body-chunk `Start` at 8 under the send, numbered under X, with B as its
+/// `driver`. X's close prunes the send from the owner map, and the chunk still resolves to B
+/// through its driver; B's task claims it and B closes cleanly.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_child_under_a_pruned_parent_resolves_through_its_driver() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        anchored_start(2, 0),
+        end_for(3, 41),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        with_parent(driven_start(2, 1, 7), 3),
+        end_for(8, 42),
+        invocation_finished_for(other_invocation_id()),
+        invocation_settled_for(other_invocation_id()),
+    ])
+    .await;
+    let anchor_x = start_open_invocation(&rs).await;
+    let send = claim_anchored(&rs, 2, 0).await;
+    rs.await_resolution(send).await.unwrap();
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor_x, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(6))
+    );
+
+    let anchor_b = start_open_invocation(&rs).await;
+    let ReplayStartClaimOutcome::Claimed { handle: chunk, .. } = rs
+        .claim_start_or_replay_end(
+            StartClaim::owned(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+                OplogIndex::from_u64(3),
+            )
+            .with_invocation_id(Some(DurableInvocationId::new(OplogIndex::from_u64(2), 1)))
+            .with_driver(Some(anchor_b)),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("the chunk Start is claimed");
+    };
+    assert_eq!(chunk.start_idx(), OplogIndex::from_u64(8));
+    rs.await_resolution(chunk).await.unwrap();
+    read_open_anchor_terminal(&rs, other_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor_b, &other_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(11))
+    );
+}
+
+/// The history of [`a_child_under_a_pruned_parent_resolves_through_its_driver`], with a chunk
+/// `Start` that records the `End` at 4 as its parent. That entry lies inside the closed invocation,
+/// and the recorded prefix holds no `Start` there, so the parent is an orphan even beside a valid
+/// driver, and committing the chunk is a divergence.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_driven_child_under_an_entry_that_is_no_start_is_a_divergence() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        anchored_start(2, 0),
+        end_for(3, 41),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        with_parent(driven_start(2, 1, 7), 4),
+        end_for(8, 42),
+        invocation_finished_for(other_invocation_id()),
+        invocation_settled_for(other_invocation_id()),
+    ])
+    .await;
+    let anchor_x = start_open_invocation(&rs).await;
+    let send = claim_anchored(&rs, 2, 0).await;
+    rs.await_resolution(send).await.unwrap();
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    rs.close_invocation_anchor(anchor_x, &replayed_invocation_id())
+        .await
+        .unwrap();
+
+    let anchor_b = start_open_invocation(&rs).await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.claim_start_or_replay_end(
+            StartClaim::owned(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+                OplogIndex::from_u64(4),
+            )
+            .with_invocation_id(Some(DurableInvocationId::new(OplogIndex::from_u64(2), 1)))
+            .with_driver(Some(anchor_b)),
+        ),
+    )
+    .await
+    .expect("the claim must not hang");
+    match result {
+        Err(WorkerExecutorError::UnexpectedOplogEntry { divergence }) => assert!(
+            divergence
+                .actual
+                .to_string()
+                .contains("which is no committed Start"),
+            "unexpected divergence: {divergence}"
+        ),
+        Err(other) => panic!("expected a divergence, got {other}"),
+        Ok(_) => panic!("expected a divergence, got a claim outcome"),
+    }
+}
+
+/// Replaying many closed invocations leaves no owner of their `Start`s in the owner map, whichever
+/// path closes them. The first invocations record their result at the export's return and leave a
+/// custom root `Start`, a child `Start` under it and their `End`s unclaimed; their settlement
+/// closes them and folds those as abandoned records. The next ones keep the settled path: they
+/// claim a `Start` and close at their terminal, at the invocation-boundary read. The last one
+/// records its result at the return, leaves its `Start` unclaimed and has no recorded settlement:
+/// the live invocation end releases the `Start` and closes it. A close keeps one record per invocation
+/// and drops the owners of its `Start`s; the custom anchors stay, one per custom invocation.
+#[test]
+#[test_r::timeout("30s")]
+async fn closed_invocations_leave_no_owners_in_the_owner_map() {
+    const INVOCATIONS: usize = 20;
+    let mut entries = vec![OplogEntry::recovery_succeeded()];
+    for _ in 0..INVOCATIONS {
+        let anchor = entries.len() as u64 + 1;
+        entries.extend([
+            unpinned_invocation_started(),
+            with_invocation_id(custom_start("custom", 1, None, 0), anchor, 0),
+            end_for(anchor + 1, 41),
+            with_parent(anchored_start(anchor, 1), anchor + 1),
+            end_for(anchor + 3, 42),
+            invocation_finished(),
+            invocation_settled_for(replayed_invocation_id()),
+        ]);
+    }
+    let mut settled_path = Vec::new();
+    for _ in 0..INVOCATIONS {
+        let anchor = entries.len() as u64 + 1;
+        settled_path.push(anchor);
+        entries.extend([
+            unpinned_invocation_started(),
+            anchored_start(anchor, 0),
+            end_for(anchor + 1, 43),
+            invocation_finished(),
+        ]);
+    }
+    // The last invocation leaves its `Start` unclaimed and has no recorded settlement: the live
+    // run settles it.
+    let last = entries.len() as u64 + 1;
+    entries.extend([
+        unpinned_invocation_started(),
+        anchored_start(last, 0),
+        end_for(last + 1, 44),
+        invocation_finished(),
+    ]);
+    let rs = replay_state_over(entries).await;
+    for _ in 0..INVOCATIONS {
+        let anchor = start_open_invocation(&rs).await;
+        read_open_anchor_terminal(&rs, replayed_invocation_id())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(
+            rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+                .await
+                .unwrap(),
+            SettledAt::Recorded(_)
+        ));
+    }
+    for anchor in settled_path {
+        enter_invocation(&rs).await;
+        let call = claim_anchored(&rs, anchor, 0).await;
+        rs.await_resolution(call).await.unwrap();
+        read_invocation_finished(&rs).await.unwrap().unwrap();
+    }
+    start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(rs.has_unclaimed_retained_starts());
+    rs.release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap();
+    let st = rs.cursor.state.lock().await;
+    assert_eq!(st.owners.owner_count(), 0);
+    assert_eq!(st.owners.identity_anchor_count(), INVOCATIONS);
+    assert_eq!(st.owners.closed_invocation_count(), 2 * INVOCATIONS + 1);
+    assert!(!st.owners.has_open_invocation());
+    assert_eq!(st.starts.retained_len(), 0);
+}
+
+/// X starts at 2 and records an entity `Start` at 3, a `Start` under that body at 4 and a `Start`
+/// at 5 with no body. X closes at 6 while 4 and 5 are retained, so their owners stay. Y starts at
+/// 7 and closes at 8 after both left the retained set: the later close drops the owner of 5, and
+/// keeps the owner of 4, whose body still decides a later `Start` under it.
+#[test]
+fn a_later_close_drops_released_owners_unless_a_body_encloses_them() {
+    let mut map = owners::OwnerMap::default();
+    map.commit_invocation_started(OplogIndex::from_u64(2), replayed_invocation_id());
+    map.commit_start(
+        OplogIndex::from_u64(3),
+        &rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+    )
+    .unwrap();
+    map.commit_start(OplogIndex::from_u64(4), &owned_start_now(3))
+        .unwrap();
+    map.commit_start(OplogIndex::from_u64(5), &anchored_start(2, 0))
+        .unwrap();
+    map.close(OplogIndex::from_u64(2), OplogIndex::from_u64(6), |index| {
+        index == OplogIndex::from_u64(4) || index == OplogIndex::from_u64(5)
+    });
+    assert_eq!(map.owner(OplogIndex::from_u64(3)), None);
+    assert_eq!(
+        map.owner(OplogIndex::from_u64(4)),
+        Some(invocation_owner(2, Some(3)))
+    );
+    assert_eq!(
+        map.owner(OplogIndex::from_u64(5)),
+        Some(invocation_owner(2, None))
+    );
+    map.commit_invocation_started(OplogIndex::from_u64(7), other_invocation_id());
+    map.close(OplogIndex::from_u64(7), OplogIndex::from_u64(8), |_| false);
+    assert_eq!(
+        map.owner(OplogIndex::from_u64(4)),
+        Some(invocation_owner(2, Some(3))),
+        "an owner with a body stays"
+    );
+    assert_eq!(
+        map.owner(OplogIndex::from_u64(5)),
+        None,
+        "an owner without a body is dropped once released"
+    );
+}
+
+/// The recorded run crashed between Finished and the settlement: the invocation settles at the
+/// replay tail and keeps the owner of its retained `Start`. The live invocation end releases that
+/// `Start` and, the invocation being closed already, drops its owner.
+#[test]
+#[test_r::timeout("30s")]
+async fn the_live_end_after_a_replay_tail_settlement_drops_the_released_owner() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        anchored_start(2, 0),
+        invocation_finished(),
+        end_for(3, 41),
+        anchored_start(2, 1),
+        end_for(6, 42),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let call = claim_anchored(&rs, 2, 0).await;
+    rs.await_resolution(call).await.unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::ReplayTail
+    );
+    assert_eq!(rs.cursor.state.lock().await.owners.owner_count(), 1);
+    rs.release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
+    assert_eq!(rs.cursor.state.lock().await.owners.owner_count(), 0);
+}
+
+/// The same history with a chunk `Start` that records no driver: it was recorded after its
+/// invocation closed, which no producer does, so committing it is a divergence.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_driverless_start_of_a_closed_invocation_is_a_divergence() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        anchored_start(2, 0),
+        end_for(3, 41),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        with_parent(anchored_start(2, 1), 3),
+        end_for(8, 42),
+        invocation_finished_for(other_invocation_id()),
+        invocation_settled_for(other_invocation_id()),
+    ])
+    .await;
+    let anchor_x = start_open_invocation(&rs).await;
+    let send = claim_anchored(&rs, 2, 0).await;
+    rs.await_resolution(send).await.unwrap();
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    rs.close_invocation_anchor(anchor_x, &replayed_invocation_id())
+        .await
+        .unwrap();
+
+    start_open_invocation(&rs).await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.claim_start_or_replay_end(
+            StartClaim::owned(
+                &HostFunctionName::MonotonicClockNow,
+                &DurableFunctionType::ReadLocal,
+                OplogIndex::from_u64(3),
+            )
+            .with_invocation_id(Some(DurableInvocationId::new(OplogIndex::from_u64(2), 1))),
+        ),
+    )
+    .await
+    .expect("the claim must not hang");
+    match result {
+        Err(WorkerExecutorError::UnexpectedOplogEntry { divergence }) => assert!(
+            divergence.actual.to_string().contains("records no driver"),
+            "unexpected divergence: {divergence}"
+        ),
+        Err(other) => panic!("expected a divergence, got {other}"),
+        Ok(_) => panic!("expected a divergence, got a claim outcome"),
+    }
+}
+
+/// A claimed `Start` whose recorded driver differs from the invocation that drives the claiming
+/// call is a divergence, not a reason to look for another `Start`.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_claim_driven_by_another_invocation_is_a_divergence() {
+    for (claim, what) in [
+        (anchored_claim(2, 0), "a claim that sets no driver"),
+        (
+            driven_claim(2, 0, 2),
+            "a claim driven by another invocation",
+        ),
+    ] {
+        let rs = replay_state_over(vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            invocation_finished(),
+            invocation_settled_for(replayed_invocation_id()),
+            invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+            driven_start(2, 0, 5),
+            end_for(6, 42),
+        ])
+        .await;
+        let anchor_x = start_open_invocation(&rs).await;
+        read_open_anchor_terminal(&rs, replayed_invocation_id())
+            .await
+            .unwrap()
+            .unwrap();
+        rs.close_invocation_anchor(anchor_x, &replayed_invocation_id())
+            .await
+            .unwrap();
+        start_open_invocation(&rs).await;
+        let Err(error) = rs.claim_start_or_replay_end(claim).await else {
+            panic!("{what} is a divergence");
+        };
+        let divergence = divergence_of(&error);
+        assert_eq!(divergence.oplog_index, OplogIndex::from_u64(6), "{what}");
+        assert_eq!(
+            divergence.mismatched,
+            vec![StartIdentityField::Driver],
+            "{what}"
+        );
+        assert_eq!(
+            host_call_of(&divergence.expected).driver,
+            Some(OplogIndex::from_u64(5)),
+            "{what}"
+        );
+    }
+}
+
+/// Claims the rejected tool invocation `Start` dispatched under `parent` and keeps its body
+/// replaying until the returned guard settles it.
+async fn claim_replaying_body(
+    rs: &ReplayState,
+    parent: u64,
+) -> (
+    ReplayCallHandle,
+    crate::durable_host::concurrent::HistoricalReconstruction,
+) {
+    let mut handle = claim_rejected_tool_reconstruction(rs, OplogIndex::from_u64(parent)).await;
+    let reconstruction = handle
+        .take_historical_reconstruction()
+        .expect("reconstruction guard");
+    (handle, reconstruction)
+}
+
+fn body_call_claim(body: u64) -> StartClaim {
+    StartClaim::owned(
+        &HostFunctionName::MonotonicClockNow,
+        &DurableFunctionType::ReadLocal,
+        OplogIndex::from_u64(body),
+    )
+}
+
+async fn claim_body_call(rs: &ReplayState, body: u64) -> ReplayCallHandle {
+    let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
+        .claim_start_or_replay_end(body_call_claim(body))
+        .await
+        .unwrap()
+    else {
+        panic!("the call of the body started at {body} must be claimed");
+    };
+    handle
+}
+
+/// X's entity `Start` is retained because X's primary exited without dispatching it, and a body
+/// record of it lies before the settlement. Nothing can dispatch that body anymore, so closing X
+/// reports the record instead of waiting for it.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_does_not_wait_for_a_body_nobody_can_dispatch() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        entity_remove_retry_policy(4),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id()),
+    )
+    .await
+    .expect("closing an anchor must not wait for a body nobody can dispatch");
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "expected a divergence, got {result:?}"
+    );
+}
+
+/// The body started at 3 dispatched the entity `Start` at 4 and ended without claiming it. An
+/// ordinary positional read at a record of the body started at 4 does not park on it: its
+/// dispatcher can no longer run.
+#[test]
+#[test_r::timeout("30s")]
+async fn ordinary_reader_does_not_park_on_an_undispatchable_retained_body() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(3)),
+        entity_remove_retry_policy(4),
+        end_for(4, 1),
+        end_for(3, 1),
+    ])
+    .await;
+    start_open_invocation(&rs).await;
+    let (_dispatcher, mut reconstruction) = claim_replaying_body(&rs, 2).await;
+    reconstruction.body_settled();
+    let result = tokio::time::timeout(Duration::from_secs(2), rs.get_oplog_entry(None))
+        .await
+        .expect("an ordinary read must not park on a body nobody can dispatch");
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "expected a divergence, got {result:?}"
+    );
+}
+
+/// A replaying body's call `Start`, `End` and `CompletionDelivered` lie before the settlement.
+/// Closing the anchor waits at the marker until the body claims the call and consumes the
+/// marker, then closes.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_waits_for_an_active_body_marker() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        invocation_finished(),
+        owned_start_now(3),
+        end_for(5, 42),
+        delivered_for(5),
+        end_for(3, 1),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    let (body, mut reconstruction) = claim_replaying_body(&rs, 2).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let invocation_id = replayed_invocation_id();
+    let mut close = Box::pin(rs.close_invocation_anchor(anchor, &invocation_id));
+    assert_pending(&mut close, "closing the anchor at an active body's marker").await;
+
+    let call = claim_body_call(&rs, 3).await;
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(5));
+    rs.await_resolution(call).await.unwrap();
+    rs.await_completion_delivery(OplogIndex::from_u64(5), OplogIndex::from_u64(7), None)
+        .await
+        .unwrap()
+        .acknowledge();
+    rs.await_resolution(body).await.unwrap();
+    reconstruction.body_settled();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), close)
+            .await
+            .expect("the close is decided once the body consumed its marker")
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(9))
+    );
+}
+
+/// X's body ended without claiming its closed child `Start`. The child belongs to X, nothing can
+/// claim it anymore, so X's close folds it instead of leaving it retained.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_folds_a_closed_child_of_a_claimed_entity_start() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        with_invocation_id(owned_start_now(3), 3, 0),
+        end_for(4, 42),
+        end_for(3, 1),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    let (body, mut reconstruction) = claim_replaying_body(&rs, 2).await;
+    reconstruction.body_settled();
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    rs.await_resolution(body).await.unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(8))
+    );
+    assert!(
+        !rs.has_unclaimed_retained_starts(),
+        "the closed child of the ended body is folded at the close"
+    );
+}
+
+/// A replaying body's stream observation lies before the settlement. Closing the anchor waits at
+/// the observation until the body consumes it, then closes.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_waits_for_an_active_body_stream_observation() {
+    let mut entries = attachment_terminal_prefix();
+    entries.extend([
+        unpinned_invocation_started(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(4)),
+        invocation_finished(),
+        attachment_terminal_observation(false, Some(OplogIndex::from_u64(5))),
+        end_for(5, 1),
+        invocation_settled_for(replayed_invocation_id()),
+    ]);
+    let rs = replay_state_over(entries).await;
+    let terminal = rs
+        .claim_concurrent_start(
+            &HostFunctionName::GolemToolOutputFinish,
+            &DurableFunctionType::ReadLocal,
+        )
+        .await
+        .unwrap();
+    rs.await_resolution(terminal).await.unwrap();
+    let anchor = start_open_invocation(&rs).await;
+    let (body, mut reconstruction) = claim_replaying_body(&rs, 4).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let invocation_id = replayed_invocation_id();
+    let mut close = Box::pin(rs.close_invocation_anchor(anchor, &invocation_id));
+    assert_pending(
+        &mut close,
+        "closing the anchor at an active body's stream observation",
+    )
+    .await;
+
+    rs.await_stream_observation(OplogIndex::from_u64(7))
+        .await
+        .unwrap()
+        .acknowledge();
+    rs.await_resolution(body).await.unwrap();
+    reconstruction.body_settled();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), close)
+            .await
+            .expect("the close is decided once the body consumed its stream observation")
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(9))
+    );
+}
+
+/// X's custom durable invocation completed without claiming a closed `Start` numbered under it.
+/// The `Start` belongs to X, nothing can claim it anymore, so X's close folds it instead of
+/// leaving it retained.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_folds_a_closed_start_numbered_under_a_claimed_custom_root() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        with_invocation_id(custom_start("outer", 1, None, 0), 2, 0),
+        with_invocation_id(start_now(), 3, 0),
+        end_for(4, 42),
+        custom_end(3, 10),
+        invocation_finished(),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    let custom = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("outer".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        DurableInvocationId::new(OplogIndex::from_u64(2), 0),
+    )
+    .await
+    .unwrap();
+    assert!(matches!(
+        rs.await_resolution_outcome(custom.handle).await.unwrap(),
+        ResolutionOutcome::Resolved(Resolution::Completed { end_idx, .. })
+            if end_idx == OplogIndex::from_u64(6)
+    ));
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(8))
+    );
+    assert!(
+        !rs.has_unclaimed_retained_starts(),
+        "the closed Start numbered under the completed custom root is folded at the close"
+    );
+}
+
+/// A root `Start` with no invocation id has no producer while an invocation is open.
+#[test]
+#[test_r::timeout("30s")]
+async fn an_idless_root_start_inside_an_invocation_is_a_divergence() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        start_now(),
+        end_for(3, 42),
+    ])
+    .await;
+    start_open_invocation(&rs).await;
+    let result = rs
+        .claim_start_or_replay_end(StartClaim::unowned(
+            &HostFunctionName::MonotonicClockNow,
+            &DurableFunctionType::ReadLocal,
+        ))
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "an idless root Start inside an invocation is a divergence"
+    );
+}
+
+/// No producer appends an entity body record before its entity `Start`: such a record is an
+/// orphan, and a positional read at it reports it instead of waiting for the later `Start`.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_body_record_before_its_entity_start_is_a_divergence() {
+    let rs = replay_state_over(vec![
+        OplogEntry::RecoverySucceeded {
+            timestamp: Timestamp::now_utc(),
+        },
+        anchored_remove_retry_policy(3),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(1)),
+        end_for(3, 1),
+        remove_retry_policy(),
+    ])
+    .await;
+    let result = tokio::time::timeout(Duration::from_secs(2), rs.get_oplog_entry(None))
+        .await
+        .expect("a record before its entity Start must not park the reader");
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "expected a divergence, got {result:?}"
+    );
+}
+
+/// A closed `Start` of X under X's replaying body lies before X's settlement. The close waits
+/// for the body instead of folding it, and the body claims it.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_record_of_the_closing_invocation_under_an_active_body_waits() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        invocation_finished(),
+        owned_start_now(3),
+        end_for(5, 42),
+        end_for(3, 1),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    let (body, mut reconstruction) = claim_replaying_body(&rs, 2).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let invocation_id = replayed_invocation_id();
+    let mut close = Box::pin(rs.close_invocation_anchor(anchor, &invocation_id));
+    assert_pending(
+        &mut close,
+        "closing the anchor under an active body's record",
+    )
+    .await;
+
+    let call = claim_body_call(&rs, 3).await;
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(5));
+    rs.await_resolution(call).await.unwrap();
+    rs.await_resolution(body).await.unwrap();
+    reconstruction.body_settled();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(2), close)
+            .await
+            .expect("the close is decided once the body claimed its record")
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(8))
+    );
+}
+
+/// X and Y are both open, and a `Start` of Y's replaying body lies before X's settlement. X's
+/// close keeps it retained for Y's body.
+#[test]
+#[test_r::timeout("30s")]
+async fn two_open_anchors_keep_the_other_invocations_active_body_entry() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(4)),
+        owned_start_now(5),
+        end_for(6, 42),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor_x = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    start_open_invocation(&rs).await;
+    let (_body, mut reconstruction) = claim_replaying_body(&rs, 4).await;
+    assert_eq!(
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            rs.close_invocation_anchor(anchor_x, &replayed_invocation_id()),
+        )
+        .await
+        .expect("closing X does not wait for Y's body")
+        .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(8))
+    );
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "Y's body record stays retained"
+    );
+    let call = claim_body_call(&rs, 5).await;
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(6));
+    reconstruction.body_settled();
+}
+
+fn fork_end(start_index: u64) -> OplogEntry {
+    OplogEntry::End {
+        timestamp: Timestamp::now_utc(),
+        start_index: OplogIndex::from_u64(start_index),
+        response: Some(OplogPayload::Inline(Box::new(HostResponse::GolemApiFork(
+            HostResponseGolemApiFork {
+                forked_agent_id: Some(AgentId::from_parts(7, 1)),
+                result: Ok(ForkResult::Forked),
+            },
+        )))),
+        forced_commit: false,
+        span_finished: None,
+        span_attributes: None,
+    }
+}
+
+/// A fork of X is recorded after X's terminal and before a positional record of X's background
+/// work. The positional reader retains it instead of parking on it, and X's guest claims it by
+/// identity later.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_fork_of_an_open_invocation_is_retained_and_claimed_by_identity() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        with_invocation_id(fork_start(), 2, 0),
+        fork_end(4),
+        remove_retry_policy(),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let (index, _) = tokio::time::timeout(Duration::from_secs(2), rs.get_oplog_entry(None))
+        .await
+        .expect("the positional read retains the fork instead of parking on it")
+        .unwrap();
+    assert_eq!(index, OplogIndex::from_u64(6));
+    let ReplayStartClaimOutcome::Claimed { handle, .. } = rs
+        .claim_start_or_replay_end(
+            StartClaim::unowned(
+                &HostFunctionName::GolemApiFork,
+                &DurableFunctionType::WriteRemote,
+            )
+            .with_invocation_id(Some(DurableInvocationId::new(OplogIndex::from_u64(2), 0))),
+        )
+        .await
+        .unwrap()
+    else {
+        panic!("the fork is claimed by identity");
+    };
+    assert_eq!(handle.start_idx(), OplogIndex::from_u64(4));
+    rs.await_resolution(handle).await.unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::Recorded(OplogIndex::from_u64(7))
+    );
+}
+
+/// X's guest never claims its fork. The close folds nothing and reports the fork.
+#[test]
+#[test_r::timeout("30s")]
+async fn closing_an_anchor_folds_nothing_and_rejects_an_unclaimed_own_fork() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        with_invocation_id(fork_start(), 2, 0),
+        fork_end(4),
+        invocation_settled_for(replayed_invocation_id()),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    let error = rs
+        .close_invocation_anchor(anchor, &replayed_invocation_id())
+        .await
+        .expect_err("an unclaimed fork of the closing invocation is a divergence");
+    assert!(
+        error.to_string().contains("GolemApiFork"),
+        "unexpected error: {error}"
+    );
+}
+
+/// The replay of an at-return invocation reaches the tail with a closed `Start` of the
+/// invocation under a replaying body, and another closed `Start` of the invocation. The live
+/// end releases the second and keeps the first for the body.
+#[test]
+#[test_r::timeout("30s")]
+async fn live_end_keeps_a_record_of_an_active_body() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        owned_start_now(4),
+        end_for(5, 42),
+        anchored_start(2, 1),
+        end_for(7, 43),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    let (_body, mut reconstruction) = claim_replaying_body(&rs, 2).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::ReplayTail
+    );
+    rs.release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap();
+    assert!(
+        rs.has_unclaimed_retained_starts(),
+        "the active body's record stays retained"
+    );
+    assert!(
+        !matches!(
+            rs.claim_start_or_replay_end(anchored_claim(2, 1))
+                .await
+                .unwrap(),
+            ReplayStartClaimOutcome::Claimed { .. }
+        ),
+        "the invocation's own closed Start is released"
+    );
+    let call = claim_body_call(&rs, 4).await;
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(5));
+    reconstruction.body_settled();
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+/// A settled-path invocation reaches its terminal with a retained `Start` under a body that can
+/// still claim it. The boundary read cannot wait for the body, so it reports a divergence.
+#[test]
+#[test_r::timeout("30s")]
+async fn settled_path_boundary_wait_is_a_divergence() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        owned_start_now(3),
+        end_for(4, 42),
+        invocation_finished(),
+    ])
+    .await;
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("an invocation starts");
+    let (_body, mut reconstruction) = claim_replaying_body(&rs, 2).await;
+    let result = tokio::time::timeout(Duration::from_secs(2), read_invocation_finished(&rs))
+        .await
+        .expect("the boundary read never waits");
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "expected a divergence, got {result:?}"
+    );
+    reconstruction.body_settled();
+}
+
+/// The replay of an at-return invocation reaches the tail with an unclaimed fork. The live end
+/// reports it.
+#[test]
+#[test_r::timeout("30s")]
+async fn live_end_rejects_an_unclaimed_fork() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        with_invocation_id(fork_start(), 2, 0),
+        fork_end(4),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::ReplayTail
+    );
+    let error = rs
+        .release_retained_starts_at_live_invocation_end()
+        .await
+        .expect_err("an unclaimed fork at the live end is a divergence");
+    assert!(
+        error.to_string().contains("GolemApiFork"),
+        "unexpected error: {error}"
+    );
+}
+
+/// A settled-path invocation A ends at 3, and B starts at 4. A store task of A records a `Start`
+/// with A's invocation id while B drives it. The `Start` is B's: B's guest claims it, or B's
+/// close folds it when it is closed, or reports it when it is not.
+#[test]
+#[test_r::timeout("30s")]
+async fn store_task_records_of_a_settled_path_invocation_are_own_of_their_driver_at_a_later_close()
+{
+    for (claimed, closed) in [(true, true), (false, true), (false, false)] {
+        let mut entries = vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            invocation_finished(),
+            invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+            driven_start(2, 0, 4),
+        ];
+        if closed {
+            entries.push(end_for(5, 42));
+        }
+        entries.push(invocation_finished_for(other_invocation_id()));
+        entries.push(invocation_settled_for(other_invocation_id()));
+        let settled = entries.len() as u64;
+        let rs = replay_state_over(entries).await;
+        rs.get_oplog_entry_agent_invocation_started()
+            .await
+            .unwrap()
+            .expect("A starts");
+        read_invocation_finished(&rs).await.unwrap().unwrap();
+        let anchor_b = start_open_invocation(&rs).await;
+        if claimed {
+            let call = claim_driven(&rs, 2, 0, 4).await;
+            rs.await_resolution(call).await.unwrap();
+        }
+        read_open_anchor_terminal(&rs, other_invocation_id())
+            .await
+            .unwrap()
+            .unwrap();
+        let closed_b = rs
+            .close_invocation_anchor(anchor_b, &other_invocation_id())
+            .await;
+        if closed {
+            assert_eq!(
+                closed_b.unwrap(),
+                SettledAt::Recorded(OplogIndex::from_u64(settled)),
+                "claimed: {claimed}"
+            );
+            assert!(!rs.has_unclaimed_retained_starts(), "claimed: {claimed}");
+        } else {
+            assert!(
+                matches!(
+                    closed_b,
+                    Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+                ),
+                "an unclosed unclaimed Start of B is a divergence at B's close"
+            );
+        }
+    }
+}
+
+/// The same store-task record when B reaches the replay tail: the live end releases it when it
+/// is closed and reports it when it is not.
+#[test]
+#[test_r::timeout("30s")]
+async fn store_task_records_of_a_settled_path_invocation_are_own_of_their_driver_at_the_live_end() {
+    for closed in [true, false] {
+        let mut entries = vec![
+            OplogEntry::recovery_succeeded(),
+            unpinned_invocation_started(),
+            invocation_finished(),
+            invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+            driven_start(2, 0, 4),
+        ];
+        if closed {
+            entries.push(end_for(5, 42));
+        }
+        let rs = replay_state_over(entries).await;
+        rs.get_oplog_entry_agent_invocation_started()
+            .await
+            .unwrap()
+            .expect("A starts");
+        read_invocation_finished(&rs).await.unwrap().unwrap();
+        rs.get_oplog_entry_agent_invocation_started()
+            .await
+            .unwrap()
+            .expect("B starts");
+        assert!(matches!(
+            rs.claim_start_or_replay_end(anchored_claim(4, 0))
+                .await
+                .unwrap(),
+            ReplayStartClaimOutcome::ReplayEnded
+        ));
+        assert!(rs.has_unclaimed_retained_starts());
+        let released = rs.release_retained_starts_at_live_invocation_end().await;
+        if closed {
+            released.unwrap();
+            assert!(!rs.has_unclaimed_retained_starts());
+        } else {
+            assert!(
+                matches!(
+                    released,
+                    Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+                ),
+                "an unclosed unclaimed Start of B is a divergence at the live end"
+            );
+        }
+    }
+}
+
+/// After the live end of the invocation that reached the tail, no retained `Start` is left, so
+/// later durable calls are live without a replay admission.
+#[test]
+#[test_r::timeout("30s")]
+async fn retained_set_is_empty_after_each_close_so_durable_calls_become_live() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        invocation_finished(),
+        anchored_start(2, 0),
+        end_for(4, 42),
+    ])
+    .await;
+    let anchor = start_open_invocation(&rs).await;
+    read_open_anchor_terminal(&rs, replayed_invocation_id())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        rs.close_invocation_anchor(anchor, &replayed_invocation_id())
+            .await
+            .unwrap(),
+        SettledAt::ReplayTail
+    );
+    assert!(rs.has_unclaimed_retained_starts());
+    rs.release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+/// A body with a recorded `Cancelled` claimed every call it recorded. A further call it makes
+/// would have been issued after its recorded cancellation point, so its claim waits while the
+/// body replays instead of reporting the replay end or a divergence. Once the body settled, a
+/// claim under it, such as the disposal of one of its resources, is decided as before: here, as
+/// a divergence.
+#[test]
+#[test_r::timeout("30s")]
+async fn cancelled_body_claim_past_its_recorded_calls_parks_until_abort() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        owned_start_now(3),
+        end_for(4, 42),
+        cancelled_for(3),
+        invocation_finished(),
+    ])
+    .await;
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("an invocation starts");
+    let (body, mut reconstruction) = claim_replaying_body(&rs, 2).await;
+    let call = claim_body_call(&rs, 3).await;
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(4));
+    rs.await_resolution(call).await.unwrap();
+    assert!(matches!(
+        rs.await_resolution(body).await.unwrap(),
+        Resolution::Cancelled { .. }
+    ));
+    let mut past = Box::pin(rs.claim_start_or_replay_end(body_call_claim(3)));
+    assert_parked(
+        &mut past,
+        "a claim past the recorded calls of a cancelled body",
+    )
+    .await;
+    reconstruction.body_settled();
+    let decided = tokio::time::timeout(Duration::from_secs(2), past)
+        .await
+        .expect("the claim is decided once the body settled");
+    let Err(error) = decided else {
+        panic!("a claim under a settled body that matches no Start is a divergence");
+    };
+    let divergence = divergence_of(&error);
+    assert_eq!(divergence.oplog_index, OplogIndex::from_u64(7), "{error}");
+    assert_eq!(divergence.expected, ReplayStep::invocation_end(), "{error}");
+    assert_eq!(
+        host_call_of(&divergence.actual).function_name,
+        HostFunctionName::MonotonicClockNow.to_string()
+    );
+}
+
+/// A body with a recorded `Cancelled` left a closed call that the cursor retained before its
+/// `Cancelled`. The abort waits until the body claimed it, and then nothing of the body stays
+/// retained.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_cancelled_body_claims_its_closed_records_before_the_abort() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        owned_start_now(3),
+        end_for(4, 42),
+        cancelled_for(3),
+        invocation_finished(),
+    ])
+    .await;
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("an invocation starts");
+    let (body, mut reconstruction) = claim_replaying_body(&rs, 2).await;
+    let (index, _) = rs.get_oplog_entry(None).await.unwrap();
+    assert_eq!(index, OplogIndex::from_u64(7));
+    assert!(matches!(
+        rs.await_resolution(body).await.unwrap(),
+        Resolution::Cancelled { .. }
+    ));
+    assert_eq!(
+        rs.retained_record_of_body(OplogIndex::from_u64(3))
+            .await
+            .unwrap(),
+        Some(OplogIndex::from_u64(4))
+    );
+    let mut claimed = Box::pin(rs.await_body_records_claimed(OplogIndex::from_u64(3)));
+    assert_pending(&mut claimed, "the abort of a body with unclaimed records").await;
+
+    let call = claim_body_call(&rs, 3).await;
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(4));
+    rs.await_resolution(call).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), claimed)
+        .await
+        .expect("the records are claimed")
+        .unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
+    reconstruction.body_settled();
+}
+
+/// A body with a recorded `Cancelled` claims its unclosed `LeaveIncompleteOnDrop` call before the
+/// abort. While the body replays the resolution never reports the call as incomplete, which would
+/// let the body repair it live before the abort drops it. Nothing of the body stays retained, so
+/// the live end has nothing to report. Once the body settled, a resolution is decided as before.
+#[test]
+#[test_r::timeout("30s")]
+async fn cancelled_body_claim_of_unclosed_start_does_not_continue_live() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        owned_start_now(3),
+        cancelled_for(3),
+    ])
+    .await;
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("an invocation starts");
+    let (body, mut reconstruction) = claim_replaying_body(&rs, 2).await;
+    let call = claim_body_call(&rs, 3).await;
+    assert_eq!(call.start_idx(), OplogIndex::from_u64(4));
+    assert!(matches!(
+        rs.await_resolution(body).await.unwrap(),
+        Resolution::Cancelled { .. }
+    ));
+    assert!(rs.at_replay_tail());
+    let mut outcome = Box::pin(rs.await_resolution_outcome(call));
+    assert_parked(
+        &mut outcome,
+        "the unclosed call of a body with a recorded Cancelled",
+    )
+    .await;
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.await_body_records_claimed(OplogIndex::from_u64(3)),
+    )
+    .await
+    .expect("the body claimed its records")
+    .unwrap();
+    reconstruction.body_settled();
+    assert!(matches!(
+        tokio::time::timeout(Duration::from_secs(2), outcome)
+            .await
+            .expect("the resolution is decided once the body settled")
+            .unwrap(),
+        ResolutionOutcome::Incomplete
+    ));
+    rs.release_retained_starts_at_live_invocation_end()
+        .await
+        .unwrap();
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+/// X starts at 2 and claims its `Start` at 3; X closes at 5 and its close prunes 3 from the owner
+/// map. Y starts at 6. A `Start` at 7 records the committed `Start` at 3 as its parent, no
+/// invocation id, and Y as its `driver`. The parent is pruned, so it is no orphan, and the owner
+/// comes from the recorded driver. A parent that is not pruned stays an orphan.
+#[test]
+fn driven_child_of_a_pruned_parent_without_an_id_takes_its_driver() {
+    let mut map = owners::OwnerMap::default();
+    map.commit_invocation_started(OplogIndex::from_u64(2), replayed_invocation_id());
+    map.commit_start(OplogIndex::from_u64(3), &anchored_start(2, 0))
+        .unwrap();
+    map.close(OplogIndex::from_u64(2), OplogIndex::from_u64(5), |_| false);
+    map.commit_invocation_started(OplogIndex::from_u64(6), replayed_invocation_id());
+    let child = with_driver(owned_start_now(3), 6);
+    assert_eq!(
+        map.record_owner(OplogIndex::from_u64(7), &child, true),
+        Ok(invocation_owner(6, None)),
+        "a pruned parent is an earlier committed Start, so the recorded driver owns the Start"
+    );
+    for (parent, what) in [
+        (8, "a forward parent"),
+        (1, "the creation entry"),
+        (4, "an entry inside the closed invocation that is no Start"),
+    ] {
+        assert!(
+            map.record_owner(
+                OplogIndex::from_u64(7),
+                &with_driver(owned_start_now(parent), 6),
+                false
+            )
+            .is_err(),
+            "{what} was never pruned, so it stays an orphan under a driver"
+        );
+    }
+}
+
+/// A body `Start` recorded after the recorded `Cancelled` of its entity body is corrupt history.
+/// Replay reports a corrupt recorded history as a divergence instead of panicking.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_body_record_after_its_recorded_cancellation_is_a_divergence() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        cancelled_for(3),
+        owned_start_now(3),
+        end_for(5, 42),
+        invocation_finished(),
+    ])
+    .await;
+    rs.get_oplog_entry_agent_invocation_started()
+        .await
+        .unwrap()
+        .expect("an invocation starts");
+    let outcome = std::panic::AssertUnwindSafe(async {
+        let (body, mut reconstruction) = claim_replaying_body(&rs, 2).await;
+        let result = tokio::time::timeout(Duration::from_secs(2), read_invocation_finished(&rs))
+            .await
+            .expect("the read must not hang");
+        drop(body);
+        reconstruction.body_settled();
+        result
+    });
+    let result = futures::FutureExt::catch_unwind(outcome).await;
+    match result {
+        Ok(result) => assert!(
+            matches!(
+                result,
+                Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+            ),
+            "expected a divergence, got {result:?}"
+        ),
+        Err(panic) => {
+            let message = panic
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| panic.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_default();
+            panic!(
+                "replay panicked on recorded history instead of reporting a divergence: {message}"
+            );
+        }
+    }
+}
+
+/// The `<scope:transaction>` `Start` that `begin_transaction_function` (`calls.rs`) records for an
+/// RDBMS transaction begun inside a custom durable invocation, with `observer` as its
+/// observational owner. The guest task is observed by the custom invocation, so the scope records
+/// no invocation id.
+fn transaction_scope_start_inside_custom_invocation(observer: Option<u64>) -> OplogEntry {
+    OplogEntry::Start {
+        timestamp: Timestamp::now_utc(),
+        parent_start_index: None,
+        function_name: HostFunctionName::Custom("<scope:transaction>".to_string()),
+        invocation_id: None,
+        observational_owner: observer.map(OplogIndex::from_u64),
+        driver: None,
+        request: None,
+        durable_function_type: DurableFunctionType::WriteRemote,
+        span_started: None,
+        denial: None,
+    }
+}
+
+async fn replay_custom_invocation_with_transaction(
+    observer: Option<u64>,
+) -> Result<Option<AgentInvocationResult>, WorkerExecutorError> {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        custom_start("custom-op", 1, None, 0),
+        observational_start_now(3, None),
+        end_for(4, 1),
+        transaction_scope_start_inside_custom_invocation(observer),
+        batched_scope_end(6),
+        custom_end(3, 1),
+        invocation_finished(),
+    ])
+    .await;
+    enter_invocation(&rs).await;
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("custom-op".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        test_invocation_id(0),
+    )
+    .await?;
+    rs.await_resolution(claimed.handle).await?;
+    tokio::time::timeout(Duration::from_secs(2), read_invocation_finished(&rs))
+        .await
+        .expect("the terminal read must not hang")
+}
+
+/// A transaction begun inside a custom durable invocation records the custom invocation as the
+/// observational owner of its `<scope:transaction>` `Start`, and that history replays.
+#[test]
+#[test_r::timeout("30s")]
+async fn transaction_scope_observed_by_its_custom_invocation_replays() {
+    let result = replay_custom_invocation_with_transaction(Some(3)).await;
+    assert!(
+        matches!(result, Ok(Some(_))),
+        "an observed transaction scope replays: {result:?}"
+    );
+}
+
+/// A `<scope:transaction>` `Start` inside a custom durable invocation that records no parent,
+/// invocation id, observational owner or driver has no owner while the invocation is open, and
+/// replay reports it as a divergence.
+#[test]
+#[test_r::timeout("30s")]
+async fn transaction_scope_without_an_owner_inside_a_custom_invocation_is_a_divergence() {
+    let result = replay_custom_invocation_with_transaction(None).await;
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "an unowned transaction scope is a divergence: {result:?}"
+    );
+}
+
+/// A retaining read that reaches a `Start` whose parent is no committed `Start` reports the
+/// divergence before it retains the `Start`, so a later read reports the same divergence instead
+/// of finding the `Start` already retained.
+#[test]
+#[test_r::timeout("30s")]
+async fn an_orphaned_retained_start_is_the_same_divergence_on_every_read() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        owned_start_now(1),
+        invocation_finished(),
+    ])
+    .await;
+    enter_invocation(&rs).await;
+    let mut errors = Vec::new();
+    for _ in 0..2 {
+        let result = tokio::time::timeout(Duration::from_secs(2), read_invocation_finished(&rs))
+            .await
+            .expect("the read must not hang");
+        match result {
+            Err(error @ WorkerExecutorError::UnexpectedOplogEntry { .. }) => {
+                errors.push(error.to_string())
+            }
+            other => panic!("expected a divergence, got {other:?}"),
+        }
+    }
+    assert!(
+        errors[0].contains("the Start at 3 references 1"),
+        "{}",
+        errors[0]
+    );
+    assert_eq!(
+        errors[0], errors[1],
+        "every read reports the same divergence"
+    );
+    assert!(!rs.has_unclaimed_retained_starts());
+}
+
+/// [`a_body_record_after_its_recorded_cancellation_is_a_divergence`] with the invocation closing
+/// between the recorded `Cancelled` of the entity body and the body record: X starts at 2, its
+/// entity body at 3 is cancelled at 4, and X finishes at 5. Y starts at 6, and a `Start` at 7
+/// records the cancelled body at 3 as its parent with Y as its driver. The body record follows
+/// the recorded cancellation of its body, which is corrupt history: the close keeps the body's
+/// entity anchor, so replay reports a divergence.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_driven_body_record_after_its_cancellation_in_a_closed_invocation_is_a_divergence() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        rejected_tool_reconstruction_start(OplogIndex::from_u64(2)),
+        cancelled_for(3),
+        invocation_finished(),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        with_driver(owned_start_now(3), 6),
+        end_for(7, 42),
+        invocation_finished_for(other_invocation_id()),
+    ])
+    .await;
+    enter_invocation(&rs).await;
+    let (body, mut reconstruction) = claim_replaying_body(&rs, 2).await;
+    assert!(matches!(
+        rs.await_resolution(body).await.unwrap(),
+        Resolution::Cancelled { .. }
+    ));
+    reconstruction.body_settled();
+    tokio::time::timeout(Duration::from_secs(2), read_invocation_finished(&rs))
+        .await
+        .expect("X's terminal read must not hang")
+        .unwrap()
+        .expect("X finishes");
+    enter_invocation(&rs).await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.get_oplog_entry_agent_invocation_finished(&other_invocation_id()),
+    )
+    .await
+    .expect("Y's terminal read must not hang");
+    assert!(
+        matches!(
+            result,
+            Err(WorkerExecutorError::UnexpectedOplogEntry { .. })
+        ),
+        "a body record after the recorded cancellation of its body must be a divergence, got \
+         {result:?}"
+    );
+}
+
+/// X starts at 2 and claims a custom root at 3, which ends at 4; X finishes at 5. Y starts at 6,
+/// and a `Start` at 7 is numbered under the custom root at 3 (its invocation id is anchored
+/// there) with Y as its driver. The close keeps the custom anchor, so the id resolves to the root
+/// and the driver owns the `Start`: the history replays.
+#[test]
+#[test_r::timeout("30s")]
+async fn a_driven_call_numbered_under_a_custom_root_of_a_closed_invocation_replays() {
+    let rs = replay_state_over(vec![
+        OplogEntry::recovery_succeeded(),
+        unpinned_invocation_started(),
+        custom_start("custom-op", 1, None, 0),
+        custom_end(3, 1),
+        invocation_finished(),
+        invocation_started_for(other_invocation_id(), test_invocation_wallet_pin()),
+        with_driver(with_invocation_id(start_now(), 3, 1), 6),
+        end_for(7, 42),
+        invocation_finished_for(other_invocation_id()),
+    ])
+    .await;
+    enter_invocation(&rs).await;
+    let claimed = claim_custom_start(
+        &rs,
+        &HostFunctionName::Custom("custom-op".to_string()),
+        &DurableFunctionType::ReadRemote,
+        None,
+        test_invocation_id(0),
+    )
+    .await
+    .unwrap();
+    rs.await_resolution(claimed.handle).await.unwrap();
+    tokio::time::timeout(Duration::from_secs(2), read_invocation_finished(&rs))
+        .await
+        .expect("X's terminal read must not hang")
+        .unwrap()
+        .expect("X finishes");
+    enter_invocation(&rs).await;
+    let result = tokio::time::timeout(
+        Duration::from_secs(2),
+        rs.get_oplog_entry_agent_invocation_finished(&other_invocation_id()),
+    )
+    .await
+    .expect("Y's terminal read must not hang");
+    assert!(
+        matches!(result, Ok(Some(_))),
+        "a driven call numbered under a closed custom root replays, got {result:?}"
+    );
 }

@@ -29,6 +29,7 @@ use golem_common::schema::SchemaGraph;
 use golem_common::schema::tool::{Doc, ToolMiddleware, ToolMiddlewareScope};
 use golem_registry_service::repo::account::DbAccountRepo;
 use golem_registry_service::repo::account_resource_override::DbAccountResourceOverrideRepo;
+use golem_registry_service::repo::account_tree::{DbAccountTreeRepo, preview_schema};
 use golem_registry_service::repo::account_usage::DbAccountUsageRepo;
 use golem_registry_service::repo::agent_secret::DbAgentSecretRepo;
 use golem_registry_service::repo::application::DbApplicationRepo;
@@ -49,6 +50,7 @@ use golem_registry_service::repo::model::hash::SqlBlake3Hash;
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::tool_middleware_release::ToolMiddlewareReleaseRecord;
 use golem_registry_service::repo::plan::DbPlanRepo;
+use golem_registry_service::repo::plan_storage::DbPlanStorageRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeEvent, RegistryChangeRepo,
@@ -227,15 +229,31 @@ async fn check_if_postgres_ready(info: &DbPostgresConfig) -> Result<(), sqlx::Er
     Ok(())
 }
 
-async fn make_pool(config: &DbPostgresConfig) -> PostgresPool {
+pub async fn make_pool(config: &DbPostgresConfig) -> PostgresPool {
     db::postgres::migrate(
         config,
         MigrationsDir::new("db/migration".into()).postgres_migrations(),
     )
     .await
     .unwrap();
+    apply_preview_schema(config).await;
 
     PostgresPool::configured(config).await.unwrap()
+}
+
+async fn apply_preview_schema(config: &DbPostgresConfig) {
+    use sqlx::{Connection, Executor};
+    let mut conn = sqlx::PgConnection::connect_with(&config.connect_options())
+        .await
+        .unwrap();
+    let schema = config.schema.clone().unwrap_or("public".to_string());
+    conn.execute(sqlx::query(&format!("SET SCHEMA '{schema}';")))
+        .await
+        .unwrap();
+    for script in preview_schema::POSTGRES {
+        sqlx::raw_sql(script).execute(&mut conn).await.unwrap();
+    }
+    conn.close().await.unwrap();
 }
 
 async fn make_deps(pool: PostgresPool, routing_test_pool: PostgresPool) -> Deps {
@@ -245,6 +263,8 @@ async fn make_deps(pool: PostgresPool, routing_test_pool: PostgresPool) -> Deps 
         account_resource_override_repo: std::sync::Arc::new(DbAccountResourceOverrideRepo::new(
             pool.clone(),
         )),
+        account_tree_repo: std::sync::Arc::new(DbAccountTreeRepo::logged(pool.clone())),
+        plan_storage_repo: std::sync::Arc::new(DbPlanStorageRepo::logged(pool.clone())),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(pool.clone())),
         installation_repo: Box::new(DbInstallationRepo::logged(pool.clone())),
@@ -1230,4 +1250,161 @@ async fn test_environment_type_ids_concurrent_deployments(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
     crate::repo::common::test_environment_type_ids_concurrent_deployments(deps).await;
+}
+
+#[test]
+async fn test_account_tree_has_one_root(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_has_one_root(deps).await;
+}
+
+#[test]
+async fn test_account_tree_sibling_keys(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_sibling_keys(deps).await;
+}
+
+#[test]
+async fn test_account_tree_failed_writes_leave_no_partial_state(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::account_tree::test_account_tree_failed_writes_leave_no_partial_state(deps).await;
+}
+
+#[test]
+async fn test_account_tree_maximum_bounds_and_rename(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_maximum_bounds_and_rename(deps).await;
+}
+
+#[test]
+async fn test_account_tree_grace_reserves_name_until_purge(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::account_tree::test_account_tree_grace_reserves_name_until_purge(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_follows_ancestor_changes(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::account_tree::test_account_tree_cache_follows_ancestor_changes(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_rejects_delayed_load(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_rejects_delayed_load(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_expiry_backup(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_expiry_backup(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_eviction_and_lag(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_tree::test_account_tree_cache_eviction_and_lag(deps).await;
+}
+
+#[test]
+async fn test_plan_definitions_are_versioned_and_owner_scoped(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::plan_storage::test_plan_definitions_are_versioned_and_owner_scoped(deps).await;
+}
+
+#[test]
+async fn test_plan_assignment_follows_owner_and_latest_revision(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::plan_storage::test_plan_assignment_follows_owner_and_latest_revision(deps).await;
+}
+
+#[test]
+async fn test_plan_writes_refuse_impossible_ranges(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_writes_refuse_impossible_ranges(deps).await;
+}
+
+#[test]
+async fn test_plan_opposing_writes_cannot_commit_impossible_range(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::plan_storage::test_plan_opposing_writes_cannot_commit_impossible_range(deps).await;
+}
+
+#[test]
+async fn test_plan_retire_races_assignment(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_retire_races_assignment(deps).await;
+}
+
+#[test]
+async fn test_plan_seed_keeps_later_edits(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_seed_keeps_later_edits(deps).await;
+}
+
+#[test]
+async fn test_plan_operating_defaults_are_validated(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_operating_defaults_are_validated(deps).await;
+}
+
+#[test]
+async fn test_plan_bounds_round_trip_above_i64_max(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_bounds_round_trip_above_i64_max(deps).await;
+}
+
+#[test]
+async fn test_plan_edit_scales_with_members(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_edit_scales_with_members(deps).await;
+}
+
+#[test]
+async fn test_tree_purge_releases_plan_records(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_tree_purge_releases_plan_records(deps).await;
+}
+
+#[test]
+async fn test_plan_edit_rediscovers_members_after_wait(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_edit_rediscovers_members_after_wait(deps).await;
+}
+
+#[test]
+async fn test_plan_guard_scope_timeout_and_cancellation(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::plan_storage::test_plan_guard_scope_timeout_and_cancellation(deps).await;
+}
+
+#[test]
+async fn test_tree_writes_retry_guard_timeouts(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_tree_writes_retry_guard_timeouts(deps).await;
+}
+
+#[test]
+async fn test_tree_purge_rediscovers_plan_links(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_tree_purge_rediscovers_plan_links(deps).await;
+}
+
+#[test]
+async fn test_plan_guard_key_collisions(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::plan_storage::test_plan_guard_key_collisions(deps).await;
+}
+
+#[test]
+async fn test_account_tree_cache_keeps_newer_install_over_delayed_load(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::account_tree::test_account_tree_cache_keeps_newer_install_over_delayed_load(deps)
+        .await;
+}
+
+#[test]
+async fn test_notifier_replays_after_listener_reconnect(db: &PostgresDb) {
+    crate::repo::notifier_reconnect::test_notifier_replays_after_listener_reconnect(db).await;
+}
+
+#[test]
+async fn test_notifier_resets_cache_after_journal_gap(db: &PostgresDb) {
+    crate::repo::notifier_reconnect::test_notifier_resets_cache_after_journal_gap(db).await;
+}
+
+#[test]
+async fn test_notifier_resets_cache_after_journal_expiry(db: &PostgresDb) {
+    crate::repo::notifier_reconnect::test_notifier_resets_cache_after_journal_expiry(db).await;
 }

@@ -35,6 +35,7 @@ pub(super) enum CleanupOutcome {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SessionTransport for WorkerService {
     async fn start(
         &self,

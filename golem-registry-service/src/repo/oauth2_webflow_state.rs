@@ -70,6 +70,7 @@ impl<Repo: OAuth2WebflowStateRepo> LoggedOAuth2WebflowStateRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: OAuth2WebflowStateRepo> OAuth2WebflowStateRepo for LoggedOAuth2WebflowStateRepo<Repo> {
     async fn create(
         &self,
@@ -137,6 +138,7 @@ impl<DBP: Pool> DbOAuth2WebflowStateRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OAuth2WebflowStateRepo for DbOAuth2WebflowStateRepo<PostgresPool> {
     async fn create(
         &self,
@@ -247,6 +249,7 @@ trait OAuth2WebflowStateRepoInternal: OAuth2WebflowStateRepo {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OAuth2WebflowStateRepoInternal for DbOAuth2WebflowStateRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;

@@ -102,8 +102,8 @@ fn resolve_ifs_entry(
     })
 }
 
-fn resolve_tool_ifs_entry(
-    file: &crate::model::app::ToolProvisionFile,
+pub(super) fn resolve_provision_file(
+    file: &crate::model::app::ProvisionFile,
 ) -> anyhow::Result<InitialComponentFile> {
     resolve_ifs_entry(&file.file, &file.source)
 }
@@ -349,7 +349,7 @@ impl<'a> ComponentStager<'a> {
                     let files = manifest_config
                         .files
                         .iter()
-                        .map(|file| resolve_ifs_entry(file, &manifest_config.files_source))
+                        .map(resolve_provision_file)
                         .collect::<anyhow::Result<Vec<_>>>()?;
 
                     result.insert(
@@ -388,7 +388,7 @@ impl<'a> ComponentStager<'a> {
                         .provision
                         .files
                         .iter()
-                        .map(resolve_tool_ifs_entry)
+                        .map(resolve_provision_file)
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     result.insert(tool_name.clone(), expand_component_files(&files).await?);
                 }
@@ -430,7 +430,7 @@ impl<'a> ComponentStager<'a> {
                     let files = config
                         .files
                         .iter()
-                        .map(resolve_tool_ifs_entry)
+                        .map(resolve_provision_file)
                         .collect::<anyhow::Result<Vec<_>>>()?;
                     result.insert(name.clone(), expand_component_files(&files).await?);
                 }

@@ -26,6 +26,7 @@ impl RemoteInvocationRpc {
 
 /// Rpc implementation simply calling the public Golem Worker API for invocation
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Rpc for RemoteInvocationRpc {
     async fn cancel_scheduled_invocation(
         &self,
@@ -85,7 +86,6 @@ impl Rpc for RemoteInvocationRpc {
                     if accepted.agent_id != Some(owned_agent_id.agent_id().into())
                         || accepted.idempotency_key != Some(idempotency_key.into())
                         || accepted.method_name != start.method_name
-                        || accepted.component_revision.is_none()
                     {
                         return Err(RpcError::ProtocolError {
                             details: "scheduled invocation acceptance does not match the target invocation".to_string(),
@@ -160,6 +160,7 @@ impl Rpc for RemoteInvocationRpc {
         &self,
         target: ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         _self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -180,6 +181,7 @@ impl Rpc for RemoteInvocationRpc {
             .prepare(
                 &target,
                 method_name,
+                invocation,
                 self_agent_id,
                 HashMap::from_iter(self_env.to_vec()),
                 self_stack,
@@ -279,6 +281,8 @@ impl Rpc for RemoteInvocationRpc {
                 constructor: proto_target.constructor,
                 component_id: proto_target.component_id,
                 method_name: Some(method_name),
+                captured_method_input: None,
+                allow_streams: true,
                 input: Some(method_parameters),
                 request_key: Some(InvocationRequestKey::Internal(idempotency_key.clone()).into()),
                 idempotency_key: Some(idempotency_key.into()),
@@ -359,9 +363,12 @@ impl Rpc for RemoteInvocationRpc {
                     .validate_response(&response)
                     .map_err(|details| RpcError::ProtocolError { details })?;
                 match response.response {
-                    Some(invocation_response::Response::Accepted(accepted)) => {
+                    Some(invocation_response::Response::Accepted(accepted))
+                    | Some(invocation_response::Response::Ready(accepted)) => {
                         attachment_state_retries = 0;
-                        if let Some(sender) = accepted_inputs.take() {
+                        if accepted.component_revision.is_some()
+                            && let Some(sender) = accepted_inputs.take()
+                        {
                             let _ = sender.send(accepted.clone());
                         }
                         if accepted.attachment_id.is_some() {
@@ -631,6 +638,7 @@ pub(super) fn scheduled_invocation_start(
         invocation_context,
         caller,
         scope_card,
+        ..
     } = invocation
     else {
         return Err(RpcError::ProtocolError {
@@ -638,6 +646,16 @@ pub(super) fn scheduled_invocation_start(
         });
     };
     let parent = Some((*self_agent_id).into());
+    let input = match input {
+        golem_common::model::agent::AgentMethodInput::Native(input) => input
+            .decode(|_, _| Err("live streams cannot be used in scheduled invocations".into()))
+            .map_err(|details| RpcError::ProtocolError { details })?,
+        _ => {
+            return Err(RpcError::ProtocolError {
+                details: "guest scheduling requires native method input".into(),
+            });
+        }
+    };
     let start = InvocationStart {
         target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
             target: Some(
@@ -649,6 +667,8 @@ pub(super) fn scheduled_invocation_start(
         constructor: None,
         component_id: None,
         method_name: Some(method_name),
+        captured_method_input: None,
+        allow_streams: false,
         input: Some(input.try_into().map_err(|error| RpcError::ProtocolError {
             details: format!("scheduled input cannot cross the remote worker boundary: {error}"),
         })?),

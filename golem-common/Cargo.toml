@@ -53,6 +53,7 @@ full = [
     "dep:poem",
     "dep:poem-openapi",
     "dep:prometheus",
+    "dep:prost",
     "dep:prost-types",
     "dep:scc",
     "dep:serde_yaml",
@@ -119,6 +120,7 @@ opentelemetry-otlp = { workspace = true, optional = true }
 poem = { workspace = true, optional = true }
 poem-openapi = { workspace = true, optional = true }
 prometheus = { workspace = true, optional = true }
+prost = { workspace = true, optional = true }
 prost-types = { workspace = true, optional = true }
 rand = { workspace = true }
 range-set-blaze = { workspace = true }
@@ -199,7 +201,6 @@ jsonschema = { workspace = true }
 opentelemetry-prometheus-text-exporter = { workspace = true }
 pretty_assertions = { workspace = true, features = ["unstable"] }
 proptest = { workspace = true }
-prost = { workspace = true }
 tempfile = { workspace = true }
 test-r = { workspace = true }
 tracing-test = { workspace = true }

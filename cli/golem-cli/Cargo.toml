@@ -161,6 +161,7 @@ golem-model-mock = { workspace = true }
 golem-native-tool = { workspace = true }
 log = { workspace = true }
 poem = { workspace = true, features = ["rustls"] }
+poem-openapi = { workspace = true }
 pretty_assertions = { workspace = true }
 proptest = { workspace = true }
 reqwest = { workspace = true }

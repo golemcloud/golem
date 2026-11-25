@@ -64,6 +64,7 @@ impl SqliteSchedulerStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerStorage for SqliteSchedulerStorage {
     async fn insert(
         &self,

@@ -244,6 +244,9 @@ pub enum InvocationState {
     Interrupted,
     /// Ended with its result (terminal)
     Completed,
+    /// Ended with its result, after which the agent failed during the invocation's background
+    /// work (terminal)
+    BackgroundFailed,
     /// Ended by a failure (terminal)
     Failed,
     /// Ended by cancellation (terminal)
@@ -252,7 +255,10 @@ pub enum InvocationState {
 
 impl InvocationState {
     pub fn is_terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+        matches!(
+            self,
+            Self::Completed | Self::BackgroundFailed | Self::Failed | Self::Cancelled
+        )
     }
 }
 
@@ -283,8 +289,8 @@ pub struct InvocationSummary {
     pub changed_at: OpenApiTimestamp,
 }
 
-/// An invocation with its result. `result` is present once the invocation is `completed` or
-/// `failed`; a completed constructor run has no result.
+/// An invocation with its result. `result` is present once the invocation is `completed`,
+/// `background-failed` or `failed`; a completed constructor run has no result.
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -301,6 +307,7 @@ pub enum InvocationOutcome {
     Method(InvocationMethodResult),
     Tool(InvocationToolResult),
     Failure(InvocationFailure),
+    BackgroundFailure(InvocationBackgroundFailure),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
@@ -315,6 +322,14 @@ pub struct InvocationToolResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
 pub struct InvocationFailure {
+    pub error: String,
+}
+
+/// The recorded result of an invocation, and the failure of the agent during the invocation's
+/// background work after it. `value` is absent for the constructor run.
+#[derive(Debug, Clone, Serialize, Deserialize, Object)]
+pub struct InvocationBackgroundFailure {
+    pub value: Option<ExternalTypedSchemaValue>,
     pub error: String,
 }
 

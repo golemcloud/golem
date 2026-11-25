@@ -68,6 +68,7 @@ struct ExpiryWorkerAccessMock {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for ExpiryWorkerAccessMock {
     async fn active_worker_fingerprint(
         &self,
@@ -125,6 +126,7 @@ impl SchedulerWorkerAccess for ExpiryWorkerAccessMock {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
     async fn expire_durable_stream_session(
         &self,
@@ -213,6 +215,7 @@ impl RecordingActiveWorkerAccess {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
     async fn expire_durable_stream_session(
         &self,
@@ -284,6 +287,7 @@ struct FailingWakeWorkerAccess {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for FailingWakeWorkerAccess {
     async fn expire_durable_stream_session(
         &self,
@@ -345,6 +349,7 @@ impl SchedulerWorkerAccess for FailingWakeWorkerAccess {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
     async fn expire_durable_stream_session(
         &self,
@@ -425,6 +430,7 @@ struct FailingActivationWorkerAccess {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for FailingActivationWorkerAccess {
     async fn expire_durable_stream_session(
         &self,
@@ -488,6 +494,7 @@ struct DelayedActiveWorkerAccessMock {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for DelayedActiveWorkerAccessMock {
     async fn expire_durable_stream_session(
         &self,
@@ -645,6 +652,7 @@ struct FlakyInsertSchedulerStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerStorage for FlakyInsertSchedulerStorage {
     async fn insert(
         &self,
@@ -775,6 +783,7 @@ struct RecordingSchedulerStorage {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SchedulerStorage for RecordingSchedulerStorage {
     async fn insert(
         &self,
@@ -2664,6 +2673,7 @@ mod lease_renewal_isolation {
     }
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl SchedulerStorage for SlowRenewalStorage {
         async fn insert(
             &self,

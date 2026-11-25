@@ -14,6 +14,7 @@
 
 pub mod account;
 pub mod account_resource_override;
+pub mod account_tree;
 pub mod account_usage;
 pub mod agent_secrets;
 pub mod application;
@@ -34,6 +35,7 @@ pub mod oauth2_token;
 pub mod oauth2_webflow_state;
 pub mod permission_share;
 pub mod plan;
+pub mod plan_storage;
 pub mod plugin;
 pub mod reports;
 pub mod resource_definition;

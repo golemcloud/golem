@@ -42,6 +42,10 @@ inherit_test_dep!(
     #[tagged_as("host_api_tests")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("agent_sdk_rust")]
+    PrecompiledComponent
+);
 
 const TEST_TTL: Duration = Duration::from_millis(50);
 
@@ -1186,5 +1190,132 @@ async fn an_agent_whose_shard_leaves_while_it_is_being_created_is_given_up_once_
         || async { !executor.worker_is_cached(&owned_agent_id).await },
     )
     .await?;
+    Ok(())
+}
+
+/// The constructor of an agent that was created but not started before its shard left runs when
+/// the shard is back. It runs with the caller of the request that created the agent, which the
+/// Create entry records, and not with the caller of the request that loads the agent then.
+#[test]
+#[timeout("120s")]
+#[tracing::instrument]
+async fn a_constructor_that_waits_through_a_shard_reassignment_runs_as_the_creator(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateWorkerRequest, create_worker_response,
+    };
+    use golem_common::model::account::AccountId;
+    use golem_worker_executor_test_utils::callers;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let probe = agent_key!("InvocationContextProbe", "created-before-the-shard-leaves");
+    let agent_id = executor.keyed_agent_id(context.default_environment_id, &probe)?;
+    // The harness learns the executor's agent registry from the first agent that runs, and the
+    // agent under test does not run before its shard leaves.
+    let warm_up = agent_key!(
+        "InvocationContextProbe",
+        "created-before-the-shard-leaves-warm-up"
+    );
+    executor.start_agent(&component.id, warm_up.clone()).await?;
+    executor
+        .invoke_and_await_agent(&component, &warm_up, "caller_summary", data_value!())
+        .await?;
+
+    let (creator_id, loader_id) = (AccountId::new(), AccountId::new());
+    let both_roles = |account_id| {
+        let account = callers::account_text(account_id);
+        format!("original={account} immediate={account} tokens=0")
+    };
+
+    // The creation writes the Create entry and stops before it enqueues the constructor.
+    let mut gate = executor
+        .gate_next_agent_initialization_enqueue(&agent_id.agent_id)
+        .await;
+    let creation = tokio::spawn({
+        let mut client = executor.client.clone();
+        let request = CreateWorkerRequest {
+            ignore_already_existing: false,
+            caller: Some(callers::account(creator_id).into()),
+            ..executor.create_keyed_worker_request(&component.id, &probe)?
+        };
+        async move { client.prepare_worker(request).await }
+    });
+    tokio::time::timeout(Duration::from_secs(20), gate.entered())
+        .await
+        .map_err(|_| anyhow::anyhow!("creation never reached the initialization enqueue"))?;
+
+    let mut client = executor.client.clone();
+    let revoked = client
+        .revoke_shards(RevokeShardsRequest {
+            shard_ids: vec![ShardId { value: 0 }],
+            revision: 1,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        revoked.result,
+        Some(revoke_shards_response::Result::Success(_))
+    ));
+    drop(gate);
+    let created = tokio::time::timeout(Duration::from_secs(20), creation).await??;
+    assert!(matches!(
+        created?.into_inner().result,
+        Some(create_worker_response::Result::Success(_))
+    ));
+    wait_until(
+        "the agent created on a shard that left to be given up",
+        || async { !executor.worker_is_cached(&agent_id).await },
+    )
+    .await?;
+
+    // The shard comes back, and a request of another caller loads the agent.
+    let assignment = client
+        .assign_shards(AssignShardsRequest {
+            number_of_shards: 1,
+            shard_epochs: vec![ShardEpochEntry {
+                shard_id: Some(ShardId { value: 0 }),
+                epoch: 2,
+            }],
+            revision: 2,
+            incarnation_id: TEST_SHARD_MANAGER.to_string(),
+        })
+        .await?
+        .into_inner();
+    assert!(matches!(
+        assignment.result,
+        Some(assign_shards_response::Result::Success(_))
+    ));
+    let report: serde_json::Value = serde_json::from_str(
+        &executor
+            .invoke_and_await_agent_as_caller(
+                &component,
+                &probe,
+                callers::account(loader_id),
+                "report",
+                data_value!(),
+            )
+            .await?
+            .into_typed::<String>()?,
+    )?;
+    assert_eq!(
+        report["constructorCaller"],
+        both_roles(creator_id),
+        "the constructor runs as the creator of the agent"
+    );
+    assert_eq!(
+        report["methodCaller"],
+        both_roles(loader_id),
+        "the method runs as the caller of its own request"
+    );
     Ok(())
 }

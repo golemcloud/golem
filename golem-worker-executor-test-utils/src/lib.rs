@@ -181,8 +181,8 @@ pub use golem_worker_executor::workerctx::ReplayAdmissionStage;
 use golem_worker_executor::workerctx::{
     CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement, ExternalOperations,
     FileSystemReading, FuelManagement, InvocationContextManagement, InvocationHooks,
-    InvocationManagement, LogEventEmitBehaviour, P3HttpBodyProducerHook, StatusManagement,
-    UpdateManagement, WorkerCtx, WorkerFilesystemContext,
+    InvocationManagement, LogEventEmitBehaviour, P3HttpBodyProducerHook, ResultRecordedAt,
+    StatusManagement, UpdateManagement, WorkerCtx, WorkerFilesystemContext,
 };
 use golem_worker_executor::{
     Bootstrap, RunDetails, bootstrap_and_run_worker_executor, derive_disjoint_sqlite_config,
@@ -717,8 +717,7 @@ impl TestWorkerExecutor {
             .as_ref()
             .expect("test service graph is captured");
         let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
-        let worker =
-            Worker::get_exact_existing_suspended(services, &owned_agent_id, caller.clone()).await?;
+        let worker = Worker::get_exact_existing_suspended(services, &owned_agent_id).await?;
         let invocation_id = golem_common::model::InvocationRequestKey::Internal(idempotency_key)
             .finalize(
                 *agent_id,
@@ -1175,6 +1174,16 @@ impl TestWorkerExecutor {
     pub fn oplog_entries_read(&self, agent_id: &AgentId) -> u64 {
         self.additional_test_deps
             .oplog_entries_read(&OwnedAgentId::new(
+                self.context.default_environment_id,
+                agent_id,
+            ))
+    }
+
+    /// The entries of each commit of the agent's opened oplog that stored entries, in commit
+    /// order: one list of indices per commit made at a level other than `ReportOnly`.
+    pub fn oplog_commit_writes(&self, agent_id: &AgentId) -> Vec<Vec<OplogIndex>> {
+        self.additional_test_deps
+            .oplog_commit_writes(&OwnedAgentId::new(
                 self.context.default_environment_id,
                 agent_id,
             ))
@@ -3898,7 +3907,6 @@ impl wasmtime_wasi::p2::bindings::cli::environment::Host for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl FuelManagement for TestWorkerCtx {
     fn observe_fuel_execution(&mut self, _current_level: u64, _entering_wasm: bool) -> bool {
         false
@@ -3946,7 +3954,6 @@ impl CallCountManagement for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     type ExtraDeps = AdditionalTestDeps;
 
@@ -4011,7 +4018,6 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl InvocationManagement for TestWorkerCtx {
     async fn set_current_idempotency_key(&mut self, key: golem_common::model::InvocationId) {
         self.durable_ctx.set_current_idempotency_key(key).await
@@ -4043,7 +4049,6 @@ impl InvocationManagement for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl StatusManagement for TestWorkerCtx {
     fn check_interrupt(&self) -> Option<InterruptKind> {
         self.durable_ctx.check_interrupt()
@@ -4058,14 +4063,14 @@ impl StatusManagement for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl InvocationHooks for TestWorkerCtx {
     async fn on_agent_invocation_started(
         &mut self,
         invocation: golem_worker_executor::worker::HydratedInvocation,
+        input: Option<&SchemaValue>,
     ) -> Result<bool, WorkerExecutorError> {
         self.durable_ctx
-            .on_agent_invocation_started(invocation)
+            .on_agent_invocation_started(invocation, input)
             .await
     }
 
@@ -4087,9 +4092,10 @@ impl InvocationHooks for TestWorkerCtx {
         &mut self,
         full_function_name: &str,
         error: AgentError,
+        recorded_at: ResultRecordedAt,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .record_agent_method_failure(full_function_name, error)
+            .record_agent_method_failure(full_function_name, error, recorded_at)
             .await
     }
 
@@ -4098,6 +4104,7 @@ impl InvocationHooks for TestWorkerCtx {
         full_function_name: &str,
         consumed_fuel: u64,
         output: &mut AgentInvocationOutput,
+        recorded_at: ResultRecordedAt,
     ) -> Result<(), WorkerExecutorError> {
         if let Some(gate) = self
             .additional_test_deps
@@ -4121,7 +4128,7 @@ impl InvocationHooks for TestWorkerCtx {
             }
         }
         self.durable_ctx
-            .on_agent_invocation_success(full_function_name, consumed_fuel, output)
+            .on_agent_invocation_success(full_function_name, consumed_fuel, output, recorded_at)
             .await
     }
 
@@ -4157,7 +4164,6 @@ impl ResourceStore for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl UpdateManagement for TestWorkerCtx {
     fn snapshot_boundary_blocker(&self) -> Option<SnapshotBoundaryBlocker> {
         self.durable_ctx.snapshot_boundary_blocker()
@@ -4210,7 +4216,6 @@ struct TestServerBootstrap {
     services: Arc<Mutex<Option<golem_worker_executor::services::All<TestWorkerCtx>>>>,
 }
 
-#[async_trait]
 impl WorkerCtx for TestWorkerCtx {
     type PublicState = PublicDurableWorkerState<TestWorkerCtx>;
 
@@ -4580,7 +4585,6 @@ impl ResourceLimiterAsync for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl FileSystemReading for TestWorkerCtx {
     async fn get_file_system_node(
         &self,
@@ -4688,7 +4692,6 @@ impl HostFutureInvokeResult for TestWorkerCtx {
     }
 }
 
-#[async_trait]
 impl InvocationContextManagement for TestWorkerCtx {
     fn remove_span(&mut self, span_id: &SpanId) -> Result<(), WorkerExecutorError> {
         self.durable_ctx.remove_span(span_id)
@@ -6423,6 +6426,13 @@ impl Oplog for TestOplog {
             }
         }
         let committed = self.oplog.commit(level).await;
+        if level != CommitLevel::ReportOnly
+            && let Ok(entries) = &committed
+            && !entries.is_empty()
+        {
+            self.additional_test_deps
+                .record_oplog_commit_write(&self.owned_agent_id, entries.keys().copied().collect());
+        }
         if committed.as_ref().is_ok_and(|entries| {
             entries
                 .values()
@@ -7134,6 +7144,7 @@ pub struct AdditionalTestDeps {
     oplog_end_gates: Arc<std::sync::Mutex<OplogEndGates>>,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
     oplog_entries_read: Arc<std::sync::Mutex<HashMap<OwnedAgentId, u64>>>,
+    oplog_commit_writes: Arc<std::sync::Mutex<HashMap<OwnedAgentId, Vec<Vec<OplogIndex>>>>>,
     oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outages: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outage_targets: Arc<std::sync::Mutex<HashMap<AgentId, PayloadId>>>,
@@ -7226,6 +7237,7 @@ impl AdditionalTestDeps {
             rpc_memory_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_entries_read: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_commit_writes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_download_failures: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outages: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outage_targets: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -7756,6 +7768,24 @@ impl AdditionalTestDeps {
             .unwrap()
             .entry(owned_agent_id.clone())
             .or_default() += entries;
+    }
+
+    fn record_oplog_commit_write(&self, owned_agent_id: &OwnedAgentId, indices: Vec<OplogIndex>) {
+        self.oplog_commit_writes
+            .lock()
+            .unwrap()
+            .entry(owned_agent_id.clone())
+            .or_default()
+            .push(indices);
+    }
+
+    fn oplog_commit_writes(&self, owned_agent_id: &OwnedAgentId) -> Vec<Vec<OplogIndex>> {
+        self.oplog_commit_writes
+            .lock()
+            .unwrap()
+            .get(owned_agent_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn oplog_entries_read(&self, owned_agent_id: &OwnedAgentId) -> u64 {
@@ -9598,6 +9628,7 @@ impl Rpc for RecordingRpc {
         &self,
         target: ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -9613,6 +9644,7 @@ impl Rpc for RecordingRpc {
             .create_demand(
                 target,
                 method_name,
+                invocation,
                 self_created_by,
                 self_agent_id,
                 self_env,
@@ -9775,6 +9807,7 @@ impl Rpc for FailingRpc {
         &self,
         target: ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -9789,6 +9822,7 @@ impl Rpc for FailingRpc {
             .create_demand(
                 target,
                 method_name,
+                invocation,
                 self_created_by,
                 self_agent_id,
                 self_env,

@@ -1093,6 +1093,43 @@ pub struct StreamSessionAttachedRecord {
     pub attempt_id: AttemptId,
     pub epoch: u64,
     pub pending_invocation_oplog_index: OplogIndex,
+    pub acceptance: StreamSessionAcceptance,
+}
+
+/// Schema-independent attachment identity retained before execution chooses a revision.
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub struct StreamSessionAcceptance {
+    pub public_session_id: String,
+    pub route_scope: Option<String>,
+    pub expiry_policy: StreamSessionExpiryPolicy,
+    pub expiry_deadline_millis: Option<u64>,
+    pub effective_identity: Vec<u8>,
+    pub execution_config: Vec<u8>,
+    pub live_join_buffer_events: u32,
+    /// Native request ordinal to transport stream ID. Foreign identities remain in Pending.
+    pub transport_stream_ids: Vec<u64>,
+}
+
+impl StreamSessionPreparedRecord {
+    pub fn acceptance(&self) -> StreamSessionAcceptance {
+        StreamSessionAcceptance {
+            public_session_id: self.public_session_id.clone(),
+            route_scope: self.route_scope.clone(),
+            expiry_policy: self.expiry_policy,
+            expiry_deadline_millis: self.expiry_deadline_millis,
+            effective_identity: self.attempt.effective_identity.clone(),
+            execution_config: self.attempt.invocation.execution_config.clone(),
+            live_join_buffer_events: self.attempt.live_join_buffer_events,
+            transport_stream_ids: self
+                .stream_mappings
+                .iter()
+                .filter(|binding| binding.role.direction() == SessionStreamRole::Input)
+                .map(|binding| binding.transport_stream_id)
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, IntoSchema, FromSchema)]

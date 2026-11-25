@@ -377,6 +377,7 @@ struct ConfiguredResourceLimitsDisabled {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ResourceLimits for ConfiguredResourceLimitsDisabled {
     async fn initialize_account(
         &self,
@@ -401,6 +402,7 @@ impl ResourceLimits for ConfiguredResourceLimitsDisabled {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ResourceLimits for ResourceLimitsDisabled {
     async fn initialize_account(
         &self,

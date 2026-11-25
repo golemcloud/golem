@@ -341,6 +341,7 @@ impl Rpc for HoldFirstSchedule {
         &self,
         target: ResolvedTarget,
         method: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         created_by: AccountId,
         caller: &AgentId,
         env: &[(String, String)],
@@ -358,6 +359,7 @@ impl Rpc for HoldFirstSchedule {
             .create_demand(
                 target,
                 method,
+                invocation,
                 created_by,
                 caller,
                 env,

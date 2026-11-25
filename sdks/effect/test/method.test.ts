@@ -14,12 +14,9 @@ import {
 } from "../src/Method.js"
 import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v } from "../src/internal/schema-model/model.js"
-import {
-  Caller,
-  InvocationContext,
-  PrincipalRef,
-  PrincipalRefSchema,
-} from "../src/InvocationContext.js"
+import { InvocationContext, PrincipalRef, PrincipalRefSchema } from "../src/InvocationContext.js"
+import { callerFromHost } from "../src/internal/invocationContext.js"
+import { agentPrincipal, anonymousPrincipal } from "./callers.js"
 
 const Person = Schema.Struct({ name: Schema.String, age: Schema.Number })
 const greet = defineMethod({
@@ -50,17 +47,24 @@ describe("Method", () => {
           const wire = schemaValueToWit(v.record(mixed ? [v.string("Ada")] : []))
           const decoded = yield* compiled.inputCodec.decode(wire)
           expect(decoded).toEqual(mixed ? { user: "Ada" } : {})
-          const context = { caller: Caller.anonymous() }
-          const output = yield* invokeMethod(
-            compiled,
-            () =>
-              Effect.map(InvocationContext, (current) => {
-                expect(current).toBe(context)
-                return current.caller.immediate.kind
-              }),
-            wire,
-          ).pipe(Effect.provideService(InvocationContext, context))
-          expect(schemaValueFromWit(output!)).toEqual(v.string("anonymous"))
+          expect(decoded.caller).toBeUndefined()
+          const principals = [anonymousPrincipal, agentPrincipal()]
+          for (const principal of principals) {
+            const caller = callerFromHost({ original: principal, immediate: principal, tokens: [] })
+            const context = { caller }
+            const output = yield* invokeMethod(
+              compiled,
+              (input) => {
+                expect(input).toEqual(mixed ? { user: "Ada" } : {})
+                return Effect.map(InvocationContext, (ctx) => {
+                  expect(ctx).toBe(context)
+                  return ctx.caller.immediate.kind
+                })
+              },
+              wire,
+            ).pipe(Effect.provideService(InvocationContext, context))
+            expect(schemaValueFromWit(output!)).toEqual(v.string(principal.tag))
+          }
         }),
     )
   }

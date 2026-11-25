@@ -71,6 +71,8 @@ impl OplogReads for RestOplogReads {
                 count,
                 cursor,
                 query,
+                // An export never asks for claims.
+                None,
                 None,
                 None,
                 None,
@@ -104,6 +106,8 @@ impl OplogReads for RestOplogReads {
                 count,
                 cursor,
                 None,
+                // An export never asks for claims.
+                None,
                 None,
                 Some(to),
                 allowance.map(|allowance| allowance.entries),
@@ -133,6 +137,8 @@ impl OplogReads for RestOplogReads {
                 &self.agent_id.0,
                 oplog_index,
                 Some(component_revision.into()),
+                // An export never asks for claims.
+                None,
                 None,
             )
             .await

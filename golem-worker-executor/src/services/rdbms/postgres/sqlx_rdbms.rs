@@ -74,6 +74,7 @@ impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl BeginTransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
     async fn begin_transaction(
         key: &RdbmsPoolKey,
@@ -107,6 +108,7 @@ impl BeginTransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl TransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
     async fn pre_commit_transaction(
         _pool: &Pool<sqlx::Postgres>,

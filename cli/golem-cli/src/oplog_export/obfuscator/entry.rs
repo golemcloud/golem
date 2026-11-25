@@ -22,6 +22,10 @@ use crate::oplog_export::model::{
     CaseKind, HostTypeMismatchRef, OmittedReason, ReportEntry, ReportField, ReportNode,
     ReportOmission, SchemaLessRpcValueRef, TimestampNode, TupleNode,
 };
+use golem_common::model::caller::{
+    Pair, PublicAccountPrincipal, PublicAgentPrincipal, PublicCaller, PublicPrincipal,
+    PublicTokenProvenance, PublicToolPrincipal, PublicUserPrincipal,
+};
 use golem_common::model::card::{
     AccountCardHolder, AgentCardHolder, ApplicationCardHolder, PublicCardHolder,
 };
@@ -38,8 +42,8 @@ use golem_common::model::oplog::{
     PublicQueuedCardEventTransferReceived, PublicRetryPolicyState,
     PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicSpanAttributes,
     PublicSpanFinished, PublicSpanStarted, PublicToolInvocationOperation,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, ReplayDivergence, ReplayStep,
-    SaveSnapshotResultParameters,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, ReplayDivergence, ReplayStart,
+    ReplayStep, SaveSnapshotParameters, SaveSnapshotResultParameters,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OplogIndex, Timestamp};
@@ -316,11 +320,79 @@ fn failed_snapshot_assisted(details: &PublicFailedSnapshotAssistedUpdateDetails)
         .build()
 }
 
+/// A schema-less value for raw public JSON method input: objects are records in key order,
+/// arrays are lists, and numbers keep their integer or float form. JSON has no byte type, so
+/// a non-empty array of integers that all fit a byte is a byte list, which is obfuscated as
+/// one token rather than element by element.
+fn json_schema_value(json: serde_json::Value) -> SchemaValue {
+    if let serde_json::Value::Array(elements) = &json
+        && let Some(bytes) = elements
+            .iter()
+            .map(|element| element.as_u64().and_then(|byte| u8::try_from(byte).ok()))
+            .collect::<Option<Vec<_>>>()
+        && !bytes.is_empty()
+    {
+        return SchemaValue::List {
+            elements: bytes.into_iter().map(SchemaValue::U8).collect(),
+        };
+    }
+    match json {
+        serde_json::Value::Null => SchemaValue::Option { inner: None },
+        serde_json::Value::Bool(value) => SchemaValue::Bool(value),
+        serde_json::Value::Number(number) => number
+            .as_u64()
+            .map(SchemaValue::U64)
+            .or_else(|| number.as_i64().map(SchemaValue::S64))
+            .unwrap_or_else(|| SchemaValue::F64(number.as_f64().unwrap_or(f64::NAN))),
+        serde_json::Value::String(value) => SchemaValue::String(value),
+        serde_json::Value::Array(elements) => SchemaValue::List {
+            elements: elements.into_iter().map(json_schema_value).collect(),
+        },
+        serde_json::Value::Object(fields) => SchemaValue::Record {
+            fields: fields
+                .into_iter()
+                .map(|(_, value)| json_schema_value(value))
+                .collect(),
+        },
+    }
+}
+
 fn retry_state(state: &PublicRetryPolicyState) -> ReportNode {
     kept(state)
 }
 
 impl Walker<'_, '_> {
+    /// The original method input is a component-independent envelope. Its case names the
+    /// captured representation, which is not customer data, so it stays in clear and the
+    /// captured value inside it is obfuscated schema-less.
+    fn method_input(&mut self, input: &TypedSchemaValue) -> ReportNode {
+        use golem_common::model::agent::PublicMethodInput;
+        use golem_common::schema::FromSchema;
+        const TYPE_NAME: &str = "original-method-input";
+        let case = |name: &str, index: u32, payload: ReportNode| {
+            kept_case(
+                CaseKind::Variant,
+                Some(TYPE_NAME.to_string()),
+                name,
+                Some(index),
+                Some(payload),
+            )
+        };
+        match PublicMethodInput::from_value(input.value()) {
+            Ok(PublicMethodInput::Native { value, .. }) => {
+                case("Native", 0, self.schemaless(&value, Region::Customer))
+            }
+            Ok(PublicMethodInput::PublicJson(json)) => {
+                let payload = match serde_json::from_str::<serde_json::Value>(&json) {
+                    Ok(json) => self.schemaless(&json_schema_value(json), Region::Customer),
+                    Err(_) => self.str_leaf(&json, Region::Customer),
+                };
+                case("PublicJson", 1, payload)
+            }
+            Err(_) => self.customer(input),
+        }
+    }
+
     /// A token over the serialised form of a Golem value: over its text when it serialises
     /// to a string, otherwise over its JSON text.
     fn tok<T: Serialize>(&self, value: &T) -> ReportNode {
@@ -383,6 +455,34 @@ impl Walker<'_, '_> {
                 "mismatched",
                 tuple(divergence.mismatched.iter().map(name).collect()),
             )
+            .opt(
+                "replayStart",
+                divergence.replay_start.as_ref().map(|start| match start {
+                    ReplayStart::Snapshot(start) => Fields::new()
+                        .add(
+                            "snapshot",
+                            Fields::new()
+                                .add("snapshotIndex", idx(&start.snapshot_index))
+                                .add(
+                                    "rejectedSnapshots",
+                                    tuple(start.rejected_snapshots.iter().map(idx).collect()),
+                                )
+                                .build(),
+                        )
+                        .build(),
+                    ReplayStart::FullReplay(start) => Fields::new()
+                        .add(
+                            "fullReplay",
+                            Fields::new()
+                                .add(
+                                    "rejectedSnapshots",
+                                    tuple(start.rejected_snapshots.iter().map(idx).collect()),
+                                )
+                                .build(),
+                        )
+                        .build(),
+                }),
+            )
             .build()
     }
 
@@ -414,6 +514,7 @@ impl Walker<'_, '_> {
                         "observationalOwner",
                         call.observational_owner.as_ref().map(idx),
                     )
+                    .opt("driver", call.driver.as_ref().map(idx))
                     .add("carriesRequest", flag(call.carries_request))
                     .opt("request", request)
                     .build();
@@ -602,6 +703,7 @@ impl Walker<'_, '_> {
                     trace_id,
                     trace_states,
                     invocation_context,
+                    caller,
                 } = params;
                 Some(
                     Fields::new()
@@ -613,6 +715,7 @@ impl Walker<'_, '_> {
                         .add("traceId", self.tok(trace_id))
                         .add("traceStates", self.tok(trace_states))
                         .add("invocationContext", self.tok(invocation_context))
+                        .add("caller", self.caller(caller))
                         .build(),
                 )
             }
@@ -624,15 +727,17 @@ impl Walker<'_, '_> {
                     trace_id,
                     trace_states,
                     invocation_context,
+                    caller,
                 } = params;
                 Some(
                     Fields::new()
                         .add("invocationId", self.tok(invocation_id))
                         .add("methodName", text(method_name.clone()))
-                        .add("functionInput", self.customer(function_input))
+                        .add("functionInput", self.method_input(function_input))
                         .add("traceId", self.tok(trace_id))
                         .add("traceStates", self.tok(trace_states))
                         .add("invocationContext", self.tok(invocation_context))
+                        .add("caller", self.caller(caller))
                         .build(),
                 )
             }
@@ -645,6 +750,7 @@ impl Walker<'_, '_> {
                     trace_id,
                     trace_states,
                     invocation_context,
+                    caller,
                 } = params;
                 Some(
                     Fields::new()
@@ -655,29 +761,39 @@ impl Walker<'_, '_> {
                         .add("traceId", self.tok(trace_id))
                         .add("traceStates", self.tok(trace_states))
                         .add("invocationContext", self.tok(invocation_context))
+                        .add("caller", self.caller(caller))
                         .build(),
                 )
             }
-            PublicAgentInvocation::SaveSnapshot(golem_schema::Empty {}) => None,
-            PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters { snapshot }) => Some(
-                Fields::new()
-                    .add("snapshot", removed_snapshot(snapshot))
-                    .build(),
-            ),
+            PublicAgentInvocation::SaveSnapshot(SaveSnapshotParameters { caller }) => {
+                Some(Fields::new().add("caller", self.caller(caller)).build())
+            }
+            PublicAgentInvocation::LoadSnapshot(LoadSnapshotParameters { snapshot, caller }) => {
+                Some(
+                    Fields::new()
+                        .add("snapshot", removed_snapshot(snapshot))
+                        .add("caller", self.caller(caller))
+                        .build(),
+                )
+            }
             PublicAgentInvocation::ProcessOplogEntries(ProcessOplogEntriesParameters {
                 invocation_id,
+                caller,
             }) => Some(
                 Fields::new()
                     .add("invocationId", self.tok(invocation_id))
+                    .add("caller", self.caller(caller))
                     .build(),
             ),
-            PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {
-                Some(
-                    Fields::new()
-                        .add("targetRevision", number(target_revision.get()))
-                        .build(),
-                )
-            }
+            PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
+                target_revision,
+                requester,
+            }) => Some(
+                Fields::new()
+                    .add("targetRevision", number(target_revision.get()))
+                    .add("requester", self.caller(requester))
+                    .build(),
+            ),
         };
         kept_case(
             CaseKind::Variant,
@@ -686,6 +802,100 @@ impl Walker<'_, '_> {
             None,
             payload,
         )
+    }
+
+    /// A caller: the kind of each principal and the authentication of an account stay; pairs,
+    /// account and environment IDs, agent types, tool names, authentication times and token IDs
+    /// are tokens; an agent's ID is an agent reference. Claims never reach the report.
+    fn caller(&mut self, caller: &PublicCaller) -> ReportNode {
+        let PublicCaller {
+            original,
+            immediate,
+            tokens,
+        } = caller;
+        let tokens = tokens
+            .iter()
+            .map(|token| self.token_provenance(token))
+            .collect();
+        Fields::new()
+            .add("original", self.principal(original))
+            .add("immediate", self.principal(immediate))
+            .add("tokens", tuple(tokens))
+            .build()
+    }
+
+    fn principal(&mut self, principal: &PublicPrincipal) -> ReportNode {
+        let payload = match principal {
+            PublicPrincipal::User(PublicUserPrincipal {
+                pair,
+                authenticated_at,
+                claims: _,
+            }) => Some(
+                Fields::new()
+                    .add("pair", self.pair(pair))
+                    .add("authenticatedAt", self.tok(authenticated_at))
+                    .build(),
+            ),
+            PublicPrincipal::Account(PublicAccountPrincipal {
+                pair,
+                account_id,
+                authentication,
+            }) => Some(
+                Fields::new()
+                    .add("pair", self.pair(pair))
+                    .add("accountId", self.tok(account_id))
+                    .add("authentication", name(authentication))
+                    .build(),
+            ),
+            PublicPrincipal::Agent(PublicAgentPrincipal {
+                pair,
+                agent_id,
+                agent_type,
+                environment_id,
+            }) => Some(
+                Fields::new()
+                    .add("pair", self.pair(pair))
+                    .add("agentId", self.agent(agent_id))
+                    .add("agentType", self.tok(agent_type))
+                    .add("environmentId", self.tok(environment_id))
+                    .build(),
+            ),
+            PublicPrincipal::Tool(PublicToolPrincipal {
+                pair,
+                environment_id,
+                tool_name,
+            }) => Some(
+                Fields::new()
+                    .add("pair", self.pair(pair))
+                    .add("environmentId", self.tok(environment_id))
+                    .add("toolName", self.str_leaf(tool_name, Region::Customer))
+                    .build(),
+            ),
+            PublicPrincipal::Anonymous(golem_schema::Empty {}) => None,
+        };
+        kept_case(
+            CaseKind::Variant,
+            None,
+            principal.kind().as_str(),
+            None,
+            payload,
+        )
+    }
+
+    fn pair(&self, pair: &Pair) -> ReportNode {
+        let Pair { issuer, subject } = pair;
+        Fields::new()
+            .add("issuer", self.tok(issuer))
+            .add("subject", self.tok(subject))
+            .build()
+    }
+
+    fn token_provenance(&self, token: &PublicTokenProvenance) -> ReportNode {
+        let PublicTokenProvenance { id, maker } = token;
+        Fields::new()
+            .add("id", self.tok(id))
+            .opt("maker", maker.as_ref().map(|maker| self.pair(maker)))
+            .build()
     }
 
     fn invocation_result(&mut self, result: &PublicAgentInvocationResult) -> ReportNode {
@@ -909,6 +1119,7 @@ impl Walker<'_, '_> {
                 function_name,
                 invocation_id,
                 observational_owner,
+                driver,
                 request,
                 durable_function_type,
                 span_started,
@@ -928,6 +1139,7 @@ impl Walker<'_, '_> {
                         }),
                 )
                 .opt("observationalOwner", observational_owner.as_ref().map(idx))
+                .opt("driver", driver.as_ref().map(idx))
                 .opt(
                     "request",
                     request
@@ -1022,6 +1234,14 @@ impl Walker<'_, '_> {
                 .add("error", self.agent_error_message(error))
                 .add("startIndex", idx(start_index))
                 .build(),
+            PublicOplogEntry::AgentInvocationSettled(AgentInvocationSettledParams {
+                timestamp: _,
+                invocation_id,
+                consumed_fuel,
+            }) => Fields::new()
+                .add("invocationId", self.tok(invocation_id))
+                .add("consumedFuel", self.int(*consumed_fuel))
+                .build(),
             PublicOplogEntry::Suspend(SuspendParams { timestamp: _ })
             | PublicOplogEntry::RecoverySucceeded(RecoverySucceededParams { timestamp: _ })
             | PublicOplogEntry::Interrupted(InterruptedParams { timestamp: _ })
@@ -1076,10 +1296,12 @@ impl Walker<'_, '_> {
                 target_revision,
                 description,
                 update_attempt_index,
+                requester,
             }) => Fields::new()
                 .add("targetRevision", number(target_revision.get()))
                 .add("description", self.update_description(description))
                 .add("updateAttemptIndex", idx(update_attempt_index))
+                .add("requester", self.caller(requester))
                 .build(),
             PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
                 timestamp: _,
