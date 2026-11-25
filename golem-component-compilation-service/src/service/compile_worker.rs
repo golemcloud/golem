@@ -164,9 +164,7 @@ impl CompileWorker {
         &self,
         request: &CompilationRequest,
     ) -> Result<Component, CompilationError> {
-        let engine = self.engine.clone();
         let component_with_revision = request.component;
-        let wasm_hash = request.wasm_hash;
 
         // TODO: we should download directly from blob store here.
         if let Some(client) = &*self.client.lock().await {
@@ -175,43 +173,49 @@ impl CompileWorker {
                 .await
                 .map_err(|e| CompilationError::ComponentDownloadFailed(e.to_string()))?;
 
-            let start = Instant::now();
-            let component = spawn_blocking({
-                move || {
-                    // The request can only populate the cache entry for the bytes we downloaded.
-                    if blake3::hash(&bytes) != *wasm_hash.as_blake3_hash() {
-                        return Err(CompilationError::ComponentDownloadFailed(format!(
-                            "Wasm hash mismatch for {component_with_revision}"
-                        )));
-                    }
-                    Component::from_binary(&engine, &bytes).map_err(|e| {
-                        CompilationError::CompileFailure(format!(
-                            "Failed to compile component {component_with_revision:?}: {e}"
-                        ))
-                    })
-                }
-            })
-            .instrument(tracing::Span::current())
-            .await
-            .map_err(|join_err| CompilationError::Unexpected(join_err.to_string()))??;
-            let end = Instant::now();
-
-            let compilation_time = end.duration_since(start);
-
-            record_compilation_time(compilation_time);
-
-            tracing::info!(
-                component_id = component_with_revision.id.to_string(),
-                component_revision = component_with_revision.revision.to_string(),
-                compilation_time_ms = compilation_time.as_millis(),
-                "Compiled component"
-            );
-
-            Ok(component)
+            Self::compile_downloaded(self.engine.clone(), request, bytes).await
         } else {
             Err(CompilationError::Unexpected(
                 "Component service is not configured".to_string(),
             ))
         }
+    }
+
+    pub(super) async fn compile_downloaded(
+        engine: Engine,
+        request: &CompilationRequest,
+        bytes: Vec<u8>,
+    ) -> Result<Component, CompilationError> {
+        let component_with_revision = request.component;
+        let wasm_hash = request.wasm_hash;
+        let start = Instant::now();
+        let component = spawn_blocking(move || {
+            // The request can only populate the cache entry for the bytes we downloaded.
+            if blake3::hash(&bytes) != *wasm_hash.as_blake3_hash() {
+                return Err(CompilationError::ComponentDownloadFailed(format!(
+                    "Wasm hash mismatch for {component_with_revision}"
+                )));
+            }
+            Component::from_binary(&engine, &bytes).map_err(|e| {
+                CompilationError::CompileFailure(format!(
+                    "Failed to compile component {component_with_revision:?}: {e}"
+                ))
+            })
+        })
+        .instrument(tracing::Span::current())
+        .await
+        .map_err(|join_err| CompilationError::Unexpected(join_err.to_string()))??;
+        let compilation_time = start.elapsed();
+
+        record_compilation_time(compilation_time);
+
+        tracing::info!(
+            component_id = component_with_revision.id.to_string(),
+            component_revision = component_with_revision.revision.to_string(),
+            compilation_time_ms = compilation_time.as_millis(),
+            "Compiled component"
+        );
+
+        Ok(component)
     }
 }

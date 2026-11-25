@@ -103,6 +103,7 @@ mod tests {
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use golem_service_base::service::compiled_component::DefaultCompiledComponentService;
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use test_r::{test, timeout};
     use tokio::sync::Semaphore;
@@ -119,6 +120,82 @@ mod tests {
             .as_ref()
             .unwrap()
             .value()
+    }
+
+    #[test]
+    #[timeout("30s")]
+    async fn compilation_rejects_mismatched_wasm_and_retries_only_missing_artifacts() {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())
+                .unwrap();
+        let storage = Arc::new(DefaultCompiledComponentService::new(Arc::new(
+            InMemoryBlobStorage::new(),
+        )));
+        let (queue, requests) = mpsc::channel(2);
+        let (upload_queue, mut artifacts) = mpsc::channel(1);
+        let wasm = b"\0asm\x0d\0\x01\0";
+        let hash = Hash::new(blake3::hash(wasm));
+        let compile_count = Arc::new(AtomicUsize::new(0));
+        CompileWorker::start_queue(engine.clone(), storage.clone(), upload_queue, requests, {
+            let engine = engine.clone();
+            let compile_count = compile_count.clone();
+            move |request| {
+                compile_count.fetch_add(1, Ordering::Relaxed);
+                let engine = engine.clone();
+                async move {
+                    let mut bytes = wasm.to_vec();
+                    if request.component.revision == ComponentRevision::INITIAL {
+                        bytes.extend_from_slice(b"\0\x02\x01x"); // A valid custom section named x.
+                    }
+                    CompileWorker::compile_downloaded(engine, &request, bytes).await
+                }
+            }
+        });
+        let service = ComponentCompilationService { queue };
+        let id = ComponentId::new();
+        let environment = EnvironmentId::new();
+        let enqueue = async |revision| {
+            service
+                .enqueue_compilation(
+                    id,
+                    ComponentRevision::new(revision).unwrap(),
+                    environment,
+                    hash,
+                    None,
+                )
+                .await
+                .unwrap();
+        };
+
+        enqueue(u64::from(ComponentRevision::INITIAL)).await;
+        enqueue(1).await;
+        let failed = artifacts.recv().await.unwrap();
+        assert_eq!(u64::from(failed.component_and_revision.revision), 1);
+        // Model an upload that has completed without writing the artifact.
+        crate::metrics::decrement_upload_queue_length();
+        failed.upload_finished.send(()).unwrap();
+        assert!(!storage.exists(hash, &engine).await.unwrap());
+
+        enqueue(2).await;
+        let retried = artifacts.recv().await.unwrap();
+        assert_eq!(u64::from(retried.component_and_revision.revision), 2);
+        crate::metrics::decrement_upload_queue_length();
+        storage
+            .put(
+                environment,
+                hash,
+                id,
+                retried.component_and_revision.revision,
+                &retried.component,
+            )
+            .await
+            .unwrap();
+        retried.upload_finished.send(()).unwrap();
+
+        enqueue(3).await;
+        drop(service);
+        assert!(artifacts.recv().await.is_none());
+        assert_eq!(compile_count.load(Ordering::Relaxed), 3);
     }
 
     #[test]
