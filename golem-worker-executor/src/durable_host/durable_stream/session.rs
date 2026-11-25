@@ -171,7 +171,7 @@ impl DurableStreamStore {
         if keys.is_empty() {
             return Ok(());
         }
-        let mut refreshed = ProducerStreamIndex::default();
+        let mut refreshed = ProducerStreamIndex::retained_by(self.producer, self.oplog.retention());
         let mut covered = OplogIndex::NONE;
         if let Some((service, mode, fingerprint)) = self.control_metadata_provider.get() {
             let keys = keys.iter().cloned().collect::<Vec<_>>();

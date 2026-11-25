@@ -34,6 +34,28 @@ impl IndexedProducerStream {
     }
 }
 
+/// The error of a record of the oplog of `producer` that references the local stream
+/// `local_id`, which the index does not know. A record at or after the retained start can
+/// reference a registration below it, which the fold of the index does not see: that registration
+/// is expired. Any other unknown registration makes the history corrupt.
+pub(super) fn unknown_local_stream(
+    producer: &AgentId,
+    retention: crate::services::oplog::retention::OplogRetention,
+    local_id: LocalStreamId,
+) -> StreamStoreError {
+    retention
+        .check_agent_from(producer, local_id.0)
+        .err()
+        .map_or_else(
+            || {
+                StreamStoreError::CorruptHistory(
+                    "producer record references an unknown local stream registration".into(),
+                )
+            },
+            StreamStoreError::Unreadable,
+        )
+}
+
 impl ProducerStreamIndex {
     /// An empty index of the oplog of `producer` whose retention is `retention`.
     pub(super) fn retained_by(
@@ -41,8 +63,40 @@ impl ProducerStreamIndex {
         retention: crate::services::oplog::retention::OplogRetention,
     ) -> Self {
         Self {
-            retained: Some((producer, retention)),
-            ..Default::default()
+            fork_lineage: Default::default(),
+            applied_fork_cuts: Default::default(),
+            loaded_metadata: Default::default(),
+            registrations: Default::default(),
+            local_stream_ids: Default::default(),
+            entity_parent_start_indices: Default::default(),
+            coordinates: Default::default(),
+            streams: Default::default(),
+            stream_sessions: Default::default(),
+            stream_roles: Default::default(),
+            session_stream_mappings: Default::default(),
+            session_stream_counts: Default::default(),
+            session_count: Default::default(),
+            session_pages: Default::default(),
+            session_consumer_streams: Default::default(),
+            session_entity_parent_start_indices: Default::default(),
+            open_session_streams: Default::default(),
+            invocation_results: Default::default(),
+            finished_sessions: Default::default(),
+            attachments: Default::default(),
+            active_attachments_by_session_stream: Default::default(),
+            active_attachment_count: Default::default(),
+            attachment_pages: Default::default(),
+            attachment_positions: Default::default(),
+            batch_positions: Default::default(),
+            complete_for_deletion: Default::default(),
+            cascade_outbox: Default::default(),
+            consumer_journals: Default::default(),
+            external_producer_heads: Default::default(),
+            external_producer_offsets: Default::default(),
+            open_streams: Default::default(),
+            deleting: Default::default(),
+            consumer_deleting: Default::default(),
+            retained: (producer, retention),
         }
     }
 
@@ -98,22 +152,8 @@ impl ProducerStreamIndex {
             .get(&local_id)
             .copied()
             .ok_or_else(|| {
-                // A record at or after the retained start can reference a registration below it,
-                // which the fold of the index does not see: that registration is expired.
-                self.retained
-                    .as_ref()
-                    .and_then(|(producer, retention)| {
-                        retention.check_agent_from(producer, local_id.0).err()
-                    })
-                    .map_or_else(
-                        || {
-                            StreamStoreError::CorruptHistory(
-                                "producer record references an unknown local stream registration"
-                                    .into(),
-                            )
-                        },
-                        StreamStoreError::Unreadable,
-                    )
+                let (producer, retention) = &self.retained;
+                unknown_local_stream(producer, *retention, local_id)
             })
     }
 

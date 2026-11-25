@@ -1034,6 +1034,7 @@ impl StreamSessionIndexService {
                         id,
                         mode,
                         fingerprint,
+                        retention,
                         &entries,
                         &metadata.stream_fork_lineage,
                     )

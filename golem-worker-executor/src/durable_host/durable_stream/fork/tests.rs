@@ -13,6 +13,7 @@ use crate::durable_host::durable_stream::{
     RegisteredStream,
     tests::{attachment_key, identity},
 };
+use crate::services::oplog::retention::OplogRetention;
 use crate::services::worker_fork::lineage::StreamForkLineage;
 use golem_common::base_model::durable_stream::{
     AttachmentId, AttemptId, DURABLE_STREAM_FORMAT_VERSION, LocalStreamId, LocalStreamReaderId,
@@ -1202,7 +1203,10 @@ fn fork_cut_is_marker_time_partial_transition_and_discards_nested_suffix() {
     let identity = identity();
     let source_session = identity.invocation.clone();
     let target_session = continuation_session(&source_session, "fork");
-    let mut index = ProducerStreamIndex::default();
+    let mut index = ProducerStreamIndex::retained_by(
+        crate::durable_host::durable_stream::tests::identity().agent_id,
+        OplogRetention::FULL,
+    );
     let root = register(
         &mut index,
         2,
@@ -1411,7 +1415,10 @@ fn fork_cut_preserves_unrelated_completed_stream_and_clears_live_state() {
     let mut output_only_target = output_only_source.clone();
     output_only_target.callee = target_session.callee;
     output_only_target.callee_fingerprint = target_session.callee_fingerprint;
-    let mut index = ProducerStreamIndex::default();
+    let mut index = ProducerStreamIndex::retained_by(
+        crate::durable_host::durable_stream::tests::identity().agent_id,
+        OplogRetention::FULL,
+    );
     let first = register(&mut index, 5, super_registration(&source_session, 0));
     let second = register(&mut index, 6, super_registration(&source_session, 1));
     for (oplog_index, stream_id) in [(7, first.stream_id), (8, second.stream_id)] {
@@ -1490,7 +1497,10 @@ fn fork_cut_preserves_foreign_dependency_journals_and_clears_live_authority() {
     let mut remote = local.clone();
     remote.callee = crate::test_agent_id("remote");
     remote.callee_fingerprint = AgentFingerprint(Uuid::from_u128(700));
-    let mut index = ProducerStreamIndex::default();
+    let mut index = ProducerStreamIndex::retained_by(
+        crate::durable_host::durable_stream::tests::identity().agent_id,
+        OplogRetention::FULL,
+    );
     let mut request = super_registration(&remote, 0);
     request.source_kind = StreamSourceKind::AgentHostedInput;
     request.source_invocation = StreamRegistrationInvocation::Remote(remote.clone());
@@ -1756,7 +1766,10 @@ async fn fork_cut_source_unavailable_remains_queryable_by_continuation_consumer(
         )
         .unwrap();
         let offset = StreamOffset::new(OplogIndex::from_u64(8), 3);
-        let mut index = ProducerStreamIndex::default();
+        let mut index = ProducerStreamIndex::retained_by(
+            crate::durable_host::durable_stream::tests::identity().agent_id,
+            OplogRetention::FULL,
+        );
         index.apply_session_attribution(&local, None).unwrap();
         index
             .apply_session_references(

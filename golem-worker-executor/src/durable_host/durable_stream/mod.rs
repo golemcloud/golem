@@ -671,7 +671,7 @@ impl From<DurableLiveStreamBusError> for StreamStoreError {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 struct ProducerStreamIndex {
     fork_lineage: StreamForkLineage,
     applied_fork_cuts: BTreeMap<OplogIndex, Arc<HashSet<StreamId>>>,
@@ -711,7 +711,7 @@ struct ProducerStreamIndex {
     consumer_deleting: bool,
     /// The producer and the retention of the oplog that the index folds. A record at or after
     /// the retained start can reference a registration below it, which the fold does not see.
-    retained: Option<(AgentId, crate::services::oplog::retention::OplogRetention)>,
+    retained: (AgentId, crate::services::oplog::retention::OplogRetention),
 }
 
 #[derive(Clone, Default, desert_rust::BinaryCodec)]

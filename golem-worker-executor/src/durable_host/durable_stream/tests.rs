@@ -24,6 +24,7 @@ use super::{
     StreamAttachmentConsumerProbe, StreamAttachmentControl, StreamAttachmentState,
     StreamSegmentSource, StreamStoreError,
 };
+use crate::services::oplog::retention::OplogRetention;
 use crate::services::oplog::{
     CommitLevel, DurableStreamOplogRecord, Oplog, OplogAddReceipt, OplogOps, OplogReadSource,
     OrderedOplogStart, PendingUpload, RawDurableStreamSessionStatus, UnreadableOplog,
@@ -1541,7 +1542,10 @@ fn consumer_journal_rejects_malformed_records_without_partial_mutation() {
         binding_slot: 0,
     };
     let key = (identity.invocation.clone(), reader_id);
-    let mut index = ProducerStreamIndex::default();
+    let mut index = ProducerStreamIndex::retained_by(
+        crate::durable_host::durable_stream::tests::identity().agent_id,
+        OplogRetention::FULL,
+    );
     let empty_packed = consumer_item_record(
         StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
         reader_id,
@@ -1627,7 +1631,10 @@ fn consumer_journal_validates_terminal_order_and_duplicate_overlay_ordinal() {
             consumer_read_ordinal: 0,
         },
     );
-    let mut index = ProducerStreamIndex::default();
+    let mut index = ProducerStreamIndex::retained_by(
+        crate::durable_host::durable_stream::tests::identity().agent_id,
+        OplogRetention::FULL,
+    );
     index
         .apply_consumer_journal_record(
             &overlay,
@@ -7428,7 +7435,10 @@ async fn malformed_history_is_rejected_while_rebuilding_the_index() {
 #[test]
 async fn rejected_nested_item_batch_does_not_partially_mutate_the_stream_index() {
     let identity = identity();
-    let mut index = ProducerStreamIndex::default();
+    let mut index = ProducerStreamIndex::retained_by(
+        crate::durable_host::durable_stream::tests::identity().agent_id,
+        OplogRetention::FULL,
+    );
     let root_index = OplogIndex::INITIAL;
     let root = registered_stream(
         root_index,
@@ -7873,7 +7883,10 @@ async fn foreign_mappings_are_deduplicated_and_count_toward_the_session_limit() 
             mapping,
         })
     };
-    let mut index = ProducerStreamIndex::default();
+    let mut index = ProducerStreamIndex::retained_by(
+        crate::durable_host::durable_stream::tests::identity().agent_id,
+        OplogRetention::FULL,
+    );
     for position in 0..MAX_DURABLE_STREAMS_PER_SESSION {
         index
             .apply_session_references(
@@ -11085,7 +11098,11 @@ fn an_unknown_local_stream_is_expired_only_below_the_retained_start() {
         Err(StreamStoreError::CorruptHistory(_))
     ));
     assert!(matches!(
-        ProducerStreamIndex::default().runtime_stream_id(LocalStreamId(idx(3))),
+        ProducerStreamIndex::retained_by(
+            crate::durable_host::durable_stream::tests::identity().agent_id,
+            OplogRetention::FULL,
+        )
+        .runtime_stream_id(LocalStreamId(idx(3))),
         Err(StreamStoreError::CorruptHistory(_))
     ));
 }
@@ -11196,7 +11213,13 @@ async fn the_consumer_journal_refresh_reads_from_the_retained_start() {
     );
     assert_eq!(
         store
-            .refresh_consumer_journals(&mut ProducerStreamIndex::default(), &[record])
+            .refresh_consumer_journals(
+                &mut ProducerStreamIndex::retained_by(
+                    crate::durable_host::durable_stream::tests::identity().agent_id,
+                    OplogRetention::FULL,
+                ),
+                &[record]
+            )
             .await,
         Ok(())
     );
