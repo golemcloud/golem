@@ -46,8 +46,9 @@ use std::time::Duration;
 
 /// An open oplog that refuses reads below its retained start.
 ///
-/// The handle keeps the retention that the service read when it opened the oplog. Nothing moves
-/// the start of an open oplog. The handle keeps the [`AgentId`] for the error of a refused read.
+/// The handle keeps the retention that the service read when it opened the oplog. The handle
+/// keeps the start that it read at open. A later move of the record does not change it. The
+/// handle keeps the [`AgentId`] for the error of a refused read.
 pub struct RetentionOplog {
     inner: Arc<dyn Oplog>,
     agent_id: AgentId,
@@ -274,8 +275,9 @@ impl Oplog for RetentionOplog {
 
 /// The [`OplogService`] that reads the retention record of each agent oplog and keeps every read
 /// at or after the retained start. A new oplog keeps every entry. The delete removes the record
-/// only after the fenced delete of the oplog succeeds. When the fence refuses the delete, or the
-/// delete fails, the record stays, and the oplog that stays keeps its start.
+/// only after the delete of the oplog succeeds (fenced for a durable oplog). When the fence
+/// refuses the delete, or the delete fails, the record stays, and the oplog that stays keeps its
+/// start.
 pub struct RetentionOplogService {
     inner: Arc<dyn OplogService>,
     key_value_storage: Arc<dyn KeyValueStorage + Send + Sync>,

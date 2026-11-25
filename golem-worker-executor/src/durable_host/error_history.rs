@@ -387,8 +387,8 @@ mod tests {
     }
 
     /// The last error walks back to the retained start. An error below the start is not found,
-    /// and the walk reads no entry below the start: a read below it would report the expired
-    /// error as the last error.
+    /// and the walk reads no entry below the start: a read below it reports the expired error
+    /// as the last error.
     #[test]
     async fn the_last_error_walk_stops_at_the_retained_start() {
         let retained = Retained::new(vec![
@@ -456,7 +456,7 @@ mod tests {
     }
 
     /// When the retention of the oplog does not read, the last error is the read failure: the walk
-    /// does not guess a start, because the oplog may not keep index 1.
+    /// does not guess a start, because the oplog can drop index 1.
     #[test]
     async fn a_retention_that_does_not_read_is_the_last_error() {
         let (retained, faults) = Retained::with_faults(vec![jump(1), error(2, 1)]).await;

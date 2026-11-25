@@ -618,8 +618,9 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
 }
 
 /// The component revision in effect at `start`: the revision of the last entry before it that
-/// names one, or the revision that the agent started with. `retention` is the retention of the
-/// oplog, which the caller reads once.
+/// names one, or the revision that the agent started with. The scan reads the `Create` entry and
+/// the retained entries, so it does not see a revision that an entry below the retained start
+/// names. `retention` is the retention of the oplog, which the caller reads once.
 pub async fn find_component_revision_at(
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &OwnedAgentId,

@@ -3204,8 +3204,8 @@ pub async fn force_oplog_retained_start(
 
 /// Removes the cached status and the invocation result index of the agent incarnation
 /// `fingerprint` from the key-value storage of executors started with the SQLite storage config.
-/// The durable status baseline stays. Call it while no executor runs; the next executor then
-/// answers the status and the results by key from the baseline and the oplog.
+/// The clean status checkpoint stays. Call it while no executor runs; the next executor then
+/// answers the status and the results by key from the checkpoint and the oplog.
 pub async fn remove_cached_status_and_result_index(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,

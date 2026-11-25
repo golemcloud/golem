@@ -62,10 +62,8 @@ enum AttributionPathNode {
 ///   at a `Start` without a parent. An entity `Start` at or after the start whose ancestor is
 ///   below it keeps its entity attribution, without the ancestors below the start.
 ///
-/// A cut of the oplog moves the start only to a restore point, where no `Start` is open, so in
-/// production no chain crosses the start. A start that a test forces can cross one. The fallback
-/// keeps such a page readable: an expired error would make the page fail, and a separate public
-/// attribution for an entity that the oplog does not keep would change the public API.
+/// The agent attribution keeps such a page readable: an expired error makes the page fail, and a
+/// separate public attribution for an entity that the oplog does not keep changes the public API.
 pub(super) struct PublicOplogAttributionResolver<'a> {
     oplog_service: Arc<dyn OplogService>,
     owned_agent_id: &'a OwnedAgentId,

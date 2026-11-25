@@ -169,8 +169,9 @@ pub enum WorkerExecutorError {
         reason: String,
     },
     /// The agent's oplog failed: it does not give the entries a replay, a recovery or a read
-    /// needs. The agent fails and does not run; its oplog is left as it is, so it can be
-    /// inspected. The failure tells why.
+    /// needs. An expired read fails the operation that reads. Only a failed source fails the
+    /// agent, which does not run; its oplog is left as it is, so it can be inspected. The failure
+    /// tells why.
     OplogFailed {
         agent_id: AgentId,
         failure: OplogFailure,
