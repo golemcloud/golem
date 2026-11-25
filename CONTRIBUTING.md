@@ -184,7 +184,7 @@ cargo clippy -p <crate> --all-targets --no-deps -- -D warnings
 cargo test -p <crate> --lib -- --report-time
 ```
 
-Then lint the whole root workspace with `cargo make check-clippy`. A change to a contract that other crates, SDKs or tools depend on also needs a smoke test of those callers: a few tests that build, deploy and invoke a component through the changed path. See "Before Submitting a PR" in `AGENTS.md`.
+Then lint the whole root workspace with `cargo make check-clippy` on the current stable toolchain. A change to a contract that other crates, SDKs or tools depend on at run time, such as a protocol, WIT or a persisted format, also needs a smoke test of those callers: the closest existing tests that run the changed path. See "Before Submitting a PR" in `AGENTS.md`.
 
 Pull requests to `main` run no tests. The continuous `Main validation` workflow selects the latest main commit and publishes its result on that exact commit. It includes the skill-harness checks. Existing maintenance branches retain their own full CI workflows; main no longer contains the legacy workflows. The release gate requires validation of the exact release source; a green ancestor is not sufficient.
 

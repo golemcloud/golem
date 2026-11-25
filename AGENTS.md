@@ -216,14 +216,14 @@ Pull requests to `main` run no tests. The continuous `Main validation` workflow 
 
 Before opening or merging a PR, run the smallest local checks that cover the changed behavior and its callers. After revisions, rerun the checks affected by those revisions. Report the checks run, their outcomes and remaining coverage limits; post-merge validation does not replace affected local checks.
 
-Two checks apply to every PR, however small:
+Two checks apply whenever their condition holds, however small the PR is:
 
-- **Lint the whole root workspace.** When a PR changes root-workspace Rust code, run `cargo make check-clippy` on its final head. `Main validation` runs the same check. It compiles every root crate, so it finds a caller in another crate that the change did not update. It also finds a lint that the change raises in another crate, such as `large_enum_variant` after a shared type grows. Package-scoped clippy sees neither.
-- **Smoke-test the callers of a changed shared contract.** A shared contract is anything that code outside the changed crate depends on: a public type, trait or function that another crate uses, a gRPC, HTTP or WebSocket protocol, WIT, a serialized or persisted format, an SDK runtime or generated bridge, CLI commands and output, or a shared test fixture. Select a few existing tests that build, deploy and invoke a component through the changed path, one for each affected area: the worker executor, the services, the CLI, and each SDK that the contract reaches. Build the test components that they need. SDKs, generated bridges and test components are outside the root workspace, so clippy does not see them. Only building them and running their tests, such as building, deploying and invoking a component, finds a break in them. The full suites and their edge cases stay with `Main validation`. Name the selected tests in the PR description, and name each one that could not run, so the reviewer can decide.
+- **Lint the whole root workspace.** When a PR changes root-workspace Rust code, run `cargo make check-clippy` on its final head. `Main validation` runs the same check. It compiles every root crate, so it finds a caller in another crate that the change did not update. It also finds a lint that the change raises in another crate, such as `large_enum_variant` after a shared type grows. Package-scoped clippy sees neither. Use the current stable toolchain (`rustup update stable`), as `Main validation` does, because the lints change between toolchains. When the check fails in a crate that the PR does not change, run `cargo clippy --all-targets --keep-going -- --no-deps -Dwarnings`, so that cargo still lints the other crates.
+- **Smoke-test the callers of a changed shared contract.** A shared contract is anything that code outside the changed crate depends on at run time: a gRPC, HTTP or WebSocket protocol, WIT, a serialized or persisted format, an SDK runtime or generated bridge, CLI commands and output, or a shared test fixture. A Rust item that another crate uses is not on this list, because the whole-workspace lint finds a caller that no longer compiles. When the behaviour of such an item changes, run the existing tests of its callers that exercise that behaviour. For a shared contract, select the closest existing tests that run the changed path, one for each affected area: the worker executor, the services, the CLI, and each SDK that the contract reaches. The usual form is an integration test that builds, deploys and invokes a component. Build the test components that the selected tests need. SDKs, generated bridges and test components are outside the root workspace, so clippy does not see them. Only building them and running their tests finds a break in them. When no existing test runs the changed path, say so in the PR description. The full suites and their edge cases stay with `Main validation`. Name the selected tests in the PR description, and name each one that could not run, so the reviewer can decide.
 
 Both checks keep the cost of a break with the PR that causes it. `Main validation` reports a break hours after the merge. Until then, another author who works in the same area meets the failure first. Their build, their tests or their feature stops working, so they have to fix the break before they can go on.
 
-Keep `cargo make test` and the broad suites for changes whose impact cannot be isolated; the absence of PR tests is not a reason to run them.
+Keep the broad suites (`cargo make unit-tests`, `cargo make worker-executor-tests`, `cargo make integration-tests`, `cargo make cli-integration-tests`) for changes whose impact cannot be isolated, or for a user request. The absence of PR tests is not a reason to run them.
 
 Load the `pre-pr-checklist` skill for scope-specific commands.
 
@@ -263,6 +263,8 @@ Include, where they apply:
 - Anything that makes the diff read as larger or stranger than it is, such as a file whose tests
   moved out of line, or a rename that touches many call sites.
 - Where the change sits in a stack, and what has to land before it.
+- For a changed shared contract, the names of the caller tests that ran and of each one that could
+  not run. Leave out their commands and their output.
 
 Prefer a claim a reviewer can check by opening a file over a number they have to take on trust. When
 a pull request is restacked or rebased, reread the description: anything naming a commit, a branch

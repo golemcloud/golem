@@ -14,7 +14,8 @@ Inspect all files in the PR, including generated files. A change can belong to m
 | Scope | Minimum local verification |
 |---|---|
 | Root Rust crate(s) | Package-scoped format check, clippy, check/build, and affected tests |
-| Shared contract, as `AGENTS.md` defines it under "Before Submitting a PR" | Verify the producer, then smoke-test the callers: a few existing tests that build, deploy and invoke a component through the changed path, one for each affected area (worker executor, services, CLI, each SDK that the contract reaches); build the test components that they need |
+| Shared Rust API, proc macro, or shared type | `cargo make check-clippy` finds a caller in another crate that no longer compiles; when the behaviour changes, run the existing tests of the callers that exercise that behaviour |
+| Shared contract, as `AGENTS.md` defines it under "Before Submitting a PR" | Verify the producer, then smoke-test the callers: the closest existing tests that run the changed path, one for each affected area (worker executor, services, CLI, each SDK that the contract reaches). The usual form is an integration test that builds, deploys and invokes a component. Build the test components that the selected tests need. When no existing test runs the changed path, say so in the PR description |
 | `dev-tools/` | Use `--manifest-path dev-tools/Cargo.toml`, except the standalone Go generator uses `--manifest-path dev-tools/go-bindgen/Cargo.toml`; do not check the root workspace unless it is also affected |
 | Rust SDK (`sdks/rust/`) | Use that SDK's Cargo workspace checks; do not run root `cargo make fix` or `cargo make build` |
 | TypeScript SDK (`sdks/ts/`) | Check affected packages; rebuild the agent template only when its runtime/WIT inputs changed |
@@ -48,6 +49,8 @@ Then, for any root-workspace Rust change, lint the whole workspace, as `Main val
 cargo make check-clippy
 ```
 
+Use the current stable toolchain (`rustup update stable`), as `Main validation` does, because the lints change between toolchains. When the check fails in a crate that the change does not touch, run `cargo clippy --all-targets --keep-going -- --no-deps -Dwarnings`, so that cargo still lints the other crates.
+
 Prefer non-mutating checks for final verification. If fixes are needed, use the equivalent scoped `cargo fmt` or `cargo clippy ... --fix` command and inspect the resulting diff.
 
 Do **not** run `cargo make fix` by default. It formats and applies clippy fixes to the entire root workspace and the separate `dev-tools` workspace, can modify unrelated dirty or staged files, and does not check the SDK workspaces.
@@ -74,7 +77,7 @@ Start with the smallest test that exercises the changed behavior:
 cargo test -p <crate> -- <test_name> --report-time
 ```
 
-Broaden for a changed shared contract (step 1), for a specific affected contract that narrower checks cannot cover, or for an explicit user request. A changed shared contract gets a smoke test of its callers: a few tests that build, deploy and invoke a component through the changed path, also when they need built test components. The absence of PR tests does not justify full suites:
+Broaden for a changed shared contract (step 1), for a specific affected contract that narrower checks cannot cover, or for an explicit user request. A changed shared contract gets a smoke test of its callers: the closest existing tests that run the changed path, also when they need built test components. The absence of PR tests does not justify full suites:
 
 | Impact | Broader command when needed |
 |---|---|
