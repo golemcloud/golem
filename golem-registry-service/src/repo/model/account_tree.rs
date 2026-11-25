@@ -39,6 +39,8 @@ pub enum AccountTreeRepoError {
     HasChildren,
     #[error("Concurrent modification")]
     ConcurrentModification,
+    #[error("The write could not acquire its guards in time; retry later")]
+    Contention,
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
 }

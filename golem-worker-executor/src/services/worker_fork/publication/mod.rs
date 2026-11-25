@@ -6,14 +6,15 @@
 //
 //     http://license.golem.cloud/LICENSE
 
+use super::ForkCallOwner;
 use crate::services::agent_filesystem_snapshots::PublishFound;
 use crate::services::oplog::{Oplog, OplogOps, OplogService, OplogServiceOps, UnreadableOplog};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::durable_stream::{StreamId, StreamOffset, StreamSessionRecord};
 use golem_common::model::oplog::host_functions::GolemApiFork;
 use golem_common::model::oplog::{
-    DurableFunctionType, DurableInvocationId, FilesystemSnapshotName, HostPayloadPair, HostRequest,
-    HostRequestNoInput, HostResponse, HostResponseGolemApiFork, OplogEntry, OplogIndex,
+    DurableFunctionType, FilesystemSnapshotName, HostPayloadPair, HostRequest, HostRequestNoInput,
+    HostResponse, HostResponseGolemApiFork, OplogEntry, OplogIndex,
 };
 use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId, Timestamp};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -24,7 +25,7 @@ pub(crate) fn request_hash(
     fingerprint: AgentFingerprint,
     cut: OplogIndex,
     selected: Option<(StreamId, Option<StreamOffset>)>,
-    guest_result: Option<(Option<OplogIndex>, Option<DurableInvocationId>)>,
+    guest_result: Option<ForkCallOwner>,
 ) -> Result<[u8; 32], String> {
     let bytes = golem_common::serialization::serialize(&(
         "golem-fork-request-v1".to_string(),
@@ -204,8 +205,7 @@ pub(crate) fn found_after(
 /// become visible without its terminal, even if the executor dies during creation.
 pub(crate) async fn write_guest_result(
     oplog: &dyn Oplog,
-    copied_scope_start: Option<OplogIndex>,
-    invocation_id: Option<DurableInvocationId>,
+    owner: ForkCallOwner,
     forked_agent_id: &AgentId,
 ) -> Result<(), WorkerExecutorError> {
     let request = HostRequest::NoInput(HostRequestNoInput {});
@@ -226,10 +226,11 @@ pub(crate) async fn write_guest_result(
         .add_pair(
             OplogEntry::Start {
                 timestamp: now,
-                parent_start_index: copied_scope_start,
+                parent_start_index: owner.parent_start_index,
                 function_name: GolemApiFork::HOST_FUNCTION_NAME,
-                invocation_id,
-                observational_owner: None,
+                invocation_id: owner.invocation_id,
+                observational_owner: owner.observational_owner,
+                driver: owner.driver,
                 request: Some(request_payload),
                 durable_function_type: DurableFunctionType::WriteRemote,
                 span_started: None,
@@ -245,18 +246,6 @@ pub(crate) async fn write_guest_result(
             }),
         )
         .await?;
-    if let Some(start_index) = copied_scope_start {
-        oplog
-            .add(OplogEntry::End {
-                timestamp: now,
-                start_index,
-                response: None,
-                forced_commit: true,
-                span_finished: None,
-                span_attributes: None,
-            })
-            .await?;
-    }
     Ok(())
 }
 

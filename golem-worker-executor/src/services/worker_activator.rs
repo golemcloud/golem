@@ -393,7 +393,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         match self
             .all
             .active_agents()
-            .get_existing(&self.all, owned_agent_id, Caller::anonymous())
+            .get_existing(&self.all, owned_agent_id)
             .await
         {
             Ok(worker) => worker.archive_oplog(last_oplog_index, wait).await,
@@ -413,7 +413,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         let worker = match self
             .all
             .active_agents()
-            .get_existing(&self.all, owned_agent_id, Caller::anonymous())
+            .get_existing(&self.all, owned_agent_id)
             .await
         {
             Ok(worker) => worker,
@@ -436,7 +436,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
                 match self
                     .all
                     .active_agents()
-                    .get_existing(&self.all, owned_agent_id, Caller::anonymous())
+                    .get_existing(&self.all, owned_agent_id)
                     .await
                 {
                     Ok(worker) => worker,
@@ -578,12 +578,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         let worker = match self
             .all
             .active_agents()
-            .get_existing_with_fingerprint(
-                &self.all,
-                owned_agent_id,
-                Caller::anonymous(),
-                Some(expected_fingerprint),
-            )
+            .get_existing_with_fingerprint(&self.all, owned_agent_id, Some(expected_fingerprint))
             .await
         {
             Ok(worker) => worker,

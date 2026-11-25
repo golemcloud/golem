@@ -25,10 +25,11 @@ use super::{
     caller_monomorphization_context, derive_expires_at, durable_now, ensure_card_permission,
     ensure_card_permission_in_surface, handle_card_id, monomorphize_card_for_agent,
     normalize_tool_grants, parse_polymorphic_permission_fields, permission_card_envelope,
-    permission_card_scope_card, permission_card_snapshot, permission_error_from_algebra,
-    permission_error_from_parse, permission_error_from_serializable,
+    permission_card_scope_card, permission_card_scope_lineage_of_child, permission_card_snapshot,
+    permission_error_from_algebra, permission_error_from_parse, permission_error_from_serializable,
     permission_error_to_serializable, permissions_derive, permissions_types, persist_runtime_card,
-    record_card_decision, resolve_permission_card, resolve_permission_card_handle,
+    record_card_decision, refuse_cut_off_scope_card, resolve_permission_card,
+    resolve_permission_card_handle, wallet_permission_error_from_algebra,
     worker_error_to_permission_error,
 };
 
@@ -282,12 +283,23 @@ pub(super) fn decide_scope_derivation_parent<Ctx: WorkerCtx>(
             worker_error_to_permission_error(error),
         )),
         Ok(Some((card, owner_invocation_key))) => {
-            if owner_invocation_key.as_ref() == Some(invocation_key) {
-                DecidedScopeParent::Scope(card)
-            } else {
+            if owner_invocation_key.as_ref() != Some(invocation_key) {
                 DecidedScopeParent::Refused(SerializablePermissionError::NotPermitted(
                     "scope-card parent is not valid in this invocation".to_string(),
                 ))
+            } else if let Err(error) = permission_card_scope_lineage_of_child(ctx, handle)
+                .map_err(|error| format!("invalid permission-card handle: {error}"))
+                .and_then(|lineage| {
+                    refuse_cut_off_scope_card(
+                        card.scope_card_id,
+                        &lineage,
+                        ctx.state.authority().cut_off_scope_card(),
+                    )
+                })
+            {
+                DecidedScopeParent::Refused(SerializablePermissionError::NotPermitted(error))
+            } else {
+                DecidedScopeParent::Scope(card)
             }
         }
         Ok(None) => {
@@ -362,7 +374,7 @@ pub(super) fn select_wallet_derivation_parent(
             &envelope.upper_positive,
             &envelope.upper_negative,
         )
-        .map_err(permission_error_from_algebra)?
+        .map_err(wallet_permission_error_from_algebra)?
     {
         WalletDerivationParent::Single(parent_id) => parent_id,
         WalletDerivationParent::MultipleRequired => {
@@ -672,6 +684,13 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         {
             return Ok(Err(error));
         }
+        // An unusable parent handle is refused by the decision below.
+        let lineage = parents
+            .iter()
+            .flat_map(|parent| {
+                permission_card_scope_lineage_of_child(self, parent).unwrap_or_default()
+            })
+            .collect::<BTreeSet<_>>();
         let card_ids = parents
             .iter()
             .filter_map(|parent| handle_card_id(self, parent))
@@ -739,7 +758,7 @@ impl<Ctx: WorkerCtx> permissions_derive::Host for DurableWorkerCtx<Ctx> {
         };
         let root_card_ids = card.root_card_ids.clone();
         let handle = self.table().push(PermissionCardHandleRep::new(
-            PermissionCardEntry::from_scope(card, invocation_key),
+            PermissionCardEntry::from_scope(card, invocation_key, lineage),
         ))?;
         self.state
             .authority_mut()

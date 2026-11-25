@@ -468,7 +468,8 @@ impl S3BlobStorage {
             BlobStorageNamespace::InitialAgentFiles { .. } => {
                 &self.config.initial_agent_files_bucket
             }
-            BlobStorageNamespace::Components { .. } => &self.config.components_bucket,
+            BlobStorageNamespace::ComponentUploads { .. } => &self.config.components_bucket,
+            BlobStorageNamespace::PublishedBlobs => &self.config.components_bucket,
             BlobStorageNamespace::FilesystemSnapshots { .. } => {
                 &self.config.filesystem_snapshots_bucket
             }
@@ -497,9 +498,14 @@ impl S3BlobStorage {
     fn bucket_prefix_of(namespace: &BlobStorageNamespace) -> String {
         match namespace {
             BlobStorageNamespace::CompilationCache => "compilation_cache".to_string(),
+            BlobStorageNamespace::PublishedBlobs => "published_blobs".to_string(),
+            BlobStorageNamespace::ComponentUploads { account_id } => {
+                format!("component_uploads/{account_id}")
+            }
             BlobStorageNamespace::CustomStorage { environment_id }
-            | BlobStorageNamespace::InitialAgentFiles { environment_id }
-            | BlobStorageNamespace::Components { environment_id } => environment_id.to_string(),
+            | BlobStorageNamespace::InitialAgentFiles { environment_id } => {
+                environment_id.to_string()
+            }
             BlobStorageNamespace::OplogPayload {
                 environment_id,
                 agent_id,
@@ -1239,6 +1245,49 @@ impl S3BlobStorage {
 
 #[async_trait]
 impl BlobStorageBackend for S3BlobStorage {
+    async fn put_published_file_if_absent_at(
+        &self,
+        path: &NormalizedBlobPath<'_>,
+        file: tempfile::NamedTempFile,
+    ) -> Result<PutIfAbsent, Error> {
+        let namespace = BlobStorageNamespace::PublishedBlobs;
+        let bucket = self.bucket_of(&namespace);
+        let key = self.key_of(&namespace, path)?;
+        let body = ByteStream::from_path(file.path()).await?.into_inner();
+        let result = with_retries_customized(
+            "published_blobs",
+            "store",
+            Some(format!("{bucket} - {key:?}")),
+            &self.config.retries,
+            &(self.client.clone(), bucket, key, body),
+            |(client, bucket, key, body)| {
+                Box::pin(async move {
+                    client
+                        .put_object()
+                        .bucket(*bucket)
+                        .key(key.clone())
+                        .if_none_match("*")
+                        .body(ByteStream::new(
+                            body.try_clone().expect("file bodies are replayable"),
+                        ))
+                        .send()
+                        .await
+                })
+            },
+            Self::is_put_if_absent_error_retriable,
+            Self::put_if_absent_error_as_loggable,
+            false,
+        )
+        .await;
+        match result {
+            Ok(_) => Ok(PutIfAbsent::Written),
+            Err(SdkError::ServiceError(error)) if Self::is_precondition_failed(error.raw()) => {
+                Ok(PutIfAbsent::AlreadyExists)
+            }
+            Err(error) => Err(error.into()),
+        }
+    }
+
     async fn get_raw_at(
         &self,
         target_label: &'static str,

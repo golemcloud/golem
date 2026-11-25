@@ -3395,7 +3395,9 @@ fn layout_namespaces() -> Vec<BlobStorageNamespace> {
         BlobStorageNamespace::CompilationCache,
         BlobStorageNamespace::CustomStorage { environment_id },
         BlobStorageNamespace::InitialAgentFiles { environment_id },
-        BlobStorageNamespace::Components { environment_id },
+        BlobStorageNamespace::ComponentUploads {
+            account_id: golem_common::model::account::AccountId(environment_id.0),
+        },
         BlobStorageNamespace::FilesystemSnapshots {
             environment_id,
             agent_id,
@@ -3471,7 +3473,7 @@ async fn without_namespace_prefixes_each_namespace_has_the_keys_of_its_own_bucke
             format!("/golem-compiled-components/{prefix}compilation_cache/blob"),
             format!("/custom-data/{prefix}{environment_id}/blob"),
             format!("/golem-initial-agent-files/{prefix}{environment_id}/blob"),
-            format!("/component-store/{prefix}{environment_id}/blob"),
+            format!("/component-store/{prefix}component_uploads/{environment_id}/blob"),
             format!("/filesystem-snapshots/{prefix}{environment_id}/{agent}/{fingerprint}/blob"),
             format!("/oplog-payload/{prefix}durable/{environment_id}/{agent}/blob"),
             format!("/oplog-archive-1/{prefix}durable/{environment_id}/00000007/blob"),
@@ -3499,7 +3501,7 @@ async fn with_namespace_prefixes_each_namespace_is_below_the_segment_of_its_kind
             format!("/golem/{prefix}compilation_cache/blob"),
             format!("/golem/{prefix}custom_data/{environment_id}/blob"),
             format!("/golem/{prefix}initial_agent_files/{environment_id}/blob"),
-            format!("/golem/{prefix}component_store/{environment_id}/blob"),
+            format!("/golem/{prefix}component_uploads/{environment_id}/blob"),
             format!(
                 "/golem/{prefix}filesystem_snapshots/{environment_id}/{agent}/{fingerprint}/blob"
             ),

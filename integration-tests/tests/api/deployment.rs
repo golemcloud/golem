@@ -215,12 +215,13 @@ fn remote_tool_hash_input(
         owner_account_email: grant.release_owner.email.clone(),
         metadata_version: grant.release.metadata_version.clone(),
         metadata_digest: grant.release.metadata_digest,
-        provision: ToolProvisionConfig {
+        provision: (&ToolProvisionConfig {
             config: NormalizedJsonValue::new(json!({"tenant": "consumer"})),
             env: BTreeMap::from([("LOG_LEVEL".to_string(), "debug".to_string())]),
             plugins: Vec::new(),
             files: Vec::new(),
-        },
+        })
+            .into(),
         component_bindings: BTreeMap::new(),
         bindings,
         environment_middleware_binding: None,
@@ -265,7 +266,7 @@ fn filesystem_remote_tool(
         owner_account_email: grant.release_owner.email.clone(),
         metadata_version: grant.release.metadata_version.clone(),
         metadata_digest: grant.release.metadata_digest,
-        provision: ToolProvisionConfig::default(),
+        provision: (&ToolProvisionConfig::default()).into(),
         component_bindings: BTreeMap::new(),
         bindings: BTreeMap::from([(
             agent_type.clone(),

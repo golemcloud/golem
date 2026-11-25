@@ -8,6 +8,7 @@ use super::attachment::{
     AttachmentController, AttachmentObserver, AttachmentWriteAcceptance, AttachmentWriteBody,
     AttachmentWriter, PreparedAttachmentTerminal, StagedAttachmentWrite,
 };
+use crate::durable_host::attribution::with_import_access;
 use crate::durable_host::call_coordinator::process_pending_replay_events_initiation;
 use crate::durable_host::concurrent::initiation::{InitiationAccess, InlineInitiationAccess};
 use crate::durable_host::concurrent::{
@@ -400,7 +401,8 @@ where
             bytes,
             descriptor,
         )?;
-        let captured = accessor.with(|mut access| access.get().attribution.capture());
+        let captured =
+            with_import_access(accessor, |mut access| access.get().attribution.capture());
         accessor.spawn(async move |accessor| captured.run(job.run(accessor)).await)?;
         let delivery = restored.await??;
         if delivery.is_replay_discarded() {

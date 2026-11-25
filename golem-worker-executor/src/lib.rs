@@ -22,6 +22,7 @@ pub(crate) mod filesystem_pressure;
 pub(crate) mod filesystem_snapshot;
 #[cfg(any(test, feature = "test-utils"))]
 pub mod filesystem_snapshot_testing;
+pub(crate) mod golem_started;
 pub mod grpc;
 pub mod identity;
 pub mod metrics;
@@ -1090,6 +1091,7 @@ async fn create_worker_executor_impl<
         shard_service.clone(),
         lazy_worker_activator.clone(),
         worker_proxy.clone(),
+        golem_config.resolved_golem_issuer().clone(),
     ));
 
     let resource_limits = bootstrap.create_resource_limits(

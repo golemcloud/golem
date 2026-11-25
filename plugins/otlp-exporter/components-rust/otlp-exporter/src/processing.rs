@@ -61,6 +61,10 @@ pub(crate) fn process_entries_from(
             OplogEntry::AgentInvocationFinished(params) => {
                 handle_invocation_finished(state, params, &mut completed_spans, &mut metrics);
             }
+            OplogEntry::AgentInvocationSettled(params) => {
+                let time_ns = datetime_to_nanos(&params.timestamp).to_string();
+                push_fuel_consumed(&mut metrics, time_ns, params.consumed_fuel);
+            }
             OplogEntry::AgentInvocationFailed(params) => {
                 let time_ns = datetime_to_nanos(&params.timestamp);
                 handle_error(
@@ -886,9 +890,13 @@ fn handle_invocation_finished(
 ) {
     let end_time_ns = datetime_to_nanos(&params.timestamp);
     finish_invocation(state, end_time_ns, false, completed, metrics);
-    let time_ns = end_time_ns.to_string();
+    push_fuel_consumed(metrics, end_time_ns.to_string(), params.consumed_fuel);
+}
 
-    if params.consumed_fuel > 0 {
+/// The fuel an invocation consumed up to its result is recorded in `AgentInvocationFinished`,
+/// and the fuel its background work consumed after the result in `AgentInvocationSettled`.
+fn push_fuel_consumed(metrics: &mut Vec<OtlpMetric>, time_ns: String, consumed_fuel: i64) {
+    if consumed_fuel > 0 {
         metrics.push(OtlpMetric {
             name: "golem.invocation.fuel_consumed".to_string(),
             unit: "1".to_string(),
@@ -899,7 +907,7 @@ fn handle_invocation_finished(
                 data_points: vec![OtlpNumberDataPoint {
                     start_time_unix_nano: time_ns.clone(),
                     time_unix_nano: time_ns,
-                    as_int: Some(params.consumed_fuel.to_string()),
+                    as_int: Some(consumed_fuel.to_string()),
                     as_double: None,
                     attributes: Vec::new(),
                 }],
@@ -1121,9 +1129,10 @@ mod tests {
     use golem_rust::bindings::golem::api::context::{Attribute, AttributeValue};
     use golem_rust::bindings::golem::api::oplog::{
         EnvironmentId, JumpParameters, LocalSpanData, OplogErrorKind, OplogPayload, OplogRegion,
-        RawCreateResourceParameters, RawErrorParameters, RawInvocationRequestOperation,
-        RawInvocationWalletPin, RawSpanClosedParameters, ResourceTypeId, RevertParameters,
-        SpanLink, Timestamp, WalletVersionToken, WorkerError, WrappedFunctionType,
+        RawAgentInvocationSettledParameters, RawCreateResourceParameters, RawErrorParameters,
+        RawInvocationRequestOperation, RawInvocationWalletPin, RawSpanClosedParameters,
+        ResourceTypeId, RevertParameters, SpanLink, Timestamp, WalletVersionToken, WorkerError,
+        WrappedFunctionType,
     };
     use golem_rust::schema::wit::wire::{AccountId, AgentId, Uuid};
     use golem_rust::wasip3::clocks::system_clock::Instant;
@@ -1171,6 +1180,41 @@ mod tests {
             attributes: vec![attribute("name", "embedded")],
             kind: SpanKind::Client,
         }
+    }
+
+    #[test]
+    fn fuel_after_the_result_is_exported_with_the_fuel_up_to_the_result() {
+        let mut state = state();
+        let OplogEntry::AgentInvocationFinished(mut finished) = invocation_finished() else {
+            unreachable!()
+        };
+        finished.consumed_fuel = 5;
+        let output = process_entries(
+            &mut state,
+            vec![
+                OplogEntry::AgentInvocationFinished(finished),
+                OplogEntry::AgentInvocationSettled(RawAgentInvocationSettledParameters {
+                    timestamp: instant(21, 0),
+                    invocation_id: Uuid {
+                        high_bits: 0,
+                        low_bits: 1,
+                    },
+                    consumed_fuel: 7,
+                }),
+            ],
+        );
+        let fuel: Vec<_> = output
+            .metrics
+            .iter()
+            .filter(|metric| metric.name == "golem.invocation.fuel_consumed")
+            .map(|metric| {
+                metric.sum.as_ref().unwrap().data_points[0]
+                    .as_int
+                    .clone()
+                    .unwrap()
+            })
+            .collect();
+        assert_eq!(fuel, vec!["5".to_string(), "7".to_string()]);
     }
 
     #[test]
@@ -1292,6 +1336,7 @@ mod tests {
             function_name: function_name.to_string(),
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(OplogPayload::Inline(Vec::new())),
             durable_function_type: WrappedFunctionType::ReadLocal,
             span_started: span,
@@ -1849,6 +1894,7 @@ mod tests {
                     function_name: "golem::api::context::start-span".to_string(),
                     invocation_id: None,
                     observational_owner: None,
+                    driver: None,
                     request: Some(OplogPayload::Inline(Vec::new())),
                     durable_function_type: WrappedFunctionType::ReadLocal,
                     span_started: Some(opening("reverted")),
@@ -1909,6 +1955,7 @@ mod tests {
                     function_name: "rpc".to_string(),
                     invocation_id: None,
                     observational_owner: None,
+                    driver: None,
                     request: None,
                     durable_function_type: WrappedFunctionType::ReadLocal,
                     span_started: Some(opening("explicit-a")),

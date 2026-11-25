@@ -48,9 +48,9 @@ pub(super) fn decode_untyped_schema_value(
 /// and it returns the conversion error as a non-trapping `result::err` — so the
 /// instance and its resource table stay alive. Capability handles are not
 /// permitted in the value trees of agent config, divergence requests or tool
-/// attachment entries. Divergence requests and tool attachment entries also
-/// reject owned streams, disposing of them as a guest drop does. Drain all
-/// relevant trees before returning the first error, even across entries.
+/// attachment entries, and neither are owned streams, which are disposed of as
+/// a guest drop does. Drain all relevant trees before returning the first
+/// error, even across entries.
 pub(crate) fn reject_quota_handles_in_oplog_entries<
     D: QuotaTokenHandleDropper
         + SecretHandleDropper
@@ -65,24 +65,14 @@ pub(crate) fn reject_quota_handles_in_oplog_entries<
     for (index, entry) in entries {
         let entry = match entry {
             oplog::OplogEntry::Create(mut params) => {
-                let configs = std::mem::take(&mut params.local_agent_config);
-                let mut new_configs = Vec::with_capacity(configs.len());
-                for mut cfg in configs {
-                    match reject_quota_handles_in_value_tree(cfg.value, dropper) {
-                        Ok(tree) => {
-                            cfg.value = tree;
-                            new_configs.push(cfg);
-                        }
-                        Err(e) => {
-                            first_error.get_or_insert_with(|| {
-                                format!("agent config value must not contain a quota token: {e}")
-                            });
-                            // The owned handle(s) were already dropped; this
-                            // entry is discarded once the error is returned.
-                        }
-                    }
+                for cfg in &mut params.local_agent_config {
+                    drain_owned_handles(
+                        &mut cfg.value,
+                        dropper,
+                        "agent config value",
+                        &mut first_error,
+                    );
                 }
-                params.local_agent_config = new_configs;
                 oplog::OplogEntry::Create(params)
             }
             oplog::OplogEntry::FailedUpdate(mut params) => {
@@ -134,6 +124,23 @@ pub(crate) fn reject_quota_handles_in_oplog_entries<
         Some(e) => Err(e),
         None => Ok(sanitized),
     }
+}
+
+/// The requester of an update in the raw WIT form: its binary encoding in the oplog, as an
+/// `oplog-payload` holds the caller of an invocation.
+pub(super) fn requester_to_wit(
+    requester: &golem_common::model::caller::Caller,
+) -> Result<Vec<u8>, String> {
+    golem_common::serialization::serialize(requester)
+}
+
+/// Decodes the raw WIT form of an update's requester. Bytes that are not an encoded caller are
+/// refused, so a round trip through WIT never changes who requested the update.
+pub(super) fn requester_from_wit(
+    bytes: &[u8],
+) -> Result<golem_common::model::caller::Caller, String> {
+    golem_common::serialization::decode(bytes)
+        .map_err(|error| format!("requester does not decode: {error}"))
 }
 
 fn drain_owned_handles<
@@ -242,6 +249,25 @@ pub(super) fn replay_divergence_to_wit(
             .into_iter()
             .map(start_identity_field_to_wit)
             .collect(),
+        replay_start: divergence.replay_start.map(|start| match start {
+            ReplayStart::Snapshot(start) => {
+                oplog::ReplayStart::Snapshot(oplog::ReplaySnapshotStart {
+                    snapshot_index: start.snapshot_index.into(),
+                    rejected_snapshots: start
+                        .rejected_snapshots
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                })
+            }
+            ReplayStart::FullReplay(start) => oplog::ReplayStart::FullReplay(
+                start
+                    .rejected_snapshots
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            ),
+        }),
     })
 }
 
@@ -257,6 +283,22 @@ pub(super) fn replay_divergence_from_wit(
             .into_iter()
             .map(start_identity_field_from_wit)
             .collect(),
+        replay_start: divergence.replay_start.map(|start| match start {
+            oplog::ReplayStart::Snapshot(start) => ReplayStart::snapshot(
+                golem_common::model::OplogIndex::from_u64(start.snapshot_index),
+                start
+                    .rejected_snapshots
+                    .into_iter()
+                    .map(golem_common::model::OplogIndex::from_u64)
+                    .collect(),
+            ),
+            oplog::ReplayStart::FullReplay(indexes) => ReplayStart::full_replay(
+                indexes
+                    .into_iter()
+                    .map(golem_common::model::OplogIndex::from_u64)
+                    .collect(),
+            ),
+        }),
     })
 }
 
@@ -268,6 +310,7 @@ fn replay_step_to_wit(step: ReplayStep) -> Result<oplog::ReplayStep, String> {
             parent_start_index: call.parent_start_index.map(Into::into),
             invocation_id: call.invocation_id.map(durable_invocation_id_to_wit),
             observational_owner: call.observational_owner.map(Into::into),
+            driver: call.driver.map(Into::into),
             carries_request: call.carries_request,
             request: call
                 .request
@@ -295,6 +338,7 @@ fn replay_step_from_wit(step: oplog::ReplayStep) -> Result<ReplayStep, String> {
             observational_owner: call
                 .observational_owner
                 .map(golem_common::model::OplogIndex::from_u64),
+            driver: call.driver.map(golem_common::model::OplogIndex::from_u64),
             carries_request: call.carries_request,
             request: call
                 .request
@@ -319,6 +363,7 @@ fn start_identity_field_to_wit(field: StartIdentityField) -> oplog::StartIdentit
         StartIdentityField::ObservationalOwner => oplog::StartIdentityField::ObservationalOwner,
         StartIdentityField::RequestPresence => oplog::StartIdentityField::RequestPresence,
         StartIdentityField::Parent => oplog::StartIdentityField::Parent,
+        StartIdentityField::Driver => oplog::StartIdentityField::Driver,
     }
 }
 
@@ -330,6 +375,7 @@ fn start_identity_field_from_wit(field: oplog::StartIdentityField) -> StartIdent
         oplog::StartIdentityField::ObservationalOwner => StartIdentityField::ObservationalOwner,
         oplog::StartIdentityField::RequestPresence => StartIdentityField::RequestPresence,
         oplog::StartIdentityField::Parent => StartIdentityField::Parent,
+        oplog::StartIdentityField::Driver => StartIdentityField::Driver,
     }
 }
 

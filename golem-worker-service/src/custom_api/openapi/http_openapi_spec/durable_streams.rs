@@ -151,6 +151,7 @@ pub(super) fn emit(
         create_responses[code]["headers"] =
             json!({"Location": header("Created session URL", string_schema())});
     }
+    add_invocation_response_headers(&mut create_responses);
     let mut create_parameters = creation_parameters.clone();
     create_parameters.extend(expiry_parameters());
     operation(
@@ -165,21 +166,23 @@ pub(super) fn emit(
     let mut parameters = creation_parameters.clone();
     parameters.push(path_parameter(&session_name, reference(SESSION)));
     parameters.extend(expiry_parameters());
+    let mut ensure_responses = responses(
+        &[
+            ("201", "Session created"),
+            ("200", "Existing invocation"),
+            ("400", "Invalid arguments"),
+            ("409", "Invocation arguments conflict"),
+        ],
+        false,
+    );
+    add_invocation_response_headers(&mut ensure_responses);
     operation(
         &session_path,
         "put",
         "ensure-session",
         parameters,
         creation_body,
-        responses(
-            &[
-                ("201", "Session created"),
-                ("200", "Existing invocation"),
-                ("400", "Invalid arguments"),
-                ("409", "Invocation arguments conflict"),
-            ],
-            false,
-        ),
+        ensure_responses,
         None,
     )?;
     for method in ["get", "head"] {
@@ -305,6 +308,7 @@ pub(super) fn emit(
         for code in ["201", "200"] {
             r[code]["headers"] = metadata_headers(false, true);
         }
+        add_invocation_response_headers(&mut r);
         operation(
             &path,
             "put",
@@ -485,13 +489,17 @@ pub(super) fn emit(
                     parameters.retain(|p| p["in"] == "path" || p["in"] == "header");
                     parameters.push(path_parameter(&fork_name, reference(SESSION)));
                 }
+                let mut responses = r.clone();
+                if path != &fork_path && url_bound {
+                    add_invocation_response_headers(&mut responses);
+                }
                 operation(
                     path,
                     "post",
                     &format!("append-{}", slot.public_name),
                     parameters,
                     Some(body.clone()),
-                    r.clone(),
+                    responses,
                     Some(slot),
                 )?;
             }

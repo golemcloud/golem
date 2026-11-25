@@ -273,6 +273,46 @@ test "byte stream retains unread bytes between bounded reads" {
 }
 
 ///|
+test "byte stream keeps returned chunks independent of reused source storage" {
+  run_attachment_async(async fn() {
+    for count in [2, 4, 8] {
+      let buffer : FixedArray[Byte] = [1, 2, 3, 4]
+      let mut reads = 0
+      let source : @async-core.Stream[
+        Result[FixedArray[Byte], @toolStreams.ByteStreamFailure],
+      ] = @async-core.Stream::from_source(
+        fn(_) {
+          reads += 1
+          if reads > 1 {
+            None
+          } else {
+            Some([Ok(buffer)])
+          }
+        },
+        () => (),
+        () => (),
+      )
+      let bytes = byte_stream(source)
+      let first = match bytes.read(count) {
+        Some(chunk) => chunk
+        None => abort("missing first chunk")
+      }
+      first[0] = 42
+      assert_eq(buffer[0], 1)
+      buffer[1] = 43
+      assert_eq(first[1], 2)
+      if count == 2 {
+        assert_eq(bytes.read(4), Some([3, 4]))
+        assert_eq(first.length(), 2)
+      } else {
+        assert_eq(first.length(), 4)
+      }
+      assert_eq(bytes.read(1), None)
+    }
+  })
+}
+
+///|
 test "byte stream skips empty successful host items" {
   run_attachment_async(async fn() {
     let mut reads = 0

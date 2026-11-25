@@ -83,7 +83,7 @@ mod component;
 mod environment;
 pub(crate) mod interactive;
 mod invocation;
-mod log;
+pub(crate) mod log;
 mod mcp;
 mod partial_match;
 mod plugin;
@@ -326,8 +326,8 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .cmd_build(component_name, build_args)
                         .await
                 }
-                GolemCliSubcommand::Install { file } => {
-                    crate::package::install(&ctx.global_flags, &file)
+                GolemCliSubcommand::Install { source } => {
+                    crate::package::install(&ctx.global_flags, &source).await
                 }
                 GolemCliSubcommand::Package {
                     subcommand: crate::command::PackageSubcommand::Pack { output },

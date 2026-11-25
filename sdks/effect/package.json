@@ -168,6 +168,7 @@
     "copy-agent-template": "node ./scripts/copy-agent-template.mjs",
     "build-agent-template": "npm run build && npm run build:bundle && npm run generate-agent-template && npm run compile-agent-template && npm run copy-agent-template",
     "typecheck": "tsc --noEmit",
+    "typecheck:integration": "npm --prefix integration-test run typecheck",
     "lint": "eslint .",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

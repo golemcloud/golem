@@ -219,10 +219,15 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .then_some(attached.attachment_id.0.into()),
                 attempt_id: (!accepted.joined_origin_observer)
                     .then_some(attached.attempt_id.0.into()),
+                // The session carries the current attachment epoch, which a revert or a
+                // takeover may have advanced past the retained record; readiness reports it too.
                 epoch: if accepted.joined_origin_observer {
                     0
                 } else {
-                    attached.epoch
+                    accepted
+                        .durable_streams
+                        .as_ref()
+                        .map_or(attached.epoch, StreamSession::attachment_epoch)
                 },
                 joined_origin_observer: accepted.joined_origin_observer,
                 environment_id: accepted
@@ -666,6 +671,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                                 prepared.attempt.expected_callee_fingerprint.0.into()
                             }),
                             new_stream_mappings: persisted_result.1.clone(),
+                            background_failure: None,
                         },
                     )),
                 })
@@ -860,10 +866,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
         };
+        // Only an awaited method invocation queues its acceptance until readiness; lookup,
+        // trigger, schedule and tool sessions never receive a separate readiness frame.
         if accepted.component_revision.is_none()
+            && start.mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32
+            && start.external_tool.is_none()
             && let Some(revision) = output.component_revision
-        {
-            if responses.send(InvocationResponse {
+            && responses.send(InvocationResponse {
                 response: Some(invocation_response::Response::Ready(InvocationAccepted {
                     agent_id: Some(accepted.agent_id.into()),
                     idempotency_key: Some(accepted.idempotency_key.into()),
@@ -871,7 +880,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     method_name: start.method_name.clone(),
                     ..Default::default()
                 })),
-            }).await.is_err() { return; }
+            }).await.is_err()
+        {
+            return;
         }
         let (result, new_stream_mappings) = match output.result {
             AgentInvocationResult::ExternalTool { result } => {
@@ -924,6 +935,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             .agent_fingerprint
                             .map(|fingerprint| fingerprint.0.into()),
                         new_stream_mappings,
+                        background_failure: output.background_failure.clone().map(|failure| {
+                            WorkerExecutorError::from(failure).into()
+                        }),
                     },
                 )),
             })

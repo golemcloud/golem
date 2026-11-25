@@ -612,6 +612,7 @@ fn generate(yaml_path: PathBuf, out_dir: OsString) {
             ),
             // oplog
             ("OplogCursor", "golem_common::model::oplog::OplogCursor"),
+            ("OplogInclude", "golem_common::model::oplog::OplogInclude"),
             ("OplogScan", "golem_common::model::oplog::OplogScan"),
             (
                 "OplogScanAllowance",

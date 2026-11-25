@@ -276,6 +276,7 @@ where
                 accessor,
                 response,
                 crate::durable_host::concurrent::InvocationIdSource::GuestImport,
+                None,
             )
             .await?;
             projected.push(project_tool_response(accessor, response));
@@ -568,6 +569,47 @@ pub(crate) async fn prepare_tool_parent_end<Ctx: WorkerCtx>(
     drive_tool_finalization(
         store,
         async move { prepare_tool_parent_end_owned(&execution, parent).await },
+        errors,
+        classify_driver_failure::<Ctx>,
+    )
+    .await
+}
+
+/// Waits, while the parent stays open, for the tool children of `parent` whose bodies run or need
+/// no admission, and drives the Store meanwhile, so that their failures reach the parent before
+/// its result. A capable child whose body still waits for a release that nothing requested is not
+/// waited for and stays staged: a later result await, or the end of the parent, admits it.
+pub(crate) async fn settle_admitted_tool_children<Ctx: WorkerCtx>(
+    store: &mut wasmtime::StoreContextMut<'_, Ctx>,
+    parent: crate::worker::owner_lane::OwnerInvocationId,
+) -> Vec<anyhow::Error> {
+    let mut errors = Vec::new();
+    let drained = store
+        .as_context_mut()
+        .run_concurrent(async move |accessor| {
+            crate::durable_host::concurrent::drain_dropped_call_events_access(accessor, |ctx| {
+                ctx.durable_ctx_mut()
+            })
+            .await
+            .map_err(anyhow::Error::from)
+        })
+        .await;
+    match drained {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => errors.push(error),
+        Err(error) => errors.push(error.into()),
+    }
+
+    let execution = store.data().durable_ctx().owner_execution.clone();
+    drive_tool_finalization(
+        store,
+        async move {
+            execution
+                .tool_operations()
+                .wait_parent_admitted_settled(&parent, &execution.deferred_tool_admission())
+                .await;
+            Ok(())
+        },
         errors,
         classify_driver_failure::<Ctx>,
     )
