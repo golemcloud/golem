@@ -31,11 +31,11 @@ use crate::oplog_export::model::{OplogExportCoverage, ReportEntry};
 use crate::oplog_export::obfuscator::TokenKey;
 use anyhow::Context as _;
 use golem_client::api::WorkerClient;
-use golem_common::model::AgentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{
     OmittedOplogEntry, OplogCursor, OplogInclude, PublicOplogPageEntry,
 };
+use golem_common::model::{AgentFingerprint, AgentId};
 use poem::http::StatusCode;
 use poem::listener::{Acceptor, Listener, TcpListener};
 use poem::web::{Data, Html, Json, Query};
@@ -84,7 +84,7 @@ pub async fn oplog_page_entry_view(
         return Ok(omitted.into());
     }
 
-    match read_omitted_entry(ctx, environment_id, agent_id, &omitted, show_claims).await {
+    match read_omitted_entry(ctx, environment_id, agent_id, &omitted, show_claims, None).await {
         Ok(entry) => Ok(entry),
         Err(error) => {
             log_warn(format!(
@@ -97,35 +97,45 @@ pub async fn oplog_page_entry_view(
 }
 
 /// The output view of an oplog page entry in full. The function reads in full an entry that the
-/// page omitted, and gives an error when that read fails.
+/// page omitted, from the incarnation of the agent that has `fingerprint`. It gives an error when
+/// that read fails.
 pub async fn oplog_page_entry_in_full(
     ctx: &Context,
     environment_id: &EnvironmentId,
     agent_id: &AgentId,
     page_entry: PublicOplogPageEntry,
     show_claims: bool,
+    fingerprint: &AgentFingerprint,
 ) -> anyhow::Result<AgentOplogEntryView> {
     match page_entry {
         PublicOplogPageEntry::Included(entry) => Ok(entry.into()),
-        PublicOplogPageEntry::Omitted(omitted) => {
-            read_omitted_entry(ctx, environment_id, agent_id, &omitted, show_claims)
-                .await
-                .with_context(|| {
-                    format!(
-                        "Failed to read oplog entry {} ({}, {} bytes)",
-                        omitted.oplog_index, omitted.entry_type, omitted.size
-                    )
-                })
-        }
+        PublicOplogPageEntry::Omitted(omitted) => read_omitted_entry(
+            ctx,
+            environment_id,
+            agent_id,
+            &omitted,
+            show_claims,
+            Some(fingerprint),
+        )
+        .await
+        .with_context(|| {
+            format!(
+                "Failed to read oplog entry {} ({}, {} bytes)",
+                omitted.oplog_index, omitted.entry_type, omitted.size
+            )
+        }),
     }
 }
 
+/// Reads in full an entry that a page omitted. With `expected_fingerprint`, the read fails when
+/// the agent is another incarnation.
 async fn read_omitted_entry(
     ctx: &Context,
     environment_id: &EnvironmentId,
     agent_id: &AgentId,
     omitted: &OmittedOplogEntry,
     show_claims: bool,
+    expected_fingerprint: Option<&AgentFingerprint>,
 ) -> anyhow::Result<AgentOplogEntryView> {
     let entry = ctx
         .golem_clients()
@@ -137,7 +147,7 @@ async fn read_omitted_entry(
             omitted.oplog_index.as_u64(),
             Some(omitted.component_revision.into()),
             oplog_include(show_claims).as_ref(),
-            None,
+            expected_fingerprint.map(|fingerprint| &fingerprint.0),
         )
         .await
         .map_service_error()?;

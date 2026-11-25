@@ -1172,10 +1172,12 @@ impl AgentCommandHandler {
     /// follows the cursor of each page to the end of the range and writes each page before it
     /// reads the next, so its memory does not grow with the oplog. A search page that the scan
     /// budget of the server ends early still has a cursor, so the budget does not end the export.
-    /// The export reads in full each entry that a page omits for its size, and a failed read
-    /// fails the export. The export writes to a temporary file in the directory of `path`, and
-    /// renames it to `path` only after the last entry, so a failed export leaves no file at
-    /// `path`.
+    /// A page read without a query passes no scan allowance, so the server sets no scan limit on
+    /// it. The export reads in full each entry that a page omits for its size, and a failed read
+    /// fails the export. Every read names the fingerprint of the agent at the start of the export,
+    /// so the export fails when the agent becomes another incarnation. The export writes to a
+    /// temporary file in the directory of `path`, and renames it to `path` only after the last
+    /// entry, so a failed export leaves no file at `path`.
     async fn cmd_oplog_jsonl_export(
         &self,
         agent_id: AgentIdArgs,
@@ -1188,6 +1190,15 @@ impl AgentCommandHandler {
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
         let agent_id = self.agent_id_of(&agent_id_match).await?;
         let environment_id = agent_id_match.environment.environment_id;
+        let fingerprint = self
+            .ctx
+            .golem_clients()
+            .await?
+            .worker
+            .get_worker_metadata(&environment_id.0, &agent_id.0, None)
+            .await
+            .map_service_error()?
+            .fingerprint;
 
         let directory = match path.parent() {
             Some(parent) if !parent.as_os_str().is_empty() => parent,
@@ -1206,8 +1217,13 @@ impl AgentCommandHandler {
             selection,
         );
 
-        let (ctx, environment_id, agent_id, query) =
-            (&self.ctx, &environment_id, &agent_id, query.as_deref());
+        let (ctx, environment_id, agent_id, query, fingerprint) = (
+            &self.ctx,
+            &environment_id,
+            &agent_id,
+            query.as_deref(),
+            &fingerprint,
+        );
         let batch_size = ctx.http_batch_size();
         let (from, to) = range.to_indices();
         let pages =
@@ -1227,7 +1243,7 @@ impl AgentCommandHandler {
                         cursor.as_ref(),
                         query,
                         oplog_include(show_claims).as_ref(),
-                        None,
+                        Some(&fingerprint.0),
                         to,
                         None,
                         None,
@@ -1252,6 +1268,7 @@ impl AgentCommandHandler {
                                 agent_id,
                                 entry,
                                 show_claims,
+                                fingerprint,
                             )
                             .await?,
                         )?;
