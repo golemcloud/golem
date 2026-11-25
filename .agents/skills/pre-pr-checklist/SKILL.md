@@ -14,7 +14,7 @@ Inspect all files in the PR, including generated files. A change can belong to m
 | Scope | Minimum local verification |
 |---|---|
 | Root Rust crate(s) | Package-scoped format check, clippy, check/build, and affected tests |
-| Shared contract, as `AGENTS.md` defines it under "Before Submitting a PR" | Verify the producer, then run the tests of every caller, including worker executor, integration, CLI integration and SDK tests; build the test components that they need |
+| Shared contract, as `AGENTS.md` defines it under "Before Submitting a PR" | Verify the producer, then smoke-test the callers: a few existing tests that build, deploy and invoke a component through the changed path, one for each affected area (worker executor, services, CLI, each SDK that the contract reaches); build the test components that they need |
 | `dev-tools/` | Use `--manifest-path dev-tools/Cargo.toml`, except the standalone Go generator uses `--manifest-path dev-tools/go-bindgen/Cargo.toml`; do not check the root workspace unless it is also affected |
 | Rust SDK (`sdks/rust/`) | Use that SDK's Cargo workspace checks; do not run root `cargo make fix` or `cargo make build` |
 | TypeScript SDK (`sdks/ts/`) | Check affected packages; rebuild the agent template only when its runtime/WIT inputs changed |
@@ -42,7 +42,7 @@ cargo fmt --manifest-path dev-tools/Cargo.toml -p <crate> -- --check
 cargo clippy --manifest-path dev-tools/Cargo.toml -p <crate> --all-targets --no-deps -- -D warnings
 ```
 
-Then, for any root-workspace Rust change, lint the whole workspace, as `Main validation` does. Package-scoped clippy does not see a lint that the change raises in another crate:
+Then, for any root-workspace Rust change, lint the whole workspace, as `Main validation` does. Package-scoped clippy does not see a caller in another crate that the change did not update, or a lint that the change raises in another crate:
 
 ```shell
 cargo make check-clippy
@@ -74,7 +74,7 @@ Start with the smallest test that exercises the changed behavior:
 cargo test -p <crate> -- <test_name> --report-time
 ```
 
-Broaden for a changed shared contract (step 1), for a specific affected contract that narrower checks cannot cover, or for an explicit user request. A changed shared contract runs the tests of its callers, including the ones that need built test components. The absence of PR tests does not justify full suites:
+Broaden for a changed shared contract (step 1), for a specific affected contract that narrower checks cannot cover, or for an explicit user request. A changed shared contract gets a smoke test of its callers: a few tests that build, deploy and invoke a component through the changed path, also when they need built test components. The absence of PR tests does not justify full suites:
 
 | Impact | Broader command when needed |
 |---|---|
@@ -125,7 +125,7 @@ git add <specific-files> # Stage only relevant files
 3. [ ] Affected packages build or type-check
 4. [ ] Modified and behaviorally affected tests pass
 5. [ ] Required artifacts are regenerated and their drift checks pass
-6. [ ] The callers of each changed shared contract have run their tests, or the PR description names the tests that could not run
+6. [ ] Each changed shared contract has a smoke test of its callers, and the PR description names the selected tests and each one that could not run
 7. [ ] Each other broader check covers an identified affected contract that narrower checks cannot cover
 8. [ ] Only relevant files are included in the PR
 
