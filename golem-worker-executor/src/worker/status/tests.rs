@@ -12321,6 +12321,15 @@ pub(crate) mod status_baseline {
             .entries
     }
 
+    /// The regions that `regions` skips, with its override merged.
+    fn merged_override(regions: &DeletedRegions) -> DeletedRegions {
+        let mut merged = regions.clone();
+        if merged.is_overridden() {
+            merged.merge_override();
+        }
+        merged
+    }
+
     /// The status after `entries`, folded from `baseline`. `None` when the fold refuses
     /// `baseline`.
     pub(crate) fn fold(
@@ -12337,10 +12346,12 @@ pub(crate) mod status_baseline {
 
     proptest! {
         /// A status baseline at any index folds the rest of the oplog to the status of a fold
-        /// of the whole oplog, in every field. A fold refuses a baseline only when a later
-        /// `Jump` or `Revert` follows its index. A baseline is also refused when a
-        /// snapshot-based or snapshot-assisted update skips a prefix. The reader then folds the
-        /// whole oplog from index 1. The write and the read of the stored baseline have their own
+        /// of the whole oplog, in every field. A fold can refuse a baseline only when a later
+        /// `Revert` deletes the index of the baseline, or when a later region uncovers a prefix
+        /// that the baseline does not cover. A later `Jump` gives such a region. A baseline is
+        /// also refused when a snapshot-based or snapshot-assisted update skips a prefix. The
+        /// fold must accept every other baseline. The reader then folds the whole oplog from
+        /// index 1. The write and the read of the stored baseline have their own
         /// property in `services::worker::tests`.
         #[test]
         fn a_fold_from_a_status_baseline_equals_a_fold_of_the_whole_oplog(
@@ -12349,33 +12360,21 @@ pub(crate) mod status_baseline {
         ) {
             let entries = oplog(create, &generated);
             let whole = fold(AgentStatusRecord::default(), entries.clone()).unwrap();
-            let skips_a_prefix = entries.values().any(|entry| {
-                matches!(
-                    entry,
-                    OplogEntry::PendingUpdate {
-                        description: UpdateDescription::SnapshotBased { .. }
-                            | UpdateDescription::SnapshotAssistedAutomatic { .. },
-                        ..
-                    }
-                )
-            });
+            let whole_skipped = merged_override(&whole.skipped_regions);
 
             entries.keys().try_for_each(|at| {
                 let (before, after): (BTreeMap<_, _>, BTreeMap<_, _>) = entries
                     .clone()
                     .into_iter()
                     .partition(|(index, _)| index <= at);
-                let refusable = after.values().any(|entry| {
-                    matches!(entry, OplogEntry::Jump { .. } | OplogEntry::Revert { .. })
-                        || (skips_a_prefix
-                            && matches!(
-                                entry,
-                                OplogEntry::PendingUpdate { .. }
-                                    | OplogEntry::SuccessfulUpdate { .. }
-                                    | OplogEntry::FailedUpdate { .. }
-                            ))
-                });
                 let baseline = fold(AgentStatusRecord::default(), before).unwrap();
+                let baseline_skipped = merged_override(&baseline.skipped_regions);
+                let uncovers_a_prefix = (1..=at.as_u64()).map(OplogIndex::from_u64).any(|index| {
+                    whole_skipped.is_in_deleted_region(index)
+                        != baseline_skipped.is_in_deleted_region(index)
+                });
+                let refusable =
+                    whole.deleted_regions.is_in_deleted_region(*at) || uncovers_a_prefix;
                 // The writers of the durable baseline write it only at a clean boundary, so no
                 // later `Jump` covers it. A start status that a later `Jump` covers while a
                 // snapshot-based update is pending is not checked: `baseline_is_invalidated`
@@ -12392,8 +12391,8 @@ pub(crate) mod status_baseline {
                     Some(status) => prop_assert_eq!(&status, &whole, "baseline at {}", at),
                     None => prop_assert!(
                         refusable,
-                        "the baseline at {} is refused with no later jump, revert or update \
-                         that skips a prefix",
+                        "the baseline at {} is refused, but no later revert deletes its index \
+                         and no later region uncovers a prefix that it does not cover",
                         at
                     ),
                 }
