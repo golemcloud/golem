@@ -229,9 +229,7 @@ async fn get_oplog_chunk<Ctx: WorkerCtx>(
         identity.create_parameters().owner_kind,
         identity.create_parameters().agent_type_name.as_ref(),
         entry.next_oplog_index,
-        entry
-            .initialized
-            .then_some(entry.current_component_revision),
+        entry.continued(),
         entry.page_size,
         GUEST_CLAIM_VISIBILITY,
     )
@@ -260,9 +258,7 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
         entry.next_oplog_index,
         entry.last_oplog_index,
         entry.page_size,
-        entry
-            .initialized
-            .then_some(entry.current_component_revision),
+        entry.continued(),
         &entry.query,
         ctx.state.config.limits.scan_budget,
         GUEST_CLAIM_VISIBILITY,
@@ -320,9 +316,7 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
                         next_oplog_index: entry.next_oplog_index,
                         query: None,
                         page_size: entry.page_size,
-                        current_component_revision: entry
-                            .initialized
-                            .then_some(entry.current_component_revision),
+                        current_component_revision: entry.continued(),
                     };
                     if let Some(denial) = agent_operation_denial(denied) {
                         break 'response begun.start_live_denied(self, request, denial).await?;
@@ -447,6 +441,12 @@ impl GetOplogEntry {
         self.current_component_revision = current_component_revision;
         self.initialized = true;
     }
+
+    /// The component revision that the next chunk continues from. `None` for a new read, which
+    /// finds the component revision at its cursor.
+    pub fn continued(&self) -> Option<ComponentRevision> {
+        self.initialized.then_some(self.current_component_revision)
+    }
 }
 
 impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
@@ -509,9 +509,7 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
                         next_oplog_index: entry.next_oplog_index,
                         query: Some(entry.query.clone()),
                         page_size: entry.page_size,
-                        current_component_revision: entry
-                            .initialized
-                            .then_some(entry.current_component_revision),
+                        current_component_revision: entry.continued(),
                     };
                     if let Some(denial) = agent_operation_denial(denied) {
                         break 'response begun.start_live_denied(self, request, denial).await?;
@@ -657,6 +655,12 @@ impl SearchOplogEntry {
                 response.last_oplog_index,
             );
         }
+    }
+
+    /// The component revision that the next batch continues from. `None` for a new search, which
+    /// starts at its cursor, or at the retained start when the cursor is below it.
+    pub fn continued(&self) -> Option<ComponentRevision> {
+        self.initialized.then_some(self.current_component_revision)
     }
 }
 
@@ -918,9 +922,7 @@ mod tests {
                         AgentMode::Durable,
                         at(5),
                         search.next_oplog_index,
-                        search
-                            .initialized
-                            .then_some(search.current_component_revision),
+                        search.continued(),
                     )
                     .await,
                     Ok((idx(5), ComponentRevision::INITIAL))
