@@ -774,6 +774,12 @@ pub enum PublicServerMessage {
     InvocationAccepted {
         #[serde(rename = "attemptId")]
         attempt_id: Uuid,
+        #[serde(
+            rename = "invocationId",
+            serialize_with = "serialize_invocation_id",
+            deserialize_with = "deserialize_invocation_id"
+        )]
+        invocation_id: crate::model::OwnedInvocationId,
         #[serde(rename = "agentId")]
         agent_id: AgentId,
         #[serde(rename = "idempotencyKey")]
@@ -1010,6 +1016,21 @@ pub fn encode_client_text(message: &PublicClientMessage) -> Result<String, Publi
     })?;
     validate_message_size(encoded.len())?;
     Ok(encoded)
+}
+
+fn serialize_invocation_id<S: Serializer>(
+    id: &crate::model::OwnedInvocationId,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.collect_str(id)
+}
+
+fn deserialize_invocation_id<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<crate::model::OwnedInvocationId, D::Error> {
+    String::deserialize(deserializer)?
+        .parse()
+        .map_err(serde::de::Error::custom)
 }
 
 pub fn decode_server_text(bytes: &[u8]) -> Result<PublicServerMessage, PublicProtocolError> {

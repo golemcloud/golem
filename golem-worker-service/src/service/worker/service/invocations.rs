@@ -30,9 +30,10 @@ use golem_common::SafeDisplay;
 use golem_common::model::caller::Caller;
 use golem_common::model::card::{AgentInvocationIdPattern, AgentResourcePattern, AgentVerb};
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::tool::{ToolBindingOwner, ToolName, ToolSource};
 use golem_common::model::{
-    AgentId, AgentInvocationResult, BackgroundFailure, IdempotencyKey, OwnedAgentId,
-    OwnedInvocationId, RESERVED_TYPE_TAG,
+    AgentId, AgentInvocationResult, BackgroundFailure, IdempotencyKey, InvocationOwner,
+    OwnedAgentId, OwnedInvocationId, RESERVED_TYPE_TAG, StandaloneToolInvocation,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -58,20 +59,20 @@ impl WorkerService {
         invocation_id: &OwnedInvocationId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Invocation> {
-        let agent_id = invocation_id
-            .agent_id()
-            .ok_or_else(|| WorkerServiceError::InvocationNotFound(invocation_id.to_string()))?;
+        let agent_id = self
+            .invocation_address(environment_id, invocation_id, &auth_ctx)
+            .await?;
         let agent = self
             .agent_for_invocation_read(
                 environment_id,
-                agent_id,
+                &agent_id,
                 &auth_ctx,
                 AgentVerb::View,
                 AgentResourcePattern::Any,
             )
             .await?;
         let summary = self
-            .invocation_summary(environment_id, invocation_id, auth_ctx.clone())
+            .invocation_summary(environment_id, &agent_id, invocation_id, auth_ctx.clone())
             .await?;
         let result = match summary.state {
             InvocationState::Completed
@@ -92,6 +93,8 @@ impl WorkerService {
         query: InvocationListQuery,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<InvocationPage> {
+        self.require_agent_address(&OwnedAgentId::new(environment_id, agent_id))
+            .await?;
         self.agent_for_invocation_read(
             environment_id,
             agent_id,
@@ -135,11 +138,177 @@ impl WorkerService {
     pub async fn lookup_invocations(
         &self,
         environment_id: EnvironmentId,
+        agent_id: Option<&AgentId>,
+        idempotency_key: &IdempotencyKey,
+        operation: Option<String>,
+        tool_name: Option<&ToolName>,
+        command: Option<&str>,
+        auth_ctx: AuthCtx,
+    ) -> WorkerResult<Vec<InvocationSummary>> {
+        if let Some(tool_name) = tool_name {
+            if operation.is_some() {
+                return Err(WorkerServiceError::TypeChecker(
+                    "operation and tool are mutually exclusive".into(),
+                ));
+            }
+            if !auth_ctx.is_system() {
+                self.agent_types
+                    .authorize_environment(environment_id, &auth_ctx)
+                    .await?;
+            }
+            let state = self
+                .agent_types
+                .tool_deployment(environment_id)
+                .await?
+                .ok_or_else(|| {
+                    WorkerServiceError::InvocationNotFound(format!(
+                        "tool {tool_name} is not deployed"
+                    ))
+                })?;
+            let tool = state.registered_tools.get(tool_name).ok_or_else(|| {
+                WorkerServiceError::InvocationNotFound(format!("tool {tool_name} is not deployed"))
+            })?;
+            let definitions = if let Some(agent_id) = agent_id {
+                self.require_agent_address(&OwnedAgentId::new(environment_id, agent_id))
+                    .await?;
+                let agent = self
+                    .agent_for_invocation_read(
+                        environment_id,
+                        agent_id,
+                        &auth_ctx,
+                        AgentVerb::View,
+                        AgentResourcePattern::Any,
+                    )
+                    .await?;
+                let agent_type_name = agent
+                    .metadata
+                    .agent_type_name
+                    .clone()
+                    .ok_or_else(|| WorkerServiceError::AgentNotFound(*agent_id))?;
+                vec![
+                    self.effective_tool_definition(
+                        &agent.component,
+                        &ToolBindingOwner::AgentType { agent_type_name },
+                        tool_name.as_str(),
+                    )
+                    .await?
+                    .0,
+                ]
+            } else {
+                if !matches!(tool.registration.source, ToolSource::Component { .. }) {
+                    return Err(WorkerServiceError::InvocationNotFound(format!(
+                        "tool {tool_name} has no standalone invocation lookup"
+                    )));
+                }
+                state
+                    .tool_bindings
+                    .iter()
+                    .filter(|(owner, bindings)| {
+                        matches!(owner, ToolBindingOwner::ComponentBaseline { .. })
+                            && bindings.contains_key(tool_name)
+                    })
+                    .map(|(owner, _)| {
+                        state
+                            .tool_middleware_chains
+                            .get(owner)
+                            .and_then(|chains| chains.get(tool_name))
+                            .map(|chain| chain.effective_definition.clone())
+                            .unwrap_or_else(|| tool.registration.definition.clone())
+                    })
+                    .collect()
+            };
+            let mut paths = std::collections::BTreeSet::new();
+            for definition in definitions {
+                // A command may be exposed by one baseline's middleware but not another's.
+                if let Ok(candidates) = tool_command_paths(&definition, command) {
+                    paths.extend(candidates);
+                }
+            }
+            if command.is_some() && paths.is_empty() {
+                return Err(WorkerServiceError::TypeChecker(format!(
+                    "unknown tool command {}",
+                    command.unwrap()
+                )));
+            }
+            let mut matches = Vec::new();
+            for path in paths {
+                if let Some(agent_id) = agent_id {
+                    let operation =
+                        golem_common::model::InvocationOperation::tool_operation(tool_name, &path);
+                    match self
+                        .lookup_agent_invocations(
+                            environment_id,
+                            agent_id,
+                            idempotency_key,
+                            Some(operation),
+                            auth_ctx.clone(),
+                        )
+                        .await
+                    {
+                        Ok(found) => matches.extend(found),
+                        Err(WorkerServiceError::InvocationNotFound(_)) => {}
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    let Some(scope) = auth_ctx.idempotency_scope() else {
+                        continue;
+                    };
+                    let unique = StandaloneToolInvocation::unique_part(
+                        environment_id,
+                        tool_name,
+                        Some(scope),
+                        &path.join(" "),
+                        Some(idempotency_key),
+                    );
+                    let id =
+                        OwnedInvocationId::new(InvocationOwner::Tool(tool_name.clone()), unique);
+                    match self
+                        .get_invocation(environment_id, &id, auth_ctx.clone())
+                        .await
+                    {
+                        Ok(found) => matches.push(found.summary),
+                        Err(
+                            WorkerServiceError::InvocationNotFound(_)
+                            | WorkerServiceError::AgentNotFound(_),
+                        ) => {}
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+            if matches.is_empty() {
+                return Err(WorkerServiceError::InvocationNotFound(format!(
+                    "no invocation of {tool_name} has this idempotency key"
+                )));
+            }
+            return Ok(matches);
+        }
+        if command.is_some() {
+            return Err(WorkerServiceError::TypeChecker(
+                "command requires tool".into(),
+            ));
+        }
+        let agent_id = agent_id
+            .ok_or_else(|| WorkerServiceError::TypeChecker("agent or tool is required".into()))?;
+        self.lookup_agent_invocations(
+            environment_id,
+            agent_id,
+            idempotency_key,
+            operation,
+            auth_ctx,
+        )
+        .await
+    }
+
+    async fn lookup_agent_invocations(
+        &self,
+        environment_id: EnvironmentId,
         agent_id: &AgentId,
         idempotency_key: &IdempotencyKey,
         operation: Option<String>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<InvocationSummary>> {
+        self.require_agent_address(&OwnedAgentId::new(environment_id, agent_id))
+            .await?;
         self.agent_for_invocation_read(
             environment_id,
             agent_id,
@@ -177,13 +346,18 @@ impl WorkerService {
         invocation_id: &OwnedInvocationId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<InvocationSummary> {
-        let agent_id = invocation_id
-            .agent_id()
-            .ok_or_else(|| WorkerServiceError::InvocationNotFound(invocation_id.to_string()))?;
+        let agent_id = self
+            .invocation_address(environment_id, invocation_id, &auth_ctx)
+            .await?;
+        if agent_id.type_tag() == RESERVED_TYPE_TAG {
+            return Err(WorkerServiceError::InvocationNotFound(
+                invocation_id.to_string(),
+            ));
+        }
         let agent = self
             .agent_for_invocation_read(
                 environment_id,
-                agent_id,
+                &agent_id,
                 &auth_ctx,
                 AgentVerb::CancelInvocation,
                 AgentResourcePattern::InvocationId(AgentInvocationIdPattern::Uuid(
@@ -193,14 +367,14 @@ impl WorkerService {
             .await?;
         // The executor rejects an unknown ID as an invalid request, so the ID is resolved first.
         let summary = self
-            .invocation_summary(environment_id, invocation_id, auth_ctx.clone())
+            .invocation_summary(environment_id, &agent_id, invocation_id, auth_ctx.clone())
             .await?;
         if summary.state.is_terminal() {
             return Ok(summary);
         }
         self.worker_client
             .cancel_invocation(
-                agent_id,
+                &agent_id,
                 &invocation_id.id(),
                 environment_id,
                 auth_ctx.clone(),
@@ -208,13 +382,53 @@ impl WorkerService {
                 Some(agent.metadata.fingerprint),
             )
             .await?;
-        self.invocation_summary(environment_id, invocation_id, auth_ctx)
+        self.invocation_summary(environment_id, &agent_id, invocation_id, auth_ctx)
             .await
     }
 
-    /// The agent named by an environment-scoped request, after the caller is authorized for
-    /// `verb` on `resource` of it. An agent of another environment, and the owner of a
-    /// standalone tool invocation, are not found.
+    async fn deployed_tool(
+        &self,
+        environment_id: EnvironmentId,
+        name: &ToolName,
+    ) -> WorkerResult<golem_common::model::tool::RegisteredTool> {
+        self.agent_types
+            .tool_deployment(environment_id)
+            .await?
+            .and_then(|state| state.registered_tools.get(name).cloned())
+            .ok_or_else(|| {
+                WorkerServiceError::InvocationNotFound(format!("tool {name} is not deployed"))
+            })
+    }
+
+    async fn invocation_address(
+        &self,
+        environment_id: EnvironmentId,
+        id: &OwnedInvocationId,
+        auth_ctx: &AuthCtx,
+    ) -> WorkerResult<AgentId> {
+        match id.owner() {
+            InvocationOwner::Agent(agent_id) => Ok(*agent_id),
+            InvocationOwner::Tool(name) => {
+                if !auth_ctx.is_system() {
+                    self.agent_types
+                        .authorize_environment(environment_id, auth_ctx)
+                        .await?;
+                }
+                let tool = self.deployed_tool(environment_id, name).await?;
+                if !matches!(tool.registration.source, ToolSource::Component { .. }) {
+                    return Err(WorkerServiceError::InvocationNotFound(id.to_string()));
+                }
+                Ok(AgentId::standalone_tool_invocation(
+                    environment_id,
+                    tool.type_id,
+                    id.id(),
+                ))
+            }
+        }
+    }
+
+    /// The invocation owner after the caller is authorized for `verb` on `resource` of it.
+    /// This also accepts standalone tool owners and tag-0 owners for result reads.
     async fn agent_for_invocation_read(
         &self,
         environment_id: EnvironmentId,
@@ -223,9 +437,6 @@ impl WorkerService {
         verb: AgentVerb,
         resource: AgentResourcePattern,
     ) -> WorkerResult<ManagedAgent> {
-        if agent_id.type_tag() == RESERVED_TYPE_TAG {
-            return Err(WorkerServiceError::AgentNotFound(*agent_id));
-        }
         self.managed_agent(
             &OwnedAgentId::new(environment_id, agent_id),
             None,
@@ -238,18 +449,18 @@ impl WorkerService {
     async fn invocation_summary(
         &self,
         environment_id: EnvironmentId,
+        agent_id: &AgentId,
         invocation_id: &OwnedInvocationId,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<InvocationSummary> {
-        let agent_id = invocation_id
-            .agent_id()
-            .ok_or_else(|| WorkerServiceError::InvocationNotFound(invocation_id.to_string()))?;
         let summary = self
             .worker_client
             .get_invocation(agent_id, &invocation_id.id(), environment_id, auth_ctx)
             .await?
             .ok_or_else(|| WorkerServiceError::InvocationNotFound(invocation_id.to_string()))?;
-        summary_from_proto(agent_id, environment_id, summary)
+        let mut summary = summary_from_proto(agent_id, environment_id, summary)?;
+        summary.invocation_id = invocation_id.to_string();
+        Ok(summary)
     }
 
     /// The result of a terminal invocation, read through the existing result lookup.
@@ -260,9 +471,7 @@ impl WorkerService {
         summary: &InvocationSummary,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Option<InvocationOutcome>> {
-        let agent_id = invocation_id
-            .agent_id()
-            .ok_or_else(|| WorkerServiceError::InvocationNotFound(invocation_id.to_string()))?;
+        let agent_id = &agent.agent_id.agent_id;
         let start = InvocationStart {
             target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
                 target: Some(
@@ -357,6 +566,46 @@ impl WorkerService {
             None => decoded,
         })
     }
+}
+
+fn tool_command_paths(
+    tool: &golem_common::schema::tool::Tool,
+    command: Option<&str>,
+) -> WorkerResult<Vec<Vec<String>>> {
+    if let Some(command) = command {
+        let path = command
+            .split_whitespace()
+            .map(str::to_string)
+            .collect::<Vec<_>>();
+        return tool
+            .canonical_command_path(&path)
+            .map(|path| vec![path])
+            .ok_or_else(|| {
+                WorkerServiceError::TypeChecker(format!("unknown tool command {command}"))
+            });
+    }
+    fn visit(
+        tool: &golem_common::schema::tool::Tool,
+        index: usize,
+        path: Vec<String>,
+        paths: &mut Vec<Vec<String>>,
+    ) {
+        let node = &tool.commands.nodes[index];
+        if node.body.is_some() {
+            paths.push(path.clone());
+        }
+        for child in &node.subcommands {
+            let index = child.as_usize().expect("validated command index");
+            let mut path = path.clone();
+            path.push(tool.commands.nodes[index].name.clone());
+            visit(tool, index, path, paths);
+        }
+    }
+    let mut paths = Vec::new();
+    if !tool.commands.nodes.is_empty() {
+        visit(tool, 0, Vec::new(), &mut paths);
+    }
+    Ok(paths)
 }
 
 /// The failure of the agent during the background work of an invocation that recorded its
@@ -478,10 +727,64 @@ impl TryFrom<i32> for InvocationKind {
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkerServiceError, recorded_failure};
+    use super::{WorkerServiceError, recorded_failure, tool_command_paths};
     use golem_common::model::oplog::AgentError;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
     use test_r::test;
+
+    #[test]
+    fn lookup_includes_commands_that_also_have_subcommands() {
+        use golem_common::schema::tool::{
+            CommandBody, CommandIndex, CommandNode, CommandTree, Tool,
+        };
+        let body = CommandBody {
+            positionals: Default::default(),
+            options: vec![],
+            flags: vec![],
+            constraints: vec![],
+            stdin: None,
+            stdout: None,
+            stderr: None,
+            result: None,
+            errors: vec![],
+            annotations: None,
+        };
+        let node = |name: &str, subcommands, body| CommandNode {
+            name: name.into(),
+            aliases: vec![],
+            doc: Default::default(),
+            http: None,
+            globals: Default::default(),
+            subcommands,
+            body,
+        };
+        let tool = Tool {
+            version: "1.0.0".into(),
+            requires_filesystem: false,
+            http_mount: None,
+            schema: golem_common::schema::SchemaGraph::empty(),
+            commands: CommandTree {
+                nodes: vec![
+                    node("tool", vec![CommandIndex(1)], None),
+                    node("x", vec![CommandIndex(2)], Some(body.clone())),
+                    node("y", vec![], Some(body)),
+                ],
+            },
+        };
+        assert_eq!(
+            tool_command_paths(&tool, None).unwrap(),
+            vec![vec!["x"], vec!["x", "y"]]
+        );
+        assert_eq!(
+            tool_command_paths(&tool, Some("x")).unwrap(),
+            vec![vec!["x"]]
+        );
+        assert_eq!(
+            tool_command_paths(&tool, Some("x y")).unwrap(),
+            vec![vec!["x", "y"]]
+        );
+        assert!(tool_command_paths(&tool, Some("y")).is_err());
+    }
 
     #[test]
     fn only_a_recorded_failure_is_the_outcome_of_a_failed_invocation() {

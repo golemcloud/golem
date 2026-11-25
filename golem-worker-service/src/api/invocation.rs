@@ -19,6 +19,7 @@ use crate::service::worker::{InvocationListQuery, WorkerService};
 use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::tool::ToolName;
 use golem_common::model::{AgentId, IdempotencyKey, OwnedInvocationId};
 use golem_common::recorded_http_api_request;
 use golem_common::schema::ExternalTypedSchemaValue;
@@ -33,10 +34,10 @@ use tracing::Instrument;
 
 type Result<T> = std::result::Result<T, ApiEndpointError>;
 
-/// The invocations of agents in one environment.
+/// The invocations of agents and standalone tools in one environment.
 ///
-/// An invocation ID is `<agent ID>.<UUID>`. The ID resolves only in the environment of its
-/// agent; in any other environment the invocation is not found.
+/// An invocation ID is `<agent ID>.<UUID>` or `<tool name>.<UUID>`. The ID resolves only in
+/// its environment; in any other environment the invocation is not found.
 ///
 /// Until invocation grants exist, `get`, `list` and `lookup` require the agent's `view`
 /// permission, and `cancel` its `cancel-invocation` permission.
@@ -110,13 +111,15 @@ impl InvocationApi {
         record.result(response)
     }
 
-    /// Find the invocations that the caller started on an agent with an idempotency key
+    /// Find the invocations that the caller started with an idempotency key
     ///
     /// The key is matched in the caller's own idempotency scope, against every method and tool
     /// command the agent ran, including those a later revision removed. A removed method is
     /// found only while one of its invocations has the method name outside an external payload;
     /// otherwise pass `operation`. A caller without a scope, and a key used through an HTTP
     /// route, find nothing. No match is `404`.
+    /// With `tool`, match each currently deployed command, or only `command` when given.
+    /// With both `agent` and `tool`, match hosted tool invocations on that agent.
     #[oai(
         path = "/:environment_id/invocations/lookup",
         method = "get",
@@ -126,7 +129,11 @@ impl InvocationApi {
         &self,
         environment_id: Path<EnvironmentId>,
         /// The agent ID
-        agent: Query<AgentId>,
+        agent: Query<Option<AgentId>>,
+        /// The tool name; with an agent, finds invocations hosted on that agent
+        tool: Query<Option<ToolName>>,
+        /// Only this command path; without it, finds every command of the tool
+        command: Query<Option<String>>,
         /// Only the invocation of this method name or `tool:<tool>/<command path>`
         operation: Query<Option<String>>,
         #[oai(name = "Idempotency-Key")] idempotency_key: Header<IdempotencyKey>,
@@ -137,15 +144,17 @@ impl InvocationApi {
         let record = recorded_http_api_request!(
             "lookup_invocations",
             environment_id = %environment_id.0,
-            agent_id = %agent_id,
+            agent_id = ?agent_id,
         );
         let response = self
             .worker_service
             .lookup_invocations(
                 environment_id.0,
-                &agent_id,
+                agent_id.as_ref(),
                 &idempotency_key.0,
                 operation.0,
+                tool.0.as_ref(),
+                command.0.as_deref(),
                 auth,
             )
             .instrument(record.span.clone())
@@ -277,7 +286,7 @@ pub enum InvocationKind {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct InvocationSummary {
-    /// `<agent ID>.<UUID>`
+    /// `<agent ID>.<UUID>` or `<tool name>.<UUID>`
     pub invocation_id: String,
     pub agent_id: AgentId,
     pub environment_id: EnvironmentId,

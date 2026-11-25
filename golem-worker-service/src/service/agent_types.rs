@@ -85,6 +85,32 @@ impl AgentTypeResolver {
             .await
     }
 
+    pub async fn is_agent_address(
+        &self,
+        environment_id: EnvironmentId,
+        agent_id: AgentId,
+    ) -> Result<bool, RegistryServiceError> {
+        let Some(type_id) = agent_id.type_id() else {
+            return Ok(false);
+        };
+        Ok(self
+            .type_ids
+            .resolve(environment_id, type_id)
+            .await?
+            .is_none_or(|resolved| resolved.0 == TypeIdKind::AgentType))
+    }
+
+    pub async fn tool_deployment(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Option<golem_common::model::tool::ToolDeploymentState>, RegistryServiceError> {
+        Ok(self
+            .registry_service
+            .get_current_environment_state(environment_id)
+            .await?
+            .tool_deployment)
+    }
+
     /// Retained declarations for management, including past implementing components.
     pub async fn retained(
         &self,

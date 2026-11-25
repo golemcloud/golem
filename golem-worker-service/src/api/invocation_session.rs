@@ -461,6 +461,7 @@ struct ProvisionalBinding {
 
 struct AdapterState {
     protocol_state: InvocationSessionState,
+    standalone_tool: bool,
     raw_input: Option<golem_common::model::agent::JsonMethodInput>,
     graph: Option<SchemaGraph>,
     output_schema: Option<SchemaType>,
@@ -494,6 +495,7 @@ impl AdapterState {
     fn with_first_channel(first_channel: u32) -> Self {
         Self {
             protocol_state: InvocationSessionState::default(),
+            standalone_tool: false,
             raw_input: None,
             graph: None,
             output_schema: None,
@@ -513,6 +515,7 @@ impl AdapterState {
     }
 
     fn initialize(&mut self, started: &StartedPublicAgentSession) -> Result<(), AdapterError> {
+        self.standalone_tool = started.standalone_tool;
         self.protocol_state
             .validate_trusted_request(&started.initial_request)
             .map_err(AdapterError::protocol)?;
@@ -2160,6 +2163,7 @@ async fn translate_private_response(
                     mappings,
                     session_token,
                     version,
+                    ..
                 } = message
                 else {
                     unreachable!()
@@ -2451,6 +2455,16 @@ fn translate_accepted(
     }
     Ok(PublicServerMessage::InvocationAccepted {
         attempt_id,
+        invocation_id: golem_common::model::OwnedInvocationId::new(
+            match accepted.tool_name.filter(|_| state.standalone_tool) {
+                Some(name) => golem_common::model::InvocationOwner::Tool(
+                    golem_common::model::tool::ToolName::try_from(name)
+                        .map_err(AdapterError::protocol)?,
+                ),
+                None => golem_common::model::InvocationOwner::Agent(agent_id),
+            },
+            idempotency_key,
+        ),
         agent_id,
         idempotency_key,
         mappings,
@@ -3606,6 +3620,7 @@ mod tests {
             .collect();
         Arc::new(Mutex::new(AdapterState {
             protocol_state,
+            standalone_tool: false,
             graph: Some(graph),
             output_schema: None,
             identity: None,
@@ -4255,8 +4270,14 @@ mod tests {
     fn acceptance_pins_executor_revision_and_exposes_native_byte_roots() {
         let keyring = keyring();
         let bindings = token_bindings(&AuthCtx::system());
-        for (native, revision) in [(false, None), (false, Some(17)), (true, Some(9))] {
+        for (native, standalone, revision) in [
+            (false, false, None),
+            (false, false, Some(17)),
+            (true, false, Some(9)),
+            (true, true, Some(9)),
+        ] {
             let mut state = AdapterState::new();
+            state.standalone_tool = standalone;
             state.graph = Some(SchemaGraph::empty());
             state.identity = Some(SessionAgentIdentity {
                 component_id: Uuid::from_u128(20),
@@ -4317,9 +4338,23 @@ mod tests {
                 Uuid::from_u128(2),
             )
             .unwrap();
+            let wire = serde_json::to_value(&accepted).unwrap();
+            assert_eq!(
+                wire["invocationId"],
+                format!(
+                    "{}.{}",
+                    if standalone {
+                        "tool".to_string()
+                    } else {
+                        session_agent_id().to_string()
+                    },
+                    InvocationId(Uuid::from_u128(5)),
+                ),
+            );
             let PublicServerMessage::InvocationAccepted {
                 idempotency_key,
                 agent_id: accepted_agent_id,
+                invocation_id,
                 mappings,
                 session_token,
                 ..
@@ -4327,6 +4362,17 @@ mod tests {
             else {
                 panic!("expected acceptance")
             };
+            assert_eq!(
+                invocation_id.to_string(),
+                format!(
+                    "{}.{idempotency_key}",
+                    if standalone {
+                        "tool".to_string()
+                    } else {
+                        accepted_agent_id.to_string()
+                    }
+                ),
+            );
             let verified = keyring
                 .verify(
                     &session_token,
@@ -4853,6 +4899,7 @@ mod tests {
         };
         let state = Arc::new(Mutex::new(AdapterState {
             protocol_state,
+            standalone_tool: false,
             graph: Some(graph),
             output_schema: None,
             identity: None,
