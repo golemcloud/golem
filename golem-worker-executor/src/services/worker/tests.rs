@@ -1047,6 +1047,7 @@ fn sample_status() -> AgentStatusRecord {
         oplog_idx: OplogIndex::from_u64(42),
         component_revision: ComponentRevision::new(3).unwrap(),
         never_live: true,
+        withdrawn_again: Some(InvocationId(Uuid::from_u128(5))),
         ..AgentStatusRecord::default()
     };
     status
@@ -4028,22 +4029,24 @@ async fn a_background_failure_after_newer_results_is_not_answered_from_an_older_
 }
 
 /// A worker service over `storage` whose durable agent oplog holds a `Create` with
-/// `component_size` 0, followed by one interrupt, and the agent's fingerprint.
+/// `component_size` 3, followed by one interrupt, and the agent's fingerprint. No default and no
+/// marked baseline gives the component size 3.
 fn status_baseline_test_service(
     storage: Arc<dyn KeyValueStorage + Send + Sync>,
 ) -> (DefaultWorkerService, OwnedAgentId, AgentFingerprint) {
     let owned_agent_id = test_owned_agent_id("status-baseline");
     let fingerprint = AgentFingerprint(Uuid::new_v4());
+    let mut create = test_create_entry(&owned_agent_id, AgentMode::Durable, fingerprint);
+    if let OplogEntry::Create { parameters, .. } = &mut create {
+        parameters.component_size = 3;
+    }
     let shard_service = Arc::new(ShardServiceDefault::new());
     shard_service.install_unexpiring(4, &HashMap::new());
     let service = DefaultWorkerService::new(
         storage,
         shard_service,
         Arc::new(IndexTestOplogService::new(BTreeMap::from([
-            (
-                OplogIndex::INITIAL,
-                test_create_entry(&owned_agent_id, AgentMode::Durable, fingerprint),
-            ),
+            (OplogIndex::INITIAL, create),
             (
                 OplogIndex::from_u64(2),
                 OplogEntry::Interrupted {
@@ -4111,7 +4114,7 @@ async fn a_cold_status_read_ignores_the_baseline_of_another_incarnation() {
 
     assert_eq!(
         (status.component_size, status.oplog_idx),
-        (0, OplogIndex::from_u64(2))
+        (3, OplogIndex::from_u64(2))
     );
 }
 
