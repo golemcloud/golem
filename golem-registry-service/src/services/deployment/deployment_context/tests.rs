@@ -2602,6 +2602,77 @@ fn compile_tools_registers_unbound_tool_without_agent_bindings() {
 }
 
 #[test]
+fn compile_tools_rejects_uuid_names_for_every_source() {
+    for (name, rejected) in [
+        ("abcdef01-2345-6789-abcd-ef0123456789", true),
+        ("abcdef0123456789abcdef0123456789", true),
+        ("abcdef01-2345-6789-abcd-ef012345678", false),
+    ] {
+        for source in ["component", "remote", "host"] {
+            let tool_name: ToolName = name.parse().unwrap();
+            let component = test_tool_component(
+                "tools",
+                BTreeMap::from([(
+                    tool_name.clone(),
+                    ToolDeploymentMetadata {
+                        definition: test_tool(name),
+                        provision: ToolProvisionConfig::default(),
+                        environment_binding: None,
+                        component_bindings: BTreeMap::new(),
+                        agent_bindings: BTreeMap::new(),
+                    },
+                )]),
+            );
+            let remote_tools = if source == "component" {
+                Vec::new()
+            } else {
+                let mut remote = test_remote_tool(name, None, BTreeMap::new());
+                if source == "host" {
+                    remote.1.as_mut().unwrap().release.source = ToolSource::Host {
+                        host_tool_id: golem_common::model::tool::HostToolId::try_from(
+                            "host-tool".to_string(),
+                        )
+                        .unwrap(),
+                        implementation_version: "1.0.0".to_string(),
+                    };
+                }
+                vec![remote]
+            };
+            let context = DeploymentContext {
+                environment: test_environment(),
+                components: if source == "component" {
+                    BTreeMap::from([(component.component_name.clone(), component)])
+                } else {
+                    BTreeMap::new()
+                },
+                http_api_deployments: BTreeMap::new(),
+                mcp_deployments: BTreeMap::new(),
+                registered_agent_types: HashMap::new(),
+            };
+            let mut errors = Vec::new();
+            let compiled = context.compile_tools_with_remote(
+                golem_common::model::deployment::DeploymentRevision::INITIAL,
+                &remote_tools,
+                &mut errors,
+                &mut Vec::new(),
+            );
+            if rejected {
+                assert_eq!(
+                    errors,
+                    vec![DeployValidationError::UuidToolName { tool_name }],
+                    "{source}: {name}"
+                );
+                assert!(compiled.registered_tools.is_empty());
+            } else {
+                assert!(errors.is_empty(), "{source}: {name}: {errors:?}");
+                assert_eq!(compiled.registered_tools.len(), 1);
+                assert_eq!(compiled.registered_tools[0].definition.name(), Some(name));
+            }
+        }
+    }
+}
+
+#[test]
 fn compile_tools_validates_local_component_bindings_without_agent_bindings() {
     let tool_name = ToolName::try_from("grep").unwrap();
     let component = test_tool_component(
