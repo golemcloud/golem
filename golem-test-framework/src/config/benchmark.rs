@@ -464,7 +464,6 @@ impl BenchmarkTestDependencies {
                 Some(Duration::from_millis(
                     shard_manager_state_write_timeout_millis,
                 )),
-                None,
                 true,
                 shard_manager_http_port,
                 shard_manager_grpc_port,
