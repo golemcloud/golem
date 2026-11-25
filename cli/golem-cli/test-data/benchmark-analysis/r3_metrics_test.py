@@ -594,13 +594,25 @@ class SelectorValidationTest(unittest.TestCase):
             process.assert_not_called()
 
 
-def campaign_record(declared, run_id):
+def campaign_hardware(memory=114 * 1024 ** 3):
+    return dict(architecture='x86_64', memory_bytes=memory,
+                cpus=[dict(vendor='AuthenticAMD', brand='AMD EPYC', family='25', model='17', stepping='1')
+                      for _ in range(32)])
+
+
+def frozen_budget(prepared):
+    (prepared / campaign.HISTORY.name).write_bytes(campaign.HISTORY.read_bytes())
+    return dict(budget_policy=campaign.BUDGET_POLICY, prior_budget=campaign.prior_budget())
+
+
+def campaign_record(declared, run_id, hardware=None):
     run = suite_record(declared, run_id)
     run['artifacts']['runner']['sha256'] = campaign.HARNESS_SHA
+    fingerprint = campaign.observed_fingerprint(hardware or campaign_hardware())
     for entry in run['results']:
-        entry['measurement_environment']['hardware_fingerprint'] = selector.original.HARDWARE
+        entry['measurement_environment']['hardware_fingerprint'] = fingerprint
         entry['series_key'] = r3.digest(json.dumps([1, entry['entry_version'], r3.RUNNER,
-            selector.original.HARDWARE, r3.STORAGE, False], separators=(',', ':')).encode())
+            fingerprint, r3.STORAGE, False], separators=(',', ':')).encode())
         if entry['name'] not in r3.CALLS:
             continue
         for result in entry['results']:
@@ -647,6 +659,76 @@ def selection_log(rows):
 
 
 class R3CampaignTest(unittest.TestCase):
+    def test_hardware_memory_boundaries_and_cpu_identity(self):
+        reference = 114 * 1024 ** 3
+        base = campaign.hardware_class(campaign_hardware())
+        for memory in (115 * 1024 ** 3, (reference * 98 + 99) // 100, reference * 102 // 100):
+            self.assertEqual(campaign.hardware_class(campaign_hardware(memory)), base)
+        for memory in ((reference * 98 + 99) // 100 - 1, reference * 102 // 100 + 1):
+            with self.assertRaisesRegex(ValueError, 'memory'):
+                campaign.hardware_class(campaign_hardware(memory))
+        for change in ('architecture', 'count', 'vendor', 'brand', 'missing-model', 'heterogeneous'):
+            observation = campaign_hardware()
+            if change == 'architecture':
+                observation['architecture'] = 'aarch64'
+            elif change == 'count':
+                observation['cpus'].pop()
+            elif change == 'missing-model':
+                observation['cpus'][0]['model'] = ''
+            elif change == 'heterogeneous':
+                observation['cpus'][0]['model'] = '18'
+            else:
+                observation['cpus'][0][change] = 'other'
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                campaign.hardware_class(observation)
+        different = campaign_hardware()
+        for cpu in different['cpus']:
+            cpu['model'] = '18'
+        self.assertNotEqual(campaign.hardware_class(different), base)
+        cpuinfo = '\n\n'.join(f'processor : {i}\nvendor_id : AuthenticAMD\nmodel name : AMD EPYC\n'
+                             'cpu family : 25\nmodel : 17\nstepping : 1' for i in range(32))
+        self.assertEqual(campaign.hardware_observation('x86_64', cpuinfo, f'MemTotal: {reference // 1024} kB\n'),
+                         campaign_hardware())
+
+    def test_class_comparison_preserves_raw_identity_and_other_boundaries(self):
+        declared = campaign.declaration(controls=True)
+        records, classes = [], {}
+        for i in range(5):
+            hardware = campaign_hardware((114 + i % 2) * 1024 ** 3)
+            run = campaign_record(declared, f'host{i}', hardware)
+            records.append((dict(path=f'host{i}'), run))
+            classes[run['run_id']] = campaign.hardware_class(hardware)
+        saved = copy.deepcopy(records)
+        exact = r3.analyze(records, declared)
+        self.assertTrue(all(b['exposed_processes'] < 5 for b in exact['bands'] if 'exposed_processes' in b))
+        grouped = r3.analyze(records, declared, hardware_classes=classes)
+        self.assertEqual(records, saved)
+        self.assertTrue(all(len(b['process_estimates']) == 5 for b in grouped['bands']))
+        self.assertEqual(set(grouped['summary']['band_statuses']), {'within-noise-threshold', 'not-applicable'})
+        self.assertEqual(grouped['processes'][1]['configurations'][0]['identity']['series'],
+                         saved[1][1]['results'][0]['series_key'])
+        self.assertTrue(all(b['identity']['hardware_class'] == classes['host0'] for b in grouped['bands']))
+        records[0][1]['artifacts']['services']['golem-worker-executor']['sha256'] = 'e' * 64
+        split = r3.analyze(records, declared, hardware_classes=classes)
+        self.assertTrue(all(len(b['process_estimates']) < 5 for b in split['bands']))
+        records[0][1]['results'][0]['series_key'] = '0' * 64
+        invalid = r3.analyze(records, declared, hardware_classes=classes)
+        self.assertEqual(len(invalid['invalid_inputs']), 1)
+
+    def test_ineligible_host_starts_no_process(self):
+        from types import SimpleNamespace
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            args = SimpleNamespace(output=root / 'output', prepared=root, root=root, wave=1, partition='bulk')
+            with patch.object(campaign, 'bound_campaign', return_value=dict(created_epoch=time.time() - 1200)), \
+                 patch.object(campaign, 'hardware_observation', return_value=campaign_hardware(120 * 1024 ** 3)), \
+                 patch.object(campaign.subprocess, 'check_output') as process:
+                with self.assertRaisesRegex(ValueError, 'memory'):
+                    campaign.run(args)
+                process.assert_not_called()
+            self.assertFalse(json.loads((args.output / 'status.json').read_text())['valid'])
+            self.assertFalse((args.output / 'pre').exists())
+
     def test_preflight_member_names_match_the_installer(self):
         import io
         from types import SimpleNamespace
@@ -673,6 +755,14 @@ class R3CampaignTest(unittest.TestCase):
             output = root / 'frozen'
             args = SimpleNamespace(output=output, origin=root / 'origin.json', campaign_origin=root / 'origin.json',
                 artifact=root / 'artifact.json', prepared=prepared, deadline=now+36000)
+            rejected = SimpleNamespace(**vars(args))
+            rejected.output, rejected.prepared = root / 'over-budget', root / 'missing-inputs'
+            prior = dict(campaign.prior_budget(), compute_millidollars=6441)
+            with patch.object(campaign, 'prior_budget', return_value=prior), \
+                 patch.dict(os.environ, GITHUB_ACTIONS='false'):
+                with self.assertRaisesRegex(ValueError, 'Cumulative allocation'):
+                    campaign.preflight(rejected)
+            self.assertEqual(list(rejected.output.iterdir()), [])
             # This test exercises archive member identity, not the independently pinned byte receipt.
             with patch.object(campaign, 'prepared_identity', return_value={}), patch.dict(os.environ, GITHUB_ACTIONS='false'):
                 campaign.preflight(args)
@@ -683,6 +773,48 @@ class R3CampaignTest(unittest.TestCase):
                 actual = campaign.original.install(archive, installed)
             self.assertEqual(set(frozen), {'target/benchmarks/benchmarks', 'target/release/worker-executor'})
             self.assertEqual(frozen, actual)
+            allocation = json.loads((output / 'campaign.json').read_text())['allocation']
+            self.assertEqual(allocation['projected_with_remaining_and_storage_dollars'], 147.30)
+            self.assertEqual(allocation['contingency_dollars'], 2.70)
+            self.assertEqual(campaign.bound_campaign(output)['prior_budget']['compute_millidollars'], 3740)
+            # Even a valid JSON receipt with altered charges is not the reviewed frozen history.
+            history_path = output / campaign.HISTORY.name
+            history = json.loads(history_path.read_text())
+            history['runs'][1]['jobs'].pop()
+            history_path.write_text(json.dumps(history))
+            with self.assertRaisesRegex(ValueError, 'budget differs'):
+                campaign.bound_campaign(output)
+
+    def test_cumulative_budget_inclusive_boundary_and_prior_receipts(self):
+        prior = campaign.prior_budget()
+        self.assertEqual(prior['compute_millidollars'], 3740)
+        self.assertEqual(prior['artifact_bytes'], 357699242)
+        self.assertEqual(prior['run_ids'], [45384583345, 45390639540])
+        initial = campaign.budget_projection(prior, 0, 0, 20)
+        self.assertEqual(initial['projected_with_remaining_and_storage_dollars'], 147.30)
+        self.assertEqual(initial['storage_reserve_dollars'], 5)
+        exact = dict(prior, compute_millidollars=6440)
+        self.assertEqual(campaign.budget_projection(exact, 0, 0, 20)
+                         ['projected_with_remaining_and_storage_dollars'], 150)
+        with self.assertRaisesRegex(ValueError, 'Cumulative allocation'):
+            campaign.budget_projection(dict(exact, compute_millidollars=6441), 0, 0, 20)
+        for mutation in ('negative-time', 'unknown-runner', 'unassigned-executed', 'duplicate-job', 'missing-run'):
+            history = json.loads(campaign.HISTORY.read_text())
+            if mutation == 'negative-time':
+                history['runs'][0]['jobs'][0]['completed_at'] = '2026-11-24T11:28:00Z'
+            elif mutation == 'unknown-runner':
+                history['runs'][0]['jobs'][0]['labels'] = ['different-runner']
+            elif mutation == 'unassigned-executed':
+                history['runs'][0]['jobs'][1]['step_count'] = 1
+            elif mutation == 'duplicate-job':
+                history['runs'][0]['jobs'].append(history['runs'][0]['jobs'][0])
+            else:
+                history['runs'].pop()
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / 'history.json'
+                path.write_text(json.dumps(history))
+                with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                    campaign.prior_budget(path)
 
     def test_fixed_inventory_versions_and_all_selector_modes(self):
         declared = campaign.declaration()
@@ -759,12 +891,23 @@ class R3CampaignTest(unittest.TestCase):
     def test_budget_counts_skips_attempts_and_fixed_slots(self):
         now = time.time()
         stamp = lambda seconds: campaign.datetime.fromtimestamp(seconds, campaign.timezone.utc).isoformat()
-        frozen = dict(campaign_run_id='123', created_epoch=now - 1200)
+        frozen = dict(campaign_run_id='123', created_epoch=now - 1200, prior_budget=campaign.prior_budget())
         jobs = dict(jobs=[dict(run_id=123, run_attempt=1, status='completed', conclusion='success',
             labels=['blacksmith-32vcpu-ubuntu-2204'], started_at=stamp(now - 6400), completed_at=stamp(now)) for _ in range(4)]
             + [dict(conclusion='skipped', labels=[])])
         allocation = campaign.budget(frozen, jobs, dict(artifacts=[]), 1)
         self.assertLess(allocation['projected_with_remaining_and_storage_dollars'], 150)
+        # At maximum permitted job duration, this new run alone costs $143.56.
+        boundary_jobs = copy.deepcopy(jobs)
+        for job in boundary_jobs['jobs'][:4]:
+            job['started_at'] = stamp(now - 6420)
+        frozen['prior_budget'] = dict(frozen['prior_budget'], compute_millidollars=6440)
+        self.assertEqual(campaign.budget(frozen, boundary_jobs, dict(artifacts=[]), 1)
+                         ['projected_with_remaining_and_storage_dollars'], 150)
+        frozen['prior_budget']['compute_millidollars'] += 1
+        with self.assertRaisesRegex(ValueError, 'Cumulative allocation'):
+            campaign.budget(frozen, boundary_jobs, dict(artifacts=[]), 1)
+        frozen['prior_budget'] = campaign.prior_budget()
         self.assertEqual(campaign.wave_start(frozen, 5) - campaign.wave_start(frozen, 1), 4 * 6600)
         for mutation in ('extra-job', 'attempt', 'duration', 'artifact'):
             changed = copy.deepcopy(jobs)
@@ -793,19 +936,22 @@ class R3CampaignTest(unittest.TestCase):
             original_members.update({f'test-components/{name}.wasm': 'd' * 64 for name in r3.FIXTURES})
             members = dict(original_members, **{'target/benchmarks/benchmarks': campaign.HARNESS_SHA})
             campaign.save(prepared / 'campaign.json', dict(campaign_run_id='123', created_epoch=start - 1200,
-                deadline=start + 33000, inputs={}, code={}, original_members=original_members))
+                deadline=start + 33000, inputs={}, code={}, original_members=original_members,
+                hardware_policy=campaign.HARDWARE_POLICY, **frozen_budget(prepared)))
             for partition in campaign.PARTITIONS:
                 host = evidence / f'r3-wave1-{partition}-attempt1'
                 host.mkdir()
                 campaign.save(host / 'original-members.json', original_members)
                 campaign.save(host / 'installed-members.json', members)
+                hardware = campaign_hardware((115 if partition == 'streaming' else 114) * 1024 ** 3)
+                campaign.save(host / 'hardware.json', hardware)
                 campaign.save(host / 'status.json', dict(valid=True, wave=1, partition=partition,
                     started=start + 1, ended=start + 6200))
                 for phase, begin in (('pre', 600), ('main', 840), ('post', 5940)):
                     path = host / phase
                     path.mkdir()
                     declared = campaign.declaration(controls=phase != 'main', partition=partition if phase == 'main' else None)
-                    record = campaign_record(declared, f'r3-123-w1-{partition}-{phase}')
+                    record = campaign_record(declared, f'r3-123-w1-{partition}-{phase}', hardware)
                     campaign.save(path / 'raw.json', dict(runs=[record]))
                     (path / 'process.log').write_text(selection_log(campaign_selections(declared)))
                     campaign.save(path / 'status.json', dict(valid=True, exit_code=0, remaining_containers=[],
@@ -813,7 +959,8 @@ class R3CampaignTest(unittest.TestCase):
             stamp = lambda seconds: campaign.datetime.fromtimestamp(seconds, campaign.timezone.utc).isoformat()
             campaign.save(root / 'jobs.json', dict(jobs=[dict(run_id=123, run_attempt=1, status='completed',
                 conclusion='success', labels=['blacksmith-32vcpu-ubuntu-2204'],
-                started_at=stamp(start), completed_at=stamp(start + 6300)) for _ in range(4)]))
+                name=f'r3-campaign / wave1 / measure ({partition})',
+                started_at=stamp(start), completed_at=stamp(start + 6300)) for partition in campaign.PARTITIONS]))
             campaign.save(root / 'artifacts.json', dict(artifacts=[]))
             command = [sys.executable, str(campaign.HERE / 'r3_campaign.py'), 'gate', '--prepared', str(prepared),
                        '--evidence', str(evidence), '--jobs', str(root / 'jobs.json'),
@@ -826,12 +973,17 @@ class R3CampaignTest(unittest.TestCase):
             self.assertFalse(report['n_accepted'])
             raw = evidence / 'r3-wave1-bulk-attempt1/main/raw.json'
             saved = raw.read_text()
-            for mutation in ('same-primary-wrong-targets', 'missing-metric', 'source', 'member'):
+            for mutation in ('same-primary-wrong-targets', 'missing-metric', 'source', 'member', 'hardware'):
                 data = json.loads(saved)
                 if mutation == 'source':
                     data['runs'][0]['source']['commitSha'] = r3.SOURCE
                 elif mutation == 'member':
                     data['runs'][0]['artifacts']['services']['golem-worker-executor']['sha256'] = 'e' * 64
+                elif mutation == 'hardware':
+                    for entry in data['runs'][0]['results']:
+                        entry['measurement_environment']['hardware_fingerprint'] = 'e' * 64
+                        entry['series_key'] = r3.digest(json.dumps([1, entry['entry_version'], r3.RUNNER,
+                            'e' * 64, r3.STORAGE, False], separators=(',', ':')).encode())
                 else:
                     entry = next(e for e in data['runs'][0]['results'] if e['name'] == 'throughput-cpu-intensive')
                     config = next(c for c in entry['results'] if c['run_config']['clusterSize'] == 5 and c['run_config']['size'] == 10)
@@ -852,6 +1004,66 @@ class R3CampaignTest(unittest.TestCase):
                     self.assertNotEqual(result.returncode, 0)
                     self.assertFalse(json.loads((root / mutation / 'gate.json').read_text())['valid'])
                 raw.write_text(saved)
+
+    def test_public_reports_preserve_failed_and_cancelled_prefixes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            prepared, evidence = root / 'prepared', root / 'evidence'
+            prepared.mkdir()
+            evidence.mkdir()
+            campaign.save(prepared / 'campaign.json', dict(campaign_run_id='123',
+                inputs={}, code={}, hardware_policy=campaign.HARDWARE_POLICY, created_epoch=time.time() - 1200,
+                **frozen_budget(prepared)))
+            jobs = []
+            for partition in campaign.PARTITIONS:
+                host = evidence / f'r3-wave1-{partition}-attempt1'
+                (host / 'pre').mkdir(parents=True)
+                campaign.save(host / 'pre/status.json', dict(valid=True, exit_code=0, remaining_containers=[]))
+                (host / 'pre/raw.json').write_text('{"retained": "not validated by inventory"}')
+                if partition == 'streaming':
+                    campaign.save(host / 'status.json', dict(valid=False, error='Wrong hardware class'))
+                jobs.append(dict(id=len(jobs), name=f'r3-campaign / wave1 / measure ({partition})',
+                    run_id=123, run_attempt=1, status='completed',
+                    conclusion='failure' if partition == 'streaming' else 'cancelled'))
+            jobs.append(dict(id=100, name='r3-campaign / wave2', run_id=123, run_attempt=1,
+                             status='completed', conclusion='skipped'))
+            campaign.save(root / 'jobs.json', dict(jobs=jobs))
+            campaign.save(root / 'artifacts.json', dict(artifacts=[]))
+            for mode in ('gate', 'final'):
+                command = [sys.executable, str(campaign.HERE / 'r3_campaign.py'), mode,
+                    '--prepared', str(prepared), '--evidence', str(evidence), '--jobs', str(root / 'jobs.json'),
+                    '--artifacts', str(root / 'artifacts.json'), '--output', str(root / mode)]
+                if mode == 'gate':
+                    command += ['--wave', '1']
+                result = subprocess.run(command, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                report = json.loads((root / mode / f'{mode}.json').read_text())
+                self.assertFalse(any(report[key] for key in ('valid', 'r3_acceptance', 'n_accepted', 'publication')))
+                workers = report['diagnostics']['workers']
+                self.assertEqual(len(workers), 4 if mode == 'gate' else 20)
+                for worker in workers[:4]:
+                    self.assertEqual(worker['phases']['pre']['status']['record']['exit_code'], 0)
+                    self.assertTrue(worker['phases']['pre']['raw_present'])
+                    self.assertEqual(worker['phases']['main']['status']['state'], 'missing')
+                    self.assertFalse(worker['phases']['post']['raw_present'])
+                self.assertEqual(workers[0]['job']['conclusion'], 'cancelled')
+                self.assertEqual(workers[0]['status']['state'], 'missing')
+                self.assertEqual(workers[3]['status']['record']['error'], 'Wrong hardware class')
+                self.assertEqual(workers[3]['job']['conclusion'], 'failure')
+                self.assertIn('hardware.json', report['error'])
+                if mode == 'final':
+                    self.assertIsNone(workers[4]['job'])
+                    self.assertEqual(report['diagnostics']['wave_jobs'][0]['conclusion'], 'skipped')
+            # Bad or non-finite status data must not discard the other hosts' diagnostics.
+            status = evidence / 'r3-wave1-startup-attempt1/status.json'
+            for text in ('{', '[]', '{"ended": NaN}'):
+                status.write_text(text)
+                diagnostics = campaign.worker_diagnostics(evidence, dict(jobs=jobs), (1,), '123')
+                self.assertEqual(diagnostics['workers'][0]['status']['state'], 'unreadable')
+                self.assertEqual(diagnostics['workers'][3]['status']['record']['error'], 'Wrong hardware class')
+                json.dumps(diagnostics, allow_nan=False)
+            with self.assertRaisesRegex(ValueError, 'another run'):
+                campaign.worker_diagnostics(evidence, dict(jobs=jobs), (1,), '456')
 
 
 if __name__ == '__main__':

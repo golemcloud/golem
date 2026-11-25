@@ -9,6 +9,7 @@ import json
 import math
 import os
 from pathlib import Path
+import platform
 import re
 import shutil
 import signal
@@ -32,6 +33,100 @@ INPUTS = ('benchmark-bundle.tar.gz', 'harness-overlay.tar.gz', 'harness-provenan
           'original-origin.json', 'preparation-receipt.json', 'toolchain.txt')
 WORKER_BYTES = 500 * 1024 ** 2
 OTHER_BYTES = 1024 ** 3
+HARDWARE_POLICY = dict(version=1, runner=metrics.RUNNER, architecture='x86_64', vcpus=32,
+                       vendor='AuthenticAMD', brand='AMD EPYC', memory_reference_bytes=114 * 1024 ** 3,
+                       memory_tolerance_percent=2)
+BUDGET_POLICY = dict(limit_millidollars=150000, large_rate_millidollars=64,
+                     small_rate_millidollars=4, storage_reserve_millidollars=5000)
+HISTORY = HERE / 'r3-budget-history.json'
+
+
+def prior_budget(path=HISTORY):
+    history = load(path)
+    require(history['repository'] == 'golemcloud/golem'
+            and sorted(run['run_id'] for run in history['runs']) == [45384583345, 45390639540],
+            'Wrong prior campaign inventory')
+    compute, artifact_bytes, jobs, artifacts = 0, 0, set(), set()
+    for run in history['runs']:
+        require(run['attempt'] == 1 and re.fullmatch('[0-9a-f]{40}', run['source'])
+                and all(re.fullmatch('[0-9a-f]{64}', run[key])
+                        for key in ('jobs_snapshot_sha256', 'artifacts_snapshot_sha256')),
+                'Invalid prior campaign provenance')
+        for job in run['jobs']:
+            require(job['id'] not in jobs, 'Duplicate prior job')
+            jobs.add(job['id'])
+            seconds = epoch(job['completed_at']) - epoch(job['started_at'])
+            require(seconds >= 0 and job['conclusion'] in ('success', 'failure', 'cancelled'),
+                    'Incomplete prior job')
+            if job['runner_id'] is None:
+                require(seconds == 0 and job['conclusion'] == 'cancelled' and job['step_count'] == 0,
+                        'Unassigned prior job has execution evidence')
+                continue
+            large = 'blacksmith-32vcpu-ubuntu-2204' in job['labels']
+            small = 'blacksmith-2vcpu-ubuntu-2204' in job['labels']
+            require(large != small, 'Unknown prior runner class')
+            rate = BUDGET_POLICY['large_rate_millidollars' if large else 'small_rate_millidollars']
+            compute += (math.ceil(seconds / 60) + 1) * rate
+        for artifact in run['artifacts']:
+            require(artifact['id'] not in artifacts and type(artifact['size_in_bytes']) is int
+                    and artifact['size_in_bytes'] >= 0, 'Invalid or duplicate prior artifact')
+            artifacts.add(artifact['id'])
+            artifact_bytes += artifact['size_in_bytes']
+    return dict(compute_millidollars=compute, artifact_bytes=artifact_bytes,
+                run_ids=[run['run_id'] for run in history['runs']], history_sha256=sha(path))
+
+
+def budget_projection(prior, large_minutes, small_minutes, remaining_jobs):
+    require(all(type(value) is int and value >= 0 for value in
+                (prior['compute_millidollars'], prior['artifact_bytes'], large_minutes, small_minutes, remaining_jobs)),
+            'Invalid cumulative budget inputs')
+    large_rate, small_rate = BUDGET_POLICY['large_rate_millidollars'], BUDGET_POLICY['small_rate_millidollars']
+    observed = large_minutes * large_rate + small_minutes * small_rate
+    remaining = remaining_jobs * 108 * large_rate + max(80 - small_minutes, 0) * small_rate
+    projected = prior['compute_millidollars'] + observed + remaining + BUDGET_POLICY['storage_reserve_millidollars']
+    require(projected <= BUDGET_POLICY['limit_millidollars'], 'Cumulative allocation exceeds$150')
+    return dict(prior_compute_dollars=prior['compute_millidollars'] / 1000,
+                observed_compute_dollars=observed / 1000, remaining_compute_dollars=remaining / 1000,
+                storage_reserve_dollars=BUDGET_POLICY['storage_reserve_millidollars'] / 1000,
+                projected_with_remaining_and_storage_dollars=projected / 1000,
+                contingency_dollars=(BUDGET_POLICY['limit_millidollars'] - projected) / 1000,
+                prior_artifact_bytes=prior['artifact_bytes'],
+                combined_artifact_limit_bytes=prior['artifact_bytes'] + 20 * WORKER_BYTES + OTHER_BYTES,
+                provider_invoice_verified=False)
+
+
+def hardware_observation(architecture, cpuinfo, meminfo):
+    cpus = []
+    for block in cpuinfo.strip().split('\n\n'):
+        fields = dict(line.split(':', 1) for line in block.splitlines() if ':' in line)
+        fields = {key.strip(): value.strip() for key, value in fields.items()}
+        cpus.append({key: fields.get(field, '') for key, field in
+                     (('vendor', 'vendor_id'), ('brand', 'model name'), ('family', 'cpu family'),
+                      ('model', 'model'), ('stepping', 'stepping'))})
+    memory = re.search(r'^MemTotal:\s+(\d+) kB$', meminfo, re.MULTILINE)
+    require(memory is not None, 'Missing total-memory observation')
+    return dict(architecture=architecture, cpus=cpus, memory_bytes=int(memory[1]) * 1024)
+
+
+def hardware_class(observation):
+    policy = HARDWARE_POLICY
+    cpus, memory = observation['cpus'], observation['memory_bytes']
+    require(observation['architecture'] == policy['architecture'] and len(cpus) == policy['vcpus'],
+            'Wrong hardware architecture or vCPU count')
+    require(all(cpu['vendor'] == policy['vendor'] and cpu['brand'] == policy['brand']
+                and all(re.fullmatch(r'\d+', cpu[key]) for key in ('family', 'model', 'stepping'))
+                for cpu in cpus), 'Wrong or missing CPU identity')
+    require(all(cpu == cpus[0] for cpu in cpus), 'Heterogeneous CPU identity')
+    require(type(memory) is int and abs(memory - policy['memory_reference_bytes']) * 100
+            <= policy['memory_reference_bytes'] * policy['memory_tolerance_percent'],
+            'Total memory outside hardware-class tolerance')
+    return metrics.digest(metrics.canonical(dict(policy=policy, cpu=cpus[0])).encode())
+
+
+def observed_fingerprint(observation):
+    return metrics.digest(json.dumps([observation['architecture'],
+        [[cpu['vendor'], cpu['brand']] for cpu in observation['cpus']], observation['memory_bytes']],
+        separators=(',', ':'), ensure_ascii=False).encode())
 
 
 def load(path):
@@ -118,7 +213,11 @@ def preflight(args):
     created = epoch(campaign['created_at'])
     require(time.time() < created + 18 * 60 and created + 570 * 60 < args.deadline <= created + 36000,
             'Insufficient original campaign budget')
+    prior = prior_budget()
+    projection = budget_projection(prior, 0, 0, 20)
     hashes = prepared_identity(args.prepared)
+    shutil.copyfile(HISTORY, args.output / HISTORY.name)
+    hashes[HISTORY.name] = prior['history_sha256']
     for name in INPUTS:
         shutil.copyfile(args.prepared / name, args.output / name)
     for name, value in (('producer-origin.json', origin), ('campaign-origin.json', campaign),
@@ -139,10 +238,11 @@ def preflight(args):
     save(args.output / 'campaign.json', dict(campaign_run_id=str(campaign['id']), created_epoch=created,
          deadline=args.deadline, orchestration_source=campaign['head_sha'], inputs=hashes, code=sources,
          original_members=original_members,
+         hardware_policy=HARDWARE_POLICY, budget_policy=BUDGET_POLICY, prior_budget=prior,
          harness_source=HARNESS, runtime_source=metrics.SOURCE, publication=False,
          allocation=dict(dollars=150, hours=10, waves=5, measurement_jobs=20,
                          measurement_billed_minutes=2160, small_billed_minutes=80,
-                         storage_reserve_dollars=5, modeled_compute_dollars=138.56)))
+                         modeled_compute_dollars=138.56, **projection)))
     save(args.output / 'full-manifest.json', declaration())
     save(args.output / 'control-manifest.json', declaration(controls=True))
     require(directory_bytes(args.output) <= OTHER_BYTES, 'Input artifact budget exceeded')
@@ -150,6 +250,11 @@ def preflight(args):
 
 def bound_campaign(prepared, live=False):
     campaign = load(prepared / 'campaign.json')
+    require(campaign['hardware_policy'] == HARDWARE_POLICY, 'Frozen hardware policy differs')
+    require(campaign['budget_policy'] == BUDGET_POLICY
+            and sha(prepared / HISTORY.name) == sha(HISTORY)
+            and campaign['prior_budget'] == prior_budget(prepared / HISTORY.name),
+            'Frozen cumulative budget differs')
     for name, digest in campaign['inputs'].items():
         require(sha(prepared / name) == digest, f'Frozen input changed: {name}')
     for name, digest in campaign['code'].items():
@@ -295,14 +400,15 @@ def artifacts_match(run, members):
     pairs += [(item, f'test-components/{name}.wasm') for name, item in run['artifacts']['fixtures'].items()]
     for item, member in pairs:
         require(item['sha256'] == members[member], f'Measured artifact differs: {member}')
-    require(all(e['measurement_environment']['hardware_fingerprint'] == original.HARDWARE
-                for e in run['results']), 'Wrong hardware class')
 
 
-def evidence_record(path, declared, members, run_id):
+def evidence_record(path, declared, members, run_id, hardware):
+    hardware_class(hardware)
     record = metrics.read_record(path, sha(path))
     require(record[1]['run_id'] == run_id, 'Wrong process identity')
     artifacts_match(record[1], members)
+    require(all(e['measurement_environment']['hardware_fingerprint'] == observed_fingerprint(hardware)
+                for e in record[1]['results']), 'Measured hardware differs from setup observation')
     analysis = metrics.analyze([record], declared)
     require(not analysis['invalid_inputs'] and analysis['summary']['invalid_iterations'] == 0,
             f'Invalid process metrics: {analysis["invalid_inputs"]}')
@@ -337,6 +443,10 @@ def run(args):
     try:
         campaign = bound_campaign(args.prepared, live=True)
         start = wave_start(campaign, args.wave)
+        hardware = hardware_observation(platform.machine(), Path('/proc/cpuinfo').read_text(),
+                                        Path('/proc/meminfo').read_text())
+        save(args.output / 'hardware.json', hardware)
+        status['hardware_class'] = hardware_class(hardware)
         def checked(command, limit=120):
             remaining = start + 600 - time.time() - 15
             require(remaining > 0, 'Setup budget exhausted')
@@ -381,7 +491,7 @@ def run(args):
             save(args.output / f'{phase}-plan.json', dict(command=command, manifest=declared,
                  orchestration_source=campaign['orchestration_source'], runtime_source=metrics.SOURCE))
             process_run(command, args.root, output, start + begin, start + end, environment)
-            record, analysis = evidence_record(output / 'raw.json', declared, members, run_id)
+            record, analysis = evidence_record(output / 'raw.json', declared, members, run_id, hardware)
             for name, digest in members.items():
                 require(sha(args.root / name) == digest, f'Installed member changed: {name}')
             artifact_paths = [record[1]['artifacts']['runner'], *record[1]['artifacts']['services'].values(),
@@ -445,29 +555,32 @@ def budget(campaign, jobs, artifacts, wave):
         require(job['run_attempt'] == 1 and str(job['run_id']) == campaign['campaign_run_id'], 'Wrong job attempt')
         if is_large:
             require(job['status'] == 'completed' and job['conclusion'] == 'success', 'Incomplete measurement job')
-        seconds = max(0, (epoch(job['completed_at']) if job.get('completed_at') else time.time()) - epoch(job['started_at']))
+        seconds = (epoch(job['completed_at']) if job.get('completed_at') else time.time()) - epoch(job['started_at'])
+        require(seconds >= 0, 'Negative billed job duration')
         (large if is_large else small).append(seconds)
     require(len(large) == wave * 4 and len(small) <= 10 and sum(small) <= 70 * 60, 'Job-count or small-runner budget exceeded')
     require(all(v <= 107 * 60 for v in large), 'Measurement job cap exceeded')
     measured_minutes = sum(math.ceil(v / 60) + 1 for v in large)
     small_minutes = sum(math.ceil(v / 60) + 1 for v in small)
-    projected = (measured_minutes + (20 - len(large)) * 108) * .064 + max(80, small_minutes) * .004 + 5
-    require(projected <= 150, 'Observed plus remaining allocation exceeds$150')
+    projection = budget_projection(campaign['prior_budget'], measured_minutes, small_minutes, 20 - len(large))
     workers = [a for a in artifacts if re.fullmatch(r'r3-wave[1-5]-(startup|durability-echo|bulk|streaming)-attempt1', a['name'])]
     require(all(a['size_in_bytes'] <= WORKER_BYTES for a in workers)
             and sum(a['size_in_bytes'] for a in artifacts if a not in workers) <= OTHER_BYTES, 'Artifact budget exceeded')
     return dict(large_jobs=len(large), small_jobs=len(small), measured_billed_minutes=measured_minutes,
-                observed_compute_dollars=measured_minutes * .064 + small_minutes * .004,
-                projected_with_remaining_and_storage_dollars=projected,
-                provider_invoice_verified=False)
+                observed_combined_artifact_bytes=campaign['prior_budget']['artifact_bytes']
+                    + sum(a['size_in_bytes'] for a in artifacts), **projection)
 
 
 def wave_evidence(prepared, evidence, wave):
     campaign = bound_campaign(prepared)
     start = wave_start(campaign, wave)
     records, control_reports, intervals = {}, {'pre': [], 'post': []}, {'pre': [], 'post': []}
+    classes = set()
     for partition in PARTITIONS:
         root = evidence / f'r3-wave{wave}-{partition}-attempt1'
+        hardware = load(root / 'hardware.json')
+        classes.add(hardware_class(hardware))
+        require(len(classes) == 1, 'CPU models differ across comparison hosts')
         require(directory_bytes(root) <= WORKER_BYTES, 'Worker evidence cap exceeded')
         status = load(root / 'status.json')
         require(status['valid'] and status['wave'] == wave and status['partition'] == partition
@@ -486,7 +599,7 @@ def wave_evidence(prepared, evidence, wave):
                     'Invalid phase timing/cleanup')
             declared = declaration(controls=phase != 'main', partition=partition if phase == 'main' else None)
             record, report = evidence_record(path / 'raw.json', declared, members,
-                f'r3-{campaign["campaign_run_id"]}-w{wave}-{partition}-{phase}')
+                f'r3-{campaign["campaign_run_id"]}-w{wave}-{partition}-{phase}', hardware)
             validate_selections(selection_rows((path / 'process.log').read_text()), declared)
             if phase == 'main':
                 records[partition] = record
@@ -503,18 +616,65 @@ def wave_evidence(prepared, evidence, wave):
             ratios.append(ratio if ratio is not None and math.isfinite(ratio) else None)
         changes.append(dict(metric=pre['metric'], post_over_pre=ratios,
                             qualification='Null when baseline zero or ratio unrepresentable; no extra threshold'))
-    return records, dict(controls=comparisons, intervals=intervals, host_pre_post_changes=changes)
+    return records, dict(hardware_class=next(iter(classes)), hardware_policy=HARDWARE_POLICY,
+                         controls=comparisons, intervals=intervals, host_pre_post_changes=changes)
+
+
+def worker_diagnostics(evidence, jobs, waves, run_id):
+    jobs = [job for page in jobs for job in page['jobs']] if isinstance(jobs, list) else jobs['jobs']
+    require(all(str(job['run_id']) == run_id and job['run_attempt'] == 1 for job in jobs),
+            'Diagnostic jobs belong to another run or attempt')
+
+    def status_at(path):
+        result = dict(path=str(path.relative_to(evidence)), state='missing')
+        try:
+            record = load(path)
+            require(isinstance(record, dict), 'Status is not an object')
+            json.dumps(record, allow_nan=False)
+            result.update(state='recorded', record=record)
+        except FileNotFoundError:
+            pass
+        except (OSError, ValueError) as error:
+            result.update(state='unreadable', error=str(error))
+        return result
+
+    workers = []
+    for wave in waves:
+        for partition in PARTITIONS:
+            name = f'r3-campaign / wave{wave} / measure ({partition})'
+            matches = [job for job in jobs if job['name'] == name]
+            require(len(matches) <= 1, f'Duplicate measurement job: {name}')
+            root = evidence / f'r3-wave{wave}-{partition}-attempt1'
+            job = {key: matches[0].get(key) for key in ('id', 'status', 'conclusion')} if matches else None
+            phases = {}
+            for phase in ('pre', 'main', 'post'):
+                phases[phase] = dict(status=status_at(root / phase / 'status.json'),
+                    raw_present=(root / phase / 'raw.json').is_file(),
+                    log_present=(root / phase / 'process.log').is_file())
+            workers.append(dict(wave=wave, partition=partition, job_name=name, job=job,
+                                status=status_at(root / 'status.json'), phases=phases))
+    wave_jobs = [{key: job.get(key) for key in ('id', 'name', 'status', 'conclusion')}
+                 for job in jobs if job['name'] in {f'r3-campaign / wave{wave}' for wave in waves}]
+    return dict(qualification='Inventory only; missing evidence does not establish whether a process ran, '
+                'and recorded statuses do not certify metrics or cleanup', workers=workers, wave_jobs=wave_jobs)
 
 
 def reconcile(args, final=False):
     args.output.mkdir(parents=True, exist_ok=False)
     report = dict(valid=False, r3_acceptance=False, n_accepted=False, publication=False)
     try:
-        campaign = bound_campaign(args.prepared)
         waves = range(1, 6) if final else (args.wave,)
+        report['diagnostics'] = worker_diagnostics(args.evidence, load(args.jobs), waves,
+            load(args.prepared / 'campaign.json')['campaign_run_id'])
+        campaign = bound_campaign(args.prepared)
+        report['prior_budget'] = campaign['prior_budget']
+        report['budget_policy'] = campaign['budget_policy']
         all_records = collections.defaultdict(list)
+        classes = set()
         for wave in waves:
             records, comparisons = wave_evidence(args.prepared, args.evidence, wave)
+            classes.add(comparisons['hardware_class'])
+            require(len(classes) == 1, 'CPU models differ across campaign waves')
             save(args.output / f'wave{wave}.json', comparisons)
             for partition, record in records.items():
                 all_records[partition].append(record)
@@ -524,7 +684,8 @@ def reconcile(args, final=False):
         else:
             statuses = collections.Counter()
             for partition, records in all_records.items():
-                result = metrics.analyze(records, declaration(partition))
+                result = metrics.analyze(records, declaration(partition),
+                    hardware_classes={record[1]['run_id']: next(iter(classes)) for record in records})
                 for band in result['bands']:
                     values = [v for v in band['process_estimates'].values() if v is not None]
                     if values:
@@ -545,7 +706,7 @@ def reconcile(args, final=False):
                 'Inputs/reports/receipts aggregate budget exceeded')
     except BaseException as error:
         report['valid'] = False
-        report['error'] = repr(error)
+        report['error'] = f'{type(error).__name__}: {error}'
         raise
     finally:
         save(args.output / ('final.json' if final else 'gate.json'), report)

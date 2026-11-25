@@ -1,0 +1,52 @@
+{
+  "repository": "golemcloud/golem",
+  "qualification": "Saved GitHub API job and artifact receipts; modeled compute, not verified provider invoices. Snapshot hashes refer to the retained original API responses.",
+  "runs": [
+    {
+      "run_id": 45384583345,
+      "attempt": 1,
+      "source": "72a241d7621ced8c684bc4192e341329ccf651ad",
+      "jobs_snapshot_sha256": "bef94dfd7f850f04c58c9ca8df977490cd6eaf6c7a01906a2ce677789076b51e",
+      "artifacts_snapshot_sha256": "6e50c3ecfe8053a14402e122208f3ecb13306e082a5f28152be38b16969e2ec9",
+      "jobs": [
+        {"id": 138412116394, "runner_id": 616938, "labels": ["blacksmith-2vcpu-ubuntu-2204"], "conclusion": "cancelled", "started_at": "2026-11-24T11:29:15Z", "completed_at": "2026-11-24T11:34:50Z"},
+        {"id": 138415132986, "runner_id": null, "step_count": 0, "labels": ["blacksmith-2vcpu-ubuntu-2204"], "conclusion": "cancelled", "started_at": "2026-11-24T11:34:50Z", "completed_at": "2026-11-24T11:34:50Z"}
+      ],
+      "artifacts": [
+        {"id": 14916660566, "size_in_bytes": 5373}
+      ]
+    },
+    {
+      "run_id": 45390639540,
+      "attempt": 1,
+      "source": "1f8525266bc400a83d4bb39f4bbae30586ea926a",
+      "jobs_snapshot_sha256": "9df587eea501f5c809bb47148d6322447bb6db3eb48762fc75e59b9389bcb8a7",
+      "artifacts_snapshot_sha256": "c7557726d18e140e9541312c5522fe5c7c2595759f0ffc0e4ff1c0a0048fe69c",
+      "jobs": [
+        {"id": 138433091583, "runner_id": 616973, "labels": ["blacksmith-2vcpu-ubuntu-2204"], "conclusion": "success", "started_at": "2026-11-24T12:08:33Z", "completed_at": "2026-11-24T12:28:26Z"},
+        {"id": 138444238481, "runner_id": 616977, "labels": ["blacksmith-32vcpu-ubuntu-2204"], "conclusion": "cancelled", "started_at": "2026-11-24T12:28:34Z", "completed_at": "2026-11-24T12:41:14Z"},
+        {"id": 138444238499, "runner_id": 616978, "labels": ["blacksmith-32vcpu-ubuntu-2204"], "conclusion": "cancelled", "started_at": "2026-11-24T12:28:34Z", "completed_at": "2026-11-24T12:41:14Z"},
+        {"id": 138444238518, "runner_id": 616976, "labels": ["blacksmith-32vcpu-ubuntu-2204"], "conclusion": "failure", "started_at": "2026-11-24T12:28:34Z", "completed_at": "2026-11-24T12:40:53Z"},
+        {"id": 138444238542, "runner_id": 616979, "labels": ["blacksmith-32vcpu-ubuntu-2204"], "conclusion": "cancelled", "started_at": "2026-11-24T12:28:34Z", "completed_at": "2026-11-24T12:41:15Z"},
+        {"id": 138451522722, "runner_id": 616982, "labels": ["blacksmith-2vcpu-ubuntu-2204"], "conclusion": "failure", "started_at": "2026-11-24T12:41:23Z", "completed_at": "2026-11-24T12:46:20Z"},
+        {"id": 138454434690, "runner_id": 616983, "labels": ["blacksmith-2vcpu-ubuntu-2204"], "conclusion": "failure", "started_at": "2026-11-24T12:46:30Z", "completed_at": "2026-11-24T12:50:19Z"}
+      ],
+      "artifacts": [
+        {"id": 14922060781, "size_in_bytes": 7305},
+        {"id": 14921505400, "size_in_bytes": 2779},
+        {"id": 14921001839, "size_in_bytes": 79360},
+        {"id": 14920986445, "size_in_bytes": 76710},
+        {"id": 14920986391, "size_in_bytes": 68893},
+        {"id": 14920946996, "size_in_bytes": 2784},
+        {"id": 14920937095, "size_in_bytes": 2776},
+        {"id": 14920908440, "size_in_bytes": 244},
+        {"id": 14920483556, "size_in_bytes": 77127},
+        {"id": 14920304921, "size_in_bytes": 8053},
+        {"id": 14920109736, "size_in_bytes": 242},
+        {"id": 14919689864, "size_in_bytes": 3062},
+        {"id": 14918083427, "size_in_bytes": 357359182},
+        {"id": 14917889018, "size_in_bytes": 5352}
+      ]
+    }
+  ]
+}

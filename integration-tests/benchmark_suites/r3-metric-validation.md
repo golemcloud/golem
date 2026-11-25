@@ -202,6 +202,32 @@ The harness source is `4db6100d250b7cbfd2993d630d4454e09167cdc7`; all runtime,
 fixture and built-in bytes remain from `eb46c797c329e1787fb9260cc57b132e0830489d`.
 The orchestration source is recorded separately. No fallback build is available.
 
+Hardware eligibility uses a frozen campaign policy, not equality with a previous
+host's exact-memory fingerprint. The policy requires the pinned Blacksmith runner,
+x86-64, 32 homogeneous AuthenticAMD / AMD EPYC CPUs, and total memory within ±2%
+of a fixed 114 GiB reference. This reference comes from the retained host inventory;
+it is not a claim that memory differences have no performance effect. The bounds
+are inclusive and use integer byte arithmetic, without chained host-to-host tolerance.
+
+Before installation or any benchmark process, the driver records architecture,
+per-CPU vendor/brand/family/model/stepping and exact total memory from Linux procfs
+in `hardware.json`. Missing CPU identity, heterogeneous CPUs, or out-of-range
+memory fails eligibility. CPU family/model/stepping must match across all hosts
+in a comparison and across waves in the final analysis. Different CPU models are
+never pooled merely because both report the generic AMD EPYC brand. Fleet-wide
+agreement is checked at reconciliation, not inferred from one host's eligibility.
+
+Each raw record must retain its original fingerprint and series key, and its
+fingerprint must match the setup observation. Campaign analysis explicitly groups
+eligible processes by the versioned hardware-class identity; process reports keep
+the original identities. Artifact, source, workload, storage and socket boundaries
+still separate groups. The standalone metric validator retains exact-identity
+grouping unless the campaign supplies verified classes. Anchor agreement and CV
+thresholds are unchanged. The class policy does not establish performance equivalence.
+Historical records without the stronger setup observations cannot establish this
+class retroactively; their raw fingerprints and failed campaign outcome stay intact.
+No executor, fixture or frozen benchmark binary change is required.
+
 Five dependency-chained waves each allocate four fresh 32-vCPU hosts. The first
 wave starts 20 minutes after workflow creation; subsequent waves start at fixed
 110-minute intervals. Each host uses these wave-relative windows:
@@ -230,9 +256,26 @@ Dispatch `benchmark.yaml` with `r3_campaign=true`, `publish=false`, all other
 research flags false, and an immutable epoch deadline at most ten hours after
 creation. The isolated workflows have no build, publisher or schedule. Workers
 have 107-minute job caps; preflight, five gates and final analysis have 65 configured
-small-runner minutes in total. The allocation is $150 before tax: $138.24 modeled
-worker compute, $0.32 small-runner compute, $5 storage reserve and $6.44 contingency.
-This excludes prior experiments and agent charges; it is not a provider spending lock.
+small-runner minutes in total. The cumulative allocation is $150 before tax:
+$138.24 modeled new worker compute, $0.32 new small-runner compute, $3.740 prior
+campaign compute, one shared $5 storage reserve and $2.700 contingency.
+`r3-budget-history.json` records the two prior campaign attempts, including failed
+and cancelled assigned jobs, retained artifact sizes and original API snapshot
+hashes. Only the cancelled job with no runner, no steps and zero duration costs
+zero. The snapshot hashes reference saved evidence; CI recomputes the charges from
+the reviewed receipts without downloading those original responses.
+
+Preflight rejects an over-budget projection before preparing inputs. It freezes
+the reviewed history and tariff policy with the campaign inputs. Every wave gate
+and final analysis checks that frozen history and includes prior compute, observed
+compute, remaining worker capacity, the small-runner allowance and the shared
+reserve. Arithmetic uses integer millidollars; exactly $150 is permitted, but
+$150.001 is rejected. Prior artifacts occupy 357,699,242 bytes. Including the new
+artifact allowance gives a combined envelope of approximately 11.099 GiB covered
+by the shared storage reserve, not a second $5 reserve.
+
+This model excludes earlier separately authorized diagnostic/selector experiments,
+tax and agent charges. It is not a verified provider invoice or a spending lock.
 Each worker output is capped at 500 MiB; input/reports/receipts together at 1 GiB,
 with seven-day retention. Oversize evidence is rejected, never truncated into a
 complete-looking result. Cancellation, runner loss and platform outages can prevent
@@ -243,3 +286,17 @@ reports in separate new directories. `run` requires the original live Actions ru
 and attempt. `final` can also reconcile downloaded evidence offline, using the
 frozen input, all wave artifacts and saved paginated jobs/artifact API responses.
 It does not start services, measure, publish or change schedules.
+
+Before validating the frozen input or any wave, gate and final reports inventory
+every expected worker and its pre/main/post evidence. They retain recorded worker
+errors, phase statuses, raw/log presence, and the matching GitHub job conclusion.
+Skipped wave jobs are listed separately. Missing status files are marked missing;
+malformed or non-finite status data is marked unreadable without discarding other
+workers' diagnostics. Missing job metadata remains unknown, not inferred cancelled.
+The job snapshot must belong to the same run and attempt.
+
+This inventory does not certify measurement validity, cleanup or whether an absent
+process actually ran. It remains available even when frozen-input checks fail.
+Incomplete/cancelled evidence still makes reconciliation exit nonzero, keeps all
+acceptance flags false, and prevents another wave from being released. A validation
+error includes its message and path; it does not replace the recorded worker error.

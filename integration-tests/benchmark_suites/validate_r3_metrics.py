@@ -417,8 +417,12 @@ def noise(values, quantity):
                 control_qualification='requires separately established comparable parallel controls')
 
 
-def analyze(records, declaration):
-    """Records are (receipt, parsed run) pairs, already verified against pinned input hashes."""
+def analyze(records, declaration, hardware_classes=None):
+    """The campaign may supply verified comparison classes; raw identities remain unchanged."""
+    if hardware_classes is not None:
+        require(set(hardware_classes) == {run['run_id'] for _, run in records}
+                and all(re.fullmatch('[0-9a-f]{64}', value) for value in hardware_classes.values()),
+                'Incomplete hardware comparison classes')
     specifications = {configuration_key(s['entry'], s['config']): s for s in declaration['configurations']}
     accepted, invalid, seen = [], [], set()
     for receipt, run in records:
@@ -463,7 +467,13 @@ def analyze(records, declaration):
                         identity=identities[key], valid=all(v['valid'] for v in views),
                         iterations=views, metrics=metrics)
             process['configurations'].append(item)
-            groups[(key, canonical(identities[key]))].append((run['run_id'], item))
+            comparison = identities[key]
+            if hardware_classes is not None:
+                comparison = {k: v for k, v in comparison.items() if k not in ('series', 'environment')}
+                comparison['environment'] = {k: v for k, v in identities[key]['environment'].items()
+                                             if k != 'hardware_fingerprint'}
+                comparison['hardware_class'] = hardware_classes[run['run_id']]
+            groups[(key, canonical(comparison))].append((run['run_id'], item))
         processes.append(process)
     bands = []
     for (key, identity), members in sorted(groups.items()):
