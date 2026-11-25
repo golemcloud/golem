@@ -20,6 +20,7 @@ use base64::prelude::BASE64_STANDARD;
 use golem_common::model::Timestamp;
 use golem_common::model::caller::{PublicCaller, PublicPrincipal};
 use golem_common::model::oplog::public_oplog_entry::FailedUpdateParams;
+use golem_common::model::oplog::public_oplog_entry::PendingUpdateParams;
 use golem_common::model::oplog::{
     MultipartPartData, OmittedOplogEntry, PluginInstallationDescription, PublicAgentInvocation,
     PublicAgentInvocationResult, PublicEntityCallMode, PublicEntityInvocation,
@@ -219,6 +220,9 @@ fn render_failed_update_lines(params: &FailedUpdateParams, pad: &str) -> Vec<Str
                     .collect::<Vec<_>>()
                     .join(", ")
             ));
+        }
+        if let Some(start) = &divergence.replay_start {
+            lines.push(format!("{pad}  replay started:  {start}"));
         }
         for (label, step) in [
             ("expected", &divergence.expected),
@@ -625,44 +629,8 @@ impl TextOutput for PublicOplogEntry {
             }
             PublicOplogEntry::PendingUpdate(params) => {
                 logln(format_message_highlight("ENQUEUED UPDATE"));
-                logln(format!(
-                    "{pad}at:                {}",
-                    format_id(&params.timestamp)
-                ));
-                logln(format!(
-                    "{pad}target revision:   {}",
-                    format_id(&params.target_revision),
-                ));
-                logln(format!(
-                    "{pad}update attempt:    {}",
-                    format_id(&params.update_attempt_index),
-                ));
-                match &params.description {
-                    PublicUpdateDescription::Automatic(_) => {
-                        logln(format!(
-                            "{pad}type:              {}",
-                            format_id("automatic")
-                        ));
-                    }
-                    PublicUpdateDescription::SnapshotAssistedAutomatic(_) => {
-                        logln(format!(
-                            "{pad}type:              {}",
-                            format_id("snapshot assisted automatic")
-                        ));
-                    }
-                    PublicUpdateDescription::SnapshotBased(inner_params) => {
-                        logln(format!(
-                            "{pad}type:              {}",
-                            format_id("snapshot based")
-                        ));
-                        logln(format!(
-                            "{pad}snapshot:          {}",
-                            BASE64_STANDARD.encode(&inner_params.payload),
-                        ));
-                        if let Some(name) = &inner_params.filesystem_snapshot {
-                            logln(format!("{pad}filesystem:        {}", format_id(name)));
-                        }
-                    }
+                for line in render_pending_update_lines(pad, params) {
+                    logln(line);
                 }
             }
             PublicOplogEntry::SuccessfulUpdate(params) => {
@@ -1353,9 +1321,61 @@ fn render_agent_invocation(
                 "{pad}target revision:   {}",
                 format_id(&params.target_revision)
             ));
+            lines.extend(render_requester_lines(pad, &params.requester));
         }
     }
 
+    lines
+}
+
+/// The lines of a `PendingUpdate` entry below its title: the update, and who requested it.
+fn render_pending_update_lines(pad: &str, params: &PendingUpdateParams) -> Vec<String> {
+    let mut lines = vec![
+        format!("{pad}at:                {}", format_id(&params.timestamp)),
+        format!(
+            "{pad}target revision:   {}",
+            format_id(&params.target_revision)
+        ),
+        format!(
+            "{pad}update attempt:    {}",
+            format_id(&params.update_attempt_index)
+        ),
+    ];
+    match &params.description {
+        PublicUpdateDescription::Automatic(_) => {
+            lines.push(format!(
+                "{pad}type:              {}",
+                format_id("automatic")
+            ));
+        }
+        PublicUpdateDescription::SnapshotAssistedAutomatic(_) => {
+            lines.push(format!(
+                "{pad}type:              {}",
+                format_id("snapshot assisted automatic")
+            ));
+        }
+        PublicUpdateDescription::SnapshotBased(inner_params) => {
+            lines.push(format!(
+                "{pad}type:              {}",
+                format_id("snapshot based")
+            ));
+            lines.push(format!(
+                "{pad}snapshot:          {}",
+                BASE64_STANDARD.encode(&inner_params.payload),
+            ));
+            if let Some(name) = &inner_params.filesystem_snapshot {
+                lines.push(format!("{pad}filesystem:        {}", format_id(name)));
+            }
+        }
+    }
+    lines.extend(render_requester_lines(pad, &params.requester));
+    lines
+}
+
+/// The requester of an update: the caller of the update request, with its role and token lines.
+fn render_requester_lines(pad: &str, requester: &PublicCaller) -> Vec<String> {
+    let mut lines = vec![format!("{pad}requested by:")];
+    lines.extend(render_caller_lines(&format!("{pad}  "), requester));
     lines
 }
 
@@ -1710,11 +1730,12 @@ mod tests {
     ];
 
     /// A failed update shows its class, and a divergence shows its index, both steps, the
-    /// mismatched fields and the known requests; the JSON form keeps the same fields.
+    /// mismatched fields, where the replay started and the known requests; the JSON form keeps
+    /// the same fields.
     #[test]
     fn a_failed_update_renders_its_class_and_divergence() {
         use golem_common::model::oplog::{
-            PublicDurableFunctionType, ReplayDivergence, ReplayHostCall, ReplayStep,
+            PublicDurableFunctionType, ReplayDivergence, ReplayHostCall, ReplayStart, ReplayStep,
             StartIdentityField, UpdateFailureClass,
         };
         let call = |function_name: &str, request: Option<&str>| ReplayHostCall {
@@ -1740,6 +1761,10 @@ mod tests {
                 expected: ReplayStep::HostCall(call("random::get_random_bytes", Some("recorded"))),
                 actual: ReplayStep::HostCall(call("random::get_random_u64", None)),
                 mismatched: vec![StartIdentityField::FunctionName],
+                replay_start: Some(ReplayStart::full_replay(vec![
+                    golem_common::model::OplogIndex::from_u64(3),
+                    golem_common::model::OplogIndex::from_u64(5),
+                ])),
             })),
         };
 
@@ -1753,6 +1778,7 @@ mod tests {
                 "expected:        Start { random::get_random_bytes, ReadLocal",
                 "actual:          Start { random::get_random_u64, ReadLocal",
                 "mismatched:      function-name",
+                "replay started:  without a snapshot after the snapshots at oplog indexes 3, 5 were rejected",
                 "expected input: \"recorded\"",
             ],
         );
@@ -1777,6 +1803,11 @@ mod tests {
             "random::get_random_bytes"
         );
         assert_eq!(json["divergence"]["mismatched"][0], "function-name");
+        assert_eq!(json["divergence"]["replayStart"]["type"], "FullReplay");
+        assert_eq!(
+            json["divergence"]["replayStart"]["rejectedSnapshots"],
+            serde_json::json!([3, 5])
+        );
     }
 
     fn agent_metadata(agent_key: &str) -> AgentMetadataView {
@@ -1968,6 +1999,7 @@ mod tests {
     fn manual_update() -> PublicAgentInvocation {
         PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
             target_revision: ComponentRevision::new(5).unwrap(),
+            requester: caller(),
         })
     }
 
@@ -1990,13 +2022,15 @@ mod tests {
     }
 
     /// Every invocation with a caller shows both roles and the tokens, and no claims line when the
-    /// entry holds no claims. A manual update has no caller.
+    /// entry holds no claims. A manual update has no caller: it shows the same lines for its
+    /// requester, under `requested by:`.
     fn assert_caller_lines(invocation: &PublicAgentInvocation, rendered: &str) {
-        if invocation.caller().is_some() {
-            assert_contains_all(rendered, &CALLER_LINES);
-        } else {
-            assert!(!rendered.contains("caller:"), "{rendered}");
-        }
+        assert_contains_all(rendered, &CALLER_LINES);
+        assert_eq!(
+            rendered.contains("requested by:"),
+            invocation.caller().is_none(),
+            "{rendered}"
+        );
         assert!(!rendered.contains("claims:"), "{rendered}");
     }
 
@@ -2320,6 +2354,51 @@ mod tests {
                 "process-oplog-entry count must not be rendered without a public count field:\n{rendered}"
             );
         }
+    }
+
+    #[test]
+    fn pending_update_renders_its_requester_under_requested_by() {
+        let params = PendingUpdateParams {
+            timestamp: timestamp(),
+            target_revision: ComponentRevision::new(3).unwrap(),
+            description: PublicUpdateDescription::Automatic(golem_schema::Empty {}),
+            update_attempt_index: golem_common::model::OplogIndex::from_u64(12),
+            requester: caller(),
+        };
+        let rendered =
+            strip_ansi_escapes::strip_str(render_pending_update_lines("    ", &params).join("\n"));
+        let at = format!("    at:                {}", timestamp());
+        assert_eq!(
+            rendered,
+            [
+                at.as_str(),
+                "    target revision:   3",
+                "    update attempt:    12",
+                "    type:              automatic",
+                "    requested by:",
+                r#"      original caller:   user ("http://test-idp.com","bob")"#,
+                r#"      immediate caller:  agent ("https://golem.example","agent:relay")"#,
+                "      tokens:",
+                r#"        - 00000000-0000-0000-0000-0000000070c1 made by ("https://golem.example","account:1")"#,
+                "        - 00000000-0000-0000-0000-0000000070c2 (no maker)",
+            ]
+            .join("\n")
+        );
+
+        // The claims of a requester show only when the entry holds them.
+        let claims = golem_common::model::caller::PublicClaims::from_json(
+            r#"{"email":"bob@mail.example"}"#.to_string(),
+        )
+        .unwrap();
+        let mut with_claims = params;
+        with_claims.requester.original = bob(Some(claims));
+        let rendered = strip_ansi_escapes::strip_str(
+            render_pending_update_lines("    ", &with_claims).join("\n"),
+        );
+        assert!(
+            rendered.contains(r#"      claims:            {"email":"bob@mail.example"}"#),
+            "{rendered}"
+        );
     }
 
     #[test]

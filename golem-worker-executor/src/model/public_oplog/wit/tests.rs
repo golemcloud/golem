@@ -359,6 +359,8 @@ fn raw_update_wit_roundtrip_preserves_bootstrap_ranges() {
                 snapshot_bootstrap: Some(bootstrap()),
             },
             update_attempt_index: Some(OplogIndex::from_u64(10)),
+            // A requester with claims: the raw WIT form keeps it whole.
+            requester: Box::new(crate::test_callers::sample_caller()),
         },
     ];
 
@@ -367,6 +369,49 @@ fn raw_update_wit_roundtrip_preserves_bootstrap_ranges() {
         assert_eq!(
             golem_common::model::oplog::OplogEnrichmentEntry::try_from(encoded).unwrap(),
             entry.into()
+        );
+    }
+}
+
+/// The raw WIT form of a pending update carries its requester as the oplog's bytes. Bytes that do
+/// not decode as a caller are refused, never read as another requester.
+#[test]
+fn raw_wit_pending_update_refuses_a_requester_that_does_not_decode() {
+    let entry = OplogEntry::PendingUpdate {
+        timestamp: Timestamp::now_utc().rounded(),
+        description: UpdateDescription::Automatic {
+            target_revision: ComponentRevision::new(2).unwrap(),
+        },
+        update_attempt_index: None,
+        requester: Box::new(crate::test_callers::sample_caller()),
+    };
+    let oplog::OplogEntry::PendingUpdate(params) = oplog::OplogEntry::try_from(entry).unwrap()
+    else {
+        panic!("expected a raw WIT pending update");
+    };
+    assert_eq!(
+        golem_common::serialization::deserialize::<golem_common::model::caller::Caller>(
+            &params.requester
+        )
+        .unwrap(),
+        crate::test_callers::sample_caller()
+    );
+
+    for bytes in [
+        Vec::new(),
+        vec![3],
+        vec![3, 0xff, 0xff, 0xff],
+        vec![99, 1, 2],
+    ] {
+        let mut params = params.clone();
+        params.requester = bytes.clone();
+        let error = golem_common::model::oplog::OplogEnrichmentEntry::try_from(
+            oplog::OplogEntry::PendingUpdate(params),
+        )
+        .unwrap_err();
+        assert!(
+            error.contains("requester does not decode"),
+            "{bytes:?}: {error}"
         );
     }
 }
@@ -1235,6 +1280,7 @@ fn failed_update_divergence_requests_drop_their_owned_handles() {
                 expected,
                 actual,
                 mismatched: vec![],
+                replay_start: None,
             }),
         })
     };

@@ -558,6 +558,8 @@ interface oplog {
 
     record manual-update-parameters {
         target-revision: component-revision,
+        /// Who requested the update. It is not the caller of the update's snapshot save.
+        requester: public-caller,
     }
 
     record external-tool-invocation-parameters {
@@ -638,6 +640,8 @@ interface oplog {
         target-revision: component-revision,
         description: update-description,
         update-attempt-index: oplog-index,
+        /// Who requested the update. It is never the caller of the update's snapshot save or load.
+        requester: public-caller,
     }
 
     record successful-update-parameters {
@@ -698,6 +702,26 @@ interface oplog {
         actual: replay-step,
         /// The identity fields on which the two steps differ; empty when the steps differ in kind
         mismatched: list<start-identity-field>,
+        /// Where the replay that diverged started; none for a divergence outside a recovery replay
+        replay-start: option<replay-start>,
+    }
+
+    /// Where a recovery replay started
+    variant replay-start {
+        /// From a loaded snapshot
+        snapshot(replay-snapshot-start),
+        /// Without a snapshot, after the recovery rejected the automatic snapshots at these oplog
+        /// indexes, in ascending order; empty when no snapshot was involved
+        full-replay(list<oplog-index>),
+    }
+
+    /// A recovery replay from a loaded snapshot
+    record replay-snapshot-start {
+        /// The oplog index of the loaded snapshot
+        snapshot-index: oplog-index,
+        /// The oplog indexes of the automatic snapshots that the recovery rejected before it, in
+        /// ascending order
+        rejected-snapshots: list<oplog-index>,
     }
 
     /// One step of a replay
@@ -1164,6 +1188,9 @@ interface oplog {
         timestamp: datetime,
         description: raw-update-description,
         update-attempt-index: option<oplog-index>,
+        /// Who requested the update, in the oplog's binary encoding, as an `oplog-payload` holds the
+        /// caller of an invocation. `enrich-oplog-entries` gives it as a `public-caller`.
+        requester: list<u8>,
     }
 
     record raw-successful-update-parameters {

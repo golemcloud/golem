@@ -19,6 +19,7 @@ pub(crate) mod public_types;
 mod replay_divergence;
 
 use crate::base_model::agent::{AgentMode, AgentTypeName, OwnerKind};
+use crate::base_model::caller::PublicCaller;
 use crate::base_model::component::ComponentRevision;
 #[cfg(feature = "full")]
 use crate::base_model::durable_stream::{
@@ -42,6 +43,7 @@ use uuid::Uuid;
 /// Imports only used by the raw oplog entries - not generated unless the 'full' feature is enabled.
 #[cfg(feature = "full")]
 mod raw_imports {
+    pub use crate::base_model::caller::Caller;
     pub use crate::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
     pub use crate::base_model::invocation_context::TraceId;
 
@@ -382,6 +384,10 @@ oplog_entry! {
     ///
     /// For automatic updates worker is expected to immediately get interrupted and restarted after inserting this entry.
     /// For manual updates, this entry is only inserted when the worker is idle, and it is also restarted.
+    ///
+    /// `requester` is who asked for the update: the caller of the update request. Every
+    /// `PendingUpdate` of one update attempt has the same requester. It is never the caller of the
+    /// update's snapshot save or load.
     PendingUpdate {
         hint: true
         wit_raw_type: "raw-pending-update-parameters"
@@ -389,11 +395,13 @@ oplog_entry! {
         raw {
             description: UpdateDescription,
             update_attempt_index: Option<OplogIndex>,
+            requester: Box<Caller>,
         }
         public {
             target_revision: ComponentRevision,
             description: PublicUpdateDescription,
             update_attempt_index: OplogIndex,
+            requester: PublicCaller,
         }
     },
     /// An update was successfully applied

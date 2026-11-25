@@ -190,8 +190,7 @@ object OplogApi {
     final case class Account(pair: PublicPrincipalRef, accountId: UUID, authentication: String) extends PublicPrincipal
     final case class Agent(
       pair: PublicPrincipalRef,
-      componentId: UUID,
-      agentId: String,
+      agentId: AgentId,
       agentType: String,
       environmentId: UUID
     ) extends PublicPrincipal
@@ -302,7 +301,9 @@ object OplogApi {
     final case class SaveSnapshot(caller: PublicCaller)                            extends AgentInvocation
     final case class LoadSnapshot(caller: PublicCaller)                            extends AgentInvocation
     final case class ProcessOplogEntries(invocationId: UUID, caller: PublicCaller) extends AgentInvocation
-    final case class ManualUpdate(componentRevision: BigInt)                       extends AgentInvocation
+
+    /** A manual update. Its requester is who asked for it, not a caller. */
+    final case class ManualUpdate(componentRevision: BigInt, requester: PublicCaller) extends AgentInvocation
   }
 
   final case class PendingAgentInvocationParameters(
@@ -317,10 +318,15 @@ object OplogApi {
     final case class SnapshotBased(data: Array[Byte], filesystemSnapshot: Option[String]) extends UpdateDescription
   }
 
+  /**
+   * A pending update. The requester is who asked for the update; it is never
+   * the caller of the update's snapshot save or load.
+   */
   final case class PendingUpdateParameters(
     timestamp: ContextApi.DateTime,
     targetRevision: BigInt,
-    updateDescription: UpdateDescription
+    updateDescription: UpdateDescription,
+    requester: PublicCaller
   )
 
   final case class SuccessfulUpdateParameters(
@@ -760,8 +766,7 @@ object OplogApi {
         val p = value[JsPublicAgentPrincipal]
         PublicPrincipal.Agent(
           pair = parsePublicPrincipalRef(p.pair),
-          componentId = JsUuid.toUuid(p.agentId.componentId.uuid),
-          agentId = p.agentId.agentId,
+          agentId = JsAgentId.toAgentId(p.agentId),
           agentType = p.agentType,
           environmentId = JsUuid.toUuid(p.environmentId.uuid)
         )
@@ -1138,7 +1143,7 @@ object OplogApi {
         )
       case "manual-update" =>
         val p = inv.asInstanceOf[JsAgentInvocationWithValue].value.asInstanceOf[JsManualUpdateParameters]
-        AgentInvocation.ManualUpdate(BigInt(p.targetRevision.toString))
+        AgentInvocation.ManualUpdate(BigInt(p.targetRevision.toString), parsePublicCaller(p.requester))
       case other =>
         throw new IllegalArgumentException(s"Unknown AgentInvocation tag: $other")
     }
@@ -1165,7 +1170,8 @@ object OplogApi {
     PendingUpdateParameters(
       timestamp = parseDateTime(raw.timestamp),
       targetRevision = BigInt(raw.targetRevision.toString),
-      updateDescription = ud
+      updateDescription = ud,
+      requester = parsePublicCaller(raw.requester)
     )
   }
 

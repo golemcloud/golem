@@ -989,6 +989,7 @@ fn agent_get_renders_the_failure_class_and_divergence_of_a_failed_update() {
                 }),
                 actual: ReplayStep::end_of_history(),
                 mismatched: vec![StartIdentityField::FunctionName],
+                replay_start: None,
             })),
         },
     )];
@@ -1197,6 +1198,10 @@ fn component_manifest_trace_structured_output_masks_secret_payloads() {
     let value = hidden_structured_output(crate::model::component::ComponentManifestTraceView {
         component_name: golem_common::model::component::ComponentName("component".to_string()),
         properties: sample_component_layer_properties(),
+        agents: std::collections::BTreeMap::from([(
+            golem_common::model::agent::AgentTypeName("Agent".to_string()),
+            sample_agent_layer_properties(),
+        )]),
     });
 
     assert_no_plaintext(
@@ -1205,7 +1210,13 @@ fn component_manifest_trace_structured_output_masks_secret_payloads() {
             "manifest-config-secret",
             "manifest-env-secret",
             "manifest-plugin-secret",
+            "agent-config-secret",
+            "agent-env-secret",
         ],
+    );
+    assert!(
+        value.to_string().contains("FROM_AGENT"),
+        "the agent initial card is not a secret and stays visible"
     );
     assert!(value.to_string().contains("***"));
 }
@@ -1328,6 +1339,7 @@ fn sample_component_view() -> crate::model::component::ComponentView {
                     plugin_version: "1.0.0".to_string(),
                     oplog_processor_component_id: None,
                     oplog_processor_component_revision: None,
+                    installed_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
                 }],
                 files: vec![],
                 initial_permissions: PolymorphicCard {
@@ -1501,6 +1513,43 @@ fn typed_schema_string(value: &str) -> golem_common::schema::TypedSchemaValue {
         golem_common::schema::SchemaGraph::anonymous(golem_common::schema::SchemaType::string()),
         golem_common::schema::SchemaValue::String(value.to_string()),
     )
+}
+
+fn sample_agent_layer_properties() -> crate::model::app::AgentLayerProperties {
+    use crate::model::cascade::property::Property;
+
+    let layer = crate::model::app::AgentLayerId::AgentCommon(
+        golem_common::model::agent::AgentTypeName("Agent".to_string()),
+    );
+    let mut properties = crate::model::app::AgentLayerProperties::default();
+    properties.config.apply_layer(
+        &layer,
+        None,
+        Some(json!({ "db": { "password": "agent-config-secret" } })),
+    );
+    properties.env.apply_layer(
+        &layer,
+        None,
+        (
+            crate::model::cascade::property::map::MapMergeMode::Upsert,
+            indexmap::IndexMap::from_iter([(
+                "API_TOKEN".to_string(),
+                "agent-env-secret".to_string(),
+            )]),
+        ),
+    );
+    properties.initial_card.apply_layer(
+        &layer,
+        None,
+        Some(crate::model::app_raw::ManifestInitialCard {
+            lower_bound: crate::model::app_raw::ManifestInitialCardBound {
+                positive: vec!["env(?agent) @ ?agent : read : FROM_AGENT".to_string()],
+                negative: Vec::new(),
+            },
+            upper_bound: Default::default(),
+        }),
+    );
+    properties
 }
 
 fn sample_component_layer_properties() -> crate::model::app::ComponentLayerProperties {
@@ -3312,12 +3361,14 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 mime_type: "application/octet-stream".to_string(),
                 filesystem_snapshot: Some("u-8e1a7f2c-4d3b-4e5f-9a6b-7c8d9e0f1a2b".to_string()),
             }),
+            requester: relayed_caller(),
         }),
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
             timestamp: timestamp(),
             target_revision: ComponentRevision::new(2).unwrap(),
             update_attempt_index: OplogIndex::from_u64(18),
             description: PublicUpdateDescription::Automatic(Empty {}),
+            requester: account_caller(),
         }),
         PublicOplogEntry::PendingUpdate(PendingUpdateParams {
             timestamp: timestamp(),
@@ -3326,6 +3377,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             description: PublicUpdateDescription::SnapshotAssistedAutomatic(
                 SnapshotAssistedAutomaticUpdateParameters {},
             ),
+            requester: tool_caller(),
         }),
         PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
             timestamp: timestamp(),
@@ -3408,6 +3460,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                     golem_common::model::oplog::StartIdentityField::RequestPresence,
                     golem_common::model::oplog::StartIdentityField::Parent,
                 ],
+                replay_start: Some(golem_common::model::oplog::ReplayStart::snapshot(
+                    OplogIndex::from_u64(19),
+                    vec![OplogIndex::from_u64(23)],
+                )),
             })),
         }),
         PublicOplogEntry::FailedUpdate(FailedUpdateParams {
@@ -3422,6 +3478,10 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
                 expected: golem_common::model::oplog::ReplayStep::invocation_end(),
                 actual: golem_common::model::oplog::ReplayStep::described("a pending invocation"),
                 mismatched: vec![],
+                replay_start: Some(golem_common::model::oplog::ReplayStart::full_replay(vec![
+                    OplogIndex::from_u64(17),
+                    OplogIndex::from_u64(19),
+                ])),
             })),
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams {
@@ -3590,6 +3650,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             not_before: None,
             invocation: PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
                 target_revision: ComponentRevision::new(5).unwrap(),
+                requester: account_caller(),
             }),
         }),
         PublicOplogEntry::AgentInvocationFinished(AgentInvocationFinishedParams {
@@ -3625,6 +3686,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             target_revision: ComponentRevision::new(8).unwrap(),
             update_attempt_index: OplogIndex::from_u64(21),
             description: PublicUpdateDescription::Automatic(Empty {}),
+            requester: account_caller(),
         }),
     ];
     let create = entries
@@ -6509,13 +6571,130 @@ fn arb_component_list_result() -> OutputDocumentStrategy {
 
 fn arb_component_manifest_trace_result() -> OutputDocumentStrategy {
     serialized_output(
-        (arb_small_string(), arb_component_layer_properties()).prop_map(
-            |(component_name, properties)| crate::model::component::ComponentManifestTraceView {
-                component_name: golem_common::model::component::ComponentName(component_name),
-                properties,
-            },
+        (
+            arb_small_string(),
+            arb_component_layer_properties(),
+            proptest::collection::btree_map(
+                arb_small_string().prop_map(golem_common::model::agent::AgentTypeName),
+                arb_agent_layer_properties(),
+                0..3,
+            ),
+        )
+            .prop_map(|(component_name, properties, agents)| {
+                crate::model::component::ComponentManifestTraceView {
+                    component_name: golem_common::model::component::ComponentName(component_name),
+                    properties,
+                    agents,
+                }
+            }),
+    )
+}
+
+fn arb_agent_layer_id() -> BoxedStrategy<crate::model::app::AgentLayerId> {
+    let agent_type = || arb_small_string().prop_map(golem_common::model::agent::AgentTypeName);
+    prop_oneof![
+        arb_small_string().prop_map(|name| {
+            crate::model::app::AgentLayerId::Component(
+                golem_common::model::component::ComponentName(name),
+            )
+        }),
+        (agent_type(), arb_small_string()).prop_map(|(agent_type, template)| {
+            crate::model::app::AgentLayerId::AgentTemplate(agent_type, template)
+        }),
+        agent_type().prop_map(crate::model::app::AgentLayerId::AgentCommon),
+        agent_type().prop_map(crate::model::app::AgentLayerId::AgentEnvironmentPresets),
+        agent_type().prop_map(crate::model::app::AgentLayerId::AgentCustomPresets),
+    ]
+    .boxed()
+}
+
+fn arb_agent_layer_properties() -> BoxedStrategy<crate::model::app::AgentLayerProperties> {
+    (
+        arb_agent_layer_id(),
+        arb_agent_layer_id(),
+        proptest::option::of(arb_small_string()),
+        arb_json_value(1),
+        proptest::collection::vec(arb_small_string(), 0..3),
+        proptest::collection::hash_map(arb_small_string(), arb_small_string(), 1..3),
+        proptest::collection::vec(arb_manifest_plugin_installation(), 1..3),
+        proptest::collection::vec(
+            (arb_small_string(), arb_manifest_initial_component_file()).prop_map(
+                |(source, file)| crate::model::app::ProvisionFile {
+                    source: PathBuf::from(source),
+                    file,
+                },
+            ),
+            1..3,
         ),
     )
+        .prop_map(
+            |(layer_id, second_layer_id, selection, config, grants, env, plugins, files)| {
+                use crate::model::cascade::property::Property;
+
+                let mut properties = crate::model::app::AgentLayerProperties::default();
+                let selection = selection.as_ref();
+                properties
+                    .applied_layers
+                    .push((layer_id.clone(), selection.cloned()));
+                properties
+                    .config
+                    .apply_layer(&layer_id, selection, Some(config));
+                properties.initial_card.apply_layer(
+                    &layer_id,
+                    selection,
+                    Some(crate::model::app_raw::ManifestInitialCard {
+                        lower_bound: crate::model::app_raw::ManifestInitialCardBound {
+                            positive: grants.clone(),
+                            negative: Vec::new(),
+                        },
+                        upper_bound: crate::model::app_raw::ManifestInitialCardBound {
+                            positive: Vec::new(),
+                            negative: grants,
+                        },
+                    }),
+                );
+                properties
+                    .initial_card
+                    .apply_layer(&second_layer_id, selection, None);
+                properties.env.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::map::MapMergeMode::Upsert,
+                        env.into_iter().collect(),
+                    ),
+                );
+                properties.plugins.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::vec::VecMergeMode::Append,
+                        plugins,
+                    ),
+                );
+                properties.files.apply_layer(
+                    &second_layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::vec::VecMergeMode::Prepend,
+                        files,
+                    ),
+                );
+                properties.tool_bindings.apply_layer(
+                    &layer_id,
+                    selection,
+                    (
+                        crate::model::cascade::property::map::MapMergeMode::Upsert,
+                        indexmap::IndexMap::from([(
+                            "search".to_string(),
+                            crate::model::app_raw::ToolBinding::default(),
+                        )]),
+                    ),
+                );
+                properties
+            },
+        )
+        .boxed()
 }
 
 fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::ComponentLayerProperties> {
@@ -6788,6 +6967,20 @@ fn arb_component_layer_properties() -> BoxedStrategy<crate::model::app::Componen
                     )]),
                 ),
             );
+            properties.initial_card.apply_layer(
+                &layer_id,
+                selection,
+                Some(crate::model::app_raw::ManifestInitialCard {
+                    lower_bound: crate::model::app_raw::ManifestInitialCardBound {
+                        positive: vec!["env(?agent) @ ?agent : read : GOLEM_AGENT_ID".to_string()],
+                        negative: Vec::new(),
+                    },
+                    upper_bound: Default::default(),
+                }),
+            );
+            properties
+                .initial_card
+                .apply_layer(&second_layer_id, selection, None);
 
             properties
         })
@@ -7104,6 +7297,7 @@ fn arb_installed_plugin() -> BoxedStrategy<golem_common::model::component::Insta
                                 .expect("generated revision should be valid")
                         },
                     ),
+                    installed_by: golem_common::model::account::AccountId(plugin_registration_id),
                 }
             },
         )
@@ -7472,7 +7666,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                             ),
                             metadata_version: "0.1.0".to_string(),
                             metadata_digest: current_file_hash,
-                            provision: golem_common::model::tool::ToolProvisionConfig::default(),
+                            provision: (&golem_common::model::tool::ToolProvisionConfig::default()).into(),
                             component_bindings: BTreeMap::from([(
                                 "component".to_string(),
                                 golem_common::model::diff::EffectiveToolBinding {
@@ -7508,7 +7702,7 @@ fn arb_deployment_diff() -> BoxedStrategy<golem_common::model::diff::DeploymentD
                             ),
                             metadata_version: "0.1.0".to_string(),
                             metadata_digest: new_file_hash,
-                            provision: golem_common::model::tool::ToolProvisionConfig::default(),
+                            provision: (&golem_common::model::tool::ToolProvisionConfig::default()).into(),
                             component_bindings: BTreeMap::from([(
                                 "component".to_string(),
                                 golem_common::model::diff::EffectiveToolBinding {

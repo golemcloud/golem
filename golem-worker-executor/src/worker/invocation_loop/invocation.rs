@@ -127,8 +127,11 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             return CommandOutcome::BreakInnerLoop(RetryDecision::None);
         }
         match inner.invocation {
-            AgentInvocation::ManualUpdate { target_revision } => {
-                self.manual_update(target_revision, update_attempt_index)
+            AgentInvocation::ManualUpdate {
+                target_revision,
+                requester,
+            } => {
+                self.manual_update(target_revision, requester, update_attempt_index)
                     .await
             }
             _ => {

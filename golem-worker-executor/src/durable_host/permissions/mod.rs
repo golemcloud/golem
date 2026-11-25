@@ -72,6 +72,7 @@ use grants::parse_grants;
 use grants::parse_pattern_grant;
 use grants::permission_error_from_algebra;
 use grants::permission_error_from_parse;
+use grants::wallet_permission_error_from_algebra;
 use handles::handle_card_id;
 use handles::permission_card_scope_card;
 use handles::permission_card_scope_lineage_of_child;

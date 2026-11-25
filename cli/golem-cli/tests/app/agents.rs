@@ -6340,6 +6340,12 @@ async fn assert_queued_manual_update_before_pending(ctx: &TestContext, agent: &s
         })
         .expect("the manual update must still be queued");
     assert_eq!(pending.pending_update_index, queued["index"].as_u64());
+    // The queued manual update names the account that requested it, in both roles.
+    let requester = &queued["entry"]["invocation"]["requester"];
+    assert_eq!(requester["original"]["kind"], "account", "{requester}");
+    assert_eq!(requester["original"]["authentication"], "apiToken");
+    assert_eq!(requester["original"], requester["immediate"]);
+    assert_eq!(requester["tokens"], serde_json::json!([]));
     // Metadata projects a queued manual invocation as pending before snapshot preparation writes
     // a PendingUpdate entry. Check that distinction in the oplog, not the metadata projection.
     assert!(

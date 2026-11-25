@@ -236,6 +236,28 @@ pub(super) async fn run_session(
             }
             _ => unreachable!(),
         };
+        if accepted.is_none() && current.component_revision.is_none() {
+            if current.agent_id.as_ref() != start.target_agent_id()
+                || current.method_name != start.method_name
+            {
+                send_error(
+                    &events,
+                    HttpSessionError::Protocol("acceptance changed target".into()),
+                )
+                .await;
+                return;
+            }
+            if !send_event(
+                &events,
+                &cancelled,
+                HttpSessionEvent::QueuedAccepted(current.clone()),
+            )
+            .await
+            {
+                cancelled.cancel();
+                return;
+            }
+        }
         while current.component_revision.is_none() {
             let response = tokio::select! {
                 _ = cancelled.cancelled() => return,

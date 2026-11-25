@@ -126,6 +126,23 @@ pub(crate) fn reject_quota_handles_in_oplog_entries<
     }
 }
 
+/// The requester of an update in the raw WIT form: its binary encoding in the oplog, as an
+/// `oplog-payload` holds the caller of an invocation.
+pub(super) fn requester_to_wit(
+    requester: &golem_common::model::caller::Caller,
+) -> Result<Vec<u8>, String> {
+    golem_common::serialization::serialize(requester)
+}
+
+/// Decodes the raw WIT form of an update's requester. Bytes that are not an encoded caller are
+/// refused, so a round trip through WIT never changes who requested the update.
+pub(super) fn requester_from_wit(
+    bytes: &[u8],
+) -> Result<golem_common::model::caller::Caller, String> {
+    golem_common::serialization::decode(bytes)
+        .map_err(|error| format!("requester does not decode: {error}"))
+}
+
 fn drain_owned_handles<
     D: QuotaTokenHandleDropper
         + SecretHandleDropper
@@ -232,6 +249,25 @@ pub(super) fn replay_divergence_to_wit(
             .into_iter()
             .map(start_identity_field_to_wit)
             .collect(),
+        replay_start: divergence.replay_start.map(|start| match start {
+            ReplayStart::Snapshot(start) => {
+                oplog::ReplayStart::Snapshot(oplog::ReplaySnapshotStart {
+                    snapshot_index: start.snapshot_index.into(),
+                    rejected_snapshots: start
+                        .rejected_snapshots
+                        .into_iter()
+                        .map(Into::into)
+                        .collect(),
+                })
+            }
+            ReplayStart::FullReplay(start) => oplog::ReplayStart::FullReplay(
+                start
+                    .rejected_snapshots
+                    .into_iter()
+                    .map(Into::into)
+                    .collect(),
+            ),
+        }),
     })
 }
 
@@ -247,6 +283,22 @@ pub(super) fn replay_divergence_from_wit(
             .into_iter()
             .map(start_identity_field_from_wit)
             .collect(),
+        replay_start: divergence.replay_start.map(|start| match start {
+            oplog::ReplayStart::Snapshot(start) => ReplayStart::snapshot(
+                golem_common::model::OplogIndex::from_u64(start.snapshot_index),
+                start
+                    .rejected_snapshots
+                    .into_iter()
+                    .map(golem_common::model::OplogIndex::from_u64)
+                    .collect(),
+            ),
+            oplog::ReplayStart::FullReplay(indexes) => ReplayStart::full_replay(
+                indexes
+                    .into_iter()
+                    .map(golem_common::model::OplogIndex::from_u64)
+                    .collect(),
+            ),
+        }),
     })
 }
 

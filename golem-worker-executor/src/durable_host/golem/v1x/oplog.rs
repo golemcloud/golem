@@ -896,6 +896,7 @@ mod tests {
                 expected: oplog::ReplayStep::EndOfHistory,
                 actual: oplog::ReplayStep::InvocationEnd,
                 mismatched: vec![],
+                replay_start: None,
             }),
         })
     }

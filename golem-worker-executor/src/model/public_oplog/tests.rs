@@ -643,6 +643,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
         plugin_version: "1.0".to_string(),
         oplog_processor_component_id: Some(ComponentId::new()),
         oplog_processor_component_revision: Some(source_revision),
+        installed_by: golem_common::model::account::AccountId::new(),
     };
     let component_id = ComponentId::new();
     let environment_id = EnvironmentId::new();
@@ -865,6 +866,7 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
                     plugin_version: "1.0".to_string(),
                     oplog_processor_component_id: Some(ComponentId::new()),
                     oplog_processor_component_revision: Some(revision),
+                    installed_by: golem_common::model::account::AccountId::new(),
                 }],
                 ..Default::default()
             },
@@ -3706,6 +3708,115 @@ async fn hidden_claims_do_not_make_an_oplog_entry_omitted() {
         public_invocation(&full.entry).caller(),
         Some(&PublicCaller::new(&caller, ClaimVisibility::Shown))
     );
+}
+
+/// A pending update and a queued manual update show their requester in both roles with its
+/// tokens, with claims only when they are shown. The requester is not the caller of the queued
+/// manual update. Guests get both roles through the WIT, never the claims.
+#[test]
+async fn pending_update_public_form_shows_the_requester() {
+    use crate::preview2::golem_api_1_x::oplog;
+
+    let (oplog_service, owned_agent_id, raw_oplog) = open_test_oplog("update-requester").await;
+    let requester = crate::test_callers::sample_caller();
+    let target_revision = ComponentRevision::new(2).unwrap();
+    let admission_index = raw_oplog
+        .add(OplogEntry::PendingUpdate {
+            timestamp: Timestamp::from(1_000),
+            description: UpdateDescription::Automatic { target_revision },
+            update_attempt_index: None,
+            requester: Box::new(requester.clone()),
+        })
+        .await
+        .unwrap();
+    let (operation, stored) = AgentInvocationPayload::ManualUpdate {
+        target_revision,
+        requester: requester.clone(),
+    }
+    .into_stored();
+    raw_oplog
+        .add(OplogEntry::PendingAgentInvocation {
+            timestamp: Timestamp::from(1_000),
+            not_before: None,
+            invocation_id: Uuid::from_u128(0x300).into(),
+            operation: Box::new(operation),
+            payload: OplogPayload::SerializedInline {
+                bytes: golem_common::serialization::serialize(&stored).unwrap(),
+                cached: None,
+            },
+            trace_id: golem_common::model::invocation_context::TraceId::generate(),
+            trace_states: Vec::new(),
+            invocation_context: Vec::new(),
+        })
+        .await
+        .unwrap();
+    raw_oplog.commit(CommitLevel::Always).await.unwrap();
+    let components = metadata_component_service(&owned_agent_id);
+
+    for claims in [ClaimVisibility::Hidden, ClaimVisibility::Shown] {
+        let expected = PublicCaller::new(&requester, claims);
+        assert_eq!(expected.original.claims().is_some(), claims.is_shown());
+
+        let chunk = get_public_oplog_chunk(
+            components.clone(),
+            oplog_service.clone(),
+            &owned_agent_id,
+            AgentMode::Durable,
+            test_component_id(),
+            OwnerKind::ComponentAgent,
+            None,
+            ComponentRevision::INITIAL,
+            OplogIndex::INITIAL,
+            100,
+            claims,
+        )
+        .await
+        .unwrap();
+        let mut seen = Vec::new();
+        for entry in &chunk.entries {
+            let wit_requester = match &entry.entry {
+                PublicOplogEntry::PendingUpdate(params) => {
+                    assert_eq!(params.requester, expected);
+                    assert_eq!(params.update_attempt_index, admission_index);
+                    seen.push("pending update");
+                    let oplog::PublicOplogEntry::PendingUpdate(wit) =
+                        oplog::PublicOplogEntry::try_from(entry.entry.clone()).unwrap()
+                    else {
+                        panic!("expected a WIT pending update");
+                    };
+                    wit.requester
+                }
+                PublicOplogEntry::PendingAgentInvocation(params) => {
+                    let PublicAgentInvocation::ManualUpdate(manual) = &params.invocation else {
+                        panic!("expected a manual update, got {:?}", params.invocation);
+                    };
+                    assert_eq!(manual.requester, expected);
+                    assert_eq!(params.invocation.caller(), None);
+                    seen.push("queued manual update");
+                    let oplog::PublicOplogEntry::PendingAgentInvocation(wit) =
+                        oplog::PublicOplogEntry::try_from(entry.entry.clone()).unwrap()
+                    else {
+                        panic!("expected a WIT pending invocation");
+                    };
+                    let oplog::AgentInvocation::ManualUpdate(wit) = wit.invocation else {
+                        panic!("expected a WIT manual update");
+                    };
+                    wit.requester
+                }
+                _ => continue,
+            };
+            let oplog::PublicPrincipal::User(user) = wit_requester.original else {
+                panic!("expected a user at the root of the requester");
+            };
+            assert_eq!(user.pair.subject, "user-1");
+            let oplog::PublicPrincipal::Agent(agent) = wit_requester.immediate else {
+                panic!("expected an agent as the immediate requester");
+            };
+            assert_eq!(agent.agent_type, "TestAgent");
+            assert_eq!(wit_requester.tokens.len(), 2);
+        }
+        assert_eq!(seen, vec!["pending update", "queued manual update"]);
+    }
 }
 
 /// A range read shows the claims of a caller exactly when the reader asks for them, as a page

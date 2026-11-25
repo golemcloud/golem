@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use golem_common::model::InvocationId;
-use golem_common::model::caller::{Caller, Principal};
+use golem_common::model::caller::Principal;
 
 use super::invocation_loop::{EphemeralStart, ephemeral_start_decision};
 use super::{RetirementReason, Worker};
@@ -157,13 +157,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(super) async fn get_existing_suspended<T>(
         deps: &T,
         owned_agent_id: &OwnedAgentId,
-        caller: Caller,
     ) -> Result<std::sync::Arc<Self>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
         deps.active_agents()
-            .get_existing(deps, owned_agent_id, caller)
+            .get_existing(deps, owned_agent_id)
             .await
     }
 
@@ -171,19 +170,17 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
-        caller: Caller,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let mut worker = Self::get_existing_suspended(deps, owned_agent_id, caller.clone()).await?;
+        let mut worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         let fingerprint = worker.get_initial_worker_metadata().fingerprint;
         loop {
             if let Some(outcome) = worker.start_deletion(expected_fingerprint).await? {
                 return outcome.handle().wait().await;
             }
-            worker = match Self::get_existing_suspended(deps, owned_agent_id, caller.clone()).await
-            {
+            worker = match Self::get_existing_suspended(deps, owned_agent_id).await {
                 Ok(worker) if worker.get_initial_worker_metadata().fingerprint == fingerprint => {
                     worker
                 }
@@ -197,13 +194,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         recover_immediately: bool,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = match Self::get_existing_suspended(deps, owned_agent_id, caller).await {
+        let worker = match Self::get_existing_suspended(deps, owned_agent_id).await {
             Ok(worker) => worker,
             Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(()),
             Err(error) => return Err(error),
@@ -273,13 +269,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         force: bool,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -355,7 +350,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        // The caller of the request is the requester of the update: every `PendingUpdate` of the
+        // attempt records it.
+        let requester = caller;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -452,7 +450,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             ),
             (UpdateMode::Automatic, decision) => {
                 debug!("Enqueuing update");
-                let update_attempt_index = worker.enqueue_automatic_update(target_revision).await?;
+                let update_attempt_index = worker
+                    .enqueue_automatic_update(target_revision, requester)
+                    .await?;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -472,7 +472,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(update_attempt_index)
             }
             (UpdateMode::Manual, decision) => {
-                let update_attempt_index = worker.enqueue_manual_update(target_revision).await?;
+                let update_attempt_index = worker
+                    .enqueue_manual_update(target_revision, requester)
+                    .await?;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -493,13 +495,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         owned_agent_id: &OwnedAgentId,
         target: RevertWorkerTarget,
         resolved_revert: Option<ResolvedRevert>,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -554,7 +555,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
@@ -564,7 +564,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps,
             owned_agent_id,
             plugin_priority,
-            caller,
             true,
             expected_fingerprint,
         )
@@ -575,7 +574,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        caller: Caller,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
@@ -585,7 +583,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             deps,
             owned_agent_id,
             plugin_priority,
-            caller,
             false,
             expected_fingerprint,
         )
@@ -596,14 +593,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         plugin_priority: PluginPriority,
-        caller: Caller,
         activate: bool,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> Result<(), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Send + Sync + Clone + 'static,
     {
-        let worker = Self::get_existing_suspended(deps, owned_agent_id, caller).await?;
+        let worker = Self::get_existing_suspended(deps, owned_agent_id).await?;
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
@@ -831,6 +827,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn enqueue_automatic_update(
         &self,
         target_revision: ComponentRevision,
+        requester: Caller,
     ) -> Result<OplogIndex, WorkerExecutorError> {
         // Admission identity and execution strategy are separate. The first PendingUpdate only
         // admits the request; the invocation loop durably selects full or snapshot-assisted replay
@@ -845,8 +842,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
 
         self.bump_read_only_cache_epoch();
-        let entry =
-            OplogEntry::pending_update(UpdateDescription::Automatic { target_revision }, None);
+        let entry = OplogEntry::pending_update(
+            UpdateDescription::Automatic { target_revision },
+            None,
+            Box::new(requester),
+        );
         let oplog_index = self
             .add_and_commit_oplog_internal(
                 &instance_guard,
@@ -857,16 +857,23 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         drop(instance_guard);
         Ok(oplog_index)
     }
+    /// Writes the `PendingUpdate` of an update attempt that was admitted earlier. `requester` is
+    /// the requester of that attempt's admission.
     pub(in crate::worker) async fn enqueue_update_for_attempt(
         &self,
         update_description: UpdateDescription,
         update_attempt_index: Option<OplogIndex>,
+        requester: Caller,
     ) -> Result<OplogIndex, WorkerExecutorError> {
         // Bump + commit under the same worker lifecycle lock.
         let instance_guard = self.lock_non_stopping_worker().await;
         instance_guard.ensure_not_deleting()?;
         self.bump_read_only_cache_epoch();
-        let entry = OplogEntry::pending_update(update_description.clone(), update_attempt_index);
+        let entry = OplogEntry::pending_update(
+            update_description.clone(),
+            update_attempt_index,
+            Box::new(requester),
+        );
         let oplog_index = self
             .add_and_commit_oplog_internal(
                 &instance_guard,
@@ -884,10 +891,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub async fn enqueue_manual_update(
         &self,
         target_revision: ComponentRevision,
+        requester: Caller,
     ) -> Result<OplogIndex, WorkerExecutorError> {
         self.ensure_component_agent_ingress("manual update")?;
-        self.enqueue_worker_invocation(AgentInvocation::ManualUpdate { target_revision })
-            .await
+        self.enqueue_worker_invocation(AgentInvocation::ManualUpdate {
+            target_revision,
+            requester,
+        })
+        .await
     }
     /// Reads the `PendingUpdate` oplog entry referenced by `pending` and reconstructs the full
     /// update description, including any snapshot payload reference. The status record only keeps
@@ -905,6 +916,21 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             other => Err(WorkerExecutorError::unknown(format!(
                 "Expected a PendingUpdate oplog entry at index {}, but found {other:?}",
                 pending.oplog_index
+            ))),
+        }
+    }
+    /// The requester of the automatic update admitted at `admission_index`: the `requester` of
+    /// the `PendingUpdate` there. The executor writes the strategy entry of that update with the
+    /// same requester.
+    pub(in crate::worker) async fn requester_of_admission(
+        &self,
+        admission_index: OplogIndex,
+    ) -> Result<Caller, WorkerExecutorError> {
+        match self.oplog.read(admission_index).await? {
+            OplogEntry::PendingUpdate { requester, .. } => Ok(*requester),
+            other => Err(WorkerExecutorError::unknown(format!(
+                "Expected the PendingUpdate that admitted an update at index {admission_index}, \
+                 but found {other:?}"
             ))),
         }
     }

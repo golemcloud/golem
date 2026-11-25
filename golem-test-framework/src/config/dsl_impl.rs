@@ -906,6 +906,20 @@ impl<Deps: TestDependencies> TestDsl for TestUserContext<Deps> {
         Ok(())
     }
 
+    async fn update_worker_as_caller(
+        &self,
+        _agent_id: &OwnedAgentId,
+        _mode: AgentUpdateMode,
+        _target_revision: ComponentRevision,
+        _disable_wakeup: bool,
+        _caller: golem_common::model::caller::Caller,
+    ) -> anyhow::Result<OplogIndex> {
+        anyhow::bail!(
+            "HTTP update DSL does not support overriding the caller; the requester is the \
+             account of the request's token. Use the worker-executor gRPC test DSL instead"
+        )
+    }
+
     async fn delete_worker(&self, agent_id: &OwnedAgentId) -> anyhow::Result<()> {
         let client = self
             .deps

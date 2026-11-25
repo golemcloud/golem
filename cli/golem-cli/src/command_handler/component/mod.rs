@@ -12,7 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::app::context::validated_to_anyhow;
+use crate::app::build::extract_component_metadata::extract_and_store_component_metadata;
+use crate::app::context::{BuildContext, validated_to_anyhow};
 
 use crate::command::component::ComponentSubcommand;
 use crate::command::shared_args::{OptionalComponentNames, PostDeployArgs};
@@ -27,7 +28,9 @@ use crate::model::agent::action_result::{
     AgentDeleteAllView, AgentDeletionMeta, AgentRedeployResult, AgentRedeploymentMeta,
 };
 use crate::model::agent::{AgentActionError, AgentUpdateMode};
-use crate::model::app::{ApplicationComponentSelectMode, ComponentDependency, DynamicHelpSections};
+use crate::model::app::{
+    ApplicationComponentSelectMode, BuildConfig, ComponentDependency, DynamicHelpSections,
+};
 use crate::model::app_raw;
 use crate::model::cascade::property::Property;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
@@ -135,9 +138,10 @@ impl ComponentCommandHandler {
                     self.cmd_redeploy_agents(component_name.component_name)
                         .await
                 }
-                ComponentSubcommand::ManifestTrace { component_name } => {
-                    self.cmd_manifest_trace(component_name).await
-                }
+                ComponentSubcommand::ManifestTrace {
+                    component_name,
+                    build,
+                } => self.cmd_manifest_trace(component_name, build).await,
             }
         })
     }
@@ -336,14 +340,33 @@ impl ComponentCommandHandler {
 
     async fn cmd_manifest_trace(
         &self,
-        _component_names: OptionalComponentNames,
+        component_names: OptionalComponentNames,
+        build: bool,
     ) -> anyhow::Result<()> {
-        let app_ctx = self.ctx.app_context_lock().await;
-        let app_ctx = app_ctx.some_or_err()?;
+        if build {
+            self.ctx
+                .app_handler()
+                .build(
+                    &BuildConfig::new(),
+                    component_names.component_name.clone(),
+                    &ApplicationComponentSelectMode::All,
+                )
+                .await?;
+        }
+        self.ctx
+            .app_handler()
+            .must_select_components(
+                component_names.component_name,
+                &ApplicationComponentSelectMode::All,
+            )
+            .await?;
+
+        let mut app_ctx = self.ctx.app_context_lock_mut().await?;
+        let app_ctx = app_ctx.some_or_err_mut()?;
 
         let component_names = app_ctx
-            .application()
-            .component_names()
+            .selected_component_names()
+            .iter()
             .cloned()
             .collect::<Vec<_>>();
         for component_name in component_names {
@@ -355,6 +378,45 @@ impl ComponentCommandHandler {
                 ),
             );
             let _indent = self.ctx.log_handler().decorated_indent_primary();
+
+            let agents = if app_ctx
+                .application()
+                .component(&component_name)
+                .wasm()
+                .exists()
+            {
+                let agent_types = extract_and_store_component_metadata(
+                    &BuildContext::new(app_ctx, &BuildConfig::new()),
+                    &component_name,
+                )
+                .await?
+                .agent_types;
+                let mapping = agent_types
+                    .iter()
+                    .map(|agent_type| (agent_type.type_name.clone(), component_name.clone()))
+                    .collect::<BTreeMap<_, _>>();
+                let resolved_agents = app_ctx.application().resolve_agents(&mapping)?;
+                mapping
+                    .into_keys()
+                    .filter_map(|agent_type_name| {
+                        let properties = resolved_agents
+                            .agent(&agent_type_name)?
+                            .layer_properties()
+                            .with_compacted_traces();
+                        Some((agent_type_name, properties))
+                    })
+                    .collect()
+            } else {
+                log_warn_action(
+                    "Skipping",
+                    format!(
+                        "the agent traces of {}, because the component is not built; build it or pass --build to see them",
+                        component_name.as_str().log_color_highlight()
+                    ),
+                );
+                BTreeMap::new()
+            };
+
             self.ctx
                 .log_handler()
                 .log_output(ComponentManifestTraceView {
@@ -364,6 +426,7 @@ impl ComponentCommandHandler {
                         .component(&component_name)
                         .layer_properties()
                         .with_compacted_traces(),
+                    agents,
                 })?
         }
 
@@ -1719,7 +1782,7 @@ impl ComponentCommandHandler {
                         owner_account_email: grant.release_owner.email.clone(),
                         metadata_version: grant.release.metadata_version.clone(),
                         metadata_digest: grant.release.metadata_digest,
-                        provision,
+                        provision: (&provision).into(),
                         component_bindings: manifest_config
                             .component_bindings
                             .iter()
@@ -1828,6 +1891,7 @@ impl ComponentCommandHandler {
         provision: &ToolManifestProvisionConfig,
         plugin_grants: &HashMap<PluginGrantKey, EnvironmentPluginGrantWithDetails>,
     ) -> anyhow::Result<(ToolProvisionConfig, Vec<PendingRemoteInitialFile>)> {
+        let installed_by = self.ctx.account_id().await?;
         let plugins = provision
             .plugins
             .iter()
@@ -1855,6 +1919,7 @@ impl ComponentCommandHandler {
                     plugin_version: grant.plugin.version.clone(),
                     oplog_processor_component_id: Some(spec.component_id),
                     oplog_processor_component_revision: Some(spec.component_revision),
+                    installed_by,
                 })
             })
             .collect::<anyhow::Result<Vec<_>>>()?;

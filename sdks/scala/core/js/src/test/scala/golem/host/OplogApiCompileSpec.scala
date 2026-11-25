@@ -45,8 +45,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     original = PublicPrincipal.User(PublicPrincipalRef("https://idp.example", "bob"), ts),
     immediate = PublicPrincipal.Agent(
       PublicPrincipalRef("https://golem.example", "agent:relay"),
-      new java.util.UUID(3L, 4L),
-      "Relay(\"r\")",
+      golem.AgentId(new java.util.UUID(3L, 4L)),
       "Relay",
       new java.util.UUID(5L, 6L)
     ),
@@ -65,7 +64,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         sampleCaller
       )
     ),
-    AgentInvocation.ManualUpdate(BigInt(2)),
+    AgentInvocation.ManualUpdate(BigInt(2), sampleCaller),
     AgentInvocation.SaveSnapshot(sampleCaller)
   )
 
@@ -233,7 +232,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
         )
       ),
       OplogEntry.PendingAgentInvocation(PendingAgentInvocationParameters(ts, agentInvocations.head, None)),
-      OplogEntry.PendingUpdate(PendingUpdateParameters(ts, BigInt(3), UpdateDescription.AutoUpdate)),
+      OplogEntry.PendingUpdate(PendingUpdateParameters(ts, BigInt(3), UpdateDescription.AutoUpdate, sampleCaller)),
       OplogEntry.SuccessfulUpdate(SuccessfulUpdateParameters(ts, BigInt(3), BigInt(1024), List(pluginDesc))),
       OplogEntry.FailedUpdate(FailedUpdateParameters(ts, BigInt(3), Some("compile error"))),
       OplogEntry.FailedUpdate(FailedUpdateParameters(ts, BigInt(3), None)),
@@ -290,7 +289,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     test("AgentInvocation exhaustive match") {
       agentInvocations.foreach {
         case AgentInvocation.ExportedFunction(p)       => Predef.assert(p.functionName.nonEmpty)
-        case AgentInvocation.ManualUpdate(rev)         => Predef.assert(rev > 0)
+        case AgentInvocation.ManualUpdate(rev, r)      => Predef.assert(rev > 0 && r.tokens.nonEmpty)
         case AgentInvocation.AgentInitialization(k, _) => Predef.assert(k == invocationUuid)
         case AgentInvocation.ExternalTool(k, _)        => Predef.assert(k == invocationUuid)
         case AgentInvocation.SaveSnapshot(c)           => Predef.assert(c.tokens.nonEmpty)
@@ -301,11 +300,11 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     },
     test("PublicPrincipal exhaustive match") {
       List(sampleCaller.original, sampleCaller.immediate, PublicPrincipal.Anonymous).foreach {
-        case PublicPrincipal.User(pair, _)           => Predef.assert(pair.subject.nonEmpty)
-        case PublicPrincipal.Account(pair, _, _)     => Predef.assert(pair.subject.nonEmpty)
-        case PublicPrincipal.Agent(pair, _, _, _, _) => Predef.assert(pair.subject.nonEmpty)
-        case PublicPrincipal.Tool(pair, _, _)        => Predef.assert(pair.subject.nonEmpty)
-        case PublicPrincipal.Anonymous               => ()
+        case PublicPrincipal.User(pair, _)        => Predef.assert(pair.subject.nonEmpty)
+        case PublicPrincipal.Account(pair, _, _)  => Predef.assert(pair.subject.nonEmpty)
+        case PublicPrincipal.Agent(pair, _, _, _) => Predef.assert(pair.subject.nonEmpty)
+        case PublicPrincipal.Tool(pair, _, _)     => Predef.assert(pair.subject.nonEmpty)
+        case PublicPrincipal.Anonymous            => ()
       }
       assertCompletes
     },

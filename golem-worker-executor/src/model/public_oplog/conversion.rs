@@ -409,6 +409,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                 timestamp,
                 description,
                 update_attempt_index,
+                requester,
             } => {
                 let target_revision = *description.target_revision();
                 let public_description = match description {
@@ -441,6 +442,7 @@ impl PublicOplogEntryOps for PublicOplogEntry {
                     target_revision,
                     description: public_description,
                     update_attempt_index: update_attempt_index.unwrap_or(oplog_index),
+                    requester: PublicCaller::new(&requester, claims),
                 }))
             }
             OplogEntry::SuccessfulUpdate {

@@ -484,6 +484,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                         target_revision,
                         mode,
                         false,
+                        // The requester is the caller of every call that this code makes:
+                        // the original caller of the chain, and this code as the immediate one.
+                        self.outgoing_caller(),
                         handle.agent_auth_ctx(),
                     )
                     .await;

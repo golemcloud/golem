@@ -6622,10 +6622,16 @@ components:
       title: ManualUpdateParameters
       required:
       - targetRevision
+      - requester
       properties:
         targetRevision:
           type: integer
           format: uint64
+        requester:
+          description: Who asked for the update. It is not the caller of the update's snapshot save.
+          allOf:
+          - $ref: '#/components/schemas/PublicCaller'
+          - description: Who asked for the update. It is not the caller of the update's snapshot save.
     MetadataEnvelope:
       type: object
       properties:
@@ -9770,6 +9776,30 @@ components:
             in kind.
           items:
             $ref: '#/components/schemas/StartIdentityField'
+        replayStart:
+          description: |-
+            Where the replay that diverged started; `None` for a divergence outside a recovery replay,
+            such as the replay of an update.
+          allOf:
+          - $ref: '#/components/schemas/ReplayStart'
+          - description: |-
+              Where the replay that diverged started; `None` for a divergence outside a recovery replay,
+              such as the replay of an update.
+    ReplayFullStart:
+      type: object
+      title: ReplayFullStart
+      description: |-
+        A replay without a snapshot. `rejected_snapshots` holds the oplog indexes of the automatic
+        snapshots that the recovery rejected before it, in ascending order; it is empty when no
+        snapshot was involved.
+      required:
+      - rejectedSnapshots
+      properties:
+        rejectedSnapshots:
+          type: array
+          items:
+            type: integer
+            format: uint64
     ReplayHostCall:
       type: object
       title: ReplayHostCall
@@ -9807,6 +9837,68 @@ components:
           allOf:
           - $ref: '#/components/schemas/TypedSchemaValue'
           - description: The request of the call, when it is known.
+    ReplaySnapshotStart:
+      type: object
+      title: ReplaySnapshotStart
+      description: |-
+        A replay that started from the snapshot at `snapshot_index`. `rejected_snapshots` holds the
+        oplog indexes of the automatic snapshots that the recovery rejected before it, in ascending
+        order.
+      required:
+      - snapshotIndex
+      - rejectedSnapshots
+      properties:
+        snapshotIndex:
+          type: integer
+          format: uint64
+        rejectedSnapshots:
+          type: array
+          items:
+            type: integer
+            format: uint64
+    ReplayStart:
+      type: object
+      description: |-
+        Where a recovery replay started: from a loaded snapshot or without a snapshot, each with
+        the automatic snapshots that the recovery rejected before it.
+      oneOf:
+      - $ref: '#/components/schemas/ReplayStart_ReplaySnapshotStart'
+      - $ref: '#/components/schemas/ReplayStart_ReplayFullStart'
+      discriminator:
+        propertyName: type
+        mapping:
+          Snapshot: '#/components/schemas/ReplayStart_ReplaySnapshotStart'
+          FullReplay: '#/components/schemas/ReplayStart_ReplayFullStart'
+    ReplayStart_ReplayFullStart:
+      description: |-
+        Where a recovery replay started: from a loaded snapshot or without a snapshot, each with
+        the automatic snapshots that the recovery rejected before it.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - FullReplay
+            example: FullReplay
+      - $ref: '#/components/schemas/ReplayFullStart'
+    ReplayStart_ReplaySnapshotStart:
+      description: |-
+        Where a recovery replay started: from a loaded snapshot or without a snapshot, each with
+        the automatic snapshots that the recovery rejected before it.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Snapshot
+            example: Snapshot
+      - $ref: '#/components/schemas/ReplaySnapshotStart'
     ReplayStep:
       type: object
       description: |-
@@ -12706,6 +12798,7 @@ components:
       - targetRevision
       - description
       - updateAttemptIndex
+      - requester
       properties:
         timestamp:
           type: string
@@ -12718,6 +12811,8 @@ components:
         updateAttemptIndex:
           type: integer
           format: uint64
+        requester:
+          $ref: '#/components/schemas/PublicCaller'
     r#PreCommitRemoteTransactionParams:
       type: object
       title: r#PreCommitRemoteTransactionParams

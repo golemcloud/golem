@@ -149,6 +149,28 @@ message ReplayDivergence {
   ReplayStep expected = 2;
   ReplayStep actual = 3;
   repeated StartIdentityField mismatched = 4;
+  optional ReplayStart replay_start = 5;
+}
+
+// Where a recovery replay started.
+message ReplayStart {
+  oneof start {
+    // A replay from a loaded snapshot.
+    ReplaySnapshotStart snapshot = 1;
+    // A replay without a snapshot.
+    ReplayFullStart full_replay = 2;
+  }
+}
+
+// A replay from the snapshot at snapshot_index, after the recovery rejected these snapshots.
+message ReplaySnapshotStart {
+  uint64 snapshot_index = 1;
+  repeated uint64 rejected_snapshots = 2;
+}
+
+// A replay without a snapshot, after the recovery rejected these snapshots.
+message ReplayFullStart {
+  repeated uint64 rejected_snapshots = 1;
 }
 
 // One step of a replay.
@@ -382,6 +404,8 @@ message ProcessOplogEntriesInvocationParameters {
 
 message ManualUpdateInvocationParameters {
   uint64 target_revision = 1;
+  // Who requested the update. Required.
+  golem.component.PublicCaller requester = 2;
 }
 
 message PublicAgentInvocationResult {
@@ -714,6 +738,9 @@ message PendingUpdateParameters {
   uint64 target_revision = 2;
   UpdateDescription update_description = 3;
   uint64 update_attempt_index = 4;
+  // Who requested the update. Required. It is never the caller of the update's snapshot save
+  // or load.
+  golem.component.PublicCaller requester = 5;
 }
 
 message SuccessfulUpdateParameters {

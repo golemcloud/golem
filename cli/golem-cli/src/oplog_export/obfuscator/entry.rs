@@ -42,8 +42,8 @@ use golem_common::model::oplog::{
     PublicQueuedCardEventTransferReceived, PublicRetryPolicyState,
     PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicSpanAttributes,
     PublicSpanFinished, PublicSpanStarted, PublicToolInvocationOperation,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, ReplayDivergence, ReplayStep,
-    SaveSnapshotParameters, SaveSnapshotResultParameters,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, ReplayDivergence, ReplayStart,
+    ReplayStep, SaveSnapshotParameters, SaveSnapshotResultParameters,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OplogIndex, Timestamp};
@@ -320,11 +320,79 @@ fn failed_snapshot_assisted(details: &PublicFailedSnapshotAssistedUpdateDetails)
         .build()
 }
 
+/// A schema-less value for raw public JSON method input: objects are records in key order,
+/// arrays are lists, and numbers keep their integer or float form. JSON has no byte type, so
+/// a non-empty array of integers that all fit a byte is a byte list, which is obfuscated as
+/// one token rather than element by element.
+fn json_schema_value(json: serde_json::Value) -> SchemaValue {
+    if let serde_json::Value::Array(elements) = &json
+        && let Some(bytes) = elements
+            .iter()
+            .map(|element| element.as_u64().and_then(|byte| u8::try_from(byte).ok()))
+            .collect::<Option<Vec<_>>>()
+        && !bytes.is_empty()
+    {
+        return SchemaValue::List {
+            elements: bytes.into_iter().map(SchemaValue::U8).collect(),
+        };
+    }
+    match json {
+        serde_json::Value::Null => SchemaValue::Option { inner: None },
+        serde_json::Value::Bool(value) => SchemaValue::Bool(value),
+        serde_json::Value::Number(number) => number
+            .as_u64()
+            .map(SchemaValue::U64)
+            .or_else(|| number.as_i64().map(SchemaValue::S64))
+            .unwrap_or_else(|| SchemaValue::F64(number.as_f64().unwrap_or(f64::NAN))),
+        serde_json::Value::String(value) => SchemaValue::String(value),
+        serde_json::Value::Array(elements) => SchemaValue::List {
+            elements: elements.into_iter().map(json_schema_value).collect(),
+        },
+        serde_json::Value::Object(fields) => SchemaValue::Record {
+            fields: fields
+                .into_iter()
+                .map(|(_, value)| json_schema_value(value))
+                .collect(),
+        },
+    }
+}
+
 fn retry_state(state: &PublicRetryPolicyState) -> ReportNode {
     kept(state)
 }
 
 impl Walker<'_, '_> {
+    /// The original method input is a component-independent envelope. Its case names the
+    /// captured representation, which is not customer data, so it stays in clear and the
+    /// captured value inside it is obfuscated schema-less.
+    fn method_input(&mut self, input: &TypedSchemaValue) -> ReportNode {
+        use golem_common::model::agent::PublicMethodInput;
+        use golem_common::schema::FromSchema;
+        const TYPE_NAME: &str = "original-method-input";
+        let case = |name: &str, index: u32, payload: ReportNode| {
+            kept_case(
+                CaseKind::Variant,
+                Some(TYPE_NAME.to_string()),
+                name,
+                Some(index),
+                Some(payload),
+            )
+        };
+        match PublicMethodInput::from_value(input.value()) {
+            Ok(PublicMethodInput::Native { value, .. }) => {
+                case("Native", 0, self.schemaless(&value, Region::Customer))
+            }
+            Ok(PublicMethodInput::PublicJson(json)) => {
+                let payload = match serde_json::from_str::<serde_json::Value>(&json) {
+                    Ok(json) => self.schemaless(&json_schema_value(json), Region::Customer),
+                    Err(_) => self.str_leaf(&json, Region::Customer),
+                };
+                case("PublicJson", 1, payload)
+            }
+            Err(_) => self.customer(input),
+        }
+    }
+
     /// A token over the serialised form of a Golem value: over its text when it serialises
     /// to a string, otherwise over its JSON text.
     fn tok<T: Serialize>(&self, value: &T) -> ReportNode {
@@ -386,6 +454,34 @@ impl Walker<'_, '_> {
             .add(
                 "mismatched",
                 tuple(divergence.mismatched.iter().map(name).collect()),
+            )
+            .opt(
+                "replayStart",
+                divergence.replay_start.as_ref().map(|start| match start {
+                    ReplayStart::Snapshot(start) => Fields::new()
+                        .add(
+                            "snapshot",
+                            Fields::new()
+                                .add("snapshotIndex", idx(&start.snapshot_index))
+                                .add(
+                                    "rejectedSnapshots",
+                                    tuple(start.rejected_snapshots.iter().map(idx).collect()),
+                                )
+                                .build(),
+                        )
+                        .build(),
+                    ReplayStart::FullReplay(start) => Fields::new()
+                        .add(
+                            "fullReplay",
+                            Fields::new()
+                                .add(
+                                    "rejectedSnapshots",
+                                    tuple(start.rejected_snapshots.iter().map(idx).collect()),
+                                )
+                                .build(),
+                        )
+                        .build(),
+                }),
             )
             .build()
     }
@@ -637,7 +733,7 @@ impl Walker<'_, '_> {
                     Fields::new()
                         .add("invocationId", self.tok(invocation_id))
                         .add("methodName", text(method_name.clone()))
-                        .add("functionInput", self.customer(function_input))
+                        .add("functionInput", self.method_input(function_input))
                         .add("traceId", self.tok(trace_id))
                         .add("traceStates", self.tok(trace_states))
                         .add("invocationContext", self.tok(invocation_context))
@@ -689,13 +785,15 @@ impl Walker<'_, '_> {
                     .add("caller", self.caller(caller))
                     .build(),
             ),
-            PublicAgentInvocation::ManualUpdate(ManualUpdateParameters { target_revision }) => {
-                Some(
-                    Fields::new()
-                        .add("targetRevision", number(target_revision.get()))
-                        .build(),
-                )
-            }
+            PublicAgentInvocation::ManualUpdate(ManualUpdateParameters {
+                target_revision,
+                requester,
+            }) => Some(
+                Fields::new()
+                    .add("targetRevision", number(target_revision.get()))
+                    .add("requester", self.caller(requester))
+                    .build(),
+            ),
         };
         kept_case(
             CaseKind::Variant,
@@ -1198,10 +1296,12 @@ impl Walker<'_, '_> {
                 target_revision,
                 description,
                 update_attempt_index,
+                requester,
             }) => Fields::new()
                 .add("targetRevision", number(target_revision.get()))
                 .add("description", self.update_description(description))
                 .add("updateAttemptIndex", idx(update_attempt_index))
+                .add("requester", self.caller(requester))
                 .build(),
             PublicOplogEntry::SuccessfulUpdate(SuccessfulUpdateParams {
                 timestamp: _,

@@ -46,6 +46,9 @@ pub enum AgentInvocationKind {
 pub enum AgentInvocation {
     ManualUpdate {
         target_revision: ComponentRevision,
+        /// Who asked for the update. It is not a caller: the update's snapshot save runs as the
+        /// agent itself, never as the requester.
+        requester: Caller,
     },
     AgentInitialization {
         idempotency_key: InvocationId,
@@ -100,6 +103,8 @@ pub enum AgentInvocation {
 pub enum AgentInvocationPayload {
     ManualUpdate {
         target_revision: ComponentRevision,
+        /// Who asked for the update.
+        requester: Caller,
     },
     AgentInitialization {
         input: SchemaValue,
@@ -195,7 +200,10 @@ impl InvocationRequestOperation {
 #[derive(Clone, Debug, PartialEq, BinaryCodec)]
 #[desert(evolution())]
 pub enum StoredAgentInvocationPayload {
-    ManualUpdate,
+    ManualUpdate {
+        /// Who asked for the update.
+        requester: Caller,
+    },
     AgentInitialization {
         input: SchemaValue,
         caller: Caller,
@@ -240,8 +248,11 @@ impl StoredAgentInvocationPayload {
     ) -> Result<AgentInvocationPayload, String> {
         type Op = InvocationRequestOperation;
         Ok(match (self, operation) {
-            (Self::ManualUpdate, Op::ManualUpdate { target_revision }) => {
-                AgentInvocationPayload::ManualUpdate { target_revision }
+            (Self::ManualUpdate { requester }, Op::ManualUpdate { target_revision }) => {
+                AgentInvocationPayload::ManualUpdate {
+                    target_revision,
+                    requester,
+                }
             }
             (Self::AgentInitialization { input, caller }, Op::AgentInitialization) => {
                 AgentInvocationPayload::AgentInitialization { input, caller }
@@ -321,7 +332,7 @@ impl StoredAgentInvocationPayload {
 
     fn variant_name(&self) -> &'static str {
         match self {
-            Self::ManualUpdate => "ManualUpdate",
+            Self::ManualUpdate { .. } => "ManualUpdate",
             Self::AgentInitialization { .. } => "AgentInitialization",
             Self::AgentMethod { .. } => "AgentMethod",
             Self::ExternalTool { .. } => "ExternalTool",
@@ -341,7 +352,9 @@ impl AgentInvocationPayload {
 
     pub fn request_operation(&self) -> InvocationRequestOperation {
         match self {
-            Self::ManualUpdate { target_revision } => InvocationRequestOperation::ManualUpdate {
+            Self::ManualUpdate {
+                target_revision, ..
+            } => InvocationRequestOperation::ManualUpdate {
                 target_revision: *target_revision,
             },
             Self::AgentInitialization { .. } => InvocationRequestOperation::AgentInitialization,
@@ -367,9 +380,13 @@ impl AgentInvocationPayload {
         type Op = InvocationRequestOperation;
         type Stored = StoredAgentInvocationPayload;
         match self {
-            Self::ManualUpdate { target_revision } => {
-                (Op::ManualUpdate { target_revision }, Stored::ManualUpdate)
-            }
+            Self::ManualUpdate {
+                target_revision,
+                requester,
+            } => (
+                Op::ManualUpdate { target_revision },
+                Stored::ManualUpdate { requester },
+            ),
             Self::AgentInitialization { input, caller } => (
                 Op::AgentInitialization,
                 Stored::AgentInitialization { input, caller },
@@ -442,6 +459,22 @@ impl AgentInvocationPayload {
     /// Compares the caller's execution contract, not deployment-time tool resolution.
     /// Tracing and scheduling metadata are stored outside the payload.
     pub fn same_caller_request(&self, other: &Self) -> bool {
+        self.same_caller_request_decoding(other, |_| None)
+    }
+
+    /// Like [`Self::same_caller_request`], but compares method inputs captured in different
+    /// representations, such as native REST input and public session JSON, by the values
+    /// `decode` gives for them. The stream permission of a request belongs to its transport,
+    /// not to its identity, so a trigger and a later awaited call with one key match.
+    ///
+    /// `self` is the accepted request and `other` the repeated one. External REST input forbids
+    /// host-managed capabilities in the result, so a repeated external REST request matches by
+    /// value only an accepted request that is external REST too.
+    pub fn same_caller_request_decoding(
+        &self,
+        other: &Self,
+        decode: impl Fn(&AgentMethodInput) -> Option<SchemaValue>,
+    ) -> bool {
         match (self, other) {
             (
                 Self::AgentInitialization { input, caller },
@@ -454,23 +487,28 @@ impl AgentInvocationPayload {
                 Self::AgentMethod {
                     method_name,
                     input,
-                    allow_streams,
                     caller,
                     scope_card,
+                    ..
                 },
                 Self::AgentMethod {
                     method_name: other_method,
                     input: other_input,
-                    allow_streams: other_allow_streams,
                     caller: other_caller,
                     scope_card: other_card,
+                    ..
                 },
             ) => {
                 method_name == other_method
-                    && allow_streams == other_allow_streams
                     && caller == other_caller
                     && scope_card == other_card
-                    && input == other_input
+                    && (input == other_input
+                        || (input.is_external_rest() || !other_input.is_external_rest())
+                            && decode(input).zip(decode(other_input)).is_some_and(
+                                |(input, other_input)| {
+                                    schema_value_same_request(&input, &other_input)
+                                },
+                            ))
             }
             (
                 Self::ExternalTool {
@@ -796,9 +834,13 @@ impl AgentInvocation {
         invocation_context: InvocationContextStack,
     ) -> Self {
         match payload {
-            AgentInvocationPayload::ManualUpdate { target_revision } => {
-                Self::ManualUpdate { target_revision }
-            }
+            AgentInvocationPayload::ManualUpdate {
+                target_revision,
+                requester,
+            } => Self::ManualUpdate {
+                target_revision,
+                requester,
+            },
             AgentInvocationPayload::AgentInitialization { input, caller } => {
                 Self::AgentInitialization {
                     idempotency_key,
@@ -875,9 +917,15 @@ impl AgentInvocation {
 
     pub fn into_parts(self) -> (InvocationId, AgentInvocationPayload, InvocationContextStack) {
         match self {
-            Self::ManualUpdate { target_revision } => (
+            Self::ManualUpdate {
+                target_revision,
+                requester,
+            } => (
                 InvocationId(Uuid::new_v4()),
-                AgentInvocationPayload::ManualUpdate { target_revision },
+                AgentInvocationPayload::ManualUpdate {
+                    target_revision,
+                    requester,
+                },
                 InvocationContextStack::fresh(),
             ),
             Self::AgentInitialization {
@@ -1280,6 +1328,65 @@ mod request_equality_tests {
                 assert_eq!(stored.with_operation(operation).unwrap(), request);
             }
         }
+    }
+
+    #[test]
+    fn same_caller_request_decoding_matches_representations_but_keeps_the_rest_restriction() {
+        let value = || SchemaValue::Record {
+            fields: vec![SchemaValue::U32(7)],
+        };
+        let internal: AgentMethodInput = value().try_into().unwrap();
+        let AgentMethodInput::Native(native) = internal.clone() else {
+            unreachable!()
+        };
+        let rest = AgentMethodInput::Native(native.for_external_rest());
+        let json = AgentMethodInput::PublicJson(
+            crate::model::invocation_session_public::JsonMethodInput::capture(br#"{"amount": 7}"#)
+                .unwrap(),
+        );
+        let request =
+            |input: &AgentMethodInput, allow_streams| AgentInvocationPayload::AgentMethod {
+                method_name: "start".into(),
+                input: input.clone(),
+                allow_streams,
+                caller: Caller::anonymous(),
+                scope_card: None,
+            };
+        let decode = |amount| {
+            move |_: &AgentMethodInput| {
+                Some(SchemaValue::Record {
+                    fields: vec![SchemaValue::U32(amount)],
+                })
+            }
+        };
+        for (accepted, repeated, matches) in [
+            (&rest, &json, true),
+            (&rest, &internal, true),
+            (&json, &internal, true),
+            (&internal, &json, true),
+            (&json, &rest, false),
+            (&internal, &rest, false),
+        ] {
+            assert_eq!(
+                request(accepted, false)
+                    .same_caller_request_decoding(&request(repeated, true), decode(7)),
+                matches,
+                "{accepted:?} then {repeated:?}"
+            );
+        }
+        assert!(
+            request(&rest, false).same_caller_request_decoding(&request(&rest, true), |_| None)
+        );
+        assert!(!request(&rest, false).same_caller_request_decoding(
+            &request(&json, true),
+            |input| {
+                decode(if matches!(input, AgentMethodInput::PublicJson(_)) {
+                    8
+                } else {
+                    7
+                })(input)
+            }
+        ));
     }
 
     #[test]

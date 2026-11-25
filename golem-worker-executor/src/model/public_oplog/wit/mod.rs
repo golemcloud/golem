@@ -39,7 +39,8 @@ pub(crate) use values::reject_quota_handles_in_oplog_entries;
 use values::{
     decode_untyped_schema_value, encode_public_typed_schema_value, encode_untyped_schema_value,
     oplog_payload_from_wit, oplog_payload_to_wit, replay_divergence_from_wit,
-    replay_divergence_to_wit, update_failure_class_from_wit, update_failure_class_to_wit,
+    replay_divergence_to_wit, requester_from_wit, requester_to_wit, update_failure_class_from_wit,
+    update_failure_class_to_wit,
 };
 
 #[cfg(test)]
@@ -84,7 +85,7 @@ use golem_common::model::oplog::{
     EphemeralFuelExhaustedError, EphemeralSleepTooLongError, FallibleResultParameters,
     JsonSnapshotData, MultipartPartData, MultipartSnapshotData, PublicOplogEntry,
     PublicSnapshotData, PublicUpdateDescription, RawSnapshotData, ReadOnlyViolationError,
-    ReplayDivergence, ReplayHostCall, ReplayStep, SaveSnapshotResultParameters,
+    ReplayDivergence, ReplayHostCall, ReplayStart, ReplayStep, SaveSnapshotResultParameters,
     SnapshotBasedUpdateParameters, StartIdentityField, UpdateFailureClass,
 };
 use golem_common::model::quota::ResourceName;

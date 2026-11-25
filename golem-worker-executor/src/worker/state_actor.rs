@@ -232,7 +232,7 @@ enum StatusJob {
     },
     AppendInvocationIfVersion {
         entry: Box<OplogEntry>,
-        attachment: Option<golem_common::model::durable_stream::StreamSessionAttachedRecord>,
+        attachment: Option<Box<golem_common::model::durable_stream::StreamSessionAttachedRecord>>,
         idempotency_key: InvocationId,
         expected_result_generation: u64,
         expected_revert_generation: u64,
@@ -563,7 +563,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 let appended = if let Some(mut attachment) = attachment {
                                     state.oplog.add_pair(*entry, Box::new(move |index| {
                                         attachment.pending_invocation_oplog_index = index;
-                                        let record = golem_common::model::durable_stream::StreamSessionRecord::Attached(attachment);
+                                        let record = golem_common::model::durable_stream::StreamSessionRecord::Attached(*attachment);
                                         let summary = DurableStreamEventSummary::session(&record);
                                         OplogEntry::stream_session(None, golem_common::model::oplog::OplogPayload::Inline(Box::new(record)), summary)
                                     })).await.map(|_| ())
@@ -927,7 +927,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         self.commit
             .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
                 entry: Box::new(entry),
-                attachment,
+                attachment: attachment.map(Box::new),
                 idempotency_key,
                 expected_result_generation,
                 expected_revert_generation,

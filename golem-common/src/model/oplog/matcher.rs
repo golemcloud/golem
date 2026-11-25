@@ -74,6 +74,22 @@ impl PublicOplogEntry {
     /// `caller`, `original`, `immediate`, `caller.original` and `caller.immediate`. Claims never
     /// take part, so a search cannot reveal them.
     fn caller_match(caller: &PublicCaller, query_path: &[String], query: &LeafQuery) -> bool {
+        Self::roles_match("caller", caller, query_path, query)
+    }
+
+    /// Matches the requester of an update as [`Self::caller_match`] matches a caller, under the
+    /// fields `requester`, `original`, `immediate`, `requester.original` and
+    /// `requester.immediate`.
+    fn requester_match(requester: &PublicCaller, query_path: &[String], query: &LeafQuery) -> bool {
+        Self::roles_match("requester", requester, query_path, query)
+    }
+
+    fn roles_match(
+        field: &str,
+        caller: &PublicCaller,
+        query_path: &[String],
+        query: &LeafQuery,
+    ) -> bool {
         [
             ("original", &caller.original),
             ("immediate", &caller.immediate),
@@ -81,9 +97,9 @@ impl PublicOplogEntry {
         .into_iter()
         .any(|(role, principal)| {
             let paths: [Vec<String>; 3] = [
-                vec!["caller".to_string()],
+                vec![field.to_string()],
                 vec![role.to_string()],
-                vec!["caller".to_string(), role.to_string()],
+                vec![field.to_string(), role.to_string()],
             ];
             let mut texts = vec![principal.kind().as_str()];
             if let Some(pair) = principal.pair() {
@@ -347,12 +363,14 @@ impl PublicOplogEntry {
                                     query,
                                 )
                         }
-                        PublicAgentInvocation::ManualUpdate(inv_params) => Self::string_match(
-                            &inv_params.target_revision.to_string(),
-                            &[],
-                            query_path,
-                            query,
-                        ),
+                        PublicAgentInvocation::ManualUpdate(inv_params) => {
+                            Self::string_match(
+                                &inv_params.target_revision.to_string(),
+                                &[],
+                                query_path,
+                                query,
+                            ) || Self::requester_match(&inv_params.requester, query_path, query)
+                        }
                     }
                     || params
                         .invocation
@@ -463,12 +481,14 @@ impl PublicOplogEntry {
                                     query,
                                 )
                         }
-                        PublicAgentInvocation::ManualUpdate(params) => Self::string_match(
-                            &params.target_revision.to_string(),
-                            &[],
-                            query_path,
-                            query,
-                        ),
+                        PublicAgentInvocation::ManualUpdate(params) => {
+                            Self::string_match(
+                                &params.target_revision.to_string(),
+                                &[],
+                                query_path,
+                                query,
+                            ) || Self::requester_match(&params.requester, query_path, query)
+                        }
                     }
                     || params
                         .invocation
@@ -485,6 +505,7 @@ impl PublicOplogEntry {
                         query_path,
                         query,
                     )
+                    || Self::requester_match(&params.requester, query_path, query)
             }
             PublicOplogEntry::SuccessfulUpdate(params) => {
                 Self::string_match("successfulupdate", &[], query_path, query)
