@@ -708,9 +708,8 @@ mod tests {
         );
     }
 
-    /// `AssignShards` says "your shards are exactly these". Anything
-    /// absent is dropped, and the sweep in `assign_shards_internal` restarts
-    /// exactly the agents the new set rejects.
+    /// `AssignShards` says "your shards are exactly these". This test checks
+    /// shard membership and refuses agents on shards absent from the new set.
     #[test]
     fn a_full_replace_push_drops_unlisted_shards_and_their_agents() {
         let service = service_holding(&epochs([(0, 1), (1, 1)]), None);
@@ -735,7 +734,7 @@ mod tests {
         );
         assert!(
             service.check_worker(&on_dropped).is_err(),
-            "an agent on a dropped shard is what the restart sweep picks up"
+            "an agent on a dropped shard must fail the membership check"
         );
         assert!(service.check_worker(&on_kept).is_ok());
     }

@@ -118,7 +118,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     /// lapsed - the first one after a manager outage does - reports the
     /// recovery deferred. An accepted registration or renewal runs it once
     /// the lease is live. A stale renewal can extend the lease without
-    /// scheduling recovery; the recovery stays owed until an accepted grant.
+    /// scheduling or completing recovery. Successful recovery, including
+    /// recovery from a push, can clear the debt. An accepted grant can
+    /// schedule recovery that is still owed.
     ///
     /// The owed-recovery ticket is taken here, before anything runs, and handed
     /// back only after a recovery ran, so the startup registration and the push
