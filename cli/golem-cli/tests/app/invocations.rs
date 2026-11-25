@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use crate::app::{Output, TestContext, cmd, flag};
+use crate::app::{Output, TestContext, cmd, flag, replace_strings_in_file};
 use serde_json::Value;
 use std::collections::HashSet;
 use test_r::{inherit_test_dep, test, timeout};
@@ -41,6 +41,25 @@ async fn invocation_commands_get_list_and_cancel(_tracing: &Tracing) {
         .await;
     assert!(outputs.success_or_dump());
     ctx.cd(app_name);
+    replace_strings_in_file(
+        ctx.cwd_path_join("src/counter_agent.rs"),
+        &[
+            ("fn new(", "async fn new("),
+            (
+                "        Self {\n            _name: name,",
+                r#"        if name == "failed-constructor" {
+            panic!("constructor rejected");
+        }
+        if name == "blocked-constructor" {
+            let promise = golem_rust::create_promise();
+            golem_rust::await_promise(&promise).await;
+        }
+        Self {
+            _name: name,"#,
+            ),
+        ],
+    )
+    .unwrap();
     let outputs = ctx.cli([cmd::DEPLOY, flag::YES]).await;
     assert!(outputs.success_or_dump());
 
@@ -254,6 +273,84 @@ async fn invocation_commands_get_list_and_cancel(_tracing: &Tracing) {
     assert_eq!(listed.iter().collect::<HashSet<_>>().len(), 4);
     assert!(listed.contains(&completed_id));
     assert!(listed.iter().any(|id| id == scheduled_id));
+
+    for (address, expected_state) in [
+        (agent.as_str(), "completed"),
+        ("CounterAgent(\"failed-constructor\")", "failed"),
+        ("CounterAgent(\"blocked-constructor\")", "running"),
+    ] {
+        if expected_state == "failed" {
+            let outputs = ctx.cli([flag::YES, cmd::AGENT, "upsert", address]).await;
+            assert!(!outputs.success(), "the constructor must fail");
+        } else if expected_state == "running" {
+            let outputs = ctx
+                .cli([
+                    flag::YES,
+                    cmd::AGENT,
+                    cmd::INVOKE,
+                    "--trigger",
+                    address,
+                    "increment",
+                ])
+                .await;
+            assert!(outputs.success_or_dump());
+        }
+        let outputs = ctx
+            .cli([flag::FORMAT, "json", cmd::AGENT, cmd::GET, address])
+            .await;
+        assert!(outputs.success_or_dump());
+        let metadata = single_json(&outputs)["metadata"].clone();
+        let fingerprint: Uuid = metadata["fingerprint"].as_str().unwrap().parse().unwrap();
+        let expected_id = format!(
+            "{}.{}",
+            metadata["agentId"].as_str().unwrap(),
+            Uuid::new_v5(&fingerprint, b"constructor")
+        );
+        let outputs = ctx
+            .cli([
+                flag::FORMAT,
+                "json",
+                INVOCATION,
+                cmd::LIST,
+                "--agent",
+                address,
+                "--kind",
+                "constructor",
+            ])
+            .await;
+        assert!(outputs.success_or_dump());
+        let listed = single_json(&outputs);
+        let constructors = listed["invocations"].as_array().unwrap();
+        assert_eq!(constructors.len(), 1, "{listed}");
+        assert_eq!(constructors[0]["invocationId"], expected_id);
+        let outputs = ctx
+            .cli([flag::FORMAT, "json", INVOCATION, cmd::GET, &expected_id])
+            .await;
+        assert!(outputs.success_or_dump());
+        let got = single_json(&outputs);
+        assert_eq!(got["summary"]["invocationId"], expected_id);
+        if expected_state == "running" {
+            assert!(
+                matches!(
+                    got["summary"]["state"].as_str(),
+                    Some("pending" | "running" | "waiting")
+                ),
+                "{got}"
+            );
+        } else {
+            assert_eq!(got["summary"]["state"], expected_state);
+        }
+        if expected_state == "failed" {
+            assert_eq!(got["result"]["type"], "Failure");
+            assert!(
+                got["result"]["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("constructor rejected"),
+                "{got}"
+            );
+        }
+    }
 
     // Cancel exits 0 and reports `cancelled`; get then exits 130.
     let outputs = ctx

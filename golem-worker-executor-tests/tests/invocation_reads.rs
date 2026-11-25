@@ -157,13 +157,20 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
     assert_eq!(ids.len(), 4, "{:?}", all.invocations);
     assert_eq!(ids[0], scheduled);
     assert_eq!(ids[1], cancelled);
-    assert!(
-        all.invocations
-            .iter()
-            .any(|summary| summary.kind == InvocationKind::Constructor as i32
-                && state_of(summary) == InvocationLifecycleState::Completed
-                && summary.operation.is_none())
-    );
+    let fingerprint = executor.get_worker_metadata(&target).await?.fingerprint;
+    let constructor_id = InvocationId(uuid::Uuid::new_v5(&fingerprint.0, b"constructor"));
+    assert!(all.invocations.iter().any(|summary| summary.kind
+        == InvocationKind::Constructor as i32
+        && id_of(summary) == constructor_id
+        && state_of(summary) == InvocationLifecycleState::Completed
+        && summary.operation.is_none()));
+    let constructor = executor
+        .get_invocation(&target.agent_id, env, constructor_id)
+        .await?
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?
+        .expect("the constructor is readable by its fingerprint-derived ID");
+    assert_eq!(constructor.kind, InvocationKind::Constructor as i32);
+    assert_eq!(state_of(&constructor), InvocationLifecycleState::Completed);
 
     // Pages of two give the same invocations in the same order, each once.
     let mut paged = Vec::new();
