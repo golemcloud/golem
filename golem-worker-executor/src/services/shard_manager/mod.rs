@@ -472,14 +472,13 @@ impl GrpcShardManagerService {
     /// is owed. The renewal loop schedules recovery through [`AnnouncementSingleFlight`], so a
     /// slow sweep does not delay the next renewal RPC.
     ///
-    /// The grant is the shard manager's set for this executor. Normally that
-    /// is exactly what was held, and only the lease clock moves. When it is
-    /// not, the manager is correcting a push this executor never received,
-    /// wider or narrower, and it is an assignment change like any other: the
-    /// hook runs the same sweep-and-recover the push path does. A grant whose
-    /// set is older than the last delivery applied crossed with a push on the
-    /// network: its set is ignored, or it would put the older set back, and
-    /// its lease is adopted, because it answers this executor's own request.
+    /// An accepted renewal records the expiry, revision and executor count,
+    /// even when the shard set does not change. After an accepted reply, the
+    /// renewal loop requests recovery if the set changed or recovery is still owed.
+    ///
+    /// A grant whose set is older than the last delivery applied crossed with a
+    /// push on the network: its set is ignored, or it would put the older set back,
+    /// and its lease is adopted, because it answers this executor's own request.
     fn adopt_lease(&self, lease: ShardLease) -> (RenewalDelay, bool) {
         let ShardLease {
             shard_epochs,
