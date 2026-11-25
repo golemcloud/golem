@@ -216,6 +216,7 @@ pub fn export_failure(error: &anyhow::Error) -> Option<(&'static str, String, Ma
             ("invalid-arguments", Map::new())
         }
         OplogExportError::StaleCursor => ("stale-cursor", Map::new()),
+        OplogExportError::Expired => ("oplog-expired", Map::new()),
         OplogExportError::RootChanged
         | OplogExportError::CreateMissing
         | OplogExportError::ReadFailed { .. }
