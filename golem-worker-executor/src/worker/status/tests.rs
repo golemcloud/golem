@@ -8203,6 +8203,84 @@ fn an_activation_in_a_deleted_region_is_not_applied() {
     });
 }
 
+/// The status fold applies a plugin activation and an oplog processor checkpoint that a later
+/// `Jump` skips. Only a deleted region removes these entries from the fold.
+#[test]
+fn the_status_fold_applies_plugin_entries_that_a_jump_skips() {
+    let grant_id = EnvironmentPluginGrantId::new();
+    let target = AgentId::from_parts(7, 23);
+    let test_case = TestCase::builder(0).build();
+    let timestamp = Timestamp::now_utc();
+    let entries = BTreeMap::from([
+        (
+            OplogIndex::INITIAL,
+            test_case.entries[0].oplog_entry.clone(),
+        ),
+        (
+            OplogIndex::from_u64(2),
+            OplogEntry::ActivatePlugin {
+                timestamp,
+                plugin_grant_id: grant_id,
+            },
+        ),
+        (
+            OplogIndex::from_u64(3),
+            OplogEntry::OplogProcessorCheckpoint {
+                timestamp,
+                plugin_grant_id: grant_id,
+                target_agent_id: target,
+                confirmed_up_to: OplogIndex::from_u64(2),
+                sending_up_to: OplogIndex::from_u64(3),
+                last_batch_start: OplogIndex::from_u64(2),
+                source_component_revision: ComponentRevision::INITIAL,
+                delivery: None,
+            },
+        ),
+        (
+            OplogIndex::from_u64(4),
+            OplogEntry::Interrupted { timestamp },
+        ),
+        (
+            OplogIndex::from_u64(5),
+            OplogEntry::Jump {
+                timestamp,
+                entity_parent_start_index: None,
+                jump: OplogRegion::from_index_range(
+                    OplogIndex::from_u64(2)..=OplogIndex::from_u64(4),
+                ),
+            },
+        ),
+    ]);
+
+    let status = update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        entries,
+        &RetryConfig::default(),
+    )
+    .unwrap();
+
+    assert!(
+        status
+            .skipped_regions
+            .is_in_deleted_region(OplogIndex::from_u64(2))
+    );
+    assert_eq!(status.active_plugins, HashSet::from([grant_id]));
+    assert_eq!(
+        status.oplog_processor_checkpoints,
+        HashMap::from([(
+            grant_id,
+            OplogProcessorCheckpointState {
+                target_agent_id: Some(target),
+                confirmed_up_to: OplogIndex::from_u64(2),
+                sending_up_to: OplogIndex::from_u64(3),
+                last_batch_start: OplogIndex::from_u64(2),
+                delivery: None,
+            },
+        )])
+    );
+}
+
 #[test]
 fn deactivate_then_reactivate_seeds_new_checkpoint() {
     let grant_id = EnvironmentPluginGrantId::new();
