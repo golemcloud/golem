@@ -125,9 +125,10 @@ impl OplogRange {
     }
 
     /// The first index of the range in an oplog whose first entry is at `oplog_first`: the start
-    /// of the range, or `oplog_first` when the range has no start.
+    /// of the range, or `oplog_first` when the range has no start. An `oplog_first` of 0 counts as
+    /// 1, because an oplog has no entry before index 1.
     pub fn first_index_in(&self, oplog_first: OplogIndex) -> OplogIndex {
-        self.start.unwrap_or(oplog_first)
+        self.start.unwrap_or(oplog_first.max(OplogIndex::INITIAL))
     }
 
     /// The first index that the range can hold: its start, or 1 when it has no start, because an
@@ -399,6 +400,37 @@ mod tests {
                 expected,
                 "{range:?} in an oplog that ends at {oplog_last}"
             )
+        });
+    }
+
+    #[test]
+    fn a_range_without_a_start_never_starts_at_0() {
+        [
+            (range(None, None), 0, 3),
+            (range(None, Some(9)), 0, 3),
+            (range(None, None), 0, 0),
+        ]
+        .into_iter()
+        .for_each(|(range, oplog_first, count)| {
+            assert_eq!(
+                range.first_index_in(index(oplog_first)),
+                index(1),
+                "{range:?}"
+            );
+            let page = range
+                .page_in(index(oplog_first), count)
+                .expect("the range has a page");
+            assert_eq!(
+                page.first_index_in(index(oplog_first)),
+                index(1),
+                "{page:?}"
+            );
+            let (start, end) = page.to_indices();
+            assert_eq!(
+                OplogRange::from_indices(start, end).unwrap(),
+                page,
+                "{page:?} keeps its value through its indices"
+            );
         });
     }
 
