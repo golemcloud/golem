@@ -1985,7 +1985,8 @@ pub mod worker {
             /// `agent.oplog-page` document, with the `cursor` of the next page when the oplog has
             /// entries after the page within its range. A search page ends early when the server's
             /// scan budget ends the search, so a page with a cursor can have fewer entries, or
-            /// none.
+            /// none. A search with --from first reads the entries before --from within the same
+            /// budget, so its first pages can be empty.
             #[arg(long, conflicts_with_all = ["html", "serve", "obfuscate"])]
             page: bool,
             /// The `cursor` of the previous page: reads the page after it. Pass it back unchanged,

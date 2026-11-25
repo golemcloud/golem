@@ -322,6 +322,11 @@ impl WorkerApi {
     /// `scanEntries` and `scanMillis` limit the scan of a range read. Without them, the scan has no
     /// limit, and `count` still limits each page. Without `query`, `lastIndex` is the last index of
     /// the oplog. With `query`, it is the last index of the range in the oplog.
+    ///
+    /// A search with `from` first reads the entries before `from`, for the component revision at
+    /// `from`. The scan budget of the server covers this read. When the budget ends the read
+    /// before `from`, the page is empty, and its cursor has `scanTo`. Pass the cursor back
+    /// unchanged, with or without `from`.
     #[oai(
         path = "/:environment_id/agents/:agent_id/oplog",
         method = "get",
