@@ -149,10 +149,11 @@ impl StatusCheckpointer {
     /// - never for ephemeral workers or when disabled;
     /// - always for [`CheckpointReason::Snapshot`] (bypasses the throttle, aligning the checkpoint
     ///   with the snapshot index);
-    /// - for [`CheckpointReason::Idle`]: when no checkpoint exists yet, when the existing checkpoint
-    ///   is no longer a usable fold baseline (its index now sits in a skipped/deleted region — e.g.
-    ///   a logical revert appended a `Revert` marker and recorded a deleted region covering it), or
-    ///   when at least `min_oplog_delta` entries were appended since the last checkpoint.
+    /// - for [`CheckpointReason::Idle`] and [`CheckpointReason::MidInvocation`]: when no checkpoint
+    ///   exists yet, when the existing checkpoint is no longer a usable fold baseline (its index
+    ///   now sits in a skipped/deleted region — e.g. a logical revert appended a `Revert` marker
+    ///   and recorded a deleted region covering it), or when at least `min_oplog_delta` entries
+    ///   were appended since the last checkpoint.
     ///
     /// Never written once [`Self::begin_delete`] has run, so an in-flight write cannot resurrect the
     /// checkpoint after it is deleted.

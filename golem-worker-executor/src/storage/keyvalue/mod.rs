@@ -175,6 +175,10 @@ pub trait KeyValueStorage: Debug {
     /// match. Pair writes win when a field is also listed in `deletes`.
     /// `None` requires absence, not an empty value. A mismatch changes nothing.
     /// Redis supports this operation only for namespaces stored as a single hash.
+    ///
+    /// When accessed through the retry decorator, `false` reports that the final attempt did not
+    /// match. An earlier attempt may already have applied before its response was lost, so callers
+    /// must not interpret `false` as proof that no mutation occurred.
     async fn compare_and_set_many(
         &self,
         svc_name: &'static str,
@@ -974,7 +978,9 @@ pub enum KeyValueStorageNamespace {
     },
     /// The durable status baseline of one agent (the *clean* status checkpoint). It has the same
     /// physical layout as [`Self::AgentStatus`]: one hash for each agent, split into `core`,
-    /// `membership`, `regions`, `updates` and the per-transfer fields.
+    /// `membership`, `regions`, `updates`, `resolved-names`, `followed-lookups`, the per-transfer
+    /// `tr:`/`ts:` fields, and the `entity-replay` marker with the per-entry
+    /// `er:`/`eo:`/`ep:`/`em:`/`ec:` fields.
     ///
     /// Only three writers write it, each at a structurally clean boundary where no jumpable oplog
     /// region is open: the snapshot save, the throttled idle boundary, and the throttled

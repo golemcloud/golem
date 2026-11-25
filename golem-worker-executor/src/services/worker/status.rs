@@ -465,8 +465,9 @@ pub(super) fn reassemble_cached_status(
 }
 
 /// One split status hash of an agent incarnation. Each hash is one per-agent hash whose fields
-/// are `core`, `membership`, `regions`, `updates`, per-transfer `tr:`/`ts:` fields, and the
-/// `entity-replay` marker with per-entry `er:`/`eo:`/`ep:`/`em:`/`ec:` replay indexes.
+/// are `core`, `membership`, `regions`, `updates`, `resolved-names`, `followed-lookups`,
+/// per-transfer `tr:`/`ts:` fields, and the `entity-replay` marker with per-entry
+/// `er:`/`eo:`/`ep:`/`em:`/`ec:` replay indexes.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum SplitStatusHash<'a> {
     /// The live status cache. The background flusher moves it forward.

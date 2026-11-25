@@ -251,9 +251,9 @@ pub trait WorkerService: Send + Sync {
         operation: BoxFuture<'a, Result<bool, WorkerExecutorError>>,
     ) -> Result<bool, WorkerExecutorError>;
 
-    /// Deletes the cached status of the worker (the live cache, the invocation result index and
-    /// the dedicated `agent_mode` key), and keeps the oplog and the durable status baseline. Only
-    /// [`Self::remove`] deletes the baseline.
+    /// Deletes the cached status of the worker (the live cache, the invocation result index, and
+    /// the dedicated `agent_mode` key when it belongs to `fingerprint`), and keeps the oplog and
+    /// the durable status baseline. Only [`Self::remove`] deletes the baseline.
     async fn remove_cached_status(
         &self,
         owned_agent_id: &OwnedAgentId,
