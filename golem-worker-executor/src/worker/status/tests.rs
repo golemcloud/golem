@@ -11633,7 +11633,9 @@ fn cancelled_standalone_retention_survives_every_checkpoint_cut() {
 }
 
 pub(crate) mod status_baseline {
-    use super::region_fold::{automatic_admission, failed, idx, revision};
+    use super::region_fold::{
+        assisted_strategy, automatic_admission, failed, idx, manual_pending_update, revision,
+    };
     use super::*;
     use golem_common::model::card::{AgentCardHolder, CardHolder, CardId, StoredCard};
     use golem_common::model::durable_stream::{
@@ -11641,6 +11643,11 @@ pub(crate) mod status_baseline {
         StreamConsumerCancelIntentRecord, StreamEndpointSide, StreamError, StreamRecordReference,
         StreamRegistrationInvocation, StreamSessionKey, StreamTerminal, StreamTerminalAuthor,
     };
+    use golem_common::model::oplog::types::SerializableIpAddresses;
+    use golem_common::model::oplog::{
+        HostRequest, HostRequestSocketsResolveName, HostResponse, HostResponseSocketsResolveName,
+    };
+    use golem_common::model::retry_policy::RetryPolicyState;
     use proptest::prelude::*;
     use test_r::test;
 
@@ -11651,8 +11658,11 @@ pub(crate) mod status_baseline {
         Pending,
         Started,
         Finished,
+        FinishedAwaitingSettlement,
+        Settled,
         Cancelled(u8),
-        InvocationFailed,
+        InvocationFailed(u8),
+        InFunctionRetry(u8),
         RecoveryFailed,
         RecoverySucceeded,
         GrowMemory(u8),
@@ -11667,6 +11677,8 @@ pub(crate) mod status_baseline {
         ActivatePlugin(bool),
         DeactivatePlugin(bool),
         AutomaticAdmission,
+        SnapshotBasedAdmission,
+        AssistedStrategy(u8, u8),
         UpdateSucceeded(u8),
         UpdateFailed,
         Jump(u8),
@@ -11689,6 +11701,9 @@ pub(crate) mod status_baseline {
         CardInstallQueued,
         CardInstalled(u8),
         CardRevokedCascade(u8),
+        NameLookupStart(u8),
+        NameLookupEnd(u8),
+        ExportForkAdmitted(u8),
     }
 
     pub(crate) fn generated() -> impl Strategy<Value = Generated> {
@@ -11696,8 +11711,11 @@ pub(crate) mod status_baseline {
             Just(Generated::Pending),
             Just(Generated::Started),
             Just(Generated::Finished),
+            Just(Generated::FinishedAwaitingSettlement),
+            Just(Generated::Settled),
             any::<u8>().prop_map(Generated::Cancelled),
-            Just(Generated::InvocationFailed),
+            any::<u8>().prop_map(Generated::InvocationFailed),
+            any::<u8>().prop_map(Generated::InFunctionRetry),
             Just(Generated::RecoveryFailed),
             Just(Generated::RecoverySucceeded),
             any::<u8>().prop_map(Generated::GrowMemory),
@@ -11712,6 +11730,9 @@ pub(crate) mod status_baseline {
             any::<bool>().prop_map(Generated::ActivatePlugin),
             any::<bool>().prop_map(Generated::DeactivatePlugin),
             Just(Generated::AutomaticAdmission),
+            Just(Generated::SnapshotBasedAdmission),
+            (any::<u8>(), any::<u8>())
+                .prop_map(|(admission, snapshot)| Generated::AssistedStrategy(admission, snapshot)),
             any::<u8>().prop_map(Generated::UpdateSucceeded),
             Just(Generated::UpdateFailed),
             any::<u8>().prop_map(Generated::Jump),
@@ -11736,6 +11757,9 @@ pub(crate) mod status_baseline {
             Just(Generated::CardInstallQueued),
             any::<u8>().prop_map(Generated::CardInstalled),
             any::<u8>().prop_map(Generated::CardRevokedCascade),
+            any::<u8>().prop_map(Generated::NameLookupStart),
+            any::<u8>().prop_map(Generated::NameLookupEnd),
+            any::<u8>().prop_map(Generated::ExportForkAdmitted),
         ]
     }
 
@@ -11768,6 +11792,10 @@ pub(crate) mod status_baseline {
     struct State {
         keys: Vec<InvocationId>,
         current: Option<InvocationId>,
+        settling: Option<InvocationId>,
+        automatic_admissions: Vec<u64>,
+        snapshots: Vec<u64>,
+        lookups: Vec<OplogIndex>,
         resources: Vec<AgentResourceId>,
         snapshot_name: Option<FilesystemSnapshotName>,
         sessions: Vec<StreamSessionKey>,
@@ -11862,6 +11890,30 @@ pub(crate) mod status_baseline {
                 state.keys.retain(|pending| *pending != key);
                 finished_invocation(&key)
             }
+            Generated::FinishedAwaitingSettlement => {
+                let key = state
+                    .current
+                    .take()
+                    .unwrap_or_else(|| InvocationId(Uuid::new_v4()));
+                state.keys.retain(|pending| *pending != key);
+                state.settling = Some(key);
+                let mut entry = finished_invocation(&key);
+                if let OplogEntry::AgentInvocationFinished {
+                    awaits_settlement, ..
+                } = &mut entry
+                {
+                    *awaits_settlement = true;
+                }
+                entry
+            }
+            Generated::Settled => OplogEntry::AgentInvocationSettled {
+                timestamp,
+                invocation_id: state
+                    .settling
+                    .take()
+                    .unwrap_or_else(|| InvocationId(Uuid::new_v4())),
+                consumed_fuel: 0,
+            },
             Generated::Cancelled(choice) => match select(&state.keys, *choice) {
                 Some(key) => {
                     state.keys.retain(|pending| *pending != key);
@@ -11872,11 +11924,33 @@ pub(crate) mod status_baseline {
                 }
                 None => OplogEntry::Interrupted { timestamp },
             },
-            Generated::InvocationFailed => invocation_error(
-                &state
-                    .current
-                    .unwrap_or_else(|| InvocationId(Uuid::new_v4())),
+            Generated::InvocationFailed(count) => OplogEntry::error(
+                None,
+                OplogErrorKind::Invocation,
+                Some(
+                    state
+                        .current
+                        .unwrap_or_else(|| InvocationId(Uuid::new_v4())),
+                ),
+                AgentError::TransientError("failed".to_string()),
+                OplogIndex::INITIAL,
+                Some(RetryPolicyState::Counter(u32::from(*count))),
+                None,
+                None,
             ),
+            Generated::InFunctionRetry(choice) => match select(&state.starts, *choice) {
+                Some(start_index) => OplogEntry::error(
+                    None,
+                    OplogErrorKind::Invocation,
+                    state.current,
+                    AgentError::TransientError("retried in the call".to_string()),
+                    idx(index - 1),
+                    Some(RetryPolicyState::Counter(1)),
+                    Some(Timestamp::from(2_000 + u64::from(*choice))),
+                    Some(start_index),
+                ),
+                None => OplogEntry::Interrupted { timestamp },
+            },
             Generated::RecoveryFailed => OplogEntry::error(
                 None,
                 OplogErrorKind::Recovery,
@@ -11915,6 +11989,7 @@ pub(crate) mod status_baseline {
                 None => OplogEntry::Suspend { timestamp },
             },
             Generated::Snapshot(named) => {
+                state.snapshots.push(index);
                 state.snapshot_name = named.then(FilesystemSnapshotName::periodic);
                 update_fields_snapshot(state.snapshot_name.clone())
             }
@@ -11934,7 +12009,20 @@ pub(crate) mod status_baseline {
                 timestamp,
                 plugin_grant_id: GRANTS[usize::from(*second)],
             },
-            Generated::AutomaticAdmission => automatic_admission(index + 1),
+            Generated::AutomaticAdmission => {
+                state.automatic_admissions.push(index);
+                automatic_admission(index + 1)
+            }
+            Generated::SnapshotBasedAdmission => manual_pending_update(index + 1, None),
+            Generated::AssistedStrategy(admission, snapshot) => match (
+                select(&state.automatic_admissions, *admission),
+                select(&state.snapshots, *snapshot),
+            ) {
+                (Some(admission), Some(snapshot)) => {
+                    assisted_strategy(admission + 1, admission, 1, snapshot, None)
+                }
+                _ => OplogEntry::Interrupted { timestamp },
+            },
             Generated::UpdateSucceeded(choice) => OplogEntry::successful_update(
                 revision(index + 1),
                 10,
@@ -12147,20 +12235,64 @@ pub(crate) mod status_baseline {
                     local_wallet_generation: 1,
                 }
             }
+            Generated::NameLookupStart(choice) => {
+                state.starts.push(idx(index));
+                state.lookups.push(idx(index));
+                OplogEntry::Start {
+                    timestamp,
+                    parent_start_index: None,
+                    function_name: HostFunctionName::SocketsIpNameLookupResolveAddresses,
+                    invocation_id: None,
+                    observational_owner: None,
+                    driver: None,
+                    request: Some(OplogPayload::Inline(Box::new(
+                        HostRequest::SocketsResolveName(HostRequestSocketsResolveName {
+                            name: format!("host-{}", choice % 3),
+                        }),
+                    ))),
+                    durable_function_type: DurableFunctionType::ReadRemote,
+                    span_started: None,
+                    denial: None,
+                }
+            }
+            Generated::NameLookupEnd(choice) => match select(&state.lookups, *choice) {
+                Some(start_index) => OplogEntry::End {
+                    timestamp,
+                    start_index,
+                    response: Some(OplogPayload::Inline(Box::new(
+                        HostResponse::SocketsResolveName(HostResponseSocketsResolveName {
+                            result: Ok(SerializableIpAddresses(vec![
+                                std::net::IpAddr::from([10, 0, 0, *choice]).into(),
+                            ])),
+                        }),
+                    ))),
+                    forced_commit: false,
+                    span_finished: None,
+                    span_attributes: None,
+                },
+                None => OplogEntry::Interrupted { timestamp },
+            },
+            Generated::ExportForkAdmitted(choice) => export_fork_admission(
+                AgentId::from_parts(8, u128::from(choice % 4)),
+                &format!("session-{}", choice % 3),
+                u64::from(*choice),
+            ),
         };
         (state, entry.rounded())
     }
 
-    /// The oplog of `generated`: the `Create` of an agent at index 1 with the initial plugins
-    /// that `initial_plugins` selects ([`grants`]), then one entry for each generated value.
-    pub(crate) fn oplog(
-        initial_plugins: u8,
-        generated: &[Generated],
-    ) -> BTreeMap<OplogIndex, OplogEntry> {
-        let mut create = TestCase::builder(1).build().entries[0].oplog_entry.clone();
-        if let OplogEntry::Create { parameters, .. } = &mut create {
-            parameters.initial_active_plugins = grants(initial_plugins);
+    /// The oplog of `generated`: the `Create` of an agent at index 1, then one entry for each
+    /// generated value. The bits 0 and 1 of `create` select the initial plugins ([`grants`]), and
+    /// bit 2 sets `never_live`. The `Create` has the fingerprint that the generated export fork
+    /// admissions name as their source.
+    pub(crate) fn oplog(create: u8, generated: &[Generated]) -> BTreeMap<OplogIndex, OplogEntry> {
+        let mut create_entry = TestCase::builder(1).build().entries[0].oplog_entry.clone();
+        if let OplogEntry::Create { parameters, .. } = &mut create_entry {
+            parameters.initial_active_plugins = grants(create);
+            parameters.never_live = create & 0b100 != 0;
+            parameters.instance_id = export_owner_fingerprint().0;
         }
+        let create = create_entry;
         generated
             .iter()
             .zip(2..)
@@ -12195,31 +12327,62 @@ pub(crate) mod status_baseline {
     proptest! {
         /// A status baseline at any index folds the rest of the oplog to the status of a fold
         /// of the whole oplog, in every field. A fold refuses a baseline only when a later
-        /// `Jump` or `Revert` follows its index; the reader then folds the whole oplog from index
-        /// 1. The write and the read of the stored baseline have their own property in
-        /// `services::worker::tests`.
+        /// `Jump` or `Revert` follows its index. A baseline is also refused when a
+        /// snapshot-based or snapshot-assisted update skips a prefix. The reader then folds the
+        /// whole oplog from index 1. The write and the read of the stored baseline have their own
+        /// property in `services::worker::tests`.
         #[test]
         fn a_fold_from_a_status_baseline_equals_a_fold_of_the_whole_oplog(
-            initial_plugins in any::<u8>(),
+            create in any::<u8>(),
             generated in proptest::collection::vec(generated(), 1..40),
         ) {
-            let entries = oplog(initial_plugins, &generated);
+            let entries = oplog(create, &generated);
             let whole = fold(AgentStatusRecord::default(), entries.clone()).unwrap();
+            let skips_a_prefix = entries.values().any(|entry| {
+                matches!(
+                    entry,
+                    OplogEntry::PendingUpdate {
+                        description: UpdateDescription::SnapshotBased { .. }
+                            | UpdateDescription::SnapshotAssistedAutomatic { .. },
+                        ..
+                    }
+                )
+            });
 
             entries.keys().try_for_each(|at| {
                 let (before, after): (BTreeMap<_, _>, BTreeMap<_, _>) = entries
                     .clone()
                     .into_iter()
                     .partition(|(index, _)| index <= at);
-                let rewinds_after = after.values().any(|entry| {
+                let refusable = after.values().any(|entry| {
                     matches!(entry, OplogEntry::Jump { .. } | OplogEntry::Revert { .. })
+                        || (skips_a_prefix
+                            && matches!(
+                                entry,
+                                OplogEntry::PendingUpdate { .. }
+                                    | OplogEntry::SuccessfulUpdate { .. }
+                                    | OplogEntry::FailedUpdate { .. }
+                            ))
                 });
                 let baseline = fold(AgentStatusRecord::default(), before).unwrap();
+                // The writers of the durable baseline write it only at a clean boundary, so no
+                // later `Jump` covers it. A start status that a later `Jump` covers while a
+                // snapshot-based update is pending is not checked: `baseline_is_invalidated`
+                // compares the skipped regions with the override of that update merged, so it
+                // accepts the start status, but `resolved_names` folds with the unreplayed
+                // regions, which have no override.
+                let covered_by_a_later_jump = after.values().any(|entry| {
+                    matches!(entry, OplogEntry::Jump { jump, .. } if jump.contains(*at))
+                });
+                if covered_by_a_later_jump && baseline.skipped_regions.is_overridden() {
+                    return Ok(());
+                }
                 match fold(baseline, after) {
                     Some(status) => prop_assert_eq!(&status, &whole, "baseline at {}", at),
                     None => prop_assert!(
-                        rewinds_after,
-                        "the baseline at {} is refused with no later jump or revert",
+                        refusable,
+                        "the baseline at {} is refused with no later jump, revert or update \
+                         that skips a prefix",
                         at
                     ),
                 }
