@@ -401,10 +401,29 @@ async fn setup_probe_app(ctx: &mut TestContext, server_config: &str) -> Recordin
     proxy
 }
 
-/// Waits until the archive moved the oplog of `agent` to the blob layer: the indexed storage of the
-/// local server holds a blob layer manifest of the agent, and the primary oplog of the agent holds
-/// no entry. The local server keeps one SQLite file for each agent and layer in `kv-store`, and
-/// names the file by the environment ID and the agent ID.
+/// The count of rows of `table` in the SQLite file `path`, or 0 when the file does not exist.
+async fn sqlite_rows(path: &std::path::Path, table_and_filter: &str) -> i64 {
+    if !path.exists() {
+        return 0;
+    }
+    let pool = sqlx::SqlitePool::connect(&format!("sqlite://{}?mode=ro", path.display()))
+        .await
+        .unwrap();
+    let (count,): (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {table_and_filter}"))
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+    count
+}
+
+/// Waits until the archive moved the whole oplog of `agent` to the blob layer: the primary oplog
+/// and the compressed layer of the agent hold no entry, and the blob storage of the local server
+/// holds a compressed oplog chunk of the agent. The archive adds the entries to a layer before it
+/// drops them from the layer below, so the entries are then all in the blob layer. The local server
+/// keeps one SQLite file for each agent and layer in `kv-store`, and names the file by the
+/// environment ID and the agent ID. It keeps the blobs in `blobs`, under a path that holds the
+/// environment ID and the agent ID.
 async fn wait_until_archived(ctx: &TestContext, agent: &str) {
     let metadata = ctx
         .cli([cmd::AGENT, cmd::GET, agent, flag::FORMAT, "json"])
@@ -417,35 +436,33 @@ async fn wait_until_archived(ctx: &TestContext, agent: &str) {
             .unwrap_or_else(|| panic!("no {field} in the agent metadata"))
             .to_string()
     };
-    let key = format!("{}_{}", id("environmentId"), id("agentId"));
+    let (environment_id, agent_id) = (id("environmentId"), id("agentId"));
+    let key = format!("{environment_id}_{agent_id}");
     let kv_store = ctx.data_dir.path().join("kv-store");
-    let (primary, manifest) = (
+    let (primary, compressed) = (
         kv_store.join(format!("durable-oplog-{key}.db")),
-        kv_store.join(format!("durable-blob-oplog-l0-{key}.db")),
+        kv_store.join(format!("durable-compressed-oplog-l1-{key}.db")),
     );
+    let chunks = ctx.data_dir.path().join("blobs").join("compressed_oplog");
     let archived = move || {
-        let (primary, manifest) = (primary.clone(), manifest.clone());
+        let (primary, compressed, chunks) = (primary.clone(), compressed.clone(), chunks.clone());
+        let (environment_id, agent_id) = (environment_id.clone(), agent_id.clone());
         async move {
-            let primary_entries = match primary.exists() {
-                false => 0,
-                true => {
-                    let pool = sqlx::SqlitePool::connect(&format!(
-                        "sqlite://{}?mode=ro",
-                        primary.display()
-                    ))
-                    .await
-                    .unwrap();
-                    let (count,): (i64,) = sqlx::query_as(
-                        "SELECT COUNT(*) FROM index_storage WHERE namespace = 'durable-worker-oplog'",
-                    )
-                    .fetch_one(&pool)
-                    .await
-                    .unwrap();
-                    pool.close().await;
-                    count
-                }
-            };
-            manifest.exists() && primary_entries == 0
+            let primary_entries = sqlite_rows(
+                &primary,
+                "index_storage WHERE namespace = 'durable-worker-oplog'",
+            )
+            .await;
+            let compressed_chunks = sqlite_rows(&compressed, "index_storage").await;
+            let blob_chunk = walkdir::WalkDir::new(&chunks)
+                .into_iter()
+                .filter_map(Result::ok)
+                .filter(|entry| entry.file_type().is_file())
+                .any(|entry| {
+                    let path = entry.path().to_string_lossy().into_owned();
+                    path.contains(&environment_id) && path.contains(&agent_id)
+                });
+            primary_entries == 0 && compressed_chunks == 0 && blob_chunk
         }
     };
     let done = futures_util::StreamExt::filter(
@@ -1438,6 +1455,66 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         .collect::<Vec<_>>();
     assert_eq!(lines.len() as u64, to);
     assert_eq!(lines, plain[..to as usize].to_vec());
+    // A new file gets the mode of a plain write, not the mode of a temporary file.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode =
+            |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        let plain_file = ctx.cwd_path_join("export/plain-write");
+        std::fs::write(&plain_file, "x").unwrap();
+        assert_eq!(mode(&path), mode(&plain_file));
+        std::fs::remove_file(&plain_file).unwrap();
+    }
+
+    // The scan budget of the server (4 entries) is far below the entries before `--from`, and
+    // the export still reads its range: a range read of the export has no scan budget.
+    let late_path = ctx.cwd_path_join("export/late.jsonl");
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            LONG_PROBE,
+            "--from",
+            "10",
+            "--to",
+            "20",
+            flag::FORMAT,
+            "jsonl",
+            "--output",
+            late_path.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let late = fs::read_to_string(&late_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(late, plain[9..20].to_vec());
+
+    // A `--to` after the end of the oplog ends the export at the end of the oplog.
+    let past_path = ctx.cwd_path_join("export/past.jsonl");
+    let outputs = ctx
+        .cli([
+            cmd::AGENT,
+            "oplog",
+            LONG_PROBE,
+            "--to",
+            &(last + 10).to_string(),
+            flag::FORMAT,
+            "jsonl",
+            "--output",
+            past_path.to_str().unwrap(),
+        ])
+        .await;
+    assert!(outputs.success_or_dump());
+    let past = fs::read_to_string(&past_path)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str::<Value>(line).unwrap())
+        .collect::<Vec<_>>();
+    assert_eq!(past, plain);
 
     // The export writes in full the entries that oplog pages omit for their size.
     let large = plain_dump(&ctx, LARGE_PROBE).await;
@@ -1570,7 +1647,13 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         files.sort();
         files
     };
-    let expected_files = vec!["large.jsonl", "oplog.jsonl", "query.jsonl"];
+    let expected_files = vec![
+        "large.jsonl",
+        "late.jsonl",
+        "oplog.jsonl",
+        "past.jsonl",
+        "query.jsonl",
+    ];
     assert_eq!(exported_files(), expected_files);
 
     // An export that fails after some pages leaves no file and no temporary file. The proxy holds
