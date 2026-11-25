@@ -786,27 +786,37 @@ impl RegistryServiceGrpcApi {
     ) -> Result<GetAgentSecretRevisionSuccessResponse, GrpcApiError> {
         use golem_api_grpc::proto::golem::registry::AgentSecretReadMode as ProtoReadMode;
         use golem_api_grpc::proto::golem::registry::v1::get_agent_secret_revision_request::Revision;
+        let invalid_request = |error: String| {
+            GrpcApiError::BadRequest(ErrorsBody {
+                code: api::error_code::VALIDATION_ERROR.to_string(),
+                errors: vec![error],
+                cause: None,
+            })
+        };
         let environment_id: EnvironmentId = request
             .environment_id
             .ok_or("missing environment_id field")?
             .try_into()?;
-        let owner: AgentSecretOwner = request.owner.ok_or("missing owner field")?.try_into()?;
-        let selector = match request.revision.ok_or("missing revision field")? {
+        let owner = AgentSecretOwner::try_from(
+            request
+                .owner
+                .ok_or_else(|| invalid_request("missing owner field".to_string()))?,
+        )
+        .map_err(invalid_request)?;
+        let selector = match request
+            .revision
+            .ok_or_else(|| invalid_request("missing revision field".to_string()))?
+        {
             Revision::Fixed(revision) => AgentSecretRevisionSelector::Fixed(
-                AgentSecretRevision::new(revision).map_err(|err| err.to_string())?,
+                AgentSecretRevision::new(revision)
+                    .map_err(|err| invalid_request(err.to_string()))?,
             ),
             Revision::Current(()) => AgentSecretRevisionSelector::Current,
         };
         let mode = match ProtoReadMode::try_from(request.mode) {
             Ok(ProtoReadMode::Live) => AgentSecretReadMode::Live,
             Ok(ProtoReadMode::Historical) => AgentSecretReadMode::Historical,
-            _ => {
-                return Err(GrpcApiError::BadRequest(ErrorsBody {
-                    code: api::error_code::VALIDATION_ERROR.to_string(),
-                    errors: vec!["invalid secret read mode".to_string()],
-                    cause: None,
-                }));
-            }
+            _ => return Err(invalid_request("invalid secret read mode".to_string())),
         };
         let agent_secret_id = AgentSecretId(
             request

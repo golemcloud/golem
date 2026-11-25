@@ -16,14 +16,14 @@ use super::environment::{EnvironmentError, EnvironmentService};
 use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificationSignalExt};
 use crate::repo::agent_secret::AgentSecretRepo;
 use crate::repo::model::agent_secrets::{
-    AgentSecretAuthExtRevisionRecord, AgentSecretCreationRecord, AgentSecretRepoError,
-    AgentSecretRevisionRecord,
+    AgentSecretAuthExtRevisionRecord, AgentSecretCreationRecord, AgentSecretDestinations,
+    AgentSecretRepoError, AgentSecretRevisionRecord,
 };
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent_secret::{
     AgentSecretCreation, AgentSecretId, AgentSecretOwner, AgentSecretReadMode, AgentSecretRevision,
-    AgentSecretRevisionSelector, AgentSecretUpdate, CanonicalAgentSecretPath,
+    AgentSecretRevisionSelector, AgentSecretUpdate, CanonicalAgentSecretPath, SecretDestination,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
@@ -383,6 +383,7 @@ impl AgentSecretService {
         &self,
         environment_id: EnvironmentId,
         data: AgentSecretCreation,
+        destinations: Vec<SecretDestination>,
         auth: &AuthCtx,
     ) -> Result<AgentSecret, AgentSecretError> {
         let environment = self
@@ -447,7 +448,7 @@ impl AgentSecretService {
                 agent_secret_path.clone(),
                 secret_type_graph,
                 secret_value,
-                vec![],
+                destinations,
                 auth.actor_account_id(),
             ))
             .await
@@ -515,6 +516,45 @@ impl AgentSecretService {
             .try_into()?;
 
         Ok(stored_agent_secret)
+    }
+
+    pub async fn update_destinations(
+        &self,
+        agent_secret_id: AgentSecretId,
+        current_revision: AgentSecretRevision,
+        destinations: Vec<SecretDestination>,
+        auth: &AuthCtx,
+    ) -> Result<AgentSecret, AgentSecretError> {
+        let (mut agent_secret, owner) = self.get_with_environment(agent_secret_id, auth).await?;
+
+        authorize_agent_secret_permission_for_owner(
+            auth,
+            owner,
+            Some(&agent_secret.path),
+            EnvironmentAgentSecretVerb::Update,
+        )?;
+
+        if current_revision != agent_secret.revision {
+            return Err(AgentSecretError::ConcurrentModification);
+        }
+        agent_secret.revision = current_revision.next()?;
+
+        let audit = DeletableRevisionAuditFields::new(auth.actor_account_id().0);
+        let mut revision = AgentSecretRevisionRecord::from_model(agent_secret, audit);
+        revision.destinations = AgentSecretDestinations::Set(destinations);
+
+        self.agent_secret_repo
+            .update(revision)
+            .await
+            .map_err(|err| match err {
+                AgentSecretRepoError::ConcurrentModification => {
+                    AgentSecretError::ConcurrentModification
+                }
+                other => other.into(),
+            })?
+            .signal_new_events_available(&self.registry_change_notifier)
+            .try_into()
+            .map_err(Into::into)
     }
 
     pub async fn delete(
@@ -696,6 +736,9 @@ impl AgentSecretService {
 
         let owner = environment_owner_from_agent_secret(&record);
         let agent_secret: AgentSecret = record.agent_secret.try_into()?;
+        if agent_secret.owner != AgentSecretOwner::Environment {
+            return Err(AgentSecretError::AgentSecretNotFound(agent_secret_id));
+        }
 
         authorize_agent_secret_permission_for_owner(
             auth,
