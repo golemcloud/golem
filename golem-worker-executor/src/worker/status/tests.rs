@@ -5425,8 +5425,9 @@ async fn committed_acceptance_retains_attachment_authority_before_and_after_prep
 
 /// A live append keeps a stream session record in its cached form (`SerializedInline` or
 /// `External` with the decoded value), not `Inline`. The fold of the commit receipt reads these
-/// records as a fold of the stored entries reads them: the consumer cancel intent is pending,
-/// and the `Attached` record validates its `PendingAgentInvocation`.
+/// records as a fold of the stored entries reads them: of two consumer cancel intents, the one
+/// that a `ConsumerCancelApplied` record applies is gone and the other is pending, and the
+/// `Attached` record validates its `PendingAgentInvocation`.
 #[test]
 #[test_r::timeout("30s")]
 async fn a_committed_fold_reads_cached_stream_session_records_as_a_fold_of_the_stored_entries() {
@@ -5434,8 +5435,9 @@ async fn a_committed_fold_reads_cached_stream_session_records_as_a_fold_of_the_s
     use futures::{StreamExt, TryStreamExt};
     use golem_common::model::durable_stream::{
         LocalStreamId, SessionStreamRole, StreamCancellationRequest,
-        StreamConsumerCancelIntentRecord, StreamEndpointSide, StreamError, StreamRecordReference,
-        StreamRegistrationInvocation, StreamTerminal, StreamTerminalAuthor,
+        StreamConsumerCancelAppliedRecord, StreamConsumerCancelIntentRecord, StreamEndpointSide,
+        StreamError, StreamRecordReference, StreamRegistrationInvocation, StreamTerminal,
+        StreamTerminalAuthor,
     };
 
     let test_case = TestCase::builder(0)
@@ -5472,6 +5474,11 @@ async fn a_committed_fold_reads_cached_stream_session_records_as_a_fold_of_the_s
             terminal: StreamTerminal::Failed(StreamError::Interrupted("stream cancelled".into())),
         },
     };
+    let applied = StreamConsumerCancelIntentRecord {
+        source: StreamRecordReference::Local(LocalStreamId(OplogIndex::from_u64(31))),
+        epoch: 12,
+        ..intent.clone()
+    };
     fixture
         .oplog
         .add(test_case.entries[0].oplog_entry.clone())
@@ -5484,7 +5491,12 @@ async fn a_committed_fold_reads_cached_stream_session_records_as_a_fold_of_the_s
         .unwrap();
     let records = [
         attached,
+        StreamSessionRecord::ConsumerCancelIntent(applied.clone()),
         StreamSessionRecord::ConsumerCancelIntent(intent.clone()),
+        StreamSessionRecord::ConsumerCancelApplied(StreamConsumerCancelAppliedRecord {
+            format_version: 1,
+            intent: applied,
+        }),
     ];
     let payloads = futures::future::try_join_all(
         records
@@ -5517,11 +5529,11 @@ async fn a_committed_fold_reads_cached_stream_session_records_as_a_fold_of_the_s
         .unwrap();
     assert_eq!(
         appended,
-        vec![OplogIndex::from_u64(3), OplogIndex::from_u64(4)]
+        (3..=6).map(OplogIndex::from_u64).collect::<Vec<_>>()
     );
     let receipt = fixture.oplog.commit(CommitLevel::Deferred).await.unwrap();
     let horizon = *receipt.last_key_value().unwrap().0;
-    assert_eq!(horizon, OplogIndex::from_u64(4));
+    assert_eq!(horizon, OplogIndex::from_u64(6));
 
     let (committed, gap, _) = fold_committed_status(
         &test_case,
@@ -5548,10 +5560,9 @@ async fn a_committed_fold_reads_cached_stream_session_records_as_a_fold_of_the_s
         .unwrap()
         .unwrap();
 
-    assert_eq!(
-        stored.pending_durable_stream_cancellations,
-        HashMap::from([((intent.source.clone(), intent.epoch), vec![intent])])
-    );
+    let pending = HashMap::from([((intent.source.clone(), intent.epoch), vec![intent])]);
+    assert_eq!(stored.pending_durable_stream_cancellations, pending);
+    assert_eq!(committed.pending_durable_stream_cancellations, pending);
     assert_eq!(
         stored
             .durable_stream_sessions
