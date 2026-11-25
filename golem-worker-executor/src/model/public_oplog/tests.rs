@@ -4777,6 +4777,11 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
     .await
     .unwrap();
     assert_eq!(guest_search.next_oplog_index, OplogIndex::from_u64(6));
+    assert_eq!(
+        guest_search.entries.first().map(|entry| entry.oplog_index),
+        Some(retained_start),
+        "the first entry of a new search is at the retained start"
+    );
     assert!(
         guest_search
             .entries
