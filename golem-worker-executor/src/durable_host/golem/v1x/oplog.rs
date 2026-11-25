@@ -24,7 +24,7 @@ use crate::model::public_oplog::PublicOplogEntryOps;
 use crate::model::public_oplog::find_component_revision_at;
 use crate::model::public_oplog::get_public_oplog_chunk;
 use crate::model::public_oplog::search_public_oplog;
-use crate::model::public_oplog::{guest_search_start, guest_search_window};
+use crate::model::public_oplog::{GuestSearchBatch, guest_search_batch, guest_search_start};
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::oplog::Host as OplogHost;
 use crate::preview2::golem_api_1_x::oplog::HostGetOplog;
@@ -294,33 +294,34 @@ async fn get_search_oplog_chunk<Ctx: WorkerCtx>(
     .await
     .map_err(|error| error.to_string())?;
     let agent_type = &identity.create_parameters().agent_type_name;
-    // The grant covers page_size indexes from the cursor, not page_size matches. The scanner caps
-    // each storage read at the remaining entry budget, even when a chunk has no matches. A new
-    // search starts at the retained start, so the budget is the part of the window at or after
-    // that start. A start after the window moves the cursor to the start with no read, and the
-    // next batch checks the grant for its own window.
+    // The scanner caps each storage read at the remaining entry budget, even when a chunk has no
+    // matches, so the budget of the batch keeps the scan inside the window of its grant.
     let page_size = NonZeroU64::new(entry.page_size as u64).expect("search page size is nonzero");
-    let Some(window) = guest_search_window(entry.next_oplog_index, page_size, start) else {
-        let last_index = match entry.last_oplog_index {
-            Some(last_index) => last_index,
-            None => ctx
-                .state
-                .oplog_service()
-                .get_last_index(&entry.owned_agent_id, agent_mode)
-                .await
-                .map_err(|error| error.to_string())?,
-        };
-        return Ok(crate::model::public_oplog::PublicOplogSearchResult {
-            entries: Vec::new(),
-            next_oplog_index: start,
-            current_component_revision,
-            last_index,
-        });
+    let (start, budget) = match guest_search_batch(
+        entry.next_oplog_index,
+        page_size,
+        start,
+        ctx.state.config.limits.scan_budget,
+    ) {
+        GuestSearchBatch::SkipTo(start) => {
+            let last_index = match entry.last_oplog_index {
+                Some(last_index) => last_index,
+                None => ctx
+                    .state
+                    .oplog_service()
+                    .get_last_index(&entry.owned_agent_id, agent_mode)
+                    .await
+                    .map_err(|error| error.to_string())?,
+            };
+            return Ok(crate::model::public_oplog::PublicOplogSearchResult {
+                entries: Vec::new(),
+                next_oplog_index: start,
+                current_component_revision,
+                last_index,
+            });
+        }
+        GuestSearchBatch::Read { start, budget } => (start, budget),
     };
-    let mut budget = ctx.state.config.limits.scan_budget;
-    budget.entries = budget
-        .entries
-        .min(NonZeroU64::new(window.count).expect("a range holds an entry"));
     search_public_oplog(
         ctx.state.component_service.clone(),
         ctx.state.oplog_service(),

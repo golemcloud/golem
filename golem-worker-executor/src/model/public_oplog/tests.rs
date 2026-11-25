@@ -4280,42 +4280,87 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
 }
 
 /// The grant of a guest search batch covers `page_size` indexes from the cursor. A batch whose
-/// start the retained start moved reads only the indexes of the window at or after its start, and
-/// a start after the window reads nothing.
+/// start the retained start moved reads from its start, and only the indexes of the window at or
+/// after it: its budget is that part of the window, or the configured budget when that is
+/// smaller. A start after the window moves the cursor to the start and reads nothing.
 #[test]
 fn a_guest_search_batch_reads_only_the_part_of_its_window_from_its_start() {
-    let page_size = std::num::NonZeroU64::new(100).unwrap();
-    let window = |window_start: u64, start: u64| {
-        guest_search_window(
-            OplogIndex::from_u64(window_start),
-            page_size,
-            OplogIndex::from_u64(start),
-        )
-        .map(|range| (range.start.as_u64(), range.count))
+    #[derive(Debug, PartialEq)]
+    enum Batch {
+        SkipTo(u64),
+        Read { start: u64, entries: u64 },
+    }
+    let configured = |entries: u64| ScanBudget {
+        entries: std::num::NonZeroU64::new(entries).unwrap(),
+        time: std::time::Duration::from_secs(7),
     };
-    assert_eq!(window(1, 1), Some((1, 100)));
-    assert_eq!(window(1, 50), Some((50, 51)));
-    assert_eq!(window(1, 100), Some((100, 1)));
-    assert_eq!(window(1, 101), None);
-    assert_eq!(window(201, 300), Some((300, 1)));
-    assert_eq!(window(201, 301), None);
+    let batch = |window_start: u64, page_size: u64, start: u64, configured_entries: u64| {
+        match guest_search_batch(
+            OplogIndex::from_u64(window_start),
+            std::num::NonZeroU64::new(page_size).unwrap(),
+            OplogIndex::from_u64(start),
+            configured(configured_entries),
+        ) {
+            GuestSearchBatch::SkipTo(start) => Batch::SkipTo(start.as_u64()),
+            GuestSearchBatch::Read { start, budget } => {
+                assert_eq!(budget.time, std::time::Duration::from_secs(7));
+                Batch::Read {
+                    start: start.as_u64(),
+                    entries: budget.entries.get(),
+                }
+            }
+        }
+    };
+
+    // A start inside the window reads from the start, with a budget of the rest of the window.
     assert_eq!(
-        guest_search_window(
-            OplogIndex::from_u64(5),
-            std::num::NonZeroU64::MIN,
-            OplogIndex::from_u64(5)
-        )
-        .map(|range| (range.start.as_u64(), range.count)),
-        Some((5, 1))
+        batch(1, 100, 1, 1000),
+        Batch::Read {
+            start: 1,
+            entries: 100
+        }
     );
     assert_eq!(
-        guest_search_window(
-            OplogIndex::from_u64(5),
-            std::num::NonZeroU64::MIN,
-            OplogIndex::from_u64(6)
-        ),
-        None
+        batch(1, 100, 50, 1000),
+        Batch::Read {
+            start: 50,
+            entries: 51
+        }
     );
+    assert_eq!(
+        batch(1, 100, 100, 1000),
+        Batch::Read {
+            start: 100,
+            entries: 1
+        }
+    );
+    assert_eq!(
+        batch(201, 100, 300, 1000),
+        Batch::Read {
+            start: 300,
+            entries: 1
+        }
+    );
+    assert_eq!(
+        batch(5, 1, 5, 1000),
+        Batch::Read {
+            start: 5,
+            entries: 1
+        }
+    );
+    // A configured budget below the rest of the window stays.
+    assert_eq!(
+        batch(1, 100, 50, 10),
+        Batch::Read {
+            start: 50,
+            entries: 10
+        }
+    );
+    // A start after the window moves the cursor to the start with no read.
+    assert_eq!(batch(1, 100, 101, 1000), Batch::SkipTo(101));
+    assert_eq!(batch(201, 100, 301, 1000), Batch::SkipTo(301));
+    assert_eq!(batch(1, 100, 5000, 1000), Batch::SkipTo(5000));
+    assert_eq!(batch(5, 1, 6, 1000), Batch::SkipTo(6));
 }
 
 #[test]

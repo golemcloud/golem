@@ -948,19 +948,45 @@ pub async fn guest_search_start(
     }
 }
 
-/// The entries that a guest search batch reads from `start`, the start that
-/// [`guest_search_start`] gives. The grant of the batch covers `page_size` indexes from
-/// `window_start`, the cursor of the search. A new search starts at the retained start, which can
-/// be inside the window or after it, so the batch reads only the indexes of the window at or after
-/// `start`. `None` when `start` is after the window: the batch reads no entry.
-pub fn guest_search_window(
+/// What a guest search batch does after [`guest_search_start`] gave its `start`.
+#[derive(Clone, Copy, Debug)]
+pub enum GuestSearchBatch {
+    /// The start is after the window that the grant of the batch covers. The batch moves the
+    /// cursor to the start and reads no entry, so the next batch checks the grant for its own
+    /// window.
+    SkipTo(OplogIndex),
+    /// The batch searches from `start` and scans at most `budget.entries` entries.
+    Read {
+        start: OplogIndex,
+        budget: ScanBudget,
+    },
+}
+
+/// The guest search batch from `start`, the start that [`guest_search_start`] gives. The grant of
+/// the batch covers `page_size` indexes from `window_start`, the cursor of the search, not
+/// `page_size` matches. A new search starts at the retained start, which can be inside the window
+/// or after it. The batch reads only the indexes of the window at or after `start`: its budget is
+/// `configured` with the entries cut to that part of the window.
+pub fn guest_search_batch(
     window_start: OplogIndex,
     page_size: NonZeroU64,
     start: OplogIndex,
-) -> Option<OplogRange> {
+    configured: ScanBudget,
+) -> GuestSearchBatch {
     let window_last =
         OplogIndex::from_u64(window_start.as_u64().saturating_add(page_size.get() - 1));
-    OplogRange::within(start, window_last, page_size.get())
+    match OplogRange::within(start, window_last, page_size.get()) {
+        Some(window) => GuestSearchBatch::Read {
+            start: window.start,
+            budget: ScanBudget {
+                entries: configured
+                    .entries
+                    .min(NonZeroU64::new(window.count).expect("a range holds an entry")),
+                ..configured
+            },
+        },
+        None => GuestSearchBatch::SkipTo(start),
+    }
 }
 
 /// The cursor of an oplog page of `query` whose next unread entry is `next_oplog_index`. A page has
