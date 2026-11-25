@@ -125,9 +125,9 @@ From `golem-worker-executor/src/services/shard.rs`:
 
 ```rust
 debug!(
-    shard_ids_current = shard_assignment.shard_ids.iter().join(", "),
-    shard_ids_to_assign = shard_ids.iter().join(", "),
-    "ShardService.assign_shards"
+    ?event,
+    current = ?guard.as_ref(),
+    "Applying shard assignment event"
 );
 ```
 

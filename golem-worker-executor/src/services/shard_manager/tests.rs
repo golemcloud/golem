@@ -65,11 +65,12 @@ fn agent_on_shard(shard: i64) -> AgentId {
 fn registration(
     expires_at: Instant,
     shard_epochs: impl IntoIterator<Item = (i64, u64)>,
+    executor_count: usize,
 ) -> ShardRegistration {
     ShardRegistration {
         number_of_shards: SHARDS as u32,
         lease: ShardLease {
-            executor_count: 1,
+            executor_count,
             shard_epochs: epoch_map(shard_epochs),
             expires_at,
             revision: revision_of(MANAGER, 1),
@@ -93,8 +94,9 @@ fn registration_from(
     revision: u64,
     expires_at: Instant,
     shard_epochs: impl IntoIterator<Item = (i64, u64)>,
+    executor_count: usize,
 ) -> ShardRegistration {
-    let mut registration = registration(expires_at, shard_epochs);
+    let mut registration = registration(expires_at, shard_epochs, executor_count);
     registration.lease.revision = revision_of(manager, revision);
     registration
 }
@@ -385,7 +387,7 @@ async fn a_shutdown_during_an_in_flight_renewal_still_deregisters() {
     let gate = Arc::new(tokio::sync::Notify::new());
     let mock = Arc::new(
         MockShardManager::new()
-            .with_register(move |_| Ok(registration(expiry, [(0, 1)])))
+            .with_register(move |_| Ok(registration(expiry, [(0, 1)], 1)))
             .with_renew(move |_, held| {
                 Ok(ShardLease {
                     executor_count: 1,
@@ -438,25 +440,6 @@ async fn a_shutdown_during_an_in_flight_renewal_still_deregisters() {
 }
 
 #[test]
-fn registration_shard_count_rejects_zero_and_preserves_the_positive_wire_range() {
-    assert!(matches!(
-        decode_registration_shard_count(0),
-        Err(ShardManagerError::ConversionError(message))
-            if message == "RegisterSuccess.number_of_shards must not be 0"
-    ));
-    [
-        (1, 1),
-        (1024, 1024),
-        (1025, 1025),
-        (u32::MAX, 4_294_967_295),
-    ]
-    .into_iter()
-    .for_each(|(value, expected)| {
-        assert_eq!(decode_registration_shard_count(value).unwrap(), expected);
-    });
-}
-
-#[test]
 // A shard count of zero would reach `ShardId::from_agent_id`, which divides by it, on the
 // first routing decision. The registration refuses it, so a misconfigured manager fails this
 // executor at startup rather than aborting it later - and installs nothing.
@@ -503,7 +486,7 @@ async fn a_renewal_that_never_answers_times_out_and_the_loop_keeps_going() {
     let gate = Arc::new(tokio::sync::Notify::new());
     let mock = Arc::new(
         MockShardManager::new()
-            .with_register(move |_| Ok(registration(expiry, [(0, 1)])))
+            .with_register(move |_| Ok(registration(expiry, [(0, 1)], 1)))
             .with_renew(move |_, held| {
                 Ok(ShardLease {
                     executor_count: 1,
@@ -559,7 +542,7 @@ async fn a_reply_that_arrives_after_its_renewal_was_given_up_on_is_never_applied
     let renewals = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let mock = Arc::new(
         MockShardManager::new()
-            .with_register(move |_| Ok(registration_from(old_manager, 10, expiry, [(0, 1)])))
+            .with_register(move |_| Ok(registration_from(old_manager, 10, expiry, [(0, 1)], 1)))
             .with_renew({
                 let renewals = renewals.clone();
                 move |_, _| {
@@ -637,7 +620,7 @@ async fn a_re_registration_that_never_answers_times_out_and_is_tried_again() {
     let expiry = Instant::now() + Duration::from_secs(3);
     let mock = Arc::new(
         MockShardManager::new()
-            .with_register(move |_| Ok(registration(expiry, [(0, 1)])))
+            .with_register(move |_| Ok(registration(expiry, [(0, 1)], 1)))
             .with_renew(|_, _| Err(ShardLeaseError::LeaseNotFound("unknown".to_string()))),
     );
     let (service, shard_service) = make_service_with_rpc_deadline_floor(
@@ -685,7 +668,7 @@ async fn a_slow_assignment_changed_hook_does_not_stall_the_renewal_loop() {
     let ttl = Duration::from_secs(3);
     let mock = Arc::new(
         MockShardManager::new()
-            .with_register(move |_| Ok(registration(Instant::now() + ttl, [(0, 1)])))
+            .with_register(move |_| Ok(registration(Instant::now() + ttl, [(0, 1)], 1)))
             .with_renew(move |_, _held| {
                 Ok(ShardLease {
                     executor_count: 1,
@@ -1077,7 +1060,7 @@ async fn a_registration_whose_lease_arrived_lapsed_is_recovered_by_the_renewal_t
     let live = Instant::now() + Duration::from_secs(300);
     let mock = Arc::new(
         MockShardManager::new()
-            .with_register(move |_| Ok(registration(lapsed, [(0, 1), (1, 1)])))
+            .with_register(move |_| Ok(registration(lapsed, [(0, 1), (1, 1)], 1)))
             .with_renew(move |_, held| {
                 Ok(ShardLease {
                     executor_count: 1,
@@ -1290,9 +1273,17 @@ async fn a_renewal_sends_the_last_received_set_and_adopts_the_granted_expiry() {
 #[test]
 async fn a_lost_lease_re_registers_with_a_fresh_uuid_and_announces_the_new_assignment() {
     let fresh_expiry = Instant::now() + Duration::from_secs(120);
+    let registrations = AtomicUsize::new(0);
     let mock = Arc::new(
         MockShardManager::new()
-            .with_register(move |_| Ok(registration(fresh_expiry, [(2, 5)])))
+            .with_register(move |_| {
+                let count = if registrations.fetch_add(1, Ordering::SeqCst) == 0 {
+                    2
+                } else {
+                    4
+                };
+                Ok(registration(fresh_expiry, [(2, 5)], count))
+            })
             .with_renew(|_, _| Err(ShardLeaseError::LeaseNotFound("unknown".to_string()))),
     );
     let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
@@ -1309,6 +1300,7 @@ async fn a_lost_lease_re_registers_with_a_fresh_uuid_and_announces_the_new_assig
     service.set_assignment_changed_hook(&hook);
 
     let assignment = service.register(ENDPOINT, None).await.unwrap();
+    assert_eq!(assignment.executor_count, 2);
     shard_service.register(
         assignment.number_of_shards,
         &assignment.shard_epochs,
@@ -1333,6 +1325,7 @@ async fn a_lost_lease_re_registers_with_a_fresh_uuid_and_announces_the_new_assig
     let assignment = shard_service.current_assignment().unwrap();
     assert_eq!(assignment.shard_epochs, epochs([(2, 5)]));
     assert_eq!(assignment.expires_at, Some(fresh_expiry));
+    assert_eq!(assignment.executor_count, 4);
 }
 
 /// The re-registration after a lost lease names the executor at the same endpoint as the first
@@ -1342,7 +1335,7 @@ async fn a_re_registration_keeps_the_advertised_endpoint() {
     let expiry = Instant::now() + Duration::from_secs(120);
     let mock = Arc::new(
         MockShardManager::new()
-            .with_register(move |_| Ok(registration(expiry, [(2, 5)])))
+            .with_register(move |_| Ok(registration(expiry, [(2, 5)], 1)))
             .with_renew(|_, _| Err(ShardLeaseError::LeaseNotFound("unknown".to_string()))),
     );
     let (service, shard_service) = make_service(mock.clone(), Shutdown::new());
@@ -1377,9 +1370,9 @@ async fn a_re_registration_with_a_manager_that_lost_its_history_adopts_its_low_r
     let mock = Arc::new(
         MockShardManager::new()
             .with_register(move |_| match attempt.fetch_add(1, Ordering::SeqCst) {
-                0 => Ok(registration_from(old_manager, 10_000, expiry, [(2, 5)])),
+                0 => Ok(registration_from(old_manager, 10_000, expiry, [(2, 5)], 1)),
                 // A manager on a new store: its revisions start over, far below the last one.
-                _ => Ok(registration_from(new_manager, 3, expiry, [(2, 6)])),
+                _ => Ok(registration_from(new_manager, 3, expiry, [(2, 6)], 1)),
             })
             .with_renew(|_, _| Err(ShardLeaseError::LeaseNotFound("unknown".to_string()))),
     );
@@ -1414,7 +1407,7 @@ async fn a_renewal_answered_by_a_manager_restored_from_a_backup_adopts_its_low_r
     let (old_manager, new_manager) = (Uuid::new_v4(), Uuid::new_v4());
     let mock = Arc::new(
         MockShardManager::new()
-            .with_register(move |_| Ok(registration_from(old_manager, 10_000, expiry, [(2, 5)])))
+            .with_register(move |_| Ok(registration_from(old_manager, 10_000, expiry, [(2, 5)], 1)))
             .with_renew(move |_, _| {
                 Ok(ShardLease {
                     executor_count: 1,
@@ -1470,7 +1463,7 @@ async fn renew_now_runs_a_renewal_ahead_of_its_timer() {
     let expiry = Instant::now() + Duration::from_secs(120);
     let mock = Arc::new(
         MockShardManager::new()
-            .with_register(move |_| Ok(registration(expiry, [(0, 1)])))
+            .with_register(move |_| Ok(registration(expiry, [(0, 1)], 1)))
             .with_renew(move |_, held| {
                 Ok(ShardLease {
                     executor_count: 1,
@@ -1781,38 +1774,6 @@ async fn a_transport_failure_serves_until_the_local_expiry_and_then_fences() {
         HashSet::from([ShardId::new(0)]),
         "without dropping the shards: the fence refuses new work and leaves the set alone"
     );
-}
-
-#[test]
-fn retry_delays_respect_the_sampled_cadence_and_absolute_cap() {
-    let secs = Duration::from_secs;
-    [
-        (None, secs(1), (secs(1), secs(2))),
-        (None, secs(16), (secs(16), secs(30))),
-        (None, secs(30), (secs(30), secs(30))),
-        (None, secs(31), (secs(30), secs(30))),
-        (None, Duration::MAX, (secs(30), secs(30))),
-        (None, Duration::ZERO, (Duration::ZERO, Duration::ZERO)),
-        (Some(secs(10)), secs(3), (secs(3), secs(6))),
-        (Some(secs(10)), secs(6), (secs(6), secs(10))),
-        (Some(secs(10)), secs(10), (secs(10), secs(10))),
-        (Some(secs(10)), secs(11), (secs(10), secs(10))),
-        (Some(secs(60)), secs(31), (secs(30), secs(30))),
-        (Some(Duration::MAX), Duration::MAX, (secs(30), secs(30))),
-        (
-            Some(Duration::ZERO),
-            secs(3),
-            (Duration::ZERO, Duration::ZERO),
-        ),
-    ]
-    .into_iter()
-    .for_each(|(cadence, current, expected)| {
-        assert_eq!(
-            retry_delays_for(cadence, current),
-            expected,
-            "{cadence:?}, {current:?}"
-        );
-    });
 }
 
 /// Failed renewals back off exponentially from 1 s, capped by

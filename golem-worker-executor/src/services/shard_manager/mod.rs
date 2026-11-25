@@ -51,7 +51,7 @@ pub enum RecoveryOutcome {
     /// Agents on lost shards were swept, and agents were recovered for the set.
     Recovered,
     /// Swept, but not recovered: the local lease had lapsed, and a fenced executor starts
-    /// nothing. The grant that revives the lease runs the recovery.
+    /// nothing. An accepted grant runs the recovery once the lease is live.
     DeferredUntilLeaseIsLive,
 }
 
@@ -103,8 +103,9 @@ pub trait ShardManagerService: Send + Sync {
     /// Registers that a recovery of the agents for the current set is owed, and returns the
     /// ticket the attempt started now hands back if it completes. Called by the receipt path
     /// before anything runs: a push that lands on a lapsed lease, a recovery that fails, and a
-    /// recovery that is still running all leave it owed, and the next grant runs it. No-op by
-    /// default.
+    /// recovery that is still running all leave it owed. The next accepted grant runs it
+    /// once the lease is live. A stale renewal can extend the lease but does not run recovery.
+    /// No-op by default.
     fn recovery_deferred(&self) -> RecoveryTicket {
         RecoveryTicket(0)
     }
@@ -258,8 +259,8 @@ pub struct GrpcShardManagerService {
     /// Shortest per-attempt deadline this executor will use; see [`Self::rpc_deadline`].
     /// A field rather than the constant so a test does not have to wait out the production floor.
     rpc_deadline_floor: Duration,
-    /// The newest recovery attempt still owed, as its ticket; `0` is none. The next grant runs a
-    /// recovery while it is non-zero, even if the set is unchanged: a push that fails is retried
+    /// The newest recovery attempt still owed, as its ticket; `0` is none. The next accepted
+    /// grant runs a recovery while it is non-zero, even if the set is unchanged: a push that fails is retried
     /// by the shard manager, but a renewal has nobody to retry it, and an unchanged grant would
     /// otherwise never run it again. A ticket rather than a flag because two attempts can
     /// overlap: a renewal's recovery can outlast the lease, a push can then land and defer its
@@ -334,12 +335,20 @@ impl GrpcShardManagerService {
         *self.executor_id.read().unwrap()
     }
 
+    /// Cap the retry delay at the cadence of the last granted lease or 30 seconds.
+    fn retry_cap(&self) -> Duration {
+        match *self.granted_cadence.read().unwrap() {
+            Some(cadence) => cadence.min(MAX_RETRY_INTERVAL),
+            None => MAX_RETRY_INTERVAL,
+        }
+    }
+
     /// Return the delay after a failed renewal and advance the retry backoff.
     fn next_retry_delay(&self) -> RenewalDelay {
-        let cadence = *self.granted_cadence.read().unwrap();
+        let cap = self.retry_cap();
         let mut backoff = self.retry_backoff.write().unwrap();
-        let (delay, next_backoff) = retry_delays_for(cadence, *backoff);
-        *backoff = next_backoff;
+        let delay = (*backoff).min(cap);
+        *backoff = delay.saturating_mul(2).min(cap);
         Some(delay)
     }
 
@@ -353,7 +362,7 @@ impl GrpcShardManagerService {
     /// Tell the executor its shard assignment changed, so running
     /// agents are recovered for the new set. A failure here is logged, never
     /// fatal — the lease itself is already installed — and remembered, so the
-    /// next grant runs the recovery again.
+    /// next accepted grant runs the recovery again once the lease is live.
     ///
     /// The attempt is registered here as well as inside the hook: the hook is
     /// the receipt path, which registers and retires its own ticket, but a
@@ -529,7 +538,19 @@ impl GrpcShardManagerService {
             .register(endpoint, pod_name, self.executor_id())
             .await?;
 
-        let number_of_shards = decode_registration_shard_count(registration.number_of_shards)?;
+        let number_of_shards: usize = registration.number_of_shards.try_into().map_err(|_| {
+            ShardManagerError::ConversionError(format!(
+                "RegisterSuccess.number_of_shards {} does not fit a usize",
+                registration.number_of_shards
+            ))
+        })?;
+
+        // `ShardId::from_agent_id` divides by it.
+        if number_of_shards == 0 {
+            return Err(ShardManagerError::ConversionError(
+                "RegisterSuccess.number_of_shards must not be 0".to_string(),
+            ));
+        }
 
         // Started here rather than by the caller because this is the first
         // point at which a lease exists, and started unconditionally so that a
@@ -663,34 +684,6 @@ impl GrpcShardManagerService {
             }
         }
     }
-}
-
-/// The current retry delay and the backoff for the next failure.
-/// The cap limits the wait between attempts, not an RPC's duration.
-fn retry_delays_for(cadence: Option<Duration>, current: Duration) -> (Duration, Duration) {
-    let cap = match cadence {
-        Some(cadence) => cadence.min(MAX_RETRY_INTERVAL),
-        None => MAX_RETRY_INTERVAL,
-    };
-    let delay = current.min(cap);
-    (delay, delay.saturating_mul(2).min(cap))
-}
-
-fn decode_registration_shard_count(value: u32) -> Result<usize, ShardManagerError> {
-    let number_of_shards: usize = value.try_into().map_err(|_| {
-        ShardManagerError::ConversionError(format!(
-            "RegisterSuccess.number_of_shards {value} does not fit a usize"
-        ))
-    })?;
-
-    // `ShardId::from_agent_id` divides by it.
-    if number_of_shards == 0 {
-        return Err(ShardManagerError::ConversionError(
-            "RegisterSuccess.number_of_shards must not be 0".to_string(),
-        ));
-    }
-
-    Ok(number_of_shards)
 }
 
 fn renewal_recovery_owed(

@@ -18,6 +18,7 @@ use super::{
     ShardLeaseRevision, UsesAllDeps, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, golem,
     retired_by_assignment, shard_epochs_from_proto,
 };
+use crate::services::shard::ShardService;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -26,15 +27,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::v1::RevokeShardsRequest,
     ) -> Result<(), WorkerExecutorError> {
-        let proto_shard_ids = request.shard_ids;
-
-        let shard_ids = proto_shard_ids.into_iter().map(ShardId::from).collect();
-        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
-            .map_err(|error| {
-                WorkerExecutorError::invalid_request(format!("RevokeShardsRequest.{error}"))
-            })?;
-
-        match self.shard_service().revoke_shards(&shard_ids, revision)? {
+        match apply_revoke_request(self.shard_service().as_ref(), request)? {
             ShardDeliveryOutcome::Applied { .. } => {}
             ShardDeliveryOutcome::Stale { delivered, applied } => {
                 // A newer delivery has already been applied and its set is the
@@ -73,22 +66,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         &self,
         request: golem::workerexecutor::v1::AssignShardsRequest,
     ) -> Result<(), WorkerExecutorError> {
-        let shard_epochs: HashMap<ShardId, ShardEpoch> =
-            shard_epochs_from_proto(request.shard_epochs)
-                .map_err(WorkerExecutorError::invalid_request)?;
-
-        let number_of_shards = decode_assignment_shard_count(request.number_of_shards)?;
-
-        let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
-            .map_err(|error| {
-                WorkerExecutorError::invalid_request(format!("AssignShardsRequest.{error}"))
-            })?;
-        match self.shard_service().assign_shards(
-            number_of_shards,
-            &shard_epochs,
-            revision,
-            request.executor_count as usize,
-        )? {
+        match apply_assignment_request(self.shard_service().as_ref(), request)? {
             ShardDeliveryOutcome::Applied { .. } => {}
             ShardDeliveryOutcome::Stale { delivered, applied } => {
                 // Crossed on the network with a newer delivery, which has already
@@ -139,11 +117,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     /// no longer owns. The recovery runs only under a live lease: a fenced
     /// executor starts nothing, so a push that lands after the local lease
     /// lapsed - the first one after a manager outage does - reports the
-    /// recovery deferred, and the grant that revives the lease runs it.
+    /// recovery deferred. An accepted registration or renewal runs it once
+    /// the lease is live. A stale renewal can extend the lease without
+    /// scheduling recovery; the recovery stays owed until an accepted grant.
     ///
     /// The owed-recovery ticket is taken here, before anything runs, and handed
     /// back only after a recovery ran, so the startup registration and the push
-    /// cannot disagree about it and a grant that revives the lease meanwhile
+    /// cannot disagree about it and an accepted grant that revives the lease meanwhile
     /// cannot find nothing owed. An error keeps it owed, which is what a retry
     /// needs, and an attempt that completes after a newer delivery deferred its
     /// own does not retire that one. One run more than needed is idempotent.
@@ -201,43 +181,201 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     }
 }
 
-fn decode_assignment_shard_count(value: u32) -> Result<usize, WorkerExecutorError> {
-    let number_of_shards: usize = value
+fn apply_assignment_request(
+    service: &dyn ShardService,
+    request: golem::workerexecutor::v1::AssignShardsRequest,
+) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
+    let shard_epochs: HashMap<ShardId, ShardEpoch> = shard_epochs_from_proto(request.shard_epochs)
+        .map_err(WorkerExecutorError::invalid_request)?;
+    let number_of_shards: usize = request
+        .number_of_shards
         .try_into()
         .map_err(|_| WorkerExecutorError::invalid_request("Invalid number of shards"))?;
-
     // `ShardId::from_agent_id` divides by it.
     if number_of_shards == 0 {
         return Err(WorkerExecutorError::invalid_request(
             "AssignShardsRequest.number_of_shards must not be 0",
         ));
     }
+    if request.executor_count == 0 {
+        return Err(WorkerExecutorError::invalid_request(
+            "AssignShardsRequest.executor_count must not be 0",
+        ));
+    }
+    let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
+        .map_err(|error| {
+            WorkerExecutorError::invalid_request(format!("AssignShardsRequest.{error}"))
+        })?;
+    service.assign_shards(
+        number_of_shards,
+        &shard_epochs,
+        revision,
+        request.executor_count as usize,
+    )
+}
 
-    Ok(number_of_shards)
+fn apply_revoke_request(
+    service: &dyn ShardService,
+    request: golem::workerexecutor::v1::RevokeShardsRequest,
+) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
+    if request.executor_count == 0 {
+        return Err(WorkerExecutorError::invalid_request(
+            "RevokeShardsRequest.executor_count must not be 0",
+        ));
+    }
+    let shard_ids = request.shard_ids.into_iter().map(ShardId::from).collect();
+    let revision = ShardLeaseRevision::from_wire(&request.incarnation_id, request.revision)
+        .map_err(|error| {
+            WorkerExecutorError::invalid_request(format!("RevokeShardsRequest.{error}"))
+        })?;
+    service.revoke_shards(&shard_ids, revision, request.executor_count as usize)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{WorkerExecutorError, decode_assignment_shard_count};
+    use super::*;
+    use crate::services::shard::ShardServiceDefault;
+    use golem_common::model::protobuf::shard_epochs_to_proto;
+    use prost::Message;
+    use std::time::{Duration, Instant};
     use test_r::test;
+    use uuid::Uuid;
 
     #[test]
-    fn assignment_shard_count_rejects_zero_and_preserves_the_positive_wire_range() {
-        assert_eq!(
-            decode_assignment_shard_count(0),
-            Err(WorkerExecutorError::invalid_request(
-                "AssignShardsRequest.number_of_shards must not be 0"
-            ))
+    fn wire_deliveries_keep_the_count_at_the_newest_revision() {
+        let service = ShardServiceDefault::new();
+        let revision = ShardLeaseRevision {
+            incarnation: Uuid::from_u128(0x5eed),
+            number: 1,
+        };
+        let expiry = Instant::now() + Duration::from_secs(60);
+        let epochs = HashMap::from([(ShardId::new(0), ShardEpoch(7))]);
+        service.register(8, &epochs, Some(expiry), revision, 2);
+
+        let request = golem::workerexecutor::v1::AssignShardsRequest {
+            number_of_shards: 8,
+            shard_epochs: shard_epochs_to_proto(epochs.iter().map(|(id, epoch)| (*id, *epoch))),
+            revision: 3,
+            incarnation_id: revision.incarnation.to_string(),
+            executor_count: 5,
+        };
+        let bytes = request.encode_to_vec();
+        apply_assignment_request(
+            &service,
+            golem::workerexecutor::v1::AssignShardsRequest::decode(bytes.as_slice()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(service.executor_count(), Some(5));
+
+        let request = golem::workerexecutor::v1::RevokeShardsRequest {
+            shard_ids: vec![ShardId::new(0).into()],
+            revision: 4,
+            incarnation_id: revision.incarnation.to_string(),
+            executor_count: 3,
+        };
+        let bytes = request.encode_to_vec();
+        apply_revoke_request(
+            &service,
+            golem::workerexecutor::v1::RevokeShardsRequest::decode(bytes.as_slice()).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(service.executor_count(), Some(3));
+        assert!(
+            service
+                .current_assignment()
+                .unwrap()
+                .shard_epochs
+                .is_empty()
         );
+        assert_eq!(
+            service.current_assignment().unwrap().expires_at,
+            Some(expiry)
+        );
+
+        service
+            .update_lease(
+                &epochs,
+                expiry,
+                ShardLeaseRevision {
+                    number: 3,
+                    ..revision
+                },
+                5,
+            )
+            .unwrap();
+        let held = service.current_assignment().unwrap();
+        assert_eq!(held.executor_count, 3);
+        assert_eq!(
+            held.revision,
+            Some(ShardLeaseRevision {
+                number: 4,
+                ..revision
+            })
+        );
+        assert!(held.shard_epochs.is_empty());
+    }
+
+    #[test]
+    fn malformed_wire_deliveries_leave_the_installed_assignment_unchanged() {
+        let service = ShardServiceDefault::new();
+        let revision = ShardLeaseRevision {
+            incarnation: Uuid::from_u128(0x5eed),
+            number: 1,
+        };
+        let expiry = Instant::now() + Duration::from_secs(60);
+        let epochs = HashMap::from([(ShardId::new(0), ShardEpoch(7))]);
+        service.register(8, &epochs, Some(expiry), revision, 2);
+        let assign = golem::workerexecutor::v1::AssignShardsRequest {
+            number_of_shards: 8,
+            shard_epochs: vec![],
+            revision: 3,
+            incarnation_id: revision.incarnation.to_string(),
+            executor_count: 5,
+        };
         [
-            (1, 1),
-            (1024, 1024),
-            (1025, 1025),
-            (u32::MAX, 4_294_967_295),
+            golem::workerexecutor::v1::AssignShardsRequest {
+                executor_count: 0,
+                ..assign.clone()
+            },
+            golem::workerexecutor::v1::AssignShardsRequest {
+                number_of_shards: 0,
+                ..assign.clone()
+            },
+            golem::workerexecutor::v1::AssignShardsRequest {
+                incarnation_id: String::new(),
+                ..assign
+            },
         ]
         .into_iter()
-        .for_each(|(value, expected)| {
-            assert_eq!(decode_assignment_shard_count(value).unwrap(), expected);
+        .for_each(|request| {
+            let bytes = request.encode_to_vec();
+            assert!(
+                apply_assignment_request(
+                    &service,
+                    golem::workerexecutor::v1::AssignShardsRequest::decode(bytes.as_slice())
+                        .unwrap(),
+                )
+                .is_err()
+            );
         });
+        let revoke = golem::workerexecutor::v1::RevokeShardsRequest {
+            shard_ids: vec![ShardId::new(0).into()],
+            revision: 4,
+            incarnation_id: revision.incarnation.to_string(),
+            executor_count: 0,
+        };
+        let bytes = revoke.encode_to_vec();
+        assert!(
+            apply_revoke_request(
+                &service,
+                golem::workerexecutor::v1::RevokeShardsRequest::decode(bytes.as_slice()).unwrap(),
+            )
+            .is_err()
+        );
+        let held = service.current_assignment().unwrap();
+        assert_eq!(held.executor_count, 2);
+        assert_eq!(held.revision, Some(revision));
+        assert_eq!(held.expires_at, Some(expiry));
+        assert_eq!(held.shard_epochs, epochs);
     }
 }

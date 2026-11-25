@@ -442,6 +442,7 @@ async fn abandoned_deletion_finishes_after_the_invocation_loop_exits(
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -578,6 +579,7 @@ async fn shard_retirement_removes_old_owner_without_removing_its_replacement(
                         shard_ids: vec![ShardId { value: 0 }],
                         revision,
                         incarnation_id: TEST_SHARD_MANAGER.to_string(),
+                        executor_count: 1,
                     })
                     .await?
                     .into_inner();
@@ -853,6 +855,7 @@ async fn a_revoke_older_than_the_last_delivery_does_not_sweep_agents(
             shard_ids: vec![shard],
             revision: 3,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -873,6 +876,7 @@ async fn a_revoke_older_than_the_last_delivery_does_not_sweep_agents(
             shard_ids: vec![shard],
             revision: 5,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -1174,6 +1178,7 @@ async fn an_agent_whose_shard_leaves_while_it_is_being_created_is_given_up_once_
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -1267,6 +1272,7 @@ async fn a_constructor_that_waits_through_a_shard_reassignment_runs_as_the_creat
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();

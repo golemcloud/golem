@@ -3253,6 +3253,7 @@ async fn shard_assignment_fails_when_a_recovered_worker_cannot_be_activated(
             shard_ids: vec![shard],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -12585,6 +12586,7 @@ async fn revoke_shard_zero(executor: &TestWorkerExecutor) -> anyhow::Result<()> 
             shard_ids: vec![ShardId { value: 0 }],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -12843,6 +12845,7 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
             shard_ids: vec![shard],
             revision: 1,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();
@@ -12890,6 +12893,7 @@ async fn shard_assignment_recovery_skips_an_agent_whose_shard_is_revoked_mid_sca
             shard_ids: vec![shard],
             revision: 3,
             incarnation_id: TEST_SHARD_MANAGER.to_string(),
+            executor_count: 1,
         })
         .await?
         .into_inner();

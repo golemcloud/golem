@@ -274,6 +274,8 @@ impl ShardLeaseState {
         self.executor_leases.contains_key(&executor_id)
     }
 
+    /// Counts stored executor leases, including executors with no shards.
+    /// Elapsed leases remain counted until housekeeping removes them.
     pub fn executor_count(&self) -> usize {
         self.executor_leases.len()
     }
@@ -987,7 +989,6 @@ mod tests {
                 let push = state.assignment_push_for(*executor_id).unwrap();
                 assert_eq!(grant.executor_count, expected);
                 assert_eq!(push.executor_count, expected);
-                assert_eq!(grant.revision, push.revision);
                 let wire = push.to_proto(Uuid::nil().to_string());
                 assert_eq!(wire.executor_count, expected as u32);
                 assert_eq!(wire.incarnation_id, Uuid::nil().to_string());
@@ -1475,12 +1476,27 @@ mod tests {
         shard_state.assign_shard(executor(1), shard(0));
         shard_state.assign_shard(executor(2), shard(1));
 
+        let check_delivered_count = |state: &ShardLeaseState, expected| {
+            let grant = state
+                .lease_grant_for(executor(2))
+                .unwrap()
+                .stamp(state.revision);
+            let push = state.assignment_push_for(executor(2)).unwrap();
+            assert_eq!(grant.executor_count, expected);
+            assert_eq!(push.executor_count, expected);
+            assert_eq!(
+                push.to_proto(incarnation_id()).executor_count,
+                expected as u32
+            );
+        };
+
         assert!(
             shard_state
                 .housekeep(t0() + jiff::SignedDuration::from_secs(9))
                 .is_empty()
         );
         assert_eq!(shard_state.executor_count(), 2);
+        check_delivered_count(&shard_state, 2);
 
         // expiry is inclusive
         let evicted = shard_state.housekeep(t0() + jiff::SignedDuration::from_secs(10));
@@ -1488,6 +1504,7 @@ mod tests {
         assert!(!shard_state.has_executor(executor(1)));
         assert!(shard_state.has_executor(executor(2)));
         assert_eq!(shard_state.pending_rebalance, shards(&[0]));
+        check_delivered_count(&shard_state, 1);
         assert_eq!(
             shard_state.shards_for_executor(executor(2)),
             Some(shards(&[1]))

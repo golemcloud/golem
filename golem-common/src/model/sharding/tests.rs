@@ -190,6 +190,7 @@ fn a_push_never_moves_the_lease_clock() {
         E::Revoke {
             shard_ids: &HashSet::from([ShardId::new(2)]),
             revision: revision_of(MANAGER, 3),
+            executor_count: 1,
         },
     );
     assert_eq!(
@@ -273,6 +274,7 @@ fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
         E::Revoke {
             shard_ids: &revoked,
             revision: revision_of(MANAGER, 2),
+            executor_count: 2,
         },
     );
     assert_eq!(
@@ -286,16 +288,19 @@ fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
         assignment.contains(&ShardId::new(0)),
         "a revoke older than the last delivery applied must be ignored"
     );
+    assert_eq!(assignment.executor_count, 3);
 
     let applied = deliver(
         &mut assignment,
         E::Revoke {
             shard_ids: &revoked,
             revision: revision_of(MANAGER, 5),
+            executor_count: 4,
         },
     );
     assert_eq!(applied, ShardDeliveryOutcome::Applied { set_changed: true });
     assert!(!assignment.contains(&ShardId::new(0)));
+    assert_eq!(assignment.executor_count, 4);
     assert_eq!(
         assignment.revision,
         Some(revision_of(MANAGER, 5)),
@@ -321,7 +326,7 @@ fn a_revoke_is_gated_by_revision_like_every_other_delivery() {
         !assignment.contains(&ShardId::new(0)),
         "a grant read before the shard moved, arriving after the revoke, must not restore it"
     );
-    assert_eq!(assignment.executor_count, 3);
+    assert_eq!(assignment.executor_count, 4);
     let full = deliver(
         &mut assignment,
         E::Assign {
@@ -482,6 +487,7 @@ fn a_push_from_a_manager_process_that_is_not_followed_is_ignored() {
         E::Revoke {
             shard_ids: &HashSet::from([ShardId::new(0)]),
             revision: revision_of(old_manager, 10_002),
+            executor_count: 7,
         },
     );
     [delayed_push, delayed_revoke]
@@ -494,6 +500,7 @@ fn a_push_from_a_manager_process_that_is_not_followed_is_ignored() {
         });
     assert_eq!(assignment.shard_epochs, epochs([(0, 5)]));
     assert_eq!(assignment.revision, Some(revision_of(new_manager, 3)));
+    assert_eq!(assignment.executor_count, 1);
 
     // The followed manager's own pushes are ordered by number as ever.
     let push = deliver(
@@ -529,7 +536,18 @@ fn a_delivery_must_name_its_manager_process() {
 /// "never expires", which would leave a fenced executor reading as ready.
 #[test]
 fn clear_lapses_the_lease_instead_of_making_it_unexpiring() {
-    let assignment = ShardAssignment::unexpiring(8, [ShardId::new(0)]);
+    let mut assignment = ShardAssignment::default();
+    let revision = revision_of(MANAGER, 17);
+    deliver(
+        &mut assignment,
+        E::Register {
+            number_of_shards: 8,
+            shard_epochs: &epochs([(0, 4)]),
+            expires_at: Some(in_secs(60)),
+            revision,
+            executor_count: 5,
+        },
+    );
     let now = Instant::now();
     assert!(assignment.lease_is_live(now));
 
@@ -544,7 +562,8 @@ fn clear_lapses_the_lease_instead_of_making_it_unexpiring() {
         "a cleared assignment is lapsed, not never-expiring"
     );
     assert!(!assignment.lease_is_live(now + Duration::from_secs(1)));
-    assert_eq!(assignment.executor_count, 1);
+    assert_eq!(assignment.executor_count, 5);
+    assert_eq!(assignment.revision, Some(revision));
     assert_eq!(assignment.number_of_shards, 8);
 }
 
@@ -570,6 +589,7 @@ fn only_registration_and_standalone_install_an_assignment() {
         E::Revoke {
             shard_ids: &revoked,
             revision,
+            executor_count: 2,
         },
         E::Clear { now },
     ]

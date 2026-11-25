@@ -202,12 +202,34 @@ fn shard_lease_from_wire(
     lease: golem_api_grpc::proto::golem::shardmanager::v1::ShardLease,
     sent_at: Instant,
 ) -> Result<ShardLease, String> {
+    if lease.executor_count == 0 {
+        return Err("ShardLease.executor_count must not be 0".to_string());
+    }
     Ok(ShardLease {
         shard_epochs: shard_epochs_from_proto(lease.shard_epochs)?,
         executor_count: lease.executor_count as usize,
         expires_at: expires_at_from_ttl(lease.lease_ttl, sent_at)?,
         revision: ShardLeaseRevision::from_wire(&lease.incarnation_id, lease.revision)
             .map_err(|error| format!("ShardLease.{error}"))?,
+    })
+}
+
+fn registration_from_wire(
+    success: golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess,
+    sent_at: Instant,
+) -> Result<ShardRegistration, String> {
+    if success.executor_count == 0 {
+        return Err("RegisterSuccess.executor_count must not be 0".to_string());
+    }
+    Ok(ShardRegistration {
+        number_of_shards: success.number_of_shards,
+        lease: ShardLease {
+            shard_epochs: shard_epochs_from_proto(success.shard_epochs)?,
+            executor_count: success.executor_count as usize,
+            expires_at: expires_at_from_ttl(success.lease_ttl, sent_at)?,
+            revision: ShardLeaseRevision::from_wire(&success.incarnation_id, success.revision)
+                .map_err(|error| format!("RegisterSuccess.{error}"))?,
+        },
     })
 }
 
@@ -363,25 +385,8 @@ impl ShardManager for GrpcShardManager {
                     match response.into_inner().result {
                         None => Err(ShardManagerError::empty_response()),
                         Some(register_response::Result::Success(success)) => {
-                            Ok(ShardRegistration {
-                                number_of_shards: success.number_of_shards,
-                                lease: ShardLease {
-                                    shard_epochs: shard_epochs_from_proto(success.shard_epochs)
-                                        .map_err(ShardManagerError::ConversionError)?,
-                                    executor_count: success.executor_count as usize,
-                                    expires_at: expires_at_from_ttl(success.lease_ttl, sent_at)
-                                        .map_err(ShardManagerError::ConversionError)?,
-                                    revision: ShardLeaseRevision::from_wire(
-                                        &success.incarnation_id,
-                                        success.revision,
-                                    )
-                                    .map_err(|error| {
-                                        ShardManagerError::ConversionError(format!(
-                                            "RegisterSuccess.{error}"
-                                        ))
-                                    })?,
-                                },
-                            })
+                            registration_from_wire(success, sent_at)
+                                .map_err(ShardManagerError::ConversionError)
                         }
                         Some(register_response::Result::Failure(failure)) => Err(failure.into()),
                     }
@@ -854,6 +859,7 @@ impl From<&'static str> for ShardLeaseError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prost::Message;
     use std::time::{Duration, Instant};
     use test_r::test;
 
@@ -895,7 +901,11 @@ mod tests {
         // the answer took its time
         std::thread::sleep(Duration::from_millis(20));
 
-        let lease = shard_lease_from_wire(on_the_wire, sent_at).unwrap();
+        let bytes = on_the_wire.encode_to_vec();
+        let decoded =
+            golem_api_grpc::proto::golem::shardmanager::v1::ShardLease::decode(bytes.as_slice())
+                .unwrap();
+        let lease = shard_lease_from_wire(decoded, sent_at).unwrap();
 
         assert_eq!(lease.executor_count, 7);
         assert_eq!(lease.expires_at, sent_at + Duration::from_secs(60));
@@ -909,6 +919,79 @@ mod tests {
                 incarnation,
                 number: 3
             }
+        );
+    }
+
+    #[test]
+    fn a_lease_with_zero_executors_does_not_decode() {
+        let lease = golem_api_grpc::proto::golem::shardmanager::v1::ShardLease {
+            shard_epochs: vec![],
+            executor_count: 0,
+            lease_ttl: Some(prost_types::Duration {
+                seconds: 60,
+                nanos: 0,
+            }),
+            revision: 3,
+            incarnation_id: Uuid::from_u128(0x5eed).to_string(),
+        };
+        let bytes = lease.encode_to_vec();
+        let decoded =
+            golem_api_grpc::proto::golem::shardmanager::v1::ShardLease::decode(bytes.as_slice())
+                .unwrap();
+        assert_eq!(
+            shard_lease_from_wire(decoded, Instant::now()).unwrap_err(),
+            "ShardLease.executor_count must not be 0"
+        );
+    }
+
+    #[test]
+    fn registration_wire_count_survives_decoding_and_zero_is_refused() {
+        let incarnation = Uuid::from_u128(0x5eed);
+        let sent_at = Instant::now();
+        let registration = golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess {
+            number_of_shards: 8,
+            shard_epochs: shard_epochs_to_proto([(ShardId::new(2), ShardEpoch(9))]),
+            executor_count: 4,
+            lease_ttl: Some(prost_types::Duration {
+                seconds: 60,
+                nanos: 0,
+            }),
+            revision: 7,
+            incarnation_id: incarnation.to_string(),
+        };
+        let bytes = registration.encode_to_vec();
+        let decoded = golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess::decode(
+            bytes.as_slice(),
+        )
+        .unwrap();
+        let grant = registration_from_wire(decoded, sent_at).unwrap();
+        assert_eq!(grant.number_of_shards, 8);
+        assert_eq!(grant.lease.executor_count, 4);
+        assert_eq!(
+            grant.lease.shard_epochs,
+            BTreeMap::from([(ShardId::new(2), ShardEpoch(9))])
+        );
+        assert_eq!(grant.lease.expires_at, sent_at + Duration::from_secs(60));
+        assert_eq!(
+            grant.lease.revision,
+            ShardLeaseRevision {
+                incarnation,
+                number: 7
+            }
+        );
+
+        let malformed = golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess {
+            executor_count: 0,
+            ..registration
+        };
+        let bytes = malformed.encode_to_vec();
+        let decoded = golem_api_grpc::proto::golem::shardmanager::v1::RegisterSuccess::decode(
+            bytes.as_slice(),
+        )
+        .unwrap();
+        assert_eq!(
+            registration_from_wire(decoded, sent_at).unwrap_err(),
+            "RegisterSuccess.executor_count must not be 0"
         );
     }
 

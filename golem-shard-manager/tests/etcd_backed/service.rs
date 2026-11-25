@@ -416,6 +416,20 @@ async fn a_lapsed_lease_is_re_homed_to_a_live_executor(
         "the stored state broke its own invariants: {re_homed}"
     );
 
+    wait_for_pushed_count(worker_executors.clone(), pod(2, 9001), 1).await;
+    let grant = shard_management
+        .renew_shard_lease(
+            executor(2),
+            re_homed
+                .shard_assignments
+                .iter()
+                .map(|(id, entry)| (*id, entry.epoch))
+                .collect(),
+        )
+        .await
+        .expect("the survivor must receive the count in its renewal");
+    assert_eq!(grant.executor_count, 1);
+
     surviving.abort();
     join_set.abort_all();
 }

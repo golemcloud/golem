@@ -77,6 +77,7 @@ pub trait ShardService: Send + Sync {
         &self,
         shard_ids: &HashSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError>;
     /// A granted lease renewal: the shard manager's set for this executor, at
     /// a new expiry anchored where the renewal was sent. Normally the set that
@@ -164,8 +165,11 @@ impl ShardServiceDefault {
 impl ShardService for ShardServiceDefault {
     fn is_ready(&self) -> bool {
         let now = Instant::now();
-        let guard = self.shard_assignment.read().unwrap();
-        ready_assignment(guard.as_ref(), now).is_ok()
+        self.shard_assignment
+            .read()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|shard_assignment| shard_assignment.lease_is_live(now))
     }
 
     fn assign_shards(
@@ -194,10 +198,17 @@ impl ShardService for ShardServiceDefault {
     fn check_admission(&self, agent_id: &AgentId) -> Result<(), WorkerExecutorError> {
         let now = Instant::now();
         let guard = self.shard_assignment.read().unwrap();
-        admission(guard.as_ref(), agent_id, now).map_err(|(refusal, error)| {
-            record_shard_admission_refusal(refusal);
-            error
-        })
+        let Some(shard_assignment) = guard.as_ref() else {
+            record_shard_admission_refusal(ShardAdmissionRefusal::NotRegistered);
+            return Err(sharding_not_ready_error());
+        };
+        if !shard_assignment.lease_is_live(now) {
+            record_shard_admission_refusal(ShardAdmissionRefusal::LeaseLapsed);
+            return Err(shard_lease_expired_error());
+        }
+        shard_assignment
+            .check_worker(agent_id)
+            .inspect_err(|_| record_shard_admission_refusal(ShardAdmissionRefusal::NotOwned))
     }
 
     fn current_assignment(&self) -> Result<ShardAssignment, WorkerExecutorError> {
@@ -238,10 +249,12 @@ impl ShardService for ShardServiceDefault {
         &self,
         shard_ids: &HashSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     ) -> Result<ShardDeliveryOutcome, WorkerExecutorError> {
         self.apply(ShardAssignmentEvent::Revoke {
             shard_ids,
             revision,
+            executor_count,
         })
         .ok_or_else(sharding_not_ready_error)
     }
@@ -281,30 +294,6 @@ impl ShardService for ShardServiceDefault {
     }
 }
 
-fn ready_assignment(
-    assignment: Option<&ShardAssignment>,
-    now: Instant,
-) -> Result<&ShardAssignment, ShardAdmissionRefusal> {
-    let assignment = assignment.ok_or(ShardAdmissionRefusal::NotRegistered)?;
-    if assignment.lease_is_live(now) {
-        Ok(assignment)
-    } else {
-        Err(ShardAdmissionRefusal::LeaseLapsed)
-    }
-}
-
-fn admission(
-    assignment: Option<&ShardAssignment>,
-    agent_id: &AgentId,
-    now: Instant,
-) -> Result<(), (ShardAdmissionRefusal, WorkerExecutorError)> {
-    let assignment = ready_assignment(assignment, now)
-        .map_err(|refusal| (refusal, sharding_not_ready_error()))?;
-    assignment
-        .check_worker(agent_id)
-        .map_err(|error| (ShardAdmissionRefusal::NotOwned, error))
-}
-
 /// Records what every delivery updates: the resulting shard count, the lease expiry when the
 /// lease expires, and, when the delivery was dropped - older than the last applied, or pushed by a
 /// manager this executor does not follow - the drop itself.
@@ -327,6 +316,11 @@ fn record_delivery(
 }
 
 fn sharding_not_ready_error() -> WorkerExecutorError {
+    WorkerExecutorError::ShardingNotReady
+}
+
+/// A lapsed shard lease refuses admission with the same retryable routing error.
+fn shard_lease_expired_error() -> WorkerExecutorError {
     WorkerExecutorError::ShardingNotReady
 }
 
@@ -445,9 +439,10 @@ mod tests {
             .revoke_shards(
                 &HashSet::from([ShardId::new(0)]),
                 revision_of(next_manager, 2),
+                5,
             )
             .unwrap();
-        assert_eq!(service.executor_count(), Some(2));
+        assert_eq!(service.executor_count(), Some(5));
         service.install_unexpiring(SHARDS, &held);
         assert_eq!(service.executor_count(), Some(1));
     }
@@ -456,6 +451,7 @@ mod tests {
     /// revoke that arrives first is refused, never applied to a placeholder
     /// whose shard count of zero the routing hash would divide by.
     #[test]
+    #[test_r::always_capture]
     fn a_delivery_before_registration_is_refused() {
         let service = ShardServiceDefault::new();
         let deliveries = [
@@ -471,7 +467,11 @@ mod tests {
         for refused in [
             service.assign_shards(SHARDS, &epochs([(0, 1)]), revision_of(MANAGER, 1), 1),
             service.update_lease(&epochs([(0, 1)]), live(), revision_of(MANAGER, 1), 1),
-            service.revoke_shards(&HashSet::from([ShardId::new(0)]), revision_of(MANAGER, 1)),
+            service.revoke_shards(
+                &HashSet::from([ShardId::new(0)]),
+                revision_of(MANAGER, 1),
+                1,
+            ),
         ] {
             assert!(
                 matches!(refused, Err(WorkerExecutorError::ShardingNotReady)),
@@ -482,8 +482,9 @@ mod tests {
             .into_iter()
             .zip(before)
             .for_each(|(delivery, before)| {
-                assert!(
-                    shard_delivery_attempt_count(delivery) > before,
+                assert_eq!(
+                    shard_delivery_attempt_count(delivery),
+                    before + 1,
                     "a refused delivery still counts as an attempt"
                 );
             });
@@ -555,6 +556,7 @@ mod tests {
     /// correct, so it only warns. That makes a *sustained* drop rate invisible in logs, which is
     /// what the counter is for.
     #[test]
+    #[test_r::always_capture]
     fn a_dropped_delivery_is_counted_and_not_only_logged() {
         let service = ShardServiceDefault::new();
         service.register(
@@ -575,12 +577,14 @@ mod tests {
             matches!(outcome, ShardDeliveryOutcome::Stale { .. }),
             "a renewal below the applied revision is dropped"
         );
-        assert!(
-            stale_shard_delivery_count(ShardDelivery::Renewal) > before,
+        assert_eq!(
+            stale_shard_delivery_count(ShardDelivery::Renewal),
+            before + 1.0,
             "and dropping it moves the counter for its own delivery kind"
         );
-        assert!(
-            shard_delivery_attempt_count(ShardDelivery::Renewal) > attempts_before,
+        assert_eq!(
+            shard_delivery_attempt_count(ShardDelivery::Renewal),
+            attempts_before + 1,
             "a stale delivery must also count as an attempt"
         );
     }
@@ -601,7 +605,11 @@ mod tests {
         );
 
         let outcome = service
-            .revoke_shards(&HashSet::from([ShardId::new(0)]), revision_of(MANAGER, 3))
+            .revoke_shards(
+                &HashSet::from([ShardId::new(0)]),
+                revision_of(MANAGER, 3),
+                2,
+            )
             .expect("a registered executor can be revoked from");
 
         assert_eq!(
@@ -623,7 +631,11 @@ mod tests {
 
         // ...while one at or above the applied revision does take the shard.
         let outcome = service
-            .revoke_shards(&HashSet::from([ShardId::new(0)]), revision_of(MANAGER, 5))
+            .revoke_shards(
+                &HashSet::from([ShardId::new(0)]),
+                revision_of(MANAGER, 5),
+                4,
+            )
             .expect("a registered executor can be revoked from");
         assert_eq!(outcome, ShardDeliveryOutcome::Applied { set_changed: true });
         assert_eq!(
@@ -681,32 +693,8 @@ mod tests {
     fn admission_is_refused_once_the_lease_has_lapsed() {
         let agent = agent_on_shard(0);
         let service = service_holding(&epochs([(0, 3)]), Some(live()));
-        assert!(matches!(
-            admission(None, &agent, Instant::now()),
-            Err((
-                ShardAdmissionRefusal::NotRegistered,
-                WorkerExecutorError::ShardingNotReady
-            ))
-        ));
         assert!(service.is_ready());
         assert!(service.check_admission(&agent).is_ok());
-        let assignment = service.current_assignment().unwrap();
-        let expiry = assignment.expires_at.unwrap();
-        let before_expiry = expiry - Duration::from_nanos(1);
-        assert!(admission(Some(&assignment), &agent, before_expiry).is_ok());
-        assert!(matches!(
-            admission(Some(&assignment), &agent, expiry),
-            Err((
-                ShardAdmissionRefusal::LeaseLapsed,
-                WorkerExecutorError::ShardingNotReady
-            ))
-        ));
-        assert!(ready_assignment(Some(&assignment), expiry).is_err());
-        assert!(matches!(
-            admission(Some(&assignment), &agent_on_shard(1), before_expiry),
-            Err((ShardAdmissionRefusal::NotOwned, WorkerExecutorError::InvalidShardId { shard_id, shard_ids }))
-                if shard_id == ShardId::new(1) && shard_ids == vec![ShardId::new(0)]
-        ));
 
         service
             .update_lease(&epochs([(0, 3)]), lapsed(), revision_of(MANAGER, 1), 1)

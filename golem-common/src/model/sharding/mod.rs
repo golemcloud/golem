@@ -315,6 +315,7 @@ pub enum ShardAssignmentEvent<'a> {
     Revoke {
         shard_ids: &'a HashSet<ShardId>,
         revision: ShardLeaseRevision,
+        executor_count: usize,
     },
     InstallUnexpiring {
         number_of_shards: usize,
@@ -400,7 +401,7 @@ pub fn transition_shard_assignment(
                 Some(shard_epochs),
                 revision,
                 path,
-                Some(executor_count),
+                executor_count,
             )
         }
         E::Renew {
@@ -415,7 +416,7 @@ pub fn transition_shard_assignment(
                 Some(shard_epochs),
                 revision,
                 ShardDeliveryPath::Reply,
-                Some(executor_count),
+                executor_count,
             )
         }
         E::Assign {
@@ -428,9 +429,19 @@ pub fn transition_shard_assignment(
             Some(shard_epochs),
             revision,
             ShardDeliveryPath::Push,
-            Some(executor_count),
+            executor_count,
         ),
-        E::Revoke { revision, .. } => (None, None, revision, ShardDeliveryPath::Push, None),
+        E::Revoke {
+            revision,
+            executor_count,
+            ..
+        } => (
+            None,
+            None,
+            revision,
+            ShardDeliveryPath::Push,
+            executor_count,
+        ),
         E::Clear { .. } | E::InstallUnexpiring { .. } => unreachable!(),
     };
     if let Some(applied) = current.revision {
@@ -467,9 +478,7 @@ pub fn transition_shard_assignment(
     if let Some(number_of_shards) = number_of_shards {
         current.number_of_shards = number_of_shards;
     }
-    if let Some(executor_count) = executor_count {
-        current.executor_count = executor_count;
-    }
+    current.executor_count = executor_count;
     current.revision = Some(revision);
     (
         Some(current),
