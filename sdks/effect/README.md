@@ -357,7 +357,7 @@ golem --local --yes --app-manifest-path static-config.golem.yaml build
 ```
 
 The manifest supplies deployment settings. Creation overrides can supply
-`{ settings: { label: "creation", count: 59 } }` through the typed client's `overrides` option.
+`{ settings: { label: "creation", count: 59 } }` through the typed client's `config` option.
 With those overrides, `read` returns
 `{"settings":{"label":"creation","count":59},"choice":"selected:value","slots":[null,7,"retained"],"omitted":null}`.
 Building this component alone does not verify deployment, host resolution or executor reconstruction.

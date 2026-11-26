@@ -281,6 +281,68 @@ describe("portable static config", () => {
     }),
   )
 
+  it.effect("discovers independently compiled recursive static leaves", () =>
+    Effect.gen(function* () {
+      interface CountNode {
+        readonly count: number
+        readonly next: CountNode | null
+      }
+      const CountNode: Schema.Codec<CountNode> = Schema.suspend(() =>
+        Schema.Struct({ count: Uint32, next: Schema.NullOr(CountNode) }),
+      )
+      const Settings = Config.defineConfig("Recursive.Leaves", {
+        labels: Config.static(Node),
+        counts: Config.static(CountNode),
+      })
+      defineAgent({
+        name: "RecursiveLeavesAgent",
+        id: {},
+        config: Settings,
+        methods: {},
+      }).implement({ init: () => Effect.void, methods: () => ({}) })
+      const compiled = yield* Settings.__compile()
+      const values = yield* Config.encodeOverrides(compiled, {
+        labels: { displayName: "outer", next: { displayName: "inner", next: null } },
+        counts: { count: 29, next: { count: 7, next: null } },
+      })
+      const metadata = guest
+        .discoverAgentTypes()
+        .find((agent) => agent.typeName === "RecursiveLeavesAgent")!
+      for (const value of values) {
+        const declaration = metadata.config.find((entry) => entry.path[0] === value.path[0])!
+        expect(
+          new SchemaRef(metadata.schema, declaration.valueType).unpackJson(value.value.value),
+        ).toEqual(
+          value.path[0] === "labels"
+            ? { displayName: "outer", next: { displayName: "inner", next: null } }
+            : { count: 29, next: { count: 7, next: null } },
+        )
+      }
+    }),
+  )
+
+  it.effect("rejects projection-induced field-absent collisions without a default", () =>
+    Effect.gen(function* () {
+      const Choice = DiscriminatedUnion([
+        {
+          tag: "selected",
+          schema: Schema.Struct({ foo_bar: Schema.String }),
+          discriminator: { tag: "field-equals", val: { fieldName: "foo_bar", literal: "x" } },
+        },
+        {
+          tag: "fallback",
+          schema: Schema.Struct({ fooBar: Schema.String }),
+          discriminator: { tag: "field-absent", val: "foo_bar" },
+        },
+      ])
+      const result = yield* Effect.result(
+        Config.compileConfig({ choice: Config.static(Choice) }, "collision"),
+      )
+      expect(result._tag).toBe("Failure")
+      if (result._tag === "Failure") expect(result.failure).toBeInstanceOf(UnsupportedSchemaError)
+    }),
+  )
+
   it.effect("projects config names without changing native values or method schemas", () =>
     Effect.gen(function* () {
       const Delivery = DiscriminatedUnion([

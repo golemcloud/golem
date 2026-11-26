@@ -1,4 +1,6 @@
 import type { SchemaGraph, SchemaType, SchemaTypeBody } from "./schema-model/model.js"
+import { composeSchemaGraphs } from "./schema-model/builder.js"
+import { validateSchemaGraph } from "./schema-model/validation.js"
 
 export const configName = (name: string): string => {
   const words = name
@@ -16,7 +18,9 @@ export const configName = (name: string): string => {
 }
 
 /** Project only config metadata; the source codec still reads native properties positionally. */
-export const configGraph = (graph: SchemaGraph): SchemaGraph => {
+export const configGraph = (source: SchemaGraph, scope: string): SchemaGraph => {
+  const composed = composeSchemaGraphs([source], scope)
+  const graph = { defs: composed.defs, root: composed.roots[0]! }
   const refId = (id: string) => `${id}/config`
   const visit = (type: SchemaType): SchemaType => {
     const body = type.body
@@ -79,7 +83,7 @@ export const configGraph = (graph: SchemaGraph): SchemaGraph => {
     }
     return { ...type, body: projected }
   }
-  return {
+  const projected = {
     root: visit(graph.root),
     defs: new Map(
       [...graph.defs].map(([id, definition]) => [
@@ -88,4 +92,7 @@ export const configGraph = (graph: SchemaGraph): SchemaGraph => {
       ]),
     ),
   }
+  const errors = validateSchemaGraph(projected)
+  if (errors.length > 0) throw new Error(errors.map((error) => error.message).join("; "))
+  return projected
 }

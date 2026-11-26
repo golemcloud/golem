@@ -193,11 +193,11 @@ export const compileConfig = (
     const leaves: ConfigLeaf[] = []
     const branches = new Set<string>()
     const paths = new Set<string>()
-    const compileField = (schema: Schema.Top) =>
+    const compileField = (schema: Schema.Top, path: ReadonlyArray<string>) =>
       Effect.gen(function* () {
         const nativeCodec = (yield* compile(schema)) as CompiledWitCodec<Schema.Top>
         const graph = yield* Effect.try({
-          try: () => configGraph(nativeCodec.graph),
+          try: () => configGraph(nativeCodec.graph, `${contextLabel}:${JSON.stringify(path)}`),
           catch: (cause) => new UnsupportedSchemaError(`${contextLabel}: ${String(cause)}`),
         })
         return { ...nativeCodec, graph, schemaGraph: schemaGraphToWit(graph) }
@@ -228,7 +228,7 @@ export const compileConfig = (
                 ? cause
                 : new UnsupportedSchemaError(`${contextLabel}: cannot inspect static schema`),
           })
-          const codec = yield* compileField(field.schema)
+          const codec = yield* compileField(field.schema, path)
           const ref = new SchemaRef(codec.schemaGraph)
           const eligible = ref.jsonEligibility()
           if (!eligible.success) {
@@ -274,7 +274,7 @@ export const compileConfig = (
         const inner = redactedInner(schema)
         if (inner !== undefined) {
           const valueSchema = underOptional ? Schema.UndefinedOr(inner) : inner
-          const codec = yield* compileField(valueSchema)
+          const codec = yield* compileField(valueSchema, path)
           const declarationGraph = { defs: codec.graph.defs, root: t.secret(codec.graph.root) }
           leaves.push({
             source: "secret",
@@ -306,12 +306,12 @@ export const compileConfig = (
           }
           return
         }
-        let codec = yield* compileField(schema)
+        let codec = yield* compileField(schema, path)
         let valueSchema = schema
         if (underOptional && codec.graph.root.body.tag !== "option") {
           const optionalSchema = Schema.UndefinedOr(schema)
           valueSchema = optionalSchema
-          codec = yield* compileField(optionalSchema)
+          codec = yield* compileField(optionalSchema, path)
         }
         leaves.push({
           source: "local",

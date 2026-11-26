@@ -28,7 +28,9 @@ use golem_common::model::card::{
     CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, ScopeCard, StoredCard,
     parse_polymorphic_permission,
 };
-use golem_common::model::component::{AgentTypeProvisionConfigUpdate, ComponentId, ComponentRevision};
+use golem_common::model::component::{
+    AgentTypeProvisionConfigUpdate, ComponentId, ComponentRevision, ConfigBindingDto,
+};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::oplog::OplogIndex;
@@ -143,9 +145,10 @@ async fn effect_static_config_captures_survive_reconstruction(
         (
             "new-revision",
             0,
-            Some(vec![AgentConfigEntryDto {
+            Some(vec![ConfigBindingDto {
                 path: vec!["settings".into()],
                 value: json!({"label":"new-revision", "count":0}).into(),
+                origins: None,
             }]),
         ),
         ("new-revision", 0, None),
