@@ -22,9 +22,9 @@ import (
 	"testing"
 
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
-	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	secrets "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_secrets_types"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/witschema"
 	witTypes "go.bytecodealliance.org/pkg/wit/types"
 )
 
@@ -121,7 +121,9 @@ func TestConfigDefaultsInMetadata(t *testing.T) {
 			t.Fatalf("want %d config declarations, got %d", len(want), len(out[0].Config))
 		}
 		graph, err := witschema.GraphToCore(out[0].Schema)
-		if err != nil { t.Fatal(err) }
+		if err != nil {
+			t.Fatal(err)
+		}
 		for _, decl := range out[0].Config {
 			key := strings.Join(decl.Path, "/")
 			expected, ok := want[key]
@@ -130,11 +132,17 @@ func TestConfigDefaultsInMetadata(t *testing.T) {
 			}
 			if expected.IsSome() && decl.DefaultValue.IsSome() {
 				value, err := witschema.ValueToCore(decl.DefaultValue.Some())
-				if err != nil { t.Fatal(err) }
+				if err != nil {
+					t.Fatal(err)
+				}
 				ref, err := graph.Ref(decl.ValueType)
-				if err != nil { t.Fatal(err) }
+				if err != nil {
+					t.Fatal(err)
+				}
 				json, err := ref.UnpackJSONBytes(value)
-				if err != nil { t.Fatal(err) }
+				if err != nil {
+					t.Fatal(err)
+				}
 				assertConfigJSON(t, json, []byte(expected.Some()))
 			}
 		}

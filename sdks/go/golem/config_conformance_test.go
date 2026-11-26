@@ -103,11 +103,17 @@ func TestStaticConfigCorpus(t *testing.T) {
 			}
 			if want[i].DefaultValue != nil {
 				value, err := witschema.ValueToCore(decl.DefaultValue.Some())
-				if err != nil { t.Fatal(err) }
+				if err != nil {
+					t.Fatal(err)
+				}
 				ref, err := graph.Ref(decl.ValueType)
-				if err != nil { t.Fatal(err) }
+				if err != nil {
+					t.Fatal(err)
+				}
 				json, err := ref.UnpackJSONBytes(value)
-				if err != nil { t.Fatal(err) }
+				if err != nil {
+					t.Fatal(err)
+				}
 				assertConfigJSON(t, json, []byte(*want[i].DefaultValue))
 			}
 		}

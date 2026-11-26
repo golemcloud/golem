@@ -87,10 +87,10 @@ import (
 // is Secret[T] so the schema graph carries a secret(inner) node; for local
 // config it is the value type directly.
 type configDecl struct {
-	source       common.AgentConfigSource
-	path         []string
-	typ          reflect.Type
-	restrict     *engine.Restriction
+	source      common.AgentConfigSource
+	path        []string
+	typ         reflect.Type
+	restrict    *engine.Restriction
 	defaultJSON witTypes.Option[string]
 }
 
@@ -144,7 +144,7 @@ type configLeaf struct {
 	typ    reflect.Type
 	index  []int
 	// tag is the field's golem restriction tag, if it has one.
-	tag          string
+	tag         string
 	defaultJSON witTypes.Option[string]
 }
 
@@ -349,9 +349,9 @@ func (d *definitions) buildConfigDecls(g *engine.GraphBuilder, cds []configDecl)
 	out := make([]common.AgentConfigDeclaration, 0, len(cds))
 	for _, cd := range cds {
 		out = append(out, common.AgentConfigDeclaration{
-			Source:       cd.source,
-			Path:         cd.path,
-			ValueType:    g.RestrictedNode(d.Compile(cd.typ), cd.restrict),
+			Source:    cd.source,
+			Path:      cd.path,
+			ValueType: g.RestrictedNode(d.Compile(cd.typ), cd.restrict),
 		})
 	}
 	return out
