@@ -320,7 +320,10 @@ async fn static_config_reference_exports_corpus_metadata() -> anyhow::Result<()>
 #[test]
 async fn moonbit_static_config_exports_corpus_metadata() -> anyhow::Result<()> {
     check_reference_metadata(
-        "../test-components/agent_config_moonbit.wasm",
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-components/agent_config_moonbit.wasm"
+        ),
         "StaticDefaultsAgent",
     )
     .await
