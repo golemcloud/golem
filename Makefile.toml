@@ -3371,4 +3371,18 @@ tools = set sdks/python/target/tools
 exec --fail-on-error cargo install --locked --git https://github.com/golemcloud/componentize-py --rev ${rev} --root ${tools} componentize-py
 rm -r sdks/python/target/prepared
 exec --fail-on-error ${tools}/bin/componentize-py -d sdks/python/wit -w agent-guest prepare sdks/python/target/prepared
+writefile sdks/python/target/compatibility.json "{\"componentize-py\": \"${rev}\"}\n"
+'''
+
+# Builds the `golem-py-sdk` wheel in sdks/python/target/wheel from the SDK
+# sources and the prepared assets. The fixed `SOURCE_DATE_EPOCH` makes the
+# wheel independent of file times, so identical inputs give identical bytes.
+[tasks.python-sdk-wheel]
+description = "Builds the golem-py-sdk wheel in sdks/python/target/wheel"
+dependencies = ["python-sdk-prepare"]
+script_runner = "@duckscript"
+script = '''
+set_env SOURCE_DATE_EPOCH 315532800
+rm -r sdks/python/target/wheel
+exec --fail-on-error uv build --wheel --no-cache --out-dir sdks/python/target/wheel sdks/python
 '''

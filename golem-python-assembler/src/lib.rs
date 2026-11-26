@@ -34,6 +34,10 @@ use wasmtime_wasi::{
 #[cfg(test)]
 test_r::enable!();
 
+mod wheel;
+
+pub use wheel::{COMPONENTIZE_PY_REVISION, DISTRIBUTION, SDK_VERSION, Sdk, read_sdk_wheel};
+
 /// The SDK module that pre-initialization imports.
 pub const BOOTSTRAP_MODULE: &str = "golem._bootstrap";
 
@@ -222,9 +226,29 @@ fn validate_entry_module(module: &str) -> Result<()> {
     Ok(())
 }
 
-/// Reads and verifies prepared assets.
+/// The identity of the prepared assets that this assembler builds with.
+///
+/// It is the SHA-256 of the manifest that `cargo make python-sdk-prepare`
+/// writes for the `agent-guest` world in `sdks/python/wit`. The manifest names
+/// the digests of the generated world bindings, the Python standard library,
+/// the adapter and every runtime library, so assets for another world, another
+/// Python runtime or another componentize-py build have another identity.
+/// Prepare the assets again and update this value when one of them changes.
+pub const PREPARED_IDENTITY: &str =
+    "a120875ae95f300c4bc550de71d95c6e893067c6714d34dc4ba037ccfb930234";
+
+/// Reads and verifies prepared assets, and checks that they are the assets
+/// that this assembler builds with.
 pub fn read_prepared(dir: &Path) -> Result<Prepared> {
-    Prepared::read(dir)
+    let prepared = Prepared::read(dir)?;
+    let identity = prepared.identity();
+    ensure!(
+        identity == PREPARED_IDENTITY,
+        "the prepared assets are {identity}, but this Golem CLI builds with \
+         {PREPARED_IDENTITY}; they were prepared for another WIT world, Python runtime or \
+         componentize-py build. Use the {DISTRIBUTION} build that matches this Golem CLI"
+    );
+    Ok(prepared)
 }
 
 /// Builds the component for `app` and returns its bytes.
