@@ -466,10 +466,16 @@ impl DeploymentContext {
                 .or_default()
                 .push(source);
         }
-        let mut colliding_tools = HashSet::new();
+        let mut rejected_tools = HashSet::new();
         for (tool_name, sources) in all_sources {
+            if uuid::Uuid::parse_str(tool_name.as_str()).is_ok() {
+                errors.push(DeployValidationError::UuidToolName {
+                    tool_name: tool_name.clone(),
+                });
+                rejected_tools.insert(tool_name.clone());
+            }
             if sources.len() > 1 && remote_tool_names.contains(&tool_name) {
-                colliding_tools.insert(tool_name.clone());
+                rejected_tools.insert(tool_name.clone());
                 errors.push(DeployValidationError::ToolSourceCollision { tool_name, sources });
             }
         }
@@ -497,7 +503,7 @@ impl DeploymentContext {
                 });
                 continue;
             }
-            if colliding_tools.contains(&tool_name) {
+            if rejected_tools.contains(&tool_name) {
                 continue;
             }
 
@@ -707,7 +713,7 @@ impl DeploymentContext {
                 }
             }
 
-            if !valid || colliding_tools.contains(&deployment.name) {
+            if !valid || rejected_tools.contains(&deployment.name) {
                 continue;
             }
             registered_tools.push(ToolRegistration {

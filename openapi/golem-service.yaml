@@ -2462,7 +2462,7 @@ paths:
     post:
       tags:
       - Agent
-      summary: Invoke a tool on an existing agent or a fresh ephemeral component owner
+      summary: Invoke a tool on an existing agent or a fresh component baseline owner
       description: |-
         Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
         require an attached invocation session rather than this scalar endpoint.
@@ -2900,13 +2900,15 @@ paths:
     get:
       tags:
       - Invocation
-      summary: Find the invocations that the caller started on an agent with an idempotency key
+      summary: Find the invocations that the caller started with an idempotency key
       description: |-
         The key is matched in the caller's own idempotency scope, against every method and tool
         command the agent ran, including those a later revision removed. A removed method is
         found only while one of its invocations has the method name outside an external payload;
         otherwise pass `operation`. A caller without a scope, and a key used through an HTTP
         route, find nothing. No match is `404`.
+        With `tool`, match each currently deployed command, or only `command` when given.
+        With both `agent` and `tool`, match hosted tool invocations on that agent.
       operationId: lookup_invocations
       parameters:
       - in: path
@@ -2921,11 +2923,26 @@ paths:
       - in: query
         name: agent
         description: The agent ID
-        required: true
         deprecated: false
         schema:
           type: string
           format: uuid
+        explode: true
+        style: form
+      - in: query
+        name: tool
+        description: The tool name; with an agent, finds invocations hosted on that agent
+        deprecated: false
+        schema:
+          type: string
+        explode: true
+        style: form
+      - in: query
+        name: command
+        description: Only this command path; without it, finds every command of the tool
+        deprecated: false
+        schema:
+          type: string
         explode: true
         style: form
       - in: query
@@ -15833,6 +15850,11 @@ components:
         canonicalKey:
           description: The canonical key text of a keyed agent. An agent without a key has none.
           type: string
+        origin:
+          description: 'How the agent came to exist: keyed, created without a key, or forked.'
+          allOf:
+          - $ref: '#/components/schemas/AgentOrigin'
+          - description: 'How the agent came to exist: keyed, created without a key, or forked.'
         constructorParameters:
           description: |-
             The canonical constructor parameter text of a component agent, without its type
@@ -15925,6 +15947,7 @@ components:
       required:
       - agentId
       - ownerKind
+      - origin
       - environmentId
       - createdBy
       - env
@@ -16018,6 +16041,13 @@ components:
             $ref: '#/components/schemas/AgentFilter'
       required:
       - filters
+    AgentOrigin:
+      description: How an agent came to exist.
+      type: string
+      enum:
+      - keyed
+      - created
+      - forked
     AgentReference:
       title: AgentReference
       type: object
@@ -18780,7 +18810,7 @@ components:
       type: object
       properties:
         invocationId:
-          description: '`<agent ID>.<UUID>`'
+          description: '`<agent ID>.<UUID>` or `<tool name>.<UUID>`'
           type: string
         agentId:
           type: string
@@ -19016,13 +19046,12 @@ components:
       enum:
       - await
       - schedule
-      - lookup
     NativeToolInvocationRequest:
       title: NativeToolInvocationRequest
       description: |-
         Select exactly one target: `agentId` for an existing real owner, or `componentId`
-        for a fresh ephemeral owner using that deployed component's baseline without constructing an agent.
-        Input is required for await and schedule, and forbidden for lookup.
+        for a fresh owner using that deployed component's baseline without constructing an agent.
+        Component tools use durable owners; host tools use ephemeral owners. Input is required.
       type: object
       properties:
         agentId:
@@ -19052,6 +19081,8 @@ components:
       title: NativeToolInvocationResponse
       type: object
       properties:
+        invocationId:
+          type: string
         agentId:
           type: string
           format: uuid
@@ -19072,6 +19103,7 @@ components:
           type: integer
           format: uint64
       required:
+      - invocationId
       - agentId
       - idempotencyKey
     NativeToolResult:
@@ -19376,13 +19408,14 @@ components:
       description: |-
         Authoritative kind of an execution owner.
 
-        This is persisted at creation time. Owners other than component agents have the
-        reserved type tag, which tells no kind apart, so only this value grants their authority.
+        This is persisted at creation time. External-tool and oplog-processor owners share the
+        reserved type tag, so only this value grants their authority.
       type: string
       enum:
       - component-agent
       - ephemeral-external-tool
       - oplog-processor
+      - standalone-tool
     Pair:
       title: Pair
       description: |-
@@ -21656,6 +21689,26 @@ components:
       - startedAt
       - attributes
       - kind
+    PublicStandaloneToolInvocation:
+      title: PublicStandaloneToolInvocation
+      type: object
+      properties:
+        toolName:
+          type: string
+        commandPath:
+          type: array
+          items:
+            type: string
+        invocationId:
+          type: string
+          format: uuid
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
+      required:
+      - toolName
+      - commandPath
+      - invocationId
+      - caller
     PublicTokenProvenance:
       title: PublicTokenProvenance
       description: |-
@@ -22017,11 +22070,35 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/StartIdentityField'
+        replayStart:
+          description: |-
+            Where the replay that diverged started; `None` for a divergence outside a recovery replay,
+            such as the replay of an update.
+          allOf:
+          - $ref: '#/components/schemas/ReplayStart'
+          - description: |-
+              Where the replay that diverged started; `None` for a divergence outside a recovery replay,
+              such as the replay of an update.
       required:
       - oplogIndex
       - expected
       - actual
       - mismatched
+    ReplayFullStart:
+      title: ReplayFullStart
+      description: |-
+        A replay without a snapshot. `rejected_snapshots` holds the oplog indexes of the automatic
+        snapshots that the recovery rejected before it, in ascending order; it is empty when no
+        snapshot was involved.
+      type: object
+      properties:
+        rejectedSnapshots:
+          type: array
+          items:
+            type: integer
+            format: uint64
+      required:
+      - rejectedSnapshots
     ReplayHostCall:
       title: ReplayHostCall
       description: |-
@@ -22059,6 +22136,68 @@ components:
       - functionName
       - durableFunctionType
       - carriesRequest
+    ReplaySnapshotStart:
+      title: ReplaySnapshotStart
+      description: |-
+        A replay that started from the snapshot at `snapshot_index`. `rejected_snapshots` holds the
+        oplog indexes of the automatic snapshots that the recovery rejected before it, in ascending
+        order.
+      type: object
+      properties:
+        snapshotIndex:
+          type: integer
+          format: uint64
+        rejectedSnapshots:
+          type: array
+          items:
+            type: integer
+            format: uint64
+      required:
+      - snapshotIndex
+      - rejectedSnapshots
+    ReplayStart:
+      description: |-
+        Where a recovery replay started: from a loaded snapshot or without a snapshot, each with
+        the automatic snapshots that the recovery rejected before it.
+      discriminator:
+        propertyName: type
+        mapping:
+          Snapshot: '#/components/schemas/ReplayStart_ReplaySnapshotStart'
+          FullReplay: '#/components/schemas/ReplayStart_ReplayFullStart'
+      type: object
+      oneOf:
+      - $ref: '#/components/schemas/ReplayStart_ReplaySnapshotStart'
+      - $ref: '#/components/schemas/ReplayStart_ReplayFullStart'
+    ReplayStart_ReplayFullStart:
+      description: |-
+        Where a recovery replay started: from a loaded snapshot or without a snapshot, each with
+        the automatic snapshots that the recovery rejected before it.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: FullReplay
+            type: string
+            enum:
+            - FullReplay
+        required:
+        - type
+      - $ref: '#/components/schemas/ReplayFullStart'
+    ReplayStart_ReplaySnapshotStart:
+      description: |-
+        Where a recovery replay started: from a loaded snapshot or without a snapshot, each with
+        the automatic snapshots that the recovery rejected before it.
+      allOf:
+      - type: object
+        properties:
+          type:
+            example: Snapshot
+            type: string
+            enum:
+            - Snapshot
+        required:
+        - type
+      - $ref: '#/components/schemas/ReplaySnapshotStart'
     ReplayStep:
       description: |-
         One step of a replay: a host call, the end of an invocation, the end of the recorded
@@ -24666,6 +24805,8 @@ components:
           format: uuid
         neverLive:
           type: boolean
+        standaloneTool:
+          $ref: '#/components/schemas/PublicStandaloneToolInvocation'
       required:
       - timestamp
       - agentId
@@ -25596,7 +25737,7 @@ components:
       example:
         accountId: 00000000-0000-0000-0000-000000000001
         actorAccountId: 00000000-0000-0000-0000-000000000002
-        changedAt: 2023-11-14T22:13:20+00:00
+        changedAt: 2023-11-14T22:13:20Z
         dimension: monthlyComputeGcu
         eventType: override_granted
         newValue:
@@ -26245,7 +26386,7 @@ components:
       example:
         accountId: 00000000-0000-0000-0000-000000000001
         actorAccountId: 00000000-0000-0000-0000-000000000002
-        changedAt: 2023-11-14T22:13:20+00:00
+        changedAt: 2023-11-14T22:13:20Z
         dimension: monthlyComputeGcu
         eventType: override_cleared
         newValue:
@@ -28671,7 +28812,7 @@ components:
         activeAdminGrant:
           actorAccountId: 00000000-0000-0000-0000-000000000002
           dimension: maxMemoryPerAgent
-          grantedAt: 2023-11-14T22:13:20+00:00
+          grantedAt: 2023-11-14T22:13:20Z
           reason: support
           value: 2147483648
         ceiling:
@@ -28861,7 +29002,7 @@ components:
     MonthlyUsageModeTransition:
       example:
         actorAccountId: 00000000-0000-0000-0000-000000000001
-        changedAt: 2023-11-14T22:13:20+00:00
+        changedAt: 2023-11-14T22:13:20Z
         newMode: hardLimit
         previousMode: allowOverage
         source: owner
@@ -30475,7 +30616,7 @@ components:
         activeAdminGrant:
           actorAccountId: 00000000-0000-0000-0000-000000000002
           dimension: maxStoragePerAgent
-          grantedAt: 2023-11-14T22:13:20+00:00
+          grantedAt: 2023-11-14T22:13:20Z
           reason: support
           value: 2147483648
         ceiling:

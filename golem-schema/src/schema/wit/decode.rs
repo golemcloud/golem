@@ -26,7 +26,7 @@ use crate::schema::schema_value::{
     ResultValuePayload, SchemaValue, SecretVariantValue, TextValuePayload, UnionValuePayload,
     VariantValuePayload,
 };
-use chrono::{DateTime, TimeZone, Utc};
+use jiff::Timestamp;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 
@@ -1480,13 +1480,11 @@ fn decode_owned_at(
     Ok(out)
 }
 
-fn datetime_from_wire(d: &wire::Datetime) -> Result<DateTime<Utc>, DecodeError> {
-    Utc.timestamp_opt(d.seconds, d.nanoseconds)
-        .single()
-        .ok_or(DecodeError::InvalidDatetime {
-            seconds: d.seconds,
-            nanoseconds: d.nanoseconds,
-        })
+fn datetime_from_wire(d: &wire::Datetime) -> Result<Timestamp, DecodeError> {
+    super::model::datetime_from_wire(d).ok_or(DecodeError::InvalidDatetime {
+        seconds: d.seconds,
+        nanoseconds: d.nanoseconds,
+    })
 }
 
 pub fn decode_metadata(m: &wire::MetadataEnvelope) -> MetadataEnvelope {

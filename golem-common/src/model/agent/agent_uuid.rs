@@ -31,7 +31,9 @@ use crate::base_model::agent_id::H_MASK;
 use crate::base_model::component::ComponentId;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::type_id::TypeId;
-use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, RESERVED_TYPE_TAG};
+use crate::base_model::{
+    AgentFingerprint, AgentId, IdempotencyKey, InvocationId, RESERVED_TYPE_TAG,
+};
 
 const KEYED_DOMAIN: &str = "golem:agent-id:keyed:v1";
 const IDEMPOTENT_CREATE_DOMAIN: &str = "golem:agent-id:idempotent-create:v1";
@@ -42,6 +44,7 @@ const DURABLE_STREAM_SESSION_DOMAIN: &str = "golem:agent-id:durable-stream-sessi
 const IMPORTED_PHANTOM_DOMAIN: &str = "golem:agent-id:imported-phantom:v1";
 const ALLOCATED_DOMAIN: &str = "golem:agent-id:allocated:v1";
 const EXTERNAL_TOOL_OWNER_DOMAIN: &str = "golem:agent-id:external-tool-owner:v1";
+const TOOL_INVOCATION_DOMAIN: &str = "golem:agent-id:tool-invocation:v1";
 
 impl AgentId {
     /// The ID of the keyed agent that `key` selects. `type_id` must be the type ID
@@ -111,12 +114,12 @@ impl AgentId {
         ))
     }
 
-    /// The ID of a Durable Streams fork of `root` on the route of `route_scope`. It carries
-    /// the root's type tag.
+    /// The ID of the Durable Streams fork named `fork_name` of `root`. It carries the root's
+    /// type tag. The route is not part of the hash: a fork name names one fork of the root
+    /// on every route and in every deployment revision.
     pub fn durable_stream_fork(
         environment_id: EnvironmentId,
         root: AgentId,
-        route_scope: &str,
         fork_name: &str,
     ) -> Self {
         Self::from_parts(
@@ -124,7 +127,6 @@ impl AgentId {
             HashInput::new(DURABLE_STREAM_FORK_DOMAIN)
                 .environment(environment_id)
                 .fixed(root.as_uuid().as_bytes())
-                .variable(route_scope.as_bytes())
                 .variable(fork_name.as_bytes())
                 .h(),
         )
@@ -212,6 +214,22 @@ impl AgentId {
                 .fixed(component_id.0.as_bytes())
                 .variable(owner_key.value.as_bytes())
                 .h(),
+        )
+    }
+
+    /// The executor address of a standalone tool invocation. The public unique
+    /// part is a raw UUID, and the tag is the tool's registered type ID.
+    pub fn standalone_tool_invocation(
+        environment_id: EnvironmentId,
+        tool_type_id: TypeId,
+        unique_part: InvocationId,
+    ) -> Self {
+        Self::typed(
+            tool_type_id,
+            HashInput::new(TOOL_INVOCATION_DOMAIN)
+                .environment(environment_id)
+                .type_id(tool_type_id)
+                .fixed(unique_part.0.as_bytes()),
         )
     }
 

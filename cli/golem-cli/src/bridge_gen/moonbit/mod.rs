@@ -892,14 +892,13 @@ fn guest_as_union(v : @model.SchemaValue) -> (String, @model.SchemaValue) raise 
 fn guest_variant_payload(index : UInt, payload : @model.SchemaValue?) -> @model.SchemaValue raise { match payload { Some(x) => x; None => raise CodecError("Missing payload for variant case " + index.to_string()) } }
 fn guest_required_payload(payload : @model.SchemaValue?, context : String) -> @model.SchemaValue raise { match payload { Some(x) => x; None => raise CodecError("Missing payload for " + context) } }
 fn guest_as_text(v : @model.SchemaValue) -> (String, String?) raise { match v { Text(x, l) => (x, l); o => codec_mismatch("text", o) } }
-fn guest_as_binary(v : @model.SchemaValue, allowed : Array[String]) -> @schema.AgentBinary raise { match v { Binary(x, mime_type) => { guest_allowed(mime_type, allowed, "MIME type"); @schema.AgentBinary::{ bytes: Bytes::from_array(x[:]), mime_type } }; o => codec_mismatch("binary", o) } }
+fn guest_as_binary(v : @model.SchemaValue) -> @schema.AgentBinary raise { match v { Binary(x, mime_type) => @schema.AgentBinary::{ bytes: Bytes::from_array(x[:]), mime_type }; o => codec_mismatch("binary", o) } }
 fn guest_as_quantity(v : @model.SchemaValue) -> @types.QuantityValue raise { match v { Quantity(x) => x; o => codec_mismatch("quantity", o) } }
 fn guest_quantity_unit(unit : String, base_unit : String, suffixes : Array[String]) -> Unit raise { if !(if suffixes.is_empty() { unit == base_unit } else { suffixes.contains(unit) }) { raise CodecError("Unsupported quantity unit: " + unit) } }
-fn guest_allowed(value : String?, allowed : Array[String], kind : String) -> Unit raise { match value { Some(x) => if allowed.length() > 0 && !allowed.contains(x) { raise CodecError("Unsupported " + kind + ": " + x) }; None => () } }
-fn guest_encode_unstructured_text(value : UnstructuredText, allowed : Array[String]) -> @model.SchemaValue raise { match value { Inline(text, language) => { guest_allowed(language, allowed, "text language"); Variant(0, Some(Text(text, language))) }; Url(url) => Variant(1, Some(Url(url))) } }
-fn guest_decode_unstructured_text(value : @model.SchemaValue, allowed : Array[String]) -> UnstructuredText raise { match value { Variant(0, Some(Text(text, language))) => { guest_allowed(language, allowed, "text language"); Inline(text, language) }; Variant(1, Some(Url(url))) => Url(url); o => codec_mismatch("unstructured-text variant", o) } }
-fn guest_encode_unstructured_binary(value : UnstructuredBinary, allowed : Array[String]) -> @model.SchemaValue raise { match value { Inline(bytes, mime_type) => { guest_allowed(mime_type, allowed, "MIME type"); Variant(0, Some(Binary(bytes, mime_type))) }; Url(url) => Variant(1, Some(Url(url))) } }
-fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[String]) -> UnstructuredBinary raise { match value { Variant(0, Some(Binary(bytes, mime_type))) => { guest_allowed(mime_type, allowed, "MIME type"); Inline(bytes, mime_type) }; Variant(1, Some(Url(url))) => Url(url); o => codec_mismatch("unstructured-binary variant", o) } }
+fn guest_encode_unstructured_text(value : UnstructuredText) -> @model.SchemaValue { match value { Inline(text, language) => Variant(0, Some(Text(text, language))); Url(url) => Variant(1, Some(Url(url))) } }
+fn guest_decode_unstructured_text(value : @model.SchemaValue) -> UnstructuredText raise { match value { Variant(0, Some(Text(text, language))) => Inline(text, language); Variant(1, Some(Url(url))) => Url(url); o => codec_mismatch("unstructured-text variant", o) } }
+fn guest_encode_unstructured_binary(value : UnstructuredBinary) -> @model.SchemaValue { match value { Inline(bytes, mime_type) => Variant(0, Some(Binary(bytes, mime_type))); Url(url) => Variant(1, Some(Url(url))) } }
+fn guest_decode_unstructured_binary(value : @model.SchemaValue) -> UnstructuredBinary raise { match value { Variant(0, Some(Binary(bytes, mime_type))) => Inline(bytes, mime_type); Variant(1, Some(Url(url))) => Url(url); o => codec_mismatch("unstructured-binary variant", o) } }
 "#;
         for line in source.lines() {
             if line.starts_with("fn ") {
@@ -2413,20 +2412,15 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         cleanup: bool,
         preflight: bool,
     ) -> anyhow::Result<String> {
-        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
+        if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
             if self.mode == MoonBitBridgeMode::GuestWasmRpc {
-                let allowed = moonbit_string_array(restrictions.languages.as_deref());
-                return Ok(format!("guest_encode_unstructured_text({val}, {allowed})"));
+                return Ok(format!("guest_encode_unstructured_text({val})"));
             }
             return Ok(format!("@runtime.unstructured_text_to_schema_value({val})"));
         }
-        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
-        {
+        if unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some() {
             if self.mode == MoonBitBridgeMode::GuestWasmRpc {
-                let allowed = moonbit_string_array(restrictions.mime_types.as_deref());
-                return Ok(format!(
-                    "guest_encode_unstructured_binary({val}, {allowed})"
-                ));
+                return Ok(format!("guest_encode_unstructured_binary({val})"));
             }
             return Ok(format!(
                 "@runtime.unstructured_binary_to_schema_value({val})"
@@ -2617,23 +2611,21 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     .context("MoonBit guest streams require an element schema")?;
                 format!("{val}.to_schema_value()")
             }
-            SchemaType::Text { restrictions, .. } => match self.mode {
+            SchemaType::Text { .. } => match self.mode {
                 MoonBitBridgeMode::ExternalRest => {
                     format!("@runtime.TextValue({val}.value, {val}.language)")
                 }
                 MoonBitBridgeMode::GuestWasmRpc => {
                     let txt = format!("txt{depth}");
-                    let allowed = moonbit_string_array(restrictions.languages.as_deref());
                     format!(
-                        "{{ let {txt} = {val}; guest_allowed({txt}.language(), {allowed}, \"text language\"); @model.SchemaValue::Text({txt}.value(), {txt}.language()) }}"
+                        "{{ let {txt} = {val}; @model.SchemaValue::Text({txt}.value(), {txt}.language()) }}"
                     )
                 }
             },
-            SchemaType::Binary { restrictions, .. } => {
+            SchemaType::Binary { .. } => {
                 let bin = format!("bin{depth}");
-                let allowed = moonbit_string_array(restrictions.mime_types.as_deref());
                 format!(
-                    "{{ let {bin} = {val}; guest_allowed({bin}.mime_type, {allowed}, \"MIME type\"); @model.SchemaValue::Binary({bin}.bytes.to_fixedarray(), {bin}.mime_type) }}"
+                    "{{ let {bin} = {val}; @model.SchemaValue::Binary({bin}.bytes.to_fixedarray(), {bin}.mime_type) }}"
                 )
             }
             SchemaType::Quantity { spec, .. } => match self.mode {
@@ -2676,39 +2668,18 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
         typ: &SchemaType,
         depth: usize,
     ) -> anyhow::Result<String> {
-        if let Some(restrictions) = unstructured_text_restrictions(self.type_naming.graph(), typ)? {
-            let allowed = restrictions
-                .languages
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .map(|code| moonbit_string_literal(code))
-                .collect::<Vec<_>>()
-                .join(", ");
+        if unstructured_text_restrictions(self.type_naming.graph(), typ)?.is_some() {
             return Ok(if self.mode == MoonBitBridgeMode::GuestWasmRpc {
-                format!("guest_decode_unstructured_text({val}, [{allowed}])")
+                format!("guest_decode_unstructured_text({val})")
             } else {
-                format!(
-                    "@runtime.unstructured_text_from_schema_value(\"output\", {val}, [{allowed}])"
-                )
+                format!("@runtime.unstructured_text_from_schema_value(\"output\", {val})")
             });
         }
-        if let Some(restrictions) = unstructured_binary_restrictions(self.type_naming.graph(), typ)?
-        {
-            let allowed = restrictions
-                .mime_types
-                .as_deref()
-                .unwrap_or_default()
-                .iter()
-                .map(|mime| moonbit_string_literal(mime))
-                .collect::<Vec<_>>()
-                .join(", ");
+        if unstructured_binary_restrictions(self.type_naming.graph(), typ)?.is_some() {
             return Ok(if self.mode == MoonBitBridgeMode::GuestWasmRpc {
-                format!("guest_decode_unstructured_binary({val}, [{allowed}])")
+                format!("guest_decode_unstructured_binary({val})")
             } else {
-                format!(
-                    "@runtime.unstructured_binary_from_schema_value(\"output\", {val}, [{allowed}])"
-                )
+                format!("@runtime.unstructured_binary_from_schema_value(\"output\", {val})")
             });
         }
 
@@ -2850,18 +2821,12 @@ fn guest_decode_unstructured_binary(value : @model.SchemaValue, allowed : Array[
                     MoonBitBridgeMode::ExternalRest => format!(
                         "{{ let {txt} = @runtime.as_text({val}); (@runtime.Text::new({txt}.0, language?={txt}.1) : @runtime.Text[{marker}]) }}"
                     ),
-                    MoonBitBridgeMode::GuestWasmRpc => {
-                        let allowed = moonbit_string_array(restrictions.languages.as_deref());
-                        format!(
-                            "{{ let {txt} = guest_as_text({val}); guest_allowed({txt}.1, {allowed}, \"text language\"); (@schema.Text::new({txt}.0, language?={txt}.1) : @schema.Text[{marker}]) }}"
-                        )
-                    }
+                    MoonBitBridgeMode::GuestWasmRpc => format!(
+                        "{{ let {txt} = guest_as_text({val}); (@schema.Text::new({txt}.0, language?={txt}.1) : @schema.Text[{marker}]) }}"
+                    ),
                 }
             }
-            SchemaType::Binary { restrictions, .. } => format!(
-                "guest_as_binary({val}, {})",
-                moonbit_string_array(restrictions.mime_types.as_deref())
-            ),
+            SchemaType::Binary { .. } => format!("guest_as_binary({val})"),
             SchemaType::Quantity { spec, .. } => {
                 let marker = self.rich.unit_name(spec)?;
                 let qty = format!("qty{depth}");

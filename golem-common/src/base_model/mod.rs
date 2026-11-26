@@ -71,7 +71,10 @@ pub mod worker;
 pub mod worker_filter;
 
 pub use durable_stream::*;
-pub use invocation_id::{IdempotencyScope, InvocationRequestKey, OwnedInvocationId};
+pub use invocation_id::{
+    IdempotencyScope, InvocationOwner, InvocationRequestKey, OwnedInvocationId,
+    StandaloneToolInvocation,
+};
 pub use worker_filter::*;
 
 use crate::{declare_structs, newtype_uuid};

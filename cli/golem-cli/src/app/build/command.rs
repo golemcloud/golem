@@ -119,6 +119,7 @@ async fn execute_preinitialize_js(
 ) -> anyhow::Result<()> {
     let base_build_dir = Utf8Path::from_path(base_build_dir).unwrap();
     let input = base_build_dir.join(&command.preinitialize_js);
+    let js_module = base_build_dir.join(&command.module);
     let output = base_build_dir.join(&command.into);
 
     new_task_up_to_date_check(ctx)
@@ -126,7 +127,7 @@ async fn execute_preinitialize_js(
             build_dir: base_build_dir.as_std_path(),
             command,
         })?
-        .with_sources(|| [&input])
+        .with_sources(|| [&input, &js_module])
         .with_targets(|| [&output])
         .run_async_or_skip(
             || async {
@@ -140,7 +141,23 @@ async fn execute_preinitialize_js(
                 );
                 let _indent = LogIndent::new();
 
-                golem_common::javascript::preinitialize_js(&input, &output).await
+                let source = std::fs::read_to_string(&js_module)
+                    .with_context(|| format!("Failed to read JS module from {js_module}"))?;
+                fs::create_dir_all(fs::parent_or_err(output.as_std_path())?)?;
+                let result = golem_common::javascript::preinitialize_js(
+                    &input,
+                    &output,
+                    source,
+                    Some(&ctx.application_context().js_compilation_cache_dir),
+                )
+                .await?;
+                if let Some(stats) = result.compilation_cache {
+                    log_action(
+                        "Compilation cache",
+                        format!("{} hits, {} misses", stats.hits, stats.misses),
+                    );
+                }
+                Ok(())
             },
             || {
                 log_skipping_up_to_date(format!(

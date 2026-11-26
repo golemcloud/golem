@@ -323,7 +323,8 @@ build:
     module: dist/bundle.js
     into: golem-temp/output.wasm
 
-  - preinitializeJs: golem-temp/output.wasm            # Pre-initialize JS runtime
+  - preinitializeJs: golem-temp/quickjs.wasm           # Pre-initialize with JS source
+    module: dist/bundle.js
     into: golem-temp/preinit.wasm
 ```
 

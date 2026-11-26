@@ -134,6 +134,14 @@ message CreateParameters {
   OwnerKind owner_kind = 16;
   optional string agent_type_name = 17;
   bool never_live = 18;
+  optional PublicStandaloneToolInvocation standalone_tool = 19;
+}
+
+message PublicStandaloneToolInvocation {
+  string tool_name = 1;
+  repeated string command_path = 2;
+  golem.common.UUID invocation_id = 3;
+  golem.component.PublicCaller caller = 4;
 }
 
 // Identifies a durable call by the oplog index of the record that numbers it and its place among
@@ -149,6 +157,28 @@ message ReplayDivergence {
   ReplayStep expected = 2;
   ReplayStep actual = 3;
   repeated StartIdentityField mismatched = 4;
+  optional ReplayStart replay_start = 5;
+}
+
+// Where a recovery replay started.
+message ReplayStart {
+  oneof start {
+    // A replay from a loaded snapshot.
+    ReplaySnapshotStart snapshot = 1;
+    // A replay without a snapshot.
+    ReplayFullStart full_replay = 2;
+  }
+}
+
+// A replay from the snapshot at snapshot_index, after the recovery rejected these snapshots.
+message ReplaySnapshotStart {
+  uint64 snapshot_index = 1;
+  repeated uint64 rejected_snapshots = 2;
+}
+
+// A replay without a snapshot, after the recovery rejected these snapshots.
+message ReplayFullStart {
+  repeated uint64 rejected_snapshots = 1;
 }
 
 // One step of a replay.

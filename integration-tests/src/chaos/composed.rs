@@ -64,7 +64,7 @@
 
 use crate::chaos::signal::FaultInjected;
 use crate::chaos::split::round2;
-use chrono::{DateTime, Utc};
+
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 
@@ -79,7 +79,7 @@ pub struct ComposedLeg {
     /// What it was aimed at: a deployment name for an unpinned fault, a pod
     /// name for a pinned one.
     pub target: String,
-    pub injected_at: DateTime<Utc>,
+    pub injected_at: jiff::Timestamp,
 }
 
 impl From<&FaultInjected> for ComposedLeg {
@@ -171,7 +171,7 @@ impl ComposedFaultReport {
     /// aborted before the heal still has a primary worth reporting.
     pub fn build(
         primary: &FaultInjected,
-        primary_recovered_at: Option<DateTime<Utc>>,
+        primary_recovered_at: Option<jiff::Timestamp>,
         secondary: Option<&FaultInjected>,
         overlap_floor: Duration,
     ) -> Self {
@@ -304,25 +304,23 @@ impl ComposedFaultReport {
 }
 
 /// Seconds from `from` to `to`, negative when `to` is earlier.
-fn secs_between(from: DateTime<Utc>, to: DateTime<Utc>) -> f64 {
-    (to - from).num_milliseconds() as f64 / 1000.0
+fn secs_between(from: jiff::Timestamp, to: jiff::Timestamp) -> f64 {
+    (to - from).as_millis() as f64 / 1000.0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::TimeDelta;
+
     use test_r::test;
 
     const FLOOR: Duration = Duration::from_secs(20);
 
-    fn t0() -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-09-03T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
+    fn t0() -> jiff::Timestamp {
+        str::parse::<jiff::Timestamp>("2026-09-03T12:00:00Z").unwrap()
     }
 
-    fn signal(kind: &str, at: DateTime<Utc>) -> FaultInjected {
+    fn signal(kind: &str, at: jiff::Timestamp) -> FaultInjected {
         FaultInjected {
             fault_id: format!("chaos-mf1-{kind}"),
             kind: kind.to_string(),
@@ -340,10 +338,10 @@ mod tests {
     #[test]
     fn a_kill_inside_the_window_is_clean_and_reports_its_overlap() {
         let primary = signal("network-partition", t0());
-        let secondary = signal("pod-kill", t0() + TimeDelta::seconds(30));
+        let secondary = signal("pod-kill", t0() + jiff::SignedDuration::from_secs(30));
         let report = ComposedFaultReport::build(
             &primary,
-            Some(t0() + TimeDelta::seconds(60)),
+            Some(t0() + jiff::SignedDuration::from_secs(60)),
             Some(&secondary),
             FLOOR,
         );
@@ -360,10 +358,10 @@ mod tests {
     #[test]
     fn a_kill_outside_the_window_reports_no_overlap() {
         let primary = signal("network-partition", t0());
-        let secondary = signal("pod-kill", t0() + TimeDelta::seconds(150));
+        let secondary = signal("pod-kill", t0() + jiff::SignedDuration::from_secs(150));
         let report = ComposedFaultReport::build(
             &primary,
-            Some(t0() + TimeDelta::seconds(120)),
+            Some(t0() + jiff::SignedDuration::from_secs(120)),
             Some(&secondary),
             FLOOR,
         );
@@ -383,10 +381,10 @@ mod tests {
     #[test]
     fn a_kill_after_the_heal_is_two_faults_in_sequence() {
         let primary = signal("network-partition", t0());
-        let secondary = signal("pod-kill", t0() + TimeDelta::seconds(90));
+        let secondary = signal("pod-kill", t0() + jiff::SignedDuration::from_secs(90));
         let report = ComposedFaultReport::build(
             &primary,
-            Some(t0() + TimeDelta::seconds(60)),
+            Some(t0() + jiff::SignedDuration::from_secs(60)),
             Some(&secondary),
             FLOOR,
         );
@@ -401,11 +399,14 @@ mod tests {
     /// raised alone rather than alongside a meaningless overlap.
     #[test]
     fn a_kill_before_the_outage_is_reported_once_not_twice() {
-        let primary = signal("network-partition", t0() + TimeDelta::seconds(30));
+        let primary = signal(
+            "network-partition",
+            t0() + jiff::SignedDuration::from_secs(30),
+        );
         let secondary = signal("pod-kill", t0());
         let report = ComposedFaultReport::build(
             &primary,
-            Some(t0() + TimeDelta::seconds(90)),
+            Some(t0() + jiff::SignedDuration::from_secs(90)),
             Some(&secondary),
             FLOOR,
         );
@@ -422,10 +423,10 @@ mod tests {
     #[test]
     fn a_kill_at_the_very_end_of_the_window_is_too_short() {
         let primary = signal("network-partition", t0());
-        let secondary = signal("pod-kill", t0() + TimeDelta::seconds(55));
+        let secondary = signal("pod-kill", t0() + jiff::SignedDuration::from_secs(55));
         let report = ComposedFaultReport::build(
             &primary,
-            Some(t0() + TimeDelta::seconds(60)),
+            Some(t0() + jiff::SignedDuration::from_secs(60)),
             Some(&secondary),
             FLOOR,
         );
@@ -442,8 +443,12 @@ mod tests {
     #[test]
     fn a_composition_that_never_happened_is_a_finding() {
         let primary = signal("network-partition", t0());
-        let report =
-            ComposedFaultReport::build(&primary, Some(t0() + TimeDelta::seconds(60)), None, FLOOR);
+        let report = ComposedFaultReport::build(
+            &primary,
+            Some(t0() + jiff::SignedDuration::from_secs(60)),
+            None,
+            FLOOR,
+        );
 
         assert_eq!(
             violations(&report),
@@ -459,7 +464,7 @@ mod tests {
     #[test]
     fn an_unhealed_run_reports_no_overlap_rather_than_a_short_one() {
         let primary = signal("network-partition", t0());
-        let secondary = signal("pod-kill", t0() + TimeDelta::seconds(30));
+        let secondary = signal("pod-kill", t0() + jiff::SignedDuration::from_secs(30));
         let report = ComposedFaultReport::build(&primary, None, Some(&secondary), FLOOR);
 
         assert!(report.findings.is_empty(), "{:?}", report.findings);
@@ -473,10 +478,10 @@ mod tests {
     #[test]
     fn a_clean_composition_still_explains_itself() {
         let primary = signal("network-partition", t0());
-        let secondary = signal("pod-kill", t0() + TimeDelta::seconds(30));
+        let secondary = signal("pod-kill", t0() + jiff::SignedDuration::from_secs(30));
         let report = ComposedFaultReport::build(
             &primary,
-            Some(t0() + TimeDelta::seconds(60)),
+            Some(t0() + jiff::SignedDuration::from_secs(60)),
             Some(&secondary),
             FLOOR,
         );

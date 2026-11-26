@@ -77,10 +77,113 @@ fn states(
     results: HashMap<InvocationId, InvocationResultPosition>,
     now: u64,
 ) -> Vec<(InvocationId, InvocationState, OplogIndex)> {
-    merge_invocations(status, results, Timestamp::from(now))
+    merge_invocations(status, results, Timestamp::from(now), None)
         .into_iter()
         .map(|entry| (entry.key, entry.state, entry.last_change))
         .collect()
+}
+
+#[test]
+fn a_terminal_standalone_startup_failure_ends_only_its_unanswered_invocation() {
+    let invocation = key(1);
+    let other = key(2);
+    for not_before in [None, Some(1_000)] {
+        let mut status = AgentStatusRecord {
+            status: AgentStatus::Failed,
+            last_error_kind: Some(golem_common::model::oplog::OplogErrorKind::Recovery),
+            terminal_failure_at: Some(Timestamp::from(70)),
+            terminal_failure_index: Some(index(7)),
+            oplog_idx: index(8),
+            pending_invocations: vec![
+                pending(invocation, 2, not_before),
+                pending(other, 3, not_before),
+            ],
+            ..AgentStatusRecord::default()
+        };
+        let pending_state = if not_before.is_some() {
+            InvocationState::Scheduled
+        } else {
+            InvocationState::Pending
+        };
+        for owner in [None, Some(invocation)] {
+            let entries = merge_invocations(&status, HashMap::new(), Timestamp::from(80), owner);
+            let entry = entries
+                .iter()
+                .find(|entry| entry.key == invocation)
+                .unwrap();
+            assert_eq!(
+                entry.state,
+                if owner.is_some() {
+                    InvocationState::Failed
+                } else {
+                    pending_state
+                }
+            );
+            assert_eq!(entry.accepted_at, Some(Timestamp::from(20)));
+            if owner.is_some() {
+                assert_eq!(entry.changed_at, Timestamp::from(70));
+                assert_eq!(entry.last_change, index(7));
+            }
+            assert_eq!(
+                entries
+                    .iter()
+                    .find(|entry| entry.key == other)
+                    .unwrap()
+                    .state,
+                pending_state
+            );
+        }
+        for (end, expected) in [
+            (InvocationEnd::Completed, InvocationState::Completed),
+            (InvocationEnd::Cancelled, InvocationState::Cancelled),
+        ] {
+            let entries = merge_invocations(
+                &status,
+                HashMap::from([(invocation, result(4, end))]),
+                Timestamp::from(80),
+                Some(invocation),
+            );
+            assert_eq!(
+                entries
+                    .iter()
+                    .find(|entry| entry.key == invocation)
+                    .unwrap()
+                    .state,
+                expected
+            );
+        }
+        status.status = AgentStatus::Retrying;
+        let entries = merge_invocations(
+            &status,
+            HashMap::new(),
+            Timestamp::from(80),
+            Some(invocation),
+        );
+        assert_eq!(
+            entries
+                .iter()
+                .find(|entry| entry.key == invocation)
+                .unwrap()
+                .state,
+            pending_state
+        );
+        status.status = AgentStatus::Failed;
+        status.running = Some(running(invocation, 4, 5));
+        for (owner, expected) in [
+            (None, InvocationState::Running),
+            (Some(invocation), InvocationState::Failed),
+        ] {
+            let entries = merge_invocations(&status, HashMap::new(), Timestamp::from(80), owner);
+            assert_eq!(
+                entries
+                    .iter()
+                    .find(|entry| entry.key == invocation)
+                    .unwrap()
+                    .state,
+                expected
+            );
+        }
+    }
 }
 
 #[test]

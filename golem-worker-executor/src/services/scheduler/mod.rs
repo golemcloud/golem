@@ -21,7 +21,7 @@ use crate::storage::scheduler::{ClaimedScheduledAction, SchedulerStorage, Schedu
 use crate::worker::INACTIVE_EPHEMERAL_AGENT_ERROR;
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use futures::stream::StreamExt;
 use golem_common::model::InvocationId;
 use golem_common::model::RetryConfig;
@@ -41,12 +41,12 @@ use tracing::{Instrument, debug, debug_span, error, info, info_span, warn};
 
 #[async_trait]
 pub trait SchedulerService: Send + Sync {
-    async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId;
+    async fn schedule(&self, time: jiff::Timestamp, action: ScheduledAction) -> ScheduleId;
 
     async fn schedule_with_id(
         &self,
         schedule_id: ScheduleId,
-        time: DateTime<Utc>,
+        time: jiff::Timestamp,
         action: ScheduledAction,
     ) -> ScheduleId;
 
@@ -57,6 +57,12 @@ pub trait SchedulerService: Send + Sync {
 /// for `SchedulerServiceDefault`, making it easier to test (by being independent of `WorkerCtx`).
 #[async_trait]
 pub trait SchedulerWorkerAccess {
+    async fn delete_finished_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError>;
+
     async fn active_worker_fingerprint(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -95,6 +101,16 @@ pub trait SchedulerWorkerAccess {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
+    async fn delete_finished_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
+        self.deref()
+            .delete_finished_invocation(owned_agent_id, fingerprint)
+            .await
+    }
+
     async fn active_worker_fingerprint(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -217,7 +233,7 @@ impl SchedulerServiceDefault {
                     if svc.shard_service.is_ready() {
                         // A failed tick is logged inside `process`, where its span is
                         // still open.
-                        let _ = svc.process(Utc::now()).await;
+                        let _ = svc.process(jiff::Timestamp::now()).await;
                     } else {
                         warn!("Skipping schedule, shard service is not ready")
                     }
@@ -266,7 +282,7 @@ impl SchedulerServiceDefault {
 
     /// Performs one scheduler tick, spanned per tick rather than per loop: a span
     /// wrapping the loop would never close, so it would never be exported.
-    async fn process(&self, now: DateTime<Utc>) -> Result<(), String> {
+    async fn process(&self, now: jiff::Timestamp) -> Result<(), String> {
         async {
             let result = async {
                 let tick_start = std::time::Instant::now();
@@ -279,7 +295,7 @@ impl SchedulerServiceDefault {
                     let claimed = self
                         .scheduler_storage
                         .claim_due(
-                            Utc::now(),
+                            jiff::Timestamp::now(),
                             &assignment,
                             self.claim_batch_size,
                             self.lease_ttl,
@@ -302,7 +318,7 @@ impl SchedulerServiceDefault {
 
                 match self
                     .scheduler_storage
-                    .count_due(Utc::now(), &assignment)
+                    .count_due(jiff::Timestamp::now(), &assignment)
                     .instrument(debug_span!("scheduler_storage_count_due"))
                     .await
                 {
@@ -334,7 +350,7 @@ impl SchedulerServiceDefault {
     async fn process_claimed_actions(
         &self,
         claimed: Vec<ClaimedScheduledAction>,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
     ) -> Result<(), SchedulerStorageError> {
         let mut actions_by_agent: HashMap<_, Vec<_>> = HashMap::new();
         let pending = Mutex::new(HashMap::new());
@@ -424,13 +440,13 @@ impl SchedulerServiceDefault {
     async fn process_and_ack_claimed_action(
         &self,
         claimed_action: ClaimedScheduledAction,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         lease_lost: &CancellationToken,
     ) -> Result<(), SchedulerStorageError> {
         let action_kind = crate::metrics::scheduler::action_kind_label(&claimed_action.action);
-        let action_start_time = Utc::now();
-        let lag = action_start_time.signed_duration_since(claimed_action.due_at);
-        let lag_secs = lag.num_milliseconds().max(0) as f64 / 1000.0;
+        let action_start_time = jiff::Timestamp::now();
+        let lag = action_start_time.duration_since(claimed_action.due_at);
+        let lag_secs = lag.as_millis().max(0) as f64 / 1000.0;
         crate::metrics::scheduler::record_scheduled_action_lag(Duration::from_secs_f64(lag_secs));
 
         let schedule_id = claimed_action.schedule_id;
@@ -438,20 +454,37 @@ impl SchedulerServiceDefault {
         let action_start = std::time::Instant::now();
         let processed = tokio::select! {
             biased;
-            _ = lease_lost.cancelled() => false,
-            processed = self.process_claimed_action(claimed_action, now) => processed,
+            _ = lease_lost.cancelled() => Err(()),
+            processed = async {
+                if let ScheduledAction::DeleteFinishedInvocation { owned_agent_id, fingerprint } = &claimed_action.action {
+                    self.worker_access.delete_finished_invocation(owned_agent_id, *fingerprint).await.map_err(|error| {
+                        error!(agent_id = %owned_agent_id, error = %error, "Failed to delete finished invocation");
+                    })
+                } else if self.process_claimed_action(claimed_action, now).await {
+                    Ok(None)
+                } else {
+                    Err(())
+                }
+            } => processed,
         };
         crate::metrics::scheduler::record_scheduled_action_processing(
             action_kind,
             action_start.elapsed(),
         );
-        if !processed {
-            return Ok(());
+        match processed {
+            Err(()) => return Ok(()),
+            Ok(Some(deadline)) => {
+                self.scheduler_storage
+                    .reschedule(&schedule_id, lease_owner, deadline, jiff::Timestamp::now())
+                    .await?;
+                return Ok(());
+            }
+            Ok(None) => {}
         }
 
         let acked = self
             .scheduler_storage
-            .ack(&schedule_id, lease_owner, Utc::now())
+            .ack(&schedule_id, lease_owner, jiff::Timestamp::now())
             .await
             .map_err(|error| {
                 warn!(
@@ -473,7 +506,7 @@ impl SchedulerServiceDefault {
     }
 
     async fn renew_lease(&self, schedule_id: ScheduleId, lease_owner: uuid::Uuid) -> bool {
-        let now = Utc::now();
+        let now = jiff::Timestamp::now();
         match self
             .scheduler_storage
             .extend_lease(&schedule_id, lease_owner, now.add(self.lease_ttl), now)
@@ -495,9 +528,16 @@ impl SchedulerServiceDefault {
     async fn process_claimed_action(
         &self,
         claimed_action: ClaimedScheduledAction,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
     ) -> bool {
         match claimed_action.action {
+            ScheduledAction::DeleteFinishedInvocation { .. } => {
+                error!(
+                    schedule_id = %claimed_action.schedule_id,
+                    "Retention action bypassed lease-aware rescheduling"
+                );
+                false
+            }
             ScheduledAction::CompletePromise {
                 account_id: _,
                 promise_id,
@@ -695,7 +735,7 @@ impl Drop for SchedulerServiceDefault {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerService for SchedulerServiceDefault {
-    async fn schedule(&self, time: DateTime<Utc>, action: ScheduledAction) -> ScheduleId {
+    async fn schedule(&self, time: jiff::Timestamp, action: ScheduledAction) -> ScheduleId {
         self.schedule_with_id(ScheduleId::fresh(), time, action)
             .await
     }
@@ -703,7 +743,7 @@ impl SchedulerService for SchedulerServiceDefault {
     async fn schedule_with_id(
         &self,
         schedule_id: ScheduleId,
-        time: DateTime<Utc>,
+        time: jiff::Timestamp,
         action: ScheduledAction,
     ) -> ScheduleId {
         let assignment = self.shard_service.current_assignment().unwrap_or_else(|err| {
@@ -719,6 +759,74 @@ impl SchedulerService for SchedulerServiceDefault {
             crate::metrics::scheduler::action_kind_label(&action),
             serialized.len(),
         );
+
+        if let ScheduledAction::DeleteFinishedInvocation {
+            owned_agent_id,
+            fingerprint,
+        } = &action
+        {
+            loop {
+                // Observe the row before reading Create. A stale producer cannot observe a newer
+                // incarnation's row and then authorize its replacement from the old Create.
+                let observed = self
+                    .retry_storage_op("get_action", &format!("schedule {schedule_id}"), || {
+                        self.scheduler_storage.get_action(&schedule_id)
+                    })
+                    .await;
+                if observed.as_deref() == Some(serialized.as_slice()) {
+                    return schedule_id;
+                }
+                let create = match self
+                    .oplog_service
+                    .read_source(
+                        owned_agent_id,
+                        golem_common::model::agent::AgentMode::Durable,
+                        OplogIndex::INITIAL,
+                        1,
+                    )
+                    .await
+                {
+                    Ok(create) => create,
+                    Err(error) => {
+                        warn!(
+                            agent_id = %owned_agent_id,
+                            error = %error,
+                            "Failed to resolve retention owner; registration will retry on load"
+                        );
+                        return schedule_id;
+                    }
+                };
+                if !matches!(create.get(&OplogIndex::INITIAL), Some(golem_common::model::oplog::OplogEntry::Create { parameters, .. }) if AgentFingerprint(parameters.instance_id) == *fingerprint)
+                {
+                    return schedule_id;
+                }
+                if let Some(observed) = observed {
+                    if self
+                        .retry_storage_op(
+                            "replace_action",
+                            &format!("schedule {schedule_id}"),
+                            || {
+                                self.scheduler_storage.replace_action(
+                                    &schedule_id,
+                                    &observed,
+                                    &serialized,
+                                    time,
+                                )
+                            },
+                        )
+                        .await
+                    {
+                        return schedule_id;
+                    }
+                } else {
+                    self.retry_storage_op("insert", &format!("action {action}"), || {
+                        self.scheduler_storage
+                            .insert(schedule_id, time, shard_id, &serialized)
+                    })
+                    .await;
+                }
+            }
+        }
 
         self.retry_storage_op("insert", &format!("action {action}"), || {
             self.scheduler_storage

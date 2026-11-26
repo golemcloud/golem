@@ -76,6 +76,7 @@ fn component_id() -> ComponentId {
 
 fn create_entry(agent_id: &AgentId, environment_id: EnvironmentId) -> OplogEntry {
     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+        standalone_tool: None,
         agent_id: *agent_id,
         component_id: component_id(),
         agent_type_name: None,
@@ -848,6 +849,7 @@ fn deep_layers(compressed_levels: usize) -> Layers {
 
 fn metadata(agent_id: &AgentId, environment_id: EnvironmentId) -> AgentMetadata {
     AgentMetadata {
+        standalone_tool: None,
         agent_id: *agent_id,
         component_id: component_id(),
         agent_type_name: None,
@@ -908,6 +910,14 @@ fn resident_set(agents: HashSet<AgentId>) -> ResidentSet {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for DirectAccess {
+    async fn delete_finished_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
+        unreachable!("the sweep never deletes finished invocations")
+    }
+
     async fn expire_durable_stream_session(
         &self,
         _owned_agent_id: &OwnedAgentId,

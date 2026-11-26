@@ -23,7 +23,7 @@ use golem_common::model::invocation_session_public::{
     PublicStreamDirection, PublicStreamError, PublicStreamMapping, PublicStreamOutcome,
     decode_binary_message, decode_server_text, encode_binary_message, encode_client_text,
 };
-use golem_common::model::{InvocationId, OwnedInvocationId};
+use golem_common::model::{AgentId, InvocationId, OwnedInvocationId};
 use golem_common::schema::public_json::{
     PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
     decode_public_schema_value, encode_public_schema_value,
@@ -137,6 +137,13 @@ pub enum SessionTransportError {
     },
     #[error("the server answered neither the start nor the resume")]
     NotAnswered,
+    /// The server ended an input stream with a failure at an item that the caller sent, for
+    /// example an item that does not satisfy its element schema.
+    #[error("the server ended the input at item {sequence}: {}", stream_error_text(.error))]
+    InputStreamFailed {
+        sequence: u64,
+        error: Box<PublicStreamError>,
+    },
     #[error("invocation session endpoint {endpoint} was unreachable for {window:?}: {last_cause}")]
     Unreachable {
         endpoint: String,
@@ -728,6 +735,17 @@ impl InputReplayBuffer {
             state.terminal = true;
         }
         Ok(())
+    }
+
+    /// Ends the input because the server ended it. Items that the server did not accept are
+    /// dropped.
+    fn end_by_server(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("input replay buffer mutex poisoned");
+        state.terminal = true;
+        state.queue.clear();
     }
 
     pub fn initialize_high_water(
@@ -1648,6 +1666,7 @@ pub struct InvocationSession {
     inputs: Vec<RegisteredInput>,
     attachment_state: AttachmentState,
     execution_ready: bool,
+    accepted_agent_id: Option<AgentId>,
     /// How many times the session has left a connection for a new one.
     reconnects: u64,
     reconnect: ReconnectClock,
@@ -1823,6 +1842,7 @@ impl InvocationSession {
                 exact_retry: pending_operation_is_retry,
             },
             execution_ready: false,
+            accepted_agent_id: None,
             reconnects: 0,
             reconnect,
         })
@@ -2059,6 +2079,7 @@ impl InvocationSession {
                     attempt_id,
                     agent_id,
                     idempotency_key,
+                    invocation_id,
                     mappings,
                     session_token,
                     ..
@@ -2074,13 +2095,19 @@ impl InvocationSession {
                     if operation_attempt_id(&pending) != Some(*attempt_id) {
                         return Err(SessionTransportError::UnexpectedAttempt);
                     }
+                    if invocation_id.id() != *idempotency_key
+                        || invocation_id.agent_id().is_some_and(|id| id != agent_id)
+                    {
+                        return Err(SessionTransportError::UnexpectedAttempt);
+                    }
                     self.deliveries.begin_connection(mappings)?;
                     self.execution_ready = !mappings.is_empty();
+                    self.accepted_agent_id = Some(*agent_id);
                     self.install_input_mappings(mappings, self.execution_ready)?;
                     self.deliveries.set_attachment_state(
                         None,
                         Some(session_token.clone()),
-                        Some(OwnedInvocationId::new(*agent_id, *idempotency_key)),
+                        Some(invocation_id.clone()),
                     )?;
                     self.reconnect.accepted();
                     self.attachment_state = AttachmentState::Accepted {
@@ -2097,10 +2124,18 @@ impl InvocationSession {
                     ..
                 } => {
                     if self.execution_ready
+                        || self.accepted_agent_id.as_ref() != Some(agent_id)
                         || !matches!(self.attachment_state,
                         AttachmentState::Accepted { attempt_id: accepted, .. } if accepted == *attempt_id)
-                        || self.deliveries.snapshot().accepted_invocation.as_ref()
-                            != Some(&OwnedInvocationId::new(*agent_id, *idempotency_key))
+                        || !self
+                            .deliveries
+                            .snapshot()
+                            .accepted_invocation
+                            .as_ref()
+                            .is_some_and(|id| {
+                                id.id() == *idempotency_key
+                                    && id.agent_id().is_none_or(|owner| owner == agent_id)
+                            })
                     {
                         return Err(SessionTransportError::UnexpectedAttempt);
                     }
@@ -2341,6 +2376,7 @@ impl InvocationSession {
             && input_mappings.len() == 1
             && self.inputs[0].stream_token.is_none();
         let mut installed = vec![false; self.inputs.len()];
+        let mut server_failure = None;
         for mapping in &input_mappings {
             let matches = self
                 .inputs
@@ -2378,6 +2414,17 @@ impl InvocationSession {
                 .input_high_water
                 .as_ref()
                 .ok_or(SessionTransportError::InvalidMapping)?;
+            if let Some(outcome) = &high_water.outcome {
+                // The server ended the input, so the items it did not accept are dropped.
+                if !high_water.terminal {
+                    return Err(SessionTransportError::InvalidMapping);
+                }
+                input.buffer.end_by_server();
+                if server_failure.is_none() {
+                    server_failure = input_terminal_failure(outcome, high_water.sequence);
+                }
+                continue;
+            }
             input
                 .buffer
                 .initialize_high_water(high_water.sequence.0, high_water.terminal)?;
@@ -2387,7 +2434,10 @@ impl InvocationSession {
                 "invocation acceptance omitted a registered input stream mapping".to_string(),
             ));
         }
-        Ok(())
+        match server_failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 
@@ -2822,10 +2872,23 @@ where
                             result = Some((**value).clone());
                         }
                         ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => {},
-                        ServerFrame::Message(PublicServerMessage::StreamEnd { direction: PublicStreamDirection::Input, channel, .. }) if binding.as_ref().is_some_and(|binding| binding.0 == *channel) => {
+                        ServerFrame::Message(PublicServerMessage::StreamEnd { direction: PublicStreamDirection::Input, channel, outcome, sequence, .. }) if binding.as_ref().is_some_and(|binding| binding.0 == *channel) => {
                             input_open = false;
                             let _ = cancel_input.send(true);
                             input_cancelled_by_server = true;
+                            if let Some(error) = input_terminal_failure(outcome, *sequence) {
+                                let _ = cancel_output.send(true);
+                                cancel_native_streams(
+                                    &session,
+                                    None,
+                                    [
+                                        stdout_channel.filter(|_| !stdout_terminal),
+                                        stderr_channel.filter(|_| !stderr_terminal),
+                                    ],
+                                    error.to_string(),
+                                ).await;
+                                return Err(error);
+                            }
                         }
                         ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome, .. }) => {
                             match outcome {
@@ -2864,6 +2927,32 @@ where
 }
 
 /// The text of a failed or rejected invocation, followed by what the agent wrote to stderr.
+fn stream_error_text(error: &PublicStreamError) -> String {
+    match error {
+        PublicStreamError::Trapped { message }
+        | PublicStreamError::Interrupted { message }
+        | PublicStreamError::ResourceExhausted { message } => message.clone(),
+        PublicStreamError::Failed { .. } => "the producer failed".to_string(),
+        PublicStreamError::Cancelled => "cancelled".to_string(),
+        PublicStreamError::Abandoned => "abandoned".to_string(),
+    }
+}
+
+/// The error of a server input terminal that fails the call. A failed input terminal is at an
+/// item that the caller sent; a consumer cancellation only stops the input.
+fn input_terminal_failure(
+    outcome: &PublicStreamOutcome,
+    sequence: DecimalU64,
+) -> Option<SessionTransportError> {
+    match outcome {
+        PublicStreamOutcome::Failed { error } => Some(SessionTransportError::InputStreamFailed {
+            sequence: sequence.0,
+            error: Box::new(error.clone()),
+        }),
+        PublicStreamOutcome::Finished | PublicStreamOutcome::ConsumerCancelled { .. } => None,
+    }
+}
+
 fn failure_text(code: PublicErrorCode, message: &str, stderr: Option<&str>) -> String {
     match stderr {
         Some(stderr) => format!("{}: {message}\n{stderr}", code.as_str()),
@@ -4061,6 +4150,8 @@ where
         ServerFrame::Message(PublicServerMessage::StreamEnd {
             direction: PublicStreamDirection::Input,
             channel,
+            outcome,
+            sequence,
             ..
         }) => {
             match session.delivery_tracker().direction_for_channel(*channel) {
@@ -4091,7 +4182,10 @@ where
                     ));
                 }
             }
-            Ok(false)
+            match input_terminal_failure(outcome, *sequence) {
+                Some(error) => Err(error),
+                None => Ok(false),
+            }
         }
         ServerFrame::Message(PublicServerMessage::AttachmentRevoked { .. }) => {
             Err(SessionTransportError::AttachmentTerminated)
@@ -5147,6 +5241,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             PublicStreamMapping {
@@ -5156,6 +5254,7 @@ mod tests {
                                 input_high_water: Some(PublicInputHighWater {
                                     sequence: DecimalU64(0),
                                     terminal: false,
+                                    outcome: None,
                                 }),
                                 provisional_ref: None,
                                 stream_token: "native-stdin".to_string(),
@@ -5436,6 +5535,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![native_output_mapping(12, role, "native-output")],
                         session_token: "native-session".to_string(),
@@ -5571,6 +5674,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             PublicStreamMapping {
@@ -5580,6 +5687,7 @@ mod tests {
                                 input_high_water: Some(PublicInputHighWater {
                                     sequence: DecimalU64(0),
                                     terminal: false,
+                                    outcome: None,
                                 }),
                                 provisional_ref: None,
                                 stream_token: "native-stdin".to_string(),
@@ -5766,6 +5874,10 @@ mod tests {
                 encode_text(&PublicServerMessage::InvocationAccepted {
                     attempt_id,
                     agent_id: accepted_agent_id(),
+                    invocation_id: OwnedInvocationId::new(
+                        accepted_agent_id(),
+                        InvocationId(uuid::Uuid::from_u128(3)),
+                    ),
                     idempotency_key: InvocationId(uuid::Uuid::from_u128(3)),
                     mappings: vec![
                         PublicStreamMapping {
@@ -5775,6 +5887,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(0),
                                 terminal: stdin_terminal,
+                                outcome: None,
                             }),
                             provisional_ref: None,
                             stream_token: "native-stdin".to_string(),
@@ -6580,6 +6693,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             PublicStreamMapping {
@@ -6719,6 +6836,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             native_output_mapping(
@@ -6849,6 +6970,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             native_output_mapping(
@@ -6915,6 +7040,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id: resumed_attempt,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             native_output_mapping(
@@ -7238,6 +7367,7 @@ mod tests {
                     golem_common::model::invocation_session_public::PublicInputHighWater {
                         sequence: DecimalU64(0),
                         terminal: false,
+                        outcome: None,
                     },
                 ),
                 provisional_ref: None,
@@ -7594,6 +7724,261 @@ mod tests {
     }
 
     #[test]
+    async fn generated_call_fails_when_the_server_ends_an_input_with_a_failure() {
+        for (outcome, fails) in [
+            (
+                PublicStreamOutcome::Failed {
+                    error: PublicStreamError::Interrupted {
+                        message: "input item 2 does not satisfy the element schema".to_string(),
+                    },
+                },
+                true,
+            ),
+            (
+                PublicStreamOutcome::ConsumerCancelled {
+                    details: Some("consumer-drop".to_string()),
+                },
+                false,
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let attempt_id = uuid::Uuid::new_v4();
+            let provisional_ref = uuid::Uuid::new_v4();
+            let initial = start_request(attempt_id);
+            let server_initial = initial.clone();
+            let server = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut socket =
+                    accept_hdr_async(socket, |request: &Request, response: Response| {
+                        Ok(select_session_subprotocol(request, response))
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(receive_client_message(&mut socket).await, server_initial);
+                socket
+                    .send(Message::Text(
+                        encode_text(&PublicServerMessage::InvocationAccepted {
+                            attempt_id,
+                            agent_id: accepted_agent_id(),
+                            invocation_id: OwnedInvocationId::new(
+                                accepted_agent_id(),
+                                InvocationId(uuid::Uuid::from_u128(1)),
+                            ),
+                            idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
+                            mappings: vec![PublicStreamMapping {
+                                channel: 4,
+                                direction: PublicStreamDirection::Input,
+                                byte_role: None,
+                                input_high_water: Some(PublicInputHighWater {
+                                    sequence: DecimalU64(0),
+                                    terminal: false,
+                                    outcome: None,
+                                }),
+                                provisional_ref: Some(provisional_ref),
+                                stream_token: "input-stream".to_string(),
+                            }],
+                            session_token: "session-token".to_string(),
+                            version: 1,
+                        })
+                        .unwrap()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+                while let Some(frame) = socket.next().await {
+                    if matches!(frame.unwrap(), Message::Close(_)) {
+                        break;
+                    }
+                }
+            });
+
+            let mut session = InvocationSession::open(
+                Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+                None,
+                ReconnectPolicy::Unlimited,
+                InvocationSessionStateSnapshot {
+                    delivered_output_cursors: BTreeMap::new(),
+                    stable_stream_bindings: BTreeMap::new(),
+                    pending_operation: Some(initial),
+                    session_token: None,
+                    accepted_invocation: None,
+                },
+                false,
+                Arc::new(()),
+            )
+            .await
+            .unwrap();
+            let buffer = InputReplayBuffer::new(GENERATED_INPUT_BYTES, GENERATED_INPUT_ITEMS);
+            session
+                .register_input(provisional_ref, None, buffer.clone())
+                .unwrap();
+            session.receive().await.unwrap();
+
+            let server_frame = ServerFrame::Message(PublicServerMessage::StreamEnd {
+                channel: 4,
+                direction: PublicStreamDirection::Input,
+                cursor_token: None,
+                outcome: outcome.clone(),
+                sequence: DecimalU64(2),
+                version: 1,
+            });
+            let frame = ReceivedFrame {
+                delivery: session.delivery_tracker().delivery(&server_frame).unwrap(),
+                frame: server_frame,
+                _admission: permit(),
+            };
+            let mut decode: Option<Box<GeneratedResultDecoder<()>>> = None;
+            let mut result_tx = None;
+            let mut inputs = HashMap::from([(provisional_ref, buffer)]);
+            let mut input_tasks = HashMap::new();
+            let result = handle_generated_frame(
+                frame,
+                &mut session,
+                None,
+                None,
+                &mut decode,
+                &mut result_tx,
+                &mut inputs,
+                &mut input_tasks,
+                &mut HashMap::new(),
+                &mut HashSet::new(),
+            )
+            .await;
+            if fails {
+                let Err(SessionTransportError::InputStreamFailed { sequence, error }) = &result
+                else {
+                    panic!("expected the failed input error, got {result:?}")
+                };
+                assert_eq!(*sequence, 2);
+                assert!(matches!(**error, PublicStreamError::Interrupted { .. }));
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("item 2: input item 2 does not satisfy the element schema")
+                );
+            } else {
+                assert!(!result.unwrap(), "a consumer cancellation failed the call");
+            }
+            session.close().await.unwrap();
+            server.await.unwrap();
+        }
+    }
+
+    #[test]
+    async fn accepted_input_mapping_carries_the_outcome_that_the_server_selected() {
+        for (outcome, fails) in [
+            (
+                PublicStreamOutcome::Failed {
+                    error: PublicStreamError::Interrupted {
+                        message: "input item 2 does not satisfy the element schema".to_string(),
+                    },
+                },
+                true,
+            ),
+            (
+                PublicStreamOutcome::ConsumerCancelled {
+                    details: Some("consumer-drop".to_string()),
+                },
+                false,
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let attempt_id = uuid::Uuid::new_v4();
+            let provisional_ref = uuid::Uuid::new_v4();
+            let initial = start_request(attempt_id);
+            let server_initial = initial.clone();
+            let server_outcome = outcome.clone();
+            let server = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut socket =
+                    accept_hdr_async(socket, |request: &Request, response: Response| {
+                        Ok(select_session_subprotocol(request, response))
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(receive_client_message(&mut socket).await, server_initial);
+                socket
+                    .send(Message::Text(
+                        encode_text(&PublicServerMessage::InvocationAccepted {
+                            attempt_id,
+                            agent_id: accepted_agent_id(),
+                            invocation_id: OwnedInvocationId::new(
+                                accepted_agent_id(),
+                                InvocationId(uuid::Uuid::from_u128(1)),
+                            ),
+                            idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
+                            mappings: vec![PublicStreamMapping {
+                                channel: 4,
+                                direction: PublicStreamDirection::Input,
+                                byte_role: None,
+                                input_high_water: Some(PublicInputHighWater {
+                                    sequence: DecimalU64(1),
+                                    terminal: true,
+                                    outcome: Some(server_outcome),
+                                }),
+                                provisional_ref: Some(provisional_ref),
+                                stream_token: "input-stream".to_string(),
+                            }],
+                            session_token: "session-token".to_string(),
+                            version: 1,
+                        })
+                        .unwrap()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+                while let Some(frame) = socket.next().await {
+                    if matches!(frame, Err(_) | Ok(Message::Close(_))) {
+                        break;
+                    }
+                }
+            });
+
+            let mut session = InvocationSession::open(
+                Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+                None,
+                ReconnectPolicy::Unlimited,
+                InvocationSessionStateSnapshot {
+                    delivered_output_cursors: BTreeMap::new(),
+                    stable_stream_bindings: BTreeMap::new(),
+                    pending_operation: Some(initial),
+                    session_token: None,
+                    accepted_invocation: None,
+                },
+                false,
+                Arc::new(()),
+            )
+            .await
+            .unwrap();
+            let buffer = InputReplayBuffer::new(GENERATED_INPUT_BYTES, GENERATED_INPUT_ITEMS);
+            session
+                .register_input(provisional_ref, None, buffer.clone())
+                .unwrap();
+            let result = session.receive().await;
+            if fails {
+                let Err(SessionTransportError::InputStreamFailed { sequence, error }) = &result
+                else {
+                    panic!(
+                        "expected the failed input error, got {:?}",
+                        result.as_ref().err()
+                    )
+                };
+                assert_eq!(*sequence, 1);
+                assert!(matches!(**error, PublicStreamError::Interrupted { .. }));
+            } else {
+                result.unwrap();
+            }
+            assert!(buffer.is_terminal(), "the server-ended input stays open");
+            assert!(buffer.is_empty());
+            session.close().await.ok();
+            server.await.unwrap();
+        }
+    }
+
+    #[test]
     async fn closed_generated_output_delivery_retains_stable_cancellation_intent() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -7613,6 +7998,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 3,
@@ -7985,6 +8374,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
@@ -8109,6 +8502,10 @@ mod tests {
                                 encode_text(&PublicServerMessage::InvocationAccepted {
                                     attempt_id,
                                     agent_id: accepted_agent_id(),
+                                    invocation_id: OwnedInvocationId::new(
+                                        accepted_agent_id(),
+                                        InvocationId(uuid::Uuid::from_u128(1)),
+                                    ),
                                     idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                                     mappings: vec![PublicStreamMapping {
                                         channel,
@@ -8224,6 +8621,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
@@ -8261,6 +8662,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token-2".to_string(),
@@ -8349,6 +8754,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 3,
@@ -8394,6 +8803,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
@@ -8482,6 +8895,7 @@ mod tests {
                         input_high_water: Some(PublicInputHighWater {
                             sequence: DecimalU64(0),
                             terminal: false,
+                            outcome: None,
                         }),
                         provisional_ref: Some(provisional_ref),
                         stream_token: "input".to_string(),
@@ -8603,6 +9017,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 4,
@@ -8611,6 +9029,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(0),
                                 terminal: false,
+                                outcome: None,
                             }),
                             provisional_ref: Some(provisional_ref),
                             stream_token: "input-stream".to_string(),
@@ -8651,6 +9070,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 10,
@@ -8659,6 +9082,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(0),
                                 terminal: false,
+                                outcome: None,
                             }),
                             provisional_ref: Some(provisional_ref),
                             stream_token: "input-stream".to_string(),
@@ -8814,6 +9238,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
@@ -8891,6 +9319,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
@@ -8937,6 +9369,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id: resume_attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token-2".to_string(),
@@ -9010,6 +9446,10 @@ mod tests {
                 PublicServerMessage::InvocationAccepted {
                     attempt_id,
                     agent_id: accepted_agent_id(),
+                    invocation_id: OwnedInvocationId::new(
+                        accepted_agent_id(),
+                        InvocationId(uuid::Uuid::from_u128(1)),
+                    ),
                     idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                     mappings: Vec::new(),
                     session_token: "session-token".to_string(),
@@ -9088,6 +9528,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
@@ -9096,6 +9540,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(3),
                                 terminal: false,
+                                outcome: None,
                             }),
                             provisional_ref: None,
                             stream_token: "replacement-input".to_string(),
@@ -9160,6 +9605,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
@@ -9168,6 +9617,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(3),
                                 terminal: false,
+                                outcome: None,
                             }),
                             provisional_ref: None,
                             stream_token: "stable-input".to_string(),
@@ -9348,6 +9798,10 @@ mod tests {
         PublicServerMessage::InvocationAccepted {
             attempt_id,
             agent_id: accepted_agent_id(),
+            invocation_id: OwnedInvocationId::new(
+                accepted_agent_id(),
+                InvocationId(uuid::Uuid::from_u128(1)),
+            ),
             idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
             mappings,
             session_token: "session-token".to_string(),
@@ -9606,6 +10060,7 @@ mod tests {
                         input_high_water: Some(PublicInputHighWater {
                             sequence: DecimalU64(0),
                             terminal: false,
+                            outcome: None,
                         }),
                         provisional_ref: Some(retry_ref),
                         stream_token: "input".to_string(),
@@ -9801,12 +10256,38 @@ mod tests {
     async fn a_retryable_rejection_after_acceptance_resumes() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let initial = start_request(uuid::Uuid::new_v4());
+        let initial = tool_start_request(uuid::Uuid::new_v4());
+        let public_id = OwnedInvocationId::new(
+            golem_common::model::InvocationOwner::Tool("native".try_into().unwrap()),
+            InvocationId(uuid::Uuid::from_u128(1)),
+        );
+        let server_id = public_id.clone();
         let server = tokio::spawn(async move {
+            let acceptance = |attempt_id| {
+                let mut message = accepted(attempt_id, Vec::new());
+                let PublicServerMessage::InvocationAccepted { invocation_id, .. } = &mut message
+                else {
+                    unreachable!()
+                };
+                *invocation_id = server_id.clone();
+                message
+            };
             let mut socket = accept_session(&listener).await;
             let start = receive_client_message(&mut socket).await;
             let attempt_id = operation_attempt_id(&start).unwrap();
-            send_server(&mut socket, accepted(attempt_id, Vec::new())).await;
+            send_server(&mut socket, acceptance(attempt_id)).await;
+            send_server(
+                &mut socket,
+                PublicServerMessage::InvocationReady {
+                    attempt_id,
+                    agent_id: accepted_agent_id(),
+                    idempotency_key: server_id.id(),
+                    mappings: Vec::new(),
+                    session_token: "ready-token".into(),
+                    version: 1,
+                },
+            )
+            .await;
             send_server(&mut socket, retryable_rejection(attempt_id)).await;
             socket.close(None).await.unwrap();
 
@@ -9821,7 +10302,7 @@ mod tests {
             ));
             send_server(
                 &mut socket,
-                accepted(operation_attempt_id(&resume).unwrap(), Vec::new()),
+                acceptance(operation_attempt_id(&resume).unwrap()),
             )
             .await;
             socket.close(None).await.unwrap();
@@ -9836,8 +10317,20 @@ mod tests {
         session.receive().await.unwrap();
         assert!(matches!(
             session.receive().await.unwrap().frame(),
+            ServerFrame::Message(PublicServerMessage::InvocationReady { .. })
+        ));
+        assert_eq!(
+            session.delivery_tracker().snapshot().accepted_invocation,
+            Some(public_id.clone())
+        );
+        assert!(matches!(
+            session.receive().await.unwrap().frame(),
             ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
         ));
+        assert_eq!(
+            session.delivery_tracker().snapshot().accepted_invocation,
+            Some(public_id)
+        );
         server.await.unwrap();
     }
 

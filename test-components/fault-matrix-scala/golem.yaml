@@ -16,10 +16,8 @@ componentTemplates:
           - project
           targets:
           - .golem/scala.js
-        - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
+        - preinitializeJs: .generated/agent_guest.wasm
           module: .golem/scala.js
-          into: "{{ golemTempDir }}/agents/golem_it_fault_matrix_scala.dynamic.wasm"
-        - preinitializeJs: "{{ golemTempDir }}/agents/golem_it_fault_matrix_scala.dynamic.wasm"
           into: "{{ golemTempDir }}/agents/golem_it_fault_matrix_scala.preinitialized.wasm"
         componentWasm: "{{ golemTempDir }}/agents/golem_it_fault_matrix_scala.preinitialized.wasm"
         customCommands:
@@ -30,6 +28,14 @@ components:
   golem-it:fault-matrix-scala:
     dir: .
     templates: scala-test-component
+
+tools:
+  fault-matrix: {}
+
+agents:
+  FaultMatrixFixture:
+    tools:
+      fault-matrix: {}
 
 environments:
   local:

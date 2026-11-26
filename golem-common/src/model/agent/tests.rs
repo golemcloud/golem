@@ -159,10 +159,16 @@ fn owner_context_distinguishes_guest_workers_from_host_only_owners() {
 }
 
 #[test]
-fn only_component_agents_have_a_type_tag() {
+fn component_agents_and_standalone_tools_have_a_type_tag() {
     let typed = AgentId::from_parts(7, 1);
     let reserved = AgentId::from_parts(RESERVED_TYPE_TAG, 1);
     assert!(OwnerKind::ComponentAgent.validate_agent_id(&typed).is_ok());
+    assert!(OwnerKind::StandaloneTool.validate_agent_id(&typed).is_ok());
+    assert!(
+        OwnerKind::StandaloneTool
+            .validate_agent_id(&reserved)
+            .is_err()
+    );
     assert!(
         OwnerKind::ComponentAgent
             .validate_agent_id(&reserved)
@@ -192,13 +198,14 @@ fn only_component_agents_have_a_type_tag() {
             "\"ephemeral-external-tool\"",
         ),
         (OwnerKind::OplogProcessor, 2, "\"oplog-processor\""),
+        (OwnerKind::StandaloneTool, 3, "\"standalone-tool\""),
     ] {
         assert_eq!(i32::from(kind), discriminant);
         assert_eq!(OwnerKind::try_from(discriminant).unwrap(), kind);
         assert_eq!(serde_json::to_string(&kind).unwrap(), json);
         assert_eq!(serde_json::from_str::<OwnerKind>(json).unwrap(), kind);
     }
-    for discriminant in [-1, 3, i32::MAX] {
+    for discriminant in [-1, 4, i32::MAX] {
         assert!(OwnerKind::try_from(discriminant).is_err());
     }
 }
@@ -213,6 +220,29 @@ use pretty_assertions::assert_eq;
 use proptest::{prop_assert_eq, proptest};
 use std::collections::HashMap;
 use test_r::test;
+#[test]
+fn constructor_restrictions_are_checked_apart_from_parsing() {
+    let agent_type = make_agent_type(
+        "agent-9",
+        vec![(
+            "name",
+            SchemaType::text(TextRestrictions {
+                max_length: Some(3),
+                ..Default::default()
+            }),
+        )],
+    );
+    // An existing agent parses its key again, so parsing does not check restrictions.
+    let too_long = ParsedAgentKey::parse("agent-9(@t\"abcdef\")", &agent_type).unwrap();
+    let error = too_long.validate_restrictions().unwrap_err();
+    assert!(error.contains("above max-length 3"), "{error}");
+    assert!(!error.contains("abcdef"), "{error}");
+    ParsedAgentKey::parse("agent-9(@t\"abc\")", &agent_type)
+        .unwrap()
+        .validate_restrictions()
+        .unwrap();
+}
+
 #[test]
 fn agent_id_structural_normalization() {
     {
@@ -930,7 +960,7 @@ mod agent_error_tests {
                     secret_id: uuid::Uuid::nil(),
                     config_key: None,
                     version: 0,
-                    resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                    resolved_at: jiff::Timestamp::new(0, 0).unwrap(),
                     category: None,
                 }),
             ],
@@ -979,6 +1009,7 @@ fn recorded_constructor_parameters_with_delimiters_round_trip() {
         canonical_key: Some(key.to_string()),
         constructor_parameters: Some(parameters.clone()),
         agent_id: AgentId::from_parts(7, 1),
+        standalone_tool: None,
         owner_kind: OwnerKind::ComponentAgent,
         env: vec![],
         environment_id: EnvironmentId(Uuid::from_u128(2)),

@@ -700,10 +700,10 @@ pub enum GolemCliSubcommand {
         #[command(subcommand)]
         subcommand: PackageSubcommand,
     },
-    /// Install and pin a local package archive without running its code
+    /// Install and pin a package without running its code
     Install {
-        /// Path to the package archive
-        file: PathBuf,
+        /// Archive path, HTTP(S) URL, or oci:// registry reference
+        source: String,
     },
     /// Preview a package's OCI manifest digest and omitted exports without contacting a server
     Publish {
@@ -1351,7 +1351,6 @@ pub mod environment {
 
 pub mod tool {
     use crate::model::agent::RawAgentId;
-    use chrono::{DateTime, Utc};
     use clap::{ArgGroup, Args, Subcommand};
     use golem_common::base_model::account::{AccountEmail, AccountId};
     use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
@@ -1362,6 +1361,7 @@ pub mod tool {
     use golem_common::base_model::tool_release::ToolReleaseId;
     use golem_common::model::IdempotencyKey;
     use golem_common::model::component::ComponentName;
+    use jiff::Timestamp;
 
     #[derive(Debug, Subcommand)]
     pub enum ToolSubcommand {
@@ -1486,10 +1486,10 @@ pub mod tool {
     #[derive(Debug, Args)]
     #[command(group(ArgGroup::new("target").required(true).multiple(false).args(["agent", "component"])))]
     pub struct ToolInvokeArgs {
-        /// Existing agent; for --lookup use the receipt's agent ID
+        /// Existing agent
         #[arg(long)]
         pub agent: Option<RawAgentId>,
-        /// Component used to create a fresh ephemeral invocation owner without constructing an agent
+        /// Component used as the baseline of a standalone tool invocation
         #[arg(long)]
         pub component: Option<ComponentName>,
         /// Deployed tool name
@@ -1513,15 +1513,12 @@ pub mod tool {
         #[arg(long, requires = "stderr")]
         pub stderr_output: Option<std::path::PathBuf>,
         /// Enqueue without waiting
-        #[arg(long, conflicts_with_all = ["lookup", "stdin", "stdout", "output", "stderr", "stderr_output"])]
+        #[arg(long, conflicts_with_all = ["stdin", "stdout", "output", "stderr", "stderr_output"])]
         pub trigger: bool,
-        /// Look up the receipt's final invocation UUID and owner without starting execution or input
-        #[arg(long, conflicts_with_all = ["trigger", "schedule_at", "stdin", "stdout", "output", "stderr", "stderr_output"])]
-        pub lookup: bool,
         /// Schedule execution at an RFC 3339 timestamp
         #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output", "stderr", "stderr_output"])]
-        pub schedule_at: Option<DateTime<Utc>>,
-        /// Request seed; `-` generates a fresh seed. With --lookup, the receipt's final invocation UUID
+        pub schedule_at: Option<Timestamp>,
+        /// Idempotency key; `-` generates a fresh key
         #[arg(long, short)]
         pub idempotency_key: Option<IdempotencyKey>,
     }
@@ -1663,13 +1660,13 @@ pub mod worker {
         PostDeployArgs, StreamArgs,
     };
     use crate::model::agent::{AgentListCursor, AgentListMode, AgentUpdateMode};
-    use chrono::{DateTime, Utc};
     use clap::{Subcommand, ValueEnum};
     use golem_common::model::IdempotencyKey;
     use golem_common::model::agent::AgentConfigEntryDto;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::{ComponentName, ComponentRevision};
     use golem_common::model::oplog::OplogCursor;
+    use jiff::Timestamp;
     use uuid::Uuid;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -1774,7 +1771,7 @@ pub mod worker {
             post_deploy_args: Option<PostDeployArgs>,
             /// Schedule the invocation at a specific time (ISO 8601 / RFC 3339 format, e.g. 2026-03-15T10:30:00Z)
             #[clap(long, requires = "trigger")]
-            schedule_at: Option<DateTime<Utc>>,
+            schedule_at: Option<Timestamp>,
             /// Fail, and run nothing, unless the agent is the incarnation with this fingerprint
             #[clap(long)]
             expected_fingerprint: Option<Uuid>,
@@ -2704,8 +2701,8 @@ pub mod resource_definition {
 
 pub mod invocation {
     use crate::model::agent::RawAgentId;
-    use chrono::{DateTime, Utc};
     use clap::{Args, Subcommand, ValueEnum};
+    use jiff::Timestamp;
 
     #[derive(Debug, Subcommand)]
     pub enum InvocationSubcommand {
@@ -2740,10 +2737,10 @@ pub mod invocation {
             kind: Option<InvocationKindArg>,
             /// Only invocations whose last change is at or after this time (RFC 3339)
             #[arg(long)]
-            since: Option<DateTime<Utc>>,
+            since: Option<Timestamp>,
             /// Only invocations whose last change is at or before this time (RFC 3339)
             #[arg(long)]
-            until: Option<DateTime<Utc>>,
+            until: Option<Timestamp>,
             /// Invocations per page, at most 1000; the server default is 100
             #[arg(long)]
             page_size: Option<u32>,
@@ -2764,12 +2761,12 @@ pub mod invocation {
 
     #[derive(Debug, Args)]
     pub struct InvocationSelector {
-        /// Invocation ID, `<agent ID>.<UUID>`, as listed by
-        /// `invocation list`. It is resolved in the current environment; select another one with
+        /// Invocation ID, `<agent ID>.<UUID>` or `<tool name>.<UUID>`.
+        /// It is resolved in the current environment; select another one with
         /// `--environment`. Mutually exclusive with `--agent` and `--idempotency-key`.
         #[arg(
-            required_unless_present = "agent",
-            conflicts_with_all = ["agent", "idempotency_key", "method"]
+            required_unless_present_any = ["agent", "tool"],
+            conflicts_with_all = ["agent", "tool", "idempotency_key", "method", "command"]
         )]
         pub invocation_id: Option<String>,
         /// The agent that received the invocation; requires `--idempotency-key`
@@ -2781,8 +2778,14 @@ pub mod invocation {
             verbatim_doc_comment,
         )]
         pub agent: Option<RawAgentId>,
-        /// The idempotency key the invocation was made with; requires `--agent`
-        #[arg(long, requires = "agent")]
+        /// The tool; with `--agent`, finds invocations hosted on that agent
+        #[arg(long, requires = "idempotency_key", conflicts_with = "method")]
+        pub tool: Option<String>,
+        /// The tool command path, for example `x y`; without it, finds every matching command
+        #[arg(long, requires = "tool")]
+        pub command: Option<String>,
+        /// The idempotency key the invocation was made with
+        #[arg(long)]
         pub idempotency_key: Option<String>,
         /// The method or `tool:<tool>/<command path>`, when the same key was used for more than
         /// one operation on the agent
@@ -3078,9 +3081,9 @@ pub mod profile {
 
 pub mod api_token {
     use crate::args::parse_instant;
-    use chrono::{DateTime, Utc};
     use clap::Subcommand;
     use golem_common::model::auth::TokenId;
+    use jiff::Timestamp;
 
     #[derive(Debug, Subcommand)]
     pub enum ApiTokenSubcommand {
@@ -3096,7 +3099,7 @@ pub mod api_token {
             /// relative durations like `30d` are NOT accepted. Defaults to
             /// the year-2100 sentinel below.
             #[arg(long, value_parser = parse_instant, default_value = "2100-01-01T00:00:00Z")]
-            expires_at: DateTime<Utc>,
+            expires_at: Timestamp,
         },
         /// Delete an existing token
         #[command(after_help = crate::command_examples::API_TOKEN_DELETE)]
@@ -3738,9 +3741,7 @@ mod test {
             &["--trigger", "--stdin", "-"][..],
             &["--trigger", "--stdout"][..],
             &["--trigger", "--stderr"][..],
-            &["--lookup", "--input", "{}"][..],
-            &["--lookup", "--stdin", "-"][..],
-            &["--lookup", "--stderr-output", "errors.bin"][..],
+            &["--lookup"][..],
             &["--output", "result.bin"][..],
             &["--stderr-output", "errors.bin"][..],
         ] {

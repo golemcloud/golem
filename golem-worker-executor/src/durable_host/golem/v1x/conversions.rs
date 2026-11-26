@@ -241,6 +241,7 @@ mod tests {
     fn metadata(never_live: bool, status: AgentStatus) -> AgentMetadata {
         let component_id = ComponentId::new();
         AgentMetadata {
+            standalone_tool: None,
             component_id,
             agent_type_name: None,
             canonical_key: None,

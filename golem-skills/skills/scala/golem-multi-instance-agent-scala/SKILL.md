@@ -32,7 +32,7 @@ The native definition-derived Scala SDK client extends `AgentCompanionBase` and 
 |--------|-------------|
 | `Client.upsert(params...)` | A client of the **keyed** agent of the parameters; the host creates it when it is missing. Synchronous; throws `AgentRpcException` when the host rejects the client |
 | `Client.create(params..., keyed = false, <config>..., env = Map.empty)` | `Future` of a client of a **new** agent. Without `keyed` the agent has no key and a new agent ID; with `keyed = true` it is the keyed agent, and an existing one fails with `AgentRpcError.Conflict` |
-| `Client.getById(agentId)` | `Future` of a client of the **existing** agent with the ID. Never creates the agent; an unknown ID, or the ID of an agent of another type, fails with `AgentRpcError.NotFound` |
+| `Client.getById(agentId)` | A client of the **existing** agent with the ID. Synchronous; never creates the agent; an unknown ID, or the ID of an agent of another type, throws `AgentRpcException` with `AgentRpcError.NotFound` |
 
 Every client has `agentId(): Future[AgentId]`. On a client of `upsert` the first call creates a missing agent.
 
@@ -55,7 +55,7 @@ val created2: Future[CounterRemote] = CounterClient.create("shared")
 val savedId: Future[AgentId] = created1.flatMap(_.agentId())
 
 // Reconnect to an existing agent by its ID
-val same: Future[CounterRemote] = savedId.flatMap(id => CounterClient.getById(id))
+val same: Future[CounterRemote] = savedId.map(id => CounterClient.getById(id))
 
 // Call methods on the created agent
 created1.flatMap(_.increment()).map { result =>
@@ -74,7 +74,7 @@ An `AgentId` can also be read from its text form with `AgentId.parse(text)`, whi
 CounterClient.create("shared", keyed = true, maxCount = Some(10), env = Map("MODE" -> "test"))
 ```
 
-CLI-generated guest/JVM bridge clients do not extend `AgentCompanionBase`, but expose the same `upsert`, `create` and `getById` (ephemeral bridges expose only `upsert`). Guest `upsert` is synchronous; external JVM `create` and `getById` return `Future`. See `golem-call-from-external-scala`.
+CLI-generated guest/JVM bridge clients do not extend `AgentCompanionBase`, but expose the same `upsert`, `create` and `getById` (ephemeral bridges expose only `upsert`). Guest `upsert` and `getById` are synchronous; external JVM `create` and `getById` return `Future`. See `golem-call-from-external-scala`.
 
 ## Key Points
 

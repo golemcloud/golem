@@ -14,6 +14,9 @@
 
 use super::*;
 
+#[cfg(test)]
+mod tests;
+
 pub(in crate::durable_host::p3::http) fn poison_p3_pooled_connection(
     connection: &Option<PooledConnection>,
 ) {

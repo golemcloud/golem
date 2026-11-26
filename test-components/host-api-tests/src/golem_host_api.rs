@@ -988,6 +988,7 @@ impl GolemHostApi for GolemHostApiImpl {
             }),
             actual: oplog::ReplayStep::EndOfHistory,
             mismatched: vec![],
+            replay_start: None,
         });
         let entry = oplog::OplogEntry::FailedUpdate(oplog::FailedUpdateParameters {
             timestamp: golem_rust::wasip3::clocks::system_clock::now(),

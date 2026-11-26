@@ -42,13 +42,16 @@ use golem_common::model::oplog::{
     PublicQueuedCardEventTransferReceived, PublicRetryPolicyState,
     PublicSnapshotAssistedUpdateDetails, PublicSnapshotData, PublicSpanAttributes,
     PublicSpanFinished, PublicSpanStarted, PublicToolInvocationOperation,
-    PublicTypedAgentConfigEntry, PublicUpdateDescription, ReplayDivergence, ReplayStep,
-    SaveSnapshotParameters, SaveSnapshotResultParameters,
+    PublicTypedAgentConfigEntry, PublicUpdateDescription, ReplayDivergence, ReplayStart,
+    ReplayStep, SaveSnapshotParameters, SaveSnapshotResultParameters,
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OplogIndex, Timestamp};
-use golem_common::schema::{IntoTypedSchemaValue, SchemaValue, TypedSchemaValue};
+use golem_common::schema::{
+    IntoTypedSchemaValue, ResultValuePayload, SchemaValue, TypedSchemaValue, VariantValuePayload,
+};
 use serde::Serialize;
+use uuid::Uuid;
 
 /// One rendered entry with what the coverage document needs from it.
 #[derive(Debug, Clone, PartialEq)]
@@ -101,6 +104,69 @@ pub fn render_entry(
             .map(|direction| HostTypeMismatchRef { index, direction })
             .collect(),
     }
+}
+
+/// Decodes canonical tagged schema-value JSON. The CLI sends stream arguments as
+/// `{"kind":"stream",...}` references, which the external decoder rejects. Each one becomes a
+/// stream leaf, which the obfuscator redacts.
+fn tagged_method_input(json: &str) -> Option<SchemaValue> {
+    fn mark_streams(json: &mut serde_json::Value, marker: &str) {
+        match json {
+            serde_json::Value::Object(object) => {
+                if object.len() == 2
+                    && object.contains_key("value")
+                    && object.get("kind").and_then(|kind| kind.as_str()) == Some("stream")
+                {
+                    *json = serde_json::json!({"kind": "string", "value": marker});
+                } else {
+                    object
+                        .values_mut()
+                        .for_each(|value| mark_streams(value, marker));
+                }
+            }
+            serde_json::Value::Array(values) => values
+                .iter_mut()
+                .for_each(|value| mark_streams(value, marker)),
+            _ => {}
+        }
+    }
+    fn restore_streams(value: &mut SchemaValue, marker: &str) {
+        let restore = |value: &mut SchemaValue| restore_streams(value, marker);
+        match value {
+            SchemaValue::String(text) if text == marker => {
+                *value = SchemaValue::Stream(
+                    golem_common::schema::stream::SchemaValueStream::from_host_endpoint(()),
+                )
+            }
+            SchemaValue::Record { fields: values }
+            | SchemaValue::Tuple { elements: values }
+            | SchemaValue::List { elements: values }
+            | SchemaValue::FixedList { elements: values } => values.iter_mut().for_each(restore),
+            SchemaValue::Map { entries } => entries.iter_mut().for_each(|(key, value)| {
+                restore_streams(key, marker);
+                restore_streams(value, marker);
+            }),
+            SchemaValue::Variant(VariantValuePayload {
+                payload: Some(inner),
+                ..
+            })
+            | SchemaValue::Option { inner: Some(inner) }
+            | SchemaValue::Result(
+                ResultValuePayload::Ok { value: Some(inner) }
+                | ResultValuePayload::Err { value: Some(inner) },
+            ) => restore(inner),
+            SchemaValue::Union(union) => restore(&mut union.body),
+            _ => {}
+        }
+    }
+    let mut json = serde_json::from_str::<serde_json::Value>(json).ok()?;
+    let marker = format!("stream:{}", Uuid::new_v4());
+    mark_streams(&mut json, &marker);
+    let mut value = serde_json::from_value::<golem_common::schema::ExternalSchemaValue>(json)
+        .ok()?
+        .into_inner();
+    restore_streams(&mut value, &marker);
+    Some(value)
 }
 
 /// An oplog region, Golem metadata in clear.
@@ -320,11 +386,85 @@ fn failed_snapshot_assisted(details: &PublicFailedSnapshotAssistedUpdateDetails)
         .build()
 }
 
+/// A schema-less value for raw public JSON method input: objects are records in key order,
+/// arrays are lists, and numbers keep their integer or float form. JSON has no byte type, so
+/// a non-empty array of integers that all fit a byte is a byte list, which is obfuscated as
+/// one token rather than element by element.
+fn json_schema_value(json: serde_json::Value) -> SchemaValue {
+    if let serde_json::Value::Array(elements) = &json
+        && let Some(bytes) = elements
+            .iter()
+            .map(|element| element.as_u64().and_then(|byte| u8::try_from(byte).ok()))
+            .collect::<Option<Vec<_>>>()
+        && !bytes.is_empty()
+    {
+        return SchemaValue::List {
+            elements: bytes.into_iter().map(SchemaValue::U8).collect(),
+        };
+    }
+    match json {
+        serde_json::Value::Null => SchemaValue::Option { inner: None },
+        serde_json::Value::Bool(value) => SchemaValue::Bool(value),
+        serde_json::Value::Number(number) => number
+            .as_u64()
+            .map(SchemaValue::U64)
+            .or_else(|| number.as_i64().map(SchemaValue::S64))
+            .unwrap_or_else(|| SchemaValue::F64(number.as_f64().unwrap_or(f64::NAN))),
+        serde_json::Value::String(value) => SchemaValue::String(value),
+        serde_json::Value::Array(elements) => SchemaValue::List {
+            elements: elements.into_iter().map(json_schema_value).collect(),
+        },
+        serde_json::Value::Object(fields) => SchemaValue::Record {
+            fields: fields
+                .into_iter()
+                .map(|(_, value)| json_schema_value(value))
+                .collect(),
+        },
+    }
+}
+
 fn retry_state(state: &PublicRetryPolicyState) -> ReportNode {
     kept(state)
 }
 
 impl Walker<'_, '_> {
+    /// The original method input is a component-independent envelope. Its case names the
+    /// captured representation, which is not customer data, so it stays in clear and the
+    /// captured value inside it is obfuscated schema-less.
+    fn method_input(&mut self, input: &TypedSchemaValue) -> ReportNode {
+        use golem_common::model::agent::PublicMethodInput;
+        use golem_common::schema::FromSchema;
+        const TYPE_NAME: &str = "original-method-input";
+        let case = |name: &str, index: u32, payload: ReportNode| {
+            kept_case(
+                CaseKind::Variant,
+                Some(TYPE_NAME.to_string()),
+                name,
+                Some(index),
+                Some(payload),
+            )
+        };
+        match PublicMethodInput::from_value(input.value()) {
+            Ok(PublicMethodInput::Native { value, .. }) => {
+                case("Native", 0, self.schemaless(&value, Region::Customer))
+            }
+            Ok(PublicMethodInput::PublicJson(json)) => {
+                // Canonical tagged schema-value JSON, as the CLI sends, keeps its value types and
+                // is obfuscated as a native input is. Other public JSON has no value types.
+                let payload = if let Some(value) = tagged_method_input(&json) {
+                    self.schemaless(&value, Region::Customer)
+                } else {
+                    match serde_json::from_str::<serde_json::Value>(&json) {
+                        Ok(json) => self.schemaless(&json_schema_value(json), Region::Customer),
+                        Err(_) => self.str_leaf(&json, Region::Customer),
+                    }
+                };
+                case("PublicJson", 1, payload)
+            }
+            Err(_) => self.customer(input),
+        }
+    }
+
     /// A token over the serialised form of a Golem value: over its text when it serialises
     /// to a string, otherwise over its JSON text.
     fn tok<T: Serialize>(&self, value: &T) -> ReportNode {
@@ -357,11 +497,11 @@ impl Walker<'_, '_> {
     /// A time chosen by the guest, such as when a scheduled invocation may start: a datetime
     /// token that `--keep-scalars` shows.
     fn datetime(&mut self, value: &Timestamp) -> ReportNode {
-        match chrono::DateTime::from_timestamp_millis(value.to_millis() as i64) {
-            Some(datetime) => {
+        match jiff::Timestamp::from_millisecond(value.to_millis() as i64) {
+            Ok(datetime) => {
                 self.schemaless(&SchemaValue::Datetime { value: datetime }, Region::Customer)
             }
-            None => self.tok(value),
+            Err(_) => self.tok(value),
         }
     }
 
@@ -386,6 +526,34 @@ impl Walker<'_, '_> {
             .add(
                 "mismatched",
                 tuple(divergence.mismatched.iter().map(name).collect()),
+            )
+            .opt(
+                "replayStart",
+                divergence.replay_start.as_ref().map(|start| match start {
+                    ReplayStart::Snapshot(start) => Fields::new()
+                        .add(
+                            "snapshot",
+                            Fields::new()
+                                .add("snapshotIndex", idx(&start.snapshot_index))
+                                .add(
+                                    "rejectedSnapshots",
+                                    tuple(start.rejected_snapshots.iter().map(idx).collect()),
+                                )
+                                .build(),
+                        )
+                        .build(),
+                    ReplayStart::FullReplay(start) => Fields::new()
+                        .add(
+                            "fullReplay",
+                            Fields::new()
+                                .add(
+                                    "rejectedSnapshots",
+                                    tuple(start.rejected_snapshots.iter().map(idx).collect()),
+                                )
+                                .build(),
+                        )
+                        .build(),
+                }),
             )
             .build()
     }
@@ -637,7 +805,7 @@ impl Walker<'_, '_> {
                     Fields::new()
                         .add("invocationId", self.tok(invocation_id))
                         .add("methodName", text(method_name.clone()))
-                        .add("functionInput", self.customer(function_input))
+                        .add("functionInput", self.method_input(function_input))
                         .add("traceId", self.tok(trace_id))
                         .add("traceStates", self.tok(trace_states))
                         .add("invocationContext", self.tok(invocation_context))
@@ -957,6 +1125,7 @@ impl Walker<'_, '_> {
                 local_agent_config,
                 instance_id,
                 never_live,
+                standalone_tool,
             }) => Fields::new()
                 .add(
                     "agentId",
@@ -1016,6 +1185,20 @@ impl Walker<'_, '_> {
                 )
                 .add("instanceId", text(instance_id.to_string()))
                 .add("neverLive", self.boolean(*never_live))
+                .opt(
+                    "standaloneTool",
+                    standalone_tool.as_ref().map(|tool| {
+                        Fields::new()
+                            .add(
+                                "toolName",
+                                self.str_leaf(tool.tool_name.as_str(), Region::Customer),
+                            )
+                            .add("commandPath", self.tok(&tool.command_path))
+                            .add("invocationId", self.tok(&tool.invocation_id))
+                            .add("caller", self.caller(&tool.caller))
+                            .build()
+                    }),
+                )
                 .build(),
             PublicOplogEntry::Start(StartParams {
                 timestamp: _,

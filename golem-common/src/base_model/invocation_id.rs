@@ -13,10 +13,19 @@
 // limitations under the License.
 
 use super::account::AccountId;
+use super::environment::EnvironmentId;
+use super::tool::ToolName;
 use super::{AgentFingerprint, AgentId, IdempotencyKey, InvocationId};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
+
+impl InvocationId {
+    /// The constructor belongs to the persisted agent incarnation, not a creating request.
+    pub fn constructor(fingerprint: AgentFingerprint) -> Self {
+        Self(Uuid::new_v5(&fingerprint.0, b"constructor"))
+    }
+}
 
 /// The authenticated caller's idempotency namespace, not an authorization grant.
 /// System and route external callers have no caller scope.
@@ -146,8 +155,74 @@ fn derive_key(domain: &str, fields: &[&[u8]]) -> IdempotencyKey {
     IdempotencyKey::derived_from_bytes(&IdempotencyKey::from(domain), &bytes)
 }
 
-/// An agent-owned invocation, printed as `<agent ID>.<UUID>`.
-/// Tool-owned transport identities are not represented by this type yet.
+/// The public owner of an invocation, not necessarily its executor address.
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+pub enum InvocationOwner {
+    Agent(AgentId),
+    Tool(ToolName),
+}
+
+impl From<AgentId> for InvocationOwner {
+    fn from(value: AgentId) -> Self {
+        Self::Agent(value)
+    }
+}
+
+impl Display for InvocationOwner {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Agent(agent) => Display::fmt(agent, f),
+            Self::Tool(tool) => Display::fmt(tool, f),
+        }
+    }
+}
+
+/// Derivation of the public unique part of a standalone tool invocation.
+pub struct StandaloneToolInvocation;
+
+impl StandaloneToolInvocation {
+    /// Keyed requests are scoped to the environment, tool, authenticated caller and
+    /// command path. Without both a key and a caller scope, allocate a fresh UUID.
+    /// Fields have u64 big-endian byte lengths; the environment is a raw UUID and
+    /// the other fields are UTF-8, in signature order.
+    pub fn unique_part(
+        environment_id: EnvironmentId,
+        tool_name: &ToolName,
+        scope: Option<IdempotencyScope>,
+        command_path: &str,
+        key: Option<&IdempotencyKey>,
+    ) -> InvocationId {
+        match (scope, key) {
+            (Some(scope), Some(key)) => InvocationId(
+                derive_key(
+                    "golem-standalone-tool-invocation-id",
+                    &[
+                        environment_id.0.as_bytes(),
+                        tool_name.as_str().as_bytes(),
+                        scope.to_string().as_bytes(),
+                        command_path.as_bytes(),
+                        key.value.as_bytes(),
+                    ],
+                )
+                .to_uuid(),
+            ),
+            _ => InvocationId(Uuid::new_v4()),
+        }
+    }
+}
+
+/// An invocation, printed as `<owner>.<UUID>`.
 #[derive(
     Clone,
     Debug,
@@ -161,17 +236,27 @@ fn derive_key(domain: &str, fields: &[&[u8]]) -> IdempotencyKey {
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub struct OwnedInvocationId {
-    agent_id: AgentId,
+    owner: InvocationOwner,
     id: InvocationId,
 }
 
 impl OwnedInvocationId {
-    pub fn new(agent_id: AgentId, id: InvocationId) -> Self {
-        Self { agent_id, id }
+    pub fn new(owner: impl Into<InvocationOwner>, id: InvocationId) -> Self {
+        Self {
+            owner: owner.into(),
+            id,
+        }
     }
 
-    pub fn agent_id(&self) -> &AgentId {
-        &self.agent_id
+    pub fn owner(&self) -> &InvocationOwner {
+        &self.owner
+    }
+
+    pub fn agent_id(&self) -> Option<&AgentId> {
+        match &self.owner {
+            InvocationOwner::Agent(agent_id) => Some(agent_id),
+            InvocationOwner::Tool(_) => None,
+        }
     }
 
     pub fn id(&self) -> InvocationId {
@@ -258,7 +343,7 @@ impl OwnedInvocationId {
 
 impl Display for OwnedInvocationId {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}.{}", self.agent_id, self.id)
+        write!(f, "{}.{}", self.owner, self.id)
     }
 }
 
@@ -266,14 +351,18 @@ impl FromStr for OwnedInvocationId {
     type Err = String;
 
     fn from_str(value: &str) -> Result<Self, Self::Err> {
-        let invalid = || "invalid invocation id: expected <agent ID>.<UUID>".to_string();
+        let invalid =
+            || "invalid invocation id: expected <agent ID or tool name>.<UUID>".to_string();
         let suffix_start = value.len().checked_sub(37).ok_or_else(invalid)?;
         let owner = value.get(..suffix_start).ok_or_else(invalid)?;
         let suffix = value.get(suffix_start..).ok_or_else(invalid)?;
         let uuid_text = suffix.strip_prefix('.').ok_or_else(invalid)?;
         let uuid = uuid_text.parse::<InvocationId>().map_err(|_| invalid())?;
-        let agent_id = owner.parse::<AgentId>().map_err(|_| invalid())?;
-        Ok(Self::new(agent_id, uuid))
+        let owner = match owner.parse::<AgentId>() {
+            Ok(agent_id) => InvocationOwner::Agent(agent_id),
+            Err(_) => InvocationOwner::Tool(owner.parse::<ToolName>().map_err(|_| invalid())?),
+        };
+        Ok(Self::new(owner, uuid))
     }
 }
 
@@ -288,6 +377,168 @@ mod tests {
 
     fn fingerprint() -> AgentFingerprint {
         AgentFingerprint(Uuid::from_u128(2))
+    }
+
+    #[test]
+    fn standalone_tool_unique_part_golden_and_input_separation() {
+        let env = EnvironmentId(uuid::uuid!("6f1c2a3b-4d5e-4f60-8a7b-9c0d1e2f3a4b"));
+        let account = AccountId(Uuid::from_u128(10));
+        let scope = IdempotencyScope::User(account);
+        let derive = |env, tool: &str, scope, command, key: &str| {
+            StandaloneToolInvocation::unique_part(
+                env,
+                &tool.parse().unwrap(),
+                Some(scope),
+                command,
+                Some(&IdempotencyKey::from(key)),
+            )
+        };
+        let id = derive(env, "a-b", scope, "c", "key");
+        assert_eq!(id.0, uuid::uuid!("0d6d6617-2d2c-52cc-b6c7-144ab49c5e39"));
+        assert_eq!(id, derive(env, "a-b", scope, "c", "key"));
+        for other in [
+            derive(EnvironmentId(Uuid::from_u128(1)), "a-b", scope, "c", "key"),
+            derive(env, "a", scope, "c", "key"),
+            derive(
+                env,
+                "a-b",
+                IdempotencyScope::User(AccountId(Uuid::from_u128(11))),
+                "c",
+                "key",
+            ),
+            derive(env, "a-b", IdempotencyScope::Agent(account), "c", "key"),
+            derive(
+                env,
+                "a-b",
+                IdempotencyScope::AdminImpersonation {
+                    admin: account,
+                    target: account,
+                },
+                "c",
+                "key",
+            ),
+            derive(env, "a-b", scope, "d", "key"),
+            derive(env, "a-b", scope, "c", "other"),
+            derive(env, "a", scope, "b-c", "key"),
+        ] {
+            assert_ne!(id, other);
+        }
+        for ((tool1, cmd1, key1), (tool2, cmd2, key2)) in [
+            (("a-b", "c", "key"), ("a", "b-c", "key")),
+            (("a", "b-c", "d"), ("a", "b", "c-d")),
+            (("a", "雪", "🦀é"), ("a", "雪🦀", "é")),
+            (("a", "", "雪"), ("a", "雪", "")),
+        ] {
+            assert_ne!(
+                derive(env, tool1, scope, cmd1, key1),
+                derive(env, tool2, scope, cmd2, key2)
+            );
+        }
+    }
+
+    #[test]
+    fn standalone_tool_without_key_or_scope_is_random() {
+        let env = EnvironmentId(Uuid::nil());
+        let tool = "a".parse().unwrap();
+        let key = IdempotencyKey::from("key");
+        for (scope, key) in [
+            (Some(IdempotencyScope::User(AccountId(Uuid::nil()))), None),
+            (None, Some(&key)),
+            (None, None),
+        ] {
+            let first = StandaloneToolInvocation::unique_part(env, &tool, scope, "x y", key);
+            let second = StandaloneToolInvocation::unique_part(env, &tool, scope, "x y", key);
+            assert_ne!(first, second);
+            assert_eq!(first.0.get_version_num(), 4);
+            assert_eq!(second.0.get_version_num(), 4);
+        }
+    }
+
+    #[test]
+    fn tool_and_agent_invocation_owner_roundtrips() {
+        use crate::schema::conversion::{FromSchema, IntoSchema};
+
+        let unique = InvocationId(Uuid::from_u128(3));
+        for tool in ["a", "a-1", "tool-with-many-parts"] {
+            let id = OwnedInvocationId::new(InvocationOwner::Tool(tool.parse().unwrap()), unique);
+            let text = format!("{tool}.00000000-0000-0000-0000-000000000003");
+            assert_eq!(id.to_string(), text);
+            assert_eq!(text.parse::<OwnedInvocationId>().unwrap(), id);
+            assert_eq!(id.agent_id(), None);
+            assert_eq!(id.id(), unique);
+            assert_eq!(OwnedInvocationId::from_value(&id.to_value()).unwrap(), id);
+            assert_eq!(
+                serde_json::from_str::<OwnedInvocationId>(&serde_json::to_string(&id).unwrap())
+                    .unwrap(),
+                id
+            );
+            #[cfg(feature = "full")]
+            assert_eq!(
+                desert_rust::deserialize::<OwnedInvocationId>(
+                    &desert_rust::serialize_to_byte_vec(&id).unwrap()
+                )
+                .unwrap(),
+                id
+            );
+        }
+        for uuid in [
+            "00000007-0cfd-8d08-825f-b29b4e7457ad",
+            "abcdef01-2345-6789-abcd-ef0123456789",
+        ] {
+            let text = format!("{uuid}.{unique}");
+            let parsed = text.parse::<OwnedInvocationId>().unwrap();
+            assert_eq!(
+                parsed.owner(),
+                &InvocationOwner::Agent(uuid.parse().unwrap())
+            );
+            assert_eq!(parsed.to_string(), text);
+            assert_eq!(
+                OwnedInvocationId::from_value(&parsed.to_value()).unwrap(),
+                parsed
+            );
+        }
+    }
+
+    #[test]
+    fn constructor_identity_is_incarnation_bound_and_separate_from_methods() {
+        let constructor = InvocationId::constructor(fingerprint());
+        assert_eq!(
+            constructor.0,
+            uuid::uuid!("f8d406b8-7838-5397-8385-e22008a2ddcf")
+        );
+        assert_eq!(constructor, InvocationId::constructor(fingerprint()));
+        assert_eq!(
+            InvocationId::constructor(AgentFingerprint(Uuid::from_u128(99))).0,
+            uuid::uuid!("c1e4f2e6-4312-506e-b331-7f0e517fadbf")
+        );
+        for operation in ["constructor", "constructor/雪:internal"] {
+            for key in ["constructor", "constructor/雪:internal"] {
+                let key = IdempotencyKey::from(key);
+                for method in [
+                    OwnedInvocationId::external(
+                        owner(),
+                        fingerprint(),
+                        operation,
+                        Some(IdempotencyScope::User(AccountId(Uuid::from_u128(10)))),
+                        Some(&key),
+                    ),
+                    OwnedInvocationId::internal(owner(), fingerprint(), operation, &key),
+                    OwnedInvocationId::route_session(
+                        owner(),
+                        fingerprint(),
+                        operation,
+                        "constructor",
+                        &key,
+                    ),
+                ] {
+                    assert_ne!(constructor, method.id());
+                }
+            }
+        }
+        let unkeyed =
+            OwnedInvocationId::external(owner(), fingerprint(), "constructor", None, None);
+        assert_eq!(unkeyed.uuid().get_version_num(), 4);
+        assert_eq!(constructor.0.get_version_num(), 5);
     }
 
     #[test]
@@ -465,7 +716,7 @@ mod tests {
         let text = "00000007-0cfd-8d08-825f-b29b4e7457ad.00000000-0000-0000-0000-000000000003";
         assert_eq!(id.to_string(), text);
         assert_eq!(text.parse::<OwnedInvocationId>().unwrap(), id);
-        assert_eq!(id.agent_id(), &owner());
+        assert_eq!(id.agent_id(), Some(&owner()));
         assert_eq!(id.uuid(), Uuid::from_u128(3));
         assert_eq!(id.id(), InvocationId(Uuid::from_u128(3)));
     }

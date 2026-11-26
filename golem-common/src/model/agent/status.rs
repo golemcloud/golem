@@ -59,11 +59,25 @@ pub struct AgentMetadata {
     pub fingerprint: AgentFingerprint,
     pub agent_mode: AgentMode,
     pub create_request: oplog::CreateRequest,
+    pub standalone_tool: Option<Box<oplog::StandaloneToolInvocation>>,
 }
 
 impl AgentMetadata {
     pub fn owned_agent_id(&self) -> OwnedAgentId {
         OwnedAgentId::new(self.environment_id, &self.agent_id)
+    }
+
+    /// A fork is forked; otherwise an agent that owns its key is keyed, and every other
+    /// owner, ephemeral agents included, was created without a key.
+    pub fn origin(&self) -> crate::base_model::agent::AgentOrigin {
+        use crate::base_model::agent::AgentOrigin;
+        if self.create_request.kind == oplog::CreateRequestKind::Fork {
+            AgentOrigin::Forked
+        } else if self.canonical_key.is_some() {
+            AgentOrigin::Keyed
+        } else {
+            AgentOrigin::Created
+        }
     }
 
     /// Resolves the persisted type and decodes the persisted constructor parameters.
@@ -719,6 +733,11 @@ pub struct UsableAutomaticSnapshot {
 pub struct AgentStatusRecord {
     pub status: AgentStatus,
     pub last_error_kind: Option<crate::base_model::oplog::OplogErrorKind>,
+    /// The time of the entry that established the current failed or exited state, including
+    /// failures before an invocation starts. Cleared when execution leaves that state.
+    pub terminal_failure_at: Option<Timestamp>,
+    /// The oplog index of the entry identified by `terminal_failure_at`.
+    pub terminal_failure_index: Option<OplogIndex>,
     pub skipped_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
     pub pending_invocations: Vec<PendingInvocationRef>,
@@ -764,6 +783,10 @@ pub struct AgentStatusRecord {
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<AgentResourceId, AgentResourceDescription>,
     pub oplog_idx: OplogIndex,
+    /// The index of the latest entry other than `AgentInvocationSettled`. A settlement only marks
+    /// the end of the background work that follows a recorded result, so the agent state that the
+    /// result describes stays at this index. Read-only HTTP validators name it.
+    pub state_oplog_idx: OplogIndex,
     pub active_plugins: HashSet<EnvironmentPluginGrantId>,
     pub oplog_processor_checkpoints:
         HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
@@ -813,6 +836,8 @@ impl Default for AgentStatusRecord {
         AgentStatusRecord {
             status: AgentStatus::Idle,
             last_error_kind: None,
+            terminal_failure_at: None,
+            terminal_failure_index: None,
             skipped_regions: DeletedRegions::new(),
             overridden_retry_config: None,
             pending_invocations: Vec::new(),
@@ -840,6 +865,7 @@ impl Default for AgentStatusRecord {
             total_linear_memory_size: 0,
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
+            state_oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),
             oplog_processor_checkpoints: HashMap::new(),
             revoked_cards: HashSet::new(),

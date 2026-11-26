@@ -35,6 +35,7 @@ expectedFingerprint|string|No|-
   "ownerKind": "component-agent",
   "agentTypeName": "string",
   "canonicalKey": "string",
+  "origin": "keyed",
   "constructorParameters": "string",
   "environmentId": "19f5cc2e-7657-437a-9268-83cd3d563563",
   "createdBy": "25a02396-1048-48f9-bf93-102d2fb7895e",
@@ -399,7 +400,43 @@ scanMillis|integer|No|The remaining time allowance of a range read, in milliseco
           }
         ],
         "instanceId": "64d2028c-ae87-4069-a624-66089d957ef9",
-        "neverLive": true
+        "neverLive": true,
+        "standaloneTool": {
+          "toolName": "string",
+          "commandPath": [
+            "string"
+          ],
+          "invocationId": "e9725468-0858-4dbb-af72-1e49c8254d68",
+          "caller": {
+            "original": {
+              "kind": "user",
+              "pair": {
+                "issuer": "string",
+                "subject": "string"
+              },
+              "authenticatedAt": "2019-08-24T14:15:22Z",
+              "claims": {}
+            },
+            "immediate": {
+              "kind": "user",
+              "pair": {
+                "issuer": "string",
+                "subject": "string"
+              },
+              "authenticatedAt": "2019-08-24T14:15:22Z",
+              "claims": {}
+            },
+            "tokens": [
+              {
+                "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+                "maker": {
+                  "issuer": "string",
+                  "subject": "string"
+                }
+              }
+            ]
+          }
+        }
       }
     }
   ],
@@ -539,7 +576,43 @@ expectedFingerprint|string|No|-
       }
     ],
     "instanceId": "64d2028c-ae87-4069-a624-66089d957ef9",
-    "neverLive": true
+    "neverLive": true,
+    "standaloneTool": {
+      "toolName": "string",
+      "commandPath": [
+        "string"
+      ],
+      "invocationId": "e9725468-0858-4dbb-af72-1e49c8254d68",
+      "caller": {
+        "original": {
+          "kind": "user",
+          "pair": {
+            "issuer": "string",
+            "subject": "string"
+          },
+          "authenticatedAt": "2019-08-24T14:15:22Z",
+          "claims": {}
+        },
+        "immediate": {
+          "kind": "user",
+          "pair": {
+            "issuer": "string",
+            "subject": "string"
+          },
+          "authenticatedAt": "2019-08-24T14:15:22Z",
+          "claims": {}
+        },
+        "tokens": [
+          {
+            "id": "497f6eca-6276-4993-bfeb-53cbbbba6f08",
+            "maker": {
+              "issuer": "string",
+              "subject": "string"
+            }
+          }
+        ]
+      }
+    }
   }
 }
 ```

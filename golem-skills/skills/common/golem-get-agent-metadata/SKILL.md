@@ -18,7 +18,7 @@ golem agent get <AGENT_ID>
 Displays the agent's current metadata including:
 
 - Component name and revision
-- Agent ID (a UUID), agent type, key (`Type(parameters)`, only for keyed agents), and fingerprint of the agent incarnation
+- Agent ID (a UUID), agent type, key (`Type(parameters)`, only for keyed agents), origin (`keyed`, `created` without a key, or `forked`), and fingerprint of the agent incarnation
 - Creation timestamp
 - Component size and total linear memory size
 - Environment variables (if any)

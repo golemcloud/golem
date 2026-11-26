@@ -91,7 +91,7 @@ struct ExternalConstructorNames {
 const TS_BRIDGE_PACKAGE_NAME: &str = "@golemcloud/golem-ts-bridge";
 const TS_SDK_PACKAGE_NAME: &str = "@golemcloud/golem-ts-sdk";
 const CREATE_DOC: &str = "Creates an agent, and resolves after its initialization. With `keyed`, it creates the keyed agent of the constructor parameters, and rejects with a `conflict` error when that agent exists; otherwise the new agent has no key and a new ID. `config` overrides local configuration values, and `env` adds environment variables to the ones the manifest defines.";
-const GET_BY_ID_DOC: &str = "Connects to the existing agent with the ID. It never creates the agent: an unknown ID, or the ID of an agent of another type, rejects with a `not-found` error.";
+const GET_BY_ID_DOC: &str = "Connects to the existing agent with the ID. It never creates the agent: an unknown ID, or the ID of an agent of another type, throws a `not-found` error.";
 /// The instance members of an external client that agent methods must not shadow.
 pub(crate) const EXTERNAL_MEMBER_NAMES: &[&str] = &[
     "parameters",
@@ -907,11 +907,11 @@ impl TypeScriptBridgeGenerator {
         drop(method);
 
         writer.write_doc(GET_BY_ID_DOC);
-        let mut method = writer.begin_static_async_method("getById");
+        let mut method = writer.begin_static_method("getById");
         method.param("agentId", "Parameters<typeof base.getRemoteAgentById>[1]");
         method.result(class_name);
         method.write_line(format!(
-            "return new {class_name}(await base.getRemoteAgentById({type_name}, agentId));"
+            "return new {class_name}(base.getRemoteAgentById({type_name}, agentId));"
         ));
         Ok(())
     }

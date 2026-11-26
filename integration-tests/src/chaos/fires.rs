@@ -88,7 +88,7 @@
 
 use crate::chaos::history::{FireRecord, OperationRecord, Outcome, Stream, TargetFireLog};
 use crate::chaos::summary::LatencyStats;
-use chrono::{DateTime, TimeDelta, Utc};
+
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -261,7 +261,7 @@ impl ScheduleFireReport {
         targets_on_faulted_pod: &BTreeSet<String>,
         lease_budget: Duration,
     ) -> Self {
-        let lead = TimeDelta::from_std(lead).unwrap_or(TimeDelta::zero());
+        let lead = jiff::SignedDuration::try_from(lead).unwrap_or(jiff::SignedDuration::ZERO);
         let budget_ms = lease_budget.as_millis().min(u64::MAX as u128) as u64;
 
         let mut fires_by_token: BTreeMap<&str, Vec<&FireRecord>> = BTreeMap::new();
@@ -310,7 +310,7 @@ impl ScheduleFireReport {
         let mut findings: Vec<FireFinding> = Vec::new();
         // When each registration actually landed, which is what decides whether
         // its action still had a chance of being on time.
-        let mut registered_at: BTreeMap<&str, DateTime<Utc>> = BTreeMap::new();
+        let mut registered_at: BTreeMap<&str, jiff::Timestamp> = BTreeMap::new();
 
         for record in records.iter().filter(|r| r.stream == Stream::Scheduled) {
             let token = record.idempotency_key.as_str();
@@ -348,7 +348,7 @@ impl ScheduleFireReport {
                         "one registration, {count} fires at {} — the action ran more than once",
                         fires
                             .iter()
-                            .map(|f| f.observed_at.to_rfc3339())
+                            .map(|f| f.observed_at.to_string())
                             .collect::<Vec<_>>()
                             .join(", ")
                     ),
@@ -372,10 +372,7 @@ impl ScheduleFireReport {
                     token: token.to_string(),
                     agent: record.agent.clone(),
                     window,
-                    detail: format!(
-                        "accepted registration due at {} never fired",
-                        due.to_rfc3339()
-                    ),
+                    detail: format!("accepted registration due at {} never fired", due),
                 }),
                 (Outcome::Indeterminate, 0) if !can_testify => report.unverifiable += 1,
                 (Outcome::Indeterminate, 0) => report.inconclusive += 1,
@@ -512,7 +509,7 @@ fn delay_stats(
     fault: Option<FaultWindow>,
     targets_on_faulted_pod: &BTreeSet<String>,
     budget_ms: u64,
-    registered_at: &BTreeMap<&str, DateTime<Utc>>,
+    registered_at: &BTreeMap<&str, jiff::Timestamp>,
 ) -> (Vec<FireDelayStats>, Vec<i64>) {
     let mut cells: BTreeMap<(TargetGroup, FireWindow), Vec<i64>> = BTreeMap::new();
     let mut overdue: Vec<i64> = Vec::new();
@@ -563,8 +560,8 @@ mod tests {
     use crate::chaos::history::{AttemptRecord, Phase};
     use test_r::test;
 
-    fn at(offset_secs: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(1_800_000_000 + offset_secs, 0).unwrap()
+    fn at(offset_secs: i64) -> jiff::Timestamp {
+        jiff::Timestamp::new(1_800_000_000 + offset_secs, 0).unwrap()
     }
 
     const LEAD: Duration = Duration::from_secs(10);
@@ -574,7 +571,7 @@ mod tests {
         token: &str,
         agent: &str,
         outcome: Outcome,
-        submitted_at: DateTime<Utc>,
+        submitted_at: jiff::Timestamp,
     ) -> OperationRecord {
         OperationRecord {
             op_id: 0,
@@ -604,11 +601,11 @@ mod tests {
         }
     }
 
-    fn fire(token: &str, scheduled: DateTime<Utc>, delay_ms: i64) -> FireRecord {
+    fn fire(token: &str, scheduled: jiff::Timestamp, delay_ms: i64) -> FireRecord {
         FireRecord {
             token: token.to_string(),
             scheduled_at: scheduled,
-            observed_at: scheduled + TimeDelta::milliseconds(delay_ms),
+            observed_at: scheduled + jiff::SignedDuration::from_millis(delay_ms),
         }
     }
 
@@ -648,7 +645,7 @@ mod tests {
         assert_eq!(report.findings[0].violation, FireViolation::NeverFired);
         assert_eq!(report.findings[0].token, "t-1");
         assert!(
-            report.findings[0].detail.contains(&at(10).to_rfc3339()),
+            report.findings[0].detail.contains(&at(10).to_string()),
             "the finding must say when the action was due: {}",
             report.findings[0].detail
         );

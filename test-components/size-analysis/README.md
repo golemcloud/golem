@@ -35,16 +35,21 @@ deterministic JSON; `--diagnostics` writes the fine breakdown (twiggy symbols an
 cargo run -p golem-size-analysis -- collect --sdk rust --wasm component.wasm \
   --user my-component [--named-wasm named.wasm] [--diagnostics symbols.json]
 cargo run -p golem-size-analysis -- collect --sdk ts --wasm app.preinitialized.wasm \
-  --guest agent_guest.wasm --dynamic app.dynamic.wasm --module-map modules.json
+  --guest agent_guest.wasm --module main.js --module-map modules.json
 cargo run -p golem-size-analysis -- collect --sdk go --wasm release.wasm \
   --named-wasm debug.wasm --user example.com/app
 ```
 
 The buckets add up to the uploaded file:
 
-- TS and Effect: the guest is the runtime; the bytes the injection added are split into SDK,
-  dependencies and user code in proportion to the rollup module map; the snapshot is the data
-  growth of the preinitialized component over its `.dynamic.wasm` input.
+- TS and Effect: the collector injects the bundle into a temporary guest copy to construct a
+  reference, without requiring a `.dynamic.wasm` build output. The data-section bytes added to this reference
+  are split into SDK, dependencies and user code in proportion to the rollup module map. The
+  snapshot bucket is the uploaded component's data growth over that reference. It excludes source
+  storage already assigned to the bundle; it is not the entire memory image written by Wizer.
+  Changes to names or other sections during injection remain in the runtime bucket, not the bundle.
+  Optimized builds pass source to the initializer directly, so the reference is not their input.
+  Quick builds match the injected reference and have no snapshot bucket.
 - Scala: runtime, one bundle bucket and the snapshot.
 - Rust: twiggy crate attribution of a named build (`--named-wasm`, or the uploaded file itself
   when it keeps names), scaled to the uploaded file when they differ. A trait impl belongs to the

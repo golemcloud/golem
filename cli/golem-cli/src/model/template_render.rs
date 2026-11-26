@@ -220,6 +220,7 @@ impl<C: Serialize> TemplateRender<C> for app_raw::PreinitializeJs {
     fn render(&self, env: &Environment, ctx: &C) -> Result<Self, Error> {
         Ok(app_raw::PreinitializeJs {
             preinitialize_js: self.preinitialize_js.render(env, ctx)?,
+            module: self.module.render(env, ctx)?,
             into: self.into.render(env, ctx)?,
         })
     }

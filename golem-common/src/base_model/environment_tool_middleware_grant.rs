@@ -19,7 +19,7 @@ use crate::base_model::tool_middleware_release::{
     ToolMiddlewareReleaseMetadata, ToolMiddlewareReleaseReference,
 };
 use crate::{declare_enums, declare_structs, newtype_uuid};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 
 newtype_uuid!(EnvironmentToolMiddlewareGrantId);
 declare_enums! {
@@ -28,7 +28,12 @@ declare_enums! {
         Deleted
     }
 }
-declare_structs! {
+
+crate::declare_datetime_struct! {
+    crate::base_model::environment_tool_middleware_grant::EnvironmentToolMiddlewareGrant,
+    [],
+    [],
+    [],
     pub struct EnvironmentToolMiddlewareGrant {
         pub id: EnvironmentToolMiddlewareGrantId,
         pub environment_id: EnvironmentId,
@@ -37,11 +42,13 @@ declare_structs! {
         pub automatic: bool,
         pub follow_coordinates: bool,
         pub lifecycle: EnvironmentToolMiddlewareGrantLifecycle,
-        pub created_at: DateTime<Utc>,
+        pub created_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
         pub created_by: AccountId,
-        pub state_changed_at: DateTime<Utc>,
+        pub state_changed_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
         pub state_changed_by: AccountId,
     }
+}
+declare_structs! {
     pub struct EnvironmentToolMiddlewareGrantWithDetails {
         pub grant: EnvironmentToolMiddlewareGrant,
         pub release: ToolMiddlewareReleaseMetadata,
@@ -65,4 +72,5 @@ declare_structs! {
     pub struct EnvironmentToolMiddlewareValidationResult {
         pub publication_plan: Vec<ToolMiddlewarePublicationPlanEntry>
     }
+
 }

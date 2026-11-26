@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::Utc;
 use golem_common::config::{DbConfig, DbSqliteConfig};
 use golem_common::model::card::{Card, CardId, CardManagedByRuntimeDerived, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
@@ -42,6 +41,7 @@ use golem_service_base::clients::registry::{
 use golem_service_base::config::BlobStorageConfig;
 use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::repo::Blob;
+use jiff::Timestamp;
 use tempfile::TempDir;
 use test_r::{test, timeout};
 use tokio::task::JoinSet;
@@ -54,7 +54,7 @@ fn runtime_card(card_id: CardId, parent_ids: Vec<CardId>) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -318,7 +318,7 @@ async fn runtime_card_grpc_lifecycle_is_shared_across_executor_clients() {
     );
 
     let mut conflicting = card.clone().into_concrete().unwrap();
-    conflicting.expires_at = Some(Utc::now() + chrono::Duration::days(1));
+    conflicting.expires_at = Some(Timestamp::now() + jiff::SignedDuration::from_hours(24));
     assert!(matches!(
         writer
             .create_runtime_card(conflicting.into(), provenance)
@@ -492,7 +492,7 @@ async fn runtime_card_creation_rejects_an_expired_parent() {
 
     let parent_id = CardId::new();
     let mut parent = runtime_card(parent_id, Vec::new()).into_concrete().unwrap();
-    parent.expires_at = Some(Utc::now() + chrono::Duration::milliseconds(100));
+    parent.expires_at = Some(Timestamp::now() + jiff::SignedDuration::from_millis(100));
     client
         .create_runtime_card(parent.into(), runtime_card_provenance(1))
         .await

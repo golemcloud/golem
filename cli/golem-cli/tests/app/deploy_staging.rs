@@ -417,6 +417,10 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
     let layer = package.blob(layer_digest).unwrap();
 
     let archive = ctx.cwd_path_join("golem-package.tar");
+    let (_oci, host) = crate::package::start_registry().await?;
+    let reference = format!("{host}/packages/tool:1.0");
+    let oci_source = format!("oci://{reference}");
+    crate::package::push_package(&reference, &std::fs::read(&archive)?).await?;
     let in_root = "packages/golem-package.tar";
     let first_outside = "../first/golem-package.tar";
     let second_outside = "../second/golem-package.tar";
@@ -450,6 +454,7 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
         (Some(in_root), Some(in_root), true),
         (Some(first_outside), Some("golem-package.tar"), true),
         (Some(second_outside), Some("golem-package.tar"), false),
+        (Some(oci_source.as_str()), Some(oci_source.as_str()), true),
     ] {
         if let Some(source) = source {
             fs::write_str(&manifest_path, format!("{manifest}{owner}"))?;
@@ -464,10 +469,17 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
                 } else {
                     source.split('/').collect()
                 };
-            assert_eq!(
-                lock["packages"]["package-deploy"]["source"].as_str(),
-                Some(fs::path_to_str(&locked_source)?)
-            );
+            let pin = &lock["packages"]["package-deploy"];
+            if source == oci_source {
+                assert_eq!(pin["source"].as_str(), Some(oci_source.as_str()));
+                assert_eq!(pin["digest"].as_str(), Some(package.digest()));
+                std::fs::remove_dir_all(ctx.config_dir.path().join("package-cache"))?;
+            } else {
+                assert_eq!(
+                    pin["source"].as_str(),
+                    Some(fs::path_to_str(&locked_source)?)
+                );
+            }
             assert!(ctx.cli([cmd::BUILD, flag::YES]).await.success_or_dump());
         } else {
             fs::write_str(
@@ -577,6 +589,7 @@ async fn installed_tool_deploy_uploads_the_original_package_layer() -> anyhow::R
             local_result = Some(result);
         }
     }
+
     Ok(())
 }
 

@@ -130,6 +130,8 @@ pub struct GolemConfig {
     pub agent_status_checkpoint: AgentStatusCheckpointConfig,
     #[serde(default)]
     pub invocation_results: InvocationResultsConfig,
+    #[serde(with = "humantime_serde")]
+    pub standalone_tool_invocation_retention: Duration,
     pub scheduler: SchedulerConfig,
     pub public_worker_api: WorkerServiceGrpcConfig,
     pub memory: MemoryConfig,
@@ -297,6 +299,11 @@ impl SafeDisplay for GolemConfig {
             "{}",
             self.invocation_results.to_safe_string_indented()
         );
+        let _ = writeln!(
+            &mut result,
+            "standalone_tool_invocation_retention: {:?}",
+            self.standalone_tool_invocation_retention
+        );
         let _ = writeln!(&mut result, "scheduler:");
         let _ = writeln!(&mut result, "{}", self.scheduler.to_safe_string_indented());
         let _ = writeln!(&mut result, "public worker api:");
@@ -445,6 +452,7 @@ impl Default for GolemConfig {
             agent_status_flush: AgentStatusFlushConfig::default(),
             agent_status_checkpoint: AgentStatusCheckpointConfig::default(),
             invocation_results: InvocationResultsConfig::default(),
+            standalone_tool_invocation_retention: Duration::from_secs(7 * 24 * 60 * 60),
             public_worker_api: WorkerServiceGrpcConfig::default(),
             memory: MemoryConfig::default(),
             filesystem_storage: FilesystemStorageConfig::default(),

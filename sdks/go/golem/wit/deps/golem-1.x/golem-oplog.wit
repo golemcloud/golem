@@ -112,13 +112,22 @@ interface oplog {
         instance-id: uuid,
         /// Whether the agent is a never-live sandbox. A marked agent reports the
         /// `sandboxed` status.
-        never-live: bool
+        never-live: bool,
+        standalone-tool: option<standalone-tool-invocation>,
+    }
+
+    record standalone-tool-invocation {
+        tool-name: string,
+        command-path: list<string>,
+        invocation-id: uuid,
+        caller: public-caller,
     }
 
     enum owner-kind {
         component-agent,
         ephemeral-external-tool,
         oplog-processor,
+        standalone-tool,
     }
 
     /// Identifies a durable call by its place in a call order.
@@ -702,6 +711,26 @@ interface oplog {
         actual: replay-step,
         /// The identity fields on which the two steps differ; empty when the steps differ in kind
         mismatched: list<start-identity-field>,
+        /// Where the replay that diverged started; none for a divergence outside a recovery replay
+        replay-start: option<replay-start>,
+    }
+
+    /// Where a recovery replay started
+    variant replay-start {
+        /// From a loaded snapshot
+        snapshot(replay-snapshot-start),
+        /// Without a snapshot, after the recovery rejected the automatic snapshots at these oplog
+        /// indexes, in ascending order; empty when no snapshot was involved
+        full-replay(list<oplog-index>),
+    }
+
+    /// A recovery replay from a loaded snapshot
+    record replay-snapshot-start {
+        /// The oplog index of the loaded snapshot
+        snapshot-index: oplog-index,
+        /// The oplog indexes of the automatic snapshots that the recovery rejected before it, in
+        /// ascending order
+        rejected-snapshots: list<oplog-index>,
     }
 
     /// One step of a replay
@@ -945,7 +974,15 @@ interface oplog {
         instance-id: uuid,
         /// Whether the agent is a never-live sandbox. A marked agent reports the
         /// `sandboxed` status.
-        never-live: bool
+        never-live: bool,
+        standalone-tool: option<raw-standalone-tool-invocation>,
+    }
+
+    record raw-standalone-tool-invocation {
+        tool-name: string,
+        command-path: list<string>,
+        invocation-id: uuid,
+        caller: list<u8>,
     }
 
     record raw-start-parameters {

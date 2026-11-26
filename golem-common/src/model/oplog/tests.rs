@@ -826,7 +826,7 @@ fn test_card(card_id: CardId) -> Card {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -841,9 +841,7 @@ fn phase_four_fixture_card() -> Card {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::DateTime::parse_from_rfc3339("2026-01-02T03:04:05Z")
-            .unwrap()
-            .to_utc(),
+        created_at: "2026-01-02T03:04:05Z".parse().unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -872,6 +870,7 @@ fn create_serialization_poem_serde_equivalence() {
     use crate::model::environment::EnvironmentId;
 
     let entry = PublicOplogEntry::Create(CreateParams {
+        standalone_tool: None,
         owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         timestamp: Timestamp::now_utc().rounded(),
         agent_id: AgentId::from_parts(7, 1),
@@ -1027,6 +1026,7 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
             let entry = OplogEntry::Create {
                 timestamp: Timestamp::now_utc().rounded(),
                 parameters: Box::new(CreateParameters {
+                    standalone_tool: None,
                     component_id,
                     agent_type_name: agent_type_name.clone(),
                     canonical_key,
@@ -1066,6 +1066,7 @@ fn authoritative_create_roundtrips_independent_identity_and_optional_keys() {
                 OwnerKind::ComponentAgent,
                 OwnerKind::EphemeralExternalTool,
                 OwnerKind::OplogProcessor,
+                OwnerKind::StandaloneTool,
             ] {
                 let mut entry = entry.clone();
                 let OplogEntry::Create { parameters, .. } = &mut entry else {

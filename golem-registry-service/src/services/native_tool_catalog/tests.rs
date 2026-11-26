@@ -18,7 +18,7 @@ fn plan_exposes_ambient_identity_metadata_and_defaults() {
         host_tool_id: HostToolId::try_from("native-test".to_string()).unwrap(),
         implementation_version: "1".to_string(),
     };
-    let now = chrono::Utc::now();
+    let now = jiff::Timestamp::now();
     let release = ToolRelease {
         id: release_id,
         owner_account_id: account_id,

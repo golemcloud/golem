@@ -24,13 +24,13 @@ use crate::repo::oauth2_token::OAuth2TokenRepo;
 use crate::repo::oauth2_webflow_state::OAuth2WebflowStateRepo;
 use anyhow::anyhow;
 use applying::Apply;
-use chrono::{Duration, Utc};
 use golem_common::model::account::{AccountCreation, AccountEmail, AccountId};
 use golem_common::model::auth::TokenWithSecret;
 use golem_common::model::login::{OAuth2Provider, OAuth2WebflowData, OAuth2WebflowStateId};
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::repo::RepoError;
+use jiff::{SignedDuration, Timestamp};
 use std::sync::Arc;
 use tap::Pipe;
 
@@ -76,7 +76,7 @@ pub struct OAuth2Service {
     token_service: Arc<TokenService>,
     oauth2_token_repo: Arc<dyn OAuth2TokenRepo>,
     oauth2_web_flow_state_repo: Arc<dyn OAuth2WebflowStateRepo>,
-    webflow_state_expiry: Duration,
+    webflow_state_expiry: SignedDuration,
     cli_redirect: url::Url,
     allowed_redirect_domains: Vec<String>,
 }
@@ -96,7 +96,7 @@ impl OAuth2Service {
             token_service,
             oauth2_token_repo,
             oauth2_web_flow_state_repo,
-            webflow_state_expiry: Duration::from_std(config.webflow_state_expiry)?,
+            webflow_state_expiry: SignedDuration::try_from(config.webflow_state_expiry)?,
             cli_redirect: config.cli_redirect.clone(),
             allowed_redirect_domains: config.allowed_redirect_domains.clone(),
         })
@@ -192,7 +192,7 @@ impl OAuth2Service {
         code: String,
     ) -> Result<WebflowCallbackAction, OAuth2Error> {
         self.oauth2_web_flow_state_repo
-            .delete_expired((Utc::now() - self.webflow_state_expiry).into())
+            .delete_expired((Timestamp::now() - self.webflow_state_expiry).into())
             .await?;
 
         let state: OAuth2WebflowState = self
@@ -240,7 +240,7 @@ impl OAuth2Service {
         state_id: &OAuth2WebflowStateId,
     ) -> Result<OAuth2WebflowState, OAuth2Error> {
         self.oauth2_web_flow_state_repo
-            .delete_expired((Utc::now() - self.webflow_state_expiry).into())
+            .delete_expired((Timestamp::now() - self.webflow_state_expiry).into())
             .await?;
 
         let state: OAuth2WebflowState = self
@@ -328,10 +328,12 @@ impl OAuth2Service {
         external_login: ExternalLogin,
         account_id: AccountId,
     ) -> Result<TokenWithSecret, OAuth2Error> {
-        let expiration = Utc::now()
+        let expiration = Timestamp::now()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
             // Ten years.
-            .checked_add_months(chrono::Months::new(10 * 12))
-            .ok_or(anyhow!("Failed to calculate token expiry"))?;
+            .checked_add(jiff::Span::new().years(10))
+            .map_err(|err| anyhow!("Failed to calculate token expiry: {err}"))?
+            .timestamp();
 
         let token_with_secret = self
             .token_service

@@ -606,14 +606,15 @@ class StreamRuntimeTest extends munit.FunSuite {
     intercept[BridgeException](codec.encode(ListValue(List(stream, stream))))
     assertEquals(codec.decode(codec.encode(value)), value)
   }
-  test("prepared recursive schemas share no invocation state and retain numeric restrictions") {
+  test("prepared recursive schemas share no invocation state and leave numeric restrictions to the server") {
     val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"ref","value":{"id":"node"}},"defs":[{"id":"node","body":{"kind":"record","value":{"fields":[{"name":"n","body":{"kind":"u8","value":{"restrictions":{"min":{"kind":"unsigned","value":10},"max":{"kind":"unsigned","value":20}}}}},{"name":"children","body":{"kind":"list","value":{"element":{"kind":"ref","value":{"id":"node"}}}}}]}}}]}""")
     val leaf = RecordValue(List(U8Value(10), ListValue(Nil)))
     val value = RecordValue(List(U8Value(20), ListValue(List(leaf))))
     val calls = (0 until 8).map(_ => scala.concurrent.Future(codec.decode(codec.encode(value)))(scala.concurrent.ExecutionContext.global))
     calls.foreach(call => assertEquals(scala.concurrent.Await.result(call, scala.concurrent.duration.Duration(10, "seconds")), value))
-    for (invalid <- List(9, 21)) {
-      intercept[BridgeException](codec.encode(RecordValue(List(U8Value(15), ListValue(List(RecordValue(List(U8Value(invalid), ListValue(Nil)))))))))
+    for (restricted <- List(9, 21)) {
+      val outside = RecordValue(List(U8Value(15), ListValue(List(RecordValue(List(U8Value(restricted), ListValue(Nil)))))))
+      assertEquals(codec.decode(codec.encode(outside)), outside)
     }
     assertEquals(codec.decode(codec.encode(value)), value)
   }
@@ -738,6 +739,7 @@ class StreamRuntimeTest extends munit.FunSuite {
     def acceptance(attempt: String = "attempt", agent: Json = Json.string(agentId), acceptedKey: String = key): Json =
       Json.parse(StreamSessionProtocol.message("invocationAccepted", Vector(
         "attemptId" -> Json.string(attempt),
+        "invocationId" -> Json.string(s"weather.$acceptedKey"),
         "agentId" -> agent,
         "idempotencyKey" -> Json.string(acceptedKey), "sessionToken" -> Json.string("session"), "mappings" -> Json.arr(Vector.empty)))).toOption.get
     val message = acceptance()
@@ -1120,7 +1122,10 @@ class StreamRuntimeTest extends munit.FunSuite {
     val encoded = codec.encode(value)
     assertEquals(encoded.render, """{"kind":"record","value":{"fields":[{"kind":"s64","value":"-9223372036854775808"},{"kind":"binary","value":{"bytes":[0,255],"mimeType":"application/octet-stream"}}]}}""")
     assertEquals(codec.decode(encoded), value)
-    intercept[BridgeException](codec.decode(Json.parse("""{"kind":"record","value":{"fields":[{"kind":"s64","value":"1"},{"kind":"binary","value":{"bytes":[0],"mimeType":"application/octet-stream"}}]}}""").toOption.get))
+    assertEquals(
+      codec.decode(Json.parse("""{"kind":"record","value":{"fields":[{"kind":"s64","value":"1"},{"kind":"binary","value":{"bytes":[0],"mimeType":"text/plain"}}]}}""").toOption.get),
+      SchemaValue.RecordValue(List(SchemaValue.S64Value(1), SchemaValue.BinaryValue(Vector[Byte](0), Some("text/plain"))))
+    )
   }
 
   test("config application JSON preserves reserved-looking fields and nested sums") {
@@ -1160,22 +1165,21 @@ class StreamRuntimeTest extends munit.FunSuite {
     val decoded = BridgeProtocol.decodeAgentInvocationResult(response).toOption.get.result.get
     assertEquals(decoded, SchemaValue.U32Value(5))
     val expected = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u32","value":{"restrictions":{"min":{"kind":"unsigned","value":10}}}}}""")
-    intercept[BridgeException](expected.encode(decoded))
+    assertEquals(expected.decode(expected.encode(decoded)), decoded)
   }
 
-  test("public codec enforces quantity bounds restrictions unions and integer boundaries") {
+  test("public codec checks quantity units, unions and integer boundaries, not restrictions") {
     val quantity = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"quantity","value":{"spec":{"baseUnit":"m","allowedSuffixes":["cm"],"min":{"mantissa":1,"scale":0,"unit":"m"},"max":{"mantissa":200,"scale":0,"unit":"m"}}}}}""")
     val q = SchemaValue.QuantityValue(150, 0, "cm")
     assertEquals(quantity.decode(quantity.encode(q)), q)
-    intercept[BridgeException](quantity.decode(Json.parse("""{"kind":"quantity","value":{"mantissa":"201","scale":0,"unit":"cm"}}""").toOption.get))
+    assertEquals(
+      quantity.decode(Json.parse("""{"kind":"quantity","value":{"mantissa":"201","scale":0,"unit":"cm"}}""").toOption.get),
+      SchemaValue.QuantityValue(201, 0, "cm")
+    )
     intercept[BridgeException](quantity.decode(Json.parse("""{"kind":"quantity","value":{"mantissa":"1","scale":0,"unit":"km"}}""").toOption.get))
 
-    val overflowing = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"quantity","value":{"spec":{"baseUnit":"m","allowedSuffixes":[],"min":{"mantissa":1,"scale":-2147483648,"unit":"m"}}}}}""")
-    intercept[BridgeException](overflowing.decode(Json.parse("""{"kind":"quantity","value":{"mantissa":"1","scale":2147483647,"unit":"m"}}""").toOption.get))
-
     val bounded = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u32","value":{"restrictions":{"min":{"kind":"unsigned","value":10},"max":{"kind":"unsigned","value":20}}}}}""")
-    assertEquals(bounded.decode(Json.parse("""{"kind":"u32","value":15}""").toOption.get), SchemaValue.U32Value(15))
-    intercept[BridgeException](bounded.decode(Json.parse("""{"kind":"u32","value":9}""").toOption.get))
+    assertEquals(bounded.decode(Json.parse("""{"kind":"u32","value":9}""").toOption.get), SchemaValue.U32Value(9))
 
     val union = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"union","value":{"spec":{"branches":[{"tag":"command","body":{"kind":"string","value":{}},"discriminator":{"rule":"prefix","value":{"prefix":"cmd:"}}}]}}}}""")
     val unionValue = SchemaValue.UnionValue("command", SchemaValue.StringValue("cmd:run"))
@@ -1656,9 +1660,9 @@ fn guest_agent_client_surface_targets_scala_sdk_rpc() {
     assert!(client_source.contains(
         "_root_.golem.runtime.rpc.AgentIdentity.create(agentTypeName, constructorPayload, options)"
     ));
-    assert!(client_source.contains(
-        "def getById(agentId: _root_.golem.AgentId): _root_.scala.concurrent.Future[CounterAgentRemote]"
-    ));
+    assert!(
+        client_source.contains("def getById(agentId: _root_.golem.AgentId): CounterAgentRemote =")
+    );
     assert!(client_source.contains(
         "def agentId(): _root_.scala.concurrent.Future[_root_.golem.AgentId] = resolved.agentId()"
     ));
@@ -1887,7 +1891,7 @@ fn guest_durable_constructors_use_agent_identity() {
         "def create(name: _root_.scala.Predef.String, keyed: _root_.scala.Boolean = false, region: _root_.scala.Option[_root_.scala.Predef.String] = _root_.scala.None, env: _root_.scala.Predef.Map[_root_.scala.Predef.String, _root_.scala.Predef.String] = _root_.scala.Predef.Map.empty): _root_.scala.concurrent.Future[DurableAgentRemote] =",
         "_root_.golem.runtime.rpc.CreateOptions(keyed, agentConfig, env)",
         "_root_.golem.runtime.rpc.AgentIdentity.create(agentTypeName, constructorPayload, options)",
-        "def getById(agentId: _root_.golem.AgentId): _root_.scala.concurrent.Future[DurableAgentRemote] =",
+        "def getById(agentId: _root_.golem.AgentId): DurableAgentRemote =",
         "_root_.golem.runtime.rpc.AgentIdentity.getById(agentTypeName, agentId)",
         "def agentId(): _root_.scala.concurrent.Future[_root_.golem.AgentId] = resolved.agentId()",
     ] {
