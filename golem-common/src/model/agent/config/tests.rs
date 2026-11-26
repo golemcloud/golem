@@ -15,56 +15,26 @@
 use super::*;
 use crate::model::agent::OwnerKind;
 use crate::model::component_metadata::{ComponentMetadata, KnownExports};
-use crate::schema::agent::{AgentConfigDeclarationSchema, ComponentConfigSchema};
-use crate::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
+use crate::schema::SchemaValue;
 use test_r::test;
 
 #[test]
-fn enrich_component_baseline_config_uses_component_schema_without_agent_type() {
-    let type_id = TypeId::new("baseline-value");
+fn non_agent_owners_cannot_enrich_typed_config() {
     let metadata = ComponentMetadata::from_parts(
         KnownExports::default(),
         Vec::new(),
         Vec::new(),
         BTreeMap::new(),
-    )
-    .with_component_config(
-        ComponentConfigSchema {
-            schema: SchemaGraph {
-                defs: vec![SchemaTypeDef {
-                    id: type_id.clone(),
-                    name: Some("BaselineValue".to_string()),
-                    body: SchemaType::string(),
-                }],
-                root: SchemaType::record(Vec::new()),
-            },
-            declarations: vec![AgentConfigDeclarationSchema {
-                source: AgentConfigSource::Local,
-                path: vec!["baseline".to_string(), "value".to_string()],
-                value_type: SchemaType::ref_to(type_id.clone()),
-                default_value: None,
-            }],
-        },
-        Default::default(),
     );
 
     for owner_kind in [OwnerKind::EphemeralExternalTool, OwnerKind::OplogProcessor] {
-        let enriched = UntypedAgentConfigEntry {
+        let error = UntypedAgentConfigEntry {
             path: vec!["baseline".to_string(), "value".to_string()],
             value: SchemaValue::String("configured".to_string()),
         }
         .enrich_with_type(&metadata, owner_kind, None)
-        .expect("component-baseline config must not require an agent type");
-
-        assert_eq!(
-            enriched.value.root_type(),
-            &SchemaType::ref_to(type_id.clone())
-        );
-        assert_eq!(
-            enriched.value.value(),
-            &SchemaValue::String("configured".to_string())
-        );
-        assert_eq!(enriched.value.graph().defs.len(), 1);
+        .unwrap_err();
+        assert_eq!(error, "Typed config requires an agent owner");
     }
 }
 

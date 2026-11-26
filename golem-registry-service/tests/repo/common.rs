@@ -524,7 +524,6 @@ fn package_test_config(wasm: String) -> golem_package::PackageConfig {
                     tools: vec![],
                     tool_middlewares: vec![],
                 },
-                config_schema: Default::default(),
                 provision: Default::default(),
                 agents: Default::default(),
                 tools: Default::default(),

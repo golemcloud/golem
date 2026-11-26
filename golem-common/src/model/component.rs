@@ -175,7 +175,6 @@ impl ComponentDto {
                 .map(|agent_type| (agent_type.type_name.0.clone(), agent_type.clone().into()))
                 .collect(),
             component_config: diff::ComponentConfig {
-                schema: metadata.config_schema().clone(),
                 initial_permissions: {
                     let card = &metadata.component_provision_config().initial_permissions;
                     diff::AgentTypeInitialPermission {
@@ -185,26 +184,6 @@ impl ComponentDto {
                         upper_negative: card.upper_negative.clone(),
                     }
                 },
-                config: metadata
-                    .component_provision_config()
-                    .config
-                    .iter()
-                    .map(|entry| {
-                        let crate::model::component_metadata::ConfigBindingSource::Static(value) =
-                            &entry.value_source;
-                        (
-                            entry.path.join("."),
-                            crate::model::json::NormalizedJsonValue::new(
-                                golem_schema::schema::render::to_json_value(
-                                    value.graph(),
-                                    value.root_type(),
-                                    value.value(),
-                                )
-                                .unwrap_or_default(),
-                            ),
-                        )
-                    })
-                    .collect(),
                 env: metadata.component_provision_config().env.clone(),
                 files_by_path: metadata
                     .component_provision_config()
@@ -369,30 +348,52 @@ mod tests {
             wasm_hash,
             package_metadata: None,
         };
-        dto.metadata.component_provision_config.config =
-            vec![crate::model::component_metadata::ConfigBinding {
-                path: vec!["enabled".into()],
-                value_source: crate::model::component_metadata::ConfigBindingSource::Static(
-                    crate::schema::TypedSchemaValue::new(
-                        SchemaGraph::anonymous(crate::schema::SchemaType::bool()),
-                        crate::schema::SchemaValue::Bool(true),
+        let agent_name = crate::model::agent::AgentTypeName("ConfigOwner".into());
+        dto.metadata.agent_type_provision_configs.insert(
+            agent_name.clone(),
+            crate::model::component_metadata::AgentTypeProvisionConfig {
+                initial_permissions: crate::model::component::AgentTypeInitialPermissions::default(
+                )
+                .to_polymorphic_card(),
+                env: BTreeMap::new(),
+                plugins: vec![],
+                files: vec![],
+                config: vec![crate::model::component_metadata::ConfigBinding {
+                    path: vec!["enabled".into()],
+                    value_source: crate::model::component_metadata::ConfigBindingSource::Static(
+                        crate::schema::TypedSchemaValue::new(
+                            SchemaGraph::anonymous(crate::schema::SchemaType::bool()),
+                            crate::schema::SchemaValue::Bool(true),
+                        ),
                     ),
-                ),
-                origins: vec![],
-            }];
+                    origins: vec![],
+                }],
+            },
+        );
         let expected = diff::Component {
             wasm_hash,
             package_metadata: None,
             agent_types: BTreeMap::new(),
-            component_config: diff::ComponentConfig {
-                config: BTreeMap::from([(
-                    "enabled".into(),
-                    NormalizedJsonValue::new(serde_json::json!(true)),
-                )]),
-                ..Default::default()
-            }
-            .into(),
-            agent_type_provision_configs: BTreeMap::new(),
+            component_config: diff::ComponentConfig::default().into(),
+            agent_type_provision_configs: BTreeMap::from([(
+                "ConfigOwner".into(),
+                diff::AgentTypeProvisionConfig {
+                    config: BTreeMap::from([(
+                        "enabled".into(),
+                        NormalizedJsonValue::new(serde_json::json!(true)),
+                    )]),
+                    env: BTreeMap::new(),
+                    files_by_path: BTreeMap::new(),
+                    plugins_by_grant_id: BTreeMap::new(),
+                    initial_permissions: diff::AgentTypeInitialPermission {
+                        lower_positive: vec![],
+                        lower_negative: vec![],
+                        upper_positive: vec![],
+                        upper_negative: vec![],
+                    },
+                }
+                .into(),
+            )]),
             tool_deployment_configs: BTreeMap::from([(
                 tool_name.as_str().to_string(),
                 diff::ToolDeploymentConfig {
@@ -416,7 +417,13 @@ mod tests {
         );
 
         // Origins do not contribute to deployment identity.
-        for binding in &mut dto.metadata.component_provision_config.config {
+        for binding in &mut dto
+            .metadata
+            .agent_type_provision_configs
+            .get_mut(&agent_name)
+            .unwrap()
+            .config
+        {
             binding
                 .origins
                 .push(crate::model::component_metadata::ConfigBindingOrigin {
@@ -432,13 +439,17 @@ mod tests {
             dto.to_diffable().unwrap().hash().unwrap(),
             expected.hash().unwrap()
         );
-        dto.metadata.component_provision_config.config[0].value_source =
-            crate::model::component_metadata::ConfigBindingSource::Static(
-                crate::schema::TypedSchemaValue::new(
-                    SchemaGraph::anonymous(crate::schema::SchemaType::bool()),
-                    crate::schema::SchemaValue::Bool(false),
-                ),
-            );
+        dto.metadata
+            .agent_type_provision_configs
+            .get_mut(&agent_name)
+            .unwrap()
+            .config[0]
+            .value_source = crate::model::component_metadata::ConfigBindingSource::Static(
+            crate::schema::TypedSchemaValue::new(
+                SchemaGraph::anonymous(crate::schema::SchemaType::bool()),
+                crate::schema::SchemaValue::Bool(false),
+            ),
+        );
         assert_ne!(
             dto.to_diffable().unwrap().hash().unwrap(),
             expected.hash().unwrap()

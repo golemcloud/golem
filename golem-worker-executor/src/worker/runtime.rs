@@ -130,19 +130,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .collect()
             }
             ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
-                let schema = owner_component_metadata.metadata.config_schema();
-                effective_agent_config(
-                    worker_metadata.config,
-                    owner_component_metadata
-                        .metadata
-                        .component_provision_config()
-                        .config
-                        .clone(),
-                    &schema.declarations,
-                )
-                .into_iter()
-                .map(|(path, value)| TypedAgentConfigEntry { path, value })
-                .collect()
+                Vec::new()
             }
         };
         if let Some(files) =
