@@ -19,22 +19,24 @@ use crate::durable_host::http::transport::{
     CapturedRequestBody, InMemoryHttpTransport, RequestBodyTiming, ScriptedHttpExchange,
 };
 use crate::durable_host::p3::http::send::driver::{DriverExit, drive_send};
-use crate::durable_host::p3::http::test_support::FrameTestOplog;
+use crate::durable_host::p3::http::test_support::{FrameTestOplog, TestHttpCtx};
 use crate::services::oplog::OplogError;
 use async_trait::async_trait;
 use futures::FutureExt;
 use golem_common::model::{Predicate, PredicateValue, RetryPolicy, RetryPolicyState, Timestamp};
 use golem_service_base::error::worker_executor::InterruptKind;
 use http_body_util::{Empty, Full, StreamBody};
+use std::collections::HashMap;
 use std::time::Duration;
 use test_r::{test, timeout};
+use wasmtime_wasi_http::WasiHttpView;
 
 fn physical_request(
     guest_headers: &HashMap<String, Vec<Vec<u8>>>,
     body: UnsyncBoxBody<Bytes, ErrorCode>,
     recording_enabled: bool,
 ) -> PhysicalSendRequest<crate::workerctx::default::Context> {
-    let mut hooks: [(); 0] = [];
+    let mut store = wasmtime::Store::new(&wasmtime::Engine::default(), TestHttpCtx::default());
     let headers = guest_headers
         .iter()
         .flat_map(|(name, values)| {
@@ -46,21 +48,48 @@ fn physical_request(
             })
         })
         .collect::<HeaderMap>();
-    let mut fields = wasmtime_wasi_http::FieldMap::new_immutable(&mut hooks, headers);
+    let fields =
+        wasmtime_wasi_http::FieldMap::new_immutable(store.data_mut().http().hooks, headers);
+    let (request, transmission) = wasmtime_wasi_http::p3::Request::new(
+        http::Method::POST,
+        Some(http::uri::Scheme::HTTP),
+        Some(http::uri::Authority::from_static("example.com")),
+        Some(http::uri::PathAndQuery::from_static("/charge/93")),
+        fields,
+        None,
+        body,
+    );
+    let req = store.data_mut().table.push(request).unwrap();
     let position = crate::durable_host::IdempotencyKeyPosition {
         parent: golem_common::model::InvocationId(
             Uuid::parse_str("7b536e18-3ac7-4cf1-9931-b552f4ef728d").unwrap(),
         ),
         logical: Some(OplogIndex::from_u64(317)),
     };
-    let managed = golem_managed_http_headers(
+    let managed = golem_outgoing_http_headers(
+        store.data().table.get(&req).unwrap(),
         vec![("traceparent".to_string(), "trace-charge-93".to_string())],
         true,
-        guest_headers,
         OplogIndex::from_u64(941),
+        &position,
+    );
+    apply_headers_to_request_resource(
+        store.data_mut().http(),
+        &Resource::new_borrow(req.rep()),
+        &managed,
     )
-    .resolve(|start| position.derive(start));
-    apply_managed_http_headers(&mut fields, &mut hooks, 4096, &managed).unwrap();
+    .unwrap();
+    let request = store.data_mut().table.delete(req).unwrap();
+    let (request, options) = request.into_http(&mut store, async { Ok(()) }).unwrap();
+    assert!(matches!(transmission.now_or_never(), Some(Ok(()))));
+    let (head, body) = request.into_parts();
+    let mut hooks = DurableHttpHooks {
+        connection_pool: None,
+        is_replay: Arc::new(AtomicBool::new(false)),
+    };
+    let body = body
+        .map_err(move |error| hooks.transport_error_to_p3(&error))
+        .boxed_unsync();
 
     PhysicalSendRequest {
         pool: None,
@@ -68,10 +97,10 @@ fn physical_request(
             connection_pool: None,
             is_replay: Arc::new(AtomicBool::new(false)),
         },
-        method: http::Method::POST,
-        uri: http::Uri::from_static("http://example.com/charge/93"),
-        version: http::Version::HTTP_11,
-        headers: (*fields).clone(),
+        method: head.method,
+        uri: head.uri,
+        version: head.version,
+        headers: head.headers,
         body: DurableRequestBody::new(
             body,
             FrameTestOplog::new(),
@@ -79,7 +108,7 @@ fn physical_request(
             recording_enabled,
             Default::default(),
         ),
-        options: None,
+        options: options.map(|options| *options),
         final_transmission_tx: oneshot::channel().0,
         _phantom: PhantomData,
     }
@@ -102,7 +131,7 @@ fn response(status: u16, timing: RequestBodyTiming) -> ScriptedHttpExchange {
 
 #[test]
 #[timeout("10s")]
-async fn physical_attempt_preserves_prepared_guest_key() {
+async fn physical_attempt_preserves_guest_key() {
     let physical = physical_request(
         &HashMap::from([(
             "idempotency-key".to_string(),

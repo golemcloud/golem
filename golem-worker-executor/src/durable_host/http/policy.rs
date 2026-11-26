@@ -20,7 +20,6 @@ use golem_common::model::IdempotencyKey;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::types::SerializableHttpErrorCode;
 use http::{HeaderName, HeaderValue};
-use std::collections::HashMap;
 use wasmtime_wasi_http::FieldMap;
 
 /// Classifies HTTP failures independently of the generated WASI bindings.
@@ -180,16 +179,16 @@ pub(crate) struct ManagedHttpHeaders {
 
 /// Selects the managed headers and whether the send needs a derived key.
 /// A guest key or disabled injection suppresses derivation.
-pub(crate) fn golem_managed_http_headers(
+pub(crate) fn golem_managed_http_headers<'a>(
     trace_headers: Vec<(String, String)>,
     set_outgoing_http_idempotency_key: bool,
-    guest_headers: &HashMap<String, Vec<Vec<u8>>>,
+    mut guest_header_names: impl Iterator<Item = &'a str>,
     start_index: OplogIndex,
 ) -> ManagedHttpHeaders {
     ManagedHttpHeaders {
         headers: trace_headers,
         idempotency_key_start: (set_outgoing_http_idempotency_key
-            && !guest_headers.contains_key("idempotency-key"))
+            && !guest_header_names.any(|name| name == "idempotency-key"))
         .then_some(start_index),
     }
 }
@@ -279,15 +278,11 @@ mod tests {
         let mut hooks: [(); 0] = [];
         let mut request = HeaderMap::new();
         request.insert("idempotency-key", HeaderValue::from_static("guest-key"));
-        let guest_headers = std::collections::HashMap::from([(
-            "idempotency-key".to_string(),
-            vec![b"guest-key".to_vec()],
-        )]);
         let mut request = FieldMap::new_immutable(&mut hooks, request);
         let managed = golem_managed_http_headers(
             vec![("traceparent".to_string(), "trace-value".to_string())],
             true,
-            &guest_headers,
+            request.keys().map(|name| name.as_str()),
             OplogIndex::from_u64(41),
         )
         .resolve(|_| panic!("a guest key must not consume a logical key position"));
@@ -301,7 +296,7 @@ mod tests {
             golem_managed_http_headers(
                 Vec::new(),
                 false,
-                &HashMap::new(),
+                std::iter::empty(),
                 OplogIndex::from_u64(41)
             )
             .resolve(|_| panic!("disabled injection must not derive a key"))
@@ -315,7 +310,7 @@ mod tests {
         let headers = golem_managed_http_headers(
             vec![("traceparent".to_string(), "trace-value".to_string())],
             true,
-            &HashMap::new(),
+            std::iter::empty(),
             OplogIndex::from_u64(41),
         )
         .resolve(|index| {

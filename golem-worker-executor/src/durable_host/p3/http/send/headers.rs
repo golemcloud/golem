@@ -14,7 +14,6 @@
 
 use super::*;
 use crate::durable_host::http::policy::InjectedHttpHeaders;
-use golem_service_base::headers::TraceContextHeaders;
 
 /// Reconstructs the outgoing URI from the recorded request head.
 pub(in crate::durable_host::p3::http) fn outgoing_http_request_uri(
@@ -54,73 +53,48 @@ pub(in crate::durable_host::p3::http) fn outgoing_http_request_span_attributes(
     ]
 }
 
-/// Builds trace headers and selects key injection through the shared policy.
+/// Selects managed headers from the guest request and resolved trace headers.
 /// Derivation uses the send's `Start` index or its reserved entity logical position.
 /// A guest-provided key suppresses derivation.
-pub(in crate::durable_host::p3::http) fn golem_outgoing_http_headers<Ctx: WorkerCtx, U: Send>(
-    store: &Accessor<U, DurableP3<Ctx>>,
-    span_id: &SpanId,
+pub(in crate::durable_host::p3::http) fn golem_outgoing_http_headers(
+    request: &wasmtime_wasi_http::p3::Request,
+    trace_headers: Vec<(String, String)>,
+    set_outgoing_http_idempotency_key: bool,
     start_index: OplogIndex,
-    guest_headers: &HashMap<String, Vec<Vec<u8>>>,
     key_position: &crate::durable_host::IdempotencyKeyPosition,
-) -> Result<InjectedHttpHeaders, WorkerExecutorError> {
-    store.with(|mut access| {
-        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-        let trace_headers = if ctx.state.forward_trace_context_headers {
-            let invocation_context = ctx
-                .state
-                .invocation_state()
-                .invocation_context
-                .get_stack(span_id)
-                .map_err(|err| {
-                    WorkerExecutorError::runtime(format!(
-                        "span {span_id} missing from the invocation context while injecting trace context headers: {err}"
-                    ))
-                })?;
-            TraceContextHeaders::from_invocation_context(invocation_context).to_raw_headers_map()
-        } else {
-            Vec::new()
-        };
-        let plan = golem_managed_http_headers(
-            trace_headers,
-            ctx.state.set_outgoing_http_idempotency_key,
-            guest_headers,
-            start_index,
-        );
-        Ok(plan.resolve(|index| key_position.derive(index)))
-    })
+) -> InjectedHttpHeaders {
+    golem_managed_http_headers(
+        trace_headers,
+        set_outgoing_http_idempotency_key,
+        request.headers.keys().map(|name| name.as_str()),
+        start_index,
+    )
+    .resolve(|index| key_position.derive(index))
 }
 
 /// Applies the injected headers to the actual request resource (replacing any
 /// existing values for the same names) so the network request carries them.
 /// The guest constructed the request with immutable headers, so they are
 /// briefly remarked mutable during injection.
-pub(in crate::durable_host::p3::http) fn apply_headers_to_request_resource<
-    Ctx: WorkerCtx,
-    U: Send,
->(
-    store: &Accessor<U, DurableP3<Ctx>>,
+pub(in crate::durable_host::p3::http) fn apply_headers_to_request_resource(
+    view: wasmtime_wasi_http::WasiHttpCtxView<'_>,
     req: &Resource<Request>,
     headers: &[(Box<str>, Box<str>)],
 ) -> Result<(), WorkerExecutorError> {
     if headers.is_empty() {
         return Ok(());
     }
-    let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
-    http_store.with(|mut access| {
-        let view = access.get();
-        let field_size_limit = view.ctx.field_size_limit;
-        let request = view
-            .table
-            .get_mut(&Resource::<wasmtime_wasi_http::p3::Request>::new_borrow(
-                req.rep(),
+    let field_size_limit = view.ctx.field_size_limit;
+    let request = view
+        .table
+        .get_mut(&Resource::<wasmtime_wasi_http::p3::Request>::new_borrow(
+            req.rep(),
+        ))
+        .map_err(|err| {
+            WorkerExecutorError::runtime(format!(
+                "failed to get outgoing p3 HTTP request from table: {err}"
             ))
-            .map_err(|err| {
-                WorkerExecutorError::runtime(format!(
-                    "failed to get outgoing p3 HTTP request from table: {err}"
-                ))
-            })?;
-        apply_managed_http_headers(&mut request.headers, view.hooks, field_size_limit, headers)
-            .map_err(WorkerExecutorError::runtime)
-    })
+        })?;
+    apply_managed_http_headers(&mut request.headers, view.hooks, field_size_limit, headers)
+        .map_err(WorkerExecutorError::runtime)
 }
