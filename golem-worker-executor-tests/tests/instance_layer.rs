@@ -246,6 +246,8 @@ async fn gol838_derivation_pairs_wallet_with_live_or_historical_namespace(
             grants.retain(|grant| !matches!(grant, PolymorphicPermissionPattern::Config(_)));
             grants
                 .push(parse_polymorphic_permission("config(?agent) @ * : read : target").unwrap());
+            // The test derives scope and wallet cards through the host bindings.
+            grants.push(parse_polymorphic_permission("card(*) @ * : derive : *").unwrap());
         })
         .store()
         .await?;
@@ -660,6 +662,10 @@ async fn cross_store_wallet_change(
                 grants.push(
                     parse_polymorphic_permission("config(?agent) @ * : read : target").unwrap(),
                 );
+            }
+            if matches!(change, WalletChange::Transfer) {
+                // The transfer installs the source card into the target agent.
+                grants.push(parse_polymorphic_permission("card(*) @ * : install : *").unwrap());
             }
         })
         .store()
