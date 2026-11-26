@@ -100,6 +100,15 @@ fn freshness_disposition_for_dispatch(
     }
 }
 
+/// The range and the scan allowance of an oplog range read.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OplogRangeRead {
+    /// The last oplog index of the range, inclusive.
+    pub to: OplogIndex,
+    /// The allowance that the read may still spend; without it, the read has no scan limit.
+    pub allowance: Option<OplogScanAllowance>,
+}
+
 fn decode_file_read_error(value: i32) -> FileReadError {
     FileReadError::try_from(value).unwrap_or(FileReadError::InvalidResponse)
 }
@@ -666,19 +675,18 @@ pub trait WorkerClient: Send + Sync {
         auth_ctx: AuthCtx,
     ) -> WorkerResult<OplogIndex>;
 
-    /// Reads an oplog page of `range`. When `range` has an end, the read is a range read: it reads
-    /// no entry after the end, and the response accounts its scan. `allowance` is the scan
-    /// allowance that a range read may still spend. Without it, the read has no scan limit.
-    /// With `ClaimVisibility::Shown`, the callers in the entries hold the users' verified claims;
-    /// the caller asks for it only after its oplog read check.
+    /// Reads an oplog page. With `range`, the read is a range read: it reads no entry after
+    /// `range.to`, and the response accounts its scan. With `ClaimVisibility::Shown`, the callers
+    /// in the entries hold the users' verified claims; the caller asks for it only after its
+    /// oplog read check.
     #[allow(clippy::too_many_arguments)]
     async fn get_oplog(
         &self,
         agent_id: &AgentId,
-        range: OplogRange,
+        from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
-        allowance: Option<OplogScanAllowance>,
+        range: Option<OplogRangeRead>,
         claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
@@ -1629,36 +1637,34 @@ impl WorkerClient for WorkerExecutorWorkerClient {
     async fn get_oplog(
         &self,
         agent_id: &AgentId,
-        range: OplogRange,
+        from_oplog_index: OplogIndex,
         cursor: Option<OplogCursor>,
         count: u64,
-        allowance: Option<OplogScanAllowance>,
+        range: Option<OplogRangeRead>,
         claims: ClaimVisibility,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
     ) -> Result<GetOplogResponse, WorkerServiceError> {
         let agent_id = *agent_id;
-        let range_read = range.has_end();
         // A range read is sent at most once: an attempt that failed after it was sent can have
         // spent scan allowance that no response reports, and a replay would spend it again.
         let target = AgentCall {
             agent_id,
-            replayable: !range_read,
+            replayable: range.is_none(),
         };
         self.call_worker_executor(
             target,
             "get_oplog",
             move |worker_executor_client| {
-                let (from_oplog_index, to_oplog_index) = range.to_indices();
                 let request = workerexecutor::v1::GetOplogRequest {
                     agent_id: Some(agent_id.into()),
-                    from_oplog_index,
+                    from_oplog_index: from_oplog_index.into(),
                     cursor: cursor.clone().map(|c| c.into()),
                     count,
                     environment_id: Some(environment_id.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
-                    to_oplog_index,
-                    scan_allowance: allowance.map(Into::into),
+                    to_oplog_index: range.map(|range| range.to.into()),
+                    scan_allowance: range.and_then(|range| range.allowance).map(Into::into),
                     claims: claims.to_protobuf(),
                 };
                 Box::pin(worker_executor_client.get_oplog(request))
@@ -1689,7 +1695,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                         .map(OplogScan::try_from)
                         .transpose()
                         .map_err(WorkerExecutorError::unknown)?;
-                    if range_read && scan.is_none() {
+                    if range.is_some() && scan.is_none() {
                         return Err(WorkerExecutorError::unknown(
                             "The oplog range read has no scan accounting",
                         )

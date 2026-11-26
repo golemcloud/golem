@@ -2329,7 +2329,7 @@ async fn oplog_returns_host_call_entries_larger_than_the_page_entry_limit(
         .get_oplog(
             golem_api_grpc::proto::golem::workerexecutor::v1::GetOplogRequest {
                 agent_id: Some(worker_id.agent_id.into()),
-                from_oplog_index: Some(random_bytes_end.oplog_index.into()),
+                from_oplog_index: random_bytes_end.oplog_index.into(),
                 cursor: None,
                 count: 1,
                 environment_id: Some(component.environment_id.into()),

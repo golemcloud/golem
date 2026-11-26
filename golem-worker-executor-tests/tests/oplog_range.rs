@@ -105,7 +105,7 @@ async fn get_page(
         .get_oplog(GetOplogRequest {
             agent_id: Some(agent_id.agent_id.into()),
             environment_id: Some(agent_id.environment_id.into()),
-            from_oplog_index: Some(from),
+            from_oplog_index: from,
             to_oplog_index: to,
             scan_allowance: None,
             cursor,

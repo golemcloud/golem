@@ -702,18 +702,19 @@ impl WorkerClient for RecordingWorkerClient {
     async fn get_oplog(
         &self,
         _: &AgentId,
-        range: OplogRange,
+        from_oplog_index: OplogIndex,
         _: Option<OplogCursor>,
         _: u64,
-        allowance: Option<golem_common::model::oplog::OplogScanAllowance>,
+        range: Option<crate::service::worker::OplogRangeRead>,
         _: golem_common::model::caller::ClaimVisibility,
         _: EnvironmentId,
         _: AuthCtx,
     ) -> Result<GetOplogResponse, crate::service::worker::WorkerServiceError> {
         self.oplog_reads.lock().unwrap().push(OplogRead {
-            range,
+            range: OplogRange::new(Some(from_oplog_index), range.map(|range| range.to))
+                .expect("the worker service validates the range of a page read"),
             query: None,
-            allowance,
+            allowance: range.and_then(|range| range.allowance),
         });
         Ok(empty_oplog_page())
     }

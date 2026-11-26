@@ -2771,7 +2771,6 @@ async fn oplog_pages_omit_entries_larger_than_the_entry_limit() {
         None,
         page_revision,
         OplogRange::ALL,
-        OplogIndex::INITIAL,
         page_limits(1_000_000, 1000),
         ClaimVisibility::Hidden,
     )
@@ -2893,7 +2892,6 @@ async fn oplog_pages_end_at_the_byte_budget_and_resume_at_the_next_entry() {
             None,
             ComponentRevision::INITIAL,
             OplogRange::new(Some(from), None).unwrap(),
-            OplogIndex::INITIAL,
             page_limits(2500, 1_000_000),
             ClaimVisibility::Hidden,
         )
@@ -2951,7 +2949,6 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
             None,
             ComponentRevision::INITIAL,
             OplogRange::new(Some(from), Some(to)).unwrap(),
-            OplogIndex::INITIAL,
             limits(count),
             ClaimVisibility::Hidden,
         )
@@ -3011,29 +3008,6 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
     );
     assert_eq!(at_the_largest_index.last_index, indices[4]);
 
-    // A range without a start reads from the first entry that the oplog holds.
-    let from_the_oplog_start = get_public_oplog_page(
-        Arc::new(PanicComponentService),
-        oplog_service.clone(),
-        &owned_agent_id,
-        AgentMode::Durable,
-        test_component_id(),
-        OwnerKind::ComponentAgent,
-        None,
-        ComponentRevision::INITIAL,
-        OplogRange::new(None, Some(indices[3])).unwrap(),
-        indices[2],
-        limits(100),
-        ClaimVisibility::Hidden,
-    )
-    .await
-    .unwrap();
-    assert_eq!(
-        page_indices(&from_the_oplog_start.entries),
-        vec![(indices[2], true), (indices[3], true)]
-    );
-    assert_eq!(from_the_oplog_start.first_index_in_chunk, indices[2]);
-
     // The range drops the matches before and after it.
     let search = search_public_oplog_page(
         Arc::new(PanicComponentService),
@@ -3045,7 +3019,6 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
         None,
         ComponentRevision::INITIAL,
         OplogRange::new(Some(indices[1]), Some(indices[3])).unwrap(),
-        OplogIndex::INITIAL,
         limits(100),
         "needle",
         ScanBudget::default(),
@@ -3067,7 +3040,6 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
         None,
         ComponentRevision::INITIAL,
         OplogRange::new(Some(indices[3]), Some(OplogIndex::from_u64(u64::MAX))).unwrap(),
-        OplogIndex::INITIAL,
         limits(100),
         "needle",
         ScanBudget::default(),
@@ -3116,7 +3088,6 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
             None,
             ComponentRevision::INITIAL,
             OplogRange::new(Some(from), None).unwrap(),
-            OplogIndex::INITIAL,
             PublicOplogPageLimits {
                 count: 3,
                 max_bytes: 2500,
@@ -3180,7 +3151,6 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             None,
             ComponentRevision::INITIAL,
             OplogRange::new(Some(from), None).unwrap(),
-            OplogIndex::INITIAL,
             PublicOplogPageLimits {
                 count: 2,
                 max_bytes: 1_000_000,
@@ -3361,7 +3331,6 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             None,
             revision,
             OplogRange::new(Some(start), None).unwrap(),
-            OplogIndex::INITIAL,
             PublicOplogPageLimits {
                 count: 3,
                 max_bytes: 1_000_000,
@@ -3380,7 +3349,6 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         AgentMode::Durable,
         None,
         OplogRange::new(Some(indices[2]), None).unwrap(),
-        OplogIndex::INITIAL,
     )
     .await
     .unwrap();
@@ -3440,7 +3408,6 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         AgentMode::Durable,
         Some(cursor),
         OplogRange::ALL,
-        OplogIndex::INITIAL,
     )
     .await
     .unwrap();
@@ -3498,7 +3465,6 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
                 scan_to: None,
             }),
             OplogRange::ALL,
-            OplogIndex::INITIAL,
         )
         .await;
         match result {
@@ -3805,7 +3771,6 @@ async fn invocation_callers_render_through_public_oplog_api_and_wit() {
             None,
             ComponentRevision::INITIAL,
             OplogRange::ALL,
-            OplogIndex::INITIAL,
             PublicOplogPageLimits {
                 count: 100,
                 max_bytes: 1_000_000,
@@ -3901,7 +3866,6 @@ async fn hidden_claims_do_not_make_an_oplog_entry_omitted() {
             None,
             ComponentRevision::INITIAL,
             OplogRange::new(Some(started_index), None).unwrap(),
-            OplogIndex::INITIAL,
             PublicOplogPageLimits {
                 count: 1,
                 max_bytes: 8 * 1024 * 1024,
@@ -4497,7 +4461,6 @@ async fn a_paged_read_resumes_a_cursor_within_its_range_and_refuses_a_cursor_out
                 scan_to: None,
             }),
             range,
-            OplogIndex::INITIAL,
         )
     };
 
@@ -4577,7 +4540,6 @@ async fn a_remote_search_with_a_start_charges_its_revision_scan_and_continues_it
             None,
             cursor,
             range,
-            OplogIndex::INITIAL,
             PublicOplogPageLimits {
                 count: 10,
                 max_bytes: 1_000_000,
@@ -4666,7 +4628,6 @@ async fn a_remote_search_with_a_start_charges_its_revision_scan_and_continues_it
         AgentMode::Durable,
         Some(first.clone()),
         with_start,
-        OplogIndex::INITIAL,
     )
     .await;
     assert!(
@@ -4701,7 +4662,6 @@ async fn a_remote_search_of_a_range_after_the_end_of_the_oplog_gives_no_entry_an
             None,
             None,
             range,
-            OplogIndex::INITIAL,
             PublicOplogPageLimits {
                 count: 10,
                 max_bytes: 1_000_000,
@@ -4741,7 +4701,6 @@ async fn a_remote_search_reads_at_least_one_batch_of_its_revision_scan_with_a_sp
             None,
             cursor,
             range,
-            OplogIndex::INITIAL,
             PublicOplogPageLimits {
                 count: 10,
                 max_bytes: 1_000_000,

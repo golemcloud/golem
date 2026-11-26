@@ -17,7 +17,7 @@ use crate::config::WebSocketTransportLimits;
 use crate::metrics::{ActiveHttpApiStream, HttpApiStreamKind};
 use crate::service::auth::AuthService;
 use crate::service::worker::ConnectWorkerStream;
-use crate::service::worker::{WorkerService, proxy_worker_connection};
+use crate::service::worker::{OplogRangeRead, WorkerService, proxy_worker_connection};
 use futures::StreamExt;
 use futures::TryStreamExt;
 use golem_common::base_model::api;
@@ -419,11 +419,14 @@ impl WorkerApi {
                 self.worker_service
                     .get_oplog(
                         &agent_id,
-                        range,
+                        range.first_index_in(OplogIndex::INITIAL),
                         cursor,
                         count,
                         expected_fingerprint,
-                        allowance,
+                        range.to_indices().1.map(|to| OplogRangeRead {
+                            to: OplogIndex::from_u64(to),
+                            allowance,
+                        }),
                         claims,
                         auth,
                     )
@@ -923,8 +926,8 @@ mod tests {
 
         read(Some(3), Some(9), Some("error"), None).await.unwrap();
         read(Some(4), None, None, None).await.unwrap();
-        // A read without `from` keeps its start open, so that the executor starts it at the first
-        // entry that the oplog holds. The scan allowance of a range read goes to the executor.
+        // A read without `from` starts at index 1. The scan allowance of a range read goes to the
+        // executor.
         read(None, Some(9), None, Some(allowance)).await.unwrap();
         // A range that ends before its start is a bad request, with and without a query.
         assert!(matches!(
@@ -950,7 +953,7 @@ mod tests {
                     allowance: None,
                 },
                 OplogRead {
-                    range: OplogRange::new(None, Some(index(9))).unwrap(),
+                    range: OplogRange::new(Some(index(1)), Some(index(9))).unwrap(),
                     query: None,
                     allowance: Some(allowance),
                 },

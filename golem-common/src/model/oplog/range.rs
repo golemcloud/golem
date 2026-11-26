@@ -175,17 +175,6 @@ impl OplogRange {
         )
     }
 
-    /// Whether the range has a start. A range without a start starts at the first entry that the
-    /// oplog holds.
-    pub fn has_start(&self) -> bool {
-        self.start.is_some()
-    }
-
-    /// Whether the range has an end. A range without an end continues to the end of the oplog.
-    pub fn has_end(&self) -> bool {
-        self.end.is_some()
-    }
-
     /// Whether a read of the range can give its first entry at `index`. A range with a start gives
     /// its first entry only at its start. A range without a start can give it at any index. Only
     /// the reader of the oplog knows the first entry that the oplog holds.
@@ -406,37 +395,22 @@ mod tests {
     }
 
     #[test]
-    fn a_range_tells_if_it_has_a_start_and_an_end_and_where_a_read_of_it_can_start() {
+    fn a_read_of_a_range_can_start_only_at_its_start_or_anywhere_without_a_start() {
         [
-            (
-                range(None, None),
-                (false, false),
-                vec![(1, true), (7, true)],
-            ),
-            (range(Some(0), None), (false, false), vec![(1, true)]),
-            (
-                range(None, Some(9)),
-                (false, true),
-                vec![(1, true), (9, true)],
-            ),
+            (range(None, None), vec![(1, true), (7, true)]),
+            (range(Some(0), None), vec![(1, true)]),
+            (range(None, Some(9)), vec![(1, true), (9, true)]),
             (
                 range(Some(4), None),
-                (true, false),
                 vec![(3, false), (4, true), (5, false)],
             ),
             (
                 range(Some(4), Some(9)),
-                (true, true),
                 vec![(1, false), (4, true), (9, false)],
             ),
         ]
         .into_iter()
-        .for_each(|(range, (start, end), first_entries)| {
-            assert_eq!(
-                (range.has_start(), range.has_end()),
-                (start, end),
-                "{range:?}"
-            );
+        .for_each(|(range, first_entries)| {
             first_entries.into_iter().for_each(|(first, expected)| {
                 assert_eq!(
                     range.can_start_at(index(first)),

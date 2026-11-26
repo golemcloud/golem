@@ -179,7 +179,7 @@ impl TestWorkerExecutor {
                     .get_oplog(workerexecutor::v1::GetOplogRequest {
                         agent_id: Some(agent_id.agent_id.into()),
                         environment_id: Some(agent_id.environment_id.into()),
-                        from_oplog_index,
+                        from_oplog_index: range.first_index_in(OplogIndex::INITIAL).into(),
                         to_oplog_index,
                         cursor,
                         count: 100,
@@ -1138,18 +1138,17 @@ impl TestDsl for TestWorkerExecutor {
 
     #[tracing::instrument(level = "info", skip_all, fields(%agent_id, query))]
     async fn get_oplog_last_index(&self, agent_id: &OwnedAgentId) -> anyhow::Result<u64> {
-        let (from_oplog_index, to_oplog_index) = OplogRange::ALL.to_indices();
         let response = self
             .client
             .clone()
             .get_oplog(workerexecutor::v1::GetOplogRequest {
                 agent_id: Some(agent_id.agent_id.into()),
                 environment_id: Some(agent_id.environment_id.into()),
-                from_oplog_index,
+                from_oplog_index: OplogIndex::INITIAL.into(),
                 cursor: None,
                 count: 1,
                 auth_ctx: Some(self.auth_ctx().into()),
-                to_oplog_index,
+                to_oplog_index: None,
                 scan_allowance: None,
                 claims: ClaimVisibility::Hidden.to_protobuf(),
             })
