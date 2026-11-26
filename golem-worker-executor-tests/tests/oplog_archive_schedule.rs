@@ -1237,22 +1237,25 @@ async fn assert_no_seal_records(
     owned: &OwnedAgentId,
 ) -> anyhow::Result<()> {
     let prefix = std::path::Path::new("seals").join(agent_path_segment(&owned.agent_id));
-    let records = blobs
-        .with("test", "assert_no_seal")
-        .list_page(
-            BlobStorageNamespace::SealRecords {
-                environment_id: owned.environment_id(),
-                type_tag: owned.agent_id.type_tag(),
-            },
-            &prefix,
-            None,
-            1,
-        )
-        .await?;
-    assert!(
-        records.is_empty(),
-        "unexpected frozen record for {owned}: {records:?}"
-    );
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let records = blobs
+            .with("test", "assert_no_seal")
+            .list_page(
+                BlobStorageNamespace::SealRecords {
+                    environment_id: owned.environment_id(),
+                    type_tag: owned.agent_id.type_tag(),
+                    agent_mode: mode,
+                },
+                &prefix,
+                None,
+                1,
+            )
+            .await?;
+        assert!(
+            records.is_empty(),
+            "unexpected frozen record for {owned}: {records:?}"
+        );
+    }
     Ok(())
 }
 
@@ -1301,11 +1304,8 @@ impl BlobStorageBackend for FailingSealStorage {
         timeout: Duration,
     ) -> anyhow::Result<PutIfAbsent> {
         if let Some(target) = self.fault.target.get()
-            && namespace
-                == (BlobStorageNamespace::SealRecords {
-                    environment_id: target.environment_id(),
-                    type_tag: target.agent_id.type_tag(),
-                })
+            && matches!(&namespace, BlobStorageNamespace::SealRecords { environment_id, type_tag, .. }
+                if *environment_id == target.environment_id() && *type_tag == target.agent_id.type_tag())
             && path.as_ref().starts_with(
                 std::path::Path::new("seals").join(agent_path_segment(&target.agent_id)),
             )

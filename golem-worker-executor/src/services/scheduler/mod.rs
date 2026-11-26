@@ -543,8 +543,15 @@ impl SchedulerServiceDefault {
                 );
                 false
             }
-            ScheduledAction::CollectTombstone { owned_agent_id } => {
-                match self.oplog_service.collect_tombstone(&owned_agent_id).await {
+            ScheduledAction::CollectTombstone {
+                owned_agent_id,
+                agent_mode,
+            } => {
+                match self
+                    .oplog_service
+                    .collect_tombstone(&owned_agent_id, agent_mode)
+                    .await
+                {
                     Ok(()) => true,
                     Err(error) => {
                         error!(

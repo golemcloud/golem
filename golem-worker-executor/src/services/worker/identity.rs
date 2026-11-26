@@ -41,6 +41,7 @@ impl DefaultWorkerService {
             return seal
                 .read_with_authority(
                     owned_agent_id,
+                    None,
                     || self.resolve_present_agent_identity(owned_agent_id),
                     |record| {
                         let seal = seal.clone();

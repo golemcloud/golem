@@ -69,6 +69,8 @@ use tokio::sync::{Mutex, Notify, oneshot};
 use tracing::{debug, info};
 use uuid::Uuid;
 
+mod sealed_scan;
+
 macro_rules! create_oplog_entry {
     ($agent_id:expr, $agent_mode:expr, $component_revision:expr, $env:expr,
      $environment_id:expr, $created_by:expr, $parent:expr, $component_size:expr,
@@ -1588,6 +1590,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
 pub(crate) struct ReadCountingBlobStorage<B = InMemoryBlobStorage> {
     inner: B,
     reads: AtomicUsize,
+    seal_lists: StdMutex<Vec<AgentMode>>,
     fail_read_once: AtomicBool,
     fail_seal_list_once: AtomicBool,
     puts: AtomicUsize,
@@ -1636,6 +1639,7 @@ impl<B> ReadCountingBlobStorage<B> {
         Self {
             inner,
             reads: AtomicUsize::new(0),
+            seal_lists: StdMutex::new(Vec::new()),
             fail_read_once: AtomicBool::new(false),
             fail_seal_list_once: AtomicBool::new(false),
             puts: AtomicUsize::new(0),
@@ -1718,7 +1722,8 @@ impl<B> ReadCountingBlobStorage<B> {
     }
 
     pub(crate) fn reset(&self) {
-        self.reads.store(0, Ordering::Relaxed)
+        self.reads.store(0, Ordering::Relaxed);
+        self.seal_lists.lock().unwrap().clear();
     }
 
     fn count_read(&self) {
@@ -1739,6 +1744,9 @@ impl<B: BlobStorageBackend> BlobStorageBackend for ReadCountingBlobStorage<B> {
         max_keys: u32,
     ) -> anyhow::Result<Vec<golem_service_base::storage::blob::BlobPageEntry>> {
         self.count_read();
+        if let BlobStorageNamespace::SealRecords { agent_mode, .. } = &namespace {
+            self.seal_lists.lock().unwrap().push(*agent_mode);
+        }
         let pause = if matches!(&namespace, BlobStorageNamespace::SealRecords { .. }) {
             let mut pause = self.pause_seal_list.lock().unwrap();
             match pause.as_mut() {
@@ -12038,7 +12046,7 @@ async fn multilayer_scan_propagates_lower_layer_exists_failure(_tracing: &Tracin
 #[test]
 async fn multilayer_scan_for_type_ephemeral(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
-    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let blob_storage = Arc::new(ReadCountingBlobStorage::new());
     let primary_oplog_service = Arc::new(
         PrimaryOplogService::new(
             indexed_storage.clone(),
@@ -12070,6 +12078,11 @@ async fn multilayer_scan_for_type_ephemeral(_tracing: &Tracing) {
         1000,
         10,
     ));
+    let _scheduler = sealed_scan::attach(
+        oplog_service.as_ref(),
+        indexed_storage,
+        blob_storage.clone(),
+    );
 
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
@@ -12110,11 +12123,23 @@ async fn multilayer_scan_for_type_ephemeral(_tracing: &Tracing) {
     for i in 0..20 {
         ephemeral.push(create_worker(AgentMode::Ephemeral, format!("eph-{i}")).await);
     }
+    for (mode, ids) in [
+        (AgentMode::Durable, &mut durable),
+        (AgentMode::Ephemeral, &mut ephemeral),
+    ] {
+        let id = OwnedAgentId::new(
+            environment_id,
+            &crate::test_agent_id(&format!("sealed-{mode:?}")),
+        );
+        sealed_scan::seed(blob_storage.as_ref(), &id, mode).await;
+        ids.push(id);
+    }
 
     // Give any background processes a chance to settle.
     tokio::time::sleep(Duration::from_secs(2)).await;
 
     let drain = async |modes: Option<AgentMode>| {
+        blob_storage.reset();
         let mut cursor = ScanCursor::default();
         let mut acc: Vec<OwnedAgentId> = Vec::new();
         // Use a small page size so pagination crosses layers and mode boundaries.
@@ -12134,6 +12159,7 @@ async fn multilayer_scan_for_type_ephemeral(_tracing: &Tracing) {
             }
             cursor = next_cursor;
         }
+        sealed_scan::assert_listing_only(&blob_storage, modes);
         acc.sort_by_key(|a| a.agent_id);
         acc
     };
@@ -12694,10 +12720,10 @@ async fn make_workers(
 #[test]
 async fn scan_for_type_only_returns_matching_mode_when_specified(_tracing: &Tracing) {
     let indexed_storage = Arc::new(InMemoryIndexedStorage::new());
-    let blob_storage = Arc::new(InMemoryBlobStorage::new());
+    let blob_storage = Arc::new(ReadCountingBlobStorage::new());
     let oplog_service = PrimaryOplogService::new(
-        indexed_storage,
-        blob_storage,
+        indexed_storage.clone(),
+        blob_storage.clone(),
         1,
         1,
         100,
@@ -12709,7 +12735,7 @@ async fn scan_for_type_only_returns_matching_mode_when_specified(_tracing: &Trac
     let account_id = AccountId::new();
     let environment_id = EnvironmentId::new();
 
-    let durable = make_workers(
+    let mut durable = make_workers(
         &oplog_service,
         environment_id,
         account_id,
@@ -12718,7 +12744,7 @@ async fn scan_for_type_only_returns_matching_mode_when_specified(_tracing: &Trac
         "dur",
     )
     .await;
-    let ephemeral = make_workers(
+    let mut ephemeral = make_workers(
         &oplog_service,
         environment_id,
         account_id,
@@ -12728,7 +12754,28 @@ async fn scan_for_type_only_returns_matching_mode_when_specified(_tracing: &Trac
     )
     .await;
 
+    let lower: Arc<dyn OplogArchiveService> = Arc::new(BlobOplogArchiveService::new(
+        blob_storage.clone(),
+        indexed_storage.clone(),
+        0,
+        RetryConfig::default(),
+    ));
+    let oplog_service = MultiLayerOplogService::new(Arc::new(oplog_service), nev![lower], 1000, 10);
+    let _scheduler = sealed_scan::attach(&oplog_service, indexed_storage, blob_storage.clone());
+    for (mode, ids) in [
+        (AgentMode::Durable, &mut durable),
+        (AgentMode::Ephemeral, &mut ephemeral),
+    ] {
+        let id = OwnedAgentId::new(
+            environment_id,
+            &crate::test_agent_id(&format!("sealed-{mode:?}")),
+        );
+        sealed_scan::seed(blob_storage.as_ref(), &id, mode).await;
+        ids.push(id);
+    }
+
     let drain = async |modes: Option<AgentMode>| {
+        blob_storage.reset();
         let mut cursor = ScanCursor::default();
         let mut acc: Vec<OwnedAgentId> = Vec::new();
         loop {
@@ -12746,6 +12793,7 @@ async fn scan_for_type_only_returns_matching_mode_when_specified(_tracing: &Trac
             }
             cursor = next_cursor;
         }
+        sealed_scan::assert_listing_only(&blob_storage, modes);
         acc.sort_by_key(|a| a.agent_id);
         acc
     };

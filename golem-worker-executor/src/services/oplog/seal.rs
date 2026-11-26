@@ -154,10 +154,14 @@ pub(crate) fn seal_prefix(agent_id: &AgentId) -> PathBuf {
     Path::new("seals").join(agent_path_segment(agent_id))
 }
 
-pub(crate) fn seal_namespace(owned_agent_id: &OwnedAgentId) -> BlobStorageNamespace {
+pub(crate) fn seal_namespace(
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+) -> BlobStorageNamespace {
     BlobStorageNamespace::SealRecords {
         environment_id: owned_agent_id.environment_id(),
         type_tag: owned_agent_id.agent_id.type_tag(),
+        agent_mode,
     }
 }
 
@@ -209,6 +213,7 @@ pub(crate) fn newest_seal_for_fingerprint(
 pub(crate) async fn list_records(
     storage: &dyn BlobStorage,
     owned_agent_id: &OwnedAgentId,
+    mode: AgentMode,
 ) -> Result<Vec<ListedSealRecord>, OplogArchiveError> {
     let prefix = seal_prefix(&owned_agent_id.agent_id);
     let mut cursor: Option<PathBuf> = None;
@@ -217,7 +222,7 @@ pub(crate) async fn list_records(
         let page = storage
             .with("oplog_seal", "list_records")
             .list_page(
-                seal_namespace(owned_agent_id),
+                seal_namespace(owned_agent_id, mode),
                 &prefix,
                 cursor.as_deref(),
                 1000,
@@ -254,6 +259,7 @@ pub(crate) async fn list_records(
 pub(crate) async fn read_record(
     storage: &dyn BlobStorage,
     owned_agent_id: &OwnedAgentId,
+    mode: AgentMode,
     listed: &ListedSealRecord,
 ) -> Result<SealRecordBody, OplogArchiveError> {
     let corrupt = |detail: String| {
@@ -267,7 +273,7 @@ pub(crate) async fn read_record(
     }
     let bytes = storage
         .with("oplog_seal", "read_record")
-        .get_raw(seal_namespace(owned_agent_id), &listed.entry.path)
+        .get_raw(seal_namespace(owned_agent_id, mode), &listed.entry.path)
         .await
         .map_err(|error| {
             OplogArchiveError::of_blob(
@@ -290,6 +296,7 @@ pub(crate) async fn read_record(
                 decode(&bytes).map_err(|error| corrupt(error.to_string()))?;
             if body.writer_epoch != listed.key.epoch
                 || body.fingerprint != listed.key.fingerprint
+                || body.agent_mode != mode
                 || body.metadata.owned_agent_id() != *owned_agent_id
                 || body.metadata.fingerprint != body.fingerprint
                 || body.metadata.agent_mode != body.agent_mode

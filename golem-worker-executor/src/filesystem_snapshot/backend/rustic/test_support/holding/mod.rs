@@ -121,6 +121,7 @@ mod tests {
         let namespace = BlobStorageNamespace::SealRecords {
             environment_id: EnvironmentId(uuid::Uuid::nil()),
             type_tag: 9,
+            agent_mode: golem_common::model::agent::AgentMode::Durable,
         };
         let result = tokio::time::timeout(
             Duration::from_secs(2),

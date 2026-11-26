@@ -1520,6 +1520,7 @@ pub enum BlobStorageNamespace {
     SealRecords {
         environment_id: EnvironmentId,
         type_tag: u32,
+        agent_mode: AgentMode,
     },
     PublishedBlobs,
     /// The filesystem snapshots of one incarnation of an agent. Each incarnation has its own
@@ -1598,8 +1599,10 @@ pub(crate) fn namespace_segments(namespace: &BlobStorageNamespace) -> Vec<String
         BlobStorageNamespace::SealRecords {
             environment_id,
             type_tag,
+            agent_mode,
         } => vec![
             "seal_records".to_string(),
+            agent_mode_prefix(*agent_mode).to_string(),
             environment_id.to_string(),
             format!("{type_tag:08x}"),
         ],
@@ -2310,6 +2313,7 @@ mod tests {
     };
     use anyhow::{Context, anyhow};
     use golem_common::model::AgentId;
+    use golem_common::model::agent::AgentMode;
     use pretty_assertions::assert_eq;
     use std::path::{Path, PathBuf};
     use test_r::test;
@@ -2345,6 +2349,7 @@ mod tests {
         let namespace = BlobStorageNamespace::SealRecords {
             environment_id: EnvironmentId(uuid::Uuid::nil()),
             type_tag: u32::MAX,
+            agent_mode: AgentMode::Durable,
         };
         let mut keys = vec![
             "a", "a-", "a/z", "a/z/deep", "a0/x", "a_/x", "a%/x", "ab/x", "a/é", "a/中", "a/😀",
@@ -2452,10 +2457,12 @@ mod tests {
         let namespace = BlobStorageNamespace::SealRecords {
             environment_id: EnvironmentId(uuid::Uuid::nil()),
             type_tag: 7,
+            agent_mode: AgentMode::Durable,
         };
         let other = BlobStorageNamespace::SealRecords {
             environment_id: EnvironmentId(uuid::Uuid::nil()),
-            type_tag: 8,
+            type_tag: 7,
+            agent_mode: AgentMode::Ephemeral,
         };
         for storage in backends {
             for path in [
@@ -2505,6 +2512,33 @@ mod tests {
                 .put_raw("test", "put", other.clone(), Path::new("seals/B"), b"other")
                 .await
                 .unwrap();
+            assert_eq!(
+                storage
+                    .put_raw_if_absent_once(
+                        "test",
+                        "other-mode-once",
+                        other.clone(),
+                        Path::new("seals/a"),
+                        b"other-mode",
+                        Duration::from_secs(5)
+                    )
+                    .await
+                    .unwrap(),
+                PutIfAbsent::Written
+            );
+            assert_eq!(
+                storage
+                    .get_raw(
+                        "test",
+                        "other-mode-read",
+                        other.clone(),
+                        Path::new("seals/a")
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                b"other-mode"
+            );
             storage
                 .create_dir("test", "mkdir", namespace.clone(), Path::new("seals/empty"))
                 .await
@@ -2564,6 +2598,23 @@ mod tests {
                     )
                     .await
                     .is_err()
+            );
+            storage
+                .delete_dir("test", "delete-mode", namespace.clone(), Path::new("seals"))
+                .await
+                .unwrap();
+            assert_eq!(
+                storage
+                    .get_raw(
+                        "test",
+                        "other-mode-after-delete",
+                        other.clone(),
+                        Path::new("seals/a")
+                    )
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                b"other-mode"
             );
         }
     }

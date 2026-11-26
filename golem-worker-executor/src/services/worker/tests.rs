@@ -667,7 +667,7 @@ impl ColdSealFixture {
         self.blobs
             .with("test", "publish_seal")
             .put_raw(
-                seal_namespace(&self.id()),
+                seal_namespace(&self.id(), self.record.agent_mode),
                 &key.path(),
                 &serialize(&self.record).unwrap(),
             )
@@ -890,9 +890,13 @@ async fn cold_reads_do_not_list_seal_records_for_stable_presence_or_disabled_sea
             ColdSealFixture::with_seal_storage(blob_layers, indexed, Some(blobs.clone())).await;
         assert_eq!(fixture.oplog.seal.get().unwrap().enabled(), enabled);
         assert!(
-            crate::services::oplog::seal::list_records(blobs.as_ref(), &fixture.id())
-                .await
-                .is_err(),
+            crate::services::oplog::seal::list_records(
+                blobs.as_ref(),
+                &fixture.id(),
+                AgentMode::Durable
+            )
+            .await
+            .is_err(),
             "the closed blob backend must refuse seal LIST"
         );
         let mutations = fixture.cold_cache_mutations();

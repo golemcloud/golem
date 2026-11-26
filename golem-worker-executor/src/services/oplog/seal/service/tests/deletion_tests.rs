@@ -60,7 +60,11 @@ async fn assert_fence(f: &Fixture, namespace: IndexedStorageNamespace, actual: O
 async fn put_record(f: &Fixture, key: SealRecordKey, bytes: &[u8]) {
     f.blobs
         .with("test", "deletion_record")
-        .put_raw(seal_namespace(&f.id()), &key.path(), bytes)
+        .put_raw(
+            seal_namespace(&f.id(), f.metadata.agent_mode),
+            &key.path(),
+            bytes,
+        )
         .await
         .unwrap();
 }
@@ -68,7 +72,7 @@ async fn put_record(f: &Fixture, key: SealRecordKey, bytes: &[u8]) {
 async fn record_bytes(f: &Fixture, path: &Path) -> Option<Vec<u8>> {
     f.blobs
         .with("test", "deletion_record_bytes")
-        .get_raw(seal_namespace(&f.id()), path)
+        .get_raw(seal_namespace(&f.id(), f.metadata.agent_mode), path)
         .await
         .unwrap()
 }
@@ -221,13 +225,20 @@ async fn stale_deletion_refuses_every_newer_listed_key_before_claim_or_tombstone
             };
             // Even an inadmissible or unreadable newer key sets the deletion lower bound.
             put_record(&f, newer, b"unreadable body").await;
-            let before = list_records(f.blobs.as_ref(), &f.id()).await.unwrap();
+            let before = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+                .await
+                .unwrap();
             let oplog = f.oplog_service().await;
             let seal = f.service();
             let mut lifecycle = oplog.lock_lifecycle(&f.id().agent_id).await;
             for result in [
-                seal.prepare_deletion(&mut lifecycle, &f.id(), ShardEpoch(7))
-                    .await,
+                seal.prepare_deletion(
+                    &mut lifecycle,
+                    &f.id(),
+                    f.metadata.agent_mode,
+                    ShardEpoch(7),
+                )
+                .await,
                 oplog
                     .delete(
                         &mut lifecycle,
@@ -248,7 +259,9 @@ async fn stale_deletion_refuses_every_newer_listed_key_before_claim_or_tombstone
                 ));
                 f.assert_epoch(&pending.state, None).await;
             }
-            let after = list_records(f.blobs.as_ref(), &f.id()).await.unwrap();
+            let after = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+                .await
+                .unwrap();
             assert_eq!(
                 after.iter().map(|record| record.key).collect::<Vec<_>>(),
                 before.iter().map(|record| record.key).collect::<Vec<_>>()
@@ -270,6 +283,39 @@ async fn sealed_deletion_retains_only_the_owning_fence_and_isolates_chunk_paths(
         for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
             let f = Fixture::with_mode(indexed.clone(), mode).await;
             let pending = seal_fixture(&f).await;
+            let other_mode = match mode {
+                AgentMode::Durable => AgentMode::Ephemeral,
+                AgentMode::Ephemeral => AgentMode::Durable,
+            };
+            let other_state = f
+                .service()
+                .indexed_state(&f.id(), other_mode, &SealManifest::new())
+                .unwrap();
+            f.indexed
+                .set_key_epoch(
+                    "test",
+                    "other_mode_fence",
+                    other_state.fence_namespace(),
+                    &f.id().storage_key(),
+                    ShardEpoch(6),
+                    &[],
+                    false,
+                )
+                .await
+                .unwrap();
+            let other_key = SealRecordKey {
+                epoch: ShardEpoch(8),
+                ..pending.key
+            };
+            f.blobs
+                .with("test", "other_mode_record")
+                .put_raw(
+                    seal_namespace(&f.id(), other_mode),
+                    &other_key.path(),
+                    b"other mode record",
+                )
+                .await
+                .unwrap();
             let other_fingerprint = AgentFingerprint::new();
             let other_agent = AgentId::from_parts(7, 9999);
             let mut sentinels = Vec::new();
@@ -282,7 +328,7 @@ async fn sealed_deletion_retains_only_the_owning_fence_and_isolates_chunk_paths(
                         level,
                     };
                     for (agent, fingerprint, keep) in [
-                        (f.id().agent_id, f.metadata.fingerprint, false),
+                        (f.id().agent_id, f.metadata.fingerprint, chunk_mode != mode),
                         (f.id().agent_id, other_fingerprint, true),
                         (other_agent, f.metadata.fingerprint, true),
                     ] {
@@ -310,6 +356,16 @@ async fn sealed_deletion_retains_only_the_owning_fence_and_isolates_chunk_paths(
                 )
                 .await
                 .unwrap();
+            assert_fence(&f, other_state.fence_namespace(), Some(ShardEpoch(6))).await;
+            assert_eq!(
+                f.blobs
+                    .with("test", "other_mode_after_delete")
+                    .get_raw(seal_namespace(&f.id(), other_mode), &other_key.path())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                b"other mode record"
+            );
             for namespace in pending.state.epoch_namespaces() {
                 let epoch = (namespace == pending.state.fence_namespace()).then_some(ShardEpoch(6));
                 assert_fence(&f, namespace, epoch).await;
@@ -322,11 +378,13 @@ async fn sealed_deletion_retains_only_the_owning_fence_and_isolates_chunk_paths(
                     .has_data
             );
             assert!(!oplog.exists(&f.id(), mode).await.unwrap());
-            let records = list_records(f.blobs.as_ref(), &f.id()).await.unwrap();
+            let records = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+                .await
+                .unwrap();
             assert_eq!(records.len(), 1);
             assert_eq!(records[0].key.kind, SealRecordKind::Deleted);
             assert!(matches!(
-                read_record(f.blobs.as_ref(), &f.id(), &records[0]).await.unwrap(),
+                read_record(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode, &records[0]).await.unwrap(),
                 SealRecordBody::Deleted(body)
                     if body.fingerprint == f.metadata.fingerprint && body.writer_epoch == ShardEpoch(6)
             ));
@@ -368,7 +426,10 @@ async fn collection_without_tombstone_preserves_seal_chunks_and_preexisting_fenc
             .unwrap();
         let before = record_bytes(&f, &pending.key.path()).await.unwrap();
         let oplog = f.oplog_service().await;
-        oplog.collect_tombstone(&f.id()).await.unwrap();
+        oplog
+            .collect_tombstone(&f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
         assert_eq!(record_bytes(&f, &pending.key.path()).await, Some(before));
         assert_fence(&f, pending.state.fence_namespace(), Some(ShardEpoch(6))).await;
         f.assert_history(&pending.record).await;
@@ -436,7 +497,9 @@ async fn collection_stops_at_the_first_immature_tombstone_without_mutation() {
                 Err(OplogError::Maintenance(_))
             ));
         }
-        let records = list_records(f.blobs.as_ref(), &f.id()).await.unwrap();
+        let records = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
         let tombstones: Vec<_> = records
             .iter()
             .filter(|record| record.key.kind == SealRecordKind::Deleted)
@@ -452,7 +515,7 @@ async fn collection_stops_at_the_first_immature_tombstone_without_mutation() {
             + f.config.server_commit_bound
             + f.config.skew_margin * 2;
         recording.times.lock().unwrap().clear();
-        seal.collect_tombstone(&mut lifecycle, &f.id())
+        seal.collect_tombstone(&mut lifecycle, &f.id(), f.metadata.agent_mode)
             .await
             .unwrap();
         assert_eq!(
@@ -514,7 +577,11 @@ async fn matured_collection_removes_only_its_region_and_preserves_all_newer_keys
         let malformed = seal_prefix(&f.id().agent_id).join("not-a-record.sealed");
         f.blobs
             .with("test", "malformed_record")
-            .put_raw(seal_namespace(&f.id()), &malformed, b"malformed sentinel")
+            .put_raw(
+                seal_namespace(&f.id(), f.metadata.agent_mode),
+                &malformed,
+                b"malformed sentinel",
+            )
             .await
             .unwrap();
         // A newer owner may already have established its own empty fence.
@@ -531,8 +598,13 @@ async fn matured_collection_removes_only_its_region_and_preserves_all_newer_keys
             .await
             .unwrap();
         let before = record_bytes(&f, &admitted.path()).await.unwrap();
-        oplog.collect_tombstone(&f.id()).await.unwrap();
-        let records = list_records(f.blobs.as_ref(), &f.id()).await.unwrap();
+        oplog
+            .collect_tombstone(&f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
+        let records = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
         assert_eq!(
             records
                 .iter()
@@ -555,7 +627,10 @@ async fn matured_collection_removes_only_its_region_and_preserves_all_newer_keys
             if record.fingerprint == newer.fingerprint)
         );
         // A duplicate scheduler delivery, now without a tombstone, is a complete no-op.
-        oplog.collect_tombstone(&f.id()).await.unwrap();
+        oplog
+            .collect_tombstone(&f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
         assert_fence(&f, pending.state.fence_namespace(), Some(ShardEpoch(8))).await;
     }
 }
@@ -571,7 +646,10 @@ async fn collection_of_late_equal_position_seals_does_not_resurrect_deleted_agen
         // a held-PUT test: the explicit late writes below model the delayed server commit.
         f.blobs
             .with("test", "pending_put_not_yet_visible")
-            .delete(seal_namespace(&f.id()), &pending.key.path())
+            .delete(
+                seal_namespace(&f.id(), f.metadata.agent_mode),
+                &pending.key.path(),
+            )
             .await
             .unwrap();
         mature_collections(&mut f);
@@ -586,7 +664,9 @@ async fn collection_of_late_equal_position_seals_does_not_resurrect_deleted_agen
             )
             .await
             .unwrap();
-        let records = list_records(f.blobs.as_ref(), &f.id()).await.unwrap();
+        let records = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
         assert_eq!(records.len(), 1);
         let tombstone = records[0].key;
         assert_eq!(tombstone.position(), pending.key.position());
@@ -600,7 +680,9 @@ async fn collection_of_late_equal_position_seals_does_not_resurrect_deleted_agen
             put_record(&f, key, &serialize(&pending.record).unwrap()).await;
             late_keys.push(key);
         }
-        let records = list_records(f.blobs.as_ref(), &f.id()).await.unwrap();
+        let records = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
         assert!(
             records
                 .iter()
@@ -608,12 +690,15 @@ async fn collection_of_late_equal_position_seals_does_not_resurrect_deleted_agen
         );
         assert_eq!(valid_record(&records).unwrap().key, tombstone);
         assert!(!oplog.exists(&f.id(), AgentMode::Durable).await.unwrap());
-        oplog.collect_tombstone(&f.id()).await.unwrap();
+        oplog
+            .collect_tombstone(&f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
         for key in late_keys.into_iter().chain([tombstone]) {
             assert!(record_bytes(&f, &key.path()).await.is_none());
         }
         assert!(
-            list_records(f.blobs.as_ref(), &f.id())
+            list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
                 .await
                 .unwrap()
                 .is_empty()
@@ -646,7 +731,9 @@ async fn final_tombstone_delete_failure_or_lost_reply_never_leaves_a_fence() {
                 )
                 .await
                 .unwrap();
-            let records = list_records(f.blobs.as_ref(), &f.id()).await.unwrap();
+            let records = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+                .await
+                .unwrap();
             assert_eq!(records.len(), 1);
             let tombstone = records[0].key;
             if after_commit {
@@ -655,7 +742,9 @@ async fn final_tombstone_delete_failure_or_lost_reply_never_leaves_a_fence() {
                 f.blobs.fail_next_delete();
             }
             assert!(matches!(
-                oplog.collect_tombstone(&f.id()).await,
+                oplog
+                    .collect_tombstone(&f.id(), f.metadata.agent_mode)
+                    .await,
                 Err(OplogError::Maintenance(_))
             ));
             // No ordinary record remains, so the injected delete is the final tombstone mutation.
@@ -666,9 +755,12 @@ async fn final_tombstone_delete_failure_or_lost_reply_never_leaves_a_fence() {
             f.assert_epoch(&pending.state, None).await;
             // Reconstruct the service after the failed/indeterminate final mutation.
             let restarted = f.oplog_service().await;
-            restarted.collect_tombstone(&f.id()).await.unwrap();
+            restarted
+                .collect_tombstone(&f.id(), f.metadata.agent_mode)
+                .await
+                .unwrap();
             assert!(
-                list_records(f.blobs.as_ref(), &f.id())
+                list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
                     .await
                     .unwrap()
                     .is_empty()
@@ -692,7 +784,10 @@ async fn lost_deletion_with_primary_create_preserves_same_incarnation_and_fence(
         let before = record_bytes(&f, &pending.key.path()).await.unwrap();
         mature_collections(&mut f);
         let oplog = f.oplog_service().await;
-        oplog.collect_tombstone(&f.id()).await.unwrap();
+        oplog
+            .collect_tombstone(&f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
         assert!(record_bytes(&f, &tombstone.path()).await.is_none());
         assert_eq!(record_bytes(&f, &pending.key.path()).await, Some(before));
         assert_chunk_sentinel(&f, f.metadata.fingerprint, true).await;
@@ -737,7 +832,7 @@ async fn lost_deletion_with_newer_admissible_seal_preserves_all_seals_chunks_and
         let collecting = {
             let oplog = oplog.clone();
             let id = f.id();
-            tokio::spawn(async move { oplog.collect_tombstone(&id).await })
+            tokio::spawn(async move { oplog.collect_tombstone(&id, AgentMode::Durable).await })
         };
         listing.await.unwrap();
         let newer = put_seal(&f, &pending.record, f.metadata.fingerprint, 8, 0).await;
@@ -877,8 +972,14 @@ async fn unidentified_never_sealed_primary_gc_removes_only_the_tombstone() {
         assert!(observation.has_data);
         assert!(observation.durable_marker.is_none());
         assert!(observation.ephemeral_marker.is_none());
-        oplog.collect_tombstone(&f.id()).await.unwrap();
-        oplog.collect_tombstone(&f.id()).await.unwrap();
+        oplog
+            .collect_tombstone(&f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
+        oplog
+            .collect_tombstone(&f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
         assert!(record_bytes(&f, &tombstone.path()).await.is_none());
         assert_chunk_sentinel(&f, f.metadata.fingerprint, true).await;
         for (level, manifest) in manifests.into_iter().enumerate() {
@@ -923,7 +1024,9 @@ async fn absent_primary_retry_for_a_does_not_shadow_recreated_sealed_b() {
         let replacement = AgentFingerprint::new();
         let newer = put_seal(&f, &pending.record, replacement, 7, 0).await;
         put_chunk_sentinel(&f, replacement).await;
-        let records = list_records(f.blobs.as_ref(), &f.id()).await.unwrap();
+        let records = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
         let before: BTreeSet<_> = records.iter().map(|record| record.key).collect();
         let newer_bytes = record_bytes(&f, &newer.path()).await.unwrap();
         f.register(8, true);
@@ -938,7 +1041,7 @@ async fn absent_primary_retry_for_a_does_not_shadow_recreated_sealed_b() {
             .await
             .unwrap();
         assert_eq!(
-            list_records(f.blobs.as_ref(), &f.id())
+            list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
                 .await
                 .unwrap()
                 .iter()
@@ -974,7 +1077,9 @@ async fn a_and_b_tombstones_survive_reseal_and_deletion_until_gc_collects_both_c
             )
             .await
             .unwrap();
-        let records = list_records(f.blobs.as_ref(), &f.id()).await.unwrap();
+        let records = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
         assert_eq!(records.len(), 1);
         let tombstone_a = records[0].key;
         put_chunk_sentinel(&f, a).await;
@@ -1019,7 +1124,9 @@ async fn a_and_b_tombstones_survive_reseal_and_deletion_until_gc_collects_both_c
             )
             .await
             .unwrap();
-        let records = list_records(f.blobs.as_ref(), &f.id()).await.unwrap();
+        let records = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
         assert_eq!(records.len(), 2);
         assert!(
             records
@@ -1060,7 +1167,9 @@ async fn a_and_b_tombstones_survive_reseal_and_deletion_until_gc_collects_both_c
         // region first and leave B's seal, chunks, tombstone, and owning fence intact.
         f.blobs.fail_delete_after_commit(0);
         assert!(matches!(
-            oplog.collect_tombstone(&f.id()).await,
+            oplog
+                .collect_tombstone(&f.id(), f.metadata.agent_mode)
+                .await,
             Err(OplogError::Maintenance(_))
         ));
         assert!(record_bytes(&f, &late_a.path()).await.is_none());
@@ -1070,9 +1179,12 @@ async fn a_and_b_tombstones_survive_reseal_and_deletion_until_gc_collects_both_c
         assert_chunk_sentinel(&f, a, true).await;
         assert_chunk_sentinel(&f, b, true).await;
         assert_fence(&f, pending_b.state.fence_namespace(), Some(ShardEpoch(7))).await;
-        oplog.collect_tombstone(&f.id()).await.unwrap();
+        oplog
+            .collect_tombstone(&f.id(), f.metadata.agent_mode)
+            .await
+            .unwrap();
         assert!(
-            list_records(f.blobs.as_ref(), &f.id())
+            list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
                 .await
                 .unwrap()
                 .is_empty()
@@ -1181,7 +1293,10 @@ async fn lost_deletion_does_not_hide_or_erase_moved_data_from_present_or_reseale
             );
             mature_collections(&mut f);
             let present = f.oplog_service().await;
-            present.collect_tombstone(&f.id()).await.unwrap();
+            present
+                .collect_tombstone(&f.id(), f.metadata.agent_mode)
+                .await
+                .unwrap();
             assert!(record_bytes(&f, &tombstone.path()).await.is_none());
             assert!(record_bytes(&f, &first.key.path()).await.is_some());
             assert_chunk_sentinel(&f, f.metadata.fingerprint, true).await;
@@ -1218,7 +1333,10 @@ async fn lost_deletion_does_not_hide_or_erase_moved_data_from_present_or_reseale
             assert!(record_bytes(&f, &tombstone.path()).await.is_some());
             mature_collections(&mut f);
             let oplog = f.oplog_service().await;
-            oplog.collect_tombstone(&f.id()).await.unwrap();
+            oplog
+                .collect_tombstone(&f.id(), f.metadata.agent_mode)
+                .await
+                .unwrap();
             assert_chunk_sentinel(&f, f.metadata.fingerprint, true).await;
             assert!(record_bytes(&f, &tombstone.path()).await.is_none());
             assert!(record_bytes(&f, &second.key.path()).await.is_some());
@@ -1289,7 +1407,7 @@ async fn memory_scheduler_storage_disables_sealing_without_lifecycle_writes() {
                 .0
         );
         assert!(
-            list_records(f.blobs.as_ref(), &f.id())
+            list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
                 .await
                 .unwrap()
                 .is_empty()
@@ -1302,6 +1420,149 @@ async fn memory_scheduler_storage_disables_sealing_without_lifecycle_writes() {
                 .unwrap(),
             f.original
         );
+    }
+}
+
+#[test]
+async fn collection_is_mode_addressed_even_for_identical_keys_fingerprints_and_epochs() {
+    let root = tempfile::TempDir::new().unwrap();
+    for indexed in storages(&root).await {
+        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+            let other_mode = match mode {
+                AgentMode::Durable => AgentMode::Ephemeral,
+                AgentMode::Ephemeral => AgentMode::Durable,
+            };
+            let mut f = Fixture::with_mode(indexed.clone(), mode).await;
+            let pending = seal_fixture(&f).await;
+            mature_collections(&mut f);
+            let oplog = f.oplog_service().await;
+            oplog
+                .delete(
+                    &mut oplog.lock_lifecycle(&f.id().agent_id).await,
+                    &f.id(),
+                    mode,
+                    f.metadata.fingerprint,
+                    Some(ShardEpoch(6)),
+                )
+                .await
+                .unwrap();
+            assert!(
+                f.scheduler
+                    .actions
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .any(|action| matches!(action,
+                ScheduledAction::CollectTombstone { owned_agent_id, agent_mode }
+                    if *owned_agent_id == f.id() && *agent_mode == mode))
+            );
+            let records = list_records(f.blobs.as_ref(), &f.id(), mode).await.unwrap();
+            assert_eq!(records.len(), 1);
+            let tombstone = records[0].key;
+            let tombstone_bytes = record_bytes(&f, &tombstone.path()).await.unwrap();
+            let other_namespace = seal_namespace(&f.id(), other_mode);
+            let mut other_record = pending.record.clone();
+            other_record.agent_mode = other_mode;
+            other_record.metadata.agent_mode = other_mode;
+            let other_bytes = serialize(&other_record).unwrap();
+            for (key, bytes) in [(pending.key, &other_bytes), (tombstone, &tombstone_bytes)] {
+                f.blobs
+                    .with("test", "other_mode_records")
+                    .put_raw(other_namespace.clone(), &key.path(), bytes)
+                    .await
+                    .unwrap();
+            }
+            let other_state = f
+                .service()
+                .indexed_state(&f.id(), other_mode, &SealManifest::new())
+                .unwrap();
+            f.indexed
+                .set_key_epoch(
+                    "test",
+                    "other_mode_fence",
+                    other_state.fence_namespace(),
+                    &f.id().storage_key(),
+                    ShardEpoch(6),
+                    &[],
+                    false,
+                )
+                .await
+                .unwrap();
+            let path = Path::new("chunks")
+                .join(agent_path_segment(&f.id().agent_id))
+                .join(f.metadata.fingerprint.to_string())
+                .join("late_chunk");
+            for chunk_mode in [mode, other_mode] {
+                f.blobs
+                    .with("test", "mode_chunk")
+                    .put_raw(
+                        BlobStorageNamespace::CompressedOplog {
+                            environment_id: f.id().environment_id(),
+                            type_tag: f.id().agent_id.type_tag(),
+                            agent_mode: chunk_mode,
+                            level: 0,
+                        },
+                        &path,
+                        b"late chunk",
+                    )
+                    .await
+                    .unwrap();
+            }
+            oplog.collect_tombstone(&f.id(), mode).await.unwrap();
+            assert!(
+                list_records(f.blobs.as_ref(), &f.id(), mode)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_eq!(
+                list_records(f.blobs.as_ref(), &f.id(), other_mode)
+                    .await
+                    .unwrap()
+                    .len(),
+                2
+            );
+            for (key, bytes) in [(pending.key, &other_bytes), (tombstone, &tombstone_bytes)] {
+                assert_eq!(
+                    f.blobs
+                        .with("test", "other_mode_after_gc")
+                        .get_raw(other_namespace.clone(), &key.path())
+                        .await
+                        .unwrap()
+                        .as_ref(),
+                    Some(bytes)
+                );
+            }
+            assert_fence(&f, pending.state.fence_namespace(), None).await;
+            assert_fence(&f, other_state.fence_namespace(), Some(ShardEpoch(6))).await;
+            for (chunk_mode, present) in [(mode, false), (other_mode, true)] {
+                assert_eq!(
+                    f.blobs
+                        .with("test", "chunk_after_gc")
+                        .get_raw(
+                            BlobStorageNamespace::CompressedOplog {
+                                environment_id: f.id().environment_id(),
+                                type_tag: f.id().agent_id.type_tag(),
+                                agent_mode: chunk_mode,
+                                level: 0,
+                            },
+                            &path
+                        )
+                        .await
+                        .unwrap()
+                        .is_some(),
+                    present
+                );
+            }
+            oplog.collect_tombstone(&f.id(), other_mode).await.unwrap();
+            assert!(
+                list_records(f.blobs.as_ref(), &f.id(), other_mode)
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            assert_fence(&f, other_state.fence_namespace(), None).await;
+        }
     }
 }
 

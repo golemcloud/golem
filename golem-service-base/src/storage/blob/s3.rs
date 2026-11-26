@@ -510,8 +510,10 @@ impl S3BlobStorage {
             BlobStorageNamespace::SealRecords {
                 environment_id,
                 type_tag,
+                agent_mode,
             } => {
-                format!("seal_records/{environment_id}/{type_tag:08x}")
+                let mode = super::agent_mode_prefix(*agent_mode);
+                format!("seal_records/{mode}/{environment_id}/{type_tag:08x}")
             }
             BlobStorageNamespace::OplogPayload {
                 environment_id,

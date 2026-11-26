@@ -254,11 +254,15 @@ pub trait OplogService: Debug + Send + Sync {
         None
     }
 
-    async fn collect_tombstone(&self, owned_agent_id: &OwnedAgentId) -> Result<(), OplogError> {
+    async fn collect_tombstone(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+    ) -> Result<(), OplogError> {
         let mut lifecycle = self.lock_lifecycle(&owned_agent_id.agent_id).await;
         if let Some(service) = self.seal_service() {
             service
-                .collect_tombstone(&mut lifecycle, owned_agent_id)
+                .collect_tombstone(&mut lifecycle, owned_agent_id, agent_mode)
                 .await?;
         }
         Ok(())

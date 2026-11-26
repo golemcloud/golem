@@ -36,6 +36,97 @@ use std::time::{Duration, Instant};
 use test_r::test;
 
 mod deletion_tests;
+mod scan_tests;
+
+#[test]
+async fn mode_addressed_records_list_only_the_requested_namespace() {
+    let f = Fixture::new(Arc::new(InMemoryIndexedStorage::new())).await;
+    let seal = f.service();
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        f.blobs.reset();
+        assert!(seal.record_in_mode(&f.id(), mode).await.unwrap().is_none());
+        assert_eq!(f.blobs.reads(), 1, "one LIST for a known mode");
+    }
+    f.blobs.reset();
+    assert!(seal.record(&f.id()).await.unwrap().is_none());
+    assert_eq!(f.blobs.reads(), 2, "missing identity probes both modes");
+
+    let missing = OwnedAgentId::new(f.id().environment_id(), &AgentId::from_parts(7, 9999));
+    for (mode, lists) in [
+        (Some(AgentMode::Durable), 1),
+        (Some(AgentMode::Ephemeral), 1),
+        (None, 2),
+    ] {
+        f.blobs.reset();
+        assert!(
+            seal.read_with_authority(
+                &missing,
+                mode,
+                || async { Ok::<_, OplogArchiveError>(false) },
+                |_| async { Ok(false) },
+                || Ok(true),
+                std::convert::identity,
+            )
+            .await
+            .unwrap()
+        );
+        assert_eq!(f.blobs.reads(), lists, "authority lookup for {mode:?}");
+    }
+
+    let pending = seal
+        .prepare(f.metadata.clone(), ShardEpoch(6))
+        .await
+        .unwrap()
+        .unwrap();
+    let mut ephemeral = pending.record.clone();
+    ephemeral.agent_mode = AgentMode::Ephemeral;
+    ephemeral.metadata.agent_mode = AgentMode::Ephemeral;
+    ephemeral.writer_nonce = Uuid::new_v4();
+    f.blobs
+        .with("test", "other_mode")
+        .put_raw(
+            seal_namespace(&f.id(), AgentMode::Ephemeral),
+            &pending.key.path(),
+            &serialize(&ephemeral).unwrap(),
+        )
+        .await
+        .unwrap();
+    for (mode, nonce) in [
+        (AgentMode::Durable, pending.record.writer_nonce),
+        (AgentMode::Ephemeral, ephemeral.writer_nonce),
+    ] {
+        f.blobs.reset();
+        assert_eq!(
+            seal.record_in_mode(&f.id(), mode)
+                .await
+                .unwrap()
+                .unwrap()
+                .writer_nonce,
+            nonce
+        );
+        assert_eq!(f.blobs.reads(), 2, "one LIST and one GET for a known mode");
+    }
+    f.blobs.reset();
+    assert_eq!(
+        seal.record(&f.id()).await.unwrap().unwrap().writer_nonce,
+        pending.record.writer_nonce
+    );
+    assert_eq!(f.blobs.reads(), 2, "unknown mode selects Durable first");
+    f.blobs
+        .with("test", "remove_durable")
+        .delete(
+            seal_namespace(&f.id(), AgentMode::Durable),
+            &pending.key.path(),
+        )
+        .await
+        .unwrap();
+    f.blobs.reset();
+    assert_eq!(
+        seal.record(&f.id()).await.unwrap().unwrap().writer_nonce,
+        ephemeral.writer_nonce
+    );
+    assert_eq!(f.blobs.reads(), 3, "two LISTs and one GET for Ephemeral");
+}
 
 #[derive(Default)]
 struct Scheduler {

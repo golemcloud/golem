@@ -1168,7 +1168,14 @@ fn scheduled_action_variants() -> Vec<ScheduledAction> {
             owned_agent_id: owned_agent_id.clone(),
             fingerprint: AgentFingerprint::new(),
         },
-        ScheduledAction::CollectTombstone { owned_agent_id },
+        ScheduledAction::CollectTombstone {
+            owned_agent_id: owned_agent_id.clone(),
+            agent_mode: AgentMode::Durable,
+        },
+        ScheduledAction::CollectTombstone {
+            owned_agent_id,
+            agent_mode: AgentMode::Ephemeral,
+        },
     ]
 }
 
@@ -1307,6 +1314,7 @@ async fn sqlite_tombstone_collection_survives_restart_and_shard_move() {
     let now = jiff::Timestamp::from_str("2023-07-17T10:06:00Z").unwrap();
     let action = ScheduledAction::CollectTombstone {
         owned_agent_id: OwnedAgentId::new(EnvironmentId::new(), &agent("collect-tombstone")),
+        agent_mode: AgentMode::Ephemeral,
     };
     let schedule_id = ScheduleId::fresh();
     let routing_hash = ShardId::hash_agent_id(&action.owned_agent_id().agent_id);

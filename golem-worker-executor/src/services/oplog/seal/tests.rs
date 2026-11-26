@@ -210,7 +210,7 @@ async fn record_listing_ignores_malformed_keys_and_decodes_the_selected_body() {
         &key(0, 0, SealRecordKind::Deleted).agent_id,
     );
     let body = record(&owned);
-    let ns = seal_namespace(&owned);
+    let ns = seal_namespace(&owned, AgentMode::Durable);
     let old = SealRecordKey {
         fingerprint: body.fingerprint,
         ..sealed(6, 0, u64::MAX)
@@ -226,12 +226,19 @@ async fn record_listing_ignores_malformed_keys_and_decodes_the_selected_body() {
         .put_raw(ns.clone(), &malformed, b"ignore")
         .await
         .unwrap();
-    let records = list_records(&storage, &owned).await.unwrap();
+    let records = list_records(&storage, &owned, AgentMode::Durable)
+        .await
+        .unwrap();
     assert_eq!(records.len(), 1);
     assert_eq!(
-        read_record(&storage, &owned, valid_record(&records).unwrap())
-            .await
-            .unwrap(),
+        read_record(
+            &storage,
+            &owned,
+            AgentMode::Durable,
+            valid_record(&records).unwrap()
+        )
+        .await
+        .unwrap(),
         SealRecordBody::Sealed(Box::new(body.clone()))
     );
     // The newer malformed body must fail rather than falling back to the old record.
@@ -241,9 +248,17 @@ async fn record_listing_ignores_malformed_keys_and_decodes_the_selected_body() {
         .put_raw(ns.clone(), &newer.path(), b"invalid")
         .await
         .unwrap();
-    let records = list_records(&storage, &owned).await.unwrap();
+    let records = list_records(&storage, &owned, AgentMode::Durable)
+        .await
+        .unwrap();
     assert!(matches!(
-        read_record(&storage, &owned, valid_record(&records).unwrap()).await,
+        read_record(
+            &storage,
+            &owned,
+            AgentMode::Durable,
+            valid_record(&records).unwrap()
+        )
+        .await,
         Err(OplogArchiveError::Corruption(_))
     ));
     let deleted = SealRecordKey {
@@ -260,11 +275,18 @@ async fn record_listing_ignores_malformed_keys_and_decodes_the_selected_body() {
         .put_raw(ns.clone(), &deleted.path(), &serialize(&tombstone).unwrap())
         .await
         .unwrap();
-    let records = list_records(&storage, &owned).await.unwrap();
+    let records = list_records(&storage, &owned, AgentMode::Durable)
+        .await
+        .unwrap();
     assert_eq!(
-        read_record(&storage, &owned, valid_record(&records).unwrap())
-            .await
-            .unwrap(),
+        read_record(
+            &storage,
+            &owned,
+            AgentMode::Durable,
+            valid_record(&records).unwrap()
+        )
+        .await
+        .unwrap(),
         SealRecordBody::Deleted(tombstone)
     );
     assert_eq!(
@@ -289,7 +311,7 @@ async fn record_body_identity_and_snapshot_must_match_the_key() {
         fingerprint: original.fingerprint,
         ..sealed(6, 0, u64::MAX)
     };
-    for variant in 0..6 {
+    for variant in 0..7 {
         let mut body = original.clone();
         match variant {
             0 => body.writer_epoch = ShardEpoch(5),
@@ -301,6 +323,10 @@ async fn record_body_identity_and_snapshot_must_match_the_key() {
                 .then_some(())
                 .unwrap(),
             4 => body.metadata.agent_mode = AgentMode::Ephemeral,
+            5 => {
+                body.agent_mode = AgentMode::Ephemeral;
+                body.metadata.agent_mode = AgentMode::Ephemeral;
+            }
             _ => {
                 body.fingerprint = AgentFingerprint::new();
                 body.metadata.fingerprint = body.fingerprint;
@@ -309,15 +335,23 @@ async fn record_body_identity_and_snapshot_must_match_the_key() {
         storage
             .with("test", "put")
             .put_raw(
-                seal_namespace(&owned),
+                seal_namespace(&owned, AgentMode::Durable),
                 &key.path(),
                 &serialize(&body).unwrap(),
             )
             .await
             .unwrap();
-        let records = list_records(&storage, &owned).await.unwrap();
+        let records = list_records(&storage, &owned, AgentMode::Durable)
+            .await
+            .unwrap();
         assert!(matches!(
-            read_record(&storage, &owned, valid_record(&records).unwrap()).await,
+            read_record(
+                &storage,
+                &owned,
+                AgentMode::Durable,
+                valid_record(&records).unwrap()
+            )
+            .await,
             Err(OplogArchiveError::Corruption(_))
         ));
     }
@@ -340,15 +374,23 @@ async fn deletion_body_identity_must_match_the_key() {
         storage
             .with("test", "put")
             .put_raw(
-                seal_namespace(&owned),
+                seal_namespace(&owned, AgentMode::Durable),
                 &key.path(),
                 &serialize(&body).unwrap(),
             )
             .await
             .unwrap();
-        let records = list_records(&storage, &owned).await.unwrap();
+        let records = list_records(&storage, &owned, AgentMode::Durable)
+            .await
+            .unwrap();
         assert!(matches!(
-            read_record(&storage, &owned, valid_record(&records).unwrap()).await,
+            read_record(
+                &storage,
+                &owned,
+                AgentMode::Durable,
+                valid_record(&records).unwrap()
+            )
+            .await,
             Err(OplogArchiveError::Corruption(_))
         ));
     }
@@ -413,14 +455,16 @@ async fn record_listing_continues_after_a_full_page() {
         storage
             .with("test", "put")
             .put_raw(
-                seal_namespace(&owned),
+                seal_namespace(&owned, AgentMode::Durable),
                 &sealed(4, seq, u64::MAX).path(),
                 b"listing does not decode bodies",
             )
             .await
             .unwrap();
     }
-    let records = list_records(&storage, &owned).await.unwrap();
+    let records = list_records(&storage, &owned, AgentMode::Durable)
+        .await
+        .unwrap();
     assert_eq!(records.len(), 1001);
     assert_eq!(valid_record(&records).unwrap().key.seq, 1000);
 }
@@ -442,17 +486,24 @@ async fn ephemeral_record_restores_status_mode_and_pending_promises() {
     storage
         .with("test", "put")
         .put_raw(
-            seal_namespace(&owned),
+            seal_namespace(&owned, AgentMode::Ephemeral),
             &key.path(),
             &serialize(&body).unwrap(),
         )
         .await
         .unwrap();
-    let records = list_records(&storage, &owned).await.unwrap();
+    let records = list_records(&storage, &owned, AgentMode::Ephemeral)
+        .await
+        .unwrap();
     assert_eq!(
-        read_record(&storage, &owned, valid_record(&records).unwrap())
-            .await
-            .unwrap(),
+        read_record(
+            &storage,
+            &owned,
+            AgentMode::Ephemeral,
+            valid_record(&records).unwrap()
+        )
+        .await
+        .unwrap(),
         SealRecordBody::Sealed(Box::new(body))
     );
 }
@@ -677,15 +728,23 @@ async fn ephemeral_pending_completed_promise_collision_is_rejected() {
     storage
         .with("test", "put")
         .put_raw(
-            seal_namespace(&owned),
+            seal_namespace(&owned, AgentMode::Ephemeral),
             &key.path(),
             &serialize(&body).unwrap(),
         )
         .await
         .unwrap();
-    let records = list_records(&storage, &owned).await.unwrap();
+    let records = list_records(&storage, &owned, AgentMode::Ephemeral)
+        .await
+        .unwrap();
     assert!(matches!(
-        read_record(&storage, &owned, valid_record(&records).unwrap()).await,
+        read_record(
+            &storage,
+            &owned,
+            AgentMode::Ephemeral,
+            valid_record(&records).unwrap()
+        )
+        .await,
         Err(OplogArchiveError::Corruption(_))
     ));
 }

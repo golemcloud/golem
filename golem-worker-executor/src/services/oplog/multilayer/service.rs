@@ -20,6 +20,7 @@ impl MultiLayerOplogService {
     async fn read_with_authority<T, E, R, RF, S, SF, A>(
         &self,
         id: &OwnedAgentId,
+        agent_mode: AgentMode,
         mut present: R,
         sealed: S,
         absent: A,
@@ -38,12 +39,19 @@ impl MultiLayerOplogService {
             return present().await;
         };
         service
-            .read_with_authority(id, present, sealed, absent, move |error| {
-                map_error(UnreadableOplog::new(
-                    &id.agent_id,
-                    OplogReadError::of_archive(OplogReadSource::Other("seal record"), error),
-                ))
-            })
+            .read_with_authority(
+                id,
+                Some(agent_mode),
+                present,
+                sealed,
+                absent,
+                move |error| {
+                    map_error(UnreadableOplog::new(
+                        &id.agent_id,
+                        OplogReadError::of_archive(OplogReadSource::Other("seal record"), error),
+                    ))
+                },
+            )
             .await
     }
 
@@ -153,6 +161,12 @@ impl MultiLayerOplogService {
     ) -> Result<Vec<OwnedAgentId>, WorkerExecutorError> {
         let mut ids = Vec::new();
         for id in unfiltered_ids {
+            if let Some(service) = self.seal_service()
+                && service.enabled()
+                && service.is_marked(&id, agent_mode).await?
+            {
+                continue;
+            }
             let mut exists_in_lower = false;
             for lower_layer in &self.lower.iter().as_slice()[from..] {
                 if lower_layer
@@ -483,6 +497,7 @@ impl OplogService for MultiLayerOplogService {
     ) -> Result<OplogIndex, UnreadableOplog> {
         self.read_with_authority(
             owned_agent_id,
+            agent_mode,
             || async {
                 let mut result = self
                     .primary
@@ -522,6 +537,7 @@ impl OplogService for MultiLayerOplogService {
     ) -> Result<OplogIndex, String> {
         self.read_with_authority(
             owned_agent_id,
+            agent_mode,
             || async {
                 let mut result = self
                     .primary
@@ -669,6 +685,7 @@ impl OplogService for MultiLayerOplogService {
         let unreadable = |error| UnreadableOplog::new(&owned_agent_id.agent_id, error);
         self.read_with_authority(
             owned_agent_id,
+            agent_mode,
             || async {
                 let mut read = OplogRead::new(idx, n).map_err(unreadable)?;
                 if let Some((start, count)) = read.next_range() {
@@ -731,6 +748,7 @@ impl OplogService for MultiLayerOplogService {
         checked_range_end(idx, n).map_err(unreadable)?;
         self.read_with_authority(
             owned_agent_id,
+            agent_mode,
             || async {
                 let mut result = self
                     .primary
@@ -784,6 +802,7 @@ impl OplogService for MultiLayerOplogService {
     ) -> Result<bool, UnreadableOplog> {
         self.read_with_authority(
             owned_agent_id,
+            agent_mode,
             || async {
                 if self.primary.exists(owned_agent_id, agent_mode).await? {
                     return Ok(true);
@@ -816,6 +835,7 @@ impl OplogService for MultiLayerOplogService {
     ) -> Result<bool, String> {
         self.read_with_authority(
             owned_agent_id,
+            agent_mode,
             || async {
                 if self.primary.try_exists(owned_agent_id, agent_mode).await? {
                     return Ok(true);
@@ -851,7 +871,9 @@ impl OplogService for MultiLayerOplogService {
     ) -> Result<ScanPage, WorkerExecutorError> {
         let state = decode_scan_cursor(&cursor, modes)?;
         let layer = state.layer;
-        if layer > self.lower.len().get() {
+        let seal_service = self.seal_service().filter(|service| service.enabled());
+        let last_layer = self.lower.len().get() + usize::from(seal_service.is_some());
+        if layer > last_layer {
             return Err(WorkerExecutorError::invalid_request(format!(
                 "Invalid oplog layer in scan cursor: {layer}"
             )));
@@ -889,7 +911,7 @@ impl OplogService for MultiLayerOplogService {
                 let agent_ids = self
                     .filter_ids_existing_on_lower_layers(unfiltered_ids, active_mode, layer)
                     .await?;
-                let cursor = if new_cursor.is_finished() && (layer + 1) <= self.lower.len().get() {
+                let cursor = if new_cursor.is_finished() && layer < last_layer {
                     first_scan_cursor(layer + 1, modes)?
                 } else if new_cursor.is_finished() {
                     ScanCursor::default()
@@ -902,7 +924,12 @@ impl OplogService for MultiLayerOplogService {
                     examined_keys,
                 })
             }
-            _ => unreachable!(),
+            _ => {
+                seal_service
+                    .expect("validated seal scan layer")
+                    .scan_for_type(environment_id, type_id, modes, cursor, count)
+                    .await
+            }
         }
     }
 

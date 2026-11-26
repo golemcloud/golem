@@ -552,7 +552,10 @@ pub enum ScheduledAction {
         fingerprint: AgentFingerprint,
     },
     /// Collects an oplog tombstone without activating the agent.
-    CollectTombstone { owned_agent_id: OwnedAgentId },
+    CollectTombstone {
+        owned_agent_id: OwnedAgentId,
+        agent_mode: AgentMode,
+    },
 }
 
 impl ScheduledAction {
@@ -570,7 +573,7 @@ impl ScheduledAction {
                 owned_agent_id.clone()
             }
             ScheduledAction::Resume { owned_agent_id, .. }
-            | ScheduledAction::CollectTombstone { owned_agent_id } => owned_agent_id.clone(),
+            | ScheduledAction::CollectTombstone { owned_agent_id, .. } => owned_agent_id.clone(),
         }
     }
 }
@@ -599,8 +602,11 @@ impl Display for ScheduledAction {
             ScheduledAction::DeleteFinishedInvocation { owned_agent_id, .. } => {
                 write!(f, "delete-finished-invocation[{owned_agent_id}]")
             }
-            ScheduledAction::CollectTombstone { owned_agent_id } => {
-                write!(f, "collect-tombstone[{owned_agent_id}]")
+            ScheduledAction::CollectTombstone {
+                owned_agent_id,
+                agent_mode,
+            } => {
+                write!(f, "collect-tombstone[{owned_agent_id}/{agent_mode:?}]")
             }
         }
     }

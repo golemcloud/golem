@@ -302,6 +302,7 @@ impl WorkerService for DefaultWorkerService {
             return seal
                 .read_with_authority(
                     owned_agent_id,
+                    None,
                     present,
                     |record| async move {
                         let metadata = record.metadata;
@@ -381,7 +382,7 @@ impl WorkerService for DefaultWorkerService {
         // what the new owner rebuilds from it.
         if delete_current_oplog && let Some(epoch) = expected_epoch {
             if let Some(seal) = self.oplog_service.seal_service() {
-                seal.prepare_deletion(lifecycle, owned_agent_id, epoch)
+                seal.prepare_deletion(lifecycle, owned_agent_id, agent_mode, epoch)
                     .await?;
             }
             self.oplog_service

@@ -36,6 +36,7 @@ impl SealService {
     async fn schedule_collection(
         &self,
         id: &OwnedAgentId,
+        mode: AgentMode,
         time: SystemTime,
     ) -> Result<(), OplogError> {
         let scheduler = self
@@ -52,6 +53,7 @@ impl SealService {
                 jiff::Timestamp::try_from(time).map_err(maintenance)?,
                 ScheduledAction::CollectTombstone {
                     owned_agent_id: id.clone(),
+                    agent_mode: mode,
                 },
             )
             .await;
@@ -61,9 +63,10 @@ impl SealService {
     async fn deletion_records(
         &self,
         id: &OwnedAgentId,
+        mode: AgentMode,
         epoch: ShardEpoch,
     ) -> Result<Vec<ListedSealRecord>, OplogError> {
-        let records = list_records(self.blobs.as_ref(), id)
+        let records = list_records(self.blobs.as_ref(), id, mode)
             .await
             .map_err(maintenance)?;
         if let Some(actual) = records.iter().map(|record| record.key.epoch).max()
@@ -83,12 +86,13 @@ impl SealService {
         &self,
         lifecycle: &mut OplogLifecycleGuard,
         id: &OwnedAgentId,
+        mode: AgentMode,
         epoch: ShardEpoch,
     ) -> Result<(), OplogError> {
         lifecycle.assert_agent(&id.agent_id);
         if self.enabled() {
-            self.deletion_records(id, epoch).await?;
-            self.schedule_collection(id, SystemTime::now() + self.gc_delay())
+            self.deletion_records(id, mode, epoch).await?;
+            self.schedule_collection(id, mode, SystemTime::now() + self.gc_delay())
                 .await?;
         }
         Ok(())
@@ -111,7 +115,7 @@ impl SealService {
             Some(epoch) => epoch,
             None => self.target_epoch(id).map_err(maintenance)?,
         };
-        let mut records = self.deletion_records(id, epoch).await?;
+        let mut records = self.deletion_records(id, mode, epoch).await?;
         let state = self
             .indexed_state(id, mode, &SealManifest::new())
             .map_err(maintenance)?;
@@ -142,7 +146,7 @@ impl SealService {
         // Schedule before the first fence mutation. A lost PUT reply or process crash must
         // never leave a tombstone whose collection cannot be rediscovered after a restart.
         if needs_tombstone {
-            self.schedule_collection(id, SystemTime::now() + self.gc_delay())
+            self.schedule_collection(id, mode, SystemTime::now() + self.gc_delay())
                 .await?;
         }
         if !present || expected_epoch.is_none() {
@@ -196,20 +200,20 @@ impl SealService {
                 .put_raw_if_absent(
                     "oplog_seal",
                     "write_tombstone",
-                    seal_namespace(id),
+                    seal_namespace(id, mode),
                     &tombstone.path(),
                     &bytes,
                 )
                 .await
                 .map_err(maintenance)?;
-            records = self.deletion_records(id, epoch).await?;
+            records = self.deletion_records(id, mode, epoch).await?;
             let listed = records
                 .iter()
                 .find(|record| record.key == tombstone)
                 .ok_or_else(|| maintenance("Written tombstone is not listed"))?;
             if outcome == PutIfAbsent::Written
                 || matches!(
-                    read_record(self.blobs.as_ref(), id, listed).await.map_err(maintenance)?,
+                    read_record(self.blobs.as_ref(), id, mode, listed).await.map_err(maintenance)?,
                     SealRecordBody::Deleted(ref stored) if stored.writer_nonce == body.writer_nonce
                 )
             {
@@ -233,7 +237,14 @@ impl SealService {
                 }
                 error => maintenance(error),
             })?;
-        for namespace in self.presence_namespaces(id) {
+        for namespace in state
+            .epoch_namespaces()
+            .into_iter()
+            .chain(
+                (0..self.config.blob_storage_layers).map(|level| state.manifest_namespace(level)),
+            )
+            .chain(std::iter::once(state.marker_namespace()))
+        {
             if namespace != state.fence_namespace() {
                 self.indexed
                     .delete_with_epoch("oplog_seal", "delete_layer", namespace, &key, None, false)
@@ -241,14 +252,15 @@ impl SealService {
                     .map_err(maintenance)?;
             }
         }
-        self.delete_incarnation_chunks(id, fingerprint).await?;
+        self.delete_incarnation_chunks(id, mode, fingerprint)
+            .await?;
         for record in records.iter().filter(|record| {
             matches!(record.key.kind, SealRecordKind::Sealed { .. })
                 && record.key.position() < tombstone.position()
         }) {
             self.blobs
                 .with("oplog_seal", "delete_old_record")
-                .delete(seal_namespace(id), &record.entry.path)
+                .delete(seal_namespace(id, mode), &record.entry.path)
                 .await
                 .map_err(maintenance)?;
         }
@@ -258,27 +270,26 @@ impl SealService {
     async fn delete_incarnation_chunks(
         &self,
         id: &OwnedAgentId,
+        mode: AgentMode,
         fingerprint: AgentFingerprint,
     ) -> Result<(), OplogError> {
         let path = Path::new("chunks")
             .join(agent_path_segment(&id.agent_id))
             .join(fingerprint.to_string());
-        for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
-            for level in 0..self.config.blob_storage_layers {
-                self.blobs
-                    .with("oplog_seal", "delete_incarnation_chunks")
-                    .delete_dir(
-                        BlobStorageNamespace::CompressedOplog {
-                            environment_id: id.environment_id(),
-                            type_tag: id.agent_id.type_tag(),
-                            agent_mode: mode,
-                            level,
-                        },
-                        &path,
-                    )
-                    .await
-                    .map_err(maintenance)?;
-            }
+        for level in 0..self.config.blob_storage_layers {
+            self.blobs
+                .with("oplog_seal", "delete_incarnation_chunks")
+                .delete_dir(
+                    BlobStorageNamespace::CompressedOplog {
+                        environment_id: id.environment_id(),
+                        type_tag: id.agent_id.type_tag(),
+                        agent_mode: mode,
+                        level,
+                    },
+                    &path,
+                )
+                .await
+                .map_err(maintenance)?;
         }
         Ok(())
     }
@@ -346,9 +357,10 @@ impl SealService {
         &self,
         lifecycle: &mut OplogLifecycleGuard,
         id: &OwnedAgentId,
+        mode: AgentMode,
     ) -> Result<(), OplogError> {
         lifecycle.assert_agent(&id.agent_id);
-        let mut tombstones = list_records(self.blobs.as_ref(), id)
+        let mut tombstones = list_records(self.blobs.as_ref(), id, mode)
             .await
             .map_err(maintenance)?;
         tombstones.retain(|record| record.key.kind == SealRecordKind::Deleted);
@@ -361,14 +373,14 @@ impl SealService {
                 + Duration::from_nanos(u64::try_from(timestamp.nanos).map_err(maintenance)?);
             let deadline = modified + self.gc_delay();
             if SystemTime::now() < deadline {
-                return self.schedule_collection(id, deadline).await;
+                return self.schedule_collection(id, mode, deadline).await;
             }
             // Identity must precede the fresh listing: if release races this read, its
             // replacement admissible record must already be visible in that listing.
             let identity = self.indexed_identity(id).await?;
             let observation = self.observe(id).await.map_err(maintenance)?;
             let pinned = Self::pinned_fingerprint(identity, &observation).map_err(maintenance)?;
-            let records = list_records(self.blobs.as_ref(), id)
+            let records = list_records(self.blobs.as_ref(), id, mode)
                 .await
                 .map_err(maintenance)?;
             if !records.iter().any(|record| record.key == tombstone.key) {
@@ -398,31 +410,30 @@ impl SealService {
                 }) {
                     self.blobs
                         .with("oplog_seal", "gc_record")
-                        .delete(seal_namespace(id), &record.entry.path)
+                        .delete(seal_namespace(id, mode), &record.entry.path)
                         .await
                         .map_err(maintenance)?;
                 }
-                self.delete_incarnation_chunks(id, fingerprint).await?;
+                self.delete_incarnation_chunks(id, mode, fingerprint)
+                    .await?;
                 // A crash here must leave the tombstone as the exact-epoch recovery anchor.
-                for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
-                    let state = self
-                        .indexed_state(id, mode, &SealManifest::new())
-                        .map_err(maintenance)?;
-                    self.indexed
-                        .remove_key_epoch_if_empty(
-                            "oplog_seal",
-                            "gc_fence",
-                            state.fence_namespace(),
-                            &id.storage_key(),
-                            tombstone.key.epoch,
-                        )
-                        .await
-                        .map_err(maintenance)?;
-                }
+                let state = self
+                    .indexed_state(id, mode, &SealManifest::new())
+                    .map_err(maintenance)?;
+                self.indexed
+                    .remove_key_epoch_if_empty(
+                        "oplog_seal",
+                        "gc_fence",
+                        state.fence_namespace(),
+                        &id.storage_key(),
+                        tombstone.key.epoch,
+                    )
+                    .await
+                    .map_err(maintenance)?;
             }
             self.blobs
                 .with("oplog_seal", "gc_tombstone")
-                .delete(seal_namespace(id), &tombstone.entry.path)
+                .delete(seal_namespace(id, mode), &tombstone.entry.path)
                 .await
                 .map_err(maintenance)?;
             previous = Some(tombstone.key.position());

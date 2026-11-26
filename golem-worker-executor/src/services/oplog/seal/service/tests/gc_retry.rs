@@ -22,7 +22,9 @@ async fn gc_retry_after_recreation_preserves_new_incarnation() {
                 .await
                 .unwrap();
             put_chunk_sentinel(&f, a).await;
-            let tombstones = list_records(f.blobs.as_ref(), &f.id()).await.unwrap();
+            let tombstones = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+                .await
+                .unwrap();
             assert_eq!(tombstones.len(), 1);
             assert_eq!(tombstones[0].key.kind, SealRecordKind::Deleted);
             match failure {
@@ -32,7 +34,9 @@ async fn gc_retry_after_recreation_preserves_new_incarnation() {
                 _ => unreachable!(),
             }
             assert!(matches!(
-                oplog.collect_tombstone(&f.id()).await,
+                oplog
+                    .collect_tombstone(&f.id(), f.metadata.agent_mode)
+                    .await,
                 Err(OplogError::Maintenance(_))
             ));
             assert_eq!(
@@ -51,10 +55,16 @@ async fn gc_retry_after_recreation_preserves_new_incarnation() {
             );
 
             let restarted = f.oplog_service().await;
-            restarted.collect_tombstone(&f.id()).await.unwrap();
-            restarted.collect_tombstone(&f.id()).await.unwrap();
+            restarted
+                .collect_tombstone(&f.id(), f.metadata.agent_mode)
+                .await
+                .unwrap();
+            restarted
+                .collect_tombstone(&f.id(), f.metadata.agent_mode)
+                .await
+                .unwrap();
             assert!(
-                list_records(f.blobs.as_ref(), &f.id())
+                list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
                     .await
                     .unwrap()
                     .is_empty()
@@ -132,8 +142,14 @@ async fn gc_trimmed_marker_pin_preserves_moved_data_in_both_modes() {
             let original = record_bytes(&f, &pending.key.path()).await.unwrap();
             mature_collections(&mut f);
             let restarted = f.oplog_service().await;
-            restarted.collect_tombstone(&f.id()).await.unwrap();
-            restarted.collect_tombstone(&f.id()).await.unwrap();
+            restarted
+                .collect_tombstone(&f.id(), f.metadata.agent_mode)
+                .await
+                .unwrap();
+            restarted
+                .collect_tombstone(&f.id(), f.metadata.agent_mode)
+                .await
+                .unwrap();
             assert!(record_bytes(&f, &tombstone.path()).await.is_none());
             assert_eq!(record_bytes(&f, &pending.key.path()).await, Some(original));
             assert_eq!(
