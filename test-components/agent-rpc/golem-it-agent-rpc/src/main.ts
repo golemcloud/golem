@@ -177,7 +177,7 @@ export const TestAgentImpl = TestAgent.implement({
       const finalAgentId = first.metadata.agentId;
 
       try {
-        await (await EphemeralReuseContract.getById(finalAgentId)).capture();
+        await EphemeralReuseContract.getById(finalAgentId).capture();
         throw new Error("ephemeral agent identity was unexpectedly reusable");
       } catch (error) {
         if (!isRemoteCallError(error)) throw error;
@@ -206,7 +206,7 @@ export const TestAgentImpl = TestAgent.implement({
       // The ID of this agent names another agent type, so a Counter lookup by it finds nothing.
       let missingAgentIdResult = false;
       try {
-        await reflected.client.getById(this.getId());
+        reflected.client.getById(this.getId());
       } catch (error) {
         missingAgentIdResult =
           isRemoteCallError(error) && error.cause.tag === "not-found";
@@ -226,7 +226,8 @@ export const TestAgentImpl = TestAgent.implement({
         throw new Error("existing Counter type was not resolved");
       }
 
-      const second = await (await byAgentId.client.getById(concreteAgentId))
+      const second = await byAgentId.client
+        .getById(concreteAgentId)
         .method("get_value")
         .invoke({});
       if (typeof second.value !== "string") {

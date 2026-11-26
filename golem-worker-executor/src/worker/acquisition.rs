@@ -1541,6 +1541,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     &component.metadata,
                 )
                 .map_err(WorkerExecutorError::invalid_request)?;
+                if let Some(constructor) = owner_context.agent() {
+                    constructor
+                        .validate_restrictions()
+                        .map_err(WorkerExecutorError::invalid_request)?;
+                }
                 if component.environment_id != owned_agent_id.environment_id {
                     return Err(WorkerExecutorError::invalid_request(
                         "owner environment does not match the component environment",
@@ -1735,6 +1740,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 {
                     let mut status = initial_status.load_full().as_ref().clone();
                     status.oplog_idx = oplog.current_oplog_index().await;
+                    status.state_oplog_idx = status.oplog_idx;
                     initial_status.store(Arc::new(status));
                 }
 

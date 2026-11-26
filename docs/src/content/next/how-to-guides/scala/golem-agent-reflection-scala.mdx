@@ -67,7 +67,7 @@ and manually construct the positional record:
 import golem.reflection.DynamicAgentClient
 import golem.schema.SchemaValue
 
-val call = DynamicAgentClient.getById(agentId).flatMap {
+val call = DynamicAgentClient.getById(agentId) match {
   case Left(error)   => Future.successful(Left(error))
   case Right(client) =>
     client.method("add").invokeValue(
@@ -132,7 +132,7 @@ This non-streaming recipe owns no stream handles. For dynamic streaming calls,
 drain or close transferred streams and cancel a started invocation when it is
 abandoned.
 
-The reflected factory is `agentType.client`. `upsert(json)` and `upsertValue(value)` return a client of the keyed agent of the constructor parameters, which the host creates when it is missing. `create(json, keyed, config, env)` and `createValue(value, keyed, overrides, env)` create a durable agent and return a `Future`: without `keyed` the new agent has no key and a new agent ID; with `keyed = true` it is the keyed agent, and an existing one gives `GolemReflectError.Remote(AgentRpcError.Conflict(...))`. Their creation-time overrides are canonical JSON entries (`ReflectedConfigJson(path, value)`) or schema-native `ConfigOverride` entries, respectively; the reflected type checks declared paths, secret fields, and values before constructing RPC. `getById(agentId)` (also on `AgentType`) returns a `Future` of a client of the existing agent; an unknown ID, or the ID of an agent of another type, gives `AgentRpcError.NotFound`. Every client has `agentId(): Future[Either[GolemReflectError, AgentId]]`.
+The reflected factory is `agentType.client`. `upsert(json)` and `upsertValue(value)` return a client of the keyed agent of the constructor parameters, which the host creates when it is missing. `create(json, keyed, config, env)` and `createValue(value, keyed, overrides, env)` create a durable agent and return a `Future`: without `keyed` the new agent has no key and a new agent ID; with `keyed = true` it is the keyed agent, and an existing one gives `GolemReflectError.Remote(AgentRpcError.Conflict(...))`. Their creation-time overrides are canonical JSON entries (`ReflectedConfigJson(path, value)`) or schema-native `ConfigOverride` entries, respectively; the reflected type checks declared paths, secret fields, and values before constructing RPC. `getById(agentId)` (also on `AgentType`) returns an `Either` with a client of the existing agent at once; an unknown ID, or the ID of an agent of another type, gives `AgentRpcError.NotFound`. Every client has `agentId(): Future[Either[GolemReflectError, AgentId]]`.
 
 All reflected and direct methods support awaited, trigger, and scheduled calls
 through `invokeValue`, `triggerValue`, and `scheduleValue`. Reflected live
@@ -161,8 +161,8 @@ val add = methods.method(
   OutputCodec.single[Int]
 )
 
-val counter = methods.getById(existingId) // Future[Either[GolemReflectError, CallerCodecAgentClient]]
-val result = counter.flatMap {
+val counter = methods.getById(existingId) // Either[GolemReflectError, CallerCodecAgentClient]
+val result = counter match {
   case Left(error)   => Future.successful(Left(error))
   case Right(client) => client.method(add).invoke(5)
 }
@@ -183,7 +183,7 @@ val counter = AgentClientDefinition.full(
 val keyed = counter.client.upsert("main")                 // the keyed agent
 val fresh = counter.client.create("main")                 // Future: a new agent without a key
 val keyedNew = counter.client.create("main", keyed = true) // Future: fails with a conflict when it exists
-val bound = counter.client.getById(existingId)            // Future: the existing agent
+val bound = counter.client.getById(existingId)            // Either: the existing agent
 val id = fresh.flatMap {
   case Left(error)   => Future.successful(Left(error))
   case Right(client) => client.agentId()

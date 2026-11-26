@@ -21,7 +21,6 @@ use crate::custom_api::oidc::model::{
 use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::{TimeDelta, Utc};
 use conditional_trait_gen::trait_gen;
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_service_base::db::postgres::PostgresPool;
@@ -29,6 +28,7 @@ use golem_service_base::db::sqlite::SqlitePool;
 use golem_service_base::db::{Pool, PoolApi};
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
 use include_dir::include_dir;
+use jiff::{SignedDuration, Timestamp};
 use sqlx::Row;
 use std::time::Duration;
 use tokio_util::sync::CancellationToken;
@@ -77,7 +77,7 @@ pub type PostgresSessionStore = DbSessionStore<PostgresPool>;
 /// Reads and takes ignore expired records, and a background task deletes them periodically.
 pub struct DbSessionStore<P> {
     pool: P,
-    pending_login_expiration: TimeDelta,
+    pending_login_expiration: SignedDuration,
     cleanup_cancel: CancellationToken,
 }
 
@@ -131,7 +131,7 @@ pub async fn migrated_postgres_pool(config: &DbPostgresConfig) -> anyhow::Result
 }
 
 fn now_millis() -> i64 {
-    Utc::now().timestamp_millis()
+    Timestamp::now().as_millisecond()
 }
 
 fn decode_record<R: desert_rust::BinaryDeserializer>(
@@ -159,7 +159,7 @@ impl DbSessionStore<SqlitePool> {
         pending_login_expiration: Duration,
         cleanup_interval: Duration,
     ) -> anyhow::Result<Self> {
-        let pending_login_expiration = TimeDelta::from_std(pending_login_expiration)
+        let pending_login_expiration = SignedDuration::try_from(pending_login_expiration)
             .context("pending_login_expiration is out of range")?;
         let cleanup_cancel = CancellationToken::new();
         Self::spawn_cleanup_task(pool.clone(), cleanup_interval, cleanup_cancel.clone());
@@ -201,10 +201,10 @@ impl DbSessionStore<SqlitePool> {
     }
 
     fn pending_login_expires_at(&self) -> Result<i64, SessionStoreError> {
-        Utc::now()
-            .checked_add_signed(self.pending_login_expiration)
-            .map(|expires_at| expires_at.timestamp_millis())
-            .ok_or_else(|| anyhow!("Failed to compute expiry").into())
+        Timestamp::now()
+            .checked_add(self.pending_login_expiration)
+            .map(|expires_at| expires_at.as_millisecond())
+            .map_err(|err| anyhow!("Failed to compute expiry: {err}").into())
     }
 
     async fn upsert(
@@ -291,7 +291,7 @@ impl SessionStore for DbSessionStore<SqlitePool> {
         upstream_state: &str,
         login: PendingPkceLogin,
     ) -> Result<(), SessionStoreError> {
-        let expires_at = login.expires_at.timestamp_millis();
+        let expires_at = login.expires_at.as_millisecond();
         let value = encode_record(
             &records::PendingPkceLoginRecord::from(login),
             "PendingPkceLogin",
@@ -326,7 +326,7 @@ impl SessionStore for DbSessionStore<SqlitePool> {
         code: &AuthorizationCode,
         entry: PkceAuthorizationCode,
     ) -> Result<(), SessionStoreError> {
-        let expires_at = entry.expires_at.timestamp_millis();
+        let expires_at = entry.expires_at.as_millisecond();
         let value = encode_record(
             &records::PkceAuthorizationCodeRecord::try_from(entry)?,
             "PkceAuthorizationCode",
@@ -361,7 +361,7 @@ impl SessionStore for DbSessionStore<SqlitePool> {
         token: &BearerToken,
         credential: PkceBearerCredential,
     ) -> Result<(), SessionStoreError> {
-        let expires_at = credential.expires_at.timestamp_millis();
+        let expires_at = credential.expires_at.as_millisecond();
         let value = encode_record(
             &records::PkceBearerCredentialRecord::try_from(credential)?,
             "PkceBearerCredential",
@@ -404,7 +404,7 @@ impl SessionStore for DbSessionStore<SqlitePool> {
         session_id: &SessionId,
         session: OidcSession,
     ) -> Result<(), SessionStoreError> {
-        let expires_at = session.expires_at.timestamp_millis();
+        let expires_at = session.expires_at.as_millisecond();
         let value = encode_record(
             &records::OidcSessionRecord::try_from(session)?,
             "OidcSession",

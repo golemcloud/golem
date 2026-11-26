@@ -26,7 +26,7 @@ full = [
     "client",
     "golem-schema/bigdecimal",
     "golem-schema/bit_vec",
-    "golem-schema/chrono",
+    "golem-schema/jiff",
     "golem-schema/full",
     "golem-schema/host",
     "golem-schema/mac_address",
@@ -93,7 +93,6 @@ bit-vec = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
 camino = { workspace = true, optional = true }
-chrono = { workspace = true }
 combine = { workspace = true }
 console-subscriber = { workspace = true, optional = true }
 derive_more = { workspace = true }
@@ -110,6 +109,7 @@ ident-mash = { workspace = true }
 im = { workspace = true }
 iso8601-timestamp = { workspace = true }
 itertools = { workspace = true, optional = true }
+jiff = { workspace = true }
 lazy_static = { workspace = true, optional = true }
 mac_address = { workspace = true, optional = true }
 nonempty-collections = { workspace = true, optional = true }
@@ -138,6 +138,7 @@ stacker = { workspace = true, optional = true }
 strum = { workspace = true }
 strum_macros = { workspace = true }
 thiserror = { workspace = true }
+time = { workspace = true }
 toml = { workspace = true, optional = true }
 tokio = { workspace = true, optional = true }
 tonic = { workspace = true, optional = true }

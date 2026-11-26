@@ -129,6 +129,8 @@ message InputStreamHighWater {
   uint64 highest_contiguous_sequence = 1;
   bytes resulting_offset = 2;
   bool terminal = 3;
+  // The terminal of the input when the server, not the client, ended it.
+  optional StreamTerminal server_outcome = 4;
 }
 
 enum StreamMappingRole {

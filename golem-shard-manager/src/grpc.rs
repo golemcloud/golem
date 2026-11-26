@@ -18,13 +18,13 @@ use crate::quota::QuotaService;
 use crate::sharding::error::ShardManagerError;
 use crate::sharding::shard_management::ShardManagement;
 use crate::sharding::{ExecutorAddr, ExecutorId, RegisterAck, ShardEpoch};
-use chrono::Utc;
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_server::ShardManagerService;
 use golem_common::model::protobuf::{ip_addr_from_proto, lease_ttl_to_proto};
 use golem_common::model::{Pod, ShardId};
 use golem_common::recorded_grpc_api_request;
 use golem_service_base::clients::shard_manager::canonical_advertised_ip;
+use jiff::Timestamp;
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::num::TryFromIntError;
@@ -123,7 +123,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
                 golem::shardmanager::v1::RegisterSuccess {
                     number_of_shards: ack.number_of_shards as u32,
                     shard_epochs: shard_epoch_entries(&ack.grant.shard_epochs),
-                    lease_ttl: Some(lease_ttl_to_proto(ack.grant.expires_at, Utc::now())),
+                    lease_ttl: Some(lease_ttl_to_proto(ack.grant.expires_at, Timestamp::now())),
                     revision: ack.grant.revision.0,
                     incarnation_id: crate::sharding::incarnation_id(),
                 },
@@ -167,7 +167,7 @@ impl ShardManagerService for ShardManagerServiceImpl {
                 golem::shardmanager::v1::renew_shard_lease_response::Result::Success(
                     golem::shardmanager::v1::ShardLease {
                         shard_epochs: shard_epoch_entries(&grant.shard_epochs),
-                        lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, Utc::now())),
+                        lease_ttl: Some(lease_ttl_to_proto(grant.expires_at, Timestamp::now())),
                         revision: grant.revision.0,
                         incarnation_id: crate::sharding::incarnation_id(),
                     },

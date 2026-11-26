@@ -574,7 +574,7 @@ async fn test_component_upload_attachment_races_collection(db: &PostgresDb) {
                 id,
                 bytes.len() as u64,
                 ComponentMetadata::default(),
-                hash.clone(),
+                hash,
                 None,
                 key,
                 account,

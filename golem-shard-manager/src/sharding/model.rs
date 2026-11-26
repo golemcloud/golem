@@ -14,10 +14,10 @@
 
 use super::error::ShardManagerError;
 use super::rebalancing::Rebalance;
-use chrono::{DateTime, Utc};
 use desert_rust::BinaryCodec;
 use golem_api_grpc::proto::golem;
 use golem_common::model::{Pod, ShardId};
+use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt;
 use std::fmt::{Debug, Display, Formatter};
@@ -139,8 +139,8 @@ pub struct ShardAssignmentEntry {
 #[desert(evolution())]
 pub struct ExecutorLease {
     pub addr: ExecutorAddr,
-    pub granted_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
+    pub granted_at: Timestamp,
+    pub expires_at: Timestamp,
     pub pod_name: Option<String>,
 }
 
@@ -171,7 +171,7 @@ pub struct ExecutorShards {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PendingGrant {
     shard_epochs: BTreeMap<ShardId, ShardEpoch>,
-    expires_at: DateTime<Utc>,
+    expires_at: Timestamp,
 }
 
 impl PendingGrant {
@@ -194,7 +194,7 @@ impl PendingGrant {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShardLeaseGrant {
     pub shard_epochs: BTreeMap<ShardId, ShardEpoch>,
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: Timestamp,
     /// The revision of the persisted state `shard_epochs` was read from. Every delivery of a
     /// shard set carries it, and the executor applies a delivery only if its revision is at least
     /// the last one it applied, so a renewal response and a push that cross on the network cannot
@@ -358,7 +358,7 @@ impl ShardLeaseState {
         executor_id: ExecutorId,
         addr: ExecutorAddr,
         pod_name: Option<String>,
-        now: DateTime<Utc>,
+        now: Timestamp,
         lease_ttl: Duration,
     ) -> Option<ExecutorId> {
         let replaced = match self.executor_for_addr(addr) {
@@ -445,7 +445,7 @@ impl ShardLeaseState {
     pub fn renew_lease(
         &mut self,
         executor_id: ExecutorId,
-        now: DateTime<Utc>,
+        now: Timestamp,
         lease_ttl: Duration,
     ) -> bool {
         match self.executor_leases.get_mut(&executor_id) {
@@ -469,7 +469,7 @@ impl ShardLeaseState {
     pub fn regrant_leases(
         &mut self,
         executors: &HashSet<ExecutorId>,
-        now: DateTime<Utc>,
+        now: Timestamp,
         lease_ttl: Duration,
     ) -> usize {
         executors
@@ -585,13 +585,13 @@ impl ShardLeaseState {
     }
 
     /// Whether any stored lease has expired at `now`, by the same rule as [`Self::housekeep`].
-    pub fn has_expired_lease(&self, now: DateTime<Utc>) -> bool {
+    pub fn has_expired_lease(&self, now: Timestamp) -> bool {
         self.executor_leases
             .values()
             .any(|lease| now >= lease.expires_at)
     }
 
-    pub fn housekeep(&mut self, now: DateTime<Utc>) -> Vec<(ExecutorId, BTreeSet<ShardId>)> {
+    pub fn housekeep(&mut self, now: Timestamp) -> Vec<(ExecutorId, BTreeSet<ShardId>)> {
         let expired: Vec<ExecutorId> = self
             .executor_leases
             .iter()
@@ -908,8 +908,8 @@ mod tests {
 
     const TTL: Duration = Duration::from_secs(60);
 
-    fn t0() -> DateTime<Utc> {
-        DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+    fn t0() -> Timestamp {
+        Timestamp::new(1_700_000_000, 0).unwrap()
     }
 
     fn executor(idx: u128) -> ExecutorId {
@@ -980,7 +980,7 @@ mod tests {
         let lease = &shard_state.executor_leases[&executor(1)];
         assert_eq!(lease.addr, addr(1));
         assert_eq!(lease.granted_at, t0());
-        assert_eq!(lease.expires_at, t0() + chrono::Duration::seconds(60));
+        assert_eq!(lease.expires_at, t0() + jiff::SignedDuration::from_secs(60));
         assert_eq!(lease.pod_name.as_deref(), Some("pod-1"));
 
         assert!(shard_state.has_executor(executor(1)));
@@ -1000,7 +1000,7 @@ mod tests {
     #[test]
     fn add_executor_at_reused_address_replaces_lease_and_transfers_shards() {
         let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1]), (2, 2, &[2])]);
-        let mut later = t0() + chrono::Duration::seconds(10);
+        let mut later = t0() + jiff::SignedDuration::from_secs(10);
 
         // bump shard 1 once so we can tell "advanced" from "reset": moving it to executor 2 and
         // back advances its epoch to 1
@@ -1035,7 +1035,7 @@ mod tests {
         assert_eq!(shard_state.executor_leases[&executor(3)].granted_at, later);
 
         // a second registration of the same id at the same address only refreshes the lease
-        later += chrono::Duration::seconds(10);
+        later += jiff::SignedDuration::from_secs(10);
         let replaced = shard_state.add_executor(executor(3), addr(1), None, later, TTL);
         assert_eq!(replaced, None);
         assert_eq!(
@@ -1143,7 +1143,7 @@ mod tests {
         );
 
         // housekeep-driven eviction behaves the same way
-        let expired = t0() + chrono::Duration::seconds(3600);
+        let expired = t0() + jiff::SignedDuration::from_secs(3600);
         assert_eq!(
             shard_state.housekeep(expired),
             vec![(executor(3), shards(&[0, 1]))]
@@ -1263,12 +1263,15 @@ mod tests {
     #[test]
     fn renew_lease_moves_only_the_clock() {
         let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1])]);
-        let later = t0() + chrono::Duration::seconds(30);
+        let later = t0() + jiff::SignedDuration::from_secs(30);
 
         assert!(shard_state.renew_lease(executor(1), later, TTL));
         let lease = &shard_state.executor_leases[&executor(1)];
         assert_eq!(lease.granted_at, later);
-        assert_eq!(lease.expires_at, later + chrono::Duration::seconds(60));
+        assert_eq!(
+            lease.expires_at,
+            later + jiff::SignedDuration::from_secs(60)
+        );
         assert_eq!(
             shard_state.shards_for_executor(executor(1)),
             Some(shards(&[0, 1]))
@@ -1289,19 +1292,19 @@ mod tests {
         let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1])]);
         let shortened = std::time::Duration::from_secs(30);
 
-        let early = t0() + chrono::Duration::seconds(20);
+        let early = t0() + jiff::SignedDuration::from_secs(20);
         assert!(shard_state.renew_lease(executor(1), early, shortened));
         assert_eq!(
             shard_state.executor_leases[&executor(1)].expires_at,
-            t0() + chrono::Duration::seconds(60),
+            t0() + jiff::SignedDuration::from_secs(60),
             "an early renewal must keep the deadline the executor may still be holding"
         );
 
-        let late = t0() + chrono::Duration::seconds(35);
+        let late = t0() + jiff::SignedDuration::from_secs(35);
         assert!(shard_state.renew_lease(executor(1), late, shortened));
         assert_eq!(
             shard_state.executor_leases[&executor(1)].expires_at,
-            late + chrono::Duration::seconds(30),
+            late + jiff::SignedDuration::from_secs(30),
             "once now + the configured length passes the outstanding deadline, it applies"
         );
     }
@@ -1311,7 +1314,7 @@ mod tests {
     #[test]
     fn a_retried_registration_never_shortens_an_outstanding_lease() {
         let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1])]);
-        let retried = t0() + chrono::Duration::seconds(10);
+        let retried = t0() + jiff::SignedDuration::from_secs(10);
 
         let replaced = shard_state.add_executor(
             executor(1),
@@ -1324,7 +1327,7 @@ mod tests {
         assert_eq!(replaced, None);
         assert_eq!(
             shard_state.executor_leases[&executor(1)].expires_at,
-            t0() + chrono::Duration::seconds(60)
+            t0() + jiff::SignedDuration::from_secs(60)
         );
     }
 
@@ -1333,7 +1336,7 @@ mod tests {
     #[test]
     fn a_regrant_never_shortens_an_outstanding_lease() {
         let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1])]);
-        let restarted = t0() + chrono::Duration::seconds(15);
+        let restarted = t0() + jiff::SignedDuration::from_secs(15);
 
         let regranted = shard_state.regrant_leases(
             &HashSet::from([executor(1)]),
@@ -1343,7 +1346,7 @@ mod tests {
         assert_eq!(regranted, 1);
         assert_eq!(
             shard_state.executor_leases[&executor(1)].expires_at,
-            t0() + chrono::Duration::seconds(60)
+            t0() + jiff::SignedDuration::from_secs(60)
         );
 
         shard_state.regrant_leases(
@@ -1353,14 +1356,14 @@ mod tests {
         );
         assert_eq!(
             shard_state.executor_leases[&executor(1)].expires_at,
-            restarted + chrono::Duration::seconds(90)
+            restarted + jiff::SignedDuration::from_secs(90)
         );
     }
 
     #[test]
     fn regrant_leases_restarts_the_clock_of_the_listed_executors_only() {
         let mut shard_state = shard_state_with(4, &[(1, 1, &[0, 1]), (2, 2, &[2, 3])]);
-        let later = t0() + chrono::Duration::seconds(3600);
+        let later = t0() + jiff::SignedDuration::from_secs(3600);
 
         // executor 9 holds no lease and must not create one
         let regranted =
@@ -1369,11 +1372,11 @@ mod tests {
         assert_eq!(regranted, 1);
         assert_eq!(
             shard_state.executor_leases[&executor(1)].expires_at,
-            later + chrono::Duration::seconds(60)
+            later + jiff::SignedDuration::from_secs(60)
         );
         assert_eq!(
             shard_state.executor_leases[&executor(2)].expires_at,
-            t0() + chrono::Duration::seconds(60)
+            t0() + jiff::SignedDuration::from_secs(60)
         );
         assert!(!shard_state.has_executor(executor(9)));
 
@@ -1402,8 +1405,8 @@ mod tests {
         shard_state.add_executor(executor(1), addr(1), None, t0(), Duration::from_secs(60));
 
         assert!(!shard_state.has_expired_lease(t0()));
-        assert!(!shard_state.has_expired_lease(t0() + chrono::Duration::seconds(59)));
-        assert!(shard_state.has_expired_lease(t0() + chrono::Duration::seconds(60)));
+        assert!(!shard_state.has_expired_lease(t0() + jiff::SignedDuration::from_secs(59)));
+        assert!(shard_state.has_expired_lease(t0() + jiff::SignedDuration::from_secs(60)));
     }
 
     #[test]
@@ -1416,13 +1419,13 @@ mod tests {
 
         assert!(
             shard_state
-                .housekeep(t0() + chrono::Duration::seconds(9))
+                .housekeep(t0() + jiff::SignedDuration::from_secs(9))
                 .is_empty()
         );
         assert_eq!(shard_state.executor_count(), 2);
 
         // expiry is inclusive
-        let evicted = shard_state.housekeep(t0() + chrono::Duration::seconds(10));
+        let evicted = shard_state.housekeep(t0() + jiff::SignedDuration::from_secs(10));
         assert_eq!(evicted, vec![(executor(1), shards(&[0]))]);
         assert!(!shard_state.has_executor(executor(1)));
         assert!(shard_state.has_executor(executor(2)));
@@ -1464,7 +1467,7 @@ mod tests {
             .executor_leases
             .get_mut(&executor(2))
             .unwrap()
-            .granted_at = DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap();
+            .granted_at = Timestamp::new(1_700_000_000, 123_456_789).unwrap();
         shard_state.assign_shard(executor(2), shard(0));
         shard_state.remove_executor(executor(1));
         shard_state.bump_revision().unwrap();

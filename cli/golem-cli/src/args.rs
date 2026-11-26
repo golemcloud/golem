@@ -15,10 +15,10 @@
 use crate::log::LogColorize;
 use crate::model::agent::AgentListCursor;
 use anyhow::anyhow;
-use chrono::{DateTime, Utc};
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent_secret::AgentSecretPath;
 use golem_common::model::split_config_path;
+use jiff::Timestamp;
 
 pub fn parse_key_val(key_and_val: &str) -> anyhow::Result<(String, String)> {
     let pos = key_and_val.find('=').ok_or_else(|| {
@@ -116,10 +116,36 @@ pub fn parse_cursor(cursor: &str) -> anyhow::Result<AgentListCursor> {
 
 pub fn parse_instant(
     s: &str,
-) -> Result<DateTime<Utc>, Box<dyn std::error::Error + Send + Sync + 'static>> {
-    match s.parse::<DateTime<Utc>>() {
-        Ok(dt) => Ok(dt),
-        Err(err) => Err(err.into()),
+) -> Result<Timestamp, Box<dyn std::error::Error + Send + Sync + 'static>> {
+    golem_common::schema::canonical::datetime::from_text(s).map_err(Into::into)
+}
+
+#[cfg(test)]
+mod parse_instant_tests {
+    use super::parse_instant;
+    use test_r::test;
+
+    #[test]
+    fn instants_require_rfc3339_without_leap_seconds() {
+        for input in [
+            "2016-12-31T23:59:60.123456789Z",
+            "2025-04-12T13:14Z",
+            "2025-04-12T13:14:15Z[UTC]",
+        ] {
+            assert!(parse_instant(input).is_err(), "accepted {input}");
+        }
+        assert_eq!(
+            parse_instant("1969-12-31T22:59:59.999999999-01:00")
+                .unwrap()
+                .as_nanosecond(),
+            -1,
+        );
+        assert_eq!(
+            parse_instant("2016-12-31T23:59:59.123456789Z")
+                .unwrap()
+                .to_string(),
+            "2016-12-31T23:59:59.123456789Z",
+        );
     }
 }
 

@@ -137,25 +137,29 @@ impl ComponentServiceLocalFileSystem {
 
     async fn get_component_from_path(
         &self,
-        wasm_path: &Path,
         engine: &Engine,
-        environment_id: EnvironmentId,
-        component_id: ComponentId,
-        component_revision: ComponentRevision,
+        metadata: &LocalFileSystemComponentMetadata,
     ) -> Result<wasmtime::component::Component, WorkerExecutorError> {
+        let LocalFileSystemComponentMetadata {
+            environment_id,
+            component_id,
+            revision: component_revision,
+            wasm_hash,
+            ..
+        } = *metadata;
         let key = CacheKey {
             component_id,
             component_revision,
         };
         let engine = engine.clone();
         let compiled_component_service = self.compiled_component_service.clone();
-        let path = wasm_path.to_path_buf();
+        let path = self.root.join(&metadata.wasm_filename);
 
         self.component_cache
             .get_or_insert_simple(&key.clone(), || {
                 Box::pin(async move {
                     let result = compiled_component_service
-                        .get(environment_id, component_id, component_revision, &engine)
+                        .get(wasm_hash, component_id, component_revision, &engine)
                         .await;
 
                     let component = match result {
@@ -198,7 +202,13 @@ impl ComponentServiceLocalFileSystem {
                             );
 
                             let result = compiled_component_service
-                                .put(environment_id, component_id, component_revision, &component)
+                                .put(
+                                    environment_id,
+                                    wasm_hash,
+                                    component_id,
+                                    component_revision,
+                                    &component,
+                                )
                                 .await;
 
                             match result {
@@ -285,17 +295,7 @@ impl ComponentService for ComponentServiceLocalFileSystem {
             metadata.ok_or(WorkerExecutorError::ComponentNotFound { component_id })?
         };
 
-        let wasm_path = self.root.join(metadata.wasm_filename.clone());
-
-        let component = self
-            .get_component_from_path(
-                &wasm_path,
-                engine,
-                metadata.environment_id,
-                component_id,
-                component_revision,
-            )
-            .await?;
+        let component = self.get_component_from_path(engine, &metadata).await?;
 
         Ok((component, Component::from(metadata)))
     }

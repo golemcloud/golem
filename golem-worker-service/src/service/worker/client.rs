@@ -548,6 +548,8 @@ where
 pub struct ExistingAgent {
     pub metadata: AgentMetadataDto,
     pub component_id: ComponentId,
+    /// The index of the latest oplog entry other than an invocation settlement.
+    pub state_oplog_index: OplogIndex,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for ExistingAgent {
@@ -560,9 +562,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for ExistingAg
             .component_id
             .ok_or("Missing component_id in agent metadata")?
             .try_into()?;
+        let state_oplog_index = OplogIndex::from_u64(metadata.state_oplog_idx);
         Ok(Self {
             metadata: metadata.try_into()?,
             component_id,
+            state_oplog_index,
         })
     }
 }

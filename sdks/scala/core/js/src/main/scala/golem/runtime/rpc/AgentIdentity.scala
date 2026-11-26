@@ -83,18 +83,14 @@ private[golem] object AgentIdentity {
    * A client of the existing agent with the given ID. An unknown ID, or the ID
    * of an agent of another type, fails with [[AgentRpcError.NotFound]].
    */
-  def getById(agentTypeName: String, agentId: AgentId): Future[RemoteAgentClient] =
-    Future.fromTry(scala.util.Try {
-      registeredTypeName(agentTypeName)
-        .flatMap(typeName =>
-          WasmRpcApi
-            .getById(typeName, JsAgentId.fromAgentId(agentId))
-            .left
-            .map(AgentRpcError.fromRpcError)
-            .map(client(typeName, _, Some(agentId)))
-        )
-        .fold(error => throw AgentRpcException(error), identity)
-    })
+  def getById(agentTypeName: String, agentId: AgentId): Either[AgentRpcError, RemoteAgentClient] =
+    registeredTypeName(agentTypeName).flatMap { typeName =>
+      WasmRpcApi
+        .getById(typeName, JsAgentId.fromAgentId(agentId))
+        .left
+        .map(AgentRpcError.fromRpcError)
+        .map(client(typeName, _, Some(agentId)))
+    }
 
   private def registeredTypeName(agentTypeName: String): Either[AgentRpcError, String] =
     AgentHostApi

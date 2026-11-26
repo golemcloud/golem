@@ -120,7 +120,7 @@ use crate::chaos::signal::{BaselineReady, FaultSignals, FaultTarget};
 use crate::chaos::summary::{AgentReadback, ChaosSummary, Note, TerminationReason};
 use crate::chaos::workload::{PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
-use chrono::{DateTime, TimeDelta, Utc};
+
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use std::collections::BTreeSet;
@@ -134,7 +134,7 @@ pub async fn run(
     signals: &FaultSignals,
     outputs: &OutputPaths,
 ) -> anyhow::Result<ChaosResult> {
-    let started_at = Utc::now();
+    let started_at = jiff::Timestamp::now();
     let scheduled_config = config.require_scheduled()?;
     let history = OperationHistory::new(ScenarioCode::S10.as_str());
     let key_prefix = crate::chaos::scenario_key_prefix(ScenarioCode::S10);
@@ -254,11 +254,11 @@ pub async fn run(
         scheduled_config.lead(),
         config.phases.baseline()
     );
-    phases.baseline = Some(PhaseWindow::started(Utc::now()));
+    phases.baseline = Some(PhaseWindow::started(jiff::Timestamp::now()));
     let handle = scheduled::start(ctx.clone(), &targets, scheduled_config);
     tokio::time::sleep(config.phases.baseline()).await;
     if let Some(window) = phases.baseline.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
 
     let baseline_operations = history.confirmed_in_phase(Phase::Baseline);
@@ -322,7 +322,7 @@ pub async fn run(
     );
     signals.write_baseline_ready(&BaselineReady {
         scenario_code: ScenarioCode::S10.as_str().to_string(),
-        ready_at: Utc::now(),
+        ready_at: jiff::Timestamp::now(),
         baseline_operations,
         fault_target: Some(FaultTarget {
             pod_address: chosen.pod_address.clone(),
@@ -388,12 +388,12 @@ pub async fn run(
         config.phases.recovery()
     );
     ctx.phase.set(Phase::Recovery);
-    phases.recovery = Some(PhaseWindow::started(Utc::now()));
+    phases.recovery = Some(PhaseWindow::started(jiff::Timestamp::now()));
     tokio::time::sleep(config.phases.recovery()).await;
     let skipped = handle.skipped();
     handle.stop().await;
     if let Some(window) = phases.recovery.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
     if skipped > 0 {
         attention_extra.push(Note::attention(format!(
@@ -520,11 +520,11 @@ impl PendingAtInjection {
 /// here would overstate what the kill was aimed at.
 pub fn pending_at_injection(
     records: &[OperationRecord],
-    injected_at: DateTime<Utc>,
+    injected_at: jiff::Timestamp,
     lead: Duration,
     on_killed_executor: &BTreeSet<String>,
 ) -> PendingAtInjection {
-    let lead = TimeDelta::from_std(lead).unwrap_or(TimeDelta::zero());
+    let lead = jiff::SignedDuration::try_from(lead).unwrap_or(jiff::SignedDuration::ZERO);
     let mut pending = PendingAtInjection {
         total: 0,
         on_killed_executor: 0,
@@ -567,11 +567,15 @@ mod tests {
     use crate::chaos::summary::NoteLevel;
     use test_r::test;
 
-    fn at(offset_secs: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(1_800_000_000 + offset_secs, 0).unwrap()
+    fn at(offset_secs: i64) -> jiff::Timestamp {
+        jiff::Timestamp::new(1_800_000_000 + offset_secs, 0).unwrap()
     }
 
-    fn registration(agent: &str, submitted_at: DateTime<Utc>, outcome: Outcome) -> OperationRecord {
+    fn registration(
+        agent: &str,
+        submitted_at: jiff::Timestamp,
+        outcome: Outcome,
+    ) -> OperationRecord {
         OperationRecord {
             op_id: 0,
             stream: Stream::Scheduled,

@@ -300,7 +300,7 @@ TsPeer.implement({
       const beforeNative = await value.invokeValue(empty)
       await client.method("add").invokeJson({ by: 1 })
       const afterJson = await value.invokeJson({})
-      const agentId = AgentId.parse(AgentId.from(beforeJson.metadata.agentId).toString())
+      const agentId = AgentId.parse(beforeJson.metadata.agentId)
       const discovered = reflection.getAgentTypeByAgentId(agentId)
       if (!discovered || !value.definition.output) return "missing-reflected-output"
       const rebound = await discovered.client.getById(agentId)
@@ -309,7 +309,7 @@ TsPeer.implement({
         .method("value")
         .invokeValue(empty)
       const output = value.definition.output
-      const sameId = (await rebound.agentId()).equals(agentId)
+      const sameId = (await rebound.agentId()) === agentId
       return `${sameId}|${discovered.name}|${beforeJson.value}|${output.unpackJson(beforeNative.value!)}|${afterJson.value}|${output.unpackJson(reboundValue.value!)}|${output.unpackJson(dynamicValue.value!)}`
     },
     async principalIdentityRoundTrip() {
@@ -319,8 +319,8 @@ TsPeer.implement({
       const discovered = reflection.getAgentType("TsPrincipalPeer")
       if (!discovered) return "missing-principal-type"
       const reflected = await discovered.client.upsert({ tenant }).method("value").invokeJson({})
-      const identity = AgentId.parse(AgentId.from(reflected.metadata.agentId).toString())
-      if (!(await typed.agentId()).equals(identity)) {
+      const identity = AgentId.parse(reflected.metadata.agentId)
+      if ((await typed.agentId()) !== identity) {
         return "invalid-principal-identity"
       }
       const completeById = await (await TsPrincipalPeer.client.getById(identity)).value()

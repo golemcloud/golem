@@ -32,7 +32,7 @@ use crate::chaos::{
     ComposedConfig, DeleteConfig, FaultConfig, IsolationConfig, PinnedConfig, PromiseConfig,
     RetryPolicy, RevertConfig, RollbackConfig, ScheduledConfig, StorageConfig, WorkloadConfig,
 };
-use chrono::{DateTime, Utc};
+
 use golem_test_framework::benchmark::RunMetadata;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
@@ -53,20 +53,20 @@ pub const RESULT_SCHEMA_VERSION: u32 = 3;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PhaseWindow {
-    pub started_at: DateTime<Utc>,
+    pub started_at: jiff::Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ended_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<jiff::Timestamp>,
 }
 
 impl PhaseWindow {
-    pub fn started(at: DateTime<Utc>) -> Self {
+    pub fn started(at: jiff::Timestamp) -> Self {
         Self {
             started_at: at,
             ended_at: None,
         }
     }
 
-    pub fn end(&mut self, at: DateTime<Utc>) {
+    pub fn end(&mut self, at: jiff::Timestamp) {
         self.ended_at = Some(at);
     }
 }
@@ -109,16 +109,16 @@ pub struct ChaosResult {
     /// `true` only when every phase ran and the report is complete.
     pub completed: bool,
     pub termination_reason: TerminationReason,
-    pub started_at: DateTime<Utc>,
+    pub started_at: jiff::Timestamp,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub ended_at: Option<DateTime<Utc>>,
+    pub ended_at: Option<jiff::Timestamp>,
     pub phases: Phases,
     /// When the workflow reported the fault active. Absent if the run aborted
     /// before injection.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fault_injected_at: Option<DateTime<Utc>>,
+    pub fault_injected_at: Option<jiff::Timestamp>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fault_recovered_at: Option<DateTime<Utc>>,
+    pub fault_recovered_at: Option<jiff::Timestamp>,
     /// Echo of what the workflow said it injected, for the record.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fault_id: Option<String>,
@@ -228,7 +228,7 @@ mod tests {
     use test_r::test;
 
     fn sample_result(termination: TerminationReason) -> ChaosResult {
-        let now = Utc::now();
+        let now = jiff::Timestamp::now();
         ChaosResult {
             schema_version: RESULT_SCHEMA_VERSION,
             scenario_code: "S12".to_string(),
@@ -299,7 +299,7 @@ mod tests {
         use crate::chaos::split::{FaultWindow, PodSplit};
         use crate::chaos::wakeups::WakeupReport;
 
-        let now = Utc::now();
+        let now = jiff::Timestamp::now();
         let waiter = "chaos-s11-promise-waiter-0000".to_string();
         let split = PodSplit {
             pod_address: "10.0.1.1:9000".to_string(),
@@ -327,7 +327,7 @@ mod tests {
                     wakeups: vec![WakeupRecord {
                         token: format!("{waiter}-00000001"),
                         armed_at: now,
-                        woken_at: now + chrono::Duration::seconds(6),
+                        woken_at: now + jiff::SignedDuration::from_secs(6),
                     }],
                     error: None,
                 }],
@@ -384,7 +384,7 @@ mod tests {
     fn an_s9_result_carries_the_rollback_fields_the_investigation_report_reads() {
         use crate::chaos::rollback::{ControlPlaneAttempts, RollbackReport, VersionCensus};
 
-        let now = Utc::now();
+        let now = jiff::Timestamp::now();
         let mut forward = std::collections::BTreeMap::new();
         forward.insert("chaos-s9-durable-0000".to_string(), Some(2u32));
         let mut back = std::collections::BTreeMap::new();
@@ -458,7 +458,7 @@ mod tests {
         use crate::chaos::resurrection::ResurrectionReport;
         use crate::chaos::split::{FaultWindow, PodSplit};
 
-        let now = Utc::now();
+        let now = jiff::Timestamp::now();
         let agent = "chaos-s6-delete-0000".to_string();
         let split = PodSplit {
             pod_address: "10.0.1.1:9000".to_string(),
@@ -538,7 +538,7 @@ mod tests {
         use crate::chaos::split::{FaultWindow, PodSplit};
         use crate::chaos::truncation::TruncationReport;
 
-        let now = Utc::now();
+        let now = jiff::Timestamp::now();
         let agent = "chaos-s7-revert-0000".to_string();
         let split = PodSplit {
             pod_address: "10.0.1.1:9000".to_string(),
@@ -621,7 +621,7 @@ mod tests {
         use crate::chaos::reachability::ReachabilityReport;
         use crate::chaos::split::{FaultWindow, PodSplit};
 
-        let now = Utc::now();
+        let now = jiff::Timestamp::now();
         let split = PodSplit {
             pod_address: "10.0.1.1:9000".to_string(),
             pod_ip: "10.0.1.1".to_string(),
@@ -647,7 +647,7 @@ mod tests {
                 &split,
                 Some(FaultWindow {
                     injected_at: now,
-                    recovered_at: Some(now + chrono::Duration::seconds(180)),
+                    recovered_at: Some(now + jiff::SignedDuration::from_secs(180)),
                 }),
                 25.0,
                 75.0,
@@ -698,8 +698,8 @@ mod tests {
         use crate::chaos::fires::{FaultWindow, ScheduleFireReport};
         use crate::chaos::history::{FireRecord, Stream, TargetFireLog};
 
-        let now = Utc::now();
-        let due = now + chrono::Duration::seconds(10);
+        let now = jiff::Timestamp::now();
+        let due = now + jiff::SignedDuration::from_secs(10);
         let mut result = sample_result(TerminationReason::Completed);
         result.scenario_code = "S10".to_string();
         result.scheduled = Some(crate::chaos::ScheduledConfig {
@@ -717,7 +717,7 @@ mod tests {
                     fires: vec![FireRecord {
                         token: "chaos-s10-scheduled-target-0000-00000001".to_string(),
                         scheduled_at: due,
-                        observed_at: due + chrono::Duration::seconds(4),
+                        observed_at: due + jiff::SignedDuration::from_secs(4),
                     }],
                     error: None,
                 }],
@@ -864,10 +864,10 @@ mod tests {
     /// present and unambiguous whenever the phase ran.
     #[test]
     fn phase_windows_carry_utc_start_and_end() {
-        let start = Utc::now();
+        let start = jiff::Timestamp::now();
         let mut window = PhaseWindow::started(start);
         assert!(window.ended_at.is_none());
-        let end = start + chrono::Duration::seconds(300);
+        let end = start + jiff::SignedDuration::from_secs(300);
         window.end(end);
         assert_eq!(window.ended_at, Some(end));
     }
@@ -891,7 +891,7 @@ mod sample_artifact {
     use crate::chaos::history::{OperationRecord, Outcome, Phase, Stream};
     use crate::chaos::summary::{AgentReadback, RoutingSnapshot};
     use crate::chaos::{FaultConfig, PhaseConfig, RetryPolicy, WorkloadConfig};
-    use chrono::TimeZone;
+
     use test_r::test;
 
     /// Writes a representative result artifact to `CHAOS_SAMPLE_RESULT` when the
@@ -903,7 +903,7 @@ mod sample_artifact {
         let Ok(path) = std::env::var("CHAOS_SAMPLE_RESULT") else {
             return;
         };
-        let at = |s: i64| Utc.timestamp_opt(1_800_000_000 + s, 0).unwrap();
+        let at = |s: i64| jiff::Timestamp::new(1_800_000_000 + s, 0).unwrap();
 
         let mut records = Vec::new();
         for i in 0..20u64 {
@@ -1066,7 +1066,7 @@ mod sample_artifact {
         let Ok(path) = std::env::var("CHAOS_SAMPLE_RESULT_S10") else {
             return;
         };
-        let at = |s: i64| Utc.timestamp_opt(1_800_000_000 + s, 0).unwrap();
+        let at = |s: i64| jiff::Timestamp::new(1_800_000_000 + s, 0).unwrap();
         let killed = "chaos-s10-scheduled-target-0000";
         let survivor = "chaos-s10-scheduled-target-0001";
 
@@ -1105,13 +1105,13 @@ mod sample_artifact {
                 attempt_log: Vec::new(),
             });
 
-            let due = submitted + chrono::Duration::seconds(10);
+            let due = submitted + jiff::SignedDuration::from_secs(10);
             // One registration stalls on the client's attempt timeout and only
             // lands long after its action was due — the shape the first real run
             // produced 26 times over.
             if i == 1 {
                 let stalled = records.last_mut().unwrap();
-                stalled.completed_at = Some(submitted + chrono::Duration::seconds(125));
+                stalled.completed_at = Some(submitted + jiff::SignedDuration::from_secs(125));
                 stalled.duration_ms = 125_000;
                 stalled.attempts = 2;
             }
@@ -1122,7 +1122,7 @@ mod sample_artifact {
                         token,
                         scheduled_at: due,
                         // Late by a shard reassignment.
-                        observed_at: due + chrono::Duration::milliseconds(41_500),
+                        observed_at: due + jiff::SignedDuration::from_millis(41_500),
                     });
                 }
             } else {
@@ -1132,7 +1132,7 @@ mod sample_artifact {
                 survivor_fires.push(FireRecord {
                     token,
                     scheduled_at: due,
-                    observed_at: due + chrono::Duration::milliseconds(late),
+                    observed_at: due + jiff::SignedDuration::from_millis(late),
                 });
             }
         }

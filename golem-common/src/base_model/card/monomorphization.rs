@@ -23,7 +23,7 @@ use crate::model::account::AccountEmail;
 use crate::model::application::ApplicationName;
 use crate::model::component::ComponentName;
 use crate::model::environment::EnvironmentName;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp as JiffTimestamp;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -125,7 +125,7 @@ pub fn instantiate_polymorphic_card_for_agent(
     card: &PolymorphicCard,
     context: &AgentPermissionMonomorphizationContext,
     child_card_id: CardId,
-    created_at: DateTime<Utc>,
+    created_at: JiffTimestamp,
 ) -> Card {
     Card {
         card_id: child_card_id,
@@ -837,7 +837,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
             managed_by: None,
@@ -904,7 +904,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
         };
@@ -959,9 +959,9 @@ mod tests {
         let source_card_id = CardId(uuid::Uuid::from_u128(1));
         let source_parent_id = CardId(uuid::Uuid::from_u128(2));
         let child_card_id = CardId(uuid::Uuid::from_u128(3));
-        let source_created_at = chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-        let child_created_at = chrono::DateTime::from_timestamp(1_700_000_100, 0).unwrap();
-        let expires_at = chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap();
+        let source_created_at = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
+        let child_created_at = jiff::Timestamp::new(1_700_000_100, 0).unwrap();
+        let expires_at = jiff::Timestamp::new(1_800_000_000, 0).unwrap();
         let grant = PolymorphicPermissionPattern::Agent(PolymorphicClassPermissionPattern {
             owner: PolymorphicAgentOwnerPattern::Agent,
             recipient: RecipientPattern::Any,
@@ -1030,7 +1030,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
         };

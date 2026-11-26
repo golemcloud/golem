@@ -459,7 +459,7 @@ impl AgentInvocationPayload {
     /// Compares the caller's execution contract, not deployment-time tool resolution.
     /// Tracing and scheduling metadata are stored outside the payload.
     pub fn same_caller_request(&self, other: &Self) -> bool {
-        self.same_caller_request_decoding(other, |_| None)
+        self.same_caller_request_decoding(other, |_| None, false)
     }
 
     /// Like [`Self::same_caller_request`], but compares method inputs captured in different
@@ -469,11 +469,13 @@ impl AgentInvocationPayload {
     ///
     /// `self` is the accepted request and `other` the repeated one. External REST input forbids
     /// host-managed capabilities in the result, so a repeated external REST request matches by
-    /// value only an accepted request that is external REST too.
+    /// value an accepted request of another representation only when `result_admits_external_rest`
+    /// says that the method's result type has no host-managed capability.
     pub fn same_caller_request_decoding(
         &self,
         other: &Self,
         decode: impl Fn(&AgentMethodInput) -> Option<SchemaValue>,
+        result_admits_external_rest: bool,
     ) -> bool {
         match (self, other) {
             (
@@ -503,7 +505,9 @@ impl AgentInvocationPayload {
                     && caller == other_caller
                     && scope_card == other_card
                     && (input == other_input
-                        || (input.is_external_rest() || !other_input.is_external_rest())
+                        || (input.is_external_rest()
+                            || !other_input.is_external_rest()
+                            || result_admits_external_rest)
                             && decode(input).zip(decode(other_input)).is_some_and(
                                 |(input, other_input)| {
                                     schema_value_same_request(&input, &other_input)
@@ -1359,24 +1363,44 @@ mod request_equality_tests {
                 })
             }
         };
-        for (accepted, repeated, matches) in [
-            (&rest, &json, true),
-            (&rest, &internal, true),
-            (&json, &internal, true),
-            (&internal, &json, true),
-            (&json, &rest, false),
-            (&internal, &rest, false),
+        for (accepted, repeated, result_admits_external_rest, matches) in [
+            (&rest, &json, false, true),
+            (&rest, &internal, false, true),
+            (&json, &internal, false, true),
+            (&internal, &json, false, true),
+            (&json, &rest, false, false),
+            (&internal, &rest, false, false),
+            (&json, &rest, true, true),
+            (&internal, &rest, true, true),
         ] {
             assert_eq!(
-                request(accepted, false)
-                    .same_caller_request_decoding(&request(repeated, true), decode(7)),
+                request(accepted, false).same_caller_request_decoding(
+                    &request(repeated, true),
+                    decode(7),
+                    result_admits_external_rest
+                ),
                 matches,
-                "{accepted:?} then {repeated:?}"
+                "{accepted:?} then {repeated:?}, result admits REST: {result_admits_external_rest}"
             );
         }
-        assert!(
-            request(&rest, false).same_caller_request_decoding(&request(&rest, true), |_| None)
-        );
+        assert!(request(&rest, false).same_caller_request_decoding(
+            &request(&rest, true),
+            |_| None,
+            false
+        ));
+        for result_admits_external_rest in [false, true] {
+            assert!(!request(&json, false).same_caller_request_decoding(
+                &request(&rest, true),
+                |input| {
+                    decode(if matches!(input, AgentMethodInput::PublicJson(_)) {
+                        8
+                    } else {
+                        7
+                    })(input)
+                },
+                result_admits_external_rest
+            ));
+        }
         assert!(!request(&rest, false).same_caller_request_decoding(
             &request(&json, true),
             |input| {
@@ -1385,7 +1409,8 @@ mod request_equality_tests {
                 } else {
                     7
                 })(input)
-            }
+            },
+            false
         ));
     }
 

@@ -18,7 +18,7 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use chrono::{TimeZone, Utc};
+
 use golem_common::model::oplog::public_oplog_entry::{
     AgentInvocationFinishedParams, AgentInvocationStartedParams,
 };
@@ -172,10 +172,8 @@ async fn rich_semantic_types_round_trip_preserves_canonical_encoding(
 
     let path = PathBuf::from("/tmp/golem-rich-types/α.txt");
     let url = url::Url::parse("https://example.com/a/b?x=1#frag")?;
-    let datetime = Utc
-        .timestamp_opt(1_700_000_000, 123_456_789)
-        .single()
-        .ok_or_else(|| anyhow!("failed to build test datetime"))?;
+    let datetime = jiff::Timestamp::new(1_700_000_000, 123_456_789)
+        .map_err(|_| anyhow!("failed to build test datetime"))?;
     let duration = Duration::from_nanos(93_784_005_006);
     let quantity = Quantity::<Bytes>::new(123, 1, "B").map_err(|e| anyhow!("{e:?}"))?;
 

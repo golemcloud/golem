@@ -146,14 +146,12 @@ impl AgentConfig {
     }
 
     /// Strips the variables that Golem sets, so neither a create override nor an environment
-    /// that a fork copies can set them. The removed names are stripped as well.
+    /// that a fork copies can set them.
     pub(crate) fn remove_dynamic_vars(worker_env: &mut Vec<(String, String)>) {
         worker_env.retain(|(key, _)| {
             key != "GOLEM_AGENT_ID"
                 && key != "GOLEM_AGENT_KEY"
                 && key != "GOLEM_AGENT_TYPE"
-                && key != "GOLEM_WORKER_NAME"
-                && key != "GOLEM_COMPONENT_ID"
                 && key != "GOLEM_COMPONENT_REVISION"
         });
     }
@@ -713,6 +711,16 @@ pub enum LookupResult {
     Pending,
     Interrupted,
     Complete(Result<AgentInvocationOutput, WorkerExecutorError>),
+}
+
+impl LookupResult {
+    /// The component revision that recorded a successful result.
+    pub fn recorded_revision(&self) -> Option<ComponentRevision> {
+        match self {
+            Self::Complete(Ok(output)) => output.component_revision,
+            _ => None,
+        }
+    }
 }
 
 #[derive(Clone)]

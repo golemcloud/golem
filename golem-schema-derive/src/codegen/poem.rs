@@ -713,12 +713,11 @@ fn type_schema_ref_expr(ty: &Type) -> TokenStream {
     }
 }
 
-/// Register statement(s) for a field/variant-content type. Types that contain
-/// a tuple (which has no `poem_openapi::types::Type` impl) are walked
-/// structurally so each leaf component is still registered; all other types
-/// delegate to `<T as Type>::register`.
+/// Register statement(s) for a field/variant-content type. Walk tuples and Jiff
+/// timestamps structurally because they have no `poem_openapi::types::Type` impl.
+/// Register other leaf types with `<T as Type>::register`.
 fn register_expr(ty: &Type) -> TokenStream {
-    if type_contains_tuple(ty) {
+    if type_needs_synthesis(ty) {
         synth_register(ty)
     } else {
         quote! { <#ty as ::poem_openapi::types::Type>::register(registry); }
@@ -727,33 +726,44 @@ fn register_expr(ty: &Type) -> TokenStream {
 
 /// `MetaSchemaRef` expression for a field/variant-content type. Tuple-bearing
 /// types are synthesized as array schemas (serde serializes tuples as JSON
-/// arrays); all other types delegate to their own `Type::schema_ref` (with the
+/// arrays), and Jiff timestamps as date-time strings. Other types delegate to
+/// their own `Type::schema_ref` (with the
 /// `Option<T>` → nullable rule applied by [`type_schema_ref_expr`]).
 fn schema_ref_expr(ty: &Type) -> TokenStream {
-    if type_contains_tuple(ty) {
+    if type_needs_synthesis(ty) {
         synth_schema_ref(ty)
     } else {
         type_schema_ref_expr(ty)
     }
 }
 
-/// Whether `ty` is, or structurally contains, a (non-empty) tuple — looking
+/// Whether `ty` needs an inline schema for a tuple or Jiff timestamp — looking
 /// through the `Vec<_>` / `Option<_>` / `Box<_>` / slice / array wrappers this
 /// derive knows how to synthesize.
-fn type_contains_tuple(ty: &Type) -> bool {
+fn type_needs_synthesis(ty: &Type) -> bool {
     match ty {
         Type::Tuple(t) => !t.elems.is_empty(),
-        Type::Slice(s) => type_contains_tuple(&s.elem),
-        Type::Array(a) => type_contains_tuple(&a.elem),
-        Type::Paren(p) => type_contains_tuple(&p.elem),
-        Type::Group(g) => type_contains_tuple(&g.elem),
-        _ => container_inner(ty).is_some_and(type_contains_tuple),
+        Type::Slice(s) => type_needs_synthesis(&s.elem),
+        Type::Array(a) => type_needs_synthesis(&a.elem),
+        Type::Paren(p) => type_needs_synthesis(&p.elem),
+        Type::Group(g) => type_needs_synthesis(&g.elem),
+        _ => is_jiff_timestamp(ty) || container_inner(ty).is_some_and(type_needs_synthesis),
     }
+}
+
+fn is_jiff_timestamp(ty: &Type) -> bool {
+    let Type::Path(path) = ty else { return false };
+    let segments = &path.path.segments;
+    (segments.len() == 1 && segments[0].ident == "Timestamp")
+        || (segments.len() == 2 && segments[0].ident == "jiff" && segments[1].ident == "Timestamp")
 }
 
 /// Recursively register the leaf component types reachable through tuples and
 /// the known wrapper types.
 fn synth_register(ty: &Type) -> TokenStream {
+    if is_jiff_timestamp(ty) {
+        return quote! {};
+    }
     match ty {
         Type::Tuple(t) => {
             let regs = t.elems.iter().map(synth_register);
@@ -777,6 +787,16 @@ fn synth_register(ty: &Type) -> TokenStream {
 /// `Vec`/slice become arrays; `Option` adds `nullable`; `Box` is transparent;
 /// everything else delegates to the type's own `schema_ref`.
 fn synth_schema_ref(ty: &Type) -> TokenStream {
+    if is_jiff_timestamp(ty) {
+        return quote! {
+            ::poem_openapi::registry::MetaSchemaRef::Inline(::std::boxed::Box::new(
+                ::poem_openapi::registry::MetaSchema {
+                    format: ::core::option::Option::Some("date-time"),
+                    ..::poem_openapi::registry::MetaSchema::new("string")
+                }
+            ))
+        };
+    }
     match ty {
         Type::Tuple(t) => {
             let arity = t.elems.len();

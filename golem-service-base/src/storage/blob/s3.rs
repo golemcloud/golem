@@ -459,7 +459,7 @@ impl S3BlobStorage {
 
     fn bucket_of(&self, namespace: &BlobStorageNamespace) -> &String {
         match namespace {
-            BlobStorageNamespace::CompilationCache { .. } => &self.config.compilation_cache_bucket,
+            BlobStorageNamespace::CompilationCache => &self.config.compilation_cache_bucket,
             BlobStorageNamespace::CustomStorage { .. } => &self.config.custom_data_bucket,
             BlobStorageNamespace::OplogPayload { .. } => &self.config.oplog_payload_bucket,
             BlobStorageNamespace::CompressedOplog { level, .. } => {
@@ -497,12 +497,12 @@ impl S3BlobStorage {
     /// level, so two namespaces can share a prefix when they share a bucket.
     fn bucket_prefix_of(namespace: &BlobStorageNamespace) -> String {
         match namespace {
+            BlobStorageNamespace::CompilationCache => "compilation_cache".to_string(),
             BlobStorageNamespace::PublishedBlobs => "published_blobs".to_string(),
             BlobStorageNamespace::ComponentUploads { account_id } => {
                 format!("component_uploads/{account_id}")
             }
-            BlobStorageNamespace::CompilationCache { environment_id }
-            | BlobStorageNamespace::CustomStorage { environment_id }
+            BlobStorageNamespace::CustomStorage { environment_id }
             | BlobStorageNamespace::InitialAgentFiles { environment_id } => {
                 environment_id.to_string()
             }

@@ -67,7 +67,7 @@ With `namespace_prefixes = true`, the keys have these prefixes:
 
 | Blobs | Key prefix |
 | --- | --- |
-| Compilation cache | `<object_prefix>/compilation_cache/<environment id>/` |
+| Compilation cache | `<object_prefix>/compilation_cache/<Wasm hash>/` |
 | WASI Blob Store data | `<object_prefix>/custom_data/<environment id>/` |
 | Oplog payloads | `<object_prefix>/oplog_payload/<agent mode>/<environment id>/<agent>/` |
 | Compressed oplog | `<object_prefix>/compressed_oplog/<agent mode>/<environment id>/<component id>/<layer>/` |
@@ -92,6 +92,8 @@ The Golem **registry service** stores original component Wasm files in its confi
 If the registry database and its blob storage both use SQLite, configure separate database files. An upload can repair a missing Wasm file while the registry holds a write transaction. If both stores use the same file, that transaction blocks the repair write.
 
 The **component compilation service** is a special, horizontally scalable component of the Golem system which shares this storage with worker executors and is capable of precompiling components before they are being used by any of the executors.
+
+The compilation cache uses the Wasm content hash and the Wasmtime artifact fingerprint. Environments with identical Wasm share the same compiled artifact. After all services use the new keys, you can remove old filesystem entries at `compilation_cache/<environment id>/<component id>/<revision>/<fingerprint>.cwasm`. For S3, prepend the configured object prefix. If S3 namespace prefixes were disabled, the old path inside the compilation cache bucket omitted `compilation_cache/`. For SQLite, remove rows whose namespace starts with `compilation_cache-`, and keep the new `compilation_cache` namespace. Do not delete the original component Wasm.
 
 ## Oplog
 

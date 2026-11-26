@@ -1357,7 +1357,6 @@ pub mod environment {
 
 pub mod tool {
     use crate::model::agent::RawAgentId;
-    use chrono::{DateTime, Utc};
     use clap::{ArgGroup, Args, Subcommand};
     use golem_common::base_model::account::{AccountEmail, AccountId};
     use golem_common::base_model::environment_tool_grant::EnvironmentToolGrantId;
@@ -1368,6 +1367,7 @@ pub mod tool {
     use golem_common::base_model::tool_release::ToolReleaseId;
     use golem_common::model::IdempotencyKey;
     use golem_common::model::component::ComponentName;
+    use jiff::Timestamp;
 
     #[derive(Debug, Subcommand)]
     pub enum ToolSubcommand {
@@ -1526,7 +1526,7 @@ pub mod tool {
         pub lookup: bool,
         /// Schedule execution at an RFC 3339 timestamp
         #[arg(long, requires = "trigger", conflicts_with_all = ["stdin", "stdout", "output", "stderr", "stderr_output"])]
-        pub schedule_at: Option<DateTime<Utc>>,
+        pub schedule_at: Option<Timestamp>,
         /// Request seed; `-` generates a fresh seed. With --lookup, the receipt's final invocation UUID
         #[arg(long, short)]
         pub idempotency_key: Option<IdempotencyKey>,
@@ -1669,13 +1669,13 @@ pub mod worker {
         PostDeployArgs, StreamArgs,
     };
     use crate::model::agent::{AgentListCursor, AgentListMode, AgentUpdateMode};
-    use chrono::{DateTime, Utc};
     use clap::{Subcommand, ValueEnum};
     use golem_common::model::IdempotencyKey;
     use golem_common::model::agent::AgentConfigEntryDto;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::{ComponentName, ComponentRevision};
     use golem_common::model::oplog::OplogCursor;
+    use jiff::Timestamp;
     use uuid::Uuid;
 
     #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -1780,7 +1780,7 @@ pub mod worker {
             post_deploy_args: Option<PostDeployArgs>,
             /// Schedule the invocation at a specific time (ISO 8601 / RFC 3339 format, e.g. 2026-03-15T10:30:00Z)
             #[clap(long, requires = "trigger")]
-            schedule_at: Option<DateTime<Utc>>,
+            schedule_at: Option<Timestamp>,
             /// Fail, and run nothing, unless the agent is the incarnation with this fingerprint
             #[clap(long)]
             expected_fingerprint: Option<Uuid>,
@@ -2736,8 +2736,8 @@ pub mod config {
 
 pub mod invocation {
     use crate::model::agent::RawAgentId;
-    use chrono::{DateTime, Utc};
     use clap::{Args, Subcommand, ValueEnum};
+    use jiff::Timestamp;
 
     #[derive(Debug, Subcommand)]
     pub enum InvocationSubcommand {
@@ -2772,10 +2772,10 @@ pub mod invocation {
             kind: Option<InvocationKindArg>,
             /// Only invocations whose last change is at or after this time (RFC 3339)
             #[arg(long)]
-            since: Option<DateTime<Utc>>,
+            since: Option<Timestamp>,
             /// Only invocations whose last change is at or before this time (RFC 3339)
             #[arg(long)]
-            until: Option<DateTime<Utc>>,
+            until: Option<Timestamp>,
             /// Invocations per page, at most 1000; the server default is 100
             #[arg(long)]
             page_size: Option<u32>,
@@ -3110,9 +3110,9 @@ pub mod profile {
 
 pub mod api_token {
     use crate::args::parse_instant;
-    use chrono::{DateTime, Utc};
     use clap::Subcommand;
     use golem_common::model::auth::TokenId;
+    use jiff::Timestamp;
 
     #[derive(Debug, Subcommand)]
     pub enum ApiTokenSubcommand {
@@ -3128,7 +3128,7 @@ pub mod api_token {
             /// relative durations like `30d` are NOT accepted. Defaults to
             /// the year-2100 sentinel below.
             #[arg(long, value_parser = parse_instant, default_value = "2100-01-01T00:00:00Z")]
-            expires_at: DateTime<Utc>,
+            expires_at: Timestamp,
         },
         /// Delete an existing token
         #[command(after_help = crate::command_examples::API_TOKEN_DELETE)]

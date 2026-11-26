@@ -712,7 +712,7 @@ run_selected_test() {
 run_filesystem_benchmark() {
   local mode=$1
   local selected=$2
-  local filter=wasi::filesystem_guest_latency_benchmark
+  local filter=wasi::linux::filesystem_guest_latency_benchmark
   local capable_binary=${work_dir}/integration-benchmark-${mode}
   local result_file=${work_dir}/filesystem-benchmark-${mode}.result
   local perf_file=${work_dir}/filesystem-benchmark-${mode}.perf
@@ -931,70 +931,70 @@ run_privileged_test \
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
-  wasi::p2_p3_quota_classification_on_managed_xfs
+  wasi::linux::p2_p3_quota_classification_on_managed_xfs
 
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
-  wasi::managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write
+  wasi::linux::managed_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write
 
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
-  wasi::managed_xfs_resource_billing_survives_idle_and_replay
+  wasi::linux::managed_xfs_resource_billing_survives_idle_and_replay
 
 # Keep each native storage interruption case explicit: the selector check rejects missing tests.
 for interruption_test in \
-  host::sleep::p2::durable_p2_sleep_managed_xfs_storage_quota \
-  host::sleep::p2::ephemeral_p2_sleep_managed_xfs_storage_quota \
-  host::sleep::p3::durable_p3_sleep_managed_xfs_storage_quota \
-  host::sleep::p3::ephemeral_p3_sleep_managed_xfs_storage_quota \
-  host::rpc::durable_sync_rpc_managed_xfs_storage_quota \
-  host::rpc::ephemeral_sync_rpc_managed_xfs_storage_quota \
-  host::rpc::durable_async_rpc_managed_xfs_storage_quota \
-  host::rpc::ephemeral_async_rpc_managed_xfs_storage_quota \
-  host::p2::tcp::poll::durable_p2_block_managed_xfs_storage_quota \
-  host::p2::tcp::poll::ephemeral_p2_block_managed_xfs_storage_quota \
-  host::p2::tcp::multi_poll::durable_p2_multi_poll_managed_xfs_storage_quota \
-  host::p2::tcp::multi_poll::ephemeral_p2_multi_poll_managed_xfs_storage_quota \
-  host::p2::tcp::input::durable_p2_blocking_read_managed_xfs_storage_quota \
-  host::p2::tcp::input::ephemeral_p2_blocking_read_managed_xfs_storage_quota \
-  host::p2::tcp::input::durable_p2_blocking_skip_managed_xfs_storage_quota \
-  host::p2::tcp::input::ephemeral_p2_blocking_skip_managed_xfs_storage_quota \
-  host::p2::tcp::input::durable_p2_blocking_splice_managed_xfs_storage_quota \
-  host::p2::tcp::input::ephemeral_p2_blocking_splice_managed_xfs_storage_quota \
-  host::p2::tcp::input::cross_socket::durable_p2_cross_socket_splice_managed_xfs_storage_quota \
-  host::p2::tcp::input::cross_socket::ephemeral_p2_cross_socket_splice_managed_xfs_storage_quota \
+  host::sleep::p2::storage::durable_p2_sleep_managed_xfs_storage_quota \
+  host::sleep::p2::storage::ephemeral_p2_sleep_managed_xfs_storage_quota \
+  host::sleep::p3::storage::durable_p3_sleep_managed_xfs_storage_quota \
+  host::sleep::p3::storage::ephemeral_p3_sleep_managed_xfs_storage_quota \
+  host::rpc::storage::durable_sync_rpc_managed_xfs_storage_quota \
+  host::rpc::storage::ephemeral_sync_rpc_managed_xfs_storage_quota \
+  host::rpc::storage::durable_async_rpc_managed_xfs_storage_quota \
+  host::rpc::storage::ephemeral_async_rpc_managed_xfs_storage_quota \
+  host::p2::tcp::poll::storage::durable_p2_block_managed_xfs_storage_quota \
+  host::p2::tcp::poll::storage::ephemeral_p2_block_managed_xfs_storage_quota \
+  host::p2::tcp::multi_poll::storage::durable_p2_multi_poll_managed_xfs_storage_quota \
+  host::p2::tcp::multi_poll::storage::ephemeral_p2_multi_poll_managed_xfs_storage_quota \
+  host::p2::tcp::input::storage::durable_p2_blocking_read_managed_xfs_storage_quota \
+  host::p2::tcp::input::storage::ephemeral_p2_blocking_read_managed_xfs_storage_quota \
+  host::p2::tcp::input::storage::durable_p2_blocking_skip_managed_xfs_storage_quota \
+  host::p2::tcp::input::storage::ephemeral_p2_blocking_skip_managed_xfs_storage_quota \
+  host::p2::tcp::input::storage::durable_p2_blocking_splice_managed_xfs_storage_quota \
+  host::p2::tcp::input::storage::ephemeral_p2_blocking_splice_managed_xfs_storage_quota \
+  host::p2::tcp::input::cross_socket::storage::durable_p2_cross_socket_splice_managed_xfs_storage_quota \
+  host::p2::tcp::input::cross_socket::storage::ephemeral_p2_cross_socket_splice_managed_xfs_storage_quota \
   host::p2::tcp::input::repeated_stop::durable_claimed_quota_stop_preserves_reason_after_policy_update \
   host::p2::tcp::input::repeated_stop::ephemeral_claimed_quota_stop_preserves_reason_after_policy_update \
   host::p2::tcp::input::repeated_stop::durable_claimed_user_stop_preserves_reason_after_policy_update \
   host::p2::tcp::input::repeated_stop::ephemeral_claimed_user_stop_preserves_reason_after_policy_update \
-  host::p3::udp::durable_p3_udp_receive_managed_xfs_storage_quota \
-  host::p3::udp::ephemeral_p3_udp_receive_managed_xfs_storage_quota \
-  host::p3::promise::durable_p3_promise_managed_xfs_storage_quota \
-  host::p3::promise::ephemeral_p3_promise_managed_xfs_storage_quota \
-  host::p3::http::headers::durable_p3_http_headers_managed_xfs_storage_quota \
-  host::p3::http::headers::ephemeral_p3_http_headers_managed_xfs_storage_quota \
-  host::p3::http::body::durable_p3_http_body_managed_xfs_storage_quota \
-  host::p3::http::body::ephemeral_p3_http_body_managed_xfs_storage_quota \
-  host::websocket::durable_websocket_receive_managed_xfs_storage_quota \
-  host::websocket::ephemeral_websocket_receive_managed_xfs_storage_quota \
-  host::websocket::handshake::durable_websocket_handshake_managed_xfs_storage_quota \
-  host::websocket::handshake::ephemeral_websocket_handshake_managed_xfs_storage_quota \
-  host::websocket::pool::durable_websocket_initial_pool_managed_xfs_storage_quota \
-  host::websocket::pool::ephemeral_websocket_initial_pool_managed_xfs_storage_quota \
-  host::websocket::reader_lock::durable_websocket_reader_lock_stop_only_managed_xfs_storage_quota \
-  host::websocket::reader_lock::ephemeral_websocket_reader_lock_stop_only_managed_xfs_storage_quota \
-  host::websocket::timed_receive::durable_websocket_timed_receive_managed_xfs_storage_quota \
-  host::websocket::timed_receive::ephemeral_websocket_timed_receive_managed_xfs_storage_quota \
-  host::websocket::reconnect_handshake::durable_websocket_reconnect_handshake_receive_managed_xfs_storage_quota \
-  host::websocket::reconnect_handshake::durable_websocket_reconnect_handshake_close_managed_xfs_storage_quota \
-  host::websocket::reconnect_pool::durable_websocket_reconnect_pool_receive_managed_xfs_storage_quota \
-  host::websocket::reconnect_pool::durable_websocket_reconnect_pool_close_managed_xfs_storage_quota \
-  metering::storage::durable_pending_managed_xfs_storage_suspends_and_recovers \
-  metering::storage::ephemeral_pending_managed_xfs_storage_fails_with_matching_resource_error \
-  metering::storage::nonmatching::durable_pending_nonmatching_managed_xfs_storage_remains_running \
-  metering::storage::nonmatching::ephemeral_pending_nonmatching_managed_xfs_storage_remains_running
+  host::p3::udp::storage::durable_p3_udp_receive_managed_xfs_storage_quota \
+  host::p3::udp::storage::ephemeral_p3_udp_receive_managed_xfs_storage_quota \
+  host::p3::promise::storage::durable_p3_promise_managed_xfs_storage_quota \
+  host::p3::promise::storage::ephemeral_p3_promise_managed_xfs_storage_quota \
+  host::p3::http::headers::storage::durable_p3_http_headers_managed_xfs_storage_quota \
+  host::p3::http::headers::storage::ephemeral_p3_http_headers_managed_xfs_storage_quota \
+  host::p3::http::body::storage::durable_p3_http_body_managed_xfs_storage_quota \
+  host::p3::http::body::storage::ephemeral_p3_http_body_managed_xfs_storage_quota \
+  host::websocket::storage::durable_websocket_receive_managed_xfs_storage_quota \
+  host::websocket::storage::ephemeral_websocket_receive_managed_xfs_storage_quota \
+  host::websocket::handshake::storage::durable_websocket_handshake_managed_xfs_storage_quota \
+  host::websocket::handshake::storage::ephemeral_websocket_handshake_managed_xfs_storage_quota \
+  host::websocket::pool::storage::durable_websocket_initial_pool_managed_xfs_storage_quota \
+  host::websocket::pool::storage::ephemeral_websocket_initial_pool_managed_xfs_storage_quota \
+  host::websocket::reader_lock::storage::durable_websocket_reader_lock_stop_only_managed_xfs_storage_quota \
+  host::websocket::reader_lock::storage::ephemeral_websocket_reader_lock_stop_only_managed_xfs_storage_quota \
+  host::websocket::timed_receive::storage::durable_websocket_timed_receive_managed_xfs_storage_quota \
+  host::websocket::timed_receive::storage::ephemeral_websocket_timed_receive_managed_xfs_storage_quota \
+  host::websocket::reconnect_handshake::storage::durable_websocket_reconnect_handshake_receive_managed_xfs_storage_quota \
+  host::websocket::reconnect_handshake::storage::durable_websocket_reconnect_handshake_close_managed_xfs_storage_quota \
+  host::websocket::reconnect_pool::storage::durable_websocket_reconnect_pool_receive_managed_xfs_storage_quota \
+  host::websocket::reconnect_pool::storage::durable_websocket_reconnect_pool_close_managed_xfs_storage_quota \
+  metering::storage::linux::durable_pending_managed_xfs_storage_suspends_and_recovers \
+  metering::storage::linux::ephemeral_pending_managed_xfs_storage_fails_with_matching_resource_error \
+  metering::storage::linux::nonmatching::durable_pending_nonmatching_managed_xfs_storage_remains_running \
+  metering::storage::linux::nonmatching::ephemeral_pending_nonmatching_managed_xfs_storage_remains_running
 do
   run_privileged_test integration "${integration_test_binary}" "api::interruption::${interruption_test}"
 done
@@ -1002,17 +1002,17 @@ done
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
-  filesystem_snapshots::managed_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay
+  filesystem_snapshots::linux::managed_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay
 
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
-  filesystem_snapshots::managed_xfs_manual_update_brings_the_files_into_the_target_revision
+  filesystem_snapshots::linux::managed_xfs_manual_update_brings_the_files_into_the_target_revision
 
 run_privileged_test \
   integration \
   "${integration_test_binary}" \
-  wasi::filesystem_downgrade_blocks_guest_until_limit_recovers
+  wasi::linux::filesystem_downgrade_blocks_guest_until_limit_recovers
 
 run_unprivileged_test \
   lib \
@@ -1057,7 +1057,7 @@ run_unprivileged_test \
 run_unprivileged_test \
   integration \
   "${integration_test_binary}" \
-  filesystem_snapshots::reflink_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay
+  filesystem_snapshots::linux::reflink_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay
 
 run_unprivileged_test \
   lib \
@@ -1067,9 +1067,9 @@ run_unprivileged_test \
 run_unprivileged_test \
   integration \
   "${integration_test_binary}" \
-  filesystem_snapshots::reflink_xfs_with_filesystem_metering_fails_at_startup
+  filesystem_snapshots::linux::reflink_xfs_with_filesystem_metering_fails_at_startup
 
 run_unprivileged_test \
   integration \
   "${integration_test_binary}" \
-  wasi::reflink_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write
+  wasi::linux::reflink_xfs_physical_pressure_unloads_loaded_idle_and_retries_safe_write

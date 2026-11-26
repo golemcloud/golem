@@ -27,7 +27,6 @@ use crate::model::masking::{
     Masked, MaskingConfig, is_sensitive_key, mask_config_bindings, mask_secret, mask_sensitive_map,
 };
 use crate::model::text_format::*;
-use chrono::{DateTime, Utc};
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 use golem_common::base_model::component_metadata::{
@@ -65,6 +64,7 @@ use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::Tool;
 use heck::{ToLowerCamelCase, ToSnakeCase};
 use itertools::Itertools;
+use jiff::Timestamp;
 use serde::Serializer;
 use serde::ser::Error;
 use serde::{Deserialize, Serialize};
@@ -182,7 +182,7 @@ pub struct ComponentView {
     pub component_id: ComponentId,
     pub component_revision: u64,
     pub component_size: u64,
-    pub created_at: DateTime<Utc>,
+    pub created_at: Timestamp,
     pub environment_id: EnvironmentId,
     pub exports: Vec<String>,
     pub agent_types: Vec<AgentTypeSchema>,

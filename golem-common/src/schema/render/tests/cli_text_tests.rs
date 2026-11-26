@@ -25,7 +25,7 @@ use crate::schema::schema_value::{
     PermissionCardValuePayload, QuotaTokenValuePayload, SchemaValue, SecretValuePayload,
     TextValuePayload,
 };
-use chrono::{TimeZone, Utc};
+use jiff::Timestamp as JiffTimestamp;
 use proptest::prelude::*;
 use test_r::test;
 
@@ -113,7 +113,7 @@ fn secret_value_is_redacted_by_default() {
         secret_id: uuid::Uuid::nil(),
         config_key: None,
         version: 0,
-        resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+        resolved_at: JiffTimestamp::new(0, 0).unwrap(),
         category: None,
     });
     let text = value_to_cli_text(&graph, &ty, &value).expect("value_to_cli_text");
@@ -151,7 +151,7 @@ fn secret_metadata_rendering_keeps_other_capabilities_redacted() {
                 secret_id,
                 config_key: Some(vec!["database".to_string(), "password".to_string()]),
                 version: 7,
-                resolved_at: Utc.timestamp_opt(1_700_000_000, 0).unwrap(),
+                resolved_at: JiffTimestamp::new(1_700_000_000, 0).unwrap(),
                 category: Some("api-key".to_string()),
             }),
             SchemaValue::QuotaToken(QuotaTokenValuePayload {
@@ -159,7 +159,7 @@ fn secret_metadata_rendering_keeps_other_capabilities_redacted() {
                 resource_name: "private-quota-resource".to_string(),
                 expected_use: 1,
                 last_credit: 0,
-                last_credit_at: Utc.timestamp_opt(1_700_000_001, 0).unwrap(),
+                last_credit_at: JiffTimestamp::new(1_700_000_001, 0).unwrap(),
             }),
             SchemaValue::PermissionCard(PermissionCardValuePayload {
                 card_id: permission_card_id,
@@ -179,7 +179,7 @@ fn secret_metadata_rendering_keeps_other_capabilities_redacted() {
         "database",
         "password",
         "\"version\":7",
-        "\"resolvedAt\":\"2023-11-14T22:13:20+00:00\"",
+        "\"resolvedAt\":\"2023-11-14T22:13:20Z\"",
         "\"category\":\"api-key\"",
         "<redacted: quota-token>",
         "<redacted: permission-card>",
@@ -204,7 +204,7 @@ fn quota_token_value_is_redacted_by_default() {
         resource_name: "gpu".to_string(),
         expected_use: 1,
         last_credit: 0,
-        last_credit_at: Utc.timestamp_opt(0, 0).unwrap(),
+        last_credit_at: JiffTimestamp::new(0, 0).unwrap(),
     });
     let text = value_to_cli_text(&graph, &ty, &value).expect("value_to_cli_text");
     assert_eq!(text, "<redacted: quota-token>");
@@ -222,7 +222,7 @@ fn permission_card_type_and_value_render_safely() {
     let payload = PermissionCardValuePayload {
         card_id: uuid::Uuid::from_u128(1),
         parent_ids: vec![uuid::Uuid::from_u128(2)],
-        expires_at: Some(Utc.timestamp_opt(1_700_000_000, 0).unwrap()),
+        expires_at: Some(JiffTimestamp::new(1_700_000_000, 0).unwrap()),
         polymorphic: true,
     };
     let value = SchemaValue::PermissionCard(payload.clone());
@@ -260,7 +260,7 @@ fn capability_value_is_redacted_inside_record() {
                 secret_id: uuid::Uuid::nil(),
                 config_key: None,
                 version: 0,
-                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                resolved_at: JiffTimestamp::new(0, 0).unwrap(),
                 category: None,
             }),
         ],
@@ -307,7 +307,7 @@ fn type_to_cli_text_includes_text_regex_and_languages() {
 fn datetime_value_uses_canonical_form() {
     let ty = SchemaType::datetime();
     let graph = SchemaGraph::anonymous(ty.clone());
-    let dt = Utc.timestamp_opt(0, 0).single().unwrap();
+    let dt = JiffTimestamp::new(0, 0).unwrap();
     let value = SchemaValue::Datetime { value: dt };
     let text = value_to_cli_text(&graph, &ty, &value).expect("value_to_cli_text");
     assert_eq!(text, canonical::datetime::to_text(&dt).unwrap());
