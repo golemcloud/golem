@@ -149,7 +149,6 @@ mod tests {
     };
     use jiff::Timestamp;
     use std::net::{IpAddr, Ipv4Addr};
-    use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -263,38 +262,14 @@ mod tests {
         bytes
     }
 
-    fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
-        payload
-            .downcast_ref::<&str>()
-            .copied()
-            .or_else(|| payload.downcast_ref::<String>().map(String::as_str))
-            .unwrap_or("<non-string panic payload>")
-    }
-
-    /// Characterisation, not a guarantee: a negative length prefix crashes rather than errors.
-    ///
-    /// Catchable only because cargo forces `panic = "unwind"` on test targets; the profiles the
-    /// shard manager ships in abort the process instead. The panic message on stderr is expected.
+    /// desert rejects a negative length prefix with an error, so a corrupted blob is refused
+    /// instead of crashing the shard manager.
     #[test]
-    fn a_negative_length_prefix_panics_the_decoder() {
+    fn a_negative_length_prefix_is_rejected() {
         let blob = blob_with_a_negative_pod_name_length();
-        let caught = catch_unwind(AssertUnwindSafe(|| decode_shard_state(&blob)));
-        match caught {
-            // With overflow checks on the add traps; without them the following slice index
-            // panics instead.
-            Err(payload) => {
-                let message = panic_message(&*payload);
-                assert!(
-                    message.contains("attempt to add with overflow")
-                        || message.contains("slice index starts at"),
-                    "the panic did not come from desert's bounds check: {message}"
-                );
-            }
-            Ok(Ok(_)) => panic!("a negative length prefix decoded successfully"),
-            Ok(Err(err)) => panic!(
-                "a negative length prefix now returns {err:?}; if the decoder rejects it, replace \
-                 this characterisation with an assertion on the error and restore the guard"
-            ),
+        match decode_shard_state(&blob) {
+            Err(ShardManagerError::SerializationError(_)) => {}
+            other => panic!("expected SerializationError, got {other:?}"),
         }
     }
 

@@ -21,10 +21,11 @@ use golem_common::{agent_key, data_value};
 use golem_test_framework::benchmark::{
     Benchmark, BenchmarkApi, BenchmarkArtifacts, BenchmarkConfig, BenchmarkRecorder,
     BenchmarkResult, BenchmarkRunner, BenchmarkSource, BenchmarkSuite, BenchmarkSuiteItem,
-    BenchmarkSuiteResult, ChaosAction, ChaosScenarioArg, DensityAction, DensityAgentModeArg,
-    DensityPromiseRuntimeArg, DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg,
-    DensityScenarioArg, DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg,
-    DensitySectionArg, DensitySharingArg, DensitySnapshottingArg, RunMetadata,
+    BenchmarkSuiteResult, BenchmarkSuiteResultCollection, ChaosAction, ChaosScenarioArg,
+    DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg, DensityPromiseTopologyArg,
+    DensityPromiseWaiterPresenceArg, DensityScenarioArg, DensityScheduleTargetPatternArg,
+    DensityScheduleTargetResidencyArg, DensitySectionArg, DensitySharingArg,
+    DensitySnapshottingArg, RunMetadata,
 };
 use golem_test_framework::config::benchmark::{TestMode, cloud_bench_run_id};
 use golem_test_framework::config::{
@@ -42,7 +43,7 @@ use integration_tests::benchmarks::{
     lookup_keyed_agent,
 };
 use integration_tests::chaos;
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
@@ -77,6 +78,66 @@ async fn main() {
 
     if let BenchmarkConfig::Suite {
         path,
+        merge_partials,
+        save_to_json,
+        source_commit_sha,
+        runner_id,
+        ..
+    } = &params.benchmark_config
+        && !merge_partials.is_empty()
+    {
+        let suite: BenchmarkSuite =
+            serde_yaml::from_str(&std::fs::read_to_string(path).expect("Failed to read suite"))
+                .expect("Failed to parse suite");
+        validate_benchmark_names(&benchmarks_by_name, &suite);
+        let partials = merge_partials
+            .iter()
+            .map(|path| {
+                let mut collection: BenchmarkSuiteResultCollection = serde_json::from_slice(
+                    &std::fs::read(path).expect("Failed to read partial result"),
+                )
+                .expect("Invalid partial result");
+                assert_eq!(
+                    collection.runs.len(),
+                    1,
+                    "expected one run per partial result"
+                );
+                collection.runs.remove(0)
+            })
+            .collect();
+        let merged =
+            BenchmarkSuiteResult::merge_partials(&suite, params.benchmark_config.mode(), partials)
+                .expect("Failed to merge partial results");
+        if let Some(commit) = source_commit_sha {
+            assert_eq!(
+                merged.source.as_ref().and_then(|s| s.commit_sha.as_ref()),
+                Some(commit),
+                "unexpected source commit"
+            );
+        }
+        if let Some(runner) = runner_id {
+            assert_eq!(
+                merged.runner.as_ref().map(|r| &r.id),
+                Some(runner),
+                "unexpected runner"
+            );
+        }
+        merged
+            .save_to_json(
+                save_to_json
+                    .as_ref()
+                    .expect("merge requires --save-to-json"),
+            )
+            .expect("Failed to save merged result");
+        println!("{}", merged.view());
+        if merged.failure_count() > 0 {
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if let BenchmarkConfig::Suite {
+        path,
         check_artifacts: true,
         ..
     } = &params.benchmark_config
@@ -96,6 +157,7 @@ async fn main() {
     let failure_count = match &params.benchmark_config {
         BenchmarkConfig::Benchmark {
             name,
+            version,
             iterations,
             cluster_size,
             size,
@@ -104,9 +166,14 @@ async fn main() {
             ..
         } => {
             if let Some(f) = benchmarks_by_name.get(name.as_str()) {
+                golem_test_framework::benchmark::MeasurementEnvironment::for_mode(
+                    params.benchmark_config.mode(),
+                );
                 let item = BenchmarkSuiteItem {
                     name: name.clone(),
+                    version: *version,
                     iterations: *iterations,
+                    partition: None,
                     cluster_size: cluster_size.clone(),
                     size: size.clone(),
                     length: length.clone(),
@@ -149,6 +216,9 @@ async fn main() {
         }
         BenchmarkConfig::Suite {
             path,
+            partition,
+            run_id,
+            timestamp,
             save_to_json,
             add_to_json,
             runner_id,
@@ -165,6 +235,27 @@ async fn main() {
 
             validate_benchmark_names(&benchmarks_by_name, &suite);
 
+            let fingerprint = suite.fingerprint();
+            let suite = if let Some(partition) = partition {
+                suite
+                    .select_partition(*partition)
+                    .expect("Invalid suite partition")
+            } else {
+                suite
+            };
+
+            let environment = golem_test_framework::benchmark::MeasurementEnvironment::for_mode(
+                params.benchmark_config.mode(),
+            );
+            if !matches!(params.benchmark_config.mode(), TestMode::Spawned { .. })
+                && let Some(runner_id) = runner_id
+            {
+                assert_eq!(
+                    runner_id, &environment.runner_id,
+                    "--runner-id conflicts with remote measurement identity"
+                );
+            }
+
             // Pre-flight warmup runs after all names are validated.
             cloud_preflight_warmup(
                 params.benchmark_config.mode(),
@@ -174,6 +265,12 @@ async fn main() {
             .await;
 
             let mut suite_result = BenchmarkSuiteResult::new(&suite.name);
+            suite_result.suite_fingerprint = Some(fingerprint);
+            suite_result.partitions = partition.iter().copied().collect();
+            suite_result.run_id = run_id.clone();
+            if let Some(timestamp) = timestamp {
+                suite_result.timestamp = *timestamp;
+            }
             suite_result.runner = runner_id.as_ref().map(|id| BenchmarkRunner {
                 id: id.clone(),
                 label: runner_label.clone(),
@@ -202,9 +299,6 @@ async fn main() {
                     )
                     .await;
                     result.drop_zero_counts(params.retain_selected_zero_counts);
-                    if !params.retain_details {
-                        result.drop_details();
-                    }
                     suite_result.add(result);
                 }
                 // no else: we already validated all names above
@@ -578,7 +672,8 @@ async fn run_benchmark<B: Benchmark>(
 fn suite_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<BenchmarkArtifacts> {
     let component_directory = component_directory(mode);
 
-    let fixtures = suite_fixture_names(suite)
+    let fixtures = suite
+        .fixture_names()
         .into_iter()
         .map(|name| {
             let path = component_directory.join(format!("{name}.wasm"));
@@ -594,16 +689,7 @@ fn suite_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<Be
     } = mode
     {
         let build_root = Path::new(workspace_root).join(build_target);
-        for (name, executable) in [
-            (
-                "golem-component-compilation-service",
-                "golem-component-compilation-service",
-            ),
-            ("golem-worker-service", "golem-worker-service"),
-            ("golem-worker-executor", "worker-executor"),
-            ("golem-shard-manager", "golem-shard-manager"),
-            ("golem-registry-service", "golem-registry-service"),
-        ] {
+        for (name, executable) in BenchmarkArtifacts::SERVICE_EXECUTABLES {
             services.insert(name.to_string(), build_root.join(executable));
         }
     }
@@ -629,37 +715,9 @@ fn component_directory(mode: &TestMode) -> PathBuf {
     }
 }
 
-fn suite_fixture_names(suite: &BenchmarkSuite) -> BTreeSet<&'static str> {
-    let mut fixtures = BTreeSet::new();
-    for benchmark in &suite.benchmarks {
-        let names: &[&str] = match benchmark.name.as_str() {
-            "cold-start-unknown-medium" | "latency-medium" => &["benchmark_agent_ts"],
-            "throughput-large-input-effect" => &["benchmark_agent_effect"],
-            "throughput-echo"
-            | "throughput-echo-aggregate"
-            | "throughput-large-input"
-            | "throughput-large-input-aggregate"
-            | "throughput-cpu-intensive"
-            | "throughput-cpu-intensive-aggregate" => {
-                &["benchmark_agent_rust_release", "benchmark_agent_ts"]
-            }
-            "streaming-tool" => &[
-                "golem_it_tool_streaming_rust_caller_release",
-                "golem_it_tool_streaming_rust_provider_release",
-            ],
-            name if name == "streaming-rpc" || name.starts_with("streaming-rpc-") => {
-                &["golem_it_agent_rpc_rust_release"]
-            }
-            _ => &["benchmark_agent_rust_release"],
-        };
-        fixtures.extend(names);
-    }
-    fixtures
-}
-
 fn check_suite_fixture_artifacts(mode: &TestMode, suite: &BenchmarkSuite) -> anyhow::Result<()> {
     let component_directory = component_directory(mode);
-    for name in suite_fixture_names(suite) {
+    for name in suite.fixture_names() {
         let path = component_directory.join(format!("{name}.wasm"));
         let metadata = std::fs::metadata(&path)
             .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
@@ -978,6 +1036,10 @@ async fn run_density(
 ) -> u64 {
     if !matches!(mode, TestMode::Cloud { .. }) {
         panic!("density benchmarks require cloud mode");
+    }
+
+    if matches!(action, DensityAction::Cell) {
+        golem_test_framework::benchmark::MeasurementEnvironment::remote_from_env();
     }
 
     let deps = BenchmarkTestDependencies::new(mode, verbosity, 0, false, otlp).await;

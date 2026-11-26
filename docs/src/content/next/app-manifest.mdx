@@ -1408,7 +1408,7 @@ For registry-backed tools, the generator reads only the release's safe tool defi
   <Field meta={{
     path: "components.<component-name>.build[*].preinitializeJs",
   }}>
-    ***WASM input path*** for JavaScript preinitialization. Requires `into` (the output WASM path). Both paths resolve against the effective component directory.
+    ***Prebuilt QuickJS WASM template path*** for JavaScript preinitialization. Requires `module` (the bundled JavaScript path) and `into` (the output WASM path). The initializer receives the source separately so the template's compiled native code can be reused. All paths resolve against the effective component directory.
   </Field>
 
   <Field

@@ -47,6 +47,7 @@ jsonwebtoken = { workspace = true }
 log = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
+rand = { workspace = true }
 redis = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }

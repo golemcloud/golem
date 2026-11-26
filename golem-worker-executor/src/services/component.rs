@@ -118,7 +118,7 @@ pub struct ComponentServiceDefault {
     component_metadata_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
     current_component_metadata_cache:
         Cache<ComponentId, (), FetchedCurrentMetadata, WorkerExecutorError>,
-    current_metadata_generations: Arc<InvalidationGenerations>,
+    current_metadata_generations: Arc<InvalidationGenerations<EnvironmentId>>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
     registry_client: Arc<dyn RegistryService>,
     compilation_limiter: CompilationLimiter,

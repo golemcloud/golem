@@ -2185,7 +2185,7 @@ mod tests {
                     "database",
                     "password",
                     "\"version\":7",
-                    "\"resolvedAt\":\"2023-11-14T22:13:20+00:00\"",
+                    "\"resolvedAt\":\"2023-11-14T22:13:20Z\"",
                     "\"category\":\"api-key\"",
                     "<redacted: quota-token>",
                     "<redacted: permission-card>",

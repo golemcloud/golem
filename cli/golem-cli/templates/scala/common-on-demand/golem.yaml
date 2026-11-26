@@ -15,10 +15,8 @@ componentTemplates:
           - "{{ componentBuildRootDir }}/project"
           targets:
           - "{{ componentBuildRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
-        - injectToPrebuiltQuickjs: "{{ componentBuildRootDir }}/.generated/agent_guest.wasm"
+        - preinitializeJs: "{{ componentBuildRootDir }}/.generated/agent_guest.wasm"
           module: "{{ componentBuildRootDir }}/.golem/{{ component_name | to_snake_case }}.js"
-          into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
-        - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
           into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
       quick:

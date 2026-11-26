@@ -4260,6 +4260,7 @@ dependencies = [
  "url",
  "urlencoding",
  "uuid",
+ "walkdir",
  "wasm-metadata 0.251.0",
  "wasm-rquickjs",
  "wasm-wave 0.251.0",
@@ -4324,7 +4325,10 @@ dependencies = [
  "golem-common",
  "tempfile",
  "test-r",
+ "tokio",
+ "walkdir",
  "wasm-rquickjs",
+ "wasmtime",
 ]
 
 [[package]]
@@ -4733,6 +4737,7 @@ name = "golem-size-analysis"
 version = "0.0.0"
 dependencies = [
  "anyhow",
+ "camino",
  "clap",
  "flate2",
  "hex",
@@ -4740,9 +4745,11 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "tempfile",
  "test-r",
  "twiggy-ir",
  "twiggy-parser",
+ "wasm-rquickjs",
  "wasmparser 0.251.0",
  "wasmprinter 0.251.0",
  "wat",
@@ -4783,6 +4790,7 @@ dependencies = [
  "opentelemetry_sdk",
  "prometheus",
  "prost",
+ "rand 0.9.5",
  "redis",
  "reqwest 0.13.5",
  "reqwest-middleware",
@@ -6080,6 +6088,7 @@ dependencies = [
  "hyper",
  "indoc",
  "jiff 1.0.3",
+ "libc",
  "opentelemetry",
  "opentelemetry_sdk",
  "pretty_assertions",
