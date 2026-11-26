@@ -165,10 +165,12 @@ pub enum SecretDestination {
 pub struct SecretDestinationParseError;
 
 fn normalize_destination_host(host: &str) -> Result<String, SecretDestinationParseError> {
-    let host = normalize_host_pattern(host, host).map_err(|_| SecretDestinationParseError)?;
-    // The card matcher defines wildcard semantics, but does not validate URL host syntax.
-    url::Host::parse(&host.replace('*', "wildcard")).map_err(|_| SecretDestinationParseError)?;
-    Ok(host)
+    let host = match url::Host::parse(host.trim()).map_err(|_| SecretDestinationParseError)? {
+        url::Host::Domain(host) => host,
+        url::Host::Ipv4(ip) => ip.to_string(),
+        url::Host::Ipv6(_) => return Err(SecretDestinationParseError),
+    };
+    normalize_host_pattern(&host, &host).map_err(|_| SecretDestinationParseError)
 }
 
 impl FromStr for SecretDestination {
@@ -227,20 +229,21 @@ impl FromStr for SecretDestination {
 
 impl SecretDestination {
     pub fn matches(&self, scheme: SecretDestinationScheme, host: &str, port: Option<u16>) -> bool {
-        if host.contains('*')
-            || host.chars().any(|c| {
-                c.is_control()
-                    || matches!(
-                        c,
-                        '/' | '\\' | '?' | '#' | '@' | '[' | ']' | '<' | '>' | '^' | '|' | '%'
-                    )
-            })
-        {
+        if host.chars().any(|c| {
+            c.is_control()
+                || matches!(
+                    c,
+                    '/' | '\\' | '?' | '#' | '@' | '[' | ']' | '<' | '>' | '^' | '|' | '%'
+                )
+        }) {
             return false;
         }
         let Ok(host) = normalize_destination_host(host) else {
             return false;
         };
+        if host.contains('*') {
+            return false;
+        }
         let port = port.unwrap_or(scheme.default_port());
         match self {
             Self::Any => {
@@ -384,6 +387,14 @@ mod destination {
             ("HTTPS://API.X.COM.", Https, "api.x.com", None, true),
             ("https://*.example.com", Https, "A.Example.COM.", None, true),
             ("https://*.example.com", Https, "*.example.com", None, false),
+            (
+                "https://*.example.com",
+                Https,
+                "＊.example.com",
+                None,
+                false,
+            ),
+            ("*", Https, "＊.example.com", None, false),
             ("*", Https, "[::1]", None, false),
             ("*", Https, "", None, false),
             ("*", Https, "example.com\\private", None, false),
@@ -399,6 +410,73 @@ mod destination {
                 "{destination}, {scheme}://{host}:{port:?}"
             );
         }
+    }
+
+    #[test]
+    fn canonical_hosts() {
+        use SecretDestinationScheme::Https;
+
+        for (input, canonical, targets) in [
+            (
+                "https://bücher.example",
+                "https://xn--bcher-kva.example",
+                ["xn--bcher-kva.example", "BÜCHER.example"],
+            ),
+            (
+                "https://BÜCHER.example",
+                "https://xn--bcher-kva.example",
+                ["xn--bcher-kva.example", "bücher.example"],
+            ),
+            (
+                "https://*.bücher.example",
+                "https://*.xn--bcher-kva.example",
+                ["a.xn--bcher-kva.example", "a.BÜCHER.example"],
+            ),
+            (
+                "https://0x7f.0.0.1",
+                "https://127.0.0.1",
+                ["127.0.0.1", "0x7f.0.0.1"],
+            ),
+            ("https://127.1", "https://127.0.0.1", ["127.0.0.1", "127.1"]),
+            (
+                "https://0177.0.0.1",
+                "https://127.0.0.1",
+                ["127.0.0.1", "0177.0.0.1"],
+            ),
+            (
+                "https://2130706433",
+                "https://127.0.0.1",
+                ["127.0.0.1", "2130706433"],
+            ),
+        ] {
+            let destination: SecretDestination = input.parse().unwrap();
+            assert_eq!(destination.to_string(), canonical);
+            assert_eq!(serde_json::to_value(&destination).unwrap(), canonical);
+            for target in targets {
+                assert!(
+                    destination.matches(Https, target, None),
+                    "{input}, {target}"
+                );
+            }
+        }
+        let mut destinations = [
+            "https://bücher.example",
+            "https://BÜCHER.example",
+            "https://xn--bcher-kva.example",
+            "https://0x7f.0.0.1",
+            "https://127.0.0.1",
+        ]
+        .map(|input| input.parse::<SecretDestination>().unwrap())
+        .to_vec();
+        destinations.sort_by_cached_key(ToString::to_string);
+        destinations.dedup();
+        assert_eq!(
+            destinations
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>(),
+            ["https://127.0.0.1", "https://xn--bcher-kva.example"]
+        );
     }
 
     #[test]
