@@ -521,20 +521,7 @@ async fn the_waiting_work_of_a_never_live_generation_does_not_reach_the_next_one
         executor
             .auto_update_worker(fork, newer.revision, false)
             .await?;
-        let outcomes = tokio::time::timeout(Duration::from_secs(90), async {
-            loop {
-                let outcomes: Vec<_> = super::update_outcomes(&executor, fork)
-                    .await?
-                    .into_iter()
-                    .filter(|outcome| outcome.oplog_index > cut)
-                    .collect();
-                if outcomes.len() >= 2 && !executor.worker_is_loaded(fork).await {
-                    break anyhow::Ok(outcomes);
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await;
+        let outcomes = super::wait_for_update_outcomes(&executor, fork, cut, 2, true).await;
         let Ok(outcomes) = outcomes else {
             let oplog = executor.get_oplog(fork, OplogIndex::INITIAL).await?;
             return Err(anyhow::anyhow!(
@@ -543,7 +530,6 @@ async fn the_waiting_work_of_a_never_live_generation_does_not_reach_the_next_one
                 super::entry_kinds(&oplog, cut)
             ));
         };
-        let outcomes = outcomes?;
         assert_eq!(outcomes.len(), 2, "{case}: {outcomes:?}");
         assert!(
             outcomes

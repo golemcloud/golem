@@ -1877,6 +1877,20 @@ impl TestWorkerExecutor {
         Ok(worker.test_gate_next_update_activation())
     }
 
+    /// Resolves when the next automatic update request of the cached worker holds the instance
+    /// lock, before it reads the status for its duplicate check.
+    pub async fn observe_next_update_admission(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<tokio::sync::oneshot::Receiver<()>> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("{owned_agent_id} is not cached"))?;
+        Ok(worker.test_observe_next_update_admission())
+    }
+
     /// Appends a buffered lifecycle hint after the next source commit has flushed.
     pub fn append_after_next_oplog_commit(&self, agent_id: &AgentId) {
         self.additional_test_deps

@@ -897,6 +897,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         (entered_rx, release_tx)
     }
 
+    /// Signals when the next automatic update request of this worker holds the instance lock,
+    /// before it reads the status for its duplicate check. The request does not wait.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[doc(hidden)]
+    pub fn test_observe_next_update_admission(&self) -> tokio::sync::oneshot::Receiver<()> {
+        let (admitted_tx, admitted_rx) = tokio::sync::oneshot::channel();
+        *self.update_admission_probe.lock().unwrap() = Some(admitted_tx);
+        admitted_rx
+    }
+
     #[cfg(any(test, feature = "test-utils"))]
     async fn pass_update_activation_gate(&self) {
         let gate = self.update_activation_gate.lock().unwrap().take();
@@ -920,6 +930,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // when this request reaches the queue head.
         let instance_guard = self.lock_non_stopping_worker().await;
         instance_guard.ensure_not_deleting()?;
+        #[cfg(any(test, feature = "test-utils"))]
+        if let Some(admitted) = self.update_admission_probe.lock().unwrap().take() {
+            let _ = admitted.send(());
+        }
         let status = self.state_actor.status().await;
         if lifecycle::has_duplicate_pending_update(&status, target_revision) {
             return Err(WorkerExecutorError::invalid_request(

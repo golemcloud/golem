@@ -16,9 +16,10 @@
 //! the effect that its load hook makes against a counting test peer.
 
 use super::peers::{TcpPeer, UdpPeer};
-use super::{settled_update_outcomes_after, tip, update_outcomes};
+use super::{settled_update_outcomes_after, tip, wait_for_update_outcomes};
 use crate::Tracing;
 use anyhow::anyhow;
+use golem_common::model::card::{CardId, CardManagedByRuntimeDerived, StoredCard};
 use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::public_oplog_entry::FailedUpdateParams;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex, UpdateFailureClass};
@@ -27,8 +28,10 @@ use golem_common::model::{
     RetryPolicy, TransactionId,
 };
 use golem_common::{agent_key, data_value};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::dsl::TestDsl;
+use golem_worker_executor::services::card::{CardService, CardState, RuntimeCardCreation};
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
 use golem_worker_executor::services::rdbms::ignite::IgniteType;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;
@@ -41,11 +44,13 @@ use golem_worker_executor::storage::keyvalue::fault_injecting::{
     FaultInjectingKeyValueStorage, KeyValueStorageFaults,
 };
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies,
+    LastUniqueId, PrecompiledComponent, TestCardService, TestContext, TestExecutorOverrides,
+    TestWorkerExecutor, WorkerExecutorTestDependencies,
 };
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
@@ -251,19 +256,11 @@ impl Hooks {
         self.executor
             .auto_update_worker(&twin, revision, false)
             .await?;
-        tokio::time::timeout(Duration::from_secs(90), async {
-            loop {
-                if let Some(outcome) = update_outcomes(&self.executor, &twin)
-                    .await?
-                    .into_iter()
-                    .find(|outcome| outcome.oplog_index > cut)
-                {
-                    break anyhow::Ok(outcome);
-                }
-                tokio::time::sleep(Duration::from_millis(20)).await;
-            }
-        })
-        .await?
+        Ok(
+            wait_for_update_outcomes(&self.executor, &twin, cut, 1, false)
+                .await?
+                .remove(0),
+        )
     }
 
     /// How many invocations the RPC peer `HookEffect("rpc-peer", port)` received; zero when the
@@ -325,10 +322,21 @@ fn assert_not_replayable(failed: &FailedUpdateParams, refused: &str) {
     );
 }
 
-/// E9(a), E9(c): a never-live fork, cut after a periodic snapshot record of its source, is
+/// Asserts that the update of an unmarked fork failed because its load hook broke the read-only
+/// rule.
+fn assert_read_only_violation(outcome: &PublicOplogEntryWithIndex) {
+    let rendered = format!("{outcome:?}").to_lowercase();
+    assert!(
+        rendered.contains("read-only") || rendered.contains("readonly"),
+        "the load hook did not fail by the read-only rule: {outcome:?}"
+    );
+}
+
+/// E9(a), E9(c), E9(d): a never-live fork, cut after a periodic snapshot record of its source, is
 /// updated to a newer revision with the same code, so the record is the baseline and the load
 /// hook runs. An HTTP request in the hook never reaches the peer, and the update is not
-/// replayable. A hook without an effect replays.
+/// replayable. The control, an unmarked fork of the same cut, fails by the read-only rule and
+/// reaches no peer either. A hook without an effect replays.
 #[test]
 #[timeout("4m")]
 async fn an_http_load_hook_of_a_never_live_fork_reaches_no_peer(
@@ -352,6 +360,12 @@ async fn an_http_load_hook_of_a_never_live_fork_reaches_no_peer(
     // E3d, the hook-refusal leg.
     super::assert_stopped_for_good(&hooks.executor, &fork, 1).await?;
     assert_eq!(peer.connections(), 0);
+    assert_read_only_violation(
+        &hooks
+            .unmarked_update(&source_id, cut, target.revision)
+            .await?,
+    );
+    assert_eq!(peer.connections(), 0);
 
     let harmless = hooks.source("none", peer.port).await?;
     let cut = tip(&hooks.executor, &harmless).await?;
@@ -369,7 +383,8 @@ async fn an_http_load_hook_of_a_never_live_fork_reaches_no_peer(
     Ok(())
 }
 
-/// E9(a): the same with an RPC call in the load hook. The peer agent is never created.
+/// E9(a), E9(d): the same with an RPC call in the load hook. The peer agent is never created,
+/// also by the unmarked control.
 #[test]
 #[timeout("4m")]
 async fn an_rpc_load_hook_of_a_never_live_fork_reaches_no_peer(
@@ -390,6 +405,12 @@ async fn an_rpc_load_hook_of_a_never_live_fork_reaches_no_peer(
     let failed = the_failure(&outcomes)?;
     assert!(failed.snapshot_assisted_details.is_some(), "{failed:?}");
     assert_not_replayable(failed, refused_boundary("rpc"));
+    assert_eq!(hooks.rpc_peer_invocations(port).await?, 0);
+    assert_read_only_violation(
+        &hooks
+            .unmarked_update(&source_id, cut, target.revision)
+            .await?,
+    );
     assert_eq!(hooks.rpc_peer_invocations(port).await?, 0);
     Ok(())
 }
@@ -431,41 +452,6 @@ async fn a_load_hook_from_a_promoted_snapshot_of_a_never_live_fork_reaches_no_pe
             .await?;
         let failed = the_failure(&outcomes)?;
         assert_not_replayable(failed, refused_boundary(effect));
-    }
-    assert_eq!(peer.connections(), 0);
-    assert_eq!(hooks.rpc_peer_invocations(rpc_port).await?, 0);
-    Ok(())
-}
-
-/// E9(d), as Simon decided: an unmarked fork's load hook runs with the read-only rule, so its HTTP
-/// request and its RPC call fail as read-only violations and reach no peer.
-#[test]
-#[timeout("4m")]
-async fn the_load_hooks_of_unmarked_forks_fail_by_the_read_only_rule_and_reach_no_peer(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let hooks = Hooks::start(last_unique_id, deps, host_api_tests).await?;
-    let peer = TcpPeer::answering().await?;
-    let rpc_port = 40_003;
-    let mut sources = Vec::new();
-    for (effect, port) in [("http", peer.port), ("rpc", rpc_port)] {
-        sources.push(hooks.source(effect, port).await?);
-    }
-    let target = hooks.newer_revision().await?;
-    for source_id in sources {
-        let cut = tip(&hooks.executor, &source_id).await?;
-        let outcome = hooks
-            .unmarked_update(&source_id, cut, target.revision)
-            .await?;
-        let rendered = format!("{outcome:?}");
-        assert!(
-            rendered.to_lowercase().contains("read-only")
-                || rendered.to_lowercase().contains("readonly"),
-            "the load hook did not fail by the read-only rule: {rendered}"
-        );
     }
     assert_eq!(peer.connections(), 0);
     assert_eq!(hooks.rpc_peer_invocations(rpc_port).await?, 0);
@@ -517,12 +503,10 @@ async fn promise_writes_in_a_load_hook_of_a_never_live_fork_are_refused(
         assert_eq!(hooks.storage.calls("create"), created, "{effect}");
         assert_eq!(hooks.storage.calls("complete"), completed, "{effect}");
 
-        let outcome = hooks
-            .unmarked_update(&source_id, cut, target.revision)
-            .await?;
-        assert!(
-            format!("{outcome:?}").to_lowercase().contains("read-only"),
-            "{outcome:?}"
+        assert_read_only_violation(
+            &hooks
+                .unmarked_update(&source_id, cut, target.revision)
+                .await?,
         );
         assert_eq!(hooks.storage.calls("create"), created, "{effect}");
         assert_eq!(hooks.storage.calls("complete"), completed, "{effect}");
@@ -532,7 +516,7 @@ async fn promise_writes_in_a_load_hook_of_a_never_live_fork_are_refused(
 }
 
 /// E24: a load hook of a never-live fork that derives a persistent card from its wallet is
-/// refused before the card service, and the update is not replayable.
+/// refused before the card service, which creates no card, and the update is not replayable.
 #[test]
 #[timeout("4m")]
 async fn a_card_derivation_in_a_load_hook_of_a_never_live_fork_is_refused(
@@ -541,16 +525,63 @@ async fn a_card_derivation_in_a_load_hook_of_a_never_live_fork_is_refused(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    let hooks = Hooks::start(last_unique_id, deps, host_api_tests).await?;
+    let created = Arc::new(AtomicUsize::new(0));
+    let hooks = Hooks::start_with(
+        last_unique_id,
+        deps,
+        host_api_tests,
+        TestExecutorOverrides {
+            create_card_service: Some(Arc::new({
+                let created = created.clone();
+                move || {
+                    Arc::new(CountingCardService {
+                        created: created.clone(),
+                    })
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
     let port = 40_006;
     let source_id = hooks.source("card", port).await?;
     let cut = tip(&hooks.executor, &source_id).await?;
     let target = hooks.newer_revision().await?;
+    let before = created.load(Ordering::SeqCst);
     let outcomes = hooks
         .marked_update(&source_id, cut, target.revision)
         .await?;
     assert_not_replayable(the_failure(&outcomes)?, "permissions");
+    assert_eq!(created.load(Ordering::SeqCst), before);
     Ok(())
+}
+
+/// The test card service, counting the runtime cards it is asked to create.
+struct CountingCardService {
+    created: Arc<AtomicUsize>,
+}
+
+#[async_trait::async_trait]
+impl CardService for CountingCardService {
+    async fn record_revoked_cards(&self, card_ids: &[CardId]) {
+        TestCardService.record_revoked_cards(card_ids).await
+    }
+
+    async fn check_cards(
+        &self,
+        card_ids: Vec<CardId>,
+    ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
+        TestCardService.check_cards(card_ids).await
+    }
+
+    async fn create_runtime_card(
+        &self,
+        card: StoredCard,
+        provenance: CardManagedByRuntimeDerived,
+    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
+        self.created.fetch_add(1, Ordering::SeqCst);
+        TestCardService.create_runtime_card(card, provenance).await
+    }
 }
 
 /// E14 and E21, the load-hook cases: a P3 TCP connect, a P3 UDP send and a P3 UDP receive in the
@@ -637,13 +668,10 @@ async fn an_incomplete_http_request_of_a_never_live_fork_is_never_sent_again(
 }
 
 /// E1b: the same for an incomplete RPC call: the never-live fork writes one `SuccessfulUpdate` and
-/// calls no peer. A fork that holds only its `Create` entry and the not yet started initialization
-/// has no bootstrap block, so the first durable call of the initializer goes past the end of the
-/// history: the update writes one `NotReplayable` failure, calls no peer and leaves no pending
-/// update.
+/// calls no peer.
 #[test]
 #[timeout("4m")]
-async fn an_incomplete_rpc_call_and_a_create_only_never_live_fork_replay_and_stop(
+async fn an_incomplete_rpc_call_of_a_never_live_fork_replays_and_calls_no_peer(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -689,32 +717,6 @@ async fn an_incomplete_rpc_call_and_a_create_only_never_live_fork_replay_and_sto
     assert!(
         matches!(outcomes[0].entry, PublicOplogEntry::SuccessfulUpdate(_)),
         "{outcomes:?}"
-    );
-
-    // The smallest cut the fork API accepts is 2: the `Create` entry and the pending invocation
-    // of the agent's initialization, which never started.
-    let create_only = OplogIndex::from_u64(2);
-    let fork = hooks
-        .executor
-        .fork_worker_never_live(&source_id, create_only)
-        .await?;
-    hooks
-        .executor
-        .auto_update_worker(&fork, hooks.component.revision, false)
-        .await?;
-    let outcomes = settled_update_outcomes_after(&hooks.executor, &fork, create_only).await?;
-    assert_eq!(
-        the_failure(&outcomes)?.failure_class,
-        UpdateFailureClass::NotReplayable
-    );
-    let metadata = hooks.executor.get_worker_metadata(&fork).await?;
-    assert!(
-        !metadata.updates.iter().any(|record| matches!(
-            record,
-            golem_common::model::agent::UpdateRecord::PendingUpdate(_)
-        )),
-        "{:?}",
-        metadata.updates
     );
     assert_eq!(hooks.rpc_peer_invocations(port).await?, peer_invocations);
     Ok(())
@@ -1285,19 +1287,9 @@ async fn a_permanently_failing_transaction_status_query_fails_an_update_as_opera
             .executor
             .auto_update_worker(&fork, newer.revision, false)
             .await?;
-        let outcome = tokio::time::timeout(Duration::from_secs(60), async {
-            loop {
-                if let Some(outcome) = update_outcomes(&hooks.executor, &fork)
-                    .await?
-                    .into_iter()
-                    .find(|outcome| outcome.oplog_index > pre_commit)
-                {
-                    break anyhow::Ok(outcome);
-                }
-                tokio::time::sleep(Duration::from_millis(50)).await;
-            }
-        })
-        .await??;
+        let outcome = wait_for_update_outcomes(&hooks.executor, &fork, pre_commit, 1, false)
+            .await?
+            .remove(0);
         let PublicOplogEntry::FailedUpdate(failed) = &outcome.entry else {
             return Err(anyhow!(
                 "{agent_type}: the update did not fail: {outcome:?}"

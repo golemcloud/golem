@@ -16,11 +16,11 @@
 //! agent-rpc-rust): the fork holds the source's cancellation intent, which it never forwards to
 //! the producer, and its deletion touches nothing of the source.
 
-use super::update_outcomes;
+use super::{update_outcomes, wait_for_update_outcomes};
 use crate::Tracing;
 use golem_common::model::durable_stream::StreamSessionRecord;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
-use golem_common::model::{AgentStatus, OplogIndex, OwnedAgentId, PromiseId};
+use golem_common::model::{AgentStatus, OplogIndex, PromiseId};
 use golem_common::schema::FromSchema;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
@@ -79,24 +79,6 @@ fn is_cancel_intent(record: &StreamSessionRecord) -> bool {
 
 fn is_cancel_applied(record: &StreamSessionRecord) -> bool {
     matches!(record, StreamSessionRecord::ConsumerCancelApplied(_))
-}
-
-async fn wait_for_outcomes(
-    executor: &TestWorkerExecutor,
-    worker_id: &OwnedAgentId,
-    count: usize,
-) -> anyhow::Result<()> {
-    tokio::time::timeout(Duration::from_secs(90), async {
-        loop {
-            if update_outcomes(executor, worker_id).await?.len() >= count
-                && !executor.worker_is_loaded(worker_id).await
-            {
-                break anyhow::Ok(());
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await?
 }
 
 /// E10 and E16: a stream consumer drops its stream before its next host call, which records a
@@ -176,7 +158,7 @@ async fn a_never_live_fork_of_a_stream_consumer_forwards_no_cancellation_and_its
     executor
         .auto_update_worker(&fork, component.revision, false)
         .await?;
-    wait_for_outcomes(&executor, &fork, 1).await?;
+    wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 1, true).await?;
     assert_eq!(controls.load(Ordering::SeqCst), controls_before);
 
     drop(executor);
@@ -185,7 +167,7 @@ async fn a_never_live_fork_of_a_stream_consumer_forwards_no_cancellation_and_its
     executor
         .auto_update_worker(&fork, component.revision, false)
         .await?;
-    wait_for_outcomes(&executor, &fork, 2).await?;
+    wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 2, true).await?;
     let fork_oplog = executor.get_oplog(&fork, OplogIndex::INITIAL).await?;
     assert_eq!(
         session_records(&fork_oplog, is_cancel_applied)

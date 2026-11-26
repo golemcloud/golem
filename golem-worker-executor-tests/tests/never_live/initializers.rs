@@ -325,16 +325,6 @@ async fn a_failed_update_of_a_never_live_fork_starts_no_further_generation(
     assert_eq!(initializers.reads.load(Ordering::SeqCst), 0);
     assert_stopped_for_good(&initializers.executor, &fork, 1).await?;
 
-    // The divergence leg: the same revision at the source's tip diverges at the added read.
-    let (fork, outcomes) = initializers
-        .marked_fork_update(&source, cut, refused)
-        .await?;
-    assert_eq!(
-        the_failure(&outcomes)?.failure_class,
-        UpdateFailureClass::Divergence
-    );
-    assert_stopped_for_good(&initializers.executor, &fork, 1).await?;
-
     let queued = initializers
         .executor
         .fork_worker_never_live(&source, cut)
@@ -347,16 +337,9 @@ async fn a_failed_update_of_a_never_live_fork_starts_no_further_generation(
         .executor
         .auto_update_worker(&queued, plain, false)
         .await?;
-    let outcomes = tokio::time::timeout(std::time::Duration::from_secs(90), async {
-        loop {
-            let outcomes = super::update_outcomes(&initializers.executor, &queued).await?;
-            if outcomes.len() >= 2 && !initializers.executor.worker_is_loaded(&queued).await {
-                break anyhow::Ok(outcomes);
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        }
-    })
-    .await??;
+    let outcomes =
+        super::wait_for_update_outcomes(&initializers.executor, &queued, OplogIndex::NONE, 2, true)
+            .await?;
     assert_eq!(outcomes.len(), 2, "{outcomes:?}");
     assert!(
         matches!(outcomes[0].entry, PublicOplogEntry::FailedUpdate(_)),

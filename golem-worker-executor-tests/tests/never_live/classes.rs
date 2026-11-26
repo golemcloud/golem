@@ -16,7 +16,7 @@
 //! of agent-updates-v1 runs `suffix_host_error` harmlessly; agent-updates-v2 fails in it by a
 //! host error.
 
-use super::update_outcomes;
+use super::wait_for_update_outcomes;
 use crate::Tracing;
 use anyhow::anyhow;
 use golem_common::model::component::ComponentDto;
@@ -32,7 +32,6 @@ use golem_worker_executor_test_utils::{
 };
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
-use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -87,19 +86,9 @@ async fn failed_update(
 ) -> anyhow::Result<FailedUpdateParams> {
     let fork = executor.fork_worker_never_live(source_id, cut).await?;
     executor.auto_update_worker(&fork, target, false).await?;
-    let outcome = tokio::time::timeout(Duration::from_secs(90), async {
-        loop {
-            if let Some(outcome) = update_outcomes(executor, &fork)
-                .await?
-                .into_iter()
-                .find(|outcome| outcome.oplog_index > cut)
-            {
-                break anyhow::Ok(outcome);
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await??;
+    let outcome = wait_for_update_outcomes(executor, &fork, cut, 1, false)
+        .await?
+        .remove(0);
     match outcome.entry {
         PublicOplogEntry::FailedUpdate(failed) => Ok(failed),
         other => Err(anyhow!("the update did not fail: {other:?}")),

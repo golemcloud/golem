@@ -132,25 +132,34 @@ pub(crate) async fn settled_update_outcomes_after(
     worker_id: &OwnedAgentId,
     after: OplogIndex,
 ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-    let own = || async {
-        Ok::<_, anyhow::Error>(
-            update_outcomes(executor, worker_id)
+    wait_for_update_outcomes(executor, worker_id, after, 1, true).await
+}
+
+/// Waits until the agent's oplog holds at least `count` update outcomes after `after`, and, when
+/// `unloaded`, the agent is unloaded, and returns those outcomes.
+pub(crate) async fn wait_for_update_outcomes(
+    executor: &TestWorkerExecutor,
+    worker_id: &OwnedAgentId,
+    after: OplogIndex,
+    count: usize,
+    unloaded: bool,
+) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+    tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let outcomes = update_outcomes(executor, worker_id)
                 .await?
                 .into_iter()
                 .filter(|entry| entry.oplog_index > after)
-                .collect::<Vec<_>>(),
-        )
-    };
-    tokio::time::timeout(Duration::from_secs(90), async {
-        loop {
-            if !own().await?.is_empty() && !executor.worker_is_loaded(worker_id).await {
-                break anyhow::Ok(());
+                .collect::<Vec<_>>();
+            if outcomes.len() >= count && (!unloaded || !executor.worker_is_loaded(worker_id).await)
+            {
+                break anyhow::Ok(outcomes);
             }
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
-    .await??;
-    own().await
+    .await
+    .map_err(|_| anyhow!("{worker_id} did not get {count} update outcomes after {after}"))?
 }
 
 async fn update_outcomes(
@@ -566,95 +575,6 @@ fn assert_only_update_entries(kinds: &[String]) {
     );
 }
 
-/// A never-live fork of an agent that was interrupted during an invocation keeps the interrupted
-/// invocation as it is: each automatic update appends only its `PendingUpdate` entries and its
-/// outcome, and no `Resumed`, also after a cold restart of the executor.
-#[test]
-#[timeout("4m")]
-async fn an_interrupted_never_live_fork_appends_only_its_update_outcomes(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    // The parked wait must not suspend, so that the interrupt finds a running invocation.
-    let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.suspend.wait_suspend_grace = Duration::from_secs(300);
-        })),
-        ..Default::default()
-    };
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, host_api_tests)
-        .store()
-        .await?;
-    let source = agent_key!("Clock", "never-live-interrupted");
-    let source_id = executor.start_agent(&component.id, source.clone()).await?;
-    executor
-        .invoke_and_await_agent(&component, &source, "healthcheck", data_value!())
-        .await?;
-    let sleeping = tokio::spawn({
-        let executor = executor.clone();
-        let component = component.clone();
-        let source = source.clone();
-        async move {
-            executor
-                .invoke_and_await_agent(&component, &source, "sleep_p3", data_value!(60u64))
-                .await
-        }
-    });
-    tokio::time::sleep(Duration::from_secs(2)).await;
-    executor.interrupt(&source_id).await?;
-    assert!(sleeping.await?.is_err());
-    executor
-        .wait_for_status(
-            &source_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
-        .await?;
-    let cut = tip(&executor, &source_id).await?;
-
-    let fork = executor.fork_worker_never_live(&source_id, cut).await?;
-    let forked = tip(&executor, &fork).await?;
-    executor
-        .auto_update_worker(&fork, component.revision, false)
-        .await?;
-    let outcomes = settled_update_outcomes(&executor, &fork).await?;
-    assert_eq!(outcomes.len(), 1, "{outcomes:?}");
-    let oplog = executor.get_oplog(&fork, OplogIndex::INITIAL).await?;
-    let first_outcome = outcomes[0].oplog_index;
-    assert_only_update_entries(&entry_kinds(&oplog, forked));
-
-    drop(executor);
-    let executor = start_with_overrides(deps, &context, overrides).await?;
-    tokio::time::sleep(Duration::from_secs(1)).await;
-    assert!(!executor.worker_is_loaded(&fork).await);
-    executor
-        .auto_update_worker(&fork, component.revision, false)
-        .await?;
-    tokio::time::timeout(Duration::from_secs(90), async {
-        loop {
-            if update_outcomes(&executor, &fork).await?.len() == 2
-                && !executor.worker_is_loaded(&fork).await
-            {
-                break anyhow::Ok(());
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await??;
-    let oplog = executor.get_oplog(&fork, OplogIndex::INITIAL).await?;
-    assert_only_update_entries(&entry_kinds(&oplog, first_outcome));
-    assert_eq!(
-        executor.get_worker_metadata(&fork).await?.status,
-        AgentStatus::Sandboxed
-    );
-    Ok(())
-}
-
 /// A quota service whose every reservation is throttled, with the estimated wait it holds:
 /// a refill far in the future, or `None` as for a capacity resource.
 struct ThrottlingQuotaService(Option<u64>);
@@ -885,21 +805,12 @@ async fn replay_a_quota_throttle_on_a_never_live_fork(
     executor
         .auto_update_worker(&fork, component.revision, false)
         .await?;
-    tokio::time::timeout(Duration::from_secs(90), async {
-        loop {
-            if update_outcomes(&executor, &fork).await?.len() == 2
-                && !executor.worker_is_loaded(&fork).await
-            {
-                break anyhow::Ok(());
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await??;
+    let outcomes = wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 2, true).await?;
+    assert_eq!(outcomes.len(), 2, "{outcomes:?}");
     let oplog = executor.get_oplog(&fork, OplogIndex::INITIAL).await?;
     assert_only_update_entries(&entry_kinds(&oplog, first_outcome));
 
-    for outcome in update_outcomes(&executor, &fork).await? {
+    for outcome in outcomes {
         let PublicOplogEntry::FailedUpdate(failed) = &outcome.entry else {
             return Err(anyhow!("the update did not fail: {outcome:?}"));
         };

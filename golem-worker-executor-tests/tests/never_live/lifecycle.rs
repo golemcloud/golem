@@ -16,7 +16,7 @@
 //! which writes one outcome and stops. An update requested while a generation stops runs in a
 //! later generation, and a crash around the outcome commit leaves exactly one outcome.
 
-use super::{live_entries, tip, update_outcomes};
+use super::{live_entries, tip, update_outcomes, wait_for_update_outcomes};
 use crate::Tracing;
 use golem_api_grpc::proto::golem::shardmanager::{ShardEpochEntry, ShardId};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -85,24 +85,6 @@ async fn idle_fork(
     Ok(fork)
 }
 
-/// Waits until the agent holds `count` update outcomes and is unloaded, and returns them.
-async fn wait_for_outcomes(
-    executor: &TestWorkerExecutor,
-    worker_id: &OwnedAgentId,
-    count: usize,
-) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
-    tokio::time::timeout(Duration::from_secs(90), async {
-        loop {
-            let outcomes = update_outcomes(executor, worker_id).await?;
-            if outcomes.len() >= count && !executor.worker_is_loaded(worker_id).await {
-                break anyhow::Ok(outcomes);
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-    })
-    .await?
-}
-
 fn assert_all_successful(outcomes: &[PublicOplogEntryWithIndex]) {
     assert!(
         outcomes
@@ -153,6 +135,9 @@ async fn push_shards(
 /// invocation) and `Interrupted` each report `Sandboxed` over that status, and each applies a
 /// first and a second automatic update to its own revision: one `SuccessfulUpdate` per update and
 /// no live entry. After the shard of the forks is revoked and assigned again, each applies a third.
+/// After a cold restart of the executor, no fork starts by itself, and each applies a fourth.
+/// Each fork appends only the entries of its updates: no `Resumed` for the interrupted
+/// invocation, and no live work.
 #[test]
 #[timeout("6m")]
 async fn every_folded_status_of_a_never_live_fork_applies_updates_also_after_shard_reassignment(
@@ -219,14 +204,15 @@ async fn every_folded_status_of_a_never_live_fork_applies_updates_also_after_sha
             executor
                 .auto_update_worker(&fork, component.revision, false)
                 .await?;
-            let outcomes = wait_for_outcomes(&executor, &fork, count).await?;
+            let outcomes =
+                wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, count, true).await?;
             assert_eq!(outcomes.len(), count, "{underlying:?}: {outcomes:?}");
             assert_all_successful(&outcomes);
         }
         let oplog = executor.get_oplog(&fork, OplogIndex::INITIAL).await?;
         assert_eq!(live_entries(&oplog, forked), Vec::<String>::new());
         assert_sandboxed(&executor, &fork, underlying).await?;
-        forks.push((fork, underlying));
+        forks.push((fork, underlying, forked));
     }
 
     let revoked = executor
@@ -244,14 +230,39 @@ async fn every_folded_status_of_a_never_live_fork_applies_updates_also_after_sha
         Some(revoke_shards_response::Result::Success(_))
     ));
     push_shards(&executor, 2, 2).await?;
-    for (fork, underlying) in &forks {
+    for (fork, underlying, _) in &forks {
         executor
             .auto_update_worker(fork, component.revision, false)
             .await?;
-        let outcomes = wait_for_outcomes(&executor, fork, 3).await?;
+        let outcomes = wait_for_update_outcomes(&executor, fork, OplogIndex::NONE, 3, true).await?;
         assert_eq!(outcomes.len(), 3, "{underlying:?}: {outcomes:?}");
         assert_all_successful(&outcomes);
         assert_sandboxed(&executor, fork, *underlying).await?;
+    }
+
+    drop(executor);
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    for (fork, underlying, forked) in &forks {
+        assert!(
+            !executor.worker_is_loaded(fork).await,
+            "{underlying:?}: the fork started after the restart"
+        );
+        executor
+            .auto_update_worker(fork, component.revision, false)
+            .await?;
+        let outcomes = wait_for_update_outcomes(&executor, fork, OplogIndex::NONE, 4, true).await?;
+        assert_eq!(outcomes.len(), 4, "{underlying:?}: {outcomes:?}");
+        assert_all_successful(&outcomes);
+        assert_sandboxed(&executor, fork, *underlying).await?;
+        let oplog = executor.get_oplog(fork, OplogIndex::INITIAL).await?;
+        let appended = super::entry_kinds(&oplog, *forked);
+        assert!(
+            appended
+                .iter()
+                .all(|kind| kind == "PendingUpdate" || kind == "SuccessfulUpdate"),
+            "{underlying:?}: {appended:?}"
+        );
     }
     Ok(())
 }
@@ -295,7 +306,8 @@ async fn a_crash_around_the_outcome_commit_of_a_never_live_fork_leaves_one_outco
         drop(executor);
 
         let executor = start_with_overrides(deps, &context, overrides()).await?;
-        let outcomes = wait_for_outcomes(&executor, &fork, 1).await?;
+        let outcomes =
+            wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 1, true).await?;
         assert_eq!(
             outcomes.len(),
             1,
@@ -315,8 +327,9 @@ async fn a_crash_around_the_outcome_commit_of_a_never_live_fork_leaves_one_outco
 
 /// E3c and the stop handoff: an automatic update requested while the previous update's outcome
 /// commits, while the generation stops after its admission, and right after the outcome became
-/// visible, while the generation unloads. Each later update runs in a later generation: the fork
-/// ends with two outcomes and no pending update.
+/// visible, while the generation unloads. In the first two cases the held generation is released
+/// only after the second request entered its admission under the instance lock. Each later
+/// update runs in a later generation: the fork ends with two outcomes and no pending update.
 #[test]
 #[timeout("6m")]
 async fn an_update_requested_while_a_never_live_generation_stops_runs_in_a_later_generation(
@@ -347,11 +360,12 @@ async fn an_update_requested_while_a_never_live_generation_stops_runs_in_a_later
         .auto_update_worker(&fork, component.revision, false)
         .await?;
     tokio::time::timeout(Duration::from_secs(60), gate.entered()).await?;
+    let admitted = executor.observe_next_update_admission(&fork).await?;
     let second = request(fork.clone());
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::timeout(Duration::from_secs(60), admitted).await??;
     drop(gate);
     second.await??;
-    let outcomes = wait_for_outcomes(&executor, &fork, 2).await?;
+    let outcomes = wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 2, true).await?;
     assert_eq!(outcomes.len(), 2, "{outcomes:?}");
     assert_all_successful(&outcomes);
 
@@ -363,11 +377,12 @@ async fn an_update_requested_while_a_never_live_generation_stops_runs_in_a_later
         .auto_update_worker(&fork, component.revision, false)
         .await?;
     tokio::time::timeout(Duration::from_secs(60), entered).await??;
+    let admitted = executor.observe_next_update_admission(&fork).await?;
     let second = request(fork.clone());
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    tokio::time::timeout(Duration::from_secs(60), admitted).await??;
     let _ = release.send(());
     second.await??;
-    let outcomes = wait_for_outcomes(&executor, &fork, 2).await?;
+    let outcomes = wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 2, true).await?;
     assert_eq!(outcomes.len(), 2, "{outcomes:?}");
     assert_all_successful(&outcomes);
 
@@ -386,7 +401,7 @@ async fn an_update_requested_while_a_never_live_generation_stops_runs_in_a_later
     executor
         .auto_update_worker(&fork, component.revision, false)
         .await?;
-    let outcomes = wait_for_outcomes(&executor, &fork, 2).await?;
+    let outcomes = wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 2, true).await?;
     assert_eq!(outcomes.len(), 2, "{outcomes:?}");
     assert_all_successful(&outcomes);
     Ok(())
@@ -425,7 +440,7 @@ async fn an_update_applied_before_its_activation_is_accepted(
     tokio::time::timeout(Duration::from_secs(60), entered).await??;
 
     let _ = release_generation.send(());
-    let outcomes = wait_for_outcomes(&executor, &fork, 2).await?;
+    let outcomes = wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 2, true).await?;
     assert_eq!(outcomes.len(), 2, "{outcomes:?}");
     assert_all_successful(&outcomes);
 

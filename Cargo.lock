@@ -4999,7 +4999,6 @@ dependencies = [
  "wasmtime-wasi-http",
  "wat",
  "windows-sys 0.61.2",
- "wit-parser 0.251.0",
  "zstd",
 ]
 

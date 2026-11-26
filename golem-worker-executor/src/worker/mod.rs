@@ -710,6 +710,8 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     last_resume_request: Mutex<Timestamp>,
     #[cfg(any(test, feature = "test-utils"))]
     update_activation_gate: StdMutex<Option<UpdateActivationGate>>,
+    #[cfg(any(test, feature = "test-utils"))]
+    update_admission_probe: StdMutex<Option<tokio::sync::oneshot::Sender<()>>>,
     /// The automatic snapshot entries that the starts of the agent exclude.
     snapshot_exclusions: StdMutex<SnapshotExclusions>,
     startup_linear_memory_bytes: AtomicU64,
