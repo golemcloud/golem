@@ -793,10 +793,27 @@ impl AdapterState {
                 .map(|state| state.schema.clone())
                 .ok_or_else(|| AdapterError::protocol("stream channel is unavailable"))?
         } else {
-            resolve_stream_element_schema_v1(graph, SchemaFingerprintV1(private.schema_fingerprint))
-                .map_err(|_| AdapterError::protocol("stream schema fingerprint is invalid"))?
-                .map(|graph| graph.root)
-                .ok_or_else(|| AdapterError::protocol("stream schema is not in the pinned graph"))?
+            // The root of the pinned graph is the method's input. An output stream that the
+            // acceptance or an acknowledgement announces is part of the method's output schema,
+            // which shares the pinned definitions.
+            let output_graph;
+            let search = match (private.direction, &self.output_schema) {
+                (PublicStreamDirection::Output, Some(output)) => {
+                    output_graph = SchemaGraph {
+                        defs: graph.defs.clone(),
+                        root: output.clone(),
+                    };
+                    &output_graph
+                }
+                _ => graph,
+            };
+            resolve_stream_element_schema_v1(
+                search,
+                SchemaFingerprintV1(private.schema_fingerprint),
+            )
+            .map_err(|_| AdapterError::protocol("stream schema fingerprint is invalid"))?
+            .map(|graph| graph.root)
+            .ok_or_else(|| AdapterError::protocol("stream schema is not in the pinned graph"))?
         };
         let expected_fingerprint = schema_fingerprint_v1(graph, Some(&schema))
             .map_err(|_| AdapterError::protocol("stream schema cannot be fingerprinted"))?
@@ -2115,13 +2132,25 @@ async fn handle_private_responses<S>(
                     error = ?error,
                     "Invocation session response translation failed"
                 );
-                fail_session(
+                // A resume receives the same private response and fails the same way, so the
+                // attempt ends with a rejection that the client does not retry. The invocation
+                // itself continues on the agent.
+                send_rejection(
                     &outbound,
-                    &state,
-                    attempt_id,
+                    Some(attempt_id),
                     PublicErrorCode::InternalError,
+                    "the server could not translate an invocation session response; the invocation continues on the agent",
                 )
                 .await;
+                let _ = outbound
+                    .send(
+                        Message::close_with(
+                            CloseCode::Error,
+                            "invocation session response translation failed",
+                        ),
+                        None,
+                    )
+                    .await;
                 return;
             }
         };
@@ -5352,6 +5381,242 @@ mod tests {
         let terminal = receiver.recv().await.unwrap();
         assert!(!terminal.should_drop(&budgets).await);
         assert!(matches!(terminal.message, Message::Text(text) if text == "terminal"));
+    }
+
+    /// The state of a method session once its component revision is selected: the pinned graph
+    /// is the record of the method's input, and the method returns a stream of numbers.
+    fn selected_method_state() -> AdapterState {
+        let mut state = AdapterState::new();
+        state.graph = Some(SchemaGraph {
+            defs: Vec::new(),
+            root: SchemaType::record_from_fields([("count", SchemaType::u32())]),
+        });
+        state.output_schema = Some(SchemaType::stream(Some(SchemaType::f64())));
+        state.identity = Some(SessionAgentIdentity {
+            component_id: Uuid::from_u128(20),
+            component_revision: None,
+            agent_id: session_agent_id(),
+            target: SessionInvocationTarget::Method {
+                agent_type: "test-agent".to_string(),
+                method: "run".to_string(),
+            },
+        });
+        state.application = Some("app".to_string());
+        state.environment = Some("env".to_string());
+        state
+            .protocol_state
+            .validate_trusted_request(&request(invocation_request::Request::Start(
+                InvocationStart {
+                    method_name: Some("run".to_string()),
+                    input: Some(ProtoSchemaValue {
+                        value: Some(schema_value::Value::U8Value(1)),
+                    }),
+                    idempotency_key: request_idempotency_key(),
+                    ..Default::default()
+                },
+            )))
+            .unwrap();
+        state
+    }
+
+    fn method_attempt_id() -> Uuid {
+        "00000000-0000-4000-8000-000000000002".parse().unwrap()
+    }
+
+    fn stream_fingerprint(element: SchemaType) -> [u8; 32] {
+        schema_fingerprint_v1(&SchemaGraph::empty(), Some(&element))
+            .unwrap()
+            .0
+    }
+
+    fn method_acceptance(
+        attempt_id: Uuid,
+        component_revision: Option<u64>,
+        stream_mappings: Vec<DurableStreamMapping>,
+    ) -> InvocationAccepted {
+        InvocationAccepted {
+            agent_id: Some(proto_agent_id()),
+            idempotency_key: idempotency_key(),
+            component_revision,
+            attachment_id: Some(proto_uuid(1)),
+            attempt_id: Some(attempt_id.into()),
+            epoch: 1,
+            stream_mappings,
+            environment_id: Some(EnvironmentId {
+                value: Some(proto_uuid(3)),
+            }),
+            callee_fingerprint: Some(proto_uuid(4)),
+            method_name: Some("run".to_string()),
+            ..Default::default()
+        }
+    }
+
+    /// An acceptance, a readiness after queueing and the acceptance of a resume can carry the
+    /// result stream, when the agent registered it before the executor answered. Its element
+    /// schema is in the method's output schema, not in the pinned input graph.
+    #[test]
+    async fn an_output_stream_that_the_acceptance_announces_resolves_against_the_output_schema() {
+        let keyring = keyring();
+        let bindings = token_bindings(&AuthCtx::system());
+        let attempt_id = method_attempt_id();
+        let output = private_mapping(
+            8,
+            StreamMappingRole::Output,
+            stream_fingerprint(SchemaType::f64()),
+        );
+        for queued in [false, true] {
+            let state = Arc::new(Mutex::new(selected_method_state()));
+            let translate = |response| {
+                translate_private_response(
+                    InvocationResponse {
+                        response: Some(response),
+                    },
+                    &state,
+                    &keyring,
+                    &bindings,
+                    keyring.active_key_id(),
+                    attempt_id,
+                )
+            };
+            if queued {
+                translate(invocation_response::Response::Accepted(method_acceptance(
+                    attempt_id,
+                    None,
+                    Vec::new(),
+                )))
+                .await
+                .unwrap();
+            }
+            let accepted = method_acceptance(attempt_id, Some(12), vec![output.clone()]);
+            let frames = translate(if queued {
+                invocation_response::Response::Ready(accepted)
+            } else {
+                invocation_response::Response::Accepted(accepted)
+            })
+            .await
+            .unwrap_or_else(|error| panic!("queued={queued}: {error:?}"));
+            let Message::Text(text) = &frames[0].message else {
+                panic!("acceptance was not text")
+            };
+            let mappings = match golem_common::model::invocation_session_public::decode_server_text(
+                text.as_bytes(),
+            )
+            .unwrap()
+            {
+                PublicServerMessage::InvocationAccepted { mappings, .. } if !queued => mappings,
+                PublicServerMessage::InvocationReady { mappings, .. } if queued => mappings,
+                other => panic!("queued={queued}: unexpected message {other:?}"),
+            };
+            let output_mapping = mappings
+                .iter()
+                .find(|mapping| mapping.direction == PublicStreamDirection::Output)
+                .expect("the acceptance exposes the result stream");
+
+            // The result names the stream that the acceptance exposed, with the same token.
+            let frames = translate(invocation_response::Response::Result(
+                InvocationSessionResult {
+                    result: Some(invocation_session_result::Result::MethodResult(
+                        stream_value(8),
+                    )),
+                    component_revision: Some(12),
+                    agent_id: Some(proto_agent_id()),
+                    idempotency_key: idempotency_key(),
+                    new_stream_mappings: vec![output.clone()],
+                    ..Default::default()
+                },
+            ))
+            .await
+            .unwrap_or_else(|error| panic!("queued={queued}: {error:?}"));
+            let Message::Text(text) = &frames[0].message else {
+                panic!("result was not text")
+            };
+            let PublicServerMessage::InvocationResult { mappings, .. } =
+                golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
+                    .unwrap()
+            else {
+                panic!("result translated to the wrong public message")
+            };
+            assert_eq!(mappings.len(), 1);
+            assert_eq!(mappings[0].channel, output_mapping.channel);
+            assert_eq!(mappings[0].stream_token, output_mapping.stream_token);
+        }
+    }
+
+    /// Every resume receives the same private response, so a response that cannot be translated
+    /// ends the attempt with a rejection that the client does not retry, also after acceptance.
+    #[test]
+    async fn an_untranslatable_response_ends_the_attempt_without_a_retry() {
+        let attempt_id = method_attempt_id();
+        // No stream of the method has this element schema.
+        let unknown = private_mapping(
+            8,
+            StreamMappingRole::Output,
+            stream_fingerprint(SchemaType::bool()),
+        );
+        let responses = vec![
+            Ok(InvocationResponse {
+                response: Some(invocation_response::Response::Accepted(method_acceptance(
+                    attempt_id,
+                    None,
+                    Vec::new(),
+                ))),
+            }),
+            Ok(InvocationResponse {
+                response: Some(invocation_response::Response::Ready(method_acceptance(
+                    attempt_id,
+                    Some(12),
+                    vec![unknown],
+                ))),
+            }),
+        ];
+        let state = Arc::new(Mutex::new(selected_method_state()));
+        let (sender, mut receiver) = mpsc::channel(8);
+        let outbound = Outbound {
+            sender,
+            budgets: SessionBudgets::new(),
+        };
+        handle_private_responses(
+            futures::stream::iter(responses),
+            None,
+            outbound,
+            state.clone(),
+            Arc::new(keyring()),
+            token_bindings(&AuthCtx::system()),
+            keyring().active_key_id().to_string(),
+            attempt_id,
+        )
+        .await;
+
+        let decode = |message: Message| {
+            let Message::Text(text) = message else {
+                panic!("expected a text message, got {message:?}")
+            };
+            golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
+                .unwrap()
+        };
+        assert!(matches!(
+            decode(receiver.recv().await.unwrap().message),
+            PublicServerMessage::InvocationAccepted { .. }
+        ));
+        assert!(state.lock().await.tokens.is_some());
+        match decode(receiver.recv().await.unwrap().message) {
+            PublicServerMessage::InvocationRejected {
+                attempt_id: rejected_attempt,
+                code,
+                retryable,
+                ..
+            } => {
+                assert_eq!(rejected_attempt, Some(attempt_id));
+                assert_eq!(code, PublicErrorCode::InternalError);
+                assert!(!retryable);
+            }
+            other => panic!("expected a rejection, got {other:?}"),
+        }
+        assert!(matches!(
+            receiver.recv().await.unwrap().message,
+            Message::Close(Some((CloseCode::Error, _)))
+        ));
+        assert!(receiver.recv().await.is_none());
     }
 
     #[test]

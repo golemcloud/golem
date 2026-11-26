@@ -1418,20 +1418,26 @@ async fn test_streaming_invocation_cli_end_to_end() {
             Duration::from_millis(25),
         )
         .await;
-    // A takeover attaches to the accepted invocation: the server answers with `InvocationReady`,
-    // which is not a new acceptance, so the takeover prints no event. Its effect is the
-    // revocation of the original attachment, while the takeover stays attached.
-    let mut takeover = ctx.cli_process([
-        cmd::AGENT,
-        cmd::INVOKE,
-        &takeover_agent,
-        "produce_byte_then_wait",
-        flag::FORMAT,
-        "json",
-        "--no-stream",
-        "--takeover-session",
-        takeover_checkpoint.to_str().unwrap(),
-    ]);
+    // The takeover revokes the original attachment and attaches to the same invocation. Its
+    // acceptance or readiness carries the output stream that the original attachment read, and
+    // the result that follows names that stream.
+    let mut takeover = ctx
+        .cli_process_after(
+            [
+                cmd::AGENT,
+                cmd::INVOKE,
+                &takeover_agent,
+                "produce_byte_then_wait",
+                flag::FORMAT,
+                "json",
+                "--no-stream",
+                "--takeover-session",
+                takeover_checkpoint.to_str().unwrap(),
+            ],
+            "\"kind\":\"result\"",
+            Duration::ZERO,
+        )
+        .await;
     assert!(
         !tokio::time::timeout(Duration::from_secs(40), original_attachment.wait())
             .await
