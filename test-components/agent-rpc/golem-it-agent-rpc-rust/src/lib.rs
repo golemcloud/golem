@@ -565,6 +565,8 @@ pub trait StreamingRpcTarget {
     fn new(name: String) -> Self;
 
     async fn consume(&self, input: AgentStream<u32>) -> Vec<u32>;
+    async fn fail_with_retries(&self, input: AgentStream<u32>) -> Vec<u32>;
+    async fn exit_after_input(&self, input: AgentStream<u32>) -> Vec<u32>;
     async fn observe_input_terminal(
         &mut self,
         input: AgentStream<u32>,
@@ -723,6 +725,25 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
             .collect()
             .await
             .expect("failed to consume input stream")
+    }
+
+    async fn fail_with_retries(&self, input: AgentStream<u32>) -> Vec<u32> {
+        let port = std::env::var("SESSION_FAILURE_RETRY_PORT").unwrap();
+        let _ = wasi_fetch::Client::new()
+            .post(&format!("http://localhost:{port}/session-failure"))
+            .send()
+            .await
+            .expect("session failure after exhausted HTTP retry policy");
+        drop(input);
+        panic!("the failing HTTP endpoint unexpectedly succeeded")
+    }
+
+    async fn exit_after_input(&self, input: AgentStream<u32>) -> Vec<u32> {
+        input
+            .collect()
+            .await
+            .expect("failed to consume input stream");
+        std::process::exit(0)
     }
 
     async fn observe_input_terminal(
