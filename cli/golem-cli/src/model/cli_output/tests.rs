@@ -7087,6 +7087,22 @@ fn arb_manifest_build_command() -> BoxedStrategy<crate::model::app_raw::BuildCom
                 },
             )
         }),
+        (
+            arb_small_string(),
+            proptest::collection::vec(arb_small_string(), 0..3),
+            arb_small_string(),
+            arb_small_string(),
+        )
+            .prop_map(|(assemble_python, modules, pyproject, into)| {
+                crate::model::app_raw::BuildCommand::AssemblePython(
+                    crate::model::app_raw::AssemblePython {
+                        assemble_python,
+                        modules,
+                        pyproject,
+                        into,
+                    },
+                )
+            }),
     ]
     .boxed()
 }

@@ -163,7 +163,7 @@ async fn test_python_build_failures_keep_the_last_component() {
     let original_source = std::fs::read_to_string(&source).unwrap();
     let original_pyproject = std::fs::read_to_string(&pyproject).unwrap();
 
-    let cases: [(&str, &Path, &str, &str, &[&str]); 6] = [
+    let cases: [(&str, &Path, &str, &str, &[&str]); 7] = [
         (
             "unsupported type hint",
             &source,
@@ -212,6 +212,16 @@ async fn test_python_build_failures_keep_the_last_component() {
             &[
                 "declares the package source `tool.uv.sources.golem-py-sdk`, but",
                 "set GOLEM_PYTHON_SDK_WHEEL",
+            ],
+        ),
+        (
+            "direct reference",
+            &pyproject,
+            "dependencies = [\"golem-py-sdk==",
+            "dependencies = [\"requests @ https://USERSENTINEL:PASSSENTINEL@example.invalid/r.whl\", \"golem-py-sdk==",
+            &[
+                "depends on `requests @ <URL omitted>`",
+                "cannot contain third-party packages",
             ],
         ),
         (

@@ -666,6 +666,7 @@ fn is_path_override_key(key: &str) -> bool {
             | GOLEM_TS_PACKAGES_PATH
             | GOLEM_EFFECT_GOLEM_PATH
             | GOLEM_MOONBIT_SDK_PATH
+            | GOLEM_PYTHON_SDK_WHEEL
     )
 }
 

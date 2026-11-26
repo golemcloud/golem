@@ -6450,7 +6450,8 @@
         { "$ref": "#/definitions/GenerateQuickJSCrate" },
         { "$ref": "#/definitions/GenerateQuickJSDTS" },
         { "$ref": "#/definitions/InjectToPrebuiltQuickJs" },
-        { "$ref": "#/definitions/PreinitializeJs" }
+        { "$ref": "#/definitions/PreinitializeJs" },
+        { "$ref": "#/definitions/AssemblePython" }
       ]
     },
     "ManifestExternalCommand": {
@@ -6503,6 +6504,17 @@
       "required": ["preinitializeJs", "into"],
       "properties": {
         "preinitializeJs": { "type": "string" },
+        "into": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
+    "AssemblePython": {
+      "type": "object",
+      "required": ["assemblePython", "modules", "pyproject", "into"],
+      "properties": {
+        "assemblePython": { "type": "string" },
+        "modules": { "type": "array", "items": { "type": "string" } },
+        "pyproject": { "type": "string" },
         "into": { "type": "string" }
       },
       "additionalProperties": false

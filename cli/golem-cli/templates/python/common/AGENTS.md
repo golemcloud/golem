@@ -73,6 +73,7 @@ class CounterAgent:
 - Parameter and result types: `bool`, `int` (`s64`), `float` (`f64`), `str`, `bytes` and, for results, `None`. Every parameter and the result need an annotation.
 - Methods are synchronous. Async and generator methods, default, variadic and keyword-only parameters, compound types, config, descriptions and HTTP mounts are not supported yet. The build fails with the location of each unsupported declaration.
 - `pyproject.toml` may list only `golem-py-sdk` in `project.dependencies`. Third-party packages are not supported yet; the build fails when they are listed.
+- `pyproject.toml` may not declare package sources: `[tool.uv.sources]` and the uv `index`, `index-url`, `extra-index-url` and `find-links` settings fail the build. To build with a local SDK wheel, set `GOLEM_PYTHON_SDK_WHEEL`.
 - An exception from a constructor or a method fails the invocation with its message.
 
 ## Building

@@ -81,13 +81,13 @@ async fn execute_assemble_python(
     let pyproject = base_build_dir.join(&command.pyproject);
     let output = base_build_dir.join(&command.into);
     let wheel = python_sdk_wheel()?;
-    let wheel_digest = format!(
-        "{:x}",
-        Sha256::digest(
-            fs::read(&wheel)
-                .with_context(|| format!("cannot read the Python SDK wheel {wheel}"))?
+    let wheel_bytes = fs::read(&wheel).with_context(|| {
+        format!(
+            "cannot read the Python SDK wheel {wheel}; build it with \
+             `cargo make python-sdk-wheel` in a Golem checkout"
         )
-    );
+    })?;
+    let wheel_digest = format!("{:x}", Sha256::digest(wheel_bytes));
 
     let source_files = python_source_files(source_dir.as_std_path());
 
@@ -249,11 +249,18 @@ fn check_python_dependencies(pyproject: &Utf8Path) -> anyhow::Result<()> {
             .chars()
             .filter(|c| !c.is_whitespace())
             .collect();
+        // A direct reference (`name @ URL`) can contain credentials, so the
+        // error shows only that the requirement has one.
+        let shown = if specifier.contains('@') {
+            format!("{} @ <URL omitted>", &requirement[..name_end])
+        } else {
+            requirement.to_owned()
+        };
         if name != golem_python_assembler::DISTRIBUTION {
-            rejected.push(format!("`{requirement}`"));
+            rejected.push(format!("`{shown}`"));
         } else if specifier != format!("=={}", golem_python_assembler::SDK_VERSION) {
             bail!(
-                "{pyproject} requires `{requirement}`, but this Golem CLI builds with `{sdk}`; \
+                "{pyproject} requires `{shown}`, but this Golem CLI builds with `{sdk}`; \
                  change the requirement to `{sdk}`"
             );
         }
@@ -1040,12 +1047,23 @@ mod tests {
         let message = error("dependencies = \"golem-py-sdk==0.0.0\"");
         assert!(message.contains("is not a list"), "{message}");
 
-        // A direct reference names another source for the SDK.
-        let message = error("dependencies = [\"golem-py-sdk @ file:///sdk.whl\"]");
+        // A direct reference names another source for the SDK; its URL can
+        // contain credentials, so the error omits it.
+        let message = error(
+            "dependencies = [\"golem-py-sdk @ git+https://TOKEN@host/sdk.git\", \
+             \"requests[socks] @ https://user:pass@host/r.whl\"]",
+        );
         assert!(
-            message.contains("requires `golem-py-sdk @ file:///sdk.whl`"),
+            message.contains("requires `golem-py-sdk @ <URL omitted>`"),
             "{message}"
         );
+        assert!(!message.contains("TOKEN"), "{message}");
+        let message = error("dependencies = [\"requests[socks] @ https://user:pass@host/r.whl\"]");
+        assert!(
+            message.contains("depends on `requests @ <URL omitted>`"),
+            "{message}"
+        );
+        assert!(!message.contains("user:pass"), "{message}");
     }
 
     #[test]
