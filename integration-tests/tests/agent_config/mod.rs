@@ -73,7 +73,7 @@ fn test_context_rust() -> Arc<dyn TestContext> {
             "echo_local_config"
         }
         fn case_config_path_segment(&self, segment: &str) -> String {
-            ccase!(kebab -> snake, segment)
+            ccase!(kebab -> camel, segment)
         }
     }
 

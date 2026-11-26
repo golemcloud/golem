@@ -119,7 +119,7 @@ impl PermissionProbe for PermissionProbeImpl {
 
 fn evidence(claimed_principal: String, actual_principal: String, label: String) -> ChainEvidence {
     let owner_config = std::env::var("OWNER_MARKER").unwrap_or_else(|_| "missing".to_string());
-    let owner_secret = Secret::<String>::new(vec!["context_secret".to_string()])
+    let owner_secret = Secret::<String>::new(vec!["contextSecret".to_string()])
         .get()
         .unwrap_or_else(|error| format!("secret-error:{error:?}"));
     let quota = QuotaToken::new("context-quota", 7);
