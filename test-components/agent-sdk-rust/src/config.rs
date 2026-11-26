@@ -52,7 +52,14 @@ impl golem_rust::agentic::ConfigSchema for StaticDefaults {
     ) -> Vec<golem_rust::agentic::ExtendedAgentConfigDeclaration> {
         let mut declarations = StaticDefaultFields::describe_config(path);
         for declaration in &mut declarations {
-            declaration.default_value = static_default(&declaration.path);
+            declaration.default_value = static_default(&declaration.path).map(|default| {
+                golem_rust::schema::render::from_json_value(
+                    &declaration.value_type,
+                    &declaration.value_type.root,
+                    &serde_json::from_str(&default).unwrap(),
+                )
+                .unwrap()
+            });
         }
         declarations
     }
@@ -62,8 +69,11 @@ impl golem_rust::agentic::ConfigSchema for StaticDefaults {
         builder: &mut golem_rust::schema::wit::direct::WireSchemaBuilder,
     ) -> Vec<golem_rust::golem_agentic::golem::agent::common::AgentConfigDeclaration> {
         let mut declarations = StaticDefaultFields::describe_wire_config(path, builder);
-        for declaration in &mut declarations {
-            declaration.default_value = static_default(&declaration.path);
+        for (declaration, native) in declarations.iter_mut().zip(Self::describe_config(path)) {
+            declaration.default_value = native
+                .default_value
+                .as_ref()
+                .map(|value| golem_rust::schema::wit::encode_value(value).unwrap());
         }
         declarations
     }
@@ -91,7 +101,7 @@ impl StaticDefaultsAgent for StaticDefaultsAgentImpl {
     }
 
     fn read(&self) -> String {
-        serde_json::to_string(&self.config.get().expect("static config is captured").0).unwrap()
+        serde_json::to_string(&self.config.get().expect("static config is stored").0).unwrap()
     }
 }
 

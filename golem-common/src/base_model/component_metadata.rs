@@ -347,24 +347,7 @@ impl From<ComponentMetadataDto> for ComponentMetadata {
     }
 }
 
-/// Revisioned operational config. Source metadata is optional audit information;
-/// consumers must not use it to resolve or authorize a value.
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
-#[cfg_attr(
-    feature = "full",
-    derive(desert_rust::BinaryCodec, poem_openapi::Object)
-)]
-#[cfg_attr(feature = "full", desert(evolution()))]
-#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
-#[serde(rename_all = "camelCase")]
-pub struct OwnerConfig {
-    pub entries: Vec<OwnerConfigEntry>,
-    /// JSON Pointer keys address fields and nested members without conflating
-    /// record member names, dotted declaration paths, or list indices.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    #[cfg_attr(feature = "full", oai(default, skip_serializing_if_is_empty))]
-    pub source_meta: BTreeMap<String, ConfigSourceMetadata>,
-}
+pub type ConfigBindings = Vec<ConfigBinding>;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[cfg_attr(
@@ -374,9 +357,13 @@ pub struct OwnerConfig {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct OwnerConfigEntry {
+pub struct ConfigBinding {
     pub path: Vec<String>,
-    pub source: OwnerConfigSource,
+    pub value_source: ConfigBindingSource,
+    /// Audit information, not an input to value resolution, authorization or deployment hashing.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[cfg_attr(feature = "full", oai(default, skip_serializing_if_is_empty))]
+    pub origins: Vec<ConfigBindingOrigin>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -386,8 +373,10 @@ pub struct OwnerConfigEntry {
 )]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(tag = "kind", content = "value", rename_all = "camelCase")]
-pub enum OwnerConfigSource {
-    Captured(TypedSchemaValue),
+/// How a field obtains its value. Managed Shared and Secret sources and unbound
+/// optional Shared fields require distinct variants rather than static payloads.
+pub enum ConfigBindingSource {
+    Static(TypedSchemaValue),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -398,39 +387,39 @@ pub enum OwnerConfigSource {
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 #[serde(rename_all = "camelCase")]
-pub struct ConfigSourceMetadata {
-    /// Portable source label, not a local absolute path or initializer contents.
-    pub source: String,
-    pub path: Vec<String>,
+pub struct ConfigBindingOrigin {
+    /// Relative to the binding's value; an empty path addresses the whole value.
+    pub value_path: Vec<String>,
+    pub location: ConfigOriginLocation,
+    /// Position in the supplying document or component metadata.
+    pub source_path: Vec<String>,
+    /// Display label only; consumers must not parse it to recover layer semantics.
     pub layer: String,
 }
 
-impl OwnerConfig {
-    pub fn from_captures(entries: Vec<TypedAgentConfigEntry>) -> Self {
-        Self {
-            entries: entries
-                .into_iter()
-                .map(|entry| OwnerConfigEntry {
-                    path: entry.path,
-                    source: OwnerConfigSource::Captured(entry.value),
-                })
-                .collect(),
-            source_meta: BTreeMap::new(),
-        }
-    }
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(
+    feature = "full",
+    derive(desert_rust::BinaryCodec, golem_schema_derive::PoemSchema)
+)]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(tag = "kind", rename_all = "camelCase")]
+pub enum ConfigOriginLocation {
+    Manifest {
+        /// Portable manifest path, never a build-machine absolute path.
+        file: String,
+    },
+    /// Identified by the component revision that contains the binding.
+    ComponentMetadata,
+}
 
-    /// Convert revision captures into the existing guest/oplog value carrier.
-    pub fn captures(&self) -> Vec<TypedAgentConfigEntry> {
-        self.entries
-            .iter()
-            .map(|entry| {
-                let OwnerConfigSource::Captured(value) = &entry.source;
-                TypedAgentConfigEntry {
-                    path: entry.path.clone(),
-                    value: value.clone(),
-                }
-            })
-            .collect()
+impl From<TypedAgentConfigEntry> for ConfigBinding {
+    fn from(entry: TypedAgentConfigEntry) -> Self {
+        Self {
+            path: entry.path,
+            value_source: ConfigBindingSource::Static(entry.value),
+            origins: Vec::new(),
+        }
     }
 }
 
@@ -447,7 +436,7 @@ pub struct ComponentProvisionConfig {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
-    pub config: OwnerConfig,
+    pub config: ConfigBindings,
     #[serde(default)]
     pub plugins: Vec<InstalledPlugin>,
     #[serde(default)]
@@ -460,7 +449,7 @@ impl Default for ComponentProvisionConfig {
             initial_permissions: crate::model::component::AgentTypeInitialPermissions::default()
                 .to_polymorphic_card(),
             env: BTreeMap::new(),
-            config: OwnerConfig::default(),
+            config: ConfigBindings::default(),
             plugins: Vec::new(),
             files: Vec::new(),
         }
@@ -502,7 +491,7 @@ pub struct AgentTypeProvisionConfig {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
-    pub config: OwnerConfig,
+    pub config: ConfigBindings,
     #[serde(default)]
     pub plugins: Vec<InstalledPlugin>,
     #[serde(default)]

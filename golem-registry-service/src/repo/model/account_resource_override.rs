@@ -278,15 +278,15 @@ fn persisted_event_type(value: &str) -> RepoResult<AdminResourceGrantEventType> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, Utc};
     use golem_common::model::account_usage::{
         DisabledResourceLimit, FiniteResourceLimit, StorageLimitDisabledReason,
         UnlimitedResourceLimit,
     };
+    use jiff::Timestamp;
     use test_r::test;
 
-    fn timestamp(seconds: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(seconds, 0).expect("test timestamp is valid")
+    fn timestamp(seconds: i64) -> Timestamp {
+        Timestamp::new(seconds, 0).expect("test timestamp is valid")
     }
 
     #[test]

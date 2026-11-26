@@ -15,6 +15,7 @@
 use super::WorkerExecutorImpl;
 use crate::durable_host::durable_session::{
     StreamSession, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
+    with_input_server_terminals,
 };
 use crate::durable_host::durable_stream::{ProducerRegistrationRequest, SessionError};
 use crate::grpc::invocation::from_proto_invocation_context;
@@ -22,7 +23,7 @@ use crate::services::oplog::OplogError;
 use crate::services::{HasAll, HasComponentService, UsesAllDeps};
 use crate::worker::{DurableStreamingInvocationRequest, Worker};
 use crate::workerctx::WorkerCtx;
-use chrono::{DateTime, Utc};
+
 use futures::Stream;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem;
@@ -150,18 +151,21 @@ struct AcceptedInvocation {
     joined_origin_observer: bool,
     queued: Option<(
         golem_common::model::durable_stream::StreamSessionAttachedRecord,
-        futures::future::BoxFuture<
-            'static,
-            Result<
-                (
-                    golem_common::model::durable_stream::StreamSessionPreparedRecord,
-                    StreamSession,
-                ),
-                WorkerExecutorError,
-            >,
-        >,
+        QueuedReadiness,
     )>,
 }
+
+/// Resolves when a queued method session becomes ready to execute.
+type QueuedReadiness = futures::future::BoxFuture<
+    'static,
+    Result<
+        (
+            golem_common::model::durable_stream::StreamSessionPreparedRecord,
+            StreamSession,
+        ),
+        WorkerExecutorError,
+    >,
+>;
 
 pub(crate) struct TransportStreamId(pub(crate) u64);
 

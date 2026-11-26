@@ -22,6 +22,7 @@ use test_r::inherit_test_dep;
 use crate::Tracing;
 
 pub mod attempt_server;
+pub mod background_work;
 pub mod checkout_v2_regressions;
 pub mod config;
 pub mod custom_durability;

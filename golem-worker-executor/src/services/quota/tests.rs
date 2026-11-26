@@ -14,7 +14,7 @@
 
 use super::*;
 use crate::span_test_support::{Tracing, get_tracing_dependency as test_r_get_dep_tracing};
-use chrono::Duration as ChronoDuration;
+
 use golem_common::model::quota::{ResourceLimit, ResourceRateLimit, TimePeriod};
 use golem_common::model::{Pod, RoutingTable, ShardEpoch, ShardId};
 use golem_service_base::clients::shard_manager::{
@@ -71,7 +71,7 @@ fn bounded_lease_with_total(
         // Use an expiry just within the 2×renewal_interval threshold
         // (test services use 100ms interval → 200ms threshold) so that
         // tests calling renew_all() always trigger a renewal.
-        expires_at: Utc::now() + ChronoDuration::milliseconds(150),
+        expires_at: jiff::Timestamp::now() + jiff::SignedDuration::from_millis(150),
         resource_limit: ResourceLimit::Rate(ResourceRateLimit {
             value: 1000,
             period: TimePeriod::Second,
@@ -95,7 +95,7 @@ fn bounded_lease_with_distant_expiry(
         pod: test_pod(),
         epoch: LeaseEpoch(epoch),
         allocation: amount,
-        expires_at: Utc::now() + ChronoDuration::seconds(60),
+        expires_at: jiff::Timestamp::now() + jiff::SignedDuration::from_secs(60),
         resource_limit: ResourceLimit::Rate(ResourceRateLimit {
             value: 1000,
             period: TimePeriod::Second,
@@ -119,7 +119,7 @@ fn slow_rate_lease_with_total(
         pod: test_pod(),
         epoch: LeaseEpoch(epoch),
         allocation: amount,
-        expires_at: Utc::now() + ChronoDuration::milliseconds(150),
+        expires_at: jiff::Timestamp::now() + jiff::SignedDuration::from_millis(150),
         resource_limit: ResourceLimit::Rate(ResourceRateLimit {
             value: 1,
             period: TimePeriod::Hour,
@@ -143,7 +143,7 @@ fn capacity_lease_with_total(
         pod: test_pod(),
         epoch: LeaseEpoch(epoch),
         allocation: amount,
-        expires_at: Utc::now() + ChronoDuration::milliseconds(150),
+        expires_at: jiff::Timestamp::now() + jiff::SignedDuration::from_millis(150),
         resource_limit: ResourceLimit::Capacity(ResourceCapacityLimit { value: 100 }),
         enforcement_action: EnforcementAction::Throttle,
         total_available_amount,
@@ -153,7 +153,7 @@ fn capacity_lease_with_total(
 fn unlimited_lease() -> QuotaLease {
     QuotaLease::Unlimited {
         pod: test_pod(),
-        expires_at: Utc::now() + ChronoDuration::minutes(5),
+        expires_at: jiff::Timestamp::now() + jiff::SignedDuration::from_mins(5),
     }
 }
 
@@ -1088,7 +1088,7 @@ async fn priority_reflects_time_in_queue() {
         slot.waiters.push(Waiter {
             amount: 20,
             last_credit_value: -500,
-            last_credit_value_at: Utc::now() - ChronoDuration::milliseconds(200),
+            last_credit_value_at: jiff::Timestamp::now() - jiff::SignedDuration::from_millis(200),
             credit_rate: 10.0, // 100 * 0.1
             max_credit: 10_000,
             tx: tx_b,
@@ -1406,7 +1406,7 @@ async fn acquire_with_previous_credit_at_sets_baseline() {
 
     // Set credit baseline 1000ms in the past with credit_rate=10/ms.
     // Expected current_credit = min(max, -100 + 1000 * 10) = min(10000, 9900) = 9900.
-    let past = Utc::now() - ChronoDuration::milliseconds(1000);
+    let past = jiff::Timestamp::now() - jiff::SignedDuration::from_millis(1000);
     let interest = svc
         .acquire(test_env_id(), test_resource_name(), 100, -100, Some(past))
         .await;
@@ -1550,7 +1550,7 @@ async fn commit_on_lost_lease_is_noop() {
                         resource_definition_id: test_resource_definition_id(),
                         epoch: LeaseEpoch(1),
                         remaining: 100,
-                        expires_at: Utc::now() + ChronoDuration::milliseconds(150),
+                        expires_at: jiff::Timestamp::now() + jiff::SignedDuration::from_millis(150),
                         resource_limit: ResourceLimit::Rate(ResourceRateLimit {
                             value: 1000,
                             period: TimePeriod::Minute,
@@ -1570,7 +1570,7 @@ async fn commit_on_lost_lease_is_noop() {
         resource_name: key.1.clone(),
         expected_use: 100,
         last_credit_value: 0,
-        last_credit_value_at: Utc::now(),
+        last_credit_value_at: jiff::Timestamp::now(),
         credit_rate: 100.0 * CREDIT_RATE_FACTOR,
         max_credit,
         _token: interest_arc,

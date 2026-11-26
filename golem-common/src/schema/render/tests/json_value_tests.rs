@@ -25,11 +25,11 @@ use crate::schema::schema_value::{
     SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
 use crate::schema::validation::validate_graph;
-use chrono::{TimeZone, Utc};
 use golem_schema::schema::render::error::RenderError;
 use golem_schema::schema::render::json_value::{
     from_json_value, from_untrusted_json_value, to_json_value, to_json_value_redacted,
 };
+use jiff::Timestamp as JiffTimestamp;
 use proptest::prelude::*;
 use serde_json::json;
 use test_r::test;
@@ -768,7 +768,7 @@ fn secret_value() -> SchemaValue {
         secret_id: uuid::Uuid::nil(),
         config_key: None,
         version: 0,
-        resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+        resolved_at: JiffTimestamp::new(0, 0).unwrap(),
         category: None,
     })
 }
@@ -779,7 +779,7 @@ fn quota_token_value() -> SchemaValue {
         resource_name: "gpu-quota".to_string(),
         expected_use: 1,
         last_credit: 0,
-        last_credit_at: Utc.timestamp_opt(0, 0).unwrap(),
+        last_credit_at: JiffTimestamp::new(0, 0).unwrap(),
     })
 }
 
@@ -803,7 +803,7 @@ fn to_json_value_emits_canonical_capability_form() {
     expected.insert("version".to_string(), json!(secret.version));
     expected.insert(
         "resolvedAt".to_string(),
-        json!(secret.resolved_at.to_rfc3339()),
+        json!(secret.resolved_at.to_string()),
     );
     if let Some(category) = secret.category {
         expected.insert("category".to_string(), json!(category));
@@ -834,7 +834,7 @@ fn permission_card_json_round_trip_matches_schema_and_redacts() {
     let value = SchemaValue::PermissionCard(PermissionCardValuePayload {
         card_id: uuid::Uuid::from_u128(1),
         parent_ids: vec![uuid::Uuid::from_u128(2)],
-        expires_at: Some(Utc.timestamp_opt(1_700_000_000, 0).unwrap()),
+        expires_at: Some(JiffTimestamp::new(1_700_000_000, 0).unwrap()),
         polymorphic: true,
     });
 

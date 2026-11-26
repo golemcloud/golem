@@ -147,11 +147,11 @@ mod records {
     };
     use anyhow::anyhow;
     use bytes::Bytes;
-    use chrono::{DateTime, Utc};
     use desert_rust::BinaryCodec;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::security_scheme::SecuritySchemeId;
     use golem_common::model::security_scheme::SecuritySchemeRevision;
+    use jiff::Timestamp;
     use openidconnect::{Nonce, Scope};
     use std::collections::HashSet;
 
@@ -199,7 +199,7 @@ mod records {
 
         pub claims: String,
         pub scopes: HashSet<String>,
-        pub expires_at: DateTime<Utc>,
+        pub expires_at: Timestamp,
     }
 
     impl TryFrom<OidcSession> for OidcSessionRecord {
@@ -289,7 +289,7 @@ mod records {
         pub frontend_state: String,
         pub code_challenge: String,
         pub upstream_nonce: String,
-        pub expires_at: DateTime<Utc>,
+        pub expires_at: Timestamp,
     }
 
     impl From<PendingPkceLogin> for PendingPkceLoginRecord {
@@ -325,7 +325,7 @@ mod records {
         pub principal: OidcSessionRecord,
         pub redirect_uri: String,
         pub code_challenge: String,
-        pub expires_at: DateTime<Utc>,
+        pub expires_at: Timestamp,
     }
 
     impl TryFrom<PkceAuthorizationCode> for PkceAuthorizationCodeRecord {
@@ -361,7 +361,7 @@ mod records {
     pub struct PkceBearerCredentialRecord {
         pub binding: PkceBindingRecord,
         pub principal: OidcSessionRecord,
-        pub expires_at: DateTime<Utc>,
+        pub expires_at: Timestamp,
     }
 
     impl TryFrom<PkceBearerCredential> for PkceBearerCredentialRecord {
@@ -397,7 +397,7 @@ mod records {
         let record: PendingPkceLoginRecord = golem_common::serialization::deserialize(&bytes)
             .map_err(|e| anyhow!("PendingPkceLogin deserialization error: {e}"))?;
         let login = PendingPkceLogin::from(record);
-        Ok((login.expires_at > Utc::now()).then_some(login))
+        Ok((login.expires_at > Timestamp::now()).then_some(login))
     }
 
     pub fn decode_authorization_code(
@@ -409,7 +409,7 @@ mod records {
         let record: PkceAuthorizationCodeRecord = golem_common::serialization::deserialize(&bytes)
             .map_err(|e| anyhow!("PkceAuthorizationCode deserialization error: {e}"))?;
         let code = PkceAuthorizationCode::try_from(record)?;
-        Ok((code.expires_at > Utc::now()).then_some(code))
+        Ok((code.expires_at > Timestamp::now()).then_some(code))
     }
 
     pub fn decode_bearer_credential(
@@ -424,7 +424,7 @@ mod records {
                 .map_err(|e| anyhow!("PkceBearerCredential deserialization error: {e}"))?;
         let credential = PkceBearerCredential::try_from(record)?;
         Ok(
-            (credential.expires_at > Utc::now() && credential.binding == *expected_binding)
+            (credential.expires_at > Timestamp::now() && credential.binding == *expected_binding)
                 .then_some(credential),
         )
     }
@@ -491,8 +491,8 @@ mod tests {
     use super::{credential_digest, records};
     use crate::custom_api::OidcSession;
     use crate::custom_api::oidc::model::{AuthorizationCode, BearerToken, PendingOidcLogin};
-    use chrono::{TimeDelta, Utc};
     use golem_common::model::security_scheme::SecuritySchemeId;
+    use jiff::{SignedDuration, Timestamp};
     use openidconnect::core::CoreIdTokenClaims;
     use openidconnect::{
         Audience, EmptyAdditionalClaims, IssuerUrl, Nonce, Scope, StandardClaims, SubjectIdentifier,
@@ -509,7 +509,7 @@ mod tests {
         }
     }
 
-    fn sample_claims(expires_at: chrono::DateTime<Utc>) -> CoreIdTokenClaims {
+    fn sample_claims(expires_at: jiff::Timestamp) -> CoreIdTokenClaims {
         let issuer = IssuerUrl::new("https://issuer.example".to_string()).unwrap();
         let audience = Audience::new("client_id".to_string());
 
@@ -518,14 +518,14 @@ mod tests {
         CoreIdTokenClaims::new(
             issuer,
             vec![audience],
-            expires_at,
-            Utc::now(),
+            std::time::SystemTime::try_from(expires_at).unwrap().into(),
+            std::time::SystemTime::now().into(),
             standard_claims,
             EmptyAdditionalClaims {},
         )
     }
 
-    fn sample_session(expires_at: chrono::DateTime<Utc>) -> OidcSession {
+    fn sample_session(expires_at: jiff::Timestamp) -> OidcSession {
         OidcSession {
             subject: "sub".into(),
             issuer: "issuer".into(),
@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn oidc_session_record_roundtrip() {
-        let expires = Utc::now() + TimeDelta::seconds(60);
+        let expires = Timestamp::now() + SignedDuration::from_secs(60);
         let session = sample_session(expires);
 
         let record = records::OidcSessionRecord::try_from(session.clone()).unwrap();

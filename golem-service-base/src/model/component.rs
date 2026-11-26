@@ -37,7 +37,7 @@ pub struct Component {
     pub environment_name: EnvironmentName,
     pub component_size: u64,
     pub metadata: ComponentMetadata,
-    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub created_at: jiff::Timestamp,
     /// Hash of the wasm before any transformations
     pub wasm_hash: diff::Hash,
     pub package_metadata: Option<ComponentPackageMetadata>,
@@ -112,7 +112,8 @@ impl TryFrom<golem_api_grpc::proto::golem::component::Component> for Component {
             .ok_or("missing created_at")?
             .apply(SystemTime::try_from)
             .map_err(|_| "Failed to convert timestamp".to_string())?
-            .into();
+            .try_into()
+            .map_err(|err: jiff::Error| err.to_string())?;
 
         let hash = value.hash.ok_or("Missing hash field")?.try_into()?;
 
@@ -158,9 +159,10 @@ impl TryFrom<Component> for golem_api_grpc::proto::golem::component::Component {
             environment_id: Some(value.environment_id.into()),
             application_name: value.application_name.0,
             environment_name: value.environment_name.0,
-            created_at: Some(prost_types::Timestamp::from(SystemTime::from(
-                value.created_at,
-            ))),
+            created_at: Some(prost_types::Timestamp::from(
+                SystemTime::try_from(value.created_at)
+                    .map_err(|err| format!("Invalid component timestamp: {err}"))?,
+            )),
             wasm_hash: Some(value.wasm_hash.into()),
             hash: Some(value.hash.into()),
             object_store_key: value.object_store_key,

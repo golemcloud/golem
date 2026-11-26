@@ -338,7 +338,7 @@ pub enum CreateIntent {
     Invocation {
         owner: NewOwner,
         idempotency_key: Option<IdempotencyKey>,
-        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
+        invocation: Option<Box<golem_api_grpc::proto::golem::worker::InvocationStart>>,
     },
     /// An explicit create request.
     Create {
@@ -957,6 +957,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub fn agent_mode(&self) -> AgentMode {
         self.execution_status.read().unwrap().agent_mode()
+    }
+
+    /// Whether a stream-permitted invocation needs a stream session. An ephemeral agent executes the
+    /// component it was created with, so its method is classified before acceptance; its
+    /// runtime ends with the invocation and cannot retain a durable attachment for scalar work.
+    pub(crate) fn invocation_needs_stream_session(&self, invocation: &AgentInvocation) -> bool {
+        self.agent_mode() != AgentMode::Ephemeral
+            || crate::worker::invocation::invocation_uses_streams(
+                invocation,
+                &self.current_component.load().metadata,
+                self.parsed_agent_id.as_ref(),
+            )
     }
 
     /// Gets the timestamp of the last time the execution status changed

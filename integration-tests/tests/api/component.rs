@@ -27,9 +27,10 @@ use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::component::{
     AgentFilePermissions, AgentTypeInitialPermissions, AgentTypeProvisionConfigCreation,
     AgentTypeProvisionConfigUpdate, ComponentCreation, ComponentName, ComponentUpdate,
-    PluginInstallation, PluginInstallationAction, PluginInstallationUpdate, PluginPriority,
-    PluginUninstallation,
+    ConfigBindingDto, PluginInstallation, PluginInstallationAction, PluginInstallationUpdate,
+    PluginPriority, PluginUninstallation,
 };
+use golem_common::model::component_metadata::ConfigBindingSource;
 use golem_common::model::environment::EnvironmentUpdate;
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantCreation;
 use golem_common::model::plugin_registration::{
@@ -40,15 +41,182 @@ use golem_common::schema::{
     MetadataEnvelope, NamedField, OutputSchema, SchemaGraph, SchemaType, SchemaValue,
 };
 use golem_schema::Empty;
+use golem_service_base::clients::registry::{
+    GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService as _,
+};
+use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
+use golem_service_base::storage::blob::{BlobStorageLabelledApi, BlobStorageNamespace};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::{assert_eq, assert_matches, assert_ne};
 use serde_json::json;
 use std::collections::BTreeMap;
+use std::path::Path;
 use test_r::{inherit_test_dep, test};
 use tokio::fs::File;
 
 inherit_test_dep!(EnvBasedTestDependencies);
+
+#[test]
+async fn component_upload_deduplication_is_account_scoped(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let owner = deps.user().await?;
+    let other = deps.user().await?;
+    let (app, first) = owner.app_and_env().await?;
+    let second = owner.env(&app.id).await?;
+    let (_, separate) = other.app_and_env().await?;
+    // Spawned registry and compilation services share this store, not the DSL's fixture store.
+    let blob_storage = FileSystemBlobStorage::attach_existing(
+        &std::env::temp_dir().join("ittest-local-object-store/golem"),
+    )?;
+    let blobs = blob_storage.with("component_upload_deduplication", "list");
+    let namespace = |account_id| BlobStorageNamespace::ComponentUploads { account_id };
+    let root = Path::new("");
+
+    let fresh = owner
+        .component(&first.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let owner_namespace = namespace(*owner.account_id());
+    let owner_objects = blobs.list_dir(owner_namespace.clone(), root).await?;
+    assert_eq!(owner_objects.len(), 1);
+    let reused = owner
+        .component(&second.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let isolated = other
+        .component(&separate.id, "it_agent_counters_release")
+        .name("it:agent-counters")
+        .store()
+        .await?;
+    let separate_namespace = namespace(*other.account_id());
+    let separate_objects = blobs.list_dir(separate_namespace.clone(), root).await?;
+    assert_eq!(separate_objects.len(), 1);
+    assert_eq!(fresh.wasm_hash, isolated.wasm_hash);
+    let response_contract = |component| -> anyhow::Result<_> {
+        let mut response = serde_json::to_value(component)?;
+        let fields = response.as_object_mut().unwrap();
+        for field in ["id", "environmentId", "createdAt"] {
+            fields.remove(field).unwrap();
+        }
+        // Provisioning creates fresh card identities and reflection can reorder schema definitions.
+        let metadata = fields.get_mut("metadata").unwrap().as_object_mut().unwrap();
+        metadata.remove("agentTypes").unwrap();
+        let normalize_permissions = |config: &mut serde_json::Value| {
+            let permissions = config["initialPermissions"].as_object_mut().unwrap();
+            permissions.remove("cardId");
+            permissions.remove("createdAt");
+        };
+        normalize_permissions(metadata.get_mut("componentProvisionConfig").unwrap());
+        for config in metadata["agentTypeProvisionConfigs"]
+            .as_object_mut()
+            .unwrap()
+            .values_mut()
+        {
+            normalize_permissions(config);
+        }
+        Ok(response)
+    };
+    assert_eq!(response_contract(&fresh)?, response_contract(&reused)?);
+
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while blobs.list_dir(owner_namespace.clone(), root).await?.len() > 1 {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
+    assert_eq!(
+        blobs.list_dir(owner_namespace.clone(), root).await?,
+        owner_objects
+    );
+
+    let client = owner.registry_service_client().await;
+    let sentinel = serde_json::from_value(json!({"componentName": "probe:collection"}))?;
+    client
+        .create_component(
+            &first.id.0,
+            &sentinel,
+            vec![0, b'a', b's', b'm', 0x0d, 0, 1, 0],
+            None::<Vec<u8>>,
+        )
+        .await?;
+    let sentinel_key = blobs
+        .list_dir(owner_namespace.clone(), root)
+        .await?
+        .into_iter()
+        .find(|key| !owner_objects.contains(key))
+        .expect("the first environment's unshared upload exists before deletion");
+    client
+        .delete_environment(&first.id.0, first.revision.into())
+        .await?;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while blobs
+            .list_dir(owner_namespace.clone(), root)
+            .await?
+            .contains(&sentinel_key)
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
+    let registry = deps.registry_service();
+    let grpc = GrpcRegistryService::new(&GrpcRegistryServiceConfig {
+        host: registry.grpc_host().to_string(),
+        port: registry.grpc_port(),
+        ..Default::default()
+    });
+    let expected = tokio::fs::read(
+        deps.component_directory()
+            .join("it_agent_counters_release.wasm"),
+    )
+    .await?;
+    assert_eq!(
+        grpc.download_component(reused.id, reused.revision).await?,
+        expected
+    );
+    blob_storage
+        .with("component_upload_deduplication", "clear_compiled_cache")
+        .delete_dir(
+            BlobStorageNamespace::CompilationCache,
+            Path::new(&reused.wasm_hash.to_string()),
+        )
+        .await?;
+    let agent = golem_common::agent_key!("Counter", "first-start-after-peer-deletion");
+    owner.start_agent(&reused.id, agent.clone()).await?;
+    let result = owner
+        .invoke_and_await_agent(&reused, &agent, "increment", golem_common::data_value!())
+        .await?;
+    assert_eq!(result.into_return_value(), Some(SchemaValue::U32(1)));
+    assert_eq!(
+        blobs.list_dir(owner_namespace.clone(), root).await?,
+        owner_objects
+    );
+
+    client
+        .delete_environment(&second.id.0, second.revision.into())
+        .await?;
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        while !blobs
+            .list_dir(owner_namespace.clone(), root)
+            .await?
+            .is_empty()
+        {
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        Ok::<_, anyhow::Error>(())
+    })
+    .await??;
+    assert_eq!(
+        blobs.list_dir(separate_namespace, root).await?,
+        separate_objects
+    );
+    Ok(())
+}
 
 fn default_agent_type_provision_config_creation(
     account_email: AccountEmail,
@@ -254,10 +422,13 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             .metadata
             .agent_type_provision_configs
             .get(&AgentTypeName("CounterAgent".to_string()))
-            .map(|config| config.config.captures())
+            .map(|config| config.config.clone())
             .unwrap_or_default()
             .iter()
-            .map(|e| (e.path.clone(), e.value.value().clone()))
+            .map(|binding| {
+                let ConfigBindingSource::Static(value) = &binding.value_source;
+                (binding.path.clone(), value.value().clone())
+            })
             .collect::<Vec<_>>(),
         vec![(
             vec!["var1".to_string()],
@@ -274,13 +445,15 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
                 AgentTypeName("CounterAgent".to_string()),
                 AgentTypeProvisionConfigUpdate {
                     config: Some(vec![
-                        AgentConfigEntryDto {
+                        ConfigBindingDto {
                             path: vec!["var1".to_string()],
                             value: serde_json::Value::String("value11".to_string()).into(),
+                            origins: None,
                         },
-                        AgentConfigEntryDto {
+                        ConfigBindingDto {
                             path: vec!["var2".to_string()],
                             value: serde_json::Value::String("value2".to_string()).into(),
+                            origins: None,
                         },
                     ]),
                     ..Default::default()
@@ -295,10 +468,13 @@ async fn update_config_vars(deps: &EnvBasedTestDependencies) -> anyhow::Result<(
             .metadata
             .agent_type_provision_configs
             .get(&AgentTypeName("CounterAgent".to_string()))
-            .map(|config| config.config.captures())
+            .map(|config| config.config.clone())
             .unwrap_or_default()
             .iter()
-            .map(|e| (e.path.clone(), e.value.value().clone()))
+            .map(|binding| {
+                let ConfigBindingSource::Static(value) = &binding.value_source;
+                (binding.path.clone(), value.value().clone())
+            })
             .collect::<Vec<_>>(),
         vec![
             (
@@ -518,10 +694,13 @@ async fn component_update_preserves_existing_provision_config_when_omitted(
             .metadata
             .agent_type_provision_configs
             .get(&AgentTypeName("CounterAgent".to_string()))
-            .map(|config| config.config.captures())
+            .map(|config| config.config.clone())
             .unwrap_or_default()
             .iter()
-            .map(|e| (e.path.clone(), e.value.value().clone()))
+            .map(|binding| {
+                let ConfigBindingSource::Static(value) = &binding.value_source;
+                (binding.path.clone(), value.value().clone())
+            })
             .collect::<Vec<_>>(),
         vec![(
             vec!["var1".to_string()],
@@ -1731,13 +1910,15 @@ async fn add_new_agent_config_entry_during_update(
             AgentTypeName("ConfigAgent".to_string()),
             AgentTypeProvisionConfigUpdate {
                 config: Some(vec![
-                    AgentConfigEntryDto {
+                    ConfigBindingDto {
                         path: vec!["foo".to_string()],
                         value: json!(2).into(),
+                        origins: None,
                     },
-                    AgentConfigEntryDto {
+                    ConfigBindingDto {
                         path: vec!["bar".to_string()],
                         value: json!("value").into(),
+                        origins: None,
                     },
                 ]),
                 ..Default::default()
@@ -1780,13 +1961,15 @@ async fn updating_agent_with_invalid_config_entry_fails_with_409(
                 AgentTypeName("ConfigAgent".to_string()),
                 AgentTypeProvisionConfigUpdate {
                     config: Some(vec![
-                        AgentConfigEntryDto {
+                        ConfigBindingDto {
                             path: vec!["foo".to_string()],
                             value: json!(2).into(),
+                            origins: None,
                         },
-                        AgentConfigEntryDto {
+                        ConfigBindingDto {
                             path: vec!["bar".to_string()],
                             value: json!(1).into(),
+                            origins: None,
                         },
                     ]),
                     ..Default::default()

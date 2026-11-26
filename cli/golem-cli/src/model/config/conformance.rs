@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::resolver::{ConfigLayer, ConfigSchemaResolution, ConfigSourcePlan};
 use golem_common::model::agent::extraction::extract_agent_type_schemas;
 use golem_common::schema::agent::AgentConfigDeclarationSchema;
 use golem_common::schema::config::{
-    ConfigCatalogSources, ConfigFieldKind, ConfigFieldSchema, ConfigLayer, ConfigOrigin,
-    ConfigSchema, ConfigSourcePlan,
+    ConfigCatalogSources, ConfigFieldKind, ConfigFieldSchema, ConfigOrigin, ConfigSchema,
 };
 use golem_common::schema::render::to_json_value;
 use golem_common::schema::validation::is_equivalent_cross_graph;
@@ -27,7 +27,10 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 use test_r::test;
 
-test_r::enable!();
+const CORPUS: &str = include_str!(concat!(
+    env!("CARGO_MANIFEST_DIR"),
+    "/../../test-data/config-conformance/v1.json"
+));
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -167,7 +170,7 @@ fn resolve(schema: &ConfigSchema, inputs: &Inputs) -> Result<Value, String> {
             ConfigSourcePlan::Secret { catalog_path } => {
                 json!({"kind":"secret", "catalogPath":catalog_path})
             }
-            ConfigSourcePlan::CapturedAbsence => json!({"kind":"captured-absence"}),
+            ConfigSourcePlan::SharedAbsence => json!({"kind":"shared-absence"}),
             ConfigSourcePlan::Descriptor(_) => panic!("this corpus has no runtime descriptors"),
         };
         values.insert(field.path.join("."), value);
@@ -189,9 +192,8 @@ fn check(id: &str, inputs: &Inputs, result: Result<Value, String>) {
 }
 
 #[test]
-fn common_config_corpus() {
-    let corpus: Corpus =
-        serde_json::from_str(include_str!("../../test-data/config-conformance/v1.json")).unwrap();
+fn config_corpus() {
+    let corpus: Corpus = serde_json::from_str(CORPUS).unwrap();
     assert_eq!(corpus.version, 1);
     let mut ids = HashSet::new();
     for case in &corpus.static_cases {
@@ -225,11 +227,91 @@ fn common_config_corpus() {
 }
 
 #[test]
+fn provisioning_binding_preserves_nested_origins_and_portable_locations() {
+    use super::{StaticConfigFieldView, StaticConfigSource};
+    use golem_common::model::component::ComponentName;
+    use golem_common::model::component_metadata::{ConfigBindingOrigin, ConfigOriginLocation};
+
+    let root = std::env::temp_dir().join("binding-origin-test");
+    let app = root.join("app");
+    let wasm = app.join("main.wasm");
+    let field = StaticConfigFieldView {
+        component: ComponentName("app:main".into()),
+        agent_type: None,
+        path: vec!["settings".into()],
+        schema: SchemaGraph::empty(),
+        fill: json!({"timeout": 3000, "maxRetries": 5, "batchSize": 20}).into(),
+        sources: vec![
+            StaticConfigSource {
+                path: vec!["settings".into(), "timeout".into()],
+                origin: ConfigOrigin {
+                    file: app.join("golem.yaml"),
+                    path: vec!["config".into(), "local".into(), "timeout".into()],
+                    layer: "application".into(),
+                },
+            },
+            StaticConfigSource {
+                path: vec!["settings".into(), "maxRetries".into()],
+                origin: ConfigOrigin {
+                    file: root.join("shared/golem.yaml"),
+                    path: vec!["config".into(), "local".into(), "retryCount".into()],
+                    layer: "code".into(),
+                },
+            },
+            StaticConfigSource {
+                path: vec!["settings".into(), "batchSize".into()],
+                origin: ConfigOrigin {
+                    file: wasm.clone(),
+                    path: vec!["config".into(), "settings".into(), "batchSize".into()],
+                    layer: "display label".into(),
+                },
+            },
+        ],
+        catalog_origin: None,
+    };
+    let binding = field.config_binding(&app, &wasm).unwrap();
+    assert_eq!(binding.path, ["settings"]);
+    assert_eq!(
+        binding.value.0,
+        json!({"timeout": 3000, "maxRetries": 5, "batchSize": 20})
+    );
+    assert_eq!(
+        binding.origins.unwrap(),
+        vec![
+            ConfigBindingOrigin {
+                value_path: vec!["timeout".into()],
+                location: ConfigOriginLocation::Manifest {
+                    file: "golem.yaml".into()
+                },
+                source_path: vec!["config".into(), "local".into(), "timeout".into()],
+                layer: "application".into()
+            },
+            ConfigBindingOrigin {
+                value_path: vec!["maxRetries".into()],
+                location: ConfigOriginLocation::Manifest {
+                    file: "../shared/golem.yaml".into()
+                },
+                source_path: vec!["config".into(), "local".into(), "retryCount".into()],
+                layer: "code".into()
+            },
+            ConfigBindingOrigin {
+                value_path: vec!["batchSize".into()],
+                location: ConfigOriginLocation::ComponentMetadata,
+                source_path: vec!["config".into(), "settings".into(), "batchSize".into()],
+                layer: "display label".into()
+            },
+        ]
+    );
+}
+
+#[test]
 async fn static_config_reference_exports_corpus_metadata() -> anyhow::Result<()> {
-    let corpus: Corpus =
-        serde_json::from_str(include_str!("../../test-data/config-conformance/v1.json"))?;
+    let corpus: Corpus = serde_json::from_str(CORPUS)?;
     check_reference_metadata(
-        "../test-components/golem_it_agent_sdk_rust_release.wasm",
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../test-components/golem_it_agent_sdk_rust_release.wasm"
+        ),
         &corpus.reference.agent_type,
     )
     .await
@@ -245,8 +327,7 @@ async fn ts_static_config_exports_corpus_metadata() -> anyhow::Result<()> {
 }
 
 async fn check_reference_metadata(component: &str, agent_type: &str) -> anyhow::Result<()> {
-    let corpus: Corpus =
-        serde_json::from_str(include_str!("../../test-data/config-conformance/v1.json"))?;
+    let corpus: Corpus = serde_json::from_str(CORPUS)?;
     let agents = extract_agent_type_schemas(Path::new(component), true, false).await?;
     let agent = agents
         .iter()

@@ -7,7 +7,7 @@ QuickJS-backed WASI Preview 3 components.
 
 - Agent metadata uses `id`, methods use `input`, and `defineAgent` returns a spec with `.client` and
   `.implement(...)`. Do not reintroduce `constructorParams`, `params`, or standalone old clients.
-- Agent IDs are opaque UUIDs that the host issues. `AgentId` (`{ uuid }`, text form the UUID) is
+- Agent IDs are opaque UUIDs that the host issues. `AgentId` (a branded string, the lower-case UUID text) is
   the only ID type; `AgentId.parse` checks only the text form. Guest code never derives an ID
   offline and never reads the agent type or constructor input out of an ID.
 - Durable agents expose `client.bindSelf`, `upsert`, `create`, and `getById`; ephemeral agents

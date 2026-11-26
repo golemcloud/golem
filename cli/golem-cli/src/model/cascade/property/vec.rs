@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::cascade::layer::Layer;
-use golem_common::cascade::property::Property;
+use crate::model::cascade::layer::Layer;
+use crate::model::cascade::property::Property;
 use serde::Serialize;
 use serde_derive::Deserialize;
 
@@ -69,6 +69,24 @@ impl<L: Layer, T: Serialize> Default for VecProperty<L, T> {
 }
 
 impl<L: Layer, T: Serialize> VecProperty<L, T> {
+    pub fn for_each_value_mut(&mut self, mut visit: impl FnMut(&mut T)) {
+        for value in &mut self.value {
+            visit(value);
+        }
+        for element in &mut self.trace {
+            let values = match element {
+                VecPropertyTraceElem::Append { appended_elems, .. } => appended_elems,
+                VecPropertyTraceElem::Prepend {
+                    prepended_elems, ..
+                } => prepended_elems,
+                VecPropertyTraceElem::Replace { new_elems, .. } => new_elems,
+            };
+            for value in values {
+                visit(value);
+            }
+        }
+    }
+
     pub fn new(vec: Vec<T>) -> Self {
         Self {
             value: vec,
@@ -147,8 +165,8 @@ impl<L: Layer, T: Serialize + Clone> Property<L> for VecProperty<L, T> {
 #[cfg(test)]
 mod test {
     use super::{VecMergeMode, VecProperty};
+    use crate::model::cascade::property::Property;
     use crate::model::cascade::property::test_support::TestLayer;
-    use golem_common::cascade::property::Property;
     use test_r::test;
 
     #[test]

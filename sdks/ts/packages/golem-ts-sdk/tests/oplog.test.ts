@@ -8,7 +8,7 @@ import { AgentId, enrichOplogEntries } from '../src/host/oplog';
 describe('oplog checkpoint enrichment', () => {
   it('preserves the source component revision while wrapping the target agent ID', () => {
     const environmentId = { uuid: { highBits: 0n, lowBits: 1n } };
-    const agentId = { uuid: { highBits: 0x00000007_0000_8000n, lowBits: 0x8000_0000_0000_0002n } };
+    const agentId = AgentId.parse('00000007-0000-8000-8000-000000000002');
     const checkpoint: RawPublicOplogEntry = {
       tag: 'oplog-processor-checkpoint',
       val: {
@@ -21,7 +21,7 @@ describe('oplog checkpoint enrichment', () => {
           parameters: [],
         },
         sourceComponentRevision: 9007199254740993n,
-        targetAgentId: agentId,
+        targetAgentId: AgentId.toWit(agentId),
         confirmedUpTo: 11n,
         sendingUpTo: 15n,
         lastBatchStart: 12n,
@@ -33,8 +33,7 @@ describe('oplog checkpoint enrichment', () => {
     expect(entry?.tag).toBe('oplog-processor-checkpoint');
     if (entry?.tag !== 'oplog-processor-checkpoint') throw new Error('Expected checkpoint');
     expect(entry.val.sourceComponentRevision).toBe(9007199254740993n);
-    expect(entry.val.targetAgentId).toBeInstanceOf(AgentId);
-    expect(entry.val.targetAgentId.toString()).toBe('00000007-0000-8000-8000-000000000002');
+    expect(entry.val.targetAgentId).toBe('00000007-0000-8000-8000-000000000002');
     expect(entry.val.confirmedUpTo).toBe(11n);
     expect(entry.val.sendingUpTo).toBe(15n);
     expect(entry.val.lastBatchStart).toBe(12n);
@@ -42,15 +41,12 @@ describe('oplog checkpoint enrichment', () => {
 
   it('keeps the never-live mark of a create entry', () => {
     const environmentId = { uuid: { highBits: 0n, lowBits: 1n } };
-    const agentId = {
-      uuid: { highBits: 0x00000007_0000_8000n, lowBits: 0x8000_0000_0000_0002n },
-    };
+    const agentId = AgentId.parse('00000007-0000-8000-8000-000000000002');
     const create = (neverLive: boolean): RawPublicOplogEntry => ({
       tag: 'create',
       val: {
         timestamp: { seconds: 1700000000n, nanoseconds: 0 },
-        agentId,
-        agentTypeName: 'ConfiguredAgent',
+        agentId: AgentId.toWit(agentId),
         ownerKind: 'component-agent',
         agentMode: 'durable',
         componentRevision: 3n,
@@ -74,6 +70,5 @@ describe('oplog checkpoint enrichment', () => {
     expect(marked.val.neverLive).toBe(true);
     expect(unmarked.val.neverLive).toBe(false);
     expect(marked.val.agentId.toString()).toBe('00000007-0000-8000-8000-000000000002');
-    expect(marked.val.agentTypeName).toBe('ConfiguredAgent');
   });
 });

@@ -116,8 +116,8 @@ brackets, and nested map forms return `400` naming the input. Original schema co
 also apply to collection elements and map keys and values.
 
 In 2.0, typed agent endpoints reject unknown query keys with a named `400`, including on
-body methods and cache hits. Declared phantom selectors and applicable DurableStreams
-read controls remain recognized. File routes still ignore query strings and raw handlers
+body methods and cache hits. The query name of a declared agent ID binding and applicable
+DurableStreams read controls remain recognized. File routes still ignore query strings and raw handlers
 receive them unchanged. Stream resource slots are not inferred query inputs; inference
 uses the declared endpoint verb, not expanded DurableStreams resource verbs.
 
@@ -487,7 +487,7 @@ Choose the narrowest caller surface that owns the information you have:
 1. Normal RPC uses a shared source definition through the SDK's ordinary typed client and owns all lifecycle factories allowed by its mode.
 2. Caller-defined static clients use local schemas without discovery. `defineAgentClient({ methods })` connects to an existing durable agent with `getById(agentId)`, which takes the agent type from the type tag of the `AgentId`; `defineAgentClient({ name, id, methods, mode?, config? })` adds the lifecycle factories `upsert`, `create`, and `getById`, and declaration-aware config validation.
 3. Discovered clients use `reflection.getReflectedAgentType` and retain an immutable deployed metadata snapshot for runtime-selected types and methods.
-4. Fully dynamic clients use `await DynamicAgentClient.getById(agentId)` to transport schema-native values to an existing durable agent. They do not retain schemas or create a target.
+4. Fully dynamic clients use `DynamicAgentClient.getById(agentId)` to transport schema-native values to an existing durable agent. They do not retain schemas or create a target.
 
 Normal RPC and caller-defined static clients encode through their local schemas before opening RPC. Full-client binding also checks the declared type name and constructor shape. Discovered clients apply the complete snapshot input restrictions and validate output cardinality and shape. The host remains authoritative for visibility, authorization, effective configuration, identity resolution, and deployed-schema validation.
 

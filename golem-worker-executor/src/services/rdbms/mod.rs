@@ -17,6 +17,7 @@ pub(crate) mod metrics;
 pub mod mysql;
 pub mod postgres;
 pub(crate) mod sqlx_common;
+mod sqlx_types;
 
 use crate::services::golem_config::RdbmsConfig;
 use crate::services::rdbms::ignite::IgniteType;

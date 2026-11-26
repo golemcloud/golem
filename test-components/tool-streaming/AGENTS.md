@@ -34,7 +34,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-local-dev-server` | Starting, configuring, and debugging the local Golem development server with `golem server` — verbosity flags, useful tracing targets, and key log lines |
 | `golem-rollback` | Rolling back a Golem deployment to a previous revision or version |
 | `golem-redeploy-agents` | Redeploying existing agents by deleting and recreating them |
-| `golem-create-agent-instance-rust` | Creating a new agent instance with `golem agent new` |
+| `golem-create-agent-instance-rust` | Creating a new agent instance with `golem agent create` or `golem agent upsert` |
 | `golem-invoke-agent-rust` | Invoking a Golem agent method from the CLI |
 | `golem-trigger-agent-rust` | Triggering a fire-and-forget invocation on a Golem agent |
 | `golem-schedule-agent-rust` | Scheduling a future invocation on a Golem agent |
@@ -55,7 +55,7 @@ This project includes coding-agent skills in `.agents/skills/`. Load a skill whe
 | `golem-recurring-task-rust` | Implementing recurring (cron-like) tasks via self-scheduling — periodic polling, cleanup, heartbeats, backoff, and cancellation |
 | `golem-wait-for-external-input-rust` | Waiting for external input using Golem promises (human-in-the-loop, webhooks, external events) |
 | `golem-add-webhook-rust` | Creating and awaiting webhooks for integrating with webhook-driven external APIs |
-| `golem-multi-instance-agent-rust` | Creating multiple agent instances with the same constructor parameters using phantom agents |
+| `golem-multi-instance-agent-rust` | Creating multiple agents with the same constructor parameters as agents without a key |
 | `golem-add-transactions-rust` | Saga-pattern transactions with compensation |
 | `golem-add-http-endpoint-rust` | Exposing an agent over HTTP with mount paths and endpoint annotations |
 | `golem-http-params-rust` | Mapping path, query, header, and body parameters for HTTP endpoints |
@@ -99,15 +99,15 @@ This is a **Golem Application** — a distributed computing project targeting We
 Key concepts:
 - **Component**: A WASM module compiled from Rust, defining one or more agent types
 - **Agent type**: A trait annotated with `#[agent_definition]`, defining the agent's API
-- **Agent (worker)**: A running instance of an agent type, identified by constructor parameters, with persistent state
+- **Agent (worker)**: A running instance of an agent type, identified by its agent ID (a UUID), with persistent state
 
 ## Agent Fundamentals
 
-- Every agent is uniquely identified by its **constructor parameter values** — two agents with the same parameters are the same agent
+- Every agent is identified by its **agent ID**. A keyed agent also has a **key**, the agent type and its constructor parameter values (`Type(params)`): there is at most one keyed agent per key, and `upsert` returns it. An agent created without a key is reachable only by its ID
 - Agents are **durable by default** — their state persists across invocations, failures, and restarts
 - Invocations are processed **sequentially in a single thread** — no concurrency within a single agent, no need for locks
 - Agents can **spawn other agents** and communicate with them via **RPC** (see Agent-to-Agent Communication)
-- An agent is created implicitly on first invocation — no separate creation step needed
+- A keyed agent is created implicitly by `upsert` or by the first invocation by key — no separate creation step needed
 - **Futures cannot outlive invocations** — every `Future` spawned during an invocation must complete (be `.await`ed or driven to completion) before the invocation returns; do not store unresolved futures in agent state to poll them from a later invocation
 
 ## Durability & Automatic Retries

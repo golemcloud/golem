@@ -274,7 +274,7 @@ mod tests {
             let model = HttpApiDeployment::try_from(HttpApiDeploymentExtRevisionRecord {
                 environment_id: Uuid::new_v4(),
                 domain: "example.com:9006".into(),
-                entity_created_at: chrono::Utc::now().into(),
+                entity_created_at: jiff::Timestamp::now().into(),
                 revision: revision.clone(),
             })
             .unwrap();

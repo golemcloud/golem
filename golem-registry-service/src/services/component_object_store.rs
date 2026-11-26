@@ -13,22 +13,30 @@
 // limitations under the License.
 
 use super::run_cpu_bound_work;
+use crate::repo::component::{ComponentRepo, ComponentUpload};
 use anyhow::{Error, anyhow};
 use futures::StreamExt;
 use futures::stream::BoxStream;
+use golem_common::model::account::AccountId;
 use golem_common::model::diff::Hash;
-use golem_common::model::environment::EnvironmentId;
+use golem_service_base::repo::SqlDateTime;
 use golem_service_base::storage::blob::{
-    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult,
+    BlobStorage, BlobStorageLabelledApi, BlobStorageNamespace,
 };
 use golem_service_base::stream::LoggedByteStream;
+use sha2::{Digest, Sha256};
 use std::fmt::Debug;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tracing::{debug, debug_span, error};
+use std::time::Duration;
+use tracing::{debug, debug_span, error, warn};
 use tracing_futures::Instrument;
+use uuid::Uuid;
 
 const COMPONENT_FILES_LABEL: &str = "component_files";
+const STAGE_TIMEOUT: Duration = Duration::from_secs(600);
+// Give an in-flight upload time to finish writing and attach before collection.
+const STAGE_LEASE: jiff::SignedDuration = jiff::SignedDuration::from_hours(1);
 
 #[derive(Debug)]
 pub struct ComponentObjectStore {
@@ -40,29 +48,25 @@ impl ComponentObjectStore {
         Self { blob_storage }
     }
 
-    pub async fn get(
-        &self,
-        environment_id: EnvironmentId,
-        object_key: &str,
-    ) -> Result<Vec<u8>, Error> {
+    pub async fn get(&self, account_id: AccountId, object_key: &str) -> Result<Vec<u8>, Error> {
         self.logged(
             "Getting component",
-            environment_id,
+            account_id,
             object_key,
-            self.get_internal(environment_id, object_key).await,
+            self.get_internal(account_id, object_key).await,
         )
     }
 
     async fn get_internal(
         &self,
-        environment_id: EnvironmentId,
+        account_id: AccountId,
         object_key: &str,
     ) -> Result<Vec<u8>, Error> {
         let result = self
             .blob_storage
             .with(COMPONENT_FILES_LABEL, "get")
             .get_raw(
-                BlobStorageNamespace::Components { environment_id },
+                BlobStorageNamespace::ComponentUploads { account_id },
                 &PathBuf::from(object_key),
             )
             .await
@@ -77,12 +81,13 @@ impl ComponentObjectStore {
     /// object at the key.
     pub async fn get_stream(
         &self,
-        environment_id: EnvironmentId,
+        account_id: AccountId,
         object_key: &str,
     ) -> Result<Option<BoxStream<'static, Result<Vec<u8>, Error>>>, Error> {
-        let span = debug_span!("Getting component stream", environment_id=%environment_id, key = object_key);
+        let span =
+            debug_span!("Getting component stream", account_id=%account_id, key = object_key);
         Ok(self
-            .get_stream_internal(environment_id, object_key)
+            .get_stream_internal(account_id, object_key)
             .await?
             .map(|inner_stream| {
                 let logging_stream = LoggedByteStream::new(inner_stream);
@@ -93,14 +98,14 @@ impl ComponentObjectStore {
 
     async fn get_stream_internal(
         &self,
-        environment_id: EnvironmentId,
+        account_id: AccountId,
         object_key: &str,
     ) -> Result<Option<BoxStream<'static, Result<Vec<u8>, Error>>>, Error> {
         let result = self
             .blob_storage
             .with(COMPONENT_FILES_LABEL, "get_stream")
             .get_stream(
-                BlobStorageNamespace::Components { environment_id },
+                BlobStorageNamespace::ComponentUploads { account_id },
                 &PathBuf::from(object_key),
             )
             .await
@@ -113,66 +118,107 @@ impl ComponentObjectStore {
         Ok(result)
     }
 
-    pub async fn put(&self, environment_id: EnvironmentId, data: Arc<[u8]>) -> Result<Hash, Error> {
+    pub async fn stage(
+        &self,
+        repo: &dyn ComponentRepo,
+        account_id: AccountId,
+        data: Arc<[u8]>,
+    ) -> Result<(Hash, ComponentUpload), Error> {
         let data_clone = data.clone();
-        let object_key: Hash = run_cpu_bound_work(move || blake3::hash(&data_clone))
-            .await
-            .into();
+        let (hash, digest) = run_cpu_bound_work(move || {
+            (
+                blake3::hash(&data_clone).into(),
+                format!("{:x}", Sha256::digest(&data_clone)),
+            )
+        })
+        .await;
+        let object_key = format!("{digest}-{}", Uuid::new_v4());
 
-        self.logged(
-            "Putting object",
-            environment_id,
-            &object_key.to_string(),
-            self.put_internal(environment_id, &object_key.to_string(), data)
-                .await,
-        )?;
-
-        Ok(object_key)
+        // Every request stages all bytes before the database decides which copy to retain.
+        // The unique key also fences a retry from deletion of an older copy of the digest.
+        let expires = SqlDateTime::from(jiff::Timestamp::now() + STAGE_LEASE);
+        repo.register_upload(account_id.0, &object_key, expires)
+            .await?;
+        tokio::time::timeout(
+            STAGE_TIMEOUT,
+            self.blob_storage
+                .with(COMPONENT_FILES_LABEL, "stage")
+                .put_raw(
+                    BlobStorageNamespace::ComponentUploads { account_id },
+                    &PathBuf::from(&object_key),
+                    data.as_ref(),
+                ),
+        )
+        .await??;
+        Ok((
+            hash,
+            ComponentUpload {
+                object_key,
+                digest,
+                storage: self.blob_storage.clone(),
+                bytes: data,
+            },
+        ))
     }
 
-    async fn put_internal(
-        &self,
-        environment_id: EnvironmentId,
-        object_key: &str,
-        data: Arc<[u8]>,
-    ) -> Result<(), Error> {
-        let namespace = BlobStorageNamespace::Components { environment_id };
-
-        let path = &PathBuf::from(object_key);
-        let blob_storage = self.blob_storage.with(COMPONENT_FILES_LABEL, "put");
-
-        let exists_result = blob_storage.exists(namespace.clone(), path).await?;
-
-        match exists_result {
-            ExistsResult::DoesNotExist => {
-                blob_storage
-                    .put_raw(
-                        BlobStorageNamespace::Components { environment_id },
-                        &PathBuf::from(object_key),
-                        data.as_ref(),
-                    )
-                    .await?;
+    pub async fn run_upload_cleanup(&self, repo: &dyn ComponentRepo) {
+        let mut after = String::new();
+        loop {
+            match repo.collect_uploads(SqlDateTime::now(), &after).await {
+                Ok((next, candidates)) => {
+                    after = next;
+                    for (account_id, key) in candidates {
+                        match self
+                            .blob_storage
+                            .with(COMPONENT_FILES_LABEL, "collect")
+                            .delete(
+                                BlobStorageNamespace::ComponentUploads {
+                                    account_id: AccountId(account_id),
+                                },
+                                &PathBuf::from(&key),
+                            )
+                            .await
+                        {
+                            Ok(()) => {
+                                if let Err(error) = repo.confirm_upload_deleted(&key).await {
+                                    warn!(account_id = %account_id, key, %error, "Could not confirm component upload deletion");
+                                }
+                            }
+                            Err(error) => {
+                                warn!(account_id = %account_id, key, %error, "Could not delete component upload")
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    warn!(%error, "Could not find unreferenced component uploads");
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    continue;
+                }
             }
-            ExistsResult::File => {}
-            ExistsResult::Directory => Err(anyhow!(
-                "Found directory where file or no data was expected"
-            ))?,
-        };
+            if after.is_empty() {
+                tokio::time::sleep(Duration::from_secs(5)).await;
+            }
+        }
+    }
 
-        Ok(())
+    pub async fn abandon_upload(&self, repo: &dyn ComponentRepo, key: &str) {
+        if let Err(error) = repo.abandon_upload(key).await {
+            warn!(key, %error, "Could not expire failed component upload");
+        }
     }
 
     fn logged<R>(
         &self,
         message: &'static str,
-        environment_id: EnvironmentId,
+        account_id: AccountId,
         key: &str,
         result: Result<R, Error>,
     ) -> Result<R, Error> {
         match &result {
-            Ok(_) => debug!(environment_id=%environment_id, key = key, "{message}"),
+            Ok(_) => debug!(account_id=%account_id, key = key, "{message}"),
             Err(error) => {
-                error!(environment_id=%environment_id, key = key, error = error.to_string(), "{message}")
+                error!(account_id=%account_id, key = key, error = error.to_string(), "{message}")
             }
         }
         result
@@ -191,13 +237,15 @@ mod tests {
     async fn a_deleted_component_object_gives_no_stream() -> anyhow::Result<()> {
         let blob_storage: Arc<dyn BlobStorage> = Arc::new(InMemoryBlobStorage::new());
         let store = ComponentObjectStore::new(blob_storage.clone());
-        let environment_id = EnvironmentId::new();
-        let key = store
-            .put(environment_id, Arc::from(&b"component"[..]))
-            .await?
-            .to_string();
+        let account_id = AccountId::new();
+        let key = "component";
+        let namespace = BlobStorageNamespace::ComponentUploads { account_id };
+        blob_storage
+            .with(COMPONENT_FILES_LABEL, "put")
+            .put_raw(namespace.clone(), &PathBuf::from(key), b"component")
+            .await?;
 
-        let stored = match store.get_stream(environment_id, &key).await? {
+        let stored = match store.get_stream(account_id, key).await? {
             Some(stream) => Some(
                 stream
                     .collect::<Vec<_>>()
@@ -210,12 +258,9 @@ mod tests {
         };
         blob_storage
             .with(COMPONENT_FILES_LABEL, "delete")
-            .delete(
-                BlobStorageNamespace::Components { environment_id },
-                &PathBuf::from(&key),
-            )
+            .delete(namespace, &PathBuf::from(key))
             .await?;
-        let deleted = store.get_stream(environment_id, &key).await?;
+        let deleted = store.get_stream(account_id, key).await?;
 
         assert_eq!(stored, Some(b"component".to_vec()));
         assert!(deleted.is_none());

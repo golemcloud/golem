@@ -17,10 +17,10 @@ use syn::Path as SynPath;
 use toml_edit::{DocumentMut, Item, Value};
 
 const RESERVED_DEPENDENCIES: &[&str] = &[
-    "chrono",
     "golem-client",
     "golem-common",
     "golem-rust",
+    "jiff",
     "reqwest",
     "reqwest-middleware",
     "serde",

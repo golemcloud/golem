@@ -32,8 +32,8 @@ use crate::log::{LogColorize, LogIndent, log_action, log_error, logln};
 use crate::model::app::{
     AppBuildStep, BridgeSdkTarget, ComponentDependency, CustomBridgeSdkTarget,
 };
+use crate::model::cascade::property::Property;
 use crate::model::language::GuestLanguage;
-use golem_common::cascade::property::Property;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::ExtractedComponentMetadata;
 use golem_common::model::component::ComponentName;

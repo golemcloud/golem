@@ -2738,6 +2738,12 @@ test('public value codec enforces canonical values, restrictions, and strict sha
   assert.throws(() => binary.validate({ kind: 'binary', value: { bytes: [256] } }, 'none'), {
     code: 'validation-error',
   });
+  // Only the server checks restrictions; the bridge checks the wire form.
+  const outsideRestrictions = {
+    kind: 'binary',
+    value: { bytes: [1, 2, 3], mimeType: 'image/png' },
+  };
+  assert.deepEqual(binary.validate(outsideRestrictions, 'none'), outsideRestrictions);
   assert.throws(() => binary.validate({ bytes: '+/8=', mimeType: 'image/png' }, 'none'), {
     code: 'validation-error',
   });
@@ -3217,6 +3223,133 @@ test('mapping installation rejects duplicate channels without accepting the sess
   }
 });
 
+for (const outcome of [
+  {
+    kind: 'failed',
+    error: { kind: 'interrupted', message: 'input item 1 does not satisfy the element schema' },
+  },
+  { kind: 'consumer-cancelled', details: 'consumer-drop' },
+]) {
+  test(`a resumed client gets the input outcome that the server selected: ${outcome.kind}`, async () => {
+    let connection = 0;
+    let idempotencyKey;
+    let returned = 0;
+    const local = await server((socket) => {
+      connection += 1;
+      socket.once('message', (data) => {
+        const operation = JSON.parse(data);
+        if (connection === 1) {
+          idempotencyKey = operation.idempotencyKey;
+          const provisionalRef = operation.methodParameters.input.value.provisionalRef;
+          socket.send(
+            JSON.stringify(
+              accepted(operation, [
+                {
+                  channel: 1,
+                  direction: 'input',
+                  streamToken: 'input',
+                  provisionalRef,
+                  inputHighWater: { sequence: '0', terminal: false },
+                },
+              ]),
+            ),
+          );
+          let items = 0;
+          socket.on('message', (message) => {
+            if (JSON.parse(message).type !== 'inputStreamItem') return;
+            items += 1;
+            if (items === 1)
+              socket.send(
+                JSON.stringify({
+                  version: 1,
+                  type: 'inputStreamAck',
+                  channel: 1,
+                  highestContiguousSequence: '1',
+                  mappings: [],
+                  terminal: false,
+                }),
+              );
+            // The server ends the input at item 1, and the connection is lost
+            // before its stream-end reaches the client.
+            else socket.terminate();
+          });
+          return;
+        }
+        assert.equal(operation.type, 'resumeAttach');
+        socket.send(
+          JSON.stringify(
+            accepted(
+              operation,
+              [
+                {
+                  channel: 9,
+                  direction: 'input',
+                  streamToken: 'input',
+                  inputHighWater: { sequence: '1', terminal: true, outcome },
+                },
+              ],
+              idempotencyKey,
+            ),
+          ),
+        );
+        if (outcome.kind !== 'failed') {
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'invocationResult',
+              mappings: [],
+              result: { kind: 'none' },
+            }),
+          );
+          socket.send(
+            JSON.stringify({
+              version: 1,
+              type: 'invocationFinished',
+              outcome: { kind: 'success' },
+            }),
+          );
+        }
+      });
+    });
+    try {
+      let pulls = 0;
+      const source = agentStream({
+        [Symbol.asyncIterator]() {
+          return {
+            next: async () => {
+              pulls += 1;
+              if (pulls <= 2) return { done: false, value: { kind: 'u32', value: pulls } };
+              return new Promise(() => {});
+            },
+            return: async () => {
+              returned += 1;
+              return { done: true };
+            },
+          };
+        },
+      });
+      const method = createStreamingRemoteMethod(
+        () => ({ server: local.endpoint }),
+        () => descriptor,
+        ([input], register) => ({ input: register(input, (value) => value) }),
+        () => undefined,
+      );
+      if (outcome.kind === 'failed')
+        await assert.rejects(method(source), (error) => {
+          assert.ok(error instanceof StreamingProtocolError);
+          assert.equal(error.code, 'interrupted');
+          assert.match(error.message, /item 1: input item 1 does not satisfy the element schema/u);
+          return true;
+        });
+      else await method(source);
+      assert.equal(connection, 2);
+      assert.ok(returned >= 1);
+    } finally {
+      await local.close();
+    }
+  });
+}
+
 test('input source failure terminal is replayed on the remapped channel after reconnect', async () => {
   const cancellations = [];
   let connection = 0;
@@ -3534,7 +3667,15 @@ for (const outcome of [
         ([input], register) => ({ input: register(input, (value) => value) }),
         () => undefined,
       );
-      await method(source);
+      if (outcome.kind === 'failed')
+        // A failed input end is at an item the caller sent, so the call fails with it.
+        await assert.rejects(method(source), (error) => {
+          assert.ok(error instanceof StreamingProtocolError);
+          assert.equal(error.code, outcome.error.kind);
+          assert.deepEqual(error.outcome, outcome);
+          return true;
+        });
+      else await method(source);
       await new Promise((resolve) => setTimeout(resolve, 10));
       assert.equal(returned, 1);
       assert.deepEqual(frames, []);
@@ -3543,6 +3684,81 @@ for (const outcome of [
     }
   });
 }
+
+test('an input that the server ends with a failure fails the call with that failure', async () => {
+  const local = await server((socket) => {
+    let items = 0;
+    socket.on('message', (data) => {
+      const message = JSON.parse(data);
+      if (message.type === 'invocationStart') {
+        const provisionalRef = message.methodParameters.input.value.provisionalRef;
+        socket.send(
+          JSON.stringify(
+            accepted(message, [
+              {
+                channel: 1,
+                direction: 'input',
+                streamToken: 'input',
+                provisionalRef,
+                inputHighWater: { sequence: '0', terminal: false },
+              },
+            ]),
+          ),
+        );
+      } else if (message.type === 'inputStreamItem' && ++items === 1) {
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'inputStreamAck',
+            channel: 1,
+            highestContiguousSequence: '1',
+            mappings: [],
+            terminal: false,
+          }),
+        );
+      } else if (message.type === 'inputStreamItem') {
+        socket.send(
+          JSON.stringify({
+            version: 1,
+            type: 'stream-end',
+            channel: 1,
+            direction: 'input',
+            sequence: '1',
+            outcome: {
+              kind: 'failed',
+              error: {
+                kind: 'interrupted',
+                message: 'input item 1 does not satisfy the element schema',
+              },
+            },
+          }),
+        );
+      }
+    });
+  });
+  try {
+    const source = agentStream(
+      (async function* () {
+        yield { kind: 'u32', value: 1 };
+        yield { kind: 'u32', value: 2 };
+      })(),
+    );
+    const method = createStreamingRemoteMethod(
+      () => ({ server: local.endpoint }),
+      () => descriptor,
+      ([input], register) => ({ input: register(input, (value) => value) }),
+      () => undefined,
+    );
+    await assert.rejects(method(source), (error) => {
+      assert.ok(error instanceof StreamingProtocolError);
+      assert.equal(error.code, 'interrupted');
+      assert.match(error.message, /item 1: input item 1 does not satisfy the element schema/u);
+      return true;
+    });
+  } finally {
+    await local.close();
+  }
+});
 
 test('consumer drop sends cancellation and remains distinct from protocol terminal', async () => {
   let cancellation;

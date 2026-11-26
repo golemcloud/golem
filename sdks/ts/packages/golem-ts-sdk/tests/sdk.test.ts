@@ -84,7 +84,7 @@ async function remoteClientTypeChecks(): Promise<void> {
   void created.ping();
   const keyed = await factory.create({ name: 'counter' }, { keyed: true, env: { A: 'b' } });
   void keyed.agentId();
-  const byId = await factory.getById(agentId);
+  const byId = factory.getById(agentId);
   void byId.ping();
   // @ts-expect-error upsert takes no configuration overrides
   factory.upsert({ name: 'counter' }, { greeting: 'hello' });
@@ -93,7 +93,7 @@ async function remoteClientTypeChecks(): Promise<void> {
   // @ts-expect-error the phantom factories are removed
   factory.newPhantom({ name: 'counter' });
   // @ts-expect-error the phantom factories are removed
-  factory.getPhantom({ name: 'counter' }, agentId.uuid);
+  factory.getPhantom({ name: 'counter' }, agentId);
   // @ts-expect-error get is renamed to upsert
   factory.get({ name: 'counter' });
   // @ts-expect-error definitions derive no agent ID offline
@@ -138,8 +138,8 @@ async function remoteClientTypeChecks(): Promise<void> {
   const methodDefinition = defineAgentClient({
     methods: { ping: method({ input: {}, returns: z.string() }) },
   });
-  void (await methodDefinition.getById(agentId)).ping();
-  void (await DynamicAgentClient.getById(agentId)).method('ping');
+  void methodDefinition.getById(agentId).ping();
+  void DynamicAgentClient.getById(agentId).method('ping');
   // @ts-expect-error method-only clients cannot declare a name without an ID shape
   defineAgentClient({ name: 'Named', methods: methodDefinition.methods });
   // @ts-expect-error lifecycle mode belongs to full constructor definitions, not ID bindings
@@ -557,7 +557,6 @@ describe('defineAgent', () => {
         whoami(_input, ctx) {
           // Identity helpers are available on `this`; the caller is on `ctx`.
           const id = this.getId();
-          void this.getPhantomId();
           void ctx.caller;
           return id.value;
         },
@@ -690,8 +689,7 @@ describe('RPC client', () => {
     };
     const agentId = await client.agentId();
     expect(rpc.agentId).toHaveBeenCalledTimes(1);
-    expect(agentId).toBeInstanceOf(AgentId);
-    expect(agentId.toString()).toBe('00000007-0000-8000-8000-000000000004');
+    expect(agentId).toBe('00000007-0000-8000-8000-000000000004');
 
     rpc.agentId.mockRejectedValueOnce({ tag: 'denied', val: 'no view' });
     await expect(client.agentId()).rejects.toMatchObject({
@@ -709,7 +707,7 @@ describe('RPC client', () => {
     );
     expect(client.ping).toBeTypeOf('function');
     const rpc = (await createdRpc()).client;
-    await expect(client.agentId()).resolves.toBeInstanceOf(AgentId);
+    await expect(client.agentId()).resolves.toBe('00000007-0000-8000-8000-000000000004');
     expect(rpc.agentId).toHaveBeenCalledTimes(1);
   });
 
@@ -764,20 +762,23 @@ describe('RPC client', () => {
   });
 
   it('maps getById to the host get-by-id with the agent type and the typed ID', async () => {
-    const client = await clientDef.client.getById(remoteAgentId);
-    expect(WasmRpc.getById).toHaveBeenLastCalledWith('ClientTestAgent', remoteAgentId);
+    const client = clientDef.client.getById(remoteAgentId);
+    expect(WasmRpc.getById).toHaveBeenLastCalledWith(
+      'ClientTestAgent',
+      AgentId.toWit(remoteAgentId),
+    );
     expect(client.ping).toBeTypeOf('function');
   });
 
-  it('rejects getById of an unknown or wrong-type ID with a typed not-found error', async () => {
+  it('throws on getById of an unknown or wrong-type ID with a typed not-found error', () => {
     vi.mocked(WasmRpc.getById).mockImplementationOnce(() => {
       throw { tag: 'not-found', val: 'no ClientTestAgent has this ID' };
     });
     const upserts = vi.mocked(WasmRpc.upsert).mock.calls.length;
     const creates = vi.mocked(WasmRpc.create).mock.calls.length;
-    const lookup = clientDef.client.getById(remoteAgentId);
-    await expect(lookup).rejects.toBeInstanceOf(RemoteCallError);
-    await expect(lookup).rejects.toMatchObject({
+    const error = thrownBy(() => clientDef.client.getById(remoteAgentId));
+    expect(error).toBeInstanceOf(RemoteCallError);
+    expect(error).toMatchObject({
       cause: { tag: 'not-found', details: 'no ClientTestAgent has this ID' },
     });
     expect(WasmRpc.upsert).toHaveBeenCalledTimes(upserts);
@@ -884,26 +885,26 @@ describe('RPC client', () => {
     vi.mocked(getAgentTypeByAgentId).mockReturnValueOnce({
       agentType: { typeName: 'FirstAgent', mode: 'durable' },
     } as never);
-    const client = await definition.getById(remoteAgentId);
-    expect(getAgentTypeByAgentId).toHaveBeenLastCalledWith(remoteAgentId);
-    expect(WasmRpc.getById).toHaveBeenLastCalledWith('FirstAgent', remoteAgentId);
+    const client = definition.getById(remoteAgentId);
+    expect(getAgentTypeByAgentId).toHaveBeenLastCalledWith(AgentId.toWit(remoteAgentId));
+    expect(WasmRpc.getById).toHaveBeenLastCalledWith('FirstAgent', AgentId.toWit(remoteAgentId));
     expect(client.ping).toBeTypeOf('function');
   });
 
-  it('rejects a method-only getById whose ID tag names no deployed agent type', async () => {
+  it('throws on a method-only getById whose ID tag names no deployed agent type', () => {
     const definition = defineAgentClient({
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
     vi.mocked(getAgentTypeByAgentId).mockReturnValueOnce(undefined);
     const byIds = vi.mocked(WasmRpc.getById).mock.calls.length;
-    await expect(definition.getById(remoteAgentId)).rejects.toMatchObject({
+    expect(thrownBy(() => definition.getById(remoteAgentId))).toMatchObject({
       name: 'RemoteCallError',
       cause: { tag: 'not-found' },
     });
     expect(WasmRpc.getById).toHaveBeenCalledTimes(byIds);
   });
 
-  it('rejects a method-only getById of an ephemeral agent type', async () => {
+  it('throws on a method-only getById of an ephemeral agent type', () => {
     const definition = defineAgentClient({
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
@@ -911,7 +912,7 @@ describe('RPC client', () => {
       agentType: { typeName: 'EphemeralAgent', mode: 'ephemeral' },
     } as never);
     const byIds = vi.mocked(WasmRpc.getById).mock.calls.length;
-    await expect(definition.getById(remoteAgentId)).rejects.toMatchObject({
+    expect(thrownBy(() => definition.getById(remoteAgentId))).toMatchObject({
       name: 'RemoteCallError',
       cause: { tag: 'not-found', details: expect.stringMatching(/ephemeral agent type/) },
     });
@@ -947,7 +948,7 @@ describe('RPC client', () => {
     vi.mocked(getAgentTypeByAgentId).mockReturnValueOnce({
       agentType: { typeName: 'ReportArchive', mode: 'durable' },
     } as never);
-    const client = await definition.getById(remoteAgentId);
+    const client = definition.getById(remoteAgentId);
     const rpc = vi.mocked(WasmRpc.getById).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: hostInvocationMetadata(remoteAgentId.toString()),
@@ -1067,7 +1068,7 @@ describe('RPC client', () => {
       id: { id: s.u64() },
       methods: { ping: method({ input: {}, returns: z.string() }) },
     });
-    const client = await def.client.getById(remoteAgentId);
+    const client = def.client.getById(remoteAgentId);
     const rpc = vi.mocked(WasmRpc.getById).mock.results.at(-1)!.value;
     rpc.asyncInvokeAndAwait.mockReturnValue({
       metadata: hostInvocationMetadata(),
@@ -1341,3 +1342,12 @@ describe('RPC client', () => {
     expect(rpc.asyncInvokeAndAwait).not.toHaveBeenCalled();
   });
 });
+
+function thrownBy(operation: () => unknown): unknown {
+  try {
+    operation();
+  } catch (error) {
+    return error;
+  }
+  throw new Error('the operation did not throw');
+}

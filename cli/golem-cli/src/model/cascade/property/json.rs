@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::cascade::layer::Layer;
-use golem_common::cascade::property::Property;
+use crate::model::cascade::layer::Layer;
+use crate::model::cascade::property::Property;
 use indexmap::IndexMap;
 use serde::Serialize;
 use serde_derive::Deserialize;
@@ -62,11 +62,36 @@ pub enum JsonPropertyTraceElem<L: Layer> {
 pub struct JsonProperty<L: Layer> {
     value: Option<Value>,
     trace: Vec<JsonPropertyTraceElem<L>>,
+    // Source lookup for resolution; the trace already identifies its layers.
     #[serde(skip)]
     sources: BTreeMap<Vec<String>, PathBuf>,
 }
 
 impl<L: Layer> JsonProperty<L> {
+    pub fn for_each_value_mut(&mut self, mut visit: impl FnMut(&mut Value)) {
+        if let Some(value) = &mut self.value {
+            visit(value);
+        }
+        for element in &mut self.trace {
+            match element {
+                JsonPropertyTraceElem::ObjectMerge {
+                    inserted_entries,
+                    updated_entries,
+                    ..
+                } => {
+                    for value in inserted_entries
+                        .values_mut()
+                        .chain(updated_entries.values_mut())
+                    {
+                        visit(value);
+                    }
+                }
+                JsonPropertyTraceElem::Replace { new_value, .. } => visit(new_value),
+                JsonPropertyTraceElem::Skip { .. } => {}
+            }
+        }
+    }
+
     pub fn source_at(&self, path: &[String]) -> Option<&Path> {
         (0..=path.len())
             .rev()
@@ -283,8 +308,8 @@ fn merge_json_values(current: Value, layer: Value) -> Value {
 #[cfg(test)]
 mod test {
     use super::{JsonProperty, JsonPropertyTraceElem};
+    use crate::model::cascade::property::Property;
     use crate::model::cascade::property::test_support::TestLayer;
-    use golem_common::cascade::property::Property;
     use serde_json::json;
     use test_r::test;
 

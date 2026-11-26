@@ -292,10 +292,16 @@ fn decode_invocation_rejection(rejected: InvocationRejected) -> WorkerServiceErr
             .map(TryInto::try_into)
             .transpose()
             .map_err(WorkerServiceError::TypeChecker)
-            .and_then(|agent_id| {
-                agent_id
-                    .map(WorkerServiceError::AgentNotFound)
-                    .ok_or_else(|| WorkerServiceError::Internal(rejected.error.clone()))
+            .and_then(|agent_id| match agent_id {
+                Some(agent_id) => Ok(WorkerServiceError::AgentNotFound(agent_id)),
+                // A key target has no agent ID in the rejection; its typed error names the
+                // agent that was not found.
+                None => rejected
+                    .worker_error
+                    .clone()
+                    .and_then(|error| WorkerExecutorError::try_from(error).ok())
+                    .map(WorkerServiceError::GolemError)
+                    .ok_or_else(|| WorkerServiceError::Internal(rejected.error.clone())),
             })
             .unwrap_or_else(|error| error),
         Ok(InvocationRejectionReason::Unauthorized) => {
@@ -542,6 +548,8 @@ where
 pub struct ExistingAgent {
     pub metadata: AgentMetadataDto,
     pub component_id: ComponentId,
+    /// The index of the latest oplog entry other than an invocation settlement.
+    pub state_oplog_index: OplogIndex,
 }
 
 impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for ExistingAgent {
@@ -554,9 +562,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for ExistingAg
             .component_id
             .ok_or("Missing component_id in agent metadata")?
             .try_into()?;
+        let state_oplog_index = OplogIndex::from_u64(metadata.state_oplog_idx);
         Ok(Self {
             metadata: metadata.try_into()?,
             component_id,
+            state_oplog_index,
         })
     }
 }

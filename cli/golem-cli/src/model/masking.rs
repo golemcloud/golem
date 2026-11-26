@@ -141,6 +141,21 @@ fn should_mask_config_path(
     !config.show_secrets && secret_paths.contains(&path.join("."))
 }
 
+pub fn mask_config_bindings(
+    config: MaskingConfig,
+    bindings: &mut [golem_common::model::component_metadata::ConfigBinding],
+    secret_paths: &BTreeSet<String>,
+) {
+    use golem_common::model::component_metadata::ConfigBindingSource;
+    for binding in bindings {
+        if should_mask_config_path(config, &binding.path, secret_paths) {
+            match &mut binding.value_source {
+                ConfigBindingSource::Static(value) => *value = masked_typed_secret_value(),
+            }
+        }
+    }
+}
+
 fn masked_typed_secret_value() -> TypedSchemaValue {
     TypedSchemaValue::new(
         SchemaGraph::anonymous(SchemaType::string()),

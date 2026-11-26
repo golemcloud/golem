@@ -111,7 +111,7 @@ impl QuotaService for RecordingQuotaService {
         resource_name: ResourceName,
         expected_use: u64,
         previous_credit: i64,
-        previous_credit_at: Option<chrono::DateTime<chrono::Utc>>,
+        previous_credit_at: Option<jiff::Timestamp>,
     ) -> LeaseInterest {
         self.acquisitions.lock().unwrap().push((
             environment_id,

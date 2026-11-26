@@ -54,11 +54,17 @@ jobs:
         working-directory: sdks/moonbit/golem_sdk
 
       - name: Check SDK
-        run: find . -name moon.pkg -exec dirname {} \; | xargs moon check --target wasm
+        run: |
+          for target in wasm wasm-gc; do
+            find . -name moon.pkg -exec dirname {} \; | xargs moon check --target "$target"
+          done
         working-directory: sdks/moonbit/golem_sdk
 
       - name: Test SDK
-        run: ./scripts/run-sdk-tests.sh
+        run: |
+          for target in wasm wasm-gc; do
+            GOLEM_MOONBIT_TARGET="$target" ./scripts/run-sdk-tests.sh
+          done
         working-directory: sdks/moonbit/golem_sdk
 
       - name: Check tools

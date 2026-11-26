@@ -30,9 +30,9 @@ pub fn generate(name: &str, version: &str) -> String {
         "[dependencies]" + NewLine +
         r#"async-trait = "^0.1""# + NewLine +
         r#"bytes = "^1.10""# + NewLine +
-        r#"chrono = { version = "^0.4", features = ["serde"] }"# + NewLine +
         r#"futures-core = "^0.3""# + NewLine +
         r#"http = "^1.0""# + NewLine +
+        r#"jiff = { version = "^1.0.1", features = ["serde"] }"# + NewLine +
         r#"reqwest = { version = "^0.12", features = ["gzip", "json", "multipart", "stream"] }"# + NewLine +
         r#"serde = { version = "^1.0", features = ["derive"] }"# + NewLine +
         r#"serde_json = "^1.0""# + NewLine +

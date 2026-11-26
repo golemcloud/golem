@@ -1,6 +1,7 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Schema } from "effect"
 import { defineAgent } from "../src/Agent.js"
+import type { AgentId } from "../src/AgentId.js"
 import * as Ids from "../src/Ids.js"
 import { method } from "../src/Method.js"
 import * as Snapshot from "../src/Snapshot.js"
@@ -10,7 +11,7 @@ import { schemaGraphToWit, schemaValueToWit } from "../src/internal/schema-model
 const uuid = Ids.Uuid.make("00000000-0000-0001-0000-000000000002")
 const encodedUuid = { highBits: 1n, lowBits: 2n }
 const componentId = { uuid }
-const agentId = { uuid: Ids.Uuid.make("00000001-0000-8000-8000-00000000000a") }
+const agentId = "00000001-0000-8000-8000-00000000000a" as AgentId
 const accountId = { uuid: Ids.Uuid.make("00000000-0000-0003-0000-000000000004") }
 const environmentId = { uuid: Ids.Uuid.make("00000000-0000-0005-0000-000000000006") }
 const promiseId = {

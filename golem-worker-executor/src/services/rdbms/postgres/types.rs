@@ -344,10 +344,10 @@ pub enum DbValue {
     Float8(f64),
     Numeric(BigDecimal),
     Boolean(bool),
-    Timestamp(chrono::NaiveDateTime),
-    Timestamptz(chrono::DateTime<chrono::Utc>),
-    Date(chrono::NaiveDate),
-    Time(chrono::NaiveTime),
+    Timestamp(jiff::civil::DateTime),
+    Timestamptz(jiff::Timestamp),
+    Date(jiff::civil::Date),
+    Time(jiff::civil::Time),
     Timetz(TimeTz),
     Interval(Interval),
     Text(String),
@@ -367,9 +367,9 @@ pub enum DbValue {
     Int4range(ValuesRange<i32>),
     Int8range(ValuesRange<i64>),
     Numrange(ValuesRange<BigDecimal>),
-    Tsrange(ValuesRange<chrono::NaiveDateTime>),
-    Tstzrange(ValuesRange<chrono::DateTime<chrono::Utc>>),
-    Daterange(ValuesRange<chrono::NaiveDate>),
+    Tsrange(ValuesRange<jiff::civil::DateTime>),
+    Tstzrange(ValuesRange<jiff::Timestamp>),
+    Daterange(ValuesRange<jiff::civil::Date>),
     Money(i64),
     Oid(u32),
     Enumeration(Enumeration),
@@ -1160,29 +1160,33 @@ pub mod tests {
 
     pub(crate) fn get_test_db_values() -> Vec<postgres_types::DbValue> {
         let tstzbounds = postgres_types::ValuesRange::new(
-            Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
-                chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2023, 3, 2).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                ),
-                chrono::Utc,
-            )),
-            Bound::Excluded(chrono::DateTime::from_naive_utc_and_offset(
-                chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                ),
-                chrono::Utc,
-            )),
+            Bound::Included(
+                jiff::civil::DateTime::from_parts(
+                    jiff::civil::Date::new(2023, 3, 2).unwrap(),
+                    jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                )
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                .unwrap()
+                .timestamp(),
+            ),
+            Bound::Excluded(
+                jiff::civil::DateTime::from_parts(
+                    jiff::civil::Date::new(2024, 1, 1).unwrap(),
+                    jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                )
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                .unwrap()
+                .timestamp(),
+            ),
         );
         let tsbounds = postgres_types::ValuesRange::new(
-            Bound::Included(chrono::NaiveDateTime::new(
-                chrono::NaiveDate::from_ymd_opt(2022, 2, 2).unwrap(),
-                chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
+            Bound::Included(jiff::civil::DateTime::from_parts(
+                jiff::civil::Date::new(2022, 2, 2).unwrap(),
+                jiff::civil::Time::new(16, 50, 30, 0).unwrap(),
             )),
-            Bound::Excluded(chrono::NaiveDateTime::new(
-                chrono::NaiveDate::from_ymd_opt(2024, 1, 1).unwrap(),
-                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+            Bound::Excluded(jiff::civil::DateTime::from_parts(
+                jiff::civil::Date::new(2024, 1, 1).unwrap(),
+                jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
             )),
         );
 
@@ -1215,31 +1219,31 @@ pub mod tests {
                 "0123456789".to_string(),
             )]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timestamp(
-                chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                jiff::civil::DateTime::from_parts(
+                    jiff::civil::Date::new(2023, 1, 1).unwrap(),
+                    jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
                 ),
             )]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timestamptz(
-                chrono::DateTime::from_naive_utc_and_offset(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                    chrono::Utc,
-                ),
+                jiff::civil::DateTime::from_parts(
+                    jiff::civil::Date::new(2026, 1, 1).unwrap(),
+                    jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                )
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                .unwrap()
+                .timestamp(),
             )]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Date(
-                chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                jiff::civil::Date::new(2023, 1, 1).unwrap(),
             )]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Time(
-                chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
             )]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timetz(
-                postgres_types::TimeTz::new(
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    chrono::FixedOffset::east_opt(5 * 60 * 60).unwrap(),
-                ),
+                postgres_types::TimeTz {
+                    time: jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                    offset: -5 * 60 * 60,
+                },
             )]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Interval(
                 postgres_types::Interval::new(10, 20, 30),
@@ -1298,7 +1302,7 @@ pub mod tests {
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Tstzrange(tstzbounds)]),
             postgres_types::DbValue::Array(vec![postgres_types::DbValue::Daterange(
                 postgres_types::ValuesRange::new(
-                    Bound::Included(chrono::NaiveDate::from_ymd_opt(2023, 2, 3).unwrap()),
+                    Bound::Included(jiff::civil::Date::new(2023, 2, 3).unwrap()),
                     Bound::Unbounded,
                 ),
             )]),

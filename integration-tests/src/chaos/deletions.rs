@@ -49,7 +49,7 @@
 use crate::chaos::history::{Outcome, Stream};
 use crate::chaos::workload::{self, WorkloadContext};
 use crate::chaos::{DeleteConfig, RetryPolicy};
-use chrono::{DateTime, Utc};
+
 use golem_test_framework::dsl::TestDsl;
 use serde::{Deserialize, Serialize};
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
@@ -76,8 +76,8 @@ pub struct DeleteRound {
     pub before_delete: Option<u64>,
     /// What the delete call itself returned.
     pub outcome: Outcome,
-    pub submitted_at: DateTime<Utc>,
-    pub completed_at: Option<DateTime<Utc>>,
+    pub submitted_at: jiff::Timestamp,
+    pub completed_at: Option<jiff::Timestamp>,
     /// Whether the platform refused this delete by saying the agent was not
     /// there, as opposed to refusing it for any other reason.
     ///
@@ -272,7 +272,7 @@ pub fn start(ctx: WorkloadContext, config: &DeleteConfig) -> DeleteHandle {
                     break;
                 }
 
-                let submitted_at = Utc::now();
+                let submitted_at = jiff::Timestamp::now();
                 submitted.fetch_add(1, Ordering::Relaxed);
                 let (outcome, rejected_as_not_found) = delete_once(&ctx, &agent, round).await;
 
@@ -284,7 +284,7 @@ pub fn start(ctx: WorkloadContext, config: &DeleteConfig) -> DeleteHandle {
                         outcome,
                         rejected_as_not_found,
                         submitted_at,
-                        completed_at: Some(Utc::now()),
+                        completed_at: Some(jiff::Timestamp::now()),
                         observed_after: None,
                     });
                     pending = Some(rounds.len() - 1);

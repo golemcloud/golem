@@ -28,6 +28,14 @@ components:
     dir: component
     templates: moonbit-test-component
 
+tools:
+  fault-matrix: {}
+
+agents:
+  FaultMatrixFixture:
+    tools:
+      fault-matrix: {}
+
 environments:
   local:
     server: local

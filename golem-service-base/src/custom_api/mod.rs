@@ -273,6 +273,28 @@ pub struct CompiledInputSchema {
 }
 
 impl CompiledInputSchema {
+    /// The record of the user-supplied input fields, in declaration order. Auto-injected fields
+    /// are left out, so a value of this record is what a caller supplies.
+    pub fn user_supplied_record(&self) -> SchemaType {
+        SchemaType::record(
+            self.input_schema
+                .fields()
+                .iter()
+                .filter(|field| {
+                    matches!(
+                        field.source,
+                        golem_common::schema::FieldSource::UserSupplied
+                    )
+                })
+                .map(|field| golem_common::schema::NamedFieldType {
+                    name: field.name.clone(),
+                    body: field.schema.clone(),
+                    metadata: field.metadata.clone(),
+                })
+                .collect(),
+        )
+    }
+
     fn validate(&self) -> Result<(), String> {
         let expected = SchemaType::record(
             self.input_schema
@@ -446,11 +468,11 @@ impl RouteMatch {
             call.expected_agent_response.validate()?;
             call.agent_selection
                 .validate(path, &call.constructor_parameters)?;
-            if let AgentSelection::Query { name } = &call.agent_selection {
-                if call.method_parameters.iter().any(|parameter| matches!(parameter,
-                    MethodParameter::Query { query_parameter_name, .. } if query_parameter_name == name)) {
-                    return Err("Agent ID query cannot also bind a method parameter".into());
-                }
+            if let AgentSelection::Query { name } = &call.agent_selection
+                && call.method_parameters.iter().any(|parameter| matches!(parameter,
+                    MethodParameter::Query { query_parameter_name, .. } if query_parameter_name == name))
+            {
+                return Err("Agent ID query cannot also bind a method parameter".into());
             }
         }
         if let RouteBehaviour::CreateAgent(create) = behavior {

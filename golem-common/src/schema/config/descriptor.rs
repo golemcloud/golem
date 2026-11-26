@@ -55,7 +55,7 @@ impl ConfigDescriptorKind {
                 if path.contains('\0') {
                     return Err(origin.error("File source paths cannot contain NUL"));
                 }
-                // Root containment, symlinks and immutable content capture require the file supplier.
+                // Root containment, symlinks and immutable content snapshots require the file supplier.
             }
             Self::Tool => {
                 if let Some(name) = value.as_str() {
@@ -183,10 +183,7 @@ impl ConfigDescriptorKind {
 }
 
 impl ConfigSchema {
-    pub(super) fn descriptor_kind<'a>(
-        &'a self,
-        mut ty: &'a SchemaType,
-    ) -> Option<ConfigDescriptorKind> {
+    pub fn descriptor_kind<'a>(&'a self, mut ty: &'a SchemaType) -> Option<ConfigDescriptorKind> {
         let mut seen = HashSet::new();
         while let SchemaType::Ref { id, .. } = ty {
             if let Some(kind) = self.descriptors.get(id) {
@@ -200,7 +197,7 @@ impl ConfigSchema {
         None
     }
 
-    pub(super) fn contains_descriptor(&self, ty: &SchemaType, seen: &mut HashSet<TypeId>) -> bool {
+    pub fn contains_descriptor(&self, ty: &SchemaType, seen: &mut HashSet<TypeId>) -> bool {
         if self.descriptor_kind(ty).is_some() {
             return true;
         }
@@ -218,7 +215,7 @@ impl ConfigSchema {
 
     /// Project manifest descriptors into the core JSON string codec, or decode them for a plan.
     /// Ordinary data and explicit Secret selectors retain their ordinary JSON representation.
-    pub(super) fn descriptor_json(
+    pub fn descriptor_json(
         &self,
         ty: &SchemaType,
         mut value: Value,

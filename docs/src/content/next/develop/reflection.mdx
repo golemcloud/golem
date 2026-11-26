@@ -246,7 +246,7 @@ export const CounterMethods = defineAgentClient({ methods: Counter.methods })
 export async function callCounter() {
   const full = Counter.client.upsert({ name: "main" })
   const agentId = await full.agentId()
-  const methodOnly = await CounterMethods.getById(agentId)
+  const methodOnly = CounterMethods.getById(agentId)
   return [await full.add({ by: 5 }), await methodOnly.add({ by: 5 })]
 }
 ```
@@ -321,7 +321,7 @@ val fullCall = full.client.upsert("main").map(_.method(fullAdd).invoke(5))
 val methodClient = methods.getById(existingId)
 ```
 
-`existingId` is a `golem.AgentId`. `fullCall` is an `Either` containing a `Future`; a successful invocation contains the typed `value`. `getById` returns a `Future` of an `Either` with the method-only client.
+`existingId` is a `golem.AgentId`. `fullCall` is an `Either` containing a `Future`; a successful invocation contains the typed `value`. `getById` returns an `Either` with the method-only client at once.
   </Tabs.Tab>
   <Tabs.Tab>
 
@@ -397,12 +397,13 @@ A full or discovered client checks the type name and constructor of the agents i
 import { AgentId, getAgentTypeByAgentId } from "@golemcloud/golem-ts-sdk"
 
 const id = await counterType.client.upsert({ name: "main" }).agentId()
-const parsed = AgentId.parse(id.toString())
+const saved: string = id
+const parsed = AgentId.parse(saved)
 const currentType = getAgentTypeByAgentId(parsed)
 if (!currentType || currentType.mode !== "durable") {
   throw new Error("Agent type unavailable or not durable")
 }
-const rebound = await currentType.client.getById(parsed)
+const rebound = currentType.client.getById(parsed)
 ```
 
 `AgentId.parse` checks only the UUID text form.
@@ -414,7 +415,8 @@ Inside `Effect.gen` and an open scope, with `AgentId` imported from the SDK:
 ```typescript
 const client = yield* counterType.client.upsert({ name: "main" })
 const id = yield* client.agentId
-const parsed = yield* AgentId.parse(AgentId.format(id))
+const saved: string = id
+const parsed = yield* AgentId.parse(saved)
 const currentType = yield* Reflection.getAgentTypeByAgentId(parsed)
 if (!currentType || currentType.mode !== "durable") {
   return yield* Effect.fail("Agent type unavailable or not durable")
@@ -445,14 +447,13 @@ With an implicit `ExecutionContext`:
 val rebound = prepared.flatMap { case (counterType, _) =>
   counterType.client.upsert(constructor)
 }.map { client =>
-  client.agentId().flatMap {
-    case Left(error) => Future.successful(Left(error))
+  client.agentId().map {
+    case Left(error) => Left(error)
     case Right(id) =>
       Reflection.getAgentTypeFor(id) match {
         case Right(Some(currentType)) => currentType.getById(id)
-        case Right(None) =>
-          Future.successful(Left(GolemReflectError.Discovery("Agent type unavailable")))
-        case Left(error) => Future.successful(Left(error))
+        case Right(None) => Left(GolemReflectError.Discovery("Agent type unavailable"))
+        case Left(error) => Left(error)
       }
   }
 }
@@ -505,7 +506,7 @@ An ephemeral agent type offers only `upsert` (in MoonBit reflection, `ephemeral_
 ```typescript
 const fresh = await counterType.client.create({ name: "main" })
 const id = await fresh.agentId()
-const known = await counterType.client.getById(id)
+const known = counterType.client.getById(id)
 const result = await known.method("add").invoke({ by: 5 })
 ```
 
@@ -571,8 +572,8 @@ val known = prepared match {
     counterType.client.create(constructor).flatMap {
       case Left(error) => Future.successful(Left(error))
       case Right(fresh) =>
-        fresh.agentId().flatMap {
-          case Left(error) => Future.successful(Left(error))
+        fresh.agentId().map {
+          case Left(error) => Left(error)
           case Right(id)   => counterType.client.getById(id)
         }
     }
@@ -859,7 +860,7 @@ With `DynamicAgentClient` imported from the SDK:
 ```typescript
 const id = await counterType.client.upsert({ name: "main" }).agentId()
 const input = add.input.packJson({ by: 5 })
-const dynamic = await DynamicAgentClient.getById(id)
+const dynamic = DynamicAgentClient.getById(id)
 const result = await dynamic.method("add").invokeValue(input)
 if (!add.output || result.value === undefined) {
   throw new Error("add must return a value")
@@ -917,7 +918,7 @@ With an implicit `ExecutionContext` and an agent ID `id`, for example from a cli
 val dynamicCall = for {
   pair <- prepared.left.map(_.message)
   input <- pair._2.input.packJson(args).left.map(_.message)
-} yield DynamicAgentClient.getById(id).flatMap {
+} yield DynamicAgentClient.getById(id) match {
   case Left(error) => Future.successful(Left(error.message))
   case Right(dynamic) =>
     dynamic.method("add").invokeValue(input).map {
