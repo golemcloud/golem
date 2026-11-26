@@ -311,10 +311,12 @@ pub enum S3StartupNamespace {
     FilesystemSnapshots,
 }
 
+type StartupScope<'a> = (&'a str, Box<str>);
+
 pub(crate) fn startup_scopes<'a>(
     config: &'a S3BlobStorageConfig,
     namespaces: &[S3StartupNamespace],
-) -> Result<Box<[(&'a str, Box<str>)]>, Error> {
+) -> Result<Box<[StartupScope<'a>]>, Error> {
     ensure!(
         !namespaces.is_empty(),
         "S3 startup requires at least one namespace"

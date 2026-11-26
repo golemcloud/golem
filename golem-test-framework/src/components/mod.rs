@@ -182,6 +182,46 @@ impl SupportedServiceLaunch {
         });
     }
 
+    fn listener_leaves(service: &str) -> &'static [&'static str] {
+        match service {
+            "worker_service" => &["PORT", "GRPC__PORT", "CUSTOM_REQUEST_PORT", "MCP_PORT"],
+            "registry_service"
+            | "component_compilation_service"
+            | "shard_manager"
+            | "worker_executor" => &["HTTP_PORT", "GRPC__PORT"],
+            _ => panic!("unsupported service {service}"),
+        }
+    }
+
+    pub(crate) fn listeners<const N: usize>(&self, expected_service: &str) -> [u16; N] {
+        assert_eq!(
+            self.service, expected_service,
+            "wrong supported launch service"
+        );
+        let leaves = Self::listener_leaves(expected_service);
+        assert_eq!(leaves.len(), N);
+        Self::validate(
+            self.service,
+            self.env
+                .iter()
+                .map(|(key, value)| (key.as_ref(), value.as_ref())),
+        );
+        std::array::from_fn(|index| {
+            let key = format!(
+                "GOLEM_ADVANCED__{}__{}",
+                expected_service.to_uppercase(),
+                leaves[index]
+            );
+            self.env
+                .iter()
+                .find(|(name, _)| name.as_ref() == key)
+                .unwrap_or_else(|| panic!("missing supported listener {key}"))
+                .1
+                .parse()
+                .expect("validated supported listener")
+        })
+    }
+
     pub(crate) fn command(&self, extras: &[(String, String)]) -> Command {
         let mut env = self
             .env
@@ -194,6 +234,19 @@ impl SupportedServiceLaunch {
                 .map(|(key, value)| (key.as_str(), value.as_str())),
         );
         Self::validate(self.service, env.iter().map(|(&key, &value)| (key, value)));
+        Self::listener_leaves(self.service).iter().for_each(|leaf| {
+            let key = format!("GOLEM_ADVANCED__{}__{leaf}", self.service.to_uppercase());
+            let original = self
+                .env
+                .iter()
+                .find(|(name, _)| name.as_ref() == key)
+                .map(|(_, value)| value.as_ref());
+            assert_eq!(
+                env.get(key.as_str()).copied(),
+                original,
+                "supported listener identity changed: {key}"
+            );
+        });
         let mut command = Command::new(self.executable.as_ref());
         command
             .current_dir(self.working_directory.as_ref())
@@ -711,16 +764,103 @@ mod tests {
     use tracing::Level;
 
     #[test]
+    fn supported_service_listener_identity() {
+        let executable = std::env::current_exe().unwrap();
+        [
+            "registry_service",
+            "component_compilation_service",
+            "shard_manager",
+            "worker_executor",
+            "worker_service",
+        ]
+        .into_iter()
+        .for_each(|service| {
+            let leaves: &[&str] = if service == "worker_service" {
+                &["PORT", "GRPC__PORT", "CUSTOM_REQUEST_PORT", "MCP_PORT"]
+            } else {
+                &["HTTP_PORT", "GRPC__PORT"]
+            };
+            let values = [18301, 19301, 18409, 19419];
+            let env: HashMap<String, String> = leaves
+                .iter()
+                .zip(values)
+                .map(|(leaf, port)| {
+                    (
+                        format!("GOLEM_ADVANCED__{}__{leaf}", service.to_uppercase()),
+                        port.to_string(),
+                    )
+                })
+                .collect();
+            let launch = SupportedServiceLaunch::new(
+                service,
+                &executable,
+                executable.parent().unwrap().into(),
+                env.clone(),
+            );
+            if service == "worker_service" {
+                assert_eq!(launch.listeners::<4>(service), values);
+            } else {
+                assert_eq!(launch.listeners::<2>(service), [18301, 19301]);
+            }
+            assert!(
+                std::panic::catch_unwind(|| launch.listeners::<2>("not_this_service")).is_err()
+            );
+            leaves.iter().for_each(|leaf| {
+                let key = format!("GOLEM_ADVANCED__{}__{leaf}", service.to_uppercase());
+                let mut missing = env.clone();
+                missing.remove(&key);
+                let missing = SupportedServiceLaunch::new(
+                    service,
+                    &executable,
+                    executable.parent().unwrap().into(),
+                    missing,
+                );
+                assert!(
+                    std::panic::catch_unwind(|| {
+                        if service == "worker_service" {
+                            missing.listeners::<4>(service);
+                        } else {
+                            missing.listeners::<2>(service);
+                        }
+                    })
+                    .is_err()
+                );
+                ["0", "65536", "018301", "{port=18301}"]
+                    .into_iter()
+                    .for_each(|value| {
+                        let mut invalid = env.clone();
+                        invalid.insert(key.clone(), value.into());
+                        assert!(
+                            std::panic::catch_unwind(|| SupportedServiceLaunch::new(
+                                service,
+                                &executable,
+                                executable.parent().unwrap().into(),
+                                invalid
+                            ))
+                            .is_err()
+                        );
+                    });
+            });
+        });
+    }
+
+    #[test]
     fn supported_service_restart_rejects_noncanonical_advanced_inputs() {
         let executable = std::env::current_exe().unwrap();
         let launch = SupportedServiceLaunch::new(
             "worker_executor",
             &executable,
             executable.parent().unwrap().to_path_buf(),
-            HashMap::from([(
-                "GOLEM_ADVANCED__WORKER_EXECUTOR__GRPC__PORT".to_string(),
-                "19301".to_string(),
-            )]),
+            HashMap::from([
+                (
+                    "GOLEM_ADVANCED__WORKER_EXECUTOR__GRPC__PORT".to_string(),
+                    "19301".to_string(),
+                ),
+                (
+                    "GOLEM_ADVANCED__WORKER_EXECUTOR__HTTP_PORT".to_string(),
+                    "18301".to_string(),
+                ),
+            ]),
         );
         let rejected = [
             (
@@ -745,6 +885,8 @@ mod tests {
             ),
             ("GOLEM_ADVANCED", "{worker_executor={grpc={port=19301}}}"),
             ("GOLEM__ADVANCED", "{worker_executor={grpc={port=19301}}}"),
+            ("GOLEM_ADVANCED__WORKER_EXECUTOR__GRPC__PORT", "19302"),
+            ("GOLEM_ADVANCED__WORKER_EXECUTOR__HTTP_PORT", "18302"),
         ];
         rejected.into_iter().for_each(|(key, value)| {
             let rejected = std::panic::catch_unwind(|| {
@@ -753,7 +895,7 @@ mod tests {
             assert!(rejected.is_err(), "accepted {key}");
         });
         let command = launch.command(&[(
-            "GOLEM_ADVANCED__WORKER_EXECUTOR__GRPC__PORT".to_string(),
+            "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__PORT".to_string(),
             "19302".to_string(),
         )]);
         assert_eq!(
@@ -763,13 +905,26 @@ mod tests {
         assert_eq!(
             command
                 .get_envs()
-                .find(|(key, _)| *key == "GOLEM_ADVANCED__WORKER_EXECUTOR__GRPC__PORT")
+                .find(|(key, _)| *key == "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__PORT")
                 .unwrap()
                 .1
                 .unwrap(),
             "19302"
         );
+        let key = "GOLEM_ADVANCED__WORKER_EXECUTOR__GRPC__PORT".to_string();
+        launch.command(&[(key.clone(), "19302".into()), (key.clone(), "19301".into())]);
+        assert!(
+            std::panic::catch_unwind(
+                || launch.command(&[(key.clone(), "19301".into()), (key.clone(), "19302".into())])
+            )
+            .is_err()
+        );
         let original = launch.command(&[]);
+        assert!(
+            !original
+                .get_envs()
+                .any(|(key, _)| key == "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__PORT")
+        );
         assert_eq!(
             original
                 .get_envs()

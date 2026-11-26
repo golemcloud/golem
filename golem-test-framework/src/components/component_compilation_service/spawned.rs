@@ -60,10 +60,10 @@ impl SpawnedComponentCompilationService {
 
     pub(crate) async fn new_supported(
         launch: SupportedServiceLaunch,
-        grpc_port: u16,
         out_level: Level,
         err_level: Level,
     ) -> Self {
+        let [_, grpc_port] = launch.listeners("component_compilation_service");
         Self::start(launch.command(&[]), grpc_port, out_level, err_level).await
     }
 

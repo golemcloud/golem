@@ -398,7 +398,6 @@ pub struct EnvBasedTestDependencies {
     temp_directory: Arc<TestTempDir>,
     registry_service: Arc<dyn RegistryService>,
     test_component_dir: PathBuf,
-    suite_plans: bool,
 }
 
 impl Debug for EnvBasedTestDependencies {
@@ -665,8 +664,20 @@ impl EnvBasedTestDependencies {
         component_compilation_service: &Arc<dyn ComponentCompilationService>,
         temp_dir: &Path,
     ) -> Arc<dyn RegistryService> {
+        if let Some(launch) =
+            Self::supported_launch(config, temp_dir, "registry_service", rdb.as_ref(), 0)
+        {
+            return Arc::new(
+                SpawnedRegistryService::new_supported(
+                    launch,
+                    config.default_stdout_level(),
+                    config.default_stderr_level(),
+                )
+                .await,
+            );
+        }
         Arc::new(
-            SpawnedRegistryService::new_with_launch(
+            SpawnedRegistryService::new(
                 &config.service_binaries_dir().join("golem-registry-service"),
                 &config.golem_repo_root.join("golem-registry-service"),
                 config.registry_http_port,
@@ -677,7 +688,6 @@ impl EnvBasedTestDependencies {
                 config.default_stdout_level(),
                 config.default_stderr_level(),
                 false,
-                Self::supported_launch(config, temp_dir, "registry_service", rdb.as_ref(), 0),
             )
             .await,
         )
@@ -689,9 +699,21 @@ impl EnvBasedTestDependencies {
         registry_service: Arc<dyn RegistryService>,
         temp_dir: &Path,
     ) -> Arc<dyn ShardManager> {
-        let launch = Self::supported_launch(config, temp_dir, "shard_manager", rdb.as_ref(), 0);
+        if let Some(launch) =
+            Self::supported_launch(config, temp_dir, "shard_manager", rdb.as_ref(), 0)
+        {
+            return Arc::new(
+                SpawnedShardManager::new_supported(
+                    launch,
+                    false,
+                    config.default_stdout_level(),
+                    config.default_stderr_level(),
+                )
+                .await,
+            );
+        }
         Arc::new(
-            SpawnedShardManager::new_with_launch(
+            SpawnedShardManager::new(
                 &config.service_binaries_dir().join("golem-shard-manager"),
                 &config.golem_repo_root.join("golem-shard-manager"),
                 config.number_of_shards_override,
@@ -705,7 +727,6 @@ impl EnvBasedTestDependencies {
                 config.default_stdout_level(),
                 config.default_stderr_level(),
                 false,
-                launch,
             )
             .await,
         )
@@ -726,7 +747,6 @@ impl EnvBasedTestDependencies {
             return Arc::new(
                 SpawnedComponentCompilationService::new_supported(
                     launch,
-                    config.compilation_grpc_port,
                     config.default_stdout_level(),
                     config.default_stderr_level(),
                 )
@@ -767,10 +787,6 @@ impl EnvBasedTestDependencies {
             return Arc::new(
                 SpawnedWorkerService::new_supported(
                     launch,
-                    config.worker_http_port,
-                    config.worker_grpc_port,
-                    config.worker_custom_request_port,
-                    config.worker_mcp_port,
                     config.default_stdout_level(),
                     config.default_stderr_level(),
                 )
@@ -815,16 +831,25 @@ impl EnvBasedTestDependencies {
         registry_service: Arc<dyn RegistryService>,
         temp_dir: &Path,
     ) -> Arc<dyn WorkerExecutorCluster> {
-        let launches = (config.service_inputs == TestServiceInputs::SupportedSettings).then(|| {
-            (0..config.worker_executor_cluster_size)
+        if config.service_inputs == TestServiceInputs::SupportedSettings {
+            let launches = (0..config.worker_executor_cluster_size)
                 .map(|index| {
                     Self::supported_launch(config, temp_dir, "worker_executor", rdb.as_ref(), index)
                         .unwrap()
                 })
-                .collect()
-        });
+                .collect();
+            return Arc::new(
+                SpawnedWorkerExecutorCluster::new_supported(
+                    launches,
+                    shard_manager,
+                    config.default_stdout_level(),
+                    config.default_stderr_level(),
+                )
+                .await,
+            );
+        }
         Arc::new(
-            SpawnedWorkerExecutorCluster::new_with_launches(
+            SpawnedWorkerExecutorCluster::new(
                 config.worker_executor_cluster_size,
                 config.executor_base_http_port,
                 config.executor_base_grpc_port,
@@ -841,7 +866,6 @@ impl EnvBasedTestDependencies {
                 config.oplog_archive_interval,
                 true,
                 false,
-                launches,
             )
             .await,
         )
@@ -922,7 +946,6 @@ impl EnvBasedTestDependencies {
             worker_executor_cluster,
             worker_service,
             test_component_dir: config.test_components_dir(),
-            suite_plans: config.service_inputs == TestServiceInputs::Suite,
         })
     }
 }
@@ -1101,18 +1124,10 @@ impl test_r::core::AsyncHostedDep for EnvBasedTestDependencies {
                     .builtin_plugin_owner_account_id()
                     .0,
                 default_plan_id: self.registry_service.default_plan().0,
-                low_fuel_plan_id: self
-                    .suite_plans
-                    .then(|| self.registry_service.low_fuel_plan().0),
-                low_disk_space_plan_id: self
-                    .suite_plans
-                    .then(|| self.registry_service.low_disk_space_plan().0),
-                low_http_calls_plan_id: self
-                    .suite_plans
-                    .then(|| self.registry_service.low_http_calls_plan().0),
-                low_rpc_calls_plan_id: self
-                    .suite_plans
-                    .then(|| self.registry_service.low_rpc_calls_plan().0),
+                low_fuel_plan_id: self.registry_service.low_fuel_plan().map(|id| id.0),
+                low_disk_space_plan_id: self.registry_service.low_disk_space_plan().map(|id| id.0),
+                low_http_calls_plan_id: self.registry_service.low_http_calls_plan().map(|id| id.0),
+                low_rpc_calls_plan_id: self.registry_service.low_rpc_calls_plan().map(|id| id.0),
             },
         };
 
@@ -1192,9 +1207,8 @@ impl test_r::core::AsyncHostedDep for EnvBasedTestDependencies {
                     .collect(),
             ));
 
-        let suite_plans = descriptor.registry_service.low_fuel_plan_id.is_some();
         let registry_service: Arc<dyn RegistryService> = Arc::new(
-            ProvidedRegistryService::new_with_optional_plans(
+            ProvidedRegistryService::new(
                 descriptor.registry_service.host,
                 descriptor.registry_service.http_port,
                 descriptor.registry_service.grpc_port,
@@ -1233,7 +1247,6 @@ impl test_r::core::AsyncHostedDep for EnvBasedTestDependencies {
             worker_executor_cluster,
             worker_service,
             test_component_dir: descriptor.test_component_dir,
-            suite_plans,
         }
     }
 }
@@ -1582,14 +1595,15 @@ fn opt_env_var(name: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::{
-        ComponentCompilationServiceDescriptor, EnvBasedTestDependenciesDescriptor, RdbDescriptor,
-        RegistryServiceDescriptor, ShardManagerDescriptor, TestTempDir, WorkerExecutorDescriptor,
-        WorkerServiceDescriptor, locate_service_executable,
+        ComponentCompilationServiceDescriptor, EnvBasedTestDependencies,
+        EnvBasedTestDependenciesDescriptor, RdbDescriptor, RegistryServiceDescriptor,
+        ShardManagerDescriptor, TestTempDir, WorkerExecutorDescriptor, WorkerServiceDescriptor,
+        locate_service_executable,
     };
     use crate::components::rdb::borrowed_sqlite::BorrowedSqliteRdb;
-    use crate::config::EnvBasedTestDependenciesConfig;
-    use crate::config::TestServiceInputs;
+    use crate::config::{EnvBasedTestDependenciesConfig, TestDependencies, TestServiceInputs};
     use golem_common::config::{DbConfig, env_config_provider, server_settings};
+    use golem_common::model::plan::PlanId;
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
@@ -1708,6 +1722,289 @@ mod tests {
                 }
                 Ok::<(), figment::Error>(())
             })?;
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn supported_settings_prepare_postgres_and_redis_inputs() {
+        use crate::components::rdb::PostgresInfo;
+        use crate::components::rdb::provided_postgres::ProvidedPostgresRdb;
+        use golem_common::config::RedisConfig;
+
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            let root = TempDir::new().unwrap();
+            let target = root.path().join("target");
+            fs::create_dir_all(target.join("debug")).unwrap();
+            let rdb = ProvidedPostgresRdb::new(PostgresInfo {
+                public_host: "198.51.100.41".into(),
+                public_port: 15437,
+                private_host: "203.0.113.42".into(),
+                private_port: 25439,
+                database_name: "prepared_state".into(),
+                username: "prepared_user".into(),
+                password: "fixture-only".into(),
+            });
+            let config = EnvBasedTestDependenciesConfig {
+                service_inputs: TestServiceInputs::SupportedSettings,
+                registry_http_port: 18411,
+                registry_grpc_port: 19413,
+                compilation_http_port: 18417,
+                compilation_grpc_port: 19419,
+                shard_manager_http_port: 18423,
+                shard_manager_grpc_port: 19429,
+                worker_http_port: 18431,
+                worker_grpc_port: 19433,
+                worker_custom_request_port: 18437,
+                worker_mcp_port: 19441,
+                executor_base_http_port: 18443,
+                executor_base_grpc_port: 19447,
+                redis_host: "198.51.100.27".into(),
+                redis_port: 16391,
+                redis_key_prefix: "tracer-prepared:".into(),
+                ..EnvBasedTestDependenciesConfig::default()
+            };
+            [
+                (
+                    "registry_service",
+                    "golem-registry-service",
+                    0,
+                    "http_port",
+                    18411,
+                    19413,
+                    "processes/registry-service-0",
+                ),
+                (
+                    "component_compilation_service",
+                    "golem-component-compilation-service",
+                    0,
+                    "http_port",
+                    18417,
+                    19419,
+                    "processes/component-compilation-service-0",
+                ),
+                (
+                    "shard_manager",
+                    "golem-shard-manager",
+                    0,
+                    "http_port",
+                    18423,
+                    19429,
+                    "processes/shard-manager-0",
+                ),
+                (
+                    "worker_service",
+                    "golem-worker-service",
+                    0,
+                    "port",
+                    18431,
+                    19433,
+                    "processes/worker-service-0",
+                ),
+                (
+                    "worker_executor",
+                    "worker-executor",
+                    5,
+                    "http_port",
+                    18448,
+                    19452,
+                    "processes/worker-executor-5",
+                ),
+            ]
+            .into_iter()
+            .try_for_each(
+                |(service, binary, index, http_key, http, grpc, process_dir)| {
+                    jail.clear_env();
+                    jail.set_env("CARGO_TARGET_DIR", target.display());
+                    jail.set_env("GOLEM_TEST_GATEWAY_SESSION_STORAGE", "redis");
+                    let executable = target.join("debug").join(binary);
+                    fs::write(&executable, "").unwrap();
+                    let launch = EnvBasedTestDependencies::supported_launch(
+                        &config,
+                        root.path(),
+                        service,
+                        &rdb,
+                        index,
+                    )
+                    .unwrap();
+                    let command = launch.command(&[]);
+                    assert_eq!(
+                        PathBuf::from(command.get_program()),
+                        executable.canonicalize().unwrap()
+                    );
+                    let process_dir = root.path().join(process_dir);
+                    let working = process_dir.join("work");
+                    assert_eq!(command.get_current_dir(), Some(working.as_path()));
+                    let config_name = binary.strip_prefix("golem-").unwrap_or(binary);
+                    let config_file = working.join("config").join(format!("{config_name}.toml"));
+                    assert_eq!(fs::read_to_string(config_file).unwrap(), "");
+                    let env = command
+                        .get_envs()
+                        .map(|(key, value)| {
+                            (
+                                key.to_str().unwrap().to_string(),
+                                value.unwrap().to_str().unwrap().to_string(),
+                            )
+                        })
+                        .collect::<std::collections::HashMap<_, _>>();
+                    assert_eq!(PathBuf::from(&env["HOME"]), process_dir.join("home"));
+                    assert_eq!(env["HOME"], env["USERPROFILE"]);
+                    assert_eq!(fs::read_dir(process_dir.join("home")).unwrap().count(), 0);
+                    assert_eq!(env["GOLEM__STATE_STORE"], "postgres");
+                    jail.clear_env();
+                    env.iter().for_each(|(key, value)| jail.set_env(key, value));
+                    let projected = server_settings::project(service, &env_config_provider());
+                    assert_eq!(projected.extract_inner::<u16>(http_key)?, http);
+                    assert_eq!(projected.extract_inner::<u16>("grpc.port")?, grpc);
+                    if service != "shard_manager" {
+                        assert_eq!(
+                            projected.extract_inner::<PathBuf>("blob_storage.config.root")?,
+                            root.path().join("blob_storage")
+                        );
+                    }
+                    let stores: &[(&str, &str)] = match service {
+                        "registry_service" => &[("db", "golem_registry_service")],
+                        "shard_manager" => &[("persistence", "golem_shard_manager")],
+                        "worker_executor" => &[
+                            ("key_value_storage", "golem_worker_executor"),
+                            ("indexed_storage", "golem_worker_executor_indexed"),
+                            ("scheduler_storage", "golem_worker_executor_scheduler"),
+                        ],
+                        _ => &[],
+                    };
+                    stores.iter().try_for_each(|(path, schema)| {
+                        let DbConfig::Postgres(db) = projected.extract_inner::<DbConfig>(path)?
+                        else {
+                            panic!("expected PostgreSQL at {service}.{path}")
+                        };
+                        assert_eq!(db.host, "198.51.100.41");
+                        assert_eq!(db.port, 15437);
+                        assert_eq!(db.database, "prepared_state");
+                        assert_eq!(db.username, "prepared_user");
+                        assert_eq!(db.password, "fixture-only");
+                        assert_eq!(db.max_connections, 20);
+                        assert_eq!(db.schema.as_deref(), Some(*schema));
+                        Ok::<(), figment::Error>(())
+                    })?;
+                    match service {
+                        "worker_service" => {
+                            assert_eq!(
+                                projected.extract_inner::<u16>("custom_request_port")?,
+                                18437
+                            );
+                            assert_eq!(projected.extract_inner::<u16>("mcp_port")?, 19441);
+                            assert_eq!(
+                                projected
+                                    .extract_inner::<String>("gateway_session_storage.type")?,
+                                "Redis"
+                            );
+                            let redis = projected
+                                .extract_inner::<RedisConfig>("gateway_session_storage.config")?;
+                            assert_eq!(redis.host, "198.51.100.27");
+                            assert_eq!(redis.port, 16391);
+                            assert_eq!(redis.key_prefix, "tracer-prepared:");
+                        }
+                        "worker_executor" => {
+                            assert_eq!(
+                                projected.extract_inner::<PathBuf>("tracing.file_dir")?,
+                                root.path().join("executor-logs")
+                            );
+                            assert!(root.path().join("executor-logs").is_dir());
+                            assert_eq!(
+                                projected.extract_inner::<String>("tracing.file_name")?,
+                                "executor-5.jsonl"
+                            );
+                            assert!(projected.extract_inner::<bool>("tracing.file.enabled")?);
+                            assert!(projected.extract_inner::<bool>("tracing.file.json")?);
+                            assert!(
+                                projected
+                                    .extract_inner::<bool>("tracing.file.json_source_location")?
+                            );
+                            assert!(!projected.extract_inner::<bool>("tracing.file.json_flatten")?);
+                            assert!(
+                                !projected
+                                    .extract_inner::<bool>("tracing.file.json_flatten_span")?
+                            );
+                        }
+                        _ => {}
+                    }
+                    Ok::<(), figment::Error>(())
+                },
+            )?;
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn supported_settings_refuse_suite_policy_overrides() {
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            let root = TempDir::new().unwrap();
+            jail.set_env(
+                "CARGO_TARGET_DIR",
+                root.path().join("unused-target").display(),
+            );
+            let rdb = BorrowedSqliteRdb::new(&root.path().join("not-created-sqlite"));
+            let suite = EnvBasedTestDependenciesConfig {
+                service_inputs: TestServiceInputs::Suite,
+                environment_state_cache_capacity: Some(17),
+                number_of_shards_override: Some(23),
+                oplog_archive_interval: Some(std::time::Duration::from_secs(31)),
+                ..EnvBasedTestDependenciesConfig::default()
+            };
+            assert!(
+                EnvBasedTestDependencies::supported_launch(
+                    &suite,
+                    root.path(),
+                    "worker_executor",
+                    &rdb,
+                    5
+                )
+                .is_none()
+            );
+            assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+            [
+                EnvBasedTestDependenciesConfig {
+                    service_inputs: TestServiceInputs::SupportedSettings,
+                    environment_state_cache_capacity: Some(37),
+                    ..EnvBasedTestDependenciesConfig::default()
+                },
+                EnvBasedTestDependenciesConfig {
+                    service_inputs: TestServiceInputs::SupportedSettings,
+                    number_of_shards_override: Some(41),
+                    ..EnvBasedTestDependenciesConfig::default()
+                },
+                EnvBasedTestDependenciesConfig {
+                    service_inputs: TestServiceInputs::SupportedSettings,
+                    oplog_archive_interval: Some(std::time::Duration::from_secs(43)),
+                    ..EnvBasedTestDependenciesConfig::default()
+                },
+            ]
+            .into_iter()
+            .for_each(|config| {
+                let failure = std::panic::catch_unwind(|| {
+                    EnvBasedTestDependencies::supported_launch(
+                        &config,
+                        root.path(),
+                        "worker_executor",
+                        &rdb,
+                        5,
+                    )
+                })
+                .err()
+                .expect("supported launch accepted a Suite policy override");
+                let message = failure
+                    .downcast_ref::<String>()
+                    .map(String::as_str)
+                    .or_else(|| failure.downcast_ref::<&str>().copied())
+                    .unwrap();
+                assert_eq!(
+                    message,
+                    "supported-settings fixture cannot override service policy"
+                );
+                assert_eq!(fs::read_dir(root.path()).unwrap().count(), 0);
+            });
             Ok(())
         });
     }
@@ -2006,6 +2303,79 @@ mod tests {
         assert_descriptor_round_trip(RdbDescriptor::Sqlite {
             path: PathBuf::from("/abs/sqlite/db"),
         });
+    }
+
+    #[test]
+    async fn descriptor_optional_suite_plans_preserve_independent_values_and_owners() {
+        use futures::StreamExt;
+        use test_r::core::AsyncHostedDep;
+
+        let ids = [11, 23, 37, 49].map(|id| Some(Uuid::from_u128(id)));
+        futures::stream::iter([
+            ids,
+            [None; 4],
+            [None, ids[1], None, ids[3]],
+            [ids[0], None, ids[2], None],
+        ])
+        .for_each(|plans| async move {
+            let owner = TempDir::new().unwrap();
+            let marker = owner.path().join("parent-marker");
+            fs::write(&marker, b"parent-owned").unwrap();
+            let blob_root = owner.path().join("blob_storage");
+            fs::create_dir(&blob_root).unwrap();
+            let mut descriptor = sample_descriptor(RdbDescriptor::Sqlite {
+                path: owner.path().to_path_buf(),
+            });
+            descriptor.temp_directory_path = owner.path().to_path_buf();
+            descriptor.test_component_dir = owner.path().to_path_buf();
+            descriptor.blob_storage_root = blob_root;
+            descriptor.registry_service.admin_account_id = Uuid::from_u128(101);
+            descriptor.registry_service.builtin_plugin_owner_account_id = Uuid::from_u128(103);
+            descriptor.registry_service.default_plan_id = Uuid::from_u128(107);
+            descriptor.registry_service.low_fuel_plan_id = plans[0];
+            descriptor.registry_service.low_disk_space_plan_id = plans[1];
+            descriptor.registry_service.low_http_calls_plan_id = plans[2];
+            descriptor.registry_service.low_rpc_calls_plan_id = plans[3];
+            let bytes = serde_json::to_vec(&descriptor).unwrap();
+            let attached = EnvBasedTestDependencies::from_descriptor(&bytes).await;
+            let registry = attached.registry_service();
+            assert_eq!(registry.admin_account_id().0, Uuid::from_u128(101));
+            assert_eq!(
+                registry.admin_account_email().to_string(),
+                "admin@example.com"
+            );
+            assert_eq!(
+                registry.builtin_plugin_owner_account_id().0,
+                Uuid::from_u128(103)
+            );
+            assert_eq!(registry.default_plan().0, Uuid::from_u128(107));
+            assert_eq!(
+                [
+                    registry.low_fuel_plan(),
+                    registry.low_disk_space_plan(),
+                    registry.low_http_calls_plan(),
+                    registry.low_rpc_calls_plan()
+                ],
+                plans.map(|id| id.map(PlanId))
+            );
+            let encoded = attached.descriptor();
+            let again = EnvBasedTestDependencies::from_descriptor(&encoded).await;
+            let registry = again.registry_service();
+            assert_eq!(
+                [
+                    registry.low_fuel_plan(),
+                    registry.low_disk_space_plan(),
+                    registry.low_http_calls_plan(),
+                    registry.low_rpc_calls_plan()
+                ],
+                plans.map(|id| id.map(PlanId))
+            );
+            assert_eq!(registry.default_plan().0, Uuid::from_u128(107));
+            drop(again);
+            drop(attached);
+            assert_eq!(fs::read(marker).unwrap(), b"parent-owned");
+        })
+        .await;
     }
 
     #[test]

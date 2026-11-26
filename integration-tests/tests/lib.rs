@@ -278,6 +278,222 @@ mod supported_settings {
         super::worker::counter_resource_test_1(deps, tracing).await
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[tag(db_sqlite)]
+    #[timeout("8m")]
+    async fn supported_owner_restart_preserves_launch(tracing: &Tracing) -> anyhow::Result<()> {
+        use anyhow::Context;
+        use futures::{FutureExt, StreamExt, TryStreamExt};
+        use golem_test_framework::components::{is_serving_grpc, worker_executor::WorkerExecutor};
+        use golem_test_framework::config::TestDependencies;
+        use std::panic::AssertUnwindSafe;
+        use std::time::Duration;
+        use tokio::time::{Instant, timeout};
+
+        async fn stopped(executor: &dyn WorkerExecutor, http: u16, grpc: u16, generation: u64) {
+            assert_eq!(executor.pid(), None);
+            assert!(executor.is_reaped());
+            assert!(!executor.is_running().await);
+            assert_eq!(executor.grpc_host(), "localhost");
+            assert_eq!(executor.grpc_port(), grpc);
+            assert_eq!(
+                executor.metrics_endpoint(),
+                Some((format!("http://localhost:{http}/metrics"), generation))
+            );
+        }
+
+        async fn live(
+            executor: &dyn WorkerExecutor,
+            http: u16,
+            grpc: u16,
+            generation: u64,
+            witness: &str,
+        ) -> anyhow::Result<()> {
+            let pid = executor
+                .pid()
+                .context("supported executor has no owned PID")?;
+            assert!(!executor.is_reaped());
+            assert!(executor.is_running().await);
+            assert_eq!(executor.grpc_host(), "localhost");
+            assert_eq!(executor.grpc_port(), grpc);
+            let url = format!("http://localhost:{http}/metrics");
+            assert_eq!(executor.metrics_endpoint(), Some((url.clone(), generation)));
+            assert!(is_serving_grpc("localhost", grpc, Duration::from_secs(1)).await);
+            let client = reqwest::Client::builder()
+                .timeout(Duration::from_secs(2))
+                .build()?;
+            let scrapes = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
+                Duration::from_millis(50),
+            ))
+            .then(|_| client.get(&url).send())
+            .filter_map(|response| {
+                std::future::ready(
+                    response
+                        .ok()
+                        .filter(|response| response.status().is_success()),
+                )
+            });
+            futures::pin_mut!(scrapes);
+            timeout(Duration::from_secs(10), scrapes.next())
+                .await
+                .context("replacement metrics did not serve")?
+                .context("metrics polling ended")?;
+
+            let environment = std::fs::read(format!("/proc/{pid}/environ"))
+                .context("read owned executor environment")?;
+            let present = [
+                witness,
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__BIND_ADDRESS",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__COMPILED_COMPONENT_SERVICE__TYPE",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__ENGINE__ENABLE_FS_CACHE",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__LIMITS__FUEL_TO_BORROW",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__RESOURCE_USAGE_METERING__COMPUTE",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__QUOTA_SERVICE__INLINE_WAIT_THRESHOLD",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__QUOTA_SERVICE__RENEWAL_INTERVAL",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__RETRIES__MAX_ATTEMPTS",
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__AGENT_WEBHOOKS_SERVICE__USE_HTTPS_FOR_WEBHOOK_URL",
+            ].map(|key| (key, environment.split(|byte| *byte == 0).any(|record| record.split(|byte| *byte == b'=').next() == Some(key.as_bytes()))));
+            drop(environment);
+            present
+                .into_iter()
+                .for_each(|(key, present)| assert!(!present, "unsupported child input {key}"));
+            assert!(executor.is_running().await);
+            Ok(())
+        }
+
+        let witness = if std::env::var_os("GOLEM_TEST_SUPPORTED_PARENT_SENTINEL").is_some() {
+            "GOLEM_TEST_SUPPORTED_PARENT_SENTINEL"
+        } else {
+            "PATH"
+        };
+        anyhow::ensure!(
+            std::env::var_os(witness).is_some(),
+            "parent inheritance witness {witness} is absent"
+        );
+        let config = EnvBasedTestDependenciesConfig {
+            worker_executor_cluster_size: 1,
+            ..config(DbType::Sqlite, 14000, |key| std::env::var(key).ok())
+        };
+        let http = config.executor_base_http_port;
+        let grpc = config.executor_base_grpc_port;
+        let owner = EnvBasedTestDependencies::new(config).await?;
+        let registry = owner.registry_service();
+        assert_eq!(
+            registry.admin_account_id().0,
+            uuid::uuid!("e71a6160-4144-4720-9e34-e5943458d129")
+        );
+        assert_eq!(registry.admin_account_email().to_string(), "initial@user");
+        assert_eq!(
+            registry.builtin_plugin_owner_account_id().0,
+            uuid::uuid!("adb2694f-cd9f-425d-905d-ca2888c9c5de")
+        );
+        assert_eq!(
+            registry.default_plan().0,
+            uuid::uuid!("157dc684-00eb-496d-941c-da8fd1d15c63")
+        );
+        assert_eq!(
+            [
+                registry.low_fuel_plan(),
+                registry.low_disk_space_plan(),
+                registry.low_http_calls_plan(),
+                registry.low_rpc_calls_plan()
+            ],
+            [None; 4]
+        );
+        let cluster = owner.worker_executor_cluster();
+        assert_eq!(cluster.size(), 1);
+        let executor = cluster
+            .to_vec()
+            .into_iter()
+            .next()
+            .context("missing owned executor")?;
+        let generation = executor
+            .metrics_endpoint()
+            .context("missing owner metrics")?
+            .1;
+        live(executor.as_ref(), http, grpc, generation, witness).await?;
+        executor
+            .kill_and_wait(Instant::now() + Duration::from_secs(60))
+            .await?;
+        stopped(executor.as_ref(), http, grpc, generation).await;
+
+        futures::stream::iter([("HTTP_PORT", http + 1), ("GRPC__PORT", grpc + 1)])
+            .then(|(leaf, port)| {
+                let executor = &executor;
+                async move {
+                    let rejected = timeout(
+                        Duration::from_secs(5),
+                        AssertUnwindSafe(executor.restart_with_extra_env_vars(vec![(
+                            format!("GOLEM_ADVANCED__WORKER_EXECUTOR__{leaf}"),
+                            port.to_string(),
+                        )]))
+                        .catch_unwind(),
+                    )
+                    .await?;
+                    anyhow::ensure!(
+                        rejected.is_err(),
+                        "supported executor accepted listener relocation"
+                    );
+                    stopped(executor.as_ref(), http, grpc, generation).await;
+                    Ok::<(), anyhow::Error>(())
+                }
+            })
+            .try_collect::<Vec<_>>()
+            .await?;
+
+        timeout(
+            Duration::from_secs(120),
+            executor.restart_with_extra_env_vars(vec![
+                (
+                    "GOLEM_ADVANCED__WORKER_EXECUTOR__HTTP_PORT".into(),
+                    http.to_string(),
+                ),
+                (
+                    "GOLEM_ADVANCED__WORKER_EXECUTOR__GRPC__PORT".into(),
+                    grpc.to_string(),
+                ),
+            ]),
+        )
+        .await?;
+        live(executor.as_ref(), http, grpc, generation + 1, witness).await?;
+        executor
+            .kill_and_wait(Instant::now() + Duration::from_secs(60))
+            .await?;
+        stopped(executor.as_ref(), http, grpc, generation + 1).await;
+        timeout(Duration::from_secs(120), executor.restart()).await?;
+        live(executor.as_ref(), http, grpc, generation + 2, witness).await?;
+
+        let shard = owner.shard_manager();
+        let shard_host = shard.grpc_host();
+        let shard_port = shard.grpc_port();
+        timeout(Duration::from_secs(30), shard.kill()).await?;
+        assert!(!is_serving_grpc(&shard_host, shard_port, Duration::from_secs(1)).await);
+        let refused = timeout(
+            Duration::from_secs(5),
+            AssertUnwindSafe(shard.restart(Some(17))).catch_unwind(),
+        )
+        .await?;
+        anyhow::ensure!(
+            refused.is_err(),
+            "supported shard manager accepted policy override"
+        );
+        assert!(!is_serving_grpc(&shard_host, shard_port, Duration::from_secs(1)).await);
+        timeout(Duration::from_secs(120), shard.restart(None)).await?;
+        assert!(is_serving_grpc(&shard_host, shard_port, Duration::from_secs(1)).await);
+        let registered = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
+            Duration::from_secs(2),
+        ))
+        .then(|_| shard.get_routing_table())
+        .try_filter(|table| std::future::ready(table.all().len() == 1));
+        futures::pin_mut!(registered);
+        timeout(Duration::from_secs(60), registered.next())
+            .await
+            .context("executor did not register after shard restart")?
+            .context("registration polling ended")??;
+        super::worker::counter_resource_test_1(&owner, tracing).await
+    }
+
     #[test]
     fn tracer_resources_are_disjoint_and_offset_once() {
         let ports = |config: &EnvBasedTestDependenciesConfig| {
@@ -312,12 +528,17 @@ mod supported_settings {
         };
         let postgres = config(DbType::Postgres, 12000, env);
         let sqlite = config(DbType::Sqlite, 13000, env);
+        let owner = EnvBasedTestDependenciesConfig {
+            worker_executor_cluster_size: 1,
+            ..config(DbType::Sqlite, 14000, env)
+        };
         assert_eq!(postgres.redis_port, 22000);
         assert_eq!(sqlite.redis_port, 23000);
+        assert_eq!(owner.redis_port, 24000);
         let ordinary = EnvBasedTestDependenciesConfig::default().with_env_overrides_from(|key| {
             (key == "GOLEM_TEST_PORT_OFFSET").then(|| "10000".to_string())
         });
-        let all = [ordinary, postgres, sqlite]
+        let all = [ordinary, postgres, sqlite, owner]
             .iter()
             .flat_map(ports)
             .collect::<Vec<_>>();

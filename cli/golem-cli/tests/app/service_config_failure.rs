@@ -114,7 +114,6 @@ async fn server_cleanup_preserves_logs_until_the_final_configuration() {
                         "--config-dir",
                         cli_config.to_str().unwrap(),
                         "--disable-app-manifest-discovery",
-                        "--server-no-limit-change",
                         "server",
                         "run",
                         "--config",
@@ -123,7 +122,7 @@ async fn server_cleanup_preserves_logs_until_the_final_configuration() {
                         data.to_str().unwrap(),
                         "--clean",
                     ],
-                    &[],
+                    &[("GOLEM_SERVER_NO_LIMIT_CHANGE", "true")],
                     cwd.path(),
                 )
                 .into_std();
@@ -446,7 +445,10 @@ async fn unreachable_s3_fails_startup_without_local_blob_storage() {
                 ("AWS_ACCESS_KEY_ID", "test-access-key"),
                 ("AWS_SECRET_ACCESS_KEY", "test-secret-key"),
                 ("AWS_EC2_METADATA_DISABLED", "true"),
-            ],
+            ]
+            .into_iter()
+            .filter(|(key, _)| binary != "golem" || !key.starts_with("GOLEM_ADVANCED__"))
+            .collect::<Vec<_>>(),
             &cwd,
         )
         .await;
@@ -495,7 +497,11 @@ async fn unreachable_s3_fails_startup_without_local_blob_storage() {
             .flat_map(|db| ["", "-wal", "-shm"].map(|suffix| data.join(format!("{db}{suffix}"))))
             .chain([
                 data.join("filesystem-snapshots.repository-key"),
-                data.join("startup-refusal.log"),
+                data.join(if binary == "worker-executor" {
+                    "startup-refusal.0.log"
+                } else {
+                    "startup-refusal.log"
+                }),
             ])
             .map(|path| path.into_boxed_path())
             .collect::<Box<[_]>>();

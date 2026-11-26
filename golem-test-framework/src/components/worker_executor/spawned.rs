@@ -19,7 +19,7 @@ use crate::components::worker_executor::{WorkerExecutor, wait_for_startup};
 use crate::components::worker_service::WorkerService;
 use crate::components::{ChildProcessLogger, SupportedServiceLaunch};
 use async_trait::async_trait;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -35,20 +35,28 @@ pub struct SpawnedWorkerExecutor {
     reaped: AtomicBool,
     generation: AtomicU64,
     lifecycle: Arc<tokio::sync::Mutex<()>>,
-    executable: PathBuf,
-    working_directory: PathBuf,
+    recipe: ExecutorLaunch,
+    out_level: Level,
+    err_level: Level,
+}
+
+enum ExecutorLaunch {
+    Suite(Box<SuiteInputs>),
+    Supported(SupportedServiceLaunch),
+}
+
+struct SuiteInputs {
+    executable: Box<Path>,
+    working_directory: Box<Path>,
     rdb: Arc<dyn Rdb>,
     shard_manager: Arc<dyn ShardManager>,
     worker_service: Arc<dyn WorkerService>,
     verbosity: Level,
-    out_level: Level,
-    err_level: Level,
     registry_service: Arc<dyn RegistryService>,
     environment_state_cache_capacity: Option<usize>,
     oplog_archive_interval: Option<Duration>,
     enable_fs_cache: bool,
     otlp: bool,
-    launch: Option<SupportedServiceLaunch>,
 }
 
 impl SpawnedWorkerExecutor {
@@ -69,69 +77,52 @@ impl SpawnedWorkerExecutor {
         enable_fs_cache: bool,
         otlp: bool,
     ) -> Self {
-        Self::new_with_launch(
-            executable,
-            working_directory,
-            http_port,
-            grpc_port,
-            rdb,
-            shard_manager,
-            worker_service,
-            verbosity,
-            out_level,
-            err_level,
-            registry_service,
-            environment_state_cache_capacity,
-            oplog_archive_interval,
-            enable_fs_cache,
-            otlp,
-            None,
-        )
-        .await
-    }
-
-    pub(crate) async fn new_with_launch(
-        executable: &Path,
-        working_directory: &Path,
-        http_port: u16,
-        grpc_port: u16,
-        rdb: Arc<dyn Rdb>,
-        shard_manager: Arc<dyn ShardManager>,
-        worker_service: Arc<dyn WorkerService>,
-        verbosity: Level,
-        out_level: Level,
-        err_level: Level,
-        registry_service: Arc<dyn RegistryService>,
-        environment_state_cache_capacity: Option<usize>,
-        oplog_archive_interval: Option<Duration>,
-        enable_fs_cache: bool,
-        otlp: bool,
-        launch: Option<SupportedServiceLaunch>,
-    ) -> Self {
         info!("Starting golem-worker-executor process");
 
         if !executable.exists() {
             panic!("Expected to have precompiled golem-worker-executor at {executable:?}");
         }
 
-        let command = Self::prepare_command(
-            executable,
-            working_directory,
-            http_port,
-            grpc_port,
-            &rdb,
-            &shard_manager,
-            &worker_service,
+        let recipe = ExecutorLaunch::Suite(Box::new(SuiteInputs {
+            executable: executable.into(),
+            working_directory: working_directory.into(),
+            rdb,
+            shard_manager,
+            worker_service,
             verbosity,
-            &registry_service,
+            registry_service,
             environment_state_cache_capacity,
             oplog_archive_interval,
             enable_fs_cache,
             otlp,
-            launch.as_ref(),
-            &[],
+        }));
+        Self::from_recipe(recipe, http_port, grpc_port, out_level, err_level).await
+    }
+
+    pub(crate) async fn new_supported(
+        launch: SupportedServiceLaunch,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        let [http_port, grpc_port] = launch.listeners("worker_executor");
+        Self::from_recipe(
+            ExecutorLaunch::Supported(launch),
+            http_port,
+            grpc_port,
+            out_level,
+            err_level,
         )
-        .await;
+        .await
+    }
+
+    async fn from_recipe(
+        recipe: ExecutorLaunch,
+        http_port: u16,
+        grpc_port: u16,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        let command = Self::prepare_command(&recipe, http_port, grpc_port, &[]).await;
         let (child, logger) = Self::start(command, grpc_port, out_level, err_level).await;
 
         Self {
@@ -142,67 +133,44 @@ impl SpawnedWorkerExecutor {
             reaped: AtomicBool::new(false),
             generation: AtomicU64::new(0),
             lifecycle: Arc::new(tokio::sync::Mutex::new(())),
-            executable: executable.to_path_buf(),
-            working_directory: working_directory.to_path_buf(),
-            rdb,
-            shard_manager,
-            worker_service,
-            verbosity,
+            recipe,
             out_level,
             err_level,
-            registry_service,
-            environment_state_cache_capacity,
-            oplog_archive_interval,
-            enable_fs_cache,
-            otlp,
-            launch,
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn prepare_command(
-        executable: &Path,
-        working_directory: &Path,
+        recipe: &ExecutorLaunch,
         http_port: u16,
         grpc_port: u16,
-        rdb: &Arc<dyn Rdb>,
-        shard_manager: &Arc<dyn ShardManager>,
-        worker_service: &Arc<dyn WorkerService>,
-        verbosity: Level,
-        registry_service: &Arc<dyn RegistryService>,
-        environment_state_cache_capacity: Option<usize>,
-        oplog_archive_interval: Option<Duration>,
-        enable_fs_cache: bool,
-        otlp: bool,
-        launch: Option<&SupportedServiceLaunch>,
         extra_env_vars: &[(String, String)],
     ) -> Command {
-        if let Some(launch) = launch {
-            return launch.command(extra_env_vars);
-        }
+        let suite = match recipe {
+            ExecutorLaunch::Supported(launch) => return launch.command(extra_env_vars),
+            ExecutorLaunch::Suite(suite) => suite,
+        };
         let mut env = super::env_vars(
             http_port,
             grpc_port,
-            shard_manager,
-            worker_service,
-            rdb,
-            registry_service,
-            environment_state_cache_capacity,
-            oplog_archive_interval,
-            verbosity,
-            enable_fs_cache,
-            otlp,
+            &suite.shard_manager,
+            &suite.worker_service,
+            &suite.rdb,
+            &suite.registry_service,
+            suite.environment_state_cache_capacity,
+            suite.oplog_archive_interval,
+            suite.verbosity,
+            suite.enable_fs_cache,
+            suite.otlp,
         )
         .await;
-        // Per-restart overrides win over the baseline configuration. Scoped to
-        // this child process only — we never touch the parent test runner's
-        // process-wide environment.
         for (key, value) in extra_env_vars {
             env.insert(key.clone(), value.clone());
         }
 
-        let mut command = Command::new(executable);
-        command.current_dir(working_directory).envs(env);
+        let mut command = Command::new(suite.executable.as_ref());
+        command
+            .current_dir(suite.working_directory.as_ref())
+            .envs(env);
         command
     }
 
@@ -427,20 +395,9 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
         }
 
         let command = Self::prepare_command(
-            &self.executable,
-            &self.working_directory,
+            &self.recipe,
             self.http_port,
             self.grpc_port,
-            &self.rdb,
-            &self.shard_manager,
-            &self.worker_service,
-            self.verbosity,
-            &self.registry_service,
-            self.environment_state_cache_capacity,
-            self.oplog_archive_interval,
-            self.enable_fs_cache,
-            self.otlp,
-            self.launch.as_ref(),
             &extra_env_vars,
         )
         .await;

@@ -44,14 +44,7 @@ localServer:
                  [logging.stderr]\nenabled = false\n",
             )
             .unwrap();
-            ctx.add_server_args([
-                "--local",
-                "--server-no-limit-change",
-                "--format",
-                format,
-                "--config",
-                "settings.toml",
-            ]);
+            ctx.add_server_args(["--local", "--format", format, "--config", "settings.toml"]);
             if quiet {
                 ctx.add_server_args(["-q"]);
             }
@@ -69,6 +62,7 @@ localServer:
                     .args(ctx.server_run_args())
                     .current_dir(&ctx.working_dir)
                     .envs(&ctx.env)
+                    .env("GOLEM_SERVER_NO_LIMIT_CHANGE", "true")
                     .env_remove("RUST_LOG")
                     .env_remove("GOLEM_LOG_FILTER")
                     .stdout(std::fs::File::create(&stdout).unwrap())

@@ -260,10 +260,10 @@ mod tests {
                     TokenSecret::trusted("test-token".to_string()),
                     AccountId(Uuid::nil()),
                     PlanId(Uuid::nil()),
-                    PlanId(Uuid::nil()),
-                    PlanId(Uuid::nil()),
-                    PlanId(Uuid::nil()),
-                    PlanId(Uuid::nil()),
+                    None,
+                    None,
+                    None,
+                    None,
                 )));
             databases.into_iter().for_each(|(rdb, expected_root)| {
                 jail.clear_env();

@@ -47,37 +47,6 @@ impl ProvidedRegistryService {
         admin_account_token: TokenSecret,
         builtin_plugin_owner_account_id: AccountId,
         default_plan_id: PlanId,
-        low_fuel_plan_id: PlanId,
-        low_disk_space_plan_id: PlanId,
-        low_http_calls_plan_id: PlanId,
-        low_rpc_calls_plan_id: PlanId,
-    ) -> Self {
-        Self::new_with_optional_plans(
-            host,
-            http_port,
-            grpc_port,
-            admin_account_id,
-            admin_account_email,
-            admin_account_token,
-            builtin_plugin_owner_account_id,
-            default_plan_id,
-            Some(low_fuel_plan_id),
-            Some(low_disk_space_plan_id),
-            Some(low_http_calls_plan_id),
-            Some(low_rpc_calls_plan_id),
-        )
-        .await
-    }
-
-    pub(crate) async fn new_with_optional_plans(
-        host: String,
-        http_port: u16,
-        grpc_port: u16,
-        admin_account_id: AccountId,
-        admin_account_email: AccountEmail,
-        admin_account_token: TokenSecret,
-        builtin_plugin_owner_account_id: AccountId,
-        default_plan_id: PlanId,
         low_fuel_plan_id: Option<PlanId>,
         low_disk_space_plan_id: Option<PlanId>,
         low_http_calls_plan_id: Option<PlanId>,
@@ -137,23 +106,20 @@ impl RegistryService for ProvidedRegistryService {
     fn default_plan(&self) -> PlanId {
         self.default_plan_id
     }
-    fn low_fuel_plan(&self) -> PlanId {
-        self.low_fuel_plan_id.expect("fixture has no low-fuel plan")
+    fn low_fuel_plan(&self) -> Option<PlanId> {
+        self.low_fuel_plan_id
     }
 
-    fn low_disk_space_plan(&self) -> PlanId {
+    fn low_disk_space_plan(&self) -> Option<PlanId> {
         self.low_disk_space_plan_id
-            .expect("fixture has no low-disk-space plan")
     }
 
-    fn low_http_calls_plan(&self) -> PlanId {
+    fn low_http_calls_plan(&self) -> Option<PlanId> {
         self.low_http_calls_plan_id
-            .expect("fixture has no low-HTTP-calls plan")
     }
 
-    fn low_rpc_calls_plan(&self) -> PlanId {
+    fn low_rpc_calls_plan(&self) -> Option<PlanId> {
         self.low_rpc_calls_plan_id
-            .expect("fixture has no low-RPC-calls plan")
     }
 
     async fn base_http_client(&self) -> reqwest_middleware::ClientWithMiddleware {

@@ -51,10 +51,10 @@ pub trait RegistryService: Send + Sync {
     fn builtin_plugin_owner_account_id(&self) -> AccountId;
 
     fn default_plan(&self) -> PlanId;
-    fn low_fuel_plan(&self) -> PlanId;
-    fn low_disk_space_plan(&self) -> PlanId;
-    fn low_http_calls_plan(&self) -> PlanId;
-    fn low_rpc_calls_plan(&self) -> PlanId;
+    fn low_fuel_plan(&self) -> Option<PlanId>;
+    fn low_disk_space_plan(&self) -> Option<PlanId>;
+    fn low_http_calls_plan(&self) -> Option<PlanId>;
+    fn low_rpc_calls_plan(&self) -> Option<PlanId>;
 
     async fn kill(&self);
 

@@ -21,6 +21,7 @@ use crate::components::worker_executor::spawned::SpawnedWorkerExecutor;
 use crate::components::worker_executor_cluster::WorkerExecutorCluster;
 use crate::components::worker_service::WorkerService;
 use async_trait::async_trait;
+use futures::StreamExt;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -28,6 +29,159 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use tokio::time::Instant;
 use tracing::{Instrument, Level, info};
+
+#[cfg(test)]
+use test_r::test;
+
+#[cfg(test)]
+#[test]
+fn supported_cluster_preflight() {
+    use std::collections::HashMap;
+    let executable = std::env::current_exe().unwrap();
+    let env = |http: &str, grpc: &str| {
+        HashMap::from([
+            (
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__HTTP_PORT".into(),
+                http.into(),
+            ),
+            (
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__GRPC__PORT".into(),
+                grpc.into(),
+            ),
+            (
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__HOST".into(),
+                "localhost".into(),
+            ),
+            (
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__PORT".into(),
+                "19020".into(),
+            ),
+        ])
+    };
+    let launch = |env| {
+        SupportedServiceLaunch::new(
+            "worker_executor",
+            &executable,
+            executable.parent().unwrap().into(),
+            env,
+        )
+    };
+    preflight_supported_launches(
+        &[launch(env("18301", "19301")), launch(env("18413", "19417"))],
+        "localhost",
+        19020,
+    );
+    [
+        ("18302", "19301"),
+        ("18301", "19302"),
+        ("19301", "19302"),
+        ("18302", "18301"),
+        ("18302", "18302"),
+    ]
+    .into_iter()
+    .for_each(|(http, grpc)| {
+        assert!(
+            std::panic::catch_unwind(|| preflight_supported_launches(
+                &[launch(env("18301", "19301")), launch(env(http, grpc))],
+                "localhost",
+                19020
+            ))
+            .is_err()
+        );
+    });
+    [
+        ("HTTP_PORT", None),
+        ("GRPC__PORT", None),
+        ("SHARD_MANAGER__HOST", None),
+        ("SHARD_MANAGER__PORT", None),
+        ("SHARD_MANAGER__HOST", Some("127.0.0.2")),
+        ("SHARD_MANAGER__PORT", Some("19021")),
+    ]
+    .into_iter()
+    .for_each(|(leaf, value)| {
+        let mut second = env("18302", "19302");
+        let key = format!("GOLEM_ADVANCED__WORKER_EXECUTOR__{leaf}");
+        match value {
+            Some(value) => {
+                second.insert(key, value.into());
+            }
+            None => {
+                second.remove(&key);
+            }
+        }
+        assert!(
+            std::panic::catch_unwind(|| preflight_supported_launches(
+                &[launch(env("18301", "19301")), launch(second)],
+                "localhost",
+                19020
+            ))
+            .is_err()
+        );
+    });
+    let wrong = SupportedServiceLaunch::new(
+        "registry_service",
+        &executable,
+        executable.parent().unwrap().into(),
+        HashMap::from([
+            (
+                "GOLEM_ADVANCED__REGISTRY_SERVICE__HTTP_PORT".into(),
+                "18302".into(),
+            ),
+            (
+                "GOLEM_ADVANCED__REGISTRY_SERVICE__GRPC__PORT".into(),
+                "19302".into(),
+            ),
+        ]),
+    );
+    assert!(
+        std::panic::catch_unwind(|| preflight_supported_launches(
+            &[launch(env("18301", "19301")), wrong],
+            "localhost",
+            19020
+        ))
+        .is_err()
+    );
+}
+
+fn preflight_supported_launches(
+    launches: &[SupportedServiceLaunch],
+    shard_host: &str,
+    shard_port: u16,
+) {
+    let mut ports = HashSet::new();
+    launches.iter().for_each(|launch| {
+        let listeners: [u16; 2] = launch.listeners("worker_executor");
+        listeners.into_iter().for_each(|port| {
+            assert!(
+                ports.insert(port),
+                "duplicate supported executor listener {port}"
+            )
+        });
+        [
+            (
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__HOST",
+                shard_host.to_string(),
+            ),
+            (
+                "GOLEM_ADVANCED__WORKER_EXECUTOR__SHARD_MANAGER__PORT",
+                shard_port.to_string(),
+            ),
+        ]
+        .into_iter()
+        .for_each(|(key, expected)| {
+            let actual = launch
+                .env
+                .iter()
+                .find(|(name, _)| name.as_ref() == key)
+                .map(|(_, value)| value.as_ref());
+            assert_eq!(
+                actual,
+                Some(expected.as_str()),
+                "supported executor shard peer disagrees with registration handle: {key}"
+            );
+        });
+    });
+}
 
 pub struct SpawnedWorkerExecutorCluster {
     worker_executors: Vec<Arc<dyn WorkerExecutor>>,
@@ -51,10 +205,9 @@ impl SpawnedWorkerExecutorCluster {
         oplog_archive_interval: Option<Duration>,
         enable_fs_cache: bool,
         otlp: bool,
-        launch: Option<SupportedServiceLaunch>,
     ) -> Arc<dyn WorkerExecutor> {
         Arc::new(
-            SpawnedWorkerExecutor::new_with_launch(
+            SpawnedWorkerExecutor::new(
                 &executable,
                 &working_directory,
                 http_port,
@@ -70,7 +223,6 @@ impl SpawnedWorkerExecutorCluster {
                 oplog_archive_interval,
                 enable_fs_cache,
                 otlp,
-                launch,
             )
             .await,
         )
@@ -94,55 +246,8 @@ impl SpawnedWorkerExecutorCluster {
         enable_fs_cache: bool,
         otlp: bool,
     ) -> Self {
-        Self::new_with_launches(
-            size,
-            base_http_port,
-            base_grpc_port,
-            executable,
-            working_directory,
-            rdb,
-            shard_manager,
-            worker_service,
-            verbosity,
-            out_level,
-            err_level,
-            registry_service,
-            environment_state_cache_capacity,
-            oplog_archive_interval,
-            enable_fs_cache,
-            otlp,
-            None,
-        )
-        .await
-    }
-
-    pub(crate) async fn new_with_launches(
-        size: usize,
-        base_http_port: u16,
-        base_grpc_port: u16,
-        executable: &Path,
-        working_directory: &Path,
-        rdb: Arc<dyn Rdb>,
-        shard_manager: Arc<dyn ShardManager>,
-        worker_service: Arc<dyn WorkerService>,
-        verbosity: Level,
-        out_level: Level,
-        err_level: Level,
-        registry_service: Arc<dyn RegistryService>,
-        environment_state_cache_capacity: Option<usize>,
-        oplog_archive_interval: Option<Duration>,
-        enable_fs_cache: bool,
-        otlp: bool,
-        launches: Option<Vec<SupportedServiceLaunch>>,
-    ) -> Self {
-        assert!(
-            launches
-                .as_ref()
-                .is_none_or(|launches| launches.len() == size)
-        );
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors = Vec::new();
-        let mut launches = launches.into_iter().flatten();
 
         for i in 0..size {
             let http_port = base_http_port + i as u16;
@@ -165,13 +270,41 @@ impl SpawnedWorkerExecutorCluster {
                     oplog_archive_interval,
                     enable_fs_cache,
                     otlp,
-                    launches.next(),
                 )
                 .in_current_span()
                 .await,
             );
         }
 
+        Self::finish(worker_executors, shard_manager).await
+    }
+
+    pub(crate) async fn new_supported(
+        launches: Vec<SupportedServiceLaunch>,
+        shard_manager: Arc<dyn ShardManager>,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        preflight_supported_launches(
+            &launches,
+            &shard_manager.grpc_host(),
+            shard_manager.grpc_port(),
+        );
+        let worker_executors = futures::stream::iter(launches)
+            .then(|launch| async move {
+                Arc::new(SpawnedWorkerExecutor::new_supported(launch, out_level, err_level).await)
+                    as Arc<dyn WorkerExecutor>
+            })
+            .collect()
+            .await;
+        Self::finish(worker_executors, shard_manager).await
+    }
+
+    async fn finish(
+        worker_executors: Vec<Arc<dyn WorkerExecutor>>,
+        shard_manager: Arc<dyn ShardManager>,
+    ) -> Self {
+        let size = worker_executors.len();
         info!("Waiting for shard manager to see all executors");
 
         let start = Instant::now();

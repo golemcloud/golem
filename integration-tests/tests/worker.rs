@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::Tracing;
-use anyhow::anyhow;
+use anyhow::{Context, anyhow};
 use axum::Router;
 use axum::extract::Query;
 use axum::http::HeaderMap;
@@ -2733,6 +2733,10 @@ async fn worker_suspends_when_running_out_of_fuel(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    let plan = deps
+        .registry_service()
+        .low_fuel_plan()
+        .context("fixture requires the low-fuel plan")?;
     let admin = deps.admin().await;
     let admin_client = admin.registry_service_client().await;
 
@@ -2744,7 +2748,7 @@ async fn worker_suspends_when_running_out_of_fuel(
             &user.account_id.0,
             &AccountSetPlan {
                 current_revision: AccountRevision::INITIAL,
-                plan: deps.registry_service().low_fuel_plan(),
+                plan,
             },
         )
         .await?;
@@ -3080,6 +3084,10 @@ async fn worker_suspends_when_monthly_http_call_limit_exhausted(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    let plan = deps
+        .registry_service()
+        .low_http_calls_plan()
+        .context("fixture requires the low-HTTP-calls plan")?;
     let admin = deps.admin().await;
     let admin_client = admin.registry_service_client().await;
 
@@ -3090,7 +3098,7 @@ async fn worker_suspends_when_monthly_http_call_limit_exhausted(
             &user.account_id.0,
             &AccountSetPlan {
                 current_revision: AccountRevision::INITIAL,
-                plan: deps.registry_service().low_http_calls_plan(),
+                plan,
             },
         )
         .await?;
@@ -3168,6 +3176,10 @@ async fn worker_suspends_when_monthly_rpc_call_limit_exhausted(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    let plan = deps
+        .registry_service()
+        .low_rpc_calls_plan()
+        .context("fixture requires the low-RPC-calls plan")?;
     let admin = deps.admin().await;
     let admin_client = admin.registry_service_client().await;
 
@@ -3178,7 +3190,7 @@ async fn worker_suspends_when_monthly_rpc_call_limit_exhausted(
             &user.account_id.0,
             &AccountSetPlan {
                 current_revision: AccountRevision::INITIAL,
-                plan: deps.registry_service().low_rpc_calls_plan(),
+                plan,
             },
         )
         .await?;

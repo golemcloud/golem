@@ -97,13 +97,11 @@ impl SpawnedWorkerService {
 
     pub(crate) async fn new_supported(
         launch: SupportedServiceLaunch,
-        http_port: u16,
-        grpc_port: u16,
-        custom_request_port: u16,
-        mcp_port: u16,
         out_level: Level,
         err_level: Level,
     ) -> Self {
+        let [http_port, grpc_port, custom_request_port, mcp_port] =
+            launch.listeners("worker_service");
         Self::start(
             launch.command(&[]),
             http_port,

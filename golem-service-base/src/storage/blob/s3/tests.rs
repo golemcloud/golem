@@ -75,7 +75,7 @@ use uuid::Uuid;
 struct SentRequest {
     method: String,
     uri: String,
-    authorization: Option<Box<str>>,
+    authorization: Option<Arc<str>>,
     range: Option<String>,
     copy_source: Option<String>,
     if_none_match: Option<String>,
@@ -87,7 +87,7 @@ impl SentRequest {
         Self {
             method: request.method().to_string(),
             uri: request.uri().to_string(),
-            authorization: request.headers().get("authorization").map(Box::from),
+            authorization: request.headers().get("authorization").map(Arc::from),
             range: request.headers().get("range").map(str::to_string),
             copy_source: request
                 .headers()

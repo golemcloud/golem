@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use anyhow::Context;
 use golem_client::api::{
     RegistryServiceClient, RegistryServiceCreateAccountError,
     RegistryServiceCreatePermissionShareError, RegistryServiceGetAccountByEmailError,
@@ -186,6 +187,10 @@ fn account_share(
 async fn owner_cannot_change_the_plan_of_the_own_account(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
+    let plan = deps
+        .registry_service()
+        .low_fuel_plan()
+        .context("fixture requires the low-fuel plan")?;
     let user = deps.user().await?;
     let client = deps.registry_service().client(&user.token).await;
 
@@ -194,7 +199,7 @@ async fn owner_cannot_change_the_plan_of_the_own_account(
             &user.account_id.0,
             &AccountSetPlan {
                 current_revision: AccountRevision::INITIAL,
-                plan: deps.registry_service().low_fuel_plan(),
+                plan,
             },
         )
         .await;
@@ -216,6 +221,10 @@ async fn owner_cannot_change_the_plan_of_the_own_account(
 async fn admin_can_change_the_plan_of_an_account(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
+    let plan = deps
+        .registry_service()
+        .low_fuel_plan()
+        .context("fixture requires the low-fuel plan")?;
     let user = deps.user().await?;
     let admin = deps.admin().await;
     let admin_client = deps.registry_service().client(&admin.token).await;
@@ -225,11 +234,11 @@ async fn admin_can_change_the_plan_of_an_account(
             &user.account_id.0,
             &AccountSetPlan {
                 current_revision: AccountRevision::INITIAL,
-                plan: deps.registry_service().low_fuel_plan(),
+                plan,
             },
         )
         .await?;
-    assert_eq!(account.plan_id, deps.registry_service().low_fuel_plan());
+    assert_eq!(account.plan_id, plan);
 
     Ok(())
 }
@@ -239,6 +248,10 @@ async fn admin_can_change_the_plan_of_an_account(
 async fn set_plan_permission_share_lets_the_recipient_change_a_plan(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {
+    let plan = deps
+        .registry_service()
+        .low_fuel_plan()
+        .context("fixture requires the low-fuel plan")?;
     let customer = deps.user().await?;
     let billing = deps.user().await?;
     let admin = deps.admin().await;
@@ -247,7 +260,7 @@ async fn set_plan_permission_share_lets_the_recipient_change_a_plan(
 
     let set_plan = AccountSetPlan {
         current_revision: AccountRevision::INITIAL,
-        plan: deps.registry_service().low_fuel_plan(),
+        plan,
     };
     // Without the share the customer account is not visible to the billing account.
     let before_share = billing_client
@@ -278,7 +291,7 @@ async fn set_plan_permission_share_lets_the_recipient_change_a_plan(
     let account = billing_client
         .set_account_plan(&customer.account_id.0, &set_plan)
         .await?;
-    assert_eq!(account.plan_id, deps.registry_service().low_fuel_plan());
+    assert_eq!(account.plan_id, plan);
 
     Ok(())
 }

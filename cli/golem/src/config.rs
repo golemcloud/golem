@@ -1945,7 +1945,7 @@ mod tests {
                 [logging.stdout]
                 json = true
                 json_flatten = false
-                json_flatten_span = true
+                json_flatten_span = false
                 json_source_location = true
                 ansi = false
                 [logging.stderr]
@@ -1956,7 +1956,7 @@ mod tests {
                 span_events_active = true
                 [logging.file]
                 enabled = true
-                json_flatten = true
+                json_flatten = false
                 json_flatten_span = false
                 pretty = true
                 span_events_full = true
@@ -2295,7 +2295,7 @@ mod tests {
             .for_each(|config| {
                 assert!(config.stdout.json);
                 assert!(!config.stdout.json_flatten);
-                assert!(config.stdout.json_flatten_span);
+                assert!(!config.stdout.json_flatten_span);
                 assert!(config.stdout.json_source_location);
                 assert!(!config.stdout.ansi);
                 assert!(config.stderr.enabled);
@@ -2305,7 +2305,7 @@ mod tests {
                 assert!(config.stderr.span_events_active);
                 assert!(!config.stderr.span_events_full);
                 assert!(config.file.enabled);
-                assert!(config.file.json_flatten);
+                assert!(!config.file.json_flatten);
                 assert!(!config.file.json_flatten_span);
                 assert!(config.file.pretty);
                 assert!(!config.file.ansi);
@@ -2628,7 +2628,7 @@ mod tests {
                             ..run_args_with_data_dir("/data")
                         },
                     );
-                    let error = result.err().expect("embedded reader owns every section");
+                    let error = result.expect_err("embedded reader owns every section");
                     assert!(format!("{error:#}").contains(path), "{error:#}");
                     Ok(())
                 });

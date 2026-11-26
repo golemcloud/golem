@@ -18,7 +18,7 @@ use crate::components::shard_manager::ShardManager;
 use crate::components::{ChildProcessLogger, SupportedServiceLaunch, is_serving_grpc};
 use async_trait::async_trait;
 use futures::FutureExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -29,18 +29,26 @@ pub struct SpawnedShardManager {
     http_port: u16,
     grpc_port: u16,
     number_of_shards_override: Arc<RwLock<Option<usize>>>,
-    state_write_timeout_override: Option<Duration>,
     process: Arc<Mutex<ProcessState>>,
     lifecycle: Arc<tokio::sync::Mutex<()>>,
-    executable: PathBuf,
-    working_directory: PathBuf,
+    recipe: Arc<ShardLaunch>,
+    out_level: Level,
+    err_level: Level,
+}
+
+enum ShardLaunch {
+    Suite(Box<SuiteInputs>),
+    Supported(SupportedServiceLaunch),
+}
+
+struct SuiteInputs {
+    executable: Box<Path>,
+    working_directory: Box<Path>,
+    state_write_timeout_override: Option<Duration>,
     rdb: Arc<dyn Rdb>,
     registry_service: Arc<dyn RegistryService>,
     verbosity: Level,
-    out_level: Level,
-    err_level: Level,
     otlp: bool,
-    launch: Option<Arc<SupportedServiceLaunch>>,
 }
 
 struct ProcessState {
@@ -109,71 +117,71 @@ impl SpawnedShardManager {
         err_level: Level,
         otlp: bool,
     ) -> Self {
-        Self::new_with_launch(
-            executable,
-            working_directory,
-            number_of_shards_override,
-            state_write_timeout_override,
-            automatic_restart,
-            http_port,
-            grpc_port,
-            rdb,
-            registry_service,
-            verbosity,
-            out_level,
-            err_level,
-            otlp,
-            None,
-        )
-        .await
-    }
-
-    pub(crate) async fn new_with_launch(
-        executable: &Path,
-        working_directory: &Path,
-        number_of_shards_override: Option<usize>,
-        state_write_timeout_override: Option<Duration>,
-        automatic_restart: bool,
-        http_port: u16,
-        grpc_port: u16,
-        rdb: Arc<dyn Rdb>,
-        registry_service: Arc<dyn RegistryService>,
-        verbosity: Level,
-        out_level: Level,
-        err_level: Level,
-        otlp: bool,
-        launch: Option<SupportedServiceLaunch>,
-    ) -> Self {
         info!("Starting golem-shard-manager process");
 
         if !executable.exists() {
             panic!("Expected to have precompiled golem-shard-manager at {executable:?}");
         }
 
-        let (child, logger) = Self::start(
-            executable,
-            working_directory,
-            number_of_shards_override,
+        let recipe = Arc::new(ShardLaunch::Suite(Box::new(SuiteInputs {
+            executable: executable.into(),
+            working_directory: working_directory.into(),
             state_write_timeout_override,
+            rdb,
+            registry_service,
+            verbosity,
+            otlp,
+        })));
+        Self::from_recipe(
+            recipe,
+            number_of_shards_override,
+            automatic_restart,
             http_port,
             grpc_port,
-            &rdb,
-            &registry_service,
-            verbosity,
             out_level,
             err_level,
-            otlp,
-            launch.as_ref(),
-            None,
         )
         .await
-        .expect("Failed to start golem-shard-manager");
+    }
+
+    pub(crate) async fn new_supported(
+        launch: SupportedServiceLaunch,
+        automatic_restart: bool,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        let [http_port, grpc_port] = launch.listeners("shard_manager");
+        Self::from_recipe(
+            Arc::new(ShardLaunch::Supported(launch)),
+            None,
+            automatic_restart,
+            http_port,
+            grpc_port,
+            out_level,
+            err_level,
+        )
+        .await
+    }
+
+    async fn from_recipe(
+        recipe: Arc<ShardLaunch>,
+        number_of_shards_override: Option<usize>,
+        automatic_restart: bool,
+        http_port: u16,
+        grpc_port: u16,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        let command =
+            Self::prepare_command(&recipe, http_port, grpc_port, number_of_shards_override).await;
+        let (child, logger) = Self::start(command, grpc_port, out_level, err_level, None)
+            .await
+            .expect("Failed to start golem-shard-manager");
 
         let shard_manager = Self {
             http_port,
             grpc_port,
             number_of_shards_override: Arc::new(RwLock::new(number_of_shards_override)),
-            state_write_timeout_override,
             process: Arc::new(Mutex::new(ProcessState {
                 supervision: Supervision::Active,
                 interrupt_restart: tokio::sync::watch::channel(false).0,
@@ -181,15 +189,9 @@ impl SpawnedShardManager {
                 logger: Some(logger),
             })),
             lifecycle: Arc::new(tokio::sync::Mutex::new(())),
-            executable: executable.to_path_buf(),
-            working_directory: working_directory.to_path_buf(),
-            rdb,
-            registry_service,
-            verbosity,
+            recipe,
             out_level,
             err_level,
-            otlp,
-            launch: launch.map(Arc::new),
         };
 
         if automatic_restart {
@@ -199,49 +201,48 @@ impl SpawnedShardManager {
         shard_manager
     }
 
-    async fn start(
-        executable: &Path,
-        working_directory: &Path,
-        number_of_shards_override: Option<usize>,
-        state_write_timeout_override: Option<Duration>,
+    async fn prepare_command(
+        recipe: &ShardLaunch,
         http_port: u16,
         grpc_port: u16,
-        rdb: &Arc<dyn Rdb>,
-        registry_service: &Arc<dyn RegistryService>,
-        verbosity: Level,
-        out_level: Level,
-        err_level: Level,
-        otlp: bool,
-        launch: Option<&SupportedServiceLaunch>,
-        mut interrupt: Option<tokio::sync::watch::Receiver<bool>>,
-    ) -> anyhow::Result<(Child, ChildProcessLogger)> {
-        let mut command = match launch {
-            Some(launch) => {
+        number_of_shards_override: Option<usize>,
+    ) -> Command {
+        match recipe {
+            ShardLaunch::Supported(launch) => {
                 assert!(
-                    number_of_shards_override.is_none() && state_write_timeout_override.is_none(),
+                    number_of_shards_override.is_none(),
                     "supported-settings shard manager cannot override policy"
                 );
                 launch.command(&[])
             }
-            None => {
-                let mut command = Command::new(executable);
-                command.current_dir(working_directory).envs(
+            ShardLaunch::Suite(suite) => {
+                let mut command = Command::new(suite.executable.as_ref());
+                command.current_dir(suite.working_directory.as_ref()).envs(
                     super::env_vars(
                         number_of_shards_override,
-                        state_write_timeout_override,
+                        suite.state_write_timeout_override,
                         http_port,
                         grpc_port,
-                        rdb,
+                        &suite.rdb,
                         false,
-                        registry_service,
-                        verbosity,
-                        otlp,
+                        &suite.registry_service,
+                        suite.verbosity,
+                        suite.otlp,
                     )
                     .await,
                 );
                 command
             }
-        };
+        }
+    }
+
+    async fn start(
+        mut command: Command,
+        grpc_port: u16,
+        out_level: Level,
+        err_level: Level,
+        mut interrupt: Option<tokio::sync::watch::Receiver<bool>>,
+    ) -> anyhow::Result<(Child, ChildProcessLogger)> {
         let mut child = StartingChild(Some(
             command
                 .stdin(Stdio::piped())
@@ -323,19 +324,12 @@ impl SpawnedShardManager {
     fn start_automatic_restart_monitor(&self) {
         let process = self.process.clone();
         let lifecycle = self.lifecycle.clone();
-        let executable = self.executable.clone();
-        let working_directory = self.working_directory.clone();
+        let recipe = self.recipe.clone();
         let number_of_shards_override = self.number_of_shards_override.clone();
-        let state_write_timeout_override = self.state_write_timeout_override;
         let http_port = self.http_port;
         let grpc_port = self.grpc_port;
-        let rdb = self.rdb.clone();
-        let registry_service = self.registry_service.clone();
-        let verbosity = self.verbosity;
         let out_level = self.out_level;
         let err_level = self.err_level;
-        let otlp = self.otlp;
-        let launch = self.launch.clone();
 
         tokio::spawn(async move {
             loop {
@@ -375,22 +369,23 @@ impl SpawnedShardManager {
                 let current_number_of_shards_override = *number_of_shards_override.read().unwrap();
                 let interrupt = process.lock().unwrap().interrupt_restart.subscribe();
                 let restarted = loop {
-                    let restart = std::panic::AssertUnwindSafe(Self::start(
-                        &executable,
-                        &working_directory,
-                        current_number_of_shards_override,
-                        state_write_timeout_override,
-                        http_port,
-                        grpc_port,
-                        &rdb,
-                        &registry_service,
-                        verbosity,
-                        out_level,
-                        err_level,
-                        otlp,
-                        launch.as_deref(),
-                        Some(interrupt.clone()),
-                    ))
+                    let restart = std::panic::AssertUnwindSafe(async {
+                        let command = Self::prepare_command(
+                            &recipe,
+                            http_port,
+                            grpc_port,
+                            current_number_of_shards_override,
+                        )
+                        .await;
+                        Self::start(
+                            command,
+                            grpc_port,
+                            out_level,
+                            err_level,
+                            Some(interrupt.clone()),
+                        )
+                        .await
+                    })
                     .catch_unwind()
                     .await;
                     match restart {
@@ -460,35 +455,25 @@ impl ShardManager for SpawnedShardManager {
 
     async fn restart(&self, number_of_shards_override: Option<usize>) {
         let _lifecycle = self.lifecycle.lock().await;
-        if let Some(launch) = &self.launch {
-            assert!(
-                number_of_shards_override.is_none(),
-                "supported-settings shard manager cannot override policy"
-            );
-            let _ = launch.command(&[]);
-        }
+        let effective_override =
+            number_of_shards_override.or(*self.number_of_shards_override.read().unwrap());
+        let command = Self::prepare_command(
+            &self.recipe,
+            self.http_port,
+            self.grpc_port,
+            effective_override,
+        )
+        .await;
         info!("Restarting golem-shard-manager");
 
         if let Some(number_of_shards) = number_of_shards_override {
             *self.number_of_shards_override.write().unwrap() = Some(number_of_shards);
         }
-        let number_of_shards_override: Option<usize> =
-            *self.number_of_shards_override.read().unwrap();
-
         let (child, logger) = Self::start(
-            &self.executable,
-            &self.working_directory,
-            number_of_shards_override,
-            self.state_write_timeout_override,
-            self.http_port,
+            command,
             self.grpc_port,
-            &self.rdb,
-            &self.registry_service,
-            self.verbosity,
             self.out_level,
             self.err_level,
-            self.otlp,
-            self.launch.as_deref(),
             None,
         )
         .await

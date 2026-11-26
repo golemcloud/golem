@@ -551,8 +551,7 @@ mod tests {
                     let error =
                         crate::custom_api::oidc::session_store::migrated_sqlite_pool(&config)
                             .await
-                            .err()
-                            .expect("a regular-file ancestor must stop initialization");
+                            .expect_err("a regular-file ancestor must stop initialization");
                     assert!(
                         error.downcast_ref::<std::io::Error>().is_some(),
                         "{error:#}"

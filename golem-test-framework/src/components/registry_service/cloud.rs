@@ -117,32 +117,20 @@ impl RegistryService for CloudRegistryService {
         self.default_plan_id
     }
 
-    fn low_fuel_plan(&self) -> PlanId {
-        panic!(
-            "low_fuel_plan is not supported in cloud mode; \
-             the benchmark calling this method requires a local or provided cluster"
-        );
+    fn low_fuel_plan(&self) -> Option<PlanId> {
+        None
     }
 
-    fn low_disk_space_plan(&self) -> PlanId {
-        panic!(
-            "low_disk_space_plan is not supported in cloud mode; \
-             the benchmark calling this method requires a local or provided cluster"
-        );
+    fn low_disk_space_plan(&self) -> Option<PlanId> {
+        None
     }
 
-    fn low_http_calls_plan(&self) -> PlanId {
-        panic!(
-            "low_http_calls_plan is not supported in cloud mode; \
-             the benchmark calling this method requires a local or provided cluster"
-        );
+    fn low_http_calls_plan(&self) -> Option<PlanId> {
+        None
     }
 
-    fn low_rpc_calls_plan(&self) -> PlanId {
-        panic!(
-            "low_rpc_calls_plan is not supported in cloud mode; \
-             the benchmark calling this method requires a local or provided cluster"
-        );
+    fn low_rpc_calls_plan(&self) -> Option<PlanId> {
+        None
     }
 
     async fn kill(&self) {}
@@ -170,6 +158,27 @@ impl RegistryService for CloudRegistryService {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn cloud_has_no_suite_quota_plans() {
+        let service = CloudRegistryService::new(
+            Url::parse("https://fixture.invalid:18481").unwrap(),
+            TokenSecret::new(),
+            AccountId(uuid::Uuid::from_u128(101)),
+            PlanId(uuid::Uuid::from_u128(211)),
+        );
+        let registry: &dyn RegistryService = &service;
+        assert_eq!(
+            [
+                registry.low_fuel_plan(),
+                registry.low_disk_space_plan(),
+                registry.low_http_calls_plan(),
+                registry.low_rpc_calls_plan(),
+            ],
+            [None; 4]
+        );
+        assert_eq!(registry.default_plan().0, uuid::Uuid::from_u128(211));
+    }
 
     /// Every generated client has to reach the gateway, not `http://host:port`.
     ///
