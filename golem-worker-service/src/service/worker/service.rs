@@ -837,8 +837,8 @@ enum TypeQuestion {
     /// The request lists agents. The listing decides itself, so its decision has its audit
     /// record, allowed or denied.
     Listing(Surface),
-    /// A lookup before another operation, which decides and records itself. A refused lookup
-    /// writes its denial; an allowed one writes nothing.
+    /// A lookup before another operation, which decides and records itself. The lookup writes
+    /// nothing; its caller records the refusal that answers the request, and only that one.
     Lookup(Surface),
 }
 
@@ -974,32 +974,41 @@ impl WorkerService {
                     Err(_) => Ok(false),
                 }
             }
-            TypeQuestion::Lookup(surface) => {
+            TypeQuestion::Lookup(_) => {
                 let authorizer = CompatibilityAuthorizer::new(auth.clone(), Vec::new())
-                    .with_type_checks([(agent_type.clone(), vec![check.clone()])]);
-                let request = self.entry_request(auth, operation.clone());
-                let allowed = authorizer
+                    .with_type_checks([(agent_type.clone(), vec![check])]);
+                let request = self.entry_request(auth, operation);
+                Ok(authorizer
                     .scope(&request)
                     .await
                     .agent_types
-                    .contains(agent_type);
-                if !allowed {
-                    // Only to write the refusal: the same check, decided with an audit that records
-                    // denials only. Its answer is the scope's answer, and a lost record does not
-                    // change it.
-                    let _ = self
-                        .decide_with(
-                            &self.audit.denials_only(),
-                            auth,
-                            self.entry_request(auth, operation),
-                            vec![vec![check]],
-                            surface,
-                        )
-                        .await;
-                }
-                Ok(allowed)
+                    .contains(agent_type))
             }
         }
+    }
+
+    /// Records the refused lookup of `agent_type`, which `component` implements, when that
+    /// refusal is the request's answer: the same type-wide check, decided with an audit that
+    /// records denials only. A lost record does not change the answer.
+    async fn record_type_refusal(
+        &self,
+        auth: &AuthCtx,
+        component: &Component,
+        agent_type: &AgentTypeName,
+        surface: Surface,
+    ) {
+        let Ok(operation) = list_agents(component) else {
+            return;
+        };
+        let _ = self
+            .decide_with(
+                &self.audit.denials_only(),
+                auth,
+                self.entry_request(auth, operation),
+                vec![vec![agent_type_check(component, agent_type)]],
+                surface,
+            )
+            .await;
     }
 
     /// The caller of a request that an account token authenticated: the account in both roles.
@@ -1354,6 +1363,8 @@ impl WorkerService {
             )
             .await?
         {
+            self.record_type_refusal(auth_ctx, &component, agent_type_name, surface)
+                .await;
             return Err(not_found());
         }
         Ok((registered, component))
@@ -1361,6 +1372,8 @@ impl WorkerService {
 
     /// Authorizes the retained namespace before scanning agents, without requiring its
     /// current implementer. Every returned agent still needs its recorded owner's permission.
+    /// A lookup that the caller may make on no registration is not found, and its first refusal
+    /// is the answer that gets a record.
     async fn retained_agent_types(
         &self,
         environment_id: EnvironmentId,
@@ -1368,7 +1381,37 @@ impl WorkerService {
         auth: &AuthCtx,
         question: TypeQuestion,
     ) -> WorkerResult<Vec<(RegisteredAgentType, Component)>> {
+        let (allowed, refused) = self
+            .split_retained_agent_types(environment_id, name, auth, question)
+            .await?;
+        if allowed.is_empty() {
+            if let (TypeQuestion::Lookup(surface), Some((_, component))) =
+                (question, refused.first())
+            {
+                self.record_type_refusal(auth, component, name, surface)
+                    .await;
+            }
+            return Err(
+                RegistryServiceError::NotFound(format!("Agent type {name} not found")).into(),
+            );
+        }
+        Ok(allowed)
+    }
+
+    /// The retained registrations of the type that the caller may see, and the ones it may not
+    /// see. A lookup records no refusal here: its caller records the one that answers it.
+    async fn split_retained_agent_types(
+        &self,
+        environment_id: EnvironmentId,
+        name: &AgentTypeName,
+        auth: &AuthCtx,
+        question: TypeQuestion,
+    ) -> WorkerResult<(
+        Vec<(RegisteredAgentType, Component)>,
+        Vec<(RegisteredAgentType, Component)>,
+    )> {
         let mut allowed = Vec::new();
+        let mut refused = Vec::new();
         for registered in self.agent_types.retained(environment_id, name).await? {
             let component = self
                 .component_service
@@ -1382,14 +1425,11 @@ impl WorkerService {
                 .await?
             {
                 allowed.push((registered, component));
+            } else {
+                refused.push((registered, component));
             }
         }
-        if allowed.is_empty() {
-            return Err(
-                RegistryServiceError::NotFound(format!("Agent type {name} not found")).into(),
-            );
-        }
-        Ok(allowed)
+        Ok((allowed, refused))
     }
 
     /// The fingerprint of the incarnation a streaming invocation reaches. An expected
@@ -4925,8 +4965,8 @@ impl WorkerService {
         let (target, component, freshness_disposition) =
             match (request.agent_id, request.parameters) {
                 (Some(agent_id), None) => {
-                    let retained = self
-                        .retained_agent_types(
+                    let (retained, refused) = self
+                        .split_retained_agent_types(
                             environment_id,
                             agent_type_name,
                             &auth,
@@ -4939,10 +4979,25 @@ impl WorkerService {
                             ) => WorkerServiceError::AgentNotFound(agent_id),
                             other => other,
                         })?;
-                    if !retained
-                        .iter()
-                        .any(|(registered, _)| agent_id.type_id() == Some(registered.type_id))
-                    {
+                    let of_the_agent = |(registered, _): &&(RegisteredAgentType, Component)| {
+                        agent_id.type_id() == Some(registered.type_id)
+                    };
+                    if !retained.iter().any(|entry| of_the_agent(&entry)) {
+                        // The refusal that answers the request gets its record: the refusal of the
+                        // agent's own registration, else the first one when none is allowed. A
+                        // refusal of another registration is not the answer, so it writes nothing.
+                        let answer = refused
+                            .iter()
+                            .find(of_the_agent)
+                            .or(if retained.is_empty() {
+                                refused.first()
+                            } else {
+                                None
+                            });
+                        if let Some((_, component)) = answer {
+                            self.record_type_refusal(&auth, component, agent_type_name, surface)
+                                .await;
+                        }
                         return Err(WorkerServiceError::AgentNotFound(agent_id));
                     }
                     let agent = self
@@ -5347,6 +5402,8 @@ mod tests {
     struct TestRegistryService {
         resolved: ResolvedAgentType,
         removed: bool,
+        /// More retained registrations of the type, after the resolved one.
+        older: Vec<RegisteredAgentType>,
     }
 
     #[async_trait]
@@ -5533,8 +5590,9 @@ mod tests {
             let registered = &self.resolved.registered_agent_type;
             Ok((environment_id == self.resolved.environment_id
                 && *name == registered.agent_type.type_name)
-                .then(|| registered.clone())
+                .then(|| std::iter::once(registered.clone()).chain(self.older.iter().cloned()))
                 .into_iter()
+                .flatten()
                 .collect())
         }
 
@@ -6614,6 +6672,7 @@ mod tests {
             *worker_client.metadata_environment_id.lock().unwrap() = Some(environment_id);
             let registry = Arc::new(TestRegistryService {
                 removed: false,
+                older: Vec::new(),
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
                         type_id: test_type_id(),
@@ -6723,6 +6782,7 @@ mod tests {
             *worker_client.metadata_environment_id.lock().unwrap() = Some(environment_id);
             let registry = Arc::new(TestRegistryService {
                 removed: false,
+                older: Vec::new(),
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
                         type_id: test_type_id(),
@@ -7101,6 +7161,7 @@ mod tests {
             .unwrap();
         harness.worker_service.agent_types = agent_type_resolver(Arc::new(TestRegistryService {
             removed: true,
+            older: Vec::new(),
             resolved: ResolvedAgentType {
                 registered_agent_type: RegisteredAgentType {
                     type_id: harness.type_id,
@@ -8193,6 +8254,7 @@ mod tests {
                     harness.worker_service.agent_types =
                         agent_type_resolver(Arc::new(TestRegistryService {
                             removed: false,
+                            older: Vec::new(),
                             resolved: ResolvedAgentType {
                                 registered_agent_type: RegisteredAgentType {
                                     type_id: harness.type_id,
@@ -9875,6 +9937,7 @@ mod tests {
             components.get_current_by_id(a.id).await.unwrap();
             let agent_types = agent_type_resolver(Arc::new(TestRegistryService {
                 removed: false,
+                older: Vec::new(),
                 resolved: ResolvedAgentType {
                     registered_agent_type: RegisteredAgentType {
                         type_id: test_type_id(),
@@ -11931,6 +11994,116 @@ mod tests {
             assert_eq!(records[0].caller.original, account(admin));
             assert_eq!(records[0].caller.immediate, account(admin));
             assert_eq!(records[0].principal, account(target));
+        }
+
+        /// The other registration of the harness's agent type: an older component that
+        /// implements it, which the caller may not see.
+        fn older_type_id() -> TypeId {
+            TypeId::try_from(43u32).unwrap()
+        }
+
+        /// A harness whose agent type also has `older_type_id`'s registration, and a caller that
+        /// may see the harness's own component and invoke its keyed agent.
+        async fn harness_with_a_hidden_older_registration(
+            sink: TestAuditSink,
+        ) -> (RestHarness, AuthCtx) {
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(sink);
+            harness
+                .worker_client
+                .set_metadata_component_revision(ComponentRevision::INITIAL);
+            let current = harness
+                .worker_service
+                .component_service
+                .get_revision(harness.component_id, harness.component_revision)
+                .await
+                .unwrap();
+            let mut older = current.clone();
+            older.id = ComponentId(Uuid::from_u128(0x01d));
+            older.component_name = ComponentName("older-weather-component".to_string());
+            harness.worker_service.component_service = Arc::new(StaticComponentService {
+                components: vec![current.clone(), older.clone()],
+                tool_state: None,
+                tool_queries: Mutex::new(vec![]),
+                revision_gate: Mutex::new(None),
+            });
+            let registered = |component: &Component, type_id| RegisteredAgentType {
+                type_id,
+                agent_type: current.metadata.agent_types()[0].clone(),
+                implemented_by: RegisteredAgentTypeImplementer {
+                    component_id: component.id,
+                    component_revision: component.revision,
+                    component_name: component.component_name.0.clone(),
+                    account_id: component.account_id,
+                    account_email: component.account_email.clone(),
+                },
+            };
+            harness.worker_service.agent_types =
+                agent_type_resolver(Arc::new(TestRegistryService {
+                    removed: false,
+                    older: vec![registered(&older, older_type_id())],
+                    resolved: ResolvedAgentType {
+                        registered_agent_type: registered(&current, harness.type_id),
+                        environment_id: harness.environment_id,
+                        deployment_revision: DeploymentRevision::INITIAL,
+                        current_deployment_revision: Some(CurrentDeploymentRevision::INITIAL),
+                    },
+                }));
+            let auth = auth_ctx_with_permissions(vec![
+                super::super::agent_type_check(&current, &harness.agent_type_name),
+                agent_target(
+                    &harness.keyed_agent_id(),
+                    AgentVerb::Invoke,
+                    AgentResourcePattern::Any,
+                ),
+            ]);
+            (harness, auth)
+        }
+
+        #[test]
+        async fn an_invoke_by_agent_id_writes_no_denial_for_another_registration_of_its_type() {
+            let sink = TestAuditSink::keeping();
+            let (harness, auth) = harness_with_a_hidden_older_registration(sink.clone()).await;
+            let mut request = harness.invoke_request();
+            request.agent_id = Some(harness.keyed_agent_id());
+            request.parameters = None;
+
+            harness.invoke_rest(request, None, auth).await.unwrap();
+
+            let records = sink.records();
+            assert!(
+                records
+                    .iter()
+                    .all(|record| record.operation != CatalogOperation::ListAgents.name()),
+                "{records:?}"
+            );
+        }
+
+        #[test]
+        async fn an_invoke_by_agent_id_of_a_hidden_registration_is_not_found_and_writes_one_denial()
+        {
+            let sink = TestAuditSink::keeping();
+            let (harness, auth) = harness_with_a_hidden_older_registration(sink.clone()).await;
+            // An agent of the older registration's type, which the caller may not see.
+            let agent_id = AgentId::keyed(
+                harness.environment_id,
+                older_type_id(),
+                &harness.agent_key(),
+            );
+            let mut request = harness.invoke_request();
+            request.agent_id = Some(agent_id);
+            request.parameters = None;
+
+            let error = harness.invoke_rest(request, None, auth).await.unwrap_err();
+
+            assert!(
+                matches!(error, WorkerServiceError::AgentNotFound(id) if id == agent_id),
+                "{error:?}"
+            );
+            let records = sink.records();
+            assert_eq!(records.len(), 1, "{records:?}");
+            assert_eq!(records[0].operation, CatalogOperation::ListAgents.name());
+            assert_ne!(records[0].outcome, AuditOutcome::Allowed);
         }
     }
 
