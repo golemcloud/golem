@@ -95,7 +95,30 @@ pub(super) fn oci_reference(source: &str, digest: Option<&str>) -> anyhow::Resul
     })
 }
 
-pub(super) async fn fetch_oci(reference: &Reference, limit: u64) -> anyhow::Result<Vec<u8>> {
+pub(super) struct OciRegistry {
+    client: Client,
+    repository: Url,
+    auth: Option<RegistryAuth>,
+}
+
+impl OciRegistry {
+    pub(super) async fn get(&self, path: &str, accept: &str) -> anyhow::Result<Response> {
+        let request = self
+            .client
+            .get(self.repository.join(path)?)
+            .header(header::ACCEPT, accept);
+        let request = match &self.auth {
+            Some(auth) => auth.apply(request),
+            None => request,
+        };
+        Ok(request.send().await.map_err(reqwest::Error::without_url)?)
+    }
+}
+
+pub(super) async fn fetch_oci(
+    reference: &Reference,
+    limit: u64,
+) -> anyhow::Result<(Vec<u8>, OciRegistry)> {
     let registry = reference.resolve_registry();
     let credential_key = if reference.registry() == "docker.io" {
         "https://index.docker.io/v1/"
@@ -182,26 +205,24 @@ pub(super) async fn fetch_oci(reference: &Reference, limit: u64) -> anyhow::Resu
                 "OCI manifest digest mismatch"
             );
         }
+        let (auth, hint) = auth.map_or((None, None), |(auth, hint)| (Some(auth), hint));
+        let registry = OciRegistry {
+            client,
+            repository: base.join(&format!("{repo}/"))?,
+            auth,
+        };
         let (mut entries, blobs) = registry_archive(&manifest)?;
         for (path, size) in blobs {
             let hex = path.strip_prefix("blobs/sha256/").unwrap();
             let digest = format!("sha256:{hex}");
-            let request = client.get(base.join(&format!("{repo}/blobs/{digest}"))?);
-            let request = match &auth {
-                Some((auth, _)) => auth.apply(request),
-                None => request,
-            };
-            let response = request.send().await.map_err(reqwest::Error::without_url)?;
-            let bytes = with_credential_hint(
-                response_bytes(response, size).await,
-                auth.as_ref().and_then(|(_, hint)| *hint),
-            )?;
+            let response = registry.get(&format!("blobs/{digest}"), "*/*").await?;
+            let bytes = with_credential_hint(response_bytes(response, size).await, hint)?;
             ensure!(bytes.len() as u64 == size, "Size mismatch for {digest}");
             entries.insert(path, bytes);
         }
         let archive = write_tar(&entries)?;
         ensure!(archive.len() as u64 <= limit, "Package size limit exceeded");
-        Ok(archive)
+        Ok((archive, registry))
     };
     tokio::time::timeout(FETCH_TIMEOUT, fetch)
         .await
@@ -378,7 +399,7 @@ async fn registry_token(
     ))
 }
 
-async fn response_bytes(response: Response, limit: u64) -> anyhow::Result<Vec<u8>> {
+pub(super) async fn response_bytes(response: Response, limit: u64) -> anyhow::Result<Vec<u8>> {
     let response = response
         .error_for_status()
         .map_err(reqwest::Error::without_url)?;
@@ -570,7 +591,8 @@ mod tests {
         });
         let error = fetch_oci(&oci_reference(&source, None).unwrap(), 4096)
             .await
-            .unwrap_err();
+            .err()
+            .unwrap();
         server.abort();
         let message = format!("{error:#}");
         assert!(message.contains(&format!("oci://{source}")), "{message}");

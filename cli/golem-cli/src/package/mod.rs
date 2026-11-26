@@ -13,6 +13,7 @@ use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 mod remote;
+mod signatures;
 
 const LOCK_NAME: &str = "golem.lock";
 const MAX_LOCK_BYTES: u64 = 512 * 1024;
@@ -136,7 +137,11 @@ fn read_lock(root: &Path) -> anyhow::Result<(Lock, Option<Vec<u8>>)> {
     })
 }
 
-pub(crate) async fn install(flags: &GolemCliGlobalFlags, source: &str) -> anyhow::Result<()> {
+pub(crate) async fn install(
+    flags: &GolemCliGlobalFlags,
+    source: &str,
+    trust_store: Option<&Path>,
+) -> anyhow::Result<()> {
     ensure!(
         !flags.disable_app_manifest_discovery,
         "Installing a package requires an application manifest"
@@ -156,7 +161,18 @@ pub(crate) async fn install(flags: &GolemCliGlobalFlags, source: &str) -> anyhow
         }
         _ => source.to_owned(),
     };
-    let bytes = fetch_source(root, &source, None, MAX_PACKAGE_BYTES).await?;
+    let (bytes, registry) = match PackageSource::parse(&source) {
+        PackageSource::Oci(reference) => {
+            let (bytes, registry) =
+                remote::fetch_oci(&remote::oci_reference(reference, None)?, MAX_PACKAGE_BYTES)
+                    .await?;
+            (bytes, Some(registry))
+        }
+        _ => (
+            fetch_source(root, &source, None, MAX_PACKAGE_BYTES).await?,
+            None,
+        ),
+    };
     let package =
         read(bytes.as_slice()).with_context(|| format!("Cannot read package {source}"))?;
     let identity = &package.config().package;
@@ -208,7 +224,13 @@ pub(crate) async fn install(flags: &GolemCliGlobalFlags, source: &str) -> anyhow
         &root.join(LOCK_NAME),
         lock_bytes.as_bytes(),
         previous_lock.as_deref(),
-    )
+    )?;
+    if let Some(registry) = registry {
+        signatures::report(&registry, package.digest(), trust_store).await;
+    } else if trust_store.is_some() {
+        crate::log::eprint_line("Package signer trust store is only used for OCI registry sources");
+    }
+    Ok(())
 }
 
 fn save_install(
@@ -373,7 +395,9 @@ async fn fetch_source(
         }
         PackageSource::Url(url) => remote::fetch_url(remote::package_url(url)?, limit).await,
         PackageSource::Oci(reference) => {
-            remote::fetch_oci(&remote::oci_reference(reference, digest)?, limit).await
+            let (bytes, _) =
+                remote::fetch_oci(&remote::oci_reference(reference, digest)?, limit).await?;
+            Ok(bytes)
         }
     }
 }

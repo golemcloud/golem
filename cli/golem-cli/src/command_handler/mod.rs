@@ -326,8 +326,12 @@ impl<Hooks: CommandHandlerHooks + 'static> CommandHandler<Hooks> {
                         .cmd_build(component_name, build_args)
                         .await
                 }
-                GolemCliSubcommand::Install { source } => {
-                    crate::package::install(&ctx.global_flags, &source).await
+                GolemCliSubcommand::Install {
+                    source,
+                    trust_store,
+                } => {
+                    crate::package::install(&ctx.global_flags, &source, trust_store.as_deref())
+                        .await
                 }
                 GolemCliSubcommand::Package {
                     subcommand: crate::command::PackageSubcommand::Pack { output },

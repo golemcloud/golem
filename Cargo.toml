@@ -281,6 +281,8 @@ sha2 = "0.10.8"
 shadow-rs = { version = "1.2.0", default-features = false, features = ["build"] }
 shell-words = "1.1.0"
 shlex = "2.0.1"
+sigstore-crypto = "0.17.0"
+sigstore-types = "0.17.0"
 similar = "2.7.0"
 socket2 = "0.6"
 spdx = "0.10.8"
