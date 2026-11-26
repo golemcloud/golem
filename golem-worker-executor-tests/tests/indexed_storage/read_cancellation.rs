@@ -16,7 +16,7 @@ use super::*;
 use futures::{StreamExt, TryStreamExt};
 use golem_common::model::oplog::OplogEntry;
 use golem_common::model::{OplogIndex, RetryConfig};
-use golem_common::serialization::serialize;
+use golem_common::serialization::{DecodeError, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_worker_executor::services::oplog::{OplogService, PrimaryOplogService};
@@ -52,17 +52,43 @@ async fn cancel_blocked_read(
     blocked
 }
 
+/// A select of the indexed storage, one for each read operation of the trait.
+#[derive(Clone, Copy, Debug)]
+enum Select {
+    Exists,
+    ScanStable,
+    Length,
+    Read,
+    First,
+    Last,
+    LastId,
+    Closest,
+}
+
+impl Select {
+    const ALL: [Self; 8] = [
+        Self::Exists,
+        Self::ScanStable,
+        Self::Length,
+        Self::Read,
+        Self::First,
+        Self::Last,
+        Self::LastId,
+        Self::Closest,
+    ];
+}
+
 async fn select(
     storage: &PostgresIndexedStorage,
     namespace: IndexedStorageNamespace,
-    operation: u8,
+    operation: Select,
 ) -> Result<(), IndexedStorageError> {
     match operation {
-        0 => storage
+        Select::Exists => storage
             .exists("test", "cancel", namespace, KEY1)
             .await
             .map(|_| ()),
-        1 => storage
+        Select::ScanStable => storage
             .scan_stable(
                 "test",
                 "cancel",
@@ -75,31 +101,30 @@ async fn select(
             )
             .await
             .map(|_| ()),
-        2 => storage
+        Select::Length => storage
             .length("test", "cancel", namespace, KEY1)
             .await
             .map(|_| ()),
-        3 => storage
+        Select::Read => storage
             .read("test", "cancel", "entry", namespace, KEY1, 1, 1)
             .await
             .map(|_| ()),
-        4 => storage
+        Select::First => storage
             .first("test", "cancel", "entry", namespace, KEY1)
             .await
             .map(|_| ()),
-        5 => storage
+        Select::Last => storage
             .last("test", "cancel", "entry", namespace, KEY1)
             .await
             .map(|_| ()),
-        6 => storage
+        Select::LastId => storage
             .last_id("test", "cancel", "entry", namespace, KEY1)
             .await
             .map(|_| ()),
-        7 => storage
+        Select::Closest => storage
             .closest("test", "cancel", "entry", namespace, KEY1, 1)
             .await
             .map(|_| ()),
-        _ => unreachable!(),
     }
 }
 
@@ -141,7 +166,7 @@ async fn cancelled_postgres_selects_are_transient_and_primary_reads_recover_or_e
         )
         .await?;
 
-    futures::stream::iter(0..8)
+    futures::stream::iter(Select::ALL)
         .then(|operation| {
             let storage = storage.clone();
             let namespace = namespace.clone();
@@ -165,7 +190,7 @@ async fn cancelled_postgres_selects_are_transient_and_primary_reads_recover_or_e
                 let error = read.await.unwrap().unwrap_err();
                 assert!(
                     matches!(error, IndexedStorageError::Transient(_)),
-                    "operation {operation}: {error:?}"
+                    "operation {operation:?}: {error:?}"
                 );
                 lock.commit().await.unwrap();
                 select(&storage, namespace, operation).await.unwrap();
@@ -237,53 +262,51 @@ async fn cancelled_postgres_selects_are_transient_and_primary_reads_recover_or_e
     );
     lock.commit().await?;
 
-    futures::stream::iter([vec![255], vec![]])
-        .map(Ok::<_, anyhow::Error>)
-        .try_for_each(|corrupt| {
-            let pool = &pool;
-            let primary = primary.clone();
-            let id = &id;
-            let storage = storage.clone();
-            let namespace = namespace.clone();
-            async move {
-                sqlx::query("UPDATE index_storage SET value = $1")
-                    .bind(&corrupt)
-                    .execute(pool)
-                    .await?;
-                let error: WorkerExecutorError = primary
-                    .read_exact(id, AgentMode::Durable, OplogIndex::INITIAL, 1)
-                    .await
-                    .unwrap_err()
-                    .into();
-                assert!(
-                    matches!(error, WorkerExecutorError::OplogFailed { .. }),
-                    "{error:?}"
-                );
-                let message = error.to_string();
-                assert!(message.contains("entry 1"), "{message}");
-                assert!(
-                    message.contains(if corrupt.is_empty() {
-                        "version"
-                    } else {
-                        "version: 255"
-                    }),
-                    "{message}"
-                );
-                assert_eq!(
-                    storage
-                        .read("test", "unchanged", "entry", namespace, KEY1, 1, 1)
-                        .await?,
-                    vec![(1, corrupt)]
-                );
-                Ok(())
-            }
-        })
-        .await?;
+    futures::stream::iter([
+        (vec![255], DecodeError::UnknownVersion(255)),
+        (vec![], DecodeError::MissingVersion),
+    ])
+    .map(Ok::<_, anyhow::Error>)
+    .try_for_each(|(corrupt, decode_error)| {
+        let pool = &pool;
+        let primary = primary.clone();
+        let id = &id;
+        let storage = storage.clone();
+        let namespace = namespace.clone();
+        async move {
+            sqlx::query("UPDATE index_storage SET value = $1")
+                .bind(&corrupt)
+                .execute(pool)
+                .await?;
+            let error: WorkerExecutorError = primary
+                .read_exact(id, AgentMode::Durable, OplogIndex::INITIAL, 1)
+                .await
+                .unwrap_err()
+                .into();
+            assert!(
+                matches!(error, WorkerExecutorError::OplogFailed { .. }),
+                "{error:?}"
+            );
+            let message = error.to_string();
+            assert!(
+                message.contains(&format!("failed to decode oplog entry 1: {decode_error}")),
+                "{message}"
+            );
+            assert_eq!(
+                storage
+                    .read("test", "unchanged", "entry", namespace, KEY1, 1, 1)
+                    .await?,
+                vec![(1, corrupt)]
+            );
+            Ok(())
+        }
+    })
+    .await?;
     sqlx::query("DROP TABLE index_storage")
         .execute(&pool)
         .await?;
     assert!(matches!(
-        select(&storage, namespace, 3).await,
+        select(&storage, namespace, Select::Read).await,
         Err(IndexedStorageError::Other(_))
     ));
     let error: WorkerExecutorError = primary

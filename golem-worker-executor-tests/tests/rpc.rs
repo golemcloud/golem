@@ -76,6 +76,7 @@ mod hint_before_rpc_start;
 mod input_gc;
 mod kept_handle_deleting_child;
 mod replay_barrier_probe;
+mod unreadable_sessions;
 mod websocket_crash_probe;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);

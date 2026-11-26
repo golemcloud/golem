@@ -57,7 +57,7 @@ use golem_worker_executor_test_utils::{
     start_with_overrides, truncate_archived_oplog_chunk,
 };
 use pretty_assertions::assert_eq;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -197,6 +197,7 @@ async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_
         1
     );
     pool.close().await;
+    let before_failure = StoredOplog::read(deps, &context, &unreadable_id).await?;
 
     let error = executor
         .invoke_and_await_agent(&component, &unreadable, "increment", data_value!())
@@ -246,6 +247,14 @@ async fn an_unknown_primary_version_fails_only_its_agent_and_a_cache_version_is_
             .await?,
         vec![(2, corrupt)]
     );
+    // The startup read fails before the executor admits the invocation, so the oplog of the
+    // agent stays as it was: no pending invocation and no outcome.
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    drop(executor);
+    before_failure.assert_adds_only_admitted_work(
+        &StoredOplog::read(deps, &context, &unreadable_id).await?,
+        0,
+    )?;
     Ok(())
 }
 
@@ -298,6 +307,102 @@ async fn wait_until_archived(
     Ok(())
 }
 
+/// The stored history of a durable agent, as bytes: the primary oplog entries and the chunks of
+/// the archive level.
+#[derive(Debug)]
+struct StoredOplog {
+    primary: Vec<(u64, Vec<u8>)>,
+    archive: Vec<(u64, Vec<u8>)>,
+}
+
+impl StoredOplog {
+    async fn read(
+        deps: &WorkerExecutorTestDependencies,
+        context: &TestContext,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<Self> {
+        let indexed = SqliteIndexedStorage::configured(
+            &golem_worker_executor::derive_disjoint_sqlite_config(
+                &sqlite_storage_config(deps, context),
+                "indexed",
+            ),
+        )
+        .await?;
+        let primary = indexed
+            .with_entity("test", "read_primary", "entry")
+            .read_raw(
+                IndexedStorageNamespace::OpLog {
+                    owned_agent_id: owned_agent_id.clone(),
+                    agent_mode: AgentMode::Durable,
+                },
+                &owned_agent_id.storage_key(),
+                0,
+                i64::MAX as u64,
+            )
+            .await?;
+        Ok(Self {
+            primary,
+            archive: archived_oplog_chunks(deps, context, owned_agent_id, ARCHIVE_LEVEL).await?,
+        })
+    }
+
+    /// Checks that `after` keeps every primary entry and archive chunk of this history with the
+    /// same bytes, and returns the entries that `after` adds, by oplog index. An entry that
+    /// moved from the primary into a new archive chunk is returned once.
+    fn added_entries(&self, after: &Self) -> anyhow::Result<BTreeMap<u64, OplogEntry>> {
+        anyhow::ensure!(
+            after.primary.starts_with(&self.primary),
+            "the failed read changed or removed primary entries: before {:?}, after {:?}",
+            self.primary,
+            after.primary
+        );
+        anyhow::ensure!(
+            after.archive.starts_with(&self.archive),
+            "the failed read changed or removed archive chunks: before {:?}, after {:?}",
+            self.archive,
+            after.archive
+        );
+        let primary = after.primary[self.primary.len()..]
+            .iter()
+            .map(|(index, bytes)| {
+                golem_common::serialization::decode::<OplogEntry>(bytes)
+                    .map(|entry| (*index, entry))
+                    .map_err(|error| anyhow::anyhow!("added primary entry {index}: {error}"))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        let archive = after.archive[self.archive.len()..]
+            .iter()
+            .map(|(last, bytes)| {
+                let chunk: CompressedOplogChunk = golem_common::serialization::decode(bytes)
+                    .map_err(|error| anyhow::anyhow!("added archive chunk {last}: {error}"))?;
+                let first = last + 1 - chunk.count;
+                Ok(chunk
+                    .decompress()?
+                    .into_iter()
+                    .zip(first..)
+                    .map(|(entry, index)| (index, entry))
+                    .collect::<Vec<_>>())
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(archive.into_iter().flatten().chain(primary).collect())
+    }
+
+    /// Checks that `after` keeps this history and adds only the `PendingAgentInvocation` entries
+    /// of the `admitted` invocations, which the executor took before the read failed. The failed
+    /// read must not add an `Error`, a cancellation, a terminal entry or any other entry.
+    fn assert_adds_only_admitted_work(&self, after: &Self, admitted: usize) -> anyhow::Result<()> {
+        let added = self.added_entries(after)?;
+        anyhow::ensure!(
+            added.len() == admitted
+                && added
+                    .values()
+                    .all(|entry| matches!(entry, OplogEntry::PendingAgentInvocation { .. })),
+            "the failed read must add only the {admitted} admitted invocations: {added:#?}"
+        );
+        Ok(())
+    }
+}
+
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -334,7 +439,7 @@ async fn an_undecodable_archive_chunk_fails_only_its_agent(
     drop(executor);
 
     truncate_archived_oplog_chunk(deps, &context, &unreadable_owned, ARCHIVE_LEVEL, 0).await?;
-    let corrupt = archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL).await?;
+    let before_failure = StoredOplog::read(deps, &context, &unreadable_owned).await?;
 
     // The executor starts on the data, and recovers every agent it can read.
     let executor = start_with_oplog_config(deps, &context, Some(archiving_config())).await?;
@@ -344,7 +449,7 @@ async fn an_undecodable_archive_chunk_fails_only_its_agent(
             .invoke_and_await_agent(&component, &unreadable, "increment", data_value!())
             .await,
         &unreadable_id.agent_id,
-        corrupt[0].0,
+        before_failure.archive[0].0,
     );
 
     assert_eq!(
@@ -359,17 +464,20 @@ async fn an_undecodable_archive_chunk_fails_only_its_agent(
         AgentStatus::Idle
     );
 
-    // Nothing deleted or rewrote the unreadable history.
+    // The startup read fails before the executor admits the invocation, so the primary and the
+    // archive stay as they were: no pending invocation and no outcome.
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
-    assert_eq!(
-        archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL).await?,
-        corrupt
-    );
+    before_failure.assert_adds_only_admitted_work(
+        &StoredOplog::read(deps, &context, &unreadable_owned).await?,
+        0,
+    )?;
     Ok(())
 }
 
 /// The `Create` of the agent reads, and a later archived chunk does not: the agent is found, its
-/// cached status admits startup, whose replay scan fails with the cause, and the agent is not run.
+/// cached status admits the invocation and startup, whose replay scan fails with the cause, and the
+/// agent is not run.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -447,7 +555,7 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
         chunks.len() - 1,
     )
     .await?;
-    let corrupt = archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL).await?;
+    let before_failure = StoredOplog::read(deps, &context, &unreadable_owned).await?;
 
     let executor = start_with_oplog_config(deps, &context, Some(archiving_config())).await?;
 
@@ -473,13 +581,15 @@ async fn an_undecodable_later_archive_chunk_fails_only_its_agent(
         5
     );
 
+    // The cached status admits the invocation, so its `PendingAgentInvocation` is the one entry
+    // that the executor adds before replay fails. The failed replay adds no `Error`, cancellation
+    // or terminal entry, and keeps every primary entry and archive chunk as it was.
+    executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
-    // Recovery may append diagnostics, but must not replace or delete the damaged history.
-    assert!(
-        archived_oplog_chunks(deps, &context, &unreadable_owned, ARCHIVE_LEVEL)
-            .await?
-            .starts_with(&corrupt)
-    );
+    before_failure.assert_adds_only_admitted_work(
+        &StoredOplog::read(deps, &context, &unreadable_owned).await?,
+        1,
+    )?;
     Ok(())
 }
 

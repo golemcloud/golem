@@ -94,6 +94,7 @@ pub mod tool_discovery;
 pub mod tool_runtime_bypass;
 pub mod tool_streaming;
 pub mod transactions;
+mod unreadable_call_paths;
 pub mod wasi;
 pub mod websocket;
 pub mod worker_initialization;
