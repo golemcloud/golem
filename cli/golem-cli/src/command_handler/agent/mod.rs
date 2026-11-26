@@ -1179,7 +1179,7 @@ impl AgentCommandHandler {
     /// before the read. After the last page, the export reads the fingerprint again. It fails when
     /// the agent became another incarnation. The export writes to a temporary file in the directory
     /// of `path`. It renames the file to `path` only after the last entry, so a failed export
-    /// leaves no file at `path`.
+    /// leaves `path` as it was.
     async fn cmd_oplog_jsonl_export(
         &self,
         agent_id: AgentIdArgs,
