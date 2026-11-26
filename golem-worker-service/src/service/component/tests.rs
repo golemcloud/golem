@@ -111,6 +111,7 @@ pub(crate) struct TestRegistry {
     pub(crate) next_lookup: Mutex<Option<Arc<LookupGate>>>,
     pub(crate) deployed_tools: Mutex<Option<golem_common::model::tool::ToolDeploymentState>>,
     pub(crate) tool_state_reads: std::sync::atomic::AtomicUsize,
+    pub(crate) auth_contexts: Mutex<HashMap<TokenSecret, AuthCtx>>,
 }
 
 /// Holds the next deployed lookup after it read the registry state, until the test releases it.
@@ -145,6 +146,7 @@ impl TestRegistry {
             next_lookup: Mutex::new(None),
             deployed_tools: Mutex::new(None),
             tool_state_reads: std::sync::atomic::AtomicUsize::new(0),
+            auth_contexts: Mutex::new(HashMap::new()),
         }
     }
 }
@@ -225,8 +227,13 @@ impl RegistryService for TestRegistry {
     ) -> Result<Vec<Component>, RegistryServiceError> {
         Ok(self.revisions.clone())
     }
-    async fn authenticate_token(&self, _: &TokenSecret) -> Result<AuthCtx, RegistryServiceError> {
-        unimplemented!()
+    async fn authenticate_token(
+        &self,
+        token: &TokenSecret,
+    ) -> Result<AuthCtx, RegistryServiceError> {
+        let auth = self.auth_contexts.lock().unwrap().get(token).cloned();
+        self.pass_lookup_gate().await;
+        auth.ok_or_else(|| RegistryServiceError::CouldNotAuthenticate("unknown token".into()))
     }
     async fn get_resource_limits(
         &self,
@@ -307,14 +314,46 @@ impl RegistryService for TestRegistry {
     }
     async fn resolve_agent_type_by_names(
         &self,
-        _: &ApplicationName,
-        _: &EnvironmentName,
-        _: &AgentTypeName,
-        _: Option<DeploymentRevision>,
+        app: &ApplicationName,
+        env: &EnvironmentName,
+        agent: &AgentTypeName,
+        revision: Option<DeploymentRevision>,
         _: Option<&str>,
-        _: &AuthCtx,
+        auth: &AuthCtx,
     ) -> Result<ResolvedAgentType, RegistryServiceError> {
-        unimplemented!()
+        use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
+        use golem_common::model::card::{
+            AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
+        };
+        let registered = self.deployed_agent_type.lock().unwrap().clone().unwrap();
+        auth.authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
+            owner: AgentOwnerPattern::Agent {
+                account: registered.implemented_by.account_email.clone(),
+                application: app.clone(),
+                environment: env.clone(),
+                component: ComponentName(registered.implemented_by.component_name.clone()),
+                agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent.clone()),
+            },
+            verb: Some(AgentVerb::View),
+            resource: AgentResourcePattern::Empty,
+        }))
+        .map_err(|_| RegistryServiceError::NotFound(agent.0.clone()))?;
+        let resolved = ResolvedAgentType {
+            registered_agent_type: registered,
+            environment_id: self
+                .deployed
+                .lock()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .environment_id,
+            deployment_revision: revision.unwrap_or(DeploymentRevision::INITIAL),
+            current_deployment_revision: revision
+                .is_none()
+                .then_some(golem_common::model::deployment::CurrentDeploymentRevision::INITIAL),
+        };
+        self.pass_lookup_gate().await;
+        Ok(resolved)
     }
     async fn get_active_routes_for_domain(
         &self,
@@ -754,4 +793,66 @@ async fn zero_age_or_capacity_disables_current_cache() {
             b.revision
         );
     }
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn cancelled_authentication_does_not_block_other_account_invalidation() {
+    use crate::config::AuthServiceConfig;
+    use crate::service::auth::{AuthService, RemoteAuthService};
+
+    let registry = Arc::new(TestRegistry::new(vec![], None));
+    let account = AccountId::new();
+    let other_account = AccountId::new();
+    let token = TokenSecret::new();
+    let other_token = TokenSecret::new();
+    for (token, account_id, email) in [
+        (token.clone(), account, "cancelled@example.com"),
+        (other_token.clone(), other_account, "other@example.com"),
+    ] {
+        registry.auth_contexts.lock().unwrap().insert(
+            token,
+            AuthCtx::User(golem_service_base::model::auth::UserAuthCtx {
+                account_id,
+                account_email: AccountEmail::new(email),
+                account_plan_id: golem_common::model::plan::PlanId::new(),
+                account_roles: Default::default(),
+                effective_surface: Default::default(),
+                delegation_surface: None,
+            }),
+        );
+    }
+    let service = Arc::new(RemoteAuthService::new(
+        registry.clone(),
+        &AuthServiceConfig::default(),
+    ));
+    service
+        .authenticate_token(other_token.clone())
+        .await
+        .unwrap();
+
+    let gate = LookupGate::new();
+    *registry.next_lookup.lock().unwrap() = Some(gate.clone());
+    let owner = tokio::spawn({
+        let service = service.clone();
+        let token = token.clone();
+        async move { service.authenticate_token(token).await }
+    });
+    gate.started.acquire().await.unwrap().forget();
+    owner.abort();
+    assert!(owner.await.unwrap_err().is_cancelled());
+
+    // A retry of the cancelled request must not prevent unrelated revocation.
+    *registry.next_lookup.lock().unwrap() = Some(LookupGate::new());
+    let retry = service.authenticate_token(token);
+    tokio::pin!(retry);
+    assert!(futures::poll!(&mut retry).is_pending());
+    registry.auth_contexts.lock().unwrap().remove(&other_token);
+    tokio::time::timeout(
+        Duration::from_secs(2),
+        service.invalidate_tokens_for_account(other_account),
+    )
+    .await
+    .expect("cancelled authentication blocked invalidation for another account");
+    assert!(service.authenticate_token(other_token).await.is_err());
 }

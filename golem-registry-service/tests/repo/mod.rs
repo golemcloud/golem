@@ -70,6 +70,7 @@ use uuid::Uuid;
 pub mod account_tree;
 pub mod common;
 pub mod notifier_reconnect;
+pub mod permission_share;
 pub mod postgres;
 pub mod resource_usage_reload;
 pub mod sqlite;

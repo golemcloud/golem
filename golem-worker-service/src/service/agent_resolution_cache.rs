@@ -22,6 +22,7 @@ use golem_service_base::clients::registry::{RegistryService, RegistryServiceErro
 use golem_service_base::model::auth::AuthCtx;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::RwLock;
 use tracing::warn;
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
@@ -54,6 +55,7 @@ pub struct AgentResolutionCache {
         Cache<PinnedAgentResolutionCacheKey, (), Arc<ResolvedAgentType>, RegistryServiceError>,
     registry_service: Arc<dyn RegistryService>,
     current_revisions: scc::HashMap<EnvironmentId, CurrentDeploymentRevisions>,
+    permission_invalidation: RwLock<u64>,
 }
 
 impl AgentResolutionCache {
@@ -83,6 +85,7 @@ impl AgentResolutionCache {
             pinned_cache,
             registry_service,
             current_revisions: scc::HashMap::new(),
+            permission_invalidation: RwLock::new(0),
         }
     }
 
@@ -102,28 +105,40 @@ impl AgentResolutionCache {
             owner_account_email: owner_account_email.map(|s| s.to_string()),
         };
 
-        // Check if we have a cached but stale entry and remove it before get_or_insert
-        if let Some(resolved) = self.cache.try_get(&key).await
-            && self.is_stale(&resolved)
-        {
-            self.cache.remove(&key).await;
-        }
-
-        let registry = self.registry_service.clone();
-        let app = app_name.clone();
-        let env = env_name.clone();
-        let agent = agent_type_name.clone();
-        let owner = owner_account_email.map(|s| s.to_string());
-        let auth = auth_ctx.clone();
+        let generation = {
+            let guard = self.permission_invalidation.read().await;
+            if let Some(resolved) = self.cache.try_get(&key).await {
+                if !self.is_stale(&resolved) {
+                    return self
+                        .cache
+                        .get_or_insert_simple(&key, async move || Ok(resolved))
+                        .await;
+                }
+                self.cache.remove(&key).await;
+            }
+            *guard
+        };
 
         let resolved = self
+            .registry_service
+            .resolve_agent_type_by_names(
+                app_name,
+                env_name,
+                agent_type_name,
+                None,
+                owner_account_email,
+                auth_ctx,
+            )
+            .await
+            .map(Arc::new)?;
+        let guard = self.permission_invalidation.read().await;
+        // Do not retain responses from lookups that overlapped permission invalidation.
+        if *guard != generation {
+            return Ok(resolved);
+        }
+        let resolved = self
             .cache
-            .get_or_insert_simple(&key, async || {
-                registry
-                    .resolve_agent_type_by_names(&app, &env, &agent, None, owner.as_deref(), &auth)
-                    .await
-                    .map(Arc::new)
-            })
+            .get_or_insert_simple(&key, async move || Ok(resolved))
             .await?;
 
         // Track the revision for staleness detection
@@ -156,27 +171,35 @@ impl AgentResolutionCache {
             owner_account_email: owner_account_email.map(|s| s.to_string()),
         };
 
-        let registry = self.registry_service.clone();
-        let app = app_name.clone();
-        let env = env_name.clone();
-        let agent = agent_type_name.clone();
-        let owner = owner_account_email.map(|s| s.to_string());
-        let auth = auth_ctx.clone();
+        let generation = {
+            let guard = self.permission_invalidation.read().await;
+            if let Some(resolved) = self.pinned_cache.try_get(&key).await {
+                return self
+                    .pinned_cache
+                    .get_or_insert_simple(&key, async move || Ok(resolved))
+                    .await;
+            }
+            *guard
+        };
 
+        let resolved = self
+            .registry_service
+            .resolve_agent_type_by_names(
+                app_name,
+                env_name,
+                agent_type_name,
+                Some(deployment_revision),
+                owner_account_email,
+                auth_ctx,
+            )
+            .await
+            .map(Arc::new)?;
+        let guard = self.permission_invalidation.read().await;
+        if *guard != generation {
+            return Ok(resolved);
+        }
         self.pinned_cache
-            .get_or_insert_simple(&key, async move || {
-                registry
-                    .resolve_agent_type_by_names(
-                        &app,
-                        &env,
-                        &agent,
-                        Some(deployment_revision),
-                        owner.as_deref(),
-                        &auth,
-                    )
-                    .await
-                    .map(Arc::new)
-            })
+            .get_or_insert_simple(&key, async move || Ok(resolved))
             .await
     }
 
@@ -271,10 +294,31 @@ impl AgentResolutionCache {
         self.current_revisions.remove_sync(&environment_id);
     }
 
+    /// Removes both caches' account entries and prevents in-flight lookups from refilling them.
+    pub async fn invalidate_by_account(&self, account_id: AccountId) {
+        let mut generation = self.permission_invalidation.write().await;
+        *generation += 1;
+        for key in self.cache.keys().await {
+            if key.caller_account_id == account_id {
+                self.cache.remove(&key).await;
+            }
+        }
+        for key in self.pinned_cache.keys().await {
+            if key.caller_account_id == account_id {
+                self.pinned_cache.remove(&key).await;
+            }
+        }
+    }
+
     pub async fn clear(&self) {
+        let mut generation = self.permission_invalidation.write().await;
+        *generation += 1;
         let keys = self.cache.keys().await;
         for key in keys {
             self.cache.remove(&key).await;
+        }
+        for key in self.pinned_cache.keys().await {
+            self.pinned_cache.remove(&key).await;
         }
         self.current_revisions.retain_sync(|_, _| false);
     }
