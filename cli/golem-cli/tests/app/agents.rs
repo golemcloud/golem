@@ -4371,6 +4371,48 @@ async fn tool_invoke_stdout_contains_only_raw_bytes() {
     let invocation_id = receipt["idempotencyKey"].as_str().unwrap();
     Uuid::parse_str(invocation_id).expect("the receipt contains the final invocation UUID");
     assert_ne!(invocation_id, "structured-cli-repeat");
+    let public_id = receipt["invocationId"]
+        .as_str()
+        .expect("scalar receipt invocation ID");
+    assert_eq!(public_id, format!("raw-output.{invocation_id}"));
+    let direct = ctx.cli(["invocation", "get", public_id]).await;
+    assert!(direct.success_or_dump());
+
+    let triggered = ctx
+        .cli([
+            "--format",
+            "json",
+            cmd::TOOL,
+            cmd::INVOKE,
+            "--component",
+            "tool-raw-stdout:provider",
+            "--trigger",
+            "raw-output",
+            "--",
+            "repeat",
+            "triggered",
+            "2",
+        ])
+        .await;
+    assert!(triggered.success_or_dump());
+    let trigger_receipt = triggered.stdout_json::<serde_json::Value>().pop().unwrap();
+    let trigger_id = trigger_receipt["response"]["invocationId"]
+        .as_str()
+        .unwrap();
+    assert_eq!(
+        trigger_id,
+        format!(
+            "raw-output.{}",
+            trigger_receipt["response"]["idempotencyKey"]
+                .as_str()
+                .unwrap()
+        )
+    );
+    assert!(
+        ctx.cli(["invocation", "get", trigger_id])
+            .await
+            .success_or_dump()
+    );
 
     let lookup = ctx
         .cli_with_input(

@@ -4025,7 +4025,7 @@ impl WorkerService {
             .worker_client
             .invoke_agent_session_one_shot(&target.agent_id, start)
             .await
-            .map_err(|error| match (error, public_tool) {
+            .map_err(|error| match (error, public_tool.as_deref()) {
                 (
                     WorkerServiceError::AcceptedInvocation {
                         mut accepted,
@@ -4064,6 +4064,13 @@ impl WorkerService {
             }
         };
         Ok(NativeToolInvocationResponse {
+            invocation_id: match public_tool {
+                Some(tool) => format!("{tool}.{response_key}"),
+                None => {
+                    golem_common::model::OwnedInvocationId::new(response_agent_id, response_key)
+                        .to_string()
+                }
+            },
             agent_id: response_agent_id,
             idempotency_key: response_key,
             result,
@@ -11081,6 +11088,112 @@ mod tests {
             panic!("get of a completed invocation with unknown operation failed: {error}")
         });
         assert!(got.result.is_none());
+    }
+
+    #[test]
+    async fn scalar_receipts_roundtrip_to_the_same_invocation() {
+        use golem_common::model::{InvocationOwner, OwnedInvocationId};
+        for owner_kind in ["component", "hosted", "host"] {
+            for scheduled in [false, true] {
+                let mut harness = RestHarness::new(AgentMode::Durable);
+                harness
+                    .worker_client
+                    .set_metadata_component_revision(harness.component_revision);
+                if owner_kind == "host" {
+                    let components = harness
+                        .worker_service
+                        .component_service
+                        .get_all_revisions(harness.component_id)
+                        .await
+                        .unwrap();
+                    let mut state = harness
+                        .worker_service
+                        .component_service
+                        .get_tool_deployment_state(
+                            harness.environment_id,
+                            harness.component_id,
+                            harness.component_revision,
+                        )
+                        .await
+                        .unwrap()
+                        .unwrap()
+                        .as_ref()
+                        .clone();
+                    let source = golem_common::model::tool::ToolSource::Host {
+                        host_tool_id: "weather".to_string().try_into().unwrap(),
+                        implementation_version: "1".into(),
+                    };
+                    state
+                        .registered_tools
+                        .get_mut(&ToolName::try_from("weather").unwrap())
+                        .unwrap()
+                        .registration
+                        .source = source.clone();
+                    for bindings in state.tool_bindings.values_mut() {
+                        for binding in bindings.values_mut() {
+                            binding.source = source.clone();
+                        }
+                    }
+                    harness.worker_service.component_service = Arc::new(StaticComponentService {
+                        components,
+                        tool_state: Some(state),
+                        tool_queries: Mutex::new(vec![]),
+                        revision_gate: Mutex::new(None),
+                    });
+                }
+                let mut request = harness.tool_request();
+                if owner_kind == "hosted" {
+                    request.agent_id = Some(harness.keyed_agent_id());
+                    request.component_id = None;
+                }
+                if scheduled {
+                    request.mode = NativeToolInvocationMode::Schedule;
+                } else {
+                    let mut output = harness.worker_client.invocation_output.lock().unwrap();
+                    output.result = golem_common::model::AgentInvocationResult::ExternalTool {
+                        result: Ok(
+                            golem_common::model::tool::SerializableToolInvocationResult {
+                                result: Some(Box::new(empty_constructor_parameters())),
+                            },
+                        ),
+                    };
+                }
+                let response = harness
+                    .worker_service
+                    .invoke_tool_rest(
+                        harness.environment_id,
+                        request,
+                        Some(RestHarness::tool_key()),
+                        AuthCtx::system(),
+                    )
+                    .await
+                    .unwrap();
+                let id: OwnedInvocationId = response.invocation_id.parse().unwrap();
+                assert_eq!(id.id(), response.idempotency_key);
+                let expected = OwnedInvocationId::new(
+                    if owner_kind != "component" {
+                        InvocationOwner::Agent(response.agent_id)
+                    } else {
+                        InvocationOwner::Tool(ToolName::try_from("weather").unwrap())
+                    },
+                    response.idempotency_key,
+                );
+                assert_eq!(id, expected);
+                *harness.worker_client.invocation_summary.lock().unwrap() = Some(invocation_summary_proto(
+                    response.idempotency_key,
+                    golem_api_grpc::proto::golem::workerexecutor::v1::InvocationLifecycleState::Pending,
+                    golem_api_grpc::proto::golem::workerexecutor::v1::InvocationKind::Tool,
+                    Some("tool:weather/current".into()),
+                ));
+                let got = harness
+                    .worker_service
+                    .get_invocation(harness.environment_id, &id, AuthCtx::system())
+                    .await
+                    .unwrap();
+                assert_eq!(got.summary.invocation_id, response.invocation_id);
+                assert_eq!(got.summary.agent_id, response.agent_id);
+            }
+        }
     }
 
     include!("tool_lookup_tests.rs");

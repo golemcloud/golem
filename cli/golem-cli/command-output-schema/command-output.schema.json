@@ -9825,8 +9825,9 @@
         "$type": { "const": "tool.invoke" },
         "response": {
           "type": "object",
-          "required": ["agentId", "idempotencyKey", "result", "status", "componentRevision", "agentFingerprint", "oplogIndex"],
+          "required": ["invocationId", "agentId", "idempotencyKey", "result", "status", "componentRevision", "agentFingerprint", "oplogIndex"],
           "properties": {
+            "invocationId": { "type": "string" },
             "agentId": { "type": "string", "format": "uuid" },
             "idempotencyKey": { "type": "string" },
             "result": { "type": ["object", "null"] },

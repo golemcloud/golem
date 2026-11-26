@@ -431,10 +431,6 @@ impl AgentsApi {
             tool_name = %request.tool_name,
             idempotency_key = idempotency_key.0.as_ref().map(|key| key.value.clone())
         );
-        let standalone_tool = request
-            .component_id
-            .is_some()
-            .then(|| request.tool_name.clone());
         let response = self
             .worker_service
             .invoke_tool_rest(environment_id.0, request.0, idempotency_key.0, auth)
@@ -443,12 +439,7 @@ impl AgentsApi {
             .map_err(Into::into);
         record.result(response).map(|result| {
             let (invocation_id, environment_id) = (
-                Some(
-                    match standalone_tool.filter(|_| result.agent_id.type_id().is_some()) {
-                        Some(tool) => format!("{tool}.{}", result.idempotency_key),
-                        None => invocation_id_header(&result.agent_id, result.idempotency_key),
-                    },
-                ),
+                Some(result.invocation_id.clone()),
                 Some(environment_id.0.to_string()),
             );
             InvokeToolResponse::Ok(Json(result), invocation_id, environment_id)
@@ -704,6 +695,7 @@ pub enum NativeToolResult {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct NativeToolInvocationResponse {
+    pub invocation_id: String,
     pub agent_id: AgentId,
     pub idempotency_key: InvocationId,
     pub result: Option<NativeToolResult>,

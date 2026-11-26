@@ -19068,6 +19068,8 @@ components:
       title: NativeToolInvocationResponse
       type: object
       properties:
+        invocationId:
+          type: string
         agentId:
           type: string
           format: uuid
@@ -19088,6 +19090,7 @@ components:
           type: integer
           format: uint64
       required:
+      - invocationId
       - agentId
       - idempotencyKey
     NativeToolResult:

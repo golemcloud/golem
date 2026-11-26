@@ -4426,6 +4426,7 @@ fn arb_tool_invoke_result() -> OutputDocumentStrategy {
         .prop_map(|key| {
             to_structured_output_value(crate::model::tool_invoke::ToolInvokeView {
                 response: NativeToolInvocationResponse {
+                    invocation_id: format!("weather.{}", uuid::Uuid::from_u128(key)),
                     agent_id: AgentId::from_parts(7, 1).0,
                     idempotency_key: uuid::Uuid::from_u128(key),
                     result: None,

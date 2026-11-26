@@ -6823,9 +6823,12 @@ components:
       type: object
       title: NativeToolInvocationResponse
       required:
+      - invocationId
       - agentId
       - idempotencyKey
       properties:
+        invocationId:
+          type: string
         agentId:
           type: string
           format: uuid
