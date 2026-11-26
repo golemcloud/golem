@@ -259,7 +259,7 @@ async fn standalone_middleware_waits_survive_restarts_before_and_after_leaf(
         1
     );
     assert!(incomplete_starts_before(&oplog, OplogIndex::from_u64(u64::MAX)).is_empty());
-    assert_settled_oplog(&oplog, &[], &[]);
+    OplogShape::of(&oplog).assert_settled();
     assert_eq!(
         accepted_activation(&executor, &owner)
             .await?

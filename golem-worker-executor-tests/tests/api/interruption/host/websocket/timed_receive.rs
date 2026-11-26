@@ -8,6 +8,7 @@ use golem_common::model::oplog::{
 use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::{HasOplog, HasWebSocketConnectionPool, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::OplogView;
 use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
@@ -141,7 +142,7 @@ fn timed_receive_start(
                     );
                 }
                 ensure!(
-                    terminal_count(entries, entry.oplog_index)
+                    entries.call(entry.oplog_index).terminal_count()
                         == if entry.oplog_index == starts[0] {
                             terminals
                         } else {

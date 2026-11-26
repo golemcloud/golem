@@ -7,6 +7,7 @@ use super::*;
 use golem_common::model::AgentEvent;
 use golem_common::schema::IntoSchema;
 use golem_worker_executor::services::golem_config::SnapshotPolicy;
+use golem_worker_executor_test_utils::OplogShape;
 use pretty_assertions::assert_eq;
 use std::collections::HashSet;
 use test_r::test;
@@ -241,9 +242,9 @@ fn starts_named<'a>(
 }
 
 /// The settled-history rules every test in this file checks: no `wasm-rpc::drop` call, every
-/// `Start` has a terminal, every `SpanClosed` refers to a `wasm-rpc::upsert` span, and nothing
-/// positional follows the last `AgentInvocationFinished`.
-fn assert_settled_history(oplog: &[PublicOplogEntryWithIndex]) {
+/// `SpanClosed` refers to a `wasm-rpc::upsert` span, and the shared settled-history invariants.
+/// `settled_later` names the retained calls whose terminal a later invocation records.
+fn assert_settled_history(oplog: &[PublicOplogEntryWithIndex], settled_later: &[OplogIndex]) {
     assert_eq!(
         starts_named(oplog, WASM_RPC_DROP).count(),
         0,
@@ -262,47 +263,18 @@ fn assert_settled_history(oplog: &[PublicOplogEntryWithIndex]) {
             );
         }
     }
-    for entry in oplog {
-        if let PublicOplogEntry::Start(start) = &entry.entry {
-            let index = entry.oplog_index;
-            assert!(
-                oplog.iter().any(|terminal| match &terminal.entry {
-                    PublicOplogEntry::End(end) => end.start_index == index,
-                    PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == index,
-                    _ => false,
-                }),
-                "the Start of {} at {index} has no terminal",
-                start.function_name
-            );
-        }
-    }
-    let last_finished = oplog
-        .iter()
-        .rev()
-        .find(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
-        .map(|entry| entry.oplog_index)
-        .expect("the history has a finished invocation");
-    // The background work of an invocation that records its result at the export's return lies
-    // between its terminal and its `AgentInvocationSettled`.
-    let last_settled = oplog
-        .iter()
-        .filter(|entry| {
-            entry.oplog_index > last_finished
-                && matches!(&entry.entry, PublicOplogEntry::AgentInvocationSettled(_))
-        })
-        .map(|entry| entry.oplog_index)
-        .max()
-        .unwrap_or(last_finished);
     assert!(
-        !oplog.iter().any(|entry| entry.oplog_index > last_settled
-            && matches!(
-                &entry.entry,
-                PublicOplogEntry::Start(_)
-                    | PublicOplogEntry::End(_)
-                    | PublicOplogEntry::Cancelled(_)
-            )),
-        "no positional entry may follow the last invocation's settlement"
+        oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationFinished(_))),
+        "the history has a finished invocation"
     );
+    settled_later
+        .iter()
+        .fold(OplogShape::of(oplog), |shape, start| {
+            shape.settled_by_later_invocation(*start)
+        })
+        .assert_settled();
 }
 
 /// A suspended invocation that a restart replays with the heap restored from the last snapshot.
@@ -404,7 +376,7 @@ async fn crash_while_awaiting(
         scenario.completed
     );
     let oplog = caller.oplog().await?;
-    assert_settled_history(&oplog);
+    assert_settled_history(&oplog, &[]);
     assert_eq!(
         caller.released_spans().await?,
         released_after_restart + scenario.releases_after_resume,
@@ -637,7 +609,7 @@ async fn crash_after_release_keeps_one_span_closed_per_client(
     assert_eq!(caller.run(1).await?, 4);
     assert_eq!(caller.target_count(&caller.target).await?, 4);
     let oplog = caller.oplog().await?;
-    assert_settled_history(&oplog);
+    assert_settled_history(&oplog, &[]);
     assert_eq!(caller.released_spans().await?, 3);
     Ok(())
 }
@@ -682,7 +654,7 @@ async fn release_in_read_only_invocation_records_only_hints(
         "client release does not record a durable call"
     );
     assert_eq!(caller.released_spans().await?, 3);
-    assert_settled_history(&oplog);
+    assert_settled_history(&oplog, &[]);
     Ok(())
 }
 
@@ -718,7 +690,7 @@ async fn release_during_snapshot_save_records_nothing(
         0,
         "a release during snapshot save appends no hint"
     );
-    assert_settled_history(&oplog);
+    assert_settled_history(&oplog, &[]);
 
     let caller = caller
         .restart(deps, &context, snapshot_every_invocation())
@@ -864,7 +836,7 @@ async fn assert_divergent_snapshot_rejected(
         0,
         "the changed fire-and-forget call must be rejected before dispatch"
     );
-    assert_settled_history(&history);
+    assert_settled_history(&history, &[]);
     Ok(())
 }
 
@@ -916,7 +888,7 @@ async fn abandon_while_awaiting(
     assert!(report.restored, "the agent was restored from a snapshot");
     assert_eq!(caller.target_count(&caller.target).await?, 1);
     let oplog = caller.oplog().await?;
-    assert_settled_history(&oplog);
+    assert_settled_history(&oplog, &[]);
     assert_eq!(
         cancelled_count(&oplog),
         1,
@@ -1079,10 +1051,14 @@ async fn replay_drops_future_an_invocation_earlier_than_recorded(
         .await?;
     let oplog = caller.oplog().await?;
     assert_eq!(cancelled_count(&oplog), 1);
-    let cancelled_at = oplog
+    let (cancelled_at, abandoned_future) = oplog
         .iter()
-        .find(|entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(_)))
-        .map(|entry| entry.oplog_index)
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancelled) => {
+                Some((entry.oplog_index, cancelled.start_index))
+            }
+            _ => None,
+        })
         .unwrap();
     let invocations = oplog
         .iter()
@@ -1121,7 +1097,7 @@ async fn replay_drops_future_an_invocation_earlier_than_recorded(
     assert!(report.restored, "the agent was restored from a snapshot");
     assert_eq!(report.retained_futures, 0);
     let oplog = caller.oplog().await?;
-    assert_settled_history(&oplog);
+    assert_settled_history(&oplog, &[abandoned_future]);
     assert_eq!(
         cancelled_count(&oplog),
         1,
@@ -1183,7 +1159,7 @@ async fn cache_futures_replay_with_changed_drop_schedule(
         assert!(caller.inspect().await?.restored);
         let history = caller.oplog().await?;
         assert_eq!(cancelled_count(&history), 5, "{name}");
-        assert_settled_history(&history);
+        assert_settled_history(&history, &[]);
     }
     Ok(())
 }
@@ -1253,6 +1229,13 @@ async fn cache_futures_replay_drop_in_an_earlier_invocation(
             .filter(|entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(_)))
             .all(|entry| entry.oplog_index > dropping)
     );
+    let abandoned_calls = history
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
     let caller = caller
         .restart(deps, &context, snapshot_every_nth_invocation(2))
         .await?;
@@ -1273,7 +1256,7 @@ async fn cache_futures_replay_drop_in_an_earlier_invocation(
     assert!(caller.inspect().await?.restored);
     let history = caller.oplog().await?;
     assert_eq!(cancelled_count(&history), 5);
-    assert_settled_history(&history);
+    assert_settled_history(&history, &abandoned_calls);
     Ok(())
 }
 
@@ -1425,7 +1408,12 @@ async fn cache_fill_replay_with_changed_drop_schedule(
             "{name}: destructor completion is internal, not a guest delivery"
         );
         assert_eq!(cancelled_count(&history), 0);
-        assert_settled_history(&history);
+        let fill_settled_later = if cross_invocation {
+            vec![fill_start]
+        } else {
+            Vec::new()
+        };
+        assert_settled_history(&history, &fill_settled_later);
     }
     Ok(())
 }
@@ -1657,7 +1645,8 @@ async fn completed_invocation_cache_drops_repair_inside_next_invocation(
             Vec::<&str>::new(),
             "repair retains the original Starts without opening another call"
         );
-        assert_settled_history(&repaired);
+        let pending = pending.iter().copied().collect::<Vec<_>>();
+        assert_settled_history(&repaired, &pending);
         let after = caller
             .executor
             .invoke_and_await_agent(
@@ -1726,7 +1715,7 @@ async fn completed_invocation_cache_drops_repair_inside_next_invocation(
             Some("sentinel"),
             "{name}: the second replay must not repeat any cache write"
         );
-        assert_settled_history(&second);
+        assert_settled_history(&second, &pending);
     }
     Ok(())
 }
@@ -1854,7 +1843,7 @@ async fn ts_snapshot_restore_replays_gc_released_clients(
         closes_before_restart,
         "replaying GC releases must not append SpanClosed hints"
     );
-    assert_settled_history(&history);
+    assert_settled_history(&history, &[]);
     let next = executor
         .invoke_and_await_agent(&component, &id, "run", data_value!(1_f64, -1_f64))
         .await?

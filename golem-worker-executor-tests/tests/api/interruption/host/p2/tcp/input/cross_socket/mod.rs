@@ -1,6 +1,7 @@
 mod completion;
 
 use super::*;
+use golem_worker_executor_test_utils::OplogView;
 use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
@@ -241,7 +242,7 @@ async fn cross_socket_pending(
         ensure!(count_agent_invocation_pair_since(&entries, OplogIndex::INITIAL) == (2, 1));
         let input_start = starts_of(&entries, INPUT)[0];
         ensure!(
-            terminal_count(&entries, input_start) == 0,
+            entries.call(input_start).terminal_count() == 0,
             "the read of A is pending"
         );
         let initial = worker
@@ -314,7 +315,7 @@ async fn cross_socket_pending(
         let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
         ensure!(cross_setup(&stopped, 2)? == starts);
         ensure!(
-            terminal_count(&stopped, input_start) == 0,
+            stopped.call(input_start).terminal_count() == 0,
             "interruption cannot invent an input terminal"
         );
         let entries = worker
@@ -403,7 +404,7 @@ async fn cross_socket_pending(
             let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
             ensure!(cross_setup(&recovered, 4)?[..2] == starts[..]);
             ensure!(
-                terminal_count(&recovered, input_start) == 1
+                recovered.call(input_start).terminal_count() == 1
                     && ends_with_connection_loss(&recovered, input_start),
                 "the pending read completes with the lost connection"
             );
@@ -546,7 +547,7 @@ fn cross_setup(
         ensure!(!matches!(entry.entry, PublicOplogEntry::Cancelled(_)));
         if let PublicOplogEntry::Start(start) = &entry.entry {
             ensure!(start.parent_start_index.is_none() && start.observational_owner.is_none());
-            let terminals = terminal_count(entries, entry.oplog_index);
+            let terminals = entries.call(entry.oplog_index).terminal_count();
             ensure!(terminals == 1 || (start.function_name == INPUT && terminals == 0));
         }
     }

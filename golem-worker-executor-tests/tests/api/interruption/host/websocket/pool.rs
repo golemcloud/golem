@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::OplogView;
 use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
@@ -94,7 +95,7 @@ pub(super) fn connect_start(
                     1
                 };
                 ensure!(
-                    terminal_count(entries, entry.oplog_index) == expected,
+                    entries.call(entry.oplog_index).terminal_count() == expected,
                     "unexpected call terminal: {entry:?}"
                 );
             }
@@ -106,7 +107,7 @@ pub(super) fn connect_start(
             _ => {}
         }
     }
-    ensure!(terminal_count(entries, starts[0]) == terminals);
+    ensure!(entries.call(starts[0]).terminal_count() == terminals);
     let ends: Vec<_> = entries
         .iter()
         .filter_map(|entry| match &entry.entry {

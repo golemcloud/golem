@@ -25,8 +25,9 @@ use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream, stdout_event_matching};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
-    TestWorkerExecutor, WorkerExecutorTestDependencies, start, start_with_overrides,
+    LastUniqueId, OplogView, PrecompiledComponent, ReplayAdmissionStage, TestContext,
+    TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies, start,
+    start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -129,7 +130,7 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
                 && matches!(&entry.entry, PublicOplogEntry::Start(params)
             if params.function_name == "golem:websocket/client::receive")),
         "{}",
-        describe_oplog(&prefix)
+        prefix.describe()
     );
     // The guest retains the unpolled receive until its loss End is durable, then drops it.
     executor
@@ -172,40 +173,34 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
             (true, true, true, true)
         );
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-        let ends: Vec<_> = oplog
-            .iter()
-            .filter(|entry| {
-                matches!(&entry.entry,
-            PublicOplogEntry::End(params) if params.start_index == discarded_start)
-            })
-            .collect();
-        let discards: Vec<_> = oplog
-            .iter()
-            .filter(|entry| {
-                matches!(&entry.entry,
-            PublicOplogEntry::CompletionDiscarded(params) if params.start_index == discarded_start)
-            })
-            .collect();
-        assert_eq!(ends.len(), 1, "{}", describe_oplog(&oplog));
-        assert_eq!(discards.len(), 1, "{}", describe_oplog(&oplog));
-        assert!(ends[0].oplog_index < discards[0].oplog_index);
-        let PublicOplogEntry::End(params) = &ends[0].entry else {
-            unreachable!()
-        };
-        let response = params.response.as_ref().expect("receive response missing");
-        let response = HostResponseWebsocketReceiveResponse::from_value(response.value())?;
+        // The receive settles once, as a session loss, and the guest discards that completion
+        // instead of observing it.
+        let receive = oplog.call(discarded_start);
+        assert_eq!(
+            (
+                receive.ends.len(),
+                receive.discards.len(),
+                receive.deliveries.len(),
+                receive.cancellations.len()
+            ),
+            (1, 1, 0, 0),
+            "one End and one CompletionDiscarded, no delivery or cancellation: {}",
+            oplog.describe()
+        );
+        assert!(
+            receive.ends[0].oplog_index < receive.discards[0].oplog_index,
+            "the End is durable before the discard"
+        );
+        let response: HostResponseWebsocketReceiveResponse = receive.end_response()?;
         assert_eq!(
             response.result,
             Err(SerializableWebsocketError::SessionLost)
         );
-        assert!(!oplog.iter().any(|entry| matches!(&entry.entry,
-            PublicOplogEntry::CompletionDelivered(params) if params.start_index == discarded_start)
-            || matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == discarded_start)),
-            "{}", describe_oplog(&oplog));
+        // Replay keeps the original discard instead of recording another one.
         if let Some(original) = &original_discard {
-            assert_eq!(*discards[0], *original);
+            assert_eq!(*receive.discards[0], *original);
         } else {
-            original_discard = Some(discards[0].clone());
+            original_discard = Some(receive.discards[0].clone());
         }
         assert_eq!(peer.accepted(), 1);
         assert_eq!(peer.completed_handshakes(), 1);
@@ -294,7 +289,7 @@ async fn websocket_report_loss_replacement_connect_and_initialization_crashes(
         } else {
             "::connect"
         };
-        assert!(oplog.iter().any(|entry| entry.oplog_index == target && matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.ends_with(function))), "{}", describe_oplog(&oplog));
+        assert!(oplog.iter().any(|entry| entry.oplog_index == target && matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.ends_with(function))), "{}", oplog.describe());
         assert_call_terminal_counts(&oplog, target, usize::from(after_end), 0);
         drop(gate);
         drop(executor);
@@ -319,7 +314,7 @@ async fn websocket_report_loss_replacement_connect_and_initialization_crashes(
             gate.abort();
             executor.shutdown_and_wait_for_invocation_loops().await?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            assert!(!oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == target)), "{}", describe_oplog(&oplog));
+            assert!(oplog.call(target).ends.is_empty(), "{}", oplog.describe());
             drop(gate);
             drop(executor);
         }
@@ -449,7 +444,7 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
             _ => None,
         })
         .expect("pending send Start");
-    assert!(!oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == send)), "{}", describe_oplog(&oplog));
+    assert!(oplog.call(send).ends.is_empty(), "{}", oplog.describe());
     let completed_siblings = oplog
         .iter()
         .filter_map(|entry| match &entry.entry {
@@ -463,7 +458,7 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
             _ => None,
         })
         .collect::<Vec<_>>();
-    assert_eq!(completed_siblings.len(), 2, "{}", describe_oplog(&oplog));
+    assert_eq!(completed_siblings.len(), 2, "{}", oplog.describe());
     for sibling in &completed_siblings {
         assert_call_terminal_counts(&oplog, *sibling, 1, 1);
     }
@@ -552,7 +547,7 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         let start = gate.start_index();
         assert_call_terminal_counts(&oplog, start, usize::from(after_end), 0);
-        assert!(oplog.iter().any(|entry| entry.oplog_index == start && matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.ends_with("::receive") || params.function_name.ends_with("::receive-with-timeout"))), "{}", describe_oplog(&oplog));
+        assert!(oplog.iter().any(|entry| entry.oplog_index == start && matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.ends_with("::receive") || params.function_name.ends_with("::receive-with-timeout"))), "{}", oplog.describe());
         drop(gate);
         drop(permit);
         drop(executor);
@@ -692,8 +687,8 @@ async fn websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start(
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(starts.len(), 1, "{}", describe_oplog(&oplog));
-            assert!(starts[0].ends_with(recorded), "{}", describe_oplog(&oplog));
+            assert_eq!(starts.len(), 1, "{}", oplog.describe());
+            assert!(starts[0].ends_with(recorded), "{}", oplog.describe());
             let recorded_start = end_gate.start_index();
             drop(live_hold);
             drop(end_gate);
@@ -761,7 +756,7 @@ async fn websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start(
                     _ => None,
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(missing_starts.len(), 1, "{}", describe_oplog(&oplog));
+            assert_eq!(missing_starts.len(), 1, "{}", oplog.describe());
             assert_call_terminal_counts(&oplog, missing_starts[0], 1, 1);
             assert_eq!(peer.accepted(), 1);
             assert_eq!(peer.completed_handshakes(), 1);
@@ -779,9 +774,18 @@ fn assert_call_terminal_counts(
     ends: usize,
     delivered: usize,
 ) {
-    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start)).count(), ends, "{}", describe_oplog(oplog));
-    assert_eq!(oplog.iter().filter(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(params) if params.start_index == start)).count(), delivered, "{}", describe_oplog(oplog));
-    assert!(!oplog.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDiscarded(params) if params.start_index == start) || matches!(&entry.entry, PublicOplogEntry::Cancelled(params) if params.start_index == start)), "{}", describe_oplog(oplog));
+    let call = oplog.call(start);
+    assert_eq!(
+        (
+            call.ends.len(),
+            call.deliveries.len(),
+            call.discards.len(),
+            call.cancellations.len()
+        ),
+        (ends, delivered, 0, 0),
+        "Ends, deliveries, discards and cancellations of the call at {start}: {}",
+        oplog.describe()
+    );
 }
 
 #[test]
@@ -1041,8 +1045,11 @@ async fn websocket_report_loss_effect_joins_initialization_before_replacement(
         2,
         "completed greeting and pending read must both exist"
     );
-    assert!(!oplog.iter().any(|entry| matches!(&entry.entry,
-        PublicOplogEntry::End(params) if params.start_index == receives[1])));
+    assert!(
+        oplog.call(receives[1]).ends.is_empty(),
+        "the pending read has no End: {}",
+        oplog.describe()
+    );
     drop(executor);
     let executor = start(deps, &context).await?;
     let result = executor
@@ -1475,16 +1482,10 @@ async fn receive_from_two_sockets_after_crash(
     let receive_starts = |oplog: &[PublicOplogEntryWithIndex]| {
         starts_of_websocket_function(oplog, "golem:websocket/client::receive")
     };
-    let has_end = |oplog: &[PublicOplogEntryWithIndex], start: OplogIndex| {
-        oplog.iter().any(
-            |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start),
-        )
-    };
+    let has_end =
+        |oplog: &[PublicOplogEntryWithIndex], start: OplogIndex| !oplog.call(start).ends.is_empty();
     let delivered = |oplog: &[PublicOplogEntryWithIndex], start: OplogIndex| {
-        oplog.iter().any(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker)
-                if marker.start_index == start)
-        })
+        !oplog.call(start).deliveries.is_empty()
     };
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -1586,12 +1587,9 @@ async fn receive_from_two_sockets_after_crash(
         "{claim_order:?}: replay must reuse both recorded receive Starts"
     );
     for start in starts {
-        let ends = oplog
-            .iter()
-            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start))
-            .count();
         assert_eq!(
-            ends, 1,
+            oplog.call(start).ends.len(),
+            1,
             "{claim_order:?}: receive Start {start} must have exactly one End"
         );
         assert!(
@@ -3430,13 +3428,9 @@ fn starts_of_websocket_function(
     function: &str,
 ) -> Vec<OplogIndex> {
     oplog
+        .starts_of(function)
         .iter()
-        .filter_map(|entry| match &entry.entry {
-            PublicOplogEntry::Start(params) if params.function_name == function => {
-                Some(entry.oplog_index)
-            }
-            _ => None,
-        })
+        .map(|entry| entry.oplog_index)
         .collect()
 }
 
@@ -3477,18 +3471,13 @@ fn assert_contention_receives_incomplete(oplog: &[PublicOplogEntryWithIndex]) {
         "expected exactly one receive and one receive-with-timeout Start, got {starts:?}"
     );
     for (start, function) in starts {
+        let call = oplog.call(start);
         assert!(
-            !oplog
-                .iter()
-                .any(|entry| matches!(&entry.entry, PublicOplogEntry::End(params)
-                    if params.start_index == start)),
+            call.ends.is_empty(),
             "the interrupted round must leave the {function} Start at {start:?} without an End"
         );
         assert!(
-            !oplog.iter().any(
-                |entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(params)
-                    if params.start_index == start)
-            ),
+            call.cancellations.is_empty(),
             "the interrupted round must leave the {function} Start at {start:?} without a Cancelled"
         );
     }
@@ -3524,35 +3513,20 @@ fn assert_contention_receive_correlation(oplog: &[PublicOplogEntryWithIndex]) {
     );
     let finished_index = finished[0].oplog_index;
     for (start, function) in &starts {
-        let ends = oplog
-            .iter()
-            .filter(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::End(params)
-                if params.start_index == *start)
-            })
-            .collect::<Vec<_>>();
+        let call = oplog.call(*start);
+        let (ends, deliveries) = (&call.ends, &call.deliveries);
         assert_eq!(
             ends.len(),
             1,
             "expected exactly one End for the {function} Start at {start:?}"
         );
-        let deliveries = oplog
-            .iter()
-            .filter(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(params)
-                if params.start_index == *start)
-            })
-            .collect::<Vec<_>>();
         assert_eq!(
             deliveries.len(),
             1,
             "expected exactly one CompletionDelivered for the {function} Start at {start:?}"
         );
         assert!(
-            !oplog.iter().any(
-                |entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(params)
-                    if params.start_index == *start)
-            ),
+            call.cancellations.is_empty(),
             "expected no Cancelled for the {function} Start at {start:?}"
         );
         assert!(
@@ -3577,18 +3551,13 @@ fn assert_single_websocket_call_incomplete(oplog: &[PublicOplogEntryWithIndex], 
         "expected exactly one {function} Start, got {starts:?}"
     );
     let start = starts[0];
+    let call = oplog.call(start);
     assert!(
-        !oplog
-            .iter()
-            .any(|entry| matches!(&entry.entry, PublicOplogEntry::End(params)
-                if params.start_index == start)),
+        call.ends.is_empty(),
         "the interrupted {function} Start at {start:?} must have no End"
     );
     assert!(
-        !oplog.iter().any(
-            |entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(params)
-                if params.start_index == start)
-        ),
+        call.cancellations.is_empty(),
         "the interrupted {function} Start at {start:?} must have no Cancelled"
     );
 }
@@ -3610,22 +3579,14 @@ fn assert_single_websocket_call_completed(oplog: &[PublicOplogEntryWithIndex], f
         "expected exactly one {function} Start, got {starts:?}"
     );
     let start = starts[0];
-    let ends = oplog
-        .iter()
-        .filter(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::End(params) if params.start_index == start)
-        })
-        .collect::<Vec<_>>();
+    let call = oplog.call(start);
     assert_eq!(
-        ends.len(),
+        call.ends.len(),
         1,
         "expected exactly one End for the {function} Start at {start:?}"
     );
     assert!(
-        !oplog.iter().any(
-            |entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(params)
-                if params.start_index == start)
-        ),
+        call.cancellations.is_empty(),
         "expected no Cancelled for the {function} Start at {start:?}"
     );
 }
@@ -3658,47 +3619,6 @@ fn expected_reconnect_frames_sent() -> [&'static str; 3] {
     ]
 }
 
-/// A compact one-line-per-entry oplog listing for timeout diagnostics.
-fn describe_oplog(oplog: &[PublicOplogEntryWithIndex]) -> String {
-    oplog
-        .iter()
-        .map(|entry| {
-            let description = match &entry.entry {
-                PublicOplogEntry::Start(params) => {
-                    format!("Start({})", params.function_name)
-                }
-                PublicOplogEntry::End(params) => format!("End(@{})", params.start_index),
-                PublicOplogEntry::Cancelled(params) => {
-                    format!("Cancelled(@{})", params.start_index)
-                }
-                PublicOplogEntry::CompletionDelivered(params) => {
-                    format!("CompletionDelivered(@{})", params.start_index)
-                }
-                PublicOplogEntry::Interrupted(_) => "Interrupted".to_string(),
-                PublicOplogEntry::AgentInvocationStarted(params) => match &params.invocation {
-                    PublicAgentInvocation::AgentMethodInvocation(invocation) => {
-                        format!("AgentInvocationStarted({})", invocation.method_name)
-                    }
-                    _ => "AgentInvocationStarted".to_string(),
-                },
-                PublicOplogEntry::AgentInvocationFinished(params) => format!(
-                    "AgentInvocationFinished({})",
-                    params.method_name.as_deref().unwrap_or("?")
-                ),
-                other => {
-                    let kind = std::any::type_name_of_val(other)
-                        .rsplit("::")
-                        .next()
-                        .unwrap_or("?");
-                    kind.to_string()
-                }
-            };
-            format!("{}: {description}", entry.oplog_index)
-        })
-        .collect::<Vec<_>>()
-        .join(", ")
-}
-
 /// Polls the worker's oplog until `predicate` holds. While the worker is
 /// live, the oplog query API only exposes entries up to the running
 /// invocation's committed protocol barrier, so polling is a deterministic
@@ -3722,7 +3642,7 @@ async fn wait_for_oplog(
             std::time::Instant::now() < deadline,
             "timed out waiting for the worker's oplog to {description}; \
              oplog so far: {}",
-            describe_oplog(&oplog)
+            oplog.describe()
         );
         tokio::time::sleep(Duration::from_millis(10)).await;
     }

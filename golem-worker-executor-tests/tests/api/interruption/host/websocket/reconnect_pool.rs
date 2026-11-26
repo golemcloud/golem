@@ -1,4 +1,5 @@
 use super::*;
+use golem_worker_executor_test_utils::OplogView;
 use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
@@ -149,14 +150,14 @@ pub(super) fn operation_start(
         );
     }
     ensure!(
-        terminal_count(entries, connect[0]) == 1,
+        entries.call(connect[0]).terminal_count() == 1,
         "historical Connect must remain completed"
     );
-    ensure!(terminal_count(entries, start) == terminals);
+    ensure!(entries.call(start).terminal_count() == terminals);
     for entry in entries {
         match &entry.entry {
             PublicOplogEntry::Start(_) => ensure!(
-                terminal_count(entries, entry.oplog_index)
+                entries.call(entry.oplog_index).terminal_count()
                     == if entry.oplog_index == start {
                         terminals
                     } else {
@@ -454,7 +455,7 @@ async fn pending_reconnect(
         ensure!(third.number == 3);
         executor.commit_oplog(&id).await?;
         let repairing = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
-        let intermediate_terminals = if path == Path::Accessor { 0 } else { terminal_count(&repairing, start) };
+        let intermediate_terminals = if path == Path::Accessor { 0 } else { repairing.call(start).terminal_count() };
         let intermediate_deliveries = usize::from(repairing.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == start)));
         ensure!(intermediate_terminals <= 1 && operation_start(&repairing, path, intermediate_terminals, intermediate_deliveries)? == start);
         if path == Path::Accessor { assert_invocation(&repairing, &stored_key, 0)?; }

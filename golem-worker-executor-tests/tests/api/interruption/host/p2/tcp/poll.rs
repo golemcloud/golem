@@ -6,6 +6,7 @@ use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::resource_limits::ResourceUsageFlusher;
 use golem_worker_executor::services::{HasOplog, HasOplogService, UsesAllDeps};
 use golem_worker_executor::worker::Worker;
+use golem_worker_executor_test_utils::OplogView;
 use golem_worker_executor_test_utils::callers;
 use test_r::test;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -231,11 +232,11 @@ async fn pending_block(
                 let polls = poll_starts(&entries);
                 if polls.len() == 2 {
                     ensure!(
-                        terminal_count(&entries, polls[0]) == 1,
+                        entries.call(polls[0]).terminal_count() == 1,
                         "connect poll must finish"
                     );
                     ensure!(
-                        terminal_count(&entries, polls[1]) == 0,
+                        entries.call(polls[1]).terminal_count() == 0,
                         "input poll must remain open"
                     );
                     ensure!(
@@ -357,7 +358,7 @@ async fn pending_block(
         ensure!(retained_raw.range(..=prefix_last).eq(prefix.iter()), "the complete committed input-poll prefix must survive stop");
         ensure!(retained_raw.values().all(|entry| !matches!(entry, OplogEntry::Jump { .. })));
         ensure!(
-            terminal_count(&stopped, poll_start) == 0,
+            stopped.call(poll_start).terminal_count() == 0,
             "interruption cannot invent a poll terminal"
         );
         let entries = worker
@@ -464,7 +465,7 @@ async fn pending_block(
                         executor.commit_oplog(&id).await?;
                         let entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                         let polls = poll_starts(&entries);
-                        if polls.len() == 4 && terminal_count(&entries, polls[3]) == 0 {
+                        if polls.len() == 4 && entries.call(polls[3]).terminal_count() == 0 {
                             return Ok::<_, anyhow::Error>(polls[3]);
                         }
                         ensure!(!invocation.is_finished(), "guest returned before the second input poll");
@@ -474,9 +475,9 @@ async fn pending_block(
                 .await
                 .context("input poll of the reconnected connection")??;
                 let reconstructed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
-                ensure!(terminal_count(&reconstructed, connect_start) == 1);
+                ensure!(reconstructed.call(connect_start).terminal_count() == 1);
                 ensure!(
-                    terminal_count(&reconstructed, poll_start) == 1,
+                    reconstructed.call(poll_start).terminal_count() == 1,
                     "replay repairs the original input poll"
                 );
                 ensure!(!invocation.is_finished());
@@ -504,9 +505,9 @@ async fn pending_block(
                 retained_raw = replay_raw;
                 let polls = poll_starts(&replay_stopped);
                 ensure!(polls.len() == 4 && polls[..2] == poll_starts(&stopped)[..]);
-                ensure!(terminal_count(&replay_stopped, connect_start) == 1);
-                ensure!(terminal_count(&replay_stopped, poll_start) == 1);
-                ensure!(terminal_count(&replay_stopped, second_poll) == 0);
+                ensure!(replay_stopped.call(connect_start).terminal_count() == 1);
+                ensure!(replay_stopped.call(poll_start).terminal_count() == 1);
+                ensure!(replay_stopped.call(second_poll).terminal_count() == 0);
                 ensure!(count_agent_invocation_pair_since(&replay_stopped, OplogIndex::INITIAL) == (2, 1));
                 let raw = worker.oplog().read_exact(
                     OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64(),
@@ -550,7 +551,7 @@ async fn pending_block(
                 polls.len() == 2 + 2 * losses as usize && polls[..2] == poll_starts(&stopped)[..],
                 "repair must retain the original Start; each reconnect adds a connect and an input poll"
             );
-            ensure!(terminal_count(&recovered, poll_start) == 1);
+            ensure!(recovered.call(poll_start).terminal_count() == 1);
             ensure!(recovered.iter().all(|e| !matches!(
                 &e.entry, PublicOplogEntry::Cancelled(c) if c.start_index == poll_start
             )));
@@ -632,15 +633,4 @@ fn poll_starts(entries: &[PublicOplogEntryWithIndex]) -> Vec<OplogIndex> {
             _ => None,
         })
         .collect()
-}
-
-fn terminal_count(entries: &[PublicOplogEntryWithIndex], start: OplogIndex) -> usize {
-    entries
-        .iter()
-        .filter(|entry| match &entry.entry {
-            PublicOplogEntry::End(end) => end.start_index == start,
-            PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
-            _ => false,
-        })
-        .count()
 }

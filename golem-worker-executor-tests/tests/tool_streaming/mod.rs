@@ -94,7 +94,6 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::component::Component as ComponentMetadata;
 use golem_service_base::model::mcp_import::McpImportObservation;
 use golem_test_framework::dsl::TestDsl;
-use golem_test_framework::dsl::oplog_shape::assert_settled_oplog;
 use golem_worker_executor::durable_host::tool::{
     ToolAttachmentModeMetadata, ToolBodyAdmissionMetadata, ToolOperationLaneMetadata,
     ToolOperationMetadata, ToolOperationWinnerMetadata, ToolOwnerFailureMetadata,
@@ -109,9 +108,10 @@ use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::dsl_impl::InvocationSessionRejection;
 use golem_worker_executor_test_utils::standalone_tool::StandaloneToolCall;
 use golem_worker_executor_test_utils::{
-    AgentInvocationSuccessGateHandle, LastUniqueId, PrecompiledComponent, ReplayAdmissionStage,
-    TestContext, TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
-    native_streaming_tool_metadata, native_test_tool_metadata, start_with_overrides,
+    AgentInvocationSuccessGateHandle, LastUniqueId, OplogShape, PrecompiledComponent,
+    ReplayAdmissionStage, TestContext, TestExecutorOverrides, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, native_streaming_tool_metadata, native_test_tool_metadata,
+    start_with_overrides,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::convert::Infallible;
@@ -24156,7 +24156,7 @@ async fn verify_completed_standalone_after_restart(
             .iter()
             .any(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
     );
-    assert_settled_oplog(&oplog, &[], &[]);
+    OplogShape::of(&oplog).assert_settled();
     Ok(())
 }
 
@@ -24506,7 +24506,7 @@ async fn standalone_tool_checkpoint_crashes_do_not_repeat_effects(
                 .count(),
             1
         );
-        assert_settled_oplog(&oplog, &[], &[]);
+        OplogShape::of(&oplog).assert_settled();
     }
     Ok(())
 }
@@ -24674,7 +24674,7 @@ async fn verify_ambiguous_retry_after_restart(
         1
     );
     assert!(incomplete_starts_before(&recovered, OplogIndex::from_u64(u64::MAX)).is_empty());
-    assert_settled_oplog(&recovered, &[], &[]);
+    OplogShape::of(&recovered).assert_settled();
     Ok(())
 }
 

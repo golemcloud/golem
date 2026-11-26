@@ -22,7 +22,12 @@ pub mod callers;
 pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
+pub mod oplog_shape;
+pub mod oplog_view;
 pub mod standalone_tool;
+
+pub use oplog_shape::OplogShape;
+pub use oplog_view::{CallRecord, InvocationRecord, OplogView};
 
 use self::agent_deployments_service::{
     ConfiguredRetryPoliciesEnvironmentStateService, DisabledEnvironmentStateService,

@@ -1,5 +1,6 @@
 use super::reconnect_pool::{self, Path};
 use super::*;
+use golem_worker_executor_test_utils::OplogView;
 use golem_worker_executor_test_utils::callers;
 use test_r::test;
 
@@ -374,7 +375,7 @@ pub(super) async fn pending_reconnect_handshake(
         ensure!(fourth.number == 4);
         executor.commit_oplog(&id).await?;
         let repairing = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
-        let intermediate_terminals = if path == Path::Accessor { 0 } else { terminal_count(&repairing, start) };
+        let intermediate_terminals = if path == Path::Accessor { 0 } else { repairing.call(start).terminal_count() };
         let intermediate_deliveries = usize::from(repairing.iter().any(|entry| matches!(&entry.entry, PublicOplogEntry::CompletionDelivered(marker) if marker.start_index == start)));
         ensure!(intermediate_terminals <= 1 && reconnect_pool::operation_start(&repairing, path, intermediate_terminals, intermediate_deliveries)? == start);
         if path == Path::Accessor { assert_invocation(&repairing, &stored_key, 0)?; }

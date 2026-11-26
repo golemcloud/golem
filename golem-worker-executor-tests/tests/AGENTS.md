@@ -53,7 +53,10 @@ machine. Timeouts bound failures; they do not establish ordering.
   including a manual update's, oplog-processor batches and external-tool invocations). `Start`/`End` entries between an invocation's terminal
   and its `Settled` are its background work and are expected. The exception is the terminal of a
   retained call or deferred destructor that a later invocation drives, or a task parked at a safe
-  park point (see `src/worker/AGENTS.md`).
+  park point (see `src/worker/AGENTS.md`). Check these rules with `OplogShape` from
+  `golem-worker-executor-test-utils` instead of a local copy, and name each exception with its
+  builder method (`crashed_during`, `left_incomplete_on_drop`, `settled_by_later_invocation`,
+  `in_flight`); select the entries of one call or invocation with `OplogView`.
 - **Prove no repeated effect on completed replay.** Stop or count the dependency before the
   restart; replay of a completed call must not touch it.
 - **Use asymmetric concurrent orderings.** Completion order must differ from initiation order in
