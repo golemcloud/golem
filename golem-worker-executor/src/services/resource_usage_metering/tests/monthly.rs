@@ -77,7 +77,7 @@ fn storage_fields(
 #[timeout("5s")]
 async fn monthly_owner_scripted_storage_is_exact_mode_specific_and_recovers() {
     for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
-        let clock = TestClock::new_at(Instant::now(), Utc::now());
+        let clock = TestClock::new_at(Instant::now(), jiff::Timestamp::now());
         let mut policy = storage_policy(AccountUsagePeriod::current());
         policy.available_fuel = 100;
         // A prepaid Store must not shield storage exhaustion from the owner monitor.
@@ -284,7 +284,7 @@ async fn closed_owner_window_does_not_accrue_over_known_metering_intervals() {
 #[timeout("5s")]
 async fn monthly_owner_flush_does_not_settle_sibling_allocations_on_the_same_account() {
     for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
-        let clock = TestClock::new_at(Instant::now(), Utc::now());
+        let clock = TestClock::new_at(Instant::now(), jiff::Timestamp::now());
         let mut policy = storage_policy(AccountUsagePeriod::current());
         policy.available_durable_storage_byte_seconds = 12_626;
         policy.available_ephemeral_storage_byte_seconds = 12_626;
@@ -386,7 +386,7 @@ async fn monthly_owner_flush_does_not_settle_sibling_allocations_on_the_same_acc
 async fn monthly_scripted_storage_unavailable_observations_report_health_not_exhaustion() {
     for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
         for unsupported in [true, false] {
-            let clock = TestClock::new_at(Instant::now(), Utc::now());
+            let clock = TestClock::new_at(Instant::now(), jiff::Timestamp::now());
             let mut policy = storage_policy(AccountUsagePeriod::current());
             policy.available_fuel = u64::MAX;
             let entry = storage_entry(policy);
@@ -454,8 +454,12 @@ async fn monthly_scripted_storage_rollover_preserves_mode_and_recovers_capacity(
         };
         let clock = TestClock::new_at(
             Instant::now(),
-            Utc.with_ymd_and_hms(2030, 1, 31, 23, 59, 59).unwrap()
-                + chrono::Duration::milliseconds(500),
+            jiff::civil::DateTime::new(2030, 1, 31, 23, 59, 59, 0)
+                .unwrap()
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                .unwrap()
+                .timestamp()
+                + jiff::SignedDuration::from_millis(500),
         );
         let mut policy = storage_policy(january);
         policy.available_fuel = u64::MAX;

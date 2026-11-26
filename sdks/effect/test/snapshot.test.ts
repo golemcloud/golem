@@ -28,6 +28,7 @@ import {
 import { schemaValueFromWit, schemaValueToWit } from "../src/internal/schema-model/wit.js"
 import { v, type SchemaValue } from "../src/internal/schema-model/model.js"
 import { InvocationContext } from "../src/InvocationContext.js"
+import type { AgentId } from "../src/AgentId.js"
 import * as Ids from "../src/Ids.js"
 import { withCaller } from "./mocks/golem-agent-invocation-context.js"
 import { userPrincipal } from "./callers.js"
@@ -344,7 +345,7 @@ describe("snapshotting", () => {
       })
       const initial: typeof schema.Type = {
         promise: {
-          agentId: { uuid: "ffffffff-ffff-ffff-0000-000000000002" as Ids.Uuid },
+          agentId: "ffffffff-ffff-ffff-0000-000000000002" as AgentId,
           fingerprint: "00000000-0000-0007-ffff-ffffffffffff" as Ids.Uuid,
           oplogIdx: 9007199254740993n,
         },

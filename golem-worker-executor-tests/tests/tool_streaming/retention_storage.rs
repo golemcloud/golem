@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
 use golem_worker_executor::storage::scheduler::{
     ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError,
@@ -43,7 +42,7 @@ impl SchedulerStorage for HoldRetentionInsert {
     async fn insert(
         &self,
         id: ScheduleId,
-        due: DateTime<Utc>,
+        due: jiff::Timestamp,
         shard: ShardId,
         action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
@@ -71,14 +70,14 @@ impl SchedulerStorage for HoldRetentionInsert {
         id: &ScheduleId,
         expected: &[u8],
         action: &[u8],
-        due: DateTime<Utc>,
+        due: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         self.inner.replace_action(id, expected, action, due).await
     }
 
     async fn claim_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
         limit: u32,
         ttl: Duration,
@@ -88,7 +87,7 @@ impl SchedulerStorage for HoldRetentionInsert {
 
     async fn count_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError> {
         self.inner.count_due(now, assignment).await
@@ -98,8 +97,8 @@ impl SchedulerStorage for HoldRetentionInsert {
         &self,
         id: &ScheduleId,
         owner: Uuid,
-        until: DateTime<Utc>,
-        now: DateTime<Utc>,
+        until: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         self.inner.extend_lease(id, owner, until, now).await
     }
@@ -108,8 +107,8 @@ impl SchedulerStorage for HoldRetentionInsert {
         &self,
         id: &ScheduleId,
         owner: Uuid,
-        due: DateTime<Utc>,
-        now: DateTime<Utc>,
+        due: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         let moved = self.inner.reschedule(id, owner, due, now).await?;
         if moved {
@@ -122,7 +121,7 @@ impl SchedulerStorage for HoldRetentionInsert {
         &self,
         id: &ScheduleId,
         owner: Uuid,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         self.inner.ack(id, owner, now).await
     }

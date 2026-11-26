@@ -23,6 +23,7 @@ use test_r::{tag_suite, test_dep};
 test_r::enable!();
 
 mod app;
+mod benchmark_analysis;
 mod bridge_gen;
 #[cfg(unix)]
 mod git_remote;

@@ -443,6 +443,12 @@ fn update_status_with_precomputed_regions(
             .max()
             .cloned()
             .unwrap_or(last_known.oplog_idx),
+        state_oplog_idx: new_entries
+            .iter()
+            .rev()
+            .find(|(_, entry)| !matches!(entry, OplogEntry::AgentInvocationSettled { .. }))
+            .map(|(index, _)| *index)
+            .unwrap_or(last_known.state_oplog_idx),
         status,
         last_error_kind,
         terminal_failure_at,

@@ -21,7 +21,7 @@ use crate::preview2::golem::quota::types::{FailedReservation, Host, HostReservat
 use crate::services::HasWorker;
 use crate::services::quota::LeaseInterest;
 use crate::workerctx::WorkerCtx;
-use chrono::{DateTime, TimeDelta, TimeZone, Utc};
+
 use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::DurableFunctionType;
@@ -142,10 +142,8 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(replayed) => {
-                        let credit_at = Utc
-                            .timestamp_millis_opt(replayed.credit_at_ms)
-                            .single()
-                            .unwrap_or_else(Utc::now);
+                        let credit_at = jiff::Timestamp::from_millisecond(replayed.credit_at_ms)
+                            .unwrap_or_else(|_| jiff::Timestamp::now());
 
                         // Credit is always 0 on a fresh acquire; timestamp is restored from oplog.
                         break 'token QuotaTokenEntry::pending(
@@ -162,7 +160,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
 
             let svc = self.state.quota_service.clone();
             let interest = svc.acquire(env_id, rn, expected_use, 0, None).await;
-            let credit_at_ms = interest.last_credit_value_at.timestamp_millis();
+            let credit_at_ms = interest
+                .last_credit_value_at
+                .as_nanosecond()
+                .div_euclid(1_000_000) as i64;
             handle
                 .complete(self, HostResponseQuotaTokenAcquired { credit_at_ms })
                 .await?;
@@ -190,10 +191,9 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             if !handle.is_live() {
                 match handle.replay(self).await? {
                     CallReplayOutcome::Replayed(replayed) => {
-                        let credit_at = Utc
-                            .timestamp_millis_opt(replayed.credit_after_at_ms)
-                            .single()
-                            .unwrap_or_else(Utc::now);
+                        let credit_at =
+                            jiff::Timestamp::from_millisecond(replayed.credit_after_at_ms)
+                                .unwrap_or_else(|_| jiff::Timestamp::now());
 
                         token_entry_mut(self, &self_)?
                             .update_replayed_credit(replayed.credit_after, credit_at)?;
@@ -214,7 +214,10 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
             let result = svc.try_reserve(interest, amount).await;
 
             let credit_after = interest.last_credit_value;
-            let credit_after_at_ms = interest.last_credit_value_at.timestamp_millis();
+            let credit_after_at_ms = interest
+                .last_credit_value_at
+                .as_nanosecond()
+                .div_euclid(1_000_000) as i64;
 
             handle
                 .complete(
@@ -282,11 +285,11 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                             } else {
                                 estimated_wait_nanos as i64
                             };
-                            let next_attempt_time: DateTime<Utc> = Utc::now()
-                                .checked_add_signed(TimeDelta::nanoseconds(
+                            let next_attempt_time: jiff::Timestamp = jiff::Timestamp::now()
+                                .checked_add(jiff::SignedDuration::from_nanos(
                                     estimated_wait_nanos_i64,
                                 ))
-                                .unwrap_or(DateTime::<Utc>::MAX_UTC);
+                                .unwrap_or(jiff::Timestamp::MAX);
                             scheduler_service
                                 .schedule(
                                     next_attempt_time,
@@ -547,10 +550,8 @@ impl<Ctx: WorkerCtx> HostReservation for DurableWorkerCtx<Ctx> {
                     let token_resource: Resource<QuotaTokenHandleRep> =
                         Resource::new_own(entry.token.rep());
 
-                    let credit_at = Utc
-                        .timestamp_millis_opt(replayed.credit_after_at_ms)
-                        .single()
-                        .unwrap_or_else(Utc::now);
+                    let credit_at = jiff::Timestamp::from_millisecond(replayed.credit_after_at_ms)
+                        .unwrap_or_else(|_| jiff::Timestamp::now());
 
                     token_entry_mut(self, &token_resource)?
                         .update_replayed_credit(replayed.credit_after, credit_at)?;
@@ -572,7 +573,10 @@ impl<Ctx: WorkerCtx> HostReservation for DurableWorkerCtx<Ctx> {
         };
         svc.commit(interest, entry.reservation, used).await;
         let credit_after = interest.last_credit_value;
-        let credit_after_at_ms = interest.last_credit_value_at.timestamp_millis();
+        let credit_after_at_ms = interest
+            .last_credit_value_at
+            .as_nanosecond()
+            .div_euclid(1_000_000) as i64;
 
         handle
             .complete(

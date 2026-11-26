@@ -17,8 +17,10 @@ use std::fmt::Debug;
 use std::future::Future;
 use std::hash::Hash;
 use std::pin::Pin;
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::Mutex;
 use std::sync::atomic::Ordering;
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::task::JoinHandle;
@@ -44,7 +46,7 @@ pub struct Cache<K, PV, V, E> {
     state: Arc<CacheState<K, PV, V, E>>,
     capacity: Option<usize>,
     full_cache_eviction: FullCacheEvictionMode,
-    background_handle: Arc<Mutex<Option<JoinHandle<()>>>>,
+    background_task: Option<Arc<BackgroundEvictionTask>>,
     name: &'static str,
     /// Test-only seam: when set, awaited inside the full-cache eviction between
     /// snapshotting the entries to keep and committing the new size, so a test
@@ -67,6 +69,14 @@ pub struct Cache<K, PV, V, E> {
 
 #[cfg(test)]
 type EvictInterleaveHook = Arc<dyn Fn() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send + Sync>;
+
+struct BackgroundEvictionTask(JoinHandle<()>);
+
+impl Drop for BackgroundEvictionTask {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
 
 pub trait SimpleCache<K, V, E> {
     fn get_or_insert_simple<F>(&self, key: &K, f: F) -> impl Future<Output = Result<V, E>>
@@ -154,11 +164,11 @@ impl<
             last_id: std::sync::atomic::AtomicU64::new(0),
             count: std::sync::atomic::AtomicUsize::new(0),
         });
-        let cache = Self {
+        let mut cache = Self {
             state,
             capacity,
             full_cache_eviction,
-            background_handle: Arc::new(Mutex::new(None)),
+            background_task: None,
             name,
             #[cfg(test)]
             evict_interleave: Arc::new(Mutex::new(None)),
@@ -173,31 +183,25 @@ impl<
         }
         record_cache_size(name, 0);
 
-        let background_handle = match background_eviction {
+        let period = match background_eviction {
             BackgroundEvictionMode::LeastRecentlyUsed { count, period } => {
                 assert!(count >= 1);
-                let cache_clone = cache.clone();
-                let eviction = background_eviction;
-                Some(tokio::task::spawn(async move {
-                    loop {
-                        tokio::time::sleep(period).await;
-                        cache_clone.background_evict(&eviction).await;
-                    }
-                }))
+                Some(period)
             }
-            BackgroundEvictionMode::OlderThan { period, .. } => {
-                let cache_clone = cache.clone();
-                let eviction = background_eviction;
-                Some(tokio::task::spawn(async move {
-                    loop {
-                        tokio::time::sleep(period).await;
-                        cache_clone.background_evict(&eviction).await;
-                    }
-                }))
-            }
+            BackgroundEvictionMode::OlderThan { period, .. } => Some(period),
             BackgroundEvictionMode::None => None,
         };
-        *cache.background_handle.lock().unwrap() = background_handle;
+        if let Some(period) = period {
+            // Clone before installing the handle so the task does not own itself.
+            let cache_clone = cache.clone();
+            let task = tokio::task::spawn(async move {
+                loop {
+                    tokio::time::sleep(period).await;
+                    cache_clone.background_evict(&background_eviction).await;
+                }
+            });
+            cache.background_task = Some(Arc::new(BackgroundEvictionTask(task)));
+        }
 
         cache
     }
@@ -902,14 +906,6 @@ impl<
             })
             .get()
             .clone())
-    }
-}
-
-impl<K, V, PV, E> Drop for Cache<K, V, PV, E> {
-    fn drop(&mut self) {
-        if let Some(handle) = self.background_handle.lock().unwrap().take() {
-            handle.abort();
-        }
     }
 }
 

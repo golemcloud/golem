@@ -117,7 +117,7 @@ defineAgent({
           const result = yield* method.invoke({ value })
           const output = result.value as { language: string; value: string }
           const agentId = result.metadata.agentId
-          if ((yield* client.agentId).uuid !== agentId.uuid) return "agent-id-mismatch"
+          if ((yield* client.agentId) !== agentId) return "agent-id-mismatch"
           const byId = yield* Reflection.getAgentTypeByAgentId(agentId)
           const all = yield* Reflection.getAllAgentTypes
           if (byId?.name !== "TsPeer" || !all.some((type) => type.name === "RustPeer")) {
@@ -149,7 +149,7 @@ defineAgent({
           const byId = yield* Reflection.getAgentTypeByAgentId(agentId)
           if (byId?.name !== "TsPrincipalPeer") return "type-mismatch"
           const local = yield* TsPrincipalPeer.client.upsert({ tenant })
-          if ((yield* local.agentId).uuid !== agentId.uuid) return "principal-in-key"
+          if ((yield* local.agentId) !== agentId) return "principal-in-key"
           const full = yield* Client.bind(agentId, TsPrincipalPeer)
           const methodOnly = yield* Client.bind(
             agentId,
@@ -168,7 +168,7 @@ defineAgent({
           const client = yield* reflected.client.upsert({ request: name })
           const echo = yield* client.method("echo")
           const result = yield* echo.invoke({ value })
-          return `${reflected.name}:${result.metadata.agentId.uuid}:${String(result.value)}`
+          return `${reflected.name}:${result.metadata.agentId}:${String(result.value)}`
         }),
       ),
     nonfiniteReflection: () =>
@@ -246,7 +246,7 @@ defineAgent({
           yield* scheduled.cancel
           yield* Effect.sleep("2500 millis")
           const count = yield* (yield* client.method("scheduledCount")).invoke({})
-          return `${reflected.name}:${invoked.metadata.agentId.uuid}:${InvocationId.format(invoked.metadata.invocationId)}:${scheduled.metadata.agentId.uuid}:${String(count.value)}`
+          return `${reflected.name}:${invoked.metadata.agentId}:${InvocationId.format(invoked.metadata.invocationId)}:${scheduled.metadata.agentId}:${String(count.value)}`
         }),
       ),
     callTsTool: ({ payload }) =>

@@ -16,7 +16,6 @@ use crate::repo::{Deps, TestDb, test_environment_default_card_record};
 use anyhow::Error;
 use assert2::{assert, check, let_assert};
 use async_trait::async_trait;
-use chrono::{Datelike, Utc};
 use futures::FutureExt;
 use futures::future::join_all;
 use golem_common::base_model::agent::{
@@ -185,6 +184,7 @@ use golem_service_base::storage::blob::{
     BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
 };
 use heck::ToKebabCase;
+use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::default::Default;
 use std::path::PathBuf;
@@ -487,8 +487,8 @@ fn runtime_card(card_id: CardId, parent_ids: Vec<CardId>) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap(),
-        expires_at: Some(chrono::DateTime::from_timestamp(1_800_000_000, 987_654_321).unwrap()),
+        created_at: jiff::Timestamp::new(1_700_000_000, 123_456_789).unwrap(),
+        expires_at: Some(jiff::Timestamp::new(1_800_000_000, 987_654_321).unwrap()),
         system_card: false,
         managed_by: None,
     })
@@ -501,6 +501,229 @@ fn runtime_card_provenance() -> CardManagedByRuntimeDerived {
         invocation_key: InvocationId(uuid::Uuid::from_u128(1)),
         oplog_index: OplogIndex::from_u64(42),
     }
+}
+
+fn package_test_config(wasm: String) -> golem_package::PackageConfig {
+    use golem_common::model::agent::extraction::ExtractedComponentMetadata;
+    use golem_common::model::component::ComponentName;
+    use golem_package::{PackageComponent, PackageConfig, PackageIdentity};
+
+    PackageConfig {
+        application: "test".into(),
+        package: PackageIdentity {
+            name: "my-package".into(),
+            version: "2.4.1".into(),
+            calls: Default::default(),
+        },
+        components: [(
+            ComponentName("example".into()),
+            PackageComponent {
+                wasm,
+                metadata: ExtractedComponentMetadata {
+                    agent_types: vec![],
+                    tools: vec![],
+                    tool_middlewares: vec![],
+                },
+                config_schema: Default::default(),
+                provision: Default::default(),
+                agents: Default::default(),
+                tools: Default::default(),
+                tool_middlewares: Default::default(),
+            },
+        )]
+        .into(),
+    }
+}
+
+pub async fn package_version_repository_contract(deps: &Deps) {
+    use futures::StreamExt;
+    use golem_registry_service::repo::package::{
+        DbPackageRepo, InsertPackageVersionError, NewPackageVersion, PackageRepo,
+        StoredPackageArchive,
+    };
+    use sha2::{Digest, Sha256};
+
+    deps.setup().await;
+    let publisher = deps.create_account().await.revision.account_id;
+    let other = deps.create_account().await.revision.account_id;
+    let repo: Box<dyn PackageRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Box::new(DbPackageRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Box::new(DbPackageRepo::new(pool.clone())),
+    };
+    let mut layers = std::collections::BTreeMap::new();
+    let wasm = golem_package::add_blob(&mut layers, golem_package::WASM, vec![1, 2, 3]);
+    let config = package_test_config(wasm.digest);
+    let (manifest_digest, bytes) = golem_package::pack(&config, &layers).unwrap();
+    let bytes = bytes::Bytes::from(bytes);
+    let archive_digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    let input = || futures::stream::iter([Ok(bytes.clone())]).boxed();
+    let storage = deps.blob_storage.as_ref();
+    assert!(
+        StoredPackageArchive::store(storage, &archive_digest, &archive_digest, input())
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .read_published_blob(&archive_digest)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let archive = StoredPackageArchive::store(storage, &archive_digest, &manifest_digest, input())
+        .await
+        .unwrap();
+    let mut version = NewPackageVersion {
+        package_path: format!("/test-{publisher}/my-package"),
+        publisher_account_id: publisher,
+        version: "2.4.1".to_string(),
+        description: Some("Example package".to_string()),
+        callables: vec!["first".to_string(), "second".to_string()],
+    };
+    assert!(
+        repo.get_version(&version.package_path, &version.version)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    repo.insert_version(&version, &archive).await.unwrap();
+    let stored = repo
+        .get_version(&version.package_path, &version.version)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(stored.publisher_account_id, publisher);
+    assert_eq!(stored.manifest_digest, manifest_digest);
+    assert_eq!(stored.archive_digest, archive_digest);
+    assert_eq!(stored.description, version.description);
+    assert_eq!(stored.callables.0, version.callables);
+    assert_eq!(stored.lifecycle, 0);
+
+    version.description = None;
+    let duplicate = repo.insert_version(&version, &archive).await.unwrap_err();
+    assert!(matches!(duplicate, InsertPackageVersionError::Repo(err) if err.is_unique_violation()));
+    assert_eq!(
+        repo.get_version(&version.package_path, &version.version)
+            .await
+            .unwrap(),
+        Some(stored)
+    );
+    version.version = "2.5.0".to_string();
+    version.publisher_account_id = other;
+    assert!(matches!(
+        repo.insert_version(&version, &archive).await,
+        Err(InsertPackageVersionError::PublisherMismatch)
+    ));
+    assert!(
+        repo.get_version(&version.package_path, &version.version)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    version.publisher_account_id = publisher;
+    repo.insert_version(&version, &archive).await.unwrap();
+}
+
+#[test_r::test]
+async fn published_package_streams_large_oci_archive() {
+    use futures::{StreamExt, TryStreamExt};
+    use golem_registry_service::repo::package::StoredPackageArchive;
+    use golem_service_base::storage::blob::{BLOB_STREAM_CHUNK_SIZE, BlobStorage, fs};
+    use serde_json::json;
+    use sha2::{Digest, Sha256};
+    use std::io::{Read, Seek};
+    use tokio_util::io::ReaderStream;
+
+    fn append(archive: &mut tar::Builder<std::fs::File>, path: &str, size: u64, data: impl Read) {
+        let mut header = tar::Header::new_ustar();
+        header.set_entry_type(tar::EntryType::Regular);
+        header.set_mode(0o644);
+        header.set_size(size);
+        archive.append_data(&mut header, path, data).unwrap();
+    }
+
+    fn descriptor(media_type: &str, digest: &str, size: u64) -> serde_json::Value {
+        json!({"mediaType": media_type, "digest": digest, "size": size})
+    }
+
+    fn blob_path(digest: &str) -> String {
+        format!("blobs/sha256/{}", digest.strip_prefix("sha256:").unwrap())
+    }
+
+    fn canonical_bytes(mut value: serde_json::Value) -> Vec<u8> {
+        value.sort_all_objects();
+        serde_json::to_vec(&value).unwrap()
+    }
+
+    const PAYLOAD_SIZE: u64 = 256 * 1024 * 1024;
+    // An empty Wasm module with one custom section named `x` and a 256 MiB payload.
+    let wasm_header = b"\0asm\x01\0\0\0\0\x82\x80\x80\x80\x01\x01x";
+    let wasm = || {
+        wasm_header
+            .as_slice()
+            .chain(std::io::repeat(b'J').take(PAYLOAD_SIZE))
+    };
+    let mut hash = Sha256::new();
+    let wasm_size = std::io::copy(&mut wasm(), &mut hash).unwrap();
+    let wasm_digest = format!("sha256:{:x}", hash.finalize());
+
+    let config = canonical_bytes(json!(package_test_config(wasm_digest.clone())));
+    let config_digest = format!("sha256:{:x}", Sha256::digest(&config));
+    let manifest_type = "application/vnd.oci.image.manifest.v1+json";
+    let manifest = canonical_bytes(json!({
+        "schemaVersion": 2,
+        "mediaType": manifest_type,
+        "artifactType": "application/vnd.golem.package.v1",
+        "config": descriptor("application/vnd.golem.package.config.v1+json", &config_digest, config.len() as u64),
+        "layers": [descriptor(golem_package::WASM, &wasm_digest, wasm_size)],
+    }));
+    let manifest_digest = format!("sha256:{:x}", Sha256::digest(&manifest));
+    let index = canonical_bytes(json!({
+        "schemaVersion": 2,
+        "mediaType": "application/vnd.oci.image.index.v1+json",
+        "manifests": [descriptor(manifest_type, &manifest_digest, manifest.len() as u64)],
+    }));
+
+    let root = tempfile::tempdir().unwrap();
+    let mut fixture = tar::Builder::new(tempfile::tempfile_in(root.path()).unwrap());
+    append(&mut fixture, &blob_path(&wasm_digest), wasm_size, wasm());
+    for (path, contents) in [
+        (blob_path(&config_digest), config.as_slice()),
+        (blob_path(&manifest_digest), manifest.as_slice()),
+        ("index.json".into(), index.as_slice()),
+        (
+            "oci-layout".into(),
+            br#"{"imageLayoutVersion":"1.0.0"}"#.as_slice(),
+        ),
+    ] {
+        append(&mut fixture, &path, contents.len() as u64, contents);
+    }
+    let mut fixture = fixture.into_inner().unwrap();
+    fixture.rewind().unwrap();
+    let mut hash = Sha256::new();
+    std::io::copy(&mut fixture, &mut hash).unwrap();
+    let archive_digest = format!("sha256:{:x}", hash.finalize());
+    fixture.rewind().unwrap();
+
+    let storage = fs::FileSystemBlobStorage::new(root.path()).await.unwrap();
+    let input =
+        ReaderStream::with_capacity(tokio::fs::File::from_std(fixture), BLOB_STREAM_CHUNK_SIZE)
+            .map_err(anyhow::Error::from)
+            .boxed();
+    StoredPackageArchive::store(&storage, &archive_digest, &manifest_digest, input)
+        .await
+        .unwrap();
+    let mut output = storage
+        .read_published_blob(&archive_digest)
+        .await
+        .unwrap()
+        .unwrap();
+    let mut hash = Sha256::new();
+    while let Some(chunk) = output.try_next().await.unwrap() {
+        assert!(chunk.len() <= BLOB_STREAM_CHUNK_SIZE);
+        hash.update(chunk);
+    }
+    assert_eq!(format!("sha256:{:x}", hash.finalize()), archive_digest);
 }
 
 pub async fn test_runtime_card_creation_is_idempotent_and_rejects_conflicts(deps: &Deps) {
@@ -729,7 +952,7 @@ pub async fn test_runtime_card_parent_integrity(deps: &Deps) {
     let mut expired_parent = runtime_card(expired_parent_id, Vec::new())
         .into_concrete()
         .unwrap();
-    expired_parent.expires_at = Some(chrono::DateTime::from_timestamp(1_600_000_000, 0).unwrap());
+    expired_parent.expires_at = Some(jiff::Timestamp::new(1_600_000_000, 0).unwrap());
     services
         .card_service
         .create_runtime_card(
@@ -942,7 +1165,7 @@ pub async fn test_component_deletion_racing_runtime_derivation(deps: &Deps) {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -1104,7 +1327,7 @@ pub async fn test_component_deletion_racing_multi_parent_runtime_derivation(deps
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -1275,7 +1498,7 @@ pub async fn test_component_deletion_racing_runtime_derivation_from_descendant(d
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -1674,7 +1897,7 @@ pub async fn test_update(deps: &Deps) {
 }
 
 pub async fn test_application_create(deps: &Deps) {
-    let now = Utc::now();
+    let now = Timestamp::now();
     let owner = deps.create_account().await;
     let user = deps.create_account().await;
     let app_name = format!("app-name-{}", new_repo_uuid());
@@ -2789,7 +3012,7 @@ pub async fn test_environment_deletion_revokes_component_card_runtime_descendant
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -3206,6 +3429,99 @@ fn default_card_contains_current_application_permissions(
     has_environment_permissions && has_component_permissions
 }
 
+pub async fn test_component_upload_reference_lifetime(deps: &Deps) {
+    let user = deps.create_account().await;
+    let account = user.revision.account_id;
+    let app = deps.create_application(account).await;
+    let first = deps.create_env(app.revision.application_id).await;
+    let second = deps.create_env(app.revision.application_id).await;
+    let repo = deps.component_repo.as_ref();
+    let store = ComponentObjectStore::new(deps.blob_storage.clone());
+    let bytes: &[u8] = b"same content";
+    let (hash, primary_upload) = store
+        .stage(repo, AccountId(account), bytes.into())
+        .await
+        .unwrap();
+    let (_, duplicate_upload) = store
+        .stage(repo, AccountId(account), bytes.into())
+        .await
+        .unwrap();
+    let primary = primary_upload.object_key.clone();
+    let duplicate = duplicate_upload.object_key.clone();
+    for (environment_id, upload) in [
+        (first.revision.environment_id, primary_upload),
+        (second.revision.environment_id, duplicate_upload),
+    ] {
+        let revision = repo
+            .create_with_upload(
+                environment_id,
+                "dedup",
+                ComponentRevisionRecord::creation(
+                    ComponentId(new_repo_uuid()),
+                    bytes.len() as u64,
+                    ComponentMetadata::default(),
+                    hash,
+                    None,
+                    upload.object_key.clone(),
+                    AccountId(account),
+                ),
+                vec![],
+                Some(upload),
+            )
+            .await
+            .unwrap();
+        assert_eq!(revision.revision.object_store_key, primary);
+        assert_eq!(
+            store.get(AccountId(account), &primary).await.unwrap(),
+            bytes
+        );
+        if environment_id == first.revision.environment_id {
+            deps.blob_storage
+                .delete(
+                    "test",
+                    "simulate_lost_upload",
+                    BlobStorageNamespace::ComponentUploads {
+                        account_id: AccountId(account),
+                    },
+                    &PathBuf::from(&primary),
+                )
+                .await
+                .unwrap();
+            assert!(store.get(AccountId(account), &primary).await.is_err());
+        }
+    }
+
+    let primary_row = (account, primary);
+    let duplicate_row = (account, duplicate);
+    let (_, candidates) = repo.collect_uploads(SqlDateTime::now(), "").await.unwrap();
+    assert!(!candidates.contains(&primary_row));
+    assert!(candidates.contains(&duplicate_row));
+    repo.confirm_upload_deleted(&duplicate_row.1).await.unwrap();
+
+    for (env, eligible) in [(first, false), (second, true)] {
+        let _ = deps
+            .environment_repo
+            .delete(EnvironmentRevisionRecord {
+                revision_id: env.revision.revision_id + 1,
+                audit: DeletableRevisionAuditFields::deletion(account),
+                ..env.revision
+            })
+            .await
+            .unwrap();
+        let (_, candidates) = repo.collect_uploads(SqlDateTime::now(), "").await.unwrap();
+        assert_eq!(candidates.contains(&primary_row), eligible);
+    }
+    repo.confirm_upload_deleted(&primary_row.1).await.unwrap();
+    assert!(
+        !repo
+            .collect_uploads(SqlDateTime::now(), "")
+            .await
+            .unwrap()
+            .1
+            .contains(&primary_row)
+    );
+}
+
 pub async fn test_component_stage(deps: &Deps) {
     let user = deps.create_account().await;
     let app = deps.create_application(user.revision.account_id).await;
@@ -3540,7 +3856,7 @@ pub async fn test_initial_permission_card_ids_by_account_are_unique(deps: &Deps)
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -3636,7 +3952,7 @@ pub async fn test_agent_initial_card_from_older_component_revision_remains_live(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -3841,7 +4157,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_deleted_compon
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -3932,7 +4248,7 @@ pub async fn test_deleted_component_agent_initial_card_is_not_reported_existing(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -4044,7 +4360,7 @@ pub async fn test_component_delete_does_not_revoke_reused_agent_initial_card_id(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -4158,7 +4474,7 @@ pub async fn test_initial_permission_card_ids_by_account_excludes_pre_recreate_r
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
     };
@@ -4655,7 +4971,9 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
             source: AccountResourceOverrideSource::SelfService,
             override_value: 5678.into(),
             reason: AccountResourceOverrideReason::UserSelfServe,
-            expires_at: Some(SqlDateTime::new(Utc::now() - chrono::Duration::seconds(1))),
+            expires_at: Some(SqlDateTime::new(
+                Timestamp::now() - jiff::SignedDuration::from_secs(1),
+            )),
             created_by: account.revision.account_id,
             created_at: now.clone(),
         })
@@ -4668,7 +4986,9 @@ pub async fn test_account_resource_override_resolution(deps: &Deps) {
             source: AccountResourceOverrideSource::SelfService,
             override_value: 5678.into(),
             reason: AccountResourceOverrideReason::UserSelfServe,
-            expires_at: Some(SqlDateTime::new(Utc::now() - chrono::Duration::seconds(1))),
+            expires_at: Some(SqlDateTime::new(
+                Timestamp::now() - jiff::SignedDuration::from_secs(1),
+            )),
             created_by: account.revision.account_id,
             created_at: now.clone(),
         })
@@ -5335,7 +5655,7 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
         .await
         .unwrap();
 
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::hours(1));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(1));
     let granted = deps
         .account_resource_override_repo
         .set_admin_grant(
@@ -5358,7 +5678,7 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
         .await
         .unwrap();
 
-    let cleanup_at = SqlDateTime::new(Utc::now() + chrono::Duration::hours(2));
+    let cleanup_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(2));
     assert!(
         deps.account_resource_override_repo
             .get_active_admin_grants(account_id, &cleanup_at)
@@ -5413,14 +5733,14 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
     assert_eq!(events[0].reason, AdminResourceGrantReason::Promotional);
     assert_eq!(events[0].actor_account_id, AccountId(account_id));
     assert_eq!(
-        events[0].changed_at.timestamp_micros(),
-        granted.changed_at.timestamp_micros()
+        events[0].changed_at.as_microsecond(),
+        granted.changed_at.as_microsecond()
     );
     assert_eq!(events[0].old_value, 5000);
     assert_eq!(events[0].new_value, finite_change_value(7000));
     assert_eq!(
-        events[0].expires_at.map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+        events[0].expires_at.map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
     assert_eq!(
         events[1].event_type,
@@ -5431,12 +5751,12 @@ pub async fn test_admin_resource_grant_expiry_is_immediate_and_cleanup_is_idempo
     assert_eq!(events[1].new_value, finite_change_value(6000));
     assert_eq!(events[1].actor_account_id, AccountId::SYSTEM);
     assert_eq!(
-        events[1].changed_at.timestamp_micros(),
-        cleanup_at.as_utc().timestamp_micros()
+        events[1].changed_at.as_microsecond(),
+        cleanup_at.as_utc().as_microsecond()
     );
     assert_eq!(
-        events[1].expires_at.map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+        events[1].expires_at.map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
 
     assert!(matches!(
@@ -5486,9 +5806,9 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
         i64::try_from(2 * FUEL_PER_GCU).unwrap(),
     );
     deps.account_usage_repo.add(&exhausted_usage).await.unwrap();
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::seconds(1));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_secs(1));
     let just_before_expiry =
-        SqlDateTime::new(expires_at.as_utc().to_owned() - chrono::Duration::microseconds(1));
+        SqlDateTime::new(expires_at.as_utc().to_owned() - jiff::SignedDuration::from_micros(1));
 
     let granted = deps
         .account_resource_override_repo
@@ -5538,14 +5858,14 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
         AccountId(account_id)
     );
     assert_eq!(
-        before_expiry.admin_grants[0].granted_at.timestamp_micros(),
-        granted_at.as_utc().timestamp_micros()
+        before_expiry.admin_grants[0].granted_at.as_microsecond(),
+        granted_at.as_utc().as_microsecond()
     );
     assert_eq!(
         before_expiry.admin_grants[0]
             .expires_at
-            .map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+            .map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
 
     let after_expiry = deps
@@ -5614,18 +5934,18 @@ pub async fn test_replacing_expired_admin_grant_records_expiry_before_new_grant(
     );
     assert_eq!(events[1].actor_account_id, AccountId::SYSTEM);
     assert_eq!(
-        events[1].changed_at.timestamp_micros(),
-        replacement.changed_at.timestamp_micros()
+        events[1].changed_at.as_microsecond(),
+        replacement.changed_at.as_microsecond()
     );
     assert_eq!(
-        events[1].expires_at.map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+        events[1].expires_at.map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
     assert_eq!(
         deps.account_resource_override_repo
-            .cleanup_expired_admin_grants(
-                SqlDateTime::new(Utc::now() + chrono::Duration::hours(3),)
-            )
+            .cleanup_expired_admin_grants(SqlDateTime::new(
+                Timestamp::now() + jiff::SignedDuration::from_hours(3),
+            ))
             .await
             .unwrap(),
         0
@@ -5656,7 +5976,7 @@ pub async fn test_admin_grant_operations_observe_time_after_locks(deps: &Deps) {
     let replacement_account_id = replacement_account.revision.account_id;
     let clear_account_id = clear_account.revision.account_id;
     let dimension = AccountResourceOverrideDimension::MonthlyComputeGcu;
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::seconds(2));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_secs(2));
     for account_id in [replacement_account_id, clear_account_id] {
         deps.account_resource_override_repo
             .set_admin_grant(
@@ -5706,10 +6026,10 @@ pub async fn test_admin_grant_operations_observe_time_after_locks(deps: &Deps) {
         }
     });
     wait_for_postgres_locks(&pool, "FROM plans", 2).await;
-    let remaining = expires_at
+    let remaining: std::time::Duration = expires_at
         .as_utc()
-        .signed_duration_since(Utc::now())
-        .to_std()
+        .duration_since(Timestamp::now())
+        .try_into()
         .expect("grant expired before both operations reached the Plan lock");
     tokio::time::sleep(remaining + std::time::Duration::from_millis(50)).await;
     blocker.commit().await.unwrap();
@@ -5777,8 +6097,8 @@ pub async fn test_cleanup_removes_expired_admin_grant_for_soft_deleted_account(d
     let account = deps.create_account().await;
     let account_id = account.revision.account_id;
     let mut plan = assign_grant_test_plan(deps, &account).await;
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::hours(1));
-    let cleanup_at = SqlDateTime::new(Utc::now() + chrono::Duration::hours(2));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(1));
+    let cleanup_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(2));
     deps.account_resource_override_repo
         .set_admin_grant(
             account_id,
@@ -5851,14 +6171,14 @@ pub async fn test_cleanup_removes_expired_admin_grant_for_soft_deleted_account(d
     );
     assert_eq!(monthly_expiry.actor_account_id, AccountId::SYSTEM);
     assert_eq!(
-        monthly_expiry.changed_at.timestamp_micros(),
-        cleanup_at.as_utc().timestamp_micros()
+        monthly_expiry.changed_at.as_microsecond(),
+        cleanup_at.as_utc().as_microsecond()
     );
     assert_eq!(
         monthly_expiry
             .expires_at
-            .map(|value| value.timestamp_micros()),
-        Some(expires_at.as_utc().timestamp_micros())
+            .map(|value| value.as_microsecond()),
+        Some(expires_at.as_utc().as_microsecond())
     );
     let storage_expiry = events
         .iter()
@@ -5920,7 +6240,7 @@ pub async fn test_plan_update_preserves_active_grants(deps: &Deps) {
             .unwrap();
     }
 
-    let expires_at = SqlDateTime::new(Utc::now() + chrono::Duration::days(1));
+    let expires_at = SqlDateTime::new(Timestamp::now() + jiff::SignedDuration::from_hours(24));
     for (dimension, value) in [
         (AccountResourceOverrideDimension::MonthlyComputeGcu, 3),
         (
@@ -6278,8 +6598,10 @@ pub async fn test_multi_account_expiry_cleanup_uses_deadlock_safe_lock_order(dep
     ];
     account_ids.sort_unstable();
     let granted_at = SqlDateTime::now();
-    let expires_at = SqlDateTime::new(granted_at.as_utc().to_owned() + chrono::Duration::hours(1));
-    let cleanup_at = SqlDateTime::new(granted_at.as_utc().to_owned() + chrono::Duration::hours(2));
+    let expires_at =
+        SqlDateTime::new(granted_at.as_utc().to_owned() + jiff::SignedDuration::from_hours(1));
+    let cleanup_at =
+        SqlDateTime::new(granted_at.as_utc().to_owned() + jiff::SignedDuration::from_hours(2));
     for account_id in &account_ids {
         deps.account_resource_override_repo
             .upsert(AccountResourceOverrideRecord {
@@ -7725,8 +8047,10 @@ pub async fn test_account_usage_history(deps: &Deps) {
     use golem_service_base::model::auth::AuthCtx;
 
     let account = deps.create_account().await;
-    let previous_month = SqlDateTime::new(Utc::now() - chrono::Duration::days(40));
-    let older_month = SqlDateTime::new(Utc::now() - chrono::Duration::days(80));
+    let previous_month =
+        SqlDateTime::new(Timestamp::now() - jiff::SignedDuration::from_hours((40) * 24));
+    let older_month =
+        SqlDateTime::new(Timestamp::now() - jiff::SignedDuration::from_hours((80) * 24));
     let mut usage = deps
         .account_usage_repo
         .get(account.revision.account_id, &previous_month)
@@ -7760,8 +8084,8 @@ pub async fn test_account_usage_history(deps: &Deps) {
         .get_usage_history(
             account.revision.account_id,
             golem_common::model::account_usage::AccountUsagePeriod {
-                year: Utc::now().year(),
-                month: Utc::now().month(),
+                year: i32::from(jiff::tz::Offset::UTC.to_datetime(Timestamp::now()).year()),
+                month: (jiff::tz::Offset::UTC.to_datetime(Timestamp::now()).month() as u32),
             },
             1,
         )
@@ -8365,7 +8689,6 @@ pub async fn test_resource_reads_exclude_disabled_monthly_usage_and_baselines(de
 }
 
 pub async fn test_all_off_resource_reads_do_not_create_monthly_billing_rows(deps: &Deps) {
-    use chrono::TimeZone;
     use golem_common::model::account_usage::MeteringStatus;
     use golem_registry_service::services::account_usage::ResourceUsageUpdate;
     use golem_service_base::clients::registry::ResourceUsageMetering;
@@ -8471,10 +8794,11 @@ pub async fn test_all_off_resource_reads_do_not_create_monthly_billing_rows(deps
         (period.year, period.month + 1)
     };
     let next_month = SqlDateTime::new(
-        chrono::Utc
-            .with_ymd_and_hms(year, month, 1, 0, 0, 0)
-            .single()
-            .unwrap(),
+        jiff::civil::date(year as i16, month as i8, 1)
+            .at(0, 0, 0, 0)
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp(),
     );
     let next = deps
         .account_usage_repo

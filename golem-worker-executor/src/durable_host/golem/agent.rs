@@ -25,7 +25,7 @@ use crate::durable_host::{DurableWorkerCtx, InternalRetryResult};
 use crate::preview2::golem::agent::host::{ConfigValueError, Host, RpcError, WebhookError};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use chrono::Utc;
+
 use golem_common::model::agent::{
     AgentConfigSource, AgentTypeName, RegisteredAgentType, ResolvedOwnerContext,
     typed_constructor_parameters,
@@ -366,7 +366,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             secret_id: secret.id.into(),
                             config_key: Some(secret.path.0.clone()),
                             version: secret.revision.get(),
-                            resolved_at: Utc::now(),
+                            resolved_at: jiff::Timestamp::now(),
                             category: expected_secret_spec.category.clone(),
                         });
 
@@ -999,7 +999,7 @@ mod tests {
             secret_id: uuid::Uuid::nil(),
             config_key: None,
             version: 1,
-            resolved_at: Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         })
     }

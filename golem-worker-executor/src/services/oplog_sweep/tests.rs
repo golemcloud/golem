@@ -914,7 +914,7 @@ impl SchedulerWorkerAccess for DirectAccess {
         &self,
         _owned_agent_id: &OwnedAgentId,
         _fingerprint: AgentFingerprint,
-    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, WorkerExecutorError> {
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
         unreachable!("the sweep never deletes finished invocations")
     }
 

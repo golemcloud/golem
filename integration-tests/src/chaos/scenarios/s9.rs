@@ -92,7 +92,7 @@ use crate::chaos::summary::{
 };
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
-use chrono::Utc;
+
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use std::time::Duration;
@@ -122,7 +122,7 @@ pub async fn run(
     signals: &FaultSignals,
     outputs: &OutputPaths,
 ) -> anyhow::Result<ChaosResult> {
-    let started_at = Utc::now();
+    let started_at = jiff::Timestamp::now();
     let workload_config = config.require_workload()?;
     let rollback_config = config.require_rollback()?;
     let history = OperationHistory::new(ScenarioCode::S9.as_str());
@@ -220,12 +220,12 @@ pub async fn run(
         "S9: baseline phase, running mixed workload for {:?}",
         config.phases.baseline()
     );
-    phases.baseline = Some(PhaseWindow::started(Utc::now()));
+    phases.baseline = Some(PhaseWindow::started(jiff::Timestamp::now()));
     let handle = workload::start(ctx.clone(), workload_config);
     tokio::time::sleep(config.phases.baseline()).await;
     routing_snapshots.push(snapshot_routing(deps, "before-fault").await);
     if let Some(window) = phases.baseline.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
 
     let baseline_operations = history.confirmed_in_phase(Phase::Baseline);
@@ -372,7 +372,7 @@ pub async fn run(
         "S9: rollback revision is {rollback_revision}, asking {} durable agents to return",
         workload_config.durable_agents
     );
-    let rollback_started_at = Utc::now();
+    let rollback_started_at = jiff::Timestamp::now();
     report.control = request_updates(
         &ctx,
         workload_config,
@@ -400,7 +400,7 @@ pub async fn run(
     );
     signals.write_baseline_ready(&BaselineReady {
         scenario_code: ScenarioCode::S9.as_str().to_string(),
-        ready_at: Utc::now(),
+        ready_at: jiff::Timestamp::now(),
         baseline_operations,
         // Agents are mid-rollback across both executors, so killing either one
         // interrupts a return in flight. Which one carries no information.
@@ -417,7 +417,7 @@ pub async fn run(
             finish!(signal_termination(&e), &records, Vec::new());
         }
     };
-    let into_update = (injected.injected_at - rollback_started_at).num_milliseconds();
+    let into_update = (injected.injected_at - rollback_started_at).as_millis();
     info!(
         "S9: fault {} ({} on {}) reported active at {}, {into_update}ms into the rollback",
         injected.fault_id, injected.kind, injected.target, injected.injected_at
@@ -452,11 +452,11 @@ pub async fn run(
         config.phases.recovery()
     );
     ctx.phase.set(Phase::Recovery);
-    phases.recovery = Some(PhaseWindow::started(Utc::now()));
+    phases.recovery = Some(PhaseWindow::started(jiff::Timestamp::now()));
     tokio::time::sleep(config.phases.recovery()).await;
     handle.stop().await;
     if let Some(window) = phases.recovery.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
     routing_snapshots.push(snapshot_routing(deps, "after-recovery").await);
 

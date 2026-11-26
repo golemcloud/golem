@@ -62,9 +62,9 @@ use crate::model::help::{
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text_format::{log_fuzzy_match, log_text_view};
 use anyhow::{anyhow, bail};
-use chrono::{DateTime, Utc};
 use colored::Colorize;
 use golem_common::model::invocation_session_public::PublicErrorCode;
+use jiff::Timestamp as JiffTimestamp;
 
 use crate::agent_id_display::SourceLanguage;
 use crate::context::GlobalEnvironmentSelector;
@@ -463,7 +463,7 @@ impl AgentCommandHandler {
         resume_session: Option<std::path::PathBuf>,
         takeover_session: Option<std::path::PathBuf>,
         post_deploy_args: Option<PostDeployArgs>,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<JiffTimestamp>,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> anyhow::Result<()> {
         let _raw_output_guard = (stdout_format == InvocationStdoutFormat::Raw)
@@ -1013,7 +1013,7 @@ impl AgentCommandHandler {
                 agent_id: format_agent_id_match(&agent_id_match),
                 component_name: component.component_name.0.clone(),
                 component_id: component.id.0.to_string(),
-                generated_at: Utc::now().to_rfc3339(),
+                generated_at: JiffTimestamp::now().to_string(),
                 cli_version: crate::version().to_string(),
                 from,
                 query: query.clone(),
@@ -4592,7 +4592,7 @@ mod tests {
             application_id: ApplicationId(uuid::Uuid::nil()),
             account_id: AccountId(uuid::Uuid::nil()),
             component_size: 0,
-            created_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+            created_at: jiff::Timestamp::UNIX_EPOCH,
             metadata: ComponentMetadata::from_parts(
                 Default::default(),
                 vec![],

@@ -278,7 +278,7 @@ pub enum PublicNativeToolTarget {
     Component { component_id: Uuid },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields, rename_all = "camelCase")]
 pub struct PublicTypedValue {
     pub graph: SchemaGraph,
@@ -312,6 +312,9 @@ pub enum PublicStreamDirection {
 pub struct PublicInputHighWater {
     pub sequence: DecimalU64,
     pub terminal: bool,
+    /// The terminal of the input when the server, not the client, ended it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<PublicStreamOutcome>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -485,7 +488,7 @@ pub enum PublicInvocationResult {
     },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum PublicStreamOutcome {
@@ -494,7 +497,7 @@ pub enum PublicStreamOutcome {
     ConsumerCancelled { details: Option<String> },
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[allow(clippy::large_enum_variant)]
 #[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
 pub enum PublicStreamError {
@@ -2410,6 +2413,7 @@ mod tests {
             input_high_water: Some(PublicInputHighWater {
                 sequence: DecimalU64(0),
                 terminal: false,
+                outcome: None,
             }),
             provisional_ref: None,
             stream_token: "third".to_string(),

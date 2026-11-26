@@ -21,6 +21,7 @@
 name: mcp-latency
 benchmarks:
   - name: mcp-latency
+    version: 1
     iterations: 3
     clusterSize: [2]
     size: [1, 50, 200]

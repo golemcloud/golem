@@ -95,10 +95,10 @@ the non-streaming public API. Every value is an object with exactly `kind` and
 that node's payload. Nested values repeat this representation recursively.
 
 A decoder also has the exact `SchemaGraph` and expected `SchemaType`. It MUST
-validate every native node against that schema, including its kind,
-restrictions, arity, and case indexes. A named reference is resolved through
-the pinned graph; its value uses the native representation of the resolved
-body and does not carry the reference name.
+check the wire form of every native node against that schema: its kind,
+arity, case indexes, and the encodings in §3.1 and §3.2. A named reference is
+resolved through the pinned graph; its value uses the native representation of
+the resolved body and does not carry the reference name.
 
 ### 3.1 Scalar and rich values
 
@@ -130,10 +130,16 @@ Binary `bytes` is an array of JSON integers from 0 through 255. MIME types are
 ASCII and match
 `^[A-Za-z0-9!#$&^_.+\-]+/[A-Za-z0-9!#$&^_.+\-]+$`.
 
-The decoder applies all restrictions from the expected schema after decoding,
-including numeric ranges, text restrictions, binary MIME allow-lists, binary
-minimum and maximum lengths, path restrictions, URL restrictions, and
-quantity restrictions.
+Only the server validates restrictions. After decoding, it applies all
+restrictions from the expected schema, including numeric ranges, text
+restrictions, binary MIME allow-lists, binary minimum and maximum lengths,
+path restrictions, URL restrictions, and quantity restrictions. It also checks
+that a `text` `language` has the syntax of a BCP-47 language tag. A client
+does not check these. The server rejects a client value that does not satisfy
+them with `validation-error`; an input item ends only its input stream (§8).
+An output item that does not satisfy them ends its output stream with a
+`failed` terminal. The diagnostic of a validation error names the path and the
+restriction, and does not contain the value.
 
 ### 3.2 Structural values
 
@@ -262,6 +268,11 @@ Fields:
 - `inputHighWater` is required for input mappings and forbidden for output
   mappings. `sequence` is the cumulative count of durably accepted logical
   items. `terminal` reports whether input has durably ended or been cancelled.
+  `outcome` is present only when `terminal` is `true` and the server, not the
+  client, ended the input, for example at an invalid item (see §8). It has the
+  `outcome` form of a stream terminal. A client that gets it MUST stop that
+  input, MUST NOT replay unacknowledged items, and fails the call when the
+  outcome is `failed`.
 
 Mappings in one message MUST have distinct channels, stream tokens, and
 provisional references. A stream token cannot be rebound to a different
@@ -643,6 +654,24 @@ only that stream. Transport detach does not cancel execution or streams.
 Explicit cancellation and readable output drop propagate cancellation.
 Natural input exhaustion is a normal input end. Input source failure is
 `source-unavailable`.
+
+An input item that fails its element schema after acceptance (a
+`validation-error` or `unsupported-value` item at the next expected sequence)
+ends only that input stream. The server records the input terminal at the
+sequence of the invalid item and sends the client a `stream-end` with
+`direction` `input` and the outcome
+`{"kind":"failed","error":{"kind":"interrupted","message":"..."}}` in place of
+the ACK of that terminal. The session and its other streams continue, but a
+client runtime fails the call with that outcome: a `failed` input
+`stream-end` from the server is at an item that the caller sent, while a
+`consumer-cancelled` one only stops the input. The
+server drops the later items and the `stream-end` that the client sends on
+that channel. When the consumer has already cancelled the input, the server
+drops the invalid item like the other frames of the cancelled input. Protocol
+violations (wrong channel or lane, framing, item count, gap, conflicting
+retry, and resource limits) stay fatal and are checked before the value.
+A client that resumes after the server ended an input gets the same outcome in
+`inputHighWater.outcome` of that input mapping (§4.3).
 
 One WebSocket carries one invocation session and multiplexes all of its input
 and output streams.

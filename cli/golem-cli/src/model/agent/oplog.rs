@@ -1818,6 +1818,7 @@ mod tests {
                 golem_common::model::agent::AgentTypeName(agent_type.to_string())
             }),
             agent_key: Some(agent_key.to_string()),
+            origin: golem_common::model::agent::AgentOrigin::Keyed,
             fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
             created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
             environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
@@ -2146,7 +2147,7 @@ mod tests {
                         secret_id,
                         config_key: Some(vec!["database".to_string(), "password".to_string()]),
                         version: 7,
-                        resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                        resolved_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
                         category: Some("api-key".to_string()),
                     }),
                     SchemaValue::QuotaToken(QuotaTokenValuePayload {
@@ -2154,7 +2155,7 @@ mod tests {
                         resource_name: "private-quota-resource".to_string(),
                         expected_use: 1,
                         last_credit: 0,
-                        last_credit_at: chrono::DateTime::from_timestamp(1_700_000_001, 0).unwrap(),
+                        last_credit_at: jiff::Timestamp::new(1_700_000_001, 0).unwrap(),
                     }),
                     SchemaValue::PermissionCard(PermissionCardValuePayload {
                         card_id: permission_card_id,
@@ -2184,7 +2185,7 @@ mod tests {
                     "database",
                     "password",
                     "\"version\":7",
-                    "\"resolvedAt\":\"2023-11-14T22:13:20+00:00\"",
+                    "\"resolvedAt\":\"2023-11-14T22:13:20Z\"",
                     "\"category\":\"api-key\"",
                     "<redacted: quota-token>",
                     "<redacted: permission-card>",

@@ -47,8 +47,11 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, OplogIndex, Timestamp};
-use golem_common::schema::{IntoTypedSchemaValue, SchemaValue, TypedSchemaValue};
+use golem_common::schema::{
+    IntoTypedSchemaValue, ResultValuePayload, SchemaValue, TypedSchemaValue, VariantValuePayload,
+};
 use serde::Serialize;
+use uuid::Uuid;
 
 /// One rendered entry with what the coverage document needs from it.
 #[derive(Debug, Clone, PartialEq)]
@@ -101,6 +104,69 @@ pub fn render_entry(
             .map(|direction| HostTypeMismatchRef { index, direction })
             .collect(),
     }
+}
+
+/// Decodes canonical tagged schema-value JSON. The CLI sends stream arguments as
+/// `{"kind":"stream",...}` references, which the external decoder rejects. Each one becomes a
+/// stream leaf, which the obfuscator redacts.
+fn tagged_method_input(json: &str) -> Option<SchemaValue> {
+    fn mark_streams(json: &mut serde_json::Value, marker: &str) {
+        match json {
+            serde_json::Value::Object(object) => {
+                if object.len() == 2
+                    && object.contains_key("value")
+                    && object.get("kind").and_then(|kind| kind.as_str()) == Some("stream")
+                {
+                    *json = serde_json::json!({"kind": "string", "value": marker});
+                } else {
+                    object
+                        .values_mut()
+                        .for_each(|value| mark_streams(value, marker));
+                }
+            }
+            serde_json::Value::Array(values) => values
+                .iter_mut()
+                .for_each(|value| mark_streams(value, marker)),
+            _ => {}
+        }
+    }
+    fn restore_streams(value: &mut SchemaValue, marker: &str) {
+        let restore = |value: &mut SchemaValue| restore_streams(value, marker);
+        match value {
+            SchemaValue::String(text) if text == marker => {
+                *value = SchemaValue::Stream(
+                    golem_common::schema::stream::SchemaValueStream::from_host_endpoint(()),
+                )
+            }
+            SchemaValue::Record { fields: values }
+            | SchemaValue::Tuple { elements: values }
+            | SchemaValue::List { elements: values }
+            | SchemaValue::FixedList { elements: values } => values.iter_mut().for_each(restore),
+            SchemaValue::Map { entries } => entries.iter_mut().for_each(|(key, value)| {
+                restore_streams(key, marker);
+                restore_streams(value, marker);
+            }),
+            SchemaValue::Variant(VariantValuePayload {
+                payload: Some(inner),
+                ..
+            })
+            | SchemaValue::Option { inner: Some(inner) }
+            | SchemaValue::Result(
+                ResultValuePayload::Ok { value: Some(inner) }
+                | ResultValuePayload::Err { value: Some(inner) },
+            ) => restore(inner),
+            SchemaValue::Union(union) => restore(&mut union.body),
+            _ => {}
+        }
+    }
+    let mut json = serde_json::from_str::<serde_json::Value>(json).ok()?;
+    let marker = format!("stream:{}", Uuid::new_v4());
+    mark_streams(&mut json, &marker);
+    let mut value = serde_json::from_value::<golem_common::schema::ExternalSchemaValue>(json)
+        .ok()?
+        .into_inner();
+    restore_streams(&mut value, &marker);
+    Some(value)
 }
 
 /// An oplog region, Golem metadata in clear.
@@ -383,9 +449,15 @@ impl Walker<'_, '_> {
                 case("Native", 0, self.schemaless(&value, Region::Customer))
             }
             Ok(PublicMethodInput::PublicJson(json)) => {
-                let payload = match serde_json::from_str::<serde_json::Value>(&json) {
-                    Ok(json) => self.schemaless(&json_schema_value(json), Region::Customer),
-                    Err(_) => self.str_leaf(&json, Region::Customer),
+                // Canonical tagged schema-value JSON, as the CLI sends, keeps its value types and
+                // is obfuscated as a native input is. Other public JSON has no value types.
+                let payload = if let Some(value) = tagged_method_input(&json) {
+                    self.schemaless(&value, Region::Customer)
+                } else {
+                    match serde_json::from_str::<serde_json::Value>(&json) {
+                        Ok(json) => self.schemaless(&json_schema_value(json), Region::Customer),
+                        Err(_) => self.str_leaf(&json, Region::Customer),
+                    }
                 };
                 case("PublicJson", 1, payload)
             }
@@ -425,11 +497,11 @@ impl Walker<'_, '_> {
     /// A time chosen by the guest, such as when a scheduled invocation may start: a datetime
     /// token that `--keep-scalars` shows.
     fn datetime(&mut self, value: &Timestamp) -> ReportNode {
-        match chrono::DateTime::from_timestamp_millis(value.to_millis() as i64) {
-            Some(datetime) => {
+        match jiff::Timestamp::from_millisecond(value.to_millis() as i64) {
+            Ok(datetime) => {
                 self.schemaless(&SchemaValue::Datetime { value: datetime }, Region::Customer)
             }
-            None => self.tok(value),
+            Err(_) => self.tok(value),
         }
     }
 

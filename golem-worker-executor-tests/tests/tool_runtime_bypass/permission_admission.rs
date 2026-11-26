@@ -25,7 +25,7 @@ use axum::Router;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::routing::post;
-use chrono::{DateTime, Utc};
+
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::agent::extraction::extract_component_metadata;
@@ -405,7 +405,7 @@ fn tool_card(grants: Vec<PolymorphicPermissionPattern>) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
     })
@@ -1252,7 +1252,7 @@ async fn crash_during_an_admitted_call_repairs_it_and_denies_later_descendants(
     Ok(())
 }
 
-type WakeInsert = (ScheduleId, DateTime<Utc>, ShardId, ScheduledAction);
+type WakeInsert = (ScheduleId, jiff::Timestamp, ShardId, ScheduledAction);
 
 /// Pauses the first invocation wake after the pending invocation commit, then loses that put.
 /// Subsequent puts use the real storage so a retry must repair the missing registration.
@@ -1271,8 +1271,8 @@ impl SchedulerStorage for LostInvocationWake {
         &self,
         id: &ScheduleId,
         owner: uuid::Uuid,
-        due: DateTime<Utc>,
-        now: DateTime<Utc>,
+        due: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         self.inner.reschedule(id, owner, due, now).await
     }
@@ -1280,7 +1280,7 @@ impl SchedulerStorage for LostInvocationWake {
     async fn insert(
         &self,
         id: ScheduleId,
-        due: DateTime<Utc>,
+        due: jiff::Timestamp,
         shard: ShardId,
         action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
@@ -1312,14 +1312,14 @@ impl SchedulerStorage for LostInvocationWake {
         id: &ScheduleId,
         expected: &[u8],
         action: &[u8],
-        due: DateTime<Utc>,
+        due: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         self.inner.replace_action(id, expected, action, due).await
     }
 
     async fn claim_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
         limit: u32,
         ttl: Duration,
@@ -1329,7 +1329,7 @@ impl SchedulerStorage for LostInvocationWake {
 
     async fn count_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError> {
         self.inner.count_due(now, assignment).await
@@ -1339,8 +1339,8 @@ impl SchedulerStorage for LostInvocationWake {
         &self,
         id: &ScheduleId,
         owner: Uuid,
-        until: DateTime<Utc>,
-        now: DateTime<Utc>,
+        until: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         self.inner.extend_lease(id, owner, until, now).await
     }
@@ -1349,7 +1349,7 @@ impl SchedulerStorage for LostInvocationWake {
         &self,
         id: &ScheduleId,
         owner: Uuid,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         self.inner.ack(id, owner, now).await
     }
@@ -1439,10 +1439,10 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
             &format!("tool:{PERMISSION_PROBE}/read"),
         )
         .await?;
-    let due = DateTime::from_timestamp_millis(Utc::now().timestamp_millis()).unwrap()
-        + chrono::Duration::hours(24);
+    let due = jiff::Timestamp::from_millisecond(jiff::Timestamp::now().as_millisecond()).unwrap()
+        + jiff::SignedDuration::from_hours(24);
     let request =
-        |command: &str, path: &str, at: DateTime<Utc>| -> anyhow::Result<InvocationStart> {
+        |command: &str, path: &str, at: jiff::Timestamp| -> anyhow::Result<InvocationStart> {
             let command_path = vec![command.to_string()];
             let index = fixture.probe.command_index_by_path(&command_path).unwrap();
             let input = TypedSchemaValue::new(
@@ -1456,8 +1456,8 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
                 idempotency_key: Some(key.clone().into()),
                 mode: AgentInvocationMode::Schedule as i32,
                 schedule_at: Some(prost_types::Timestamp {
-                    seconds: at.timestamp(),
-                    nanos: at.timestamp_subsec_nanos() as i32,
+                    seconds: at.as_second(),
+                    nanos: at.subsec_nanosecond() as u32 as i32,
                 }),
                 auth_ctx: Some(fixture.executor.auth_ctx().into()),
                 caller: Some(callers::account(fixture.account_id).into()),
@@ -1476,7 +1476,7 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
             })
         };
     let first_request = request("read", "/public", due)?;
-    let retry_request = request("read", "/public", due + chrono::Duration::hours(1))?;
+    let retry_request = request("read", "/public", due + jiff::SignedDuration::from_hours(1))?;
     let first = tokio::spawn({
         let fixture = fixture.clone();
         async move { fixture.executor.invoke_agent_session(first_request).await }
@@ -1495,7 +1495,7 @@ async fn existing_owner_schedule_retry_repairs_lost_wake_with_original_pending_i
     );
     assert_eq!(
         pending[0].not_before.unwrap().to_millis(),
-        due.timestamp_millis() as u64
+        due.as_millisecond() as u64
     );
     let PublicAgentInvocation::ExternalTool(original) = &pending[0].invocation else {
         unreachable!()

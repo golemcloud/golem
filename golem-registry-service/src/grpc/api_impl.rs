@@ -335,7 +335,12 @@ impl RegistryServiceGrpcApi {
             .map(|u| {
                 let account_id = u.account_id.ok_or("missing account_id field")?.try_into()?;
                 let period = u.period.ok_or("missing period field")?;
-                if chrono::NaiveDate::from_ymd_opt(period.year, period.month, 1).is_none() {
+                if i16::try_from(period.year)
+                    .ok()
+                    .zip(i8::try_from(period.month).ok())
+                    .and_then(|(year, month)| jiff::civil::Date::new(year, month, 1).ok())
+                    .is_none()
+                {
                     return Err(GrpcApiError::from(format!(
                         "invalid account usage period: {:04}-{:02}",
                         period.year, period.month

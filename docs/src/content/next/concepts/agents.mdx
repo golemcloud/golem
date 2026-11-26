@@ -222,6 +222,8 @@ Choose constructor parameters to match the thing the agent represents. One agent
 
 Golem compares constructor arguments exactly as given. The entries of a map argument may come in any order, but strings are compared code point by code point, with no Unicode normalization: `"é"` written as one code point and `"é"` written as `e` plus a combining accent select two different agents. If visually identical strings must reach the same agent, normalize them (for example to NFC) before you call the agent.
 
+The key of a durable agent is at most 512 bytes long, counted as the UTF-8 bytes of its canonical `Type(params)` text, the form the CLI shows. `CounterAgent("alice")` is 21 bytes. A call by a longer key fails with `Agent key is too long` and creates no agent. Keep the key to the values that select the agent, and pass larger data to its methods. The constructor arguments of an agent created without a key, and of an ephemeral agent, have no such limit.
+
 ## What each agent owns
 
 Each agent has its own:

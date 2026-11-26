@@ -12,6 +12,8 @@ use std::fs::{self, File};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
+mod remote;
+
 const LOCK_NAME: &str = "golem.lock";
 const MAX_LOCK_BYTES: u64 = 512 * 1024;
 
@@ -128,13 +130,13 @@ fn read_lock(root: &Path) -> anyhow::Result<(Lock, Option<Vec<u8>>)> {
     })()
     .with_context(|| {
         format!(
-            "Cannot read {}; repair it and run `golem install <file>`",
+            "Cannot read {}; repair it and run `golem install <source>`",
             path.display()
         )
     })
 }
 
-pub(crate) fn install(flags: &GolemCliGlobalFlags, file: &Path) -> anyhow::Result<()> {
+pub(crate) async fn install(flags: &GolemCliGlobalFlags, source: &str) -> anyhow::Result<()> {
     ensure!(
         !flags.disable_app_manifest_discovery,
         "Installing a package requires an application manifest"
@@ -147,13 +149,19 @@ pub(crate) fn install(flags: &GolemCliGlobalFlags, file: &Path) -> anyhow::Resul
     let root = manifest_path
         .parent()
         .context("Manifest has no parent directory")?;
-    let path = crate::fs::absolute_lexical_path_from_base_dir(file, &cwd);
-    let package = read(open_regular(&path)?)
-        .with_context(|| format!("Cannot read package {}", path.display()))?;
+    let source = match PackageSource::parse(source) {
+        PackageSource::File(file) => {
+            let path = crate::fs::absolute_lexical_path_from_base_dir(Path::new(file), &cwd);
+            crate::fs::path_to_str(path.strip_prefix(root).unwrap_or(&path))?.to_owned()
+        }
+        _ => source.to_owned(),
+    };
+    let bytes = fetch_source(root, &source, None, MAX_PACKAGE_BYTES).await?;
+    let package =
+        read(bytes.as_slice()).with_context(|| format!("Cannot read package {source}"))?;
     let identity = &package.config().package;
-    let source = path.strip_prefix(root).unwrap_or(&path);
     let pin = FilePin {
-        source: crate::fs::path_to_str(source)?.into(),
+        source,
         version: identity.version.clone(),
         digest: package.digest().into(),
     };
@@ -221,7 +229,7 @@ fn save_install(
             Some(previous) => previous.persist(lock_path).map(|_| ()).map_err(|e| e.error),
             None => fs::remove_file(lock_path),
         };
-        restored.with_context(|| format!("Could not restore golem.lock after failing to save the manifest ({error}); rerun `golem install <file>`"))?;
+        restored.with_context(|| format!("Could not restore golem.lock after failing to save the manifest ({error}); rerun `golem install <source>`"))?;
         return Err(error).context("Could not save the manifest; golem.lock was restored");
     }
     Ok(())
@@ -312,17 +320,22 @@ impl LocalEffects<'_> {
 
 #[async_trait::async_trait]
 impl PackageEffects for LocalEffects<'_> {
-    fn authorize_file(&self, _name: &str, _pin: &FilePin) -> anyhow::Result<()> {
-        Ok(())
+    fn authorize(&self, _name: &str, pin: &FilePin) -> anyhow::Result<()> {
+        match PackageSource::parse(&pin.source) {
+            PackageSource::File(_) => Ok(()),
+            PackageSource::Url(url) => remote::package_url(url).map(|_| ()),
+            PackageSource::Oci(reference) => {
+                remote::oci_reference(reference, Some(&pin.digest)).map(|_| ())
+            }
+        }
     }
 
     async fn cached(&mut self, digest: &str, limit: u64) -> anyhow::Result<Option<Vec<u8>>> {
         Ok(read_regular(&self.cache_path(digest), limit).ok())
     }
 
-    async fn fetch_file(&mut self, pin: &FilePin, limit: u64) -> anyhow::Result<Vec<u8>> {
-        let path = self.app_root.join(&pin.source);
-        read_regular(&path, limit).with_context(|| format!("Cannot fetch {}", path.display()))
+    async fn fetch(&mut self, pin: &FilePin, limit: u64) -> anyhow::Result<Vec<u8>> {
+        fetch_source(self.app_root, &pin.source, Some(&pin.digest), limit).await
     }
 
     async fn cache(&mut self, digest: &str, bytes: &[u8]) -> anyhow::Result<()> {
@@ -344,6 +357,24 @@ impl PackageEffects for LocalEffects<'_> {
         fs::create_dir_all(path.parent().context("Unpack path has no parent")?)?;
         File::create_new(path)?.write_all(bytes)?;
         Ok(())
+    }
+}
+
+async fn fetch_source(
+    root: &Path,
+    source: &str,
+    digest: Option<&str>,
+    limit: u64,
+) -> anyhow::Result<Vec<u8>> {
+    match PackageSource::parse(source) {
+        PackageSource::File(file) => {
+            let path = root.join(file);
+            read_regular(&path, limit).with_context(|| format!("Cannot fetch {}", path.display()))
+        }
+        PackageSource::Url(url) => remote::fetch_url(remote::package_url(url)?, limit).await,
+        PackageSource::Oci(reference) => {
+            remote::fetch_oci(&remote::oci_reference(reference, digest)?, limit).await
+        }
     }
 }
 

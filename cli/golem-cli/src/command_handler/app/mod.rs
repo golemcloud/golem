@@ -4630,7 +4630,6 @@ mod tests {
     use crate::fuzzy::Match;
     use crate::model::app::EnvironmentToolBridgeRequests;
     use crate::model::deploy::EnvironmentToolGrantPlanAction;
-    use chrono::Utc;
     use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
     use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
     use golem_common::model::deployment::DeploymentAgentSecretDefault;
@@ -4650,6 +4649,7 @@ mod tests {
     };
     use golem_common::schema::SchemaGraph;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+    use jiff::Timestamp;
     use std::collections::{BTreeSet, HashMap};
     use test_r::test;
 
@@ -5178,7 +5178,7 @@ mod tests {
     ) -> EnvironmentToolGrantWithDetails {
         let release_id = ToolReleaseId::new();
         let actor = AccountId::new();
-        let now = Utc::now();
+        let now = Timestamp::now();
         let name = ToolName::try_from(name).unwrap();
         let definition = Tool {
             version: version.to_string(),

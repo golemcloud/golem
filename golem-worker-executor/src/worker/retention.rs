@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::*;
-use chrono::{DateTime, Utc};
 use golem_common::model::agent::InvocationEnd;
 use golem_common::model::{ScheduleId, ScheduledAction};
 
@@ -21,7 +20,7 @@ pub(super) fn deadline(
     invocation_id: Option<InvocationId>,
     status: &AgentStatusRecord,
     lifetime: Duration,
-) -> Option<DateTime<Utc>> {
+) -> Option<jiff::Timestamp> {
     let key = invocation_id?;
     let gave_up = matches!(status.status, AgentStatus::Failed | AgentStatus::Exited);
     if !gave_up && (status.running.is_some() || status.settling_invocation.is_some()) {
@@ -36,11 +35,11 @@ pub(super) fn deadline(
     };
     let deadline = i64::try_from(finished_at.to_millis())
         .ok()
-        .and_then(DateTime::from_timestamp_millis)
+        .and_then(|millis| jiff::Timestamp::from_millisecond(millis).ok())
         .and_then(|finished_at| {
-            chrono::TimeDelta::from_std(lifetime)
+            jiff::SignedDuration::try_from(lifetime)
                 .ok()
-                .and_then(|lifetime| finished_at.checked_add_signed(lifetime))
+                .and_then(|lifetime| finished_at.checked_add(lifetime).ok())
         });
     if deadline.is_none() {
         tracing::warn!(
@@ -96,7 +95,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub(crate) async fn finished_invocation_deadline(
         &self,
-    ) -> Result<Option<DateTime<Utc>>, WorkerExecutorError> {
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
         let status = self.try_get_last_known_status().await?;
         Ok(deadline(
             self.standalone_invocation_id(),

@@ -76,7 +76,7 @@ pub trait WorkerActivator<Ctx: WorkerCtx>: Send + Sync {
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, WorkerExecutorError>;
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError>;
 
     async fn expire_durable_stream_session(
         &self,
@@ -334,7 +334,7 @@ impl<Ctx: WorkerCtx> WorkerActivator<Ctx> for LazyWorkerActivator<Ctx> {
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, WorkerExecutorError> {
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
         let activator = self
             .worker_activator
             .lock()
@@ -600,7 +600,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-    ) -> Result<Option<chrono::DateTime<chrono::Utc>>, WorkerExecutorError> {
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
         let worker = match self
             .all
             .active_agents()
@@ -614,7 +614,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + Send + Sync + 'static> WorkerActivator<
         let Some(deadline) = worker.finished_invocation_deadline().await? else {
             return Ok(None);
         };
-        if deadline > chrono::Utc::now() {
+        if deadline > jiff::Timestamp::now() {
             return Ok(Some(deadline));
         }
         match Worker::<Ctx>::delete(&self.all, owned_agent_id, fingerprint).await {

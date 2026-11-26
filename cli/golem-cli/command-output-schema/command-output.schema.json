@@ -6500,9 +6500,10 @@
     },
     "PreinitializeJs": {
       "type": "object",
-      "required": ["preinitializeJs", "into"],
+      "required": ["preinitializeJs", "module", "into"],
       "properties": {
         "preinitializeJs": { "type": "string" },
+        "module": { "type": "string" },
         "into": { "type": "string" }
       },
       "additionalProperties": false
@@ -7512,6 +7513,7 @@
         "agentId",
         "agentType",
         "agentKey",
+        "origin",
         "fingerprint",
         "createdBy",
         "environmentId",
@@ -7534,6 +7536,7 @@
         "agentId": { "type": "string", "format": "uuid" },
         "agentType": { "type": ["string", "null"] },
         "agentKey": { "type": ["string", "null"] },
+        "origin": { "type": "string", "enum": ["keyed", "created", "forked"] },
         "fingerprint": { "type": "string", "format": "uuid" },
         "createdBy": { "type": "string" },
         "environmentId": { "type": "string" },

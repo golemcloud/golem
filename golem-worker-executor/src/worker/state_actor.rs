@@ -66,7 +66,7 @@ use crate::services::{
 };
 use crate::workerctx::WorkerCtx;
 use arc_swap::ArcSwap;
-use chrono::Utc;
+
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
 use golem_common::model::InvocationId;
@@ -1517,14 +1517,17 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             authority_change_count = authority_change_count.max(1);
         }
 
-        // Compared without the index, which moves on nearly every fold, to tell a fold that changed
+        // Compared without the indexes, which move on nearly every fold, to tell a fold that changed
         // other fields. Empty folds still finalize checkpoint pruning; do not bypass them on an
         // empty receipt.
         let mut updated_status = updated_status;
         let updated_index = updated_status.oplog_idx;
+        let updated_state_index = updated_status.state_oplog_idx;
         updated_status.oplog_idx = old_status.oplog_idx;
+        updated_status.state_oplog_idx = old_status.state_oplog_idx;
         let fields_changed = reconstructed || updated_status != *old_status;
         updated_status.oplog_idx = updated_index;
+        updated_status.state_oplog_idx = updated_state_index;
         let changed = if fields_changed || updated_index != old_status.oplog_idx {
             let updated_status = self.update_last_known_status(updated_status).await;
             if reconstructed {
@@ -1626,7 +1629,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             self.deps
                 .scheduler_service()
                 .schedule(
-                    Utc::now() + archive_interval,
+                    jiff::Timestamp::now() + archive_interval,
                     ScheduledAction::ArchiveOplog {
                         account_id: self.created_by,
                         owned_agent_id: self.owned_agent_id.clone(),

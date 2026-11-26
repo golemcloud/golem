@@ -324,6 +324,26 @@ impl ParsedAgentKey {
         normalisation::normalize_agent_key_text(s)
     }
 
+    /// Checks the constructor parameters against the restrictions of their schema. Only the
+    /// creation of an agent checks them, because an existing agent parses its key again.
+    pub fn validate_restrictions(&self) -> Result<(), String> {
+        crate::schema::validation::validate_value(
+            self.parameters.graph(),
+            self.parameters.root_type(),
+            self.parameters.value(),
+        )
+        .map_err(|errors| {
+            format!(
+                "invalid constructor parameters: {}",
+                errors
+                    .iter()
+                    .map(crate::schema::validation::ValueError::diagnostic)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        })
+    }
+
     /// The canonical constructor parameter text, without the agent type name.
     pub fn canonical_parameters(&self) -> Result<String, String> {
         crate::model::agent::structural_format::format_structural_typed(&self.parameters)

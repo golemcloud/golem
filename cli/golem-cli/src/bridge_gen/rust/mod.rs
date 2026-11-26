@@ -115,12 +115,12 @@ impl RustRuntimeConfig {
     }
 
     /// Datetimes outside the four-digit, non-negative RFC 3339 year range have no
-    /// canonical text form, and a `TimeDelta` can exceed the s64 nanosecond range of a
+    /// canonical text form, and a `SignedDuration` can exceed the s64 nanosecond range of a
     /// `duration` value, so both codecs check these before encoding and after decoding.
     fn scalar_checks() -> TokenStream {
         quote! {
-            pub fn check_datetime(value: &chrono::DateTime<chrono::Utc>) -> Result<chrono::DateTime<chrono::Utc>, String> {
-                let year = chrono::Datelike::year(value);
+            pub fn check_datetime(value: &jiff::Timestamp) -> Result<jiff::Timestamp, String> {
+                let year = value.to_zoned_datetime(jiff::tz::TimeZone::UTC).year();
                 if (0..=9999).contains(&year) {
                     Ok(*value)
                 } else {
@@ -128,8 +128,8 @@ impl RustRuntimeConfig {
                 }
             }
 
-            pub fn duration_nanoseconds(value: &chrono::TimeDelta) -> Result<i64, String> {
-                value.num_nanoseconds().ok_or_else(|| {
+            pub fn duration_nanoseconds(value: &jiff::SignedDuration) -> Result<i64, String> {
+                i64::try_from(value.as_nanos()).map_err(|_| {
                     format!("Duration {value} does not fit the signed 64-bit nanosecond range")
                 })
             }
@@ -643,9 +643,9 @@ impl RustBridgeGenerator {
                     "uuid/v4",
                 ]);
                 doc["features"]["serde"] =
-                    string_array(&["dep:serde", "chrono/serde", "url/serde", "uuid/serde"]);
+                    string_array(&["dep:serde", "jiff/serde", "url/serde", "uuid/serde"]);
 
-                doc["dependencies"]["chrono"] = dep("0.4.44", &[]);
+                doc["dependencies"]["jiff"] = dep("1.0.1", &[]);
                 doc["dependencies"]["golem-client"] =
                     optional(golem_source.dep_item("golem-client", &[])?)?;
                 doc["dependencies"]["golem-common"] =
@@ -663,7 +663,7 @@ impl RustBridgeGenerator {
                 } else {
                     sdk_overrides()?.golem_rust_dependency()
                 };
-                doc["dependencies"]["chrono"] = dep("0.4.42", &[]);
+                doc["dependencies"]["jiff"] = dep("1.0.1", &[]);
                 doc["dependencies"]["golem-rust"] =
                     sdk_dependency.as_toml_item(&["export_golem_agentic", "macro"])?;
                 doc["dependencies"]["serde"] = dep("1", &["derive"]);
@@ -974,7 +974,7 @@ impl RustBridgeGenerator {
                     method_name: &str,
                     method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue,
                     mode: golem_client::model::AgentInvocationMode,
-                    schedule_at: Option<chrono::DateTime<chrono::Utc>>,
+                    schedule_at: Option<jiff::Timestamp>,
                 ) -> Result<golem_client::model::AgentInvocationResult, crate::__golem_bridge_runtime::ClientError> {
                     let config = CONFIG.get().expect("Configuration has not been set");
                     #invocation_target
@@ -2426,14 +2426,14 @@ impl RustBridgeGenerator {
 
         if self.agent_type.mode == AgentMode::Ephemeral {
             return Ok(quote! {
-                pub async fn #name(&self, when: chrono::DateTime<chrono::Utc>, #(#param_defs),*) -> Result<crate::__golem_bridge_runtime::EphemeralInvocationReceipt, crate::__golem_bridge_runtime::ClientError> {
+                pub async fn #name(&self, when: jiff::Timestamp, #(#param_defs),*) -> Result<crate::__golem_bridge_runtime::EphemeralInvocationReceipt, crate::__golem_bridge_runtime::ClientError> {
                     let (agent_id, idempotency_key, _) = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, Some(when), #(#param_refs),*).await?;
                     Ok(crate::__golem_bridge_runtime::EphemeralInvocationReceipt { agent_id, idempotency_key })
                 }
             });
         }
         Ok(quote! {
-            pub async fn #name(&self, when: chrono::DateTime<chrono::Utc>, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
+            pub async fn #name(&self, when: jiff::Timestamp, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
                 let _ = self.#internal_name(golem_client::model::AgentInvocationMode::Schedule, Some(when), #(#param_refs),*).await?;
                 Ok(())
             }
@@ -2451,7 +2451,7 @@ impl RustBridgeGenerator {
             Some(return_type) => {
                 let decode_body = self.output_decode_expr(&method.output_schema)?;
                 Ok(quote! {
-                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_common::model::AgentId, uuid::Uuid, Option<#return_type>), crate::__golem_bridge_runtime::ClientError> {
+                    async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<jiff::Timestamp>, #(#param_defs),*) -> Result<(golem_common::model::AgentId, uuid::Uuid, Option<#return_type>), crate::__golem_bridge_runtime::ClientError> {
                         let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_value;
                         let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
                         let agent_id = golem_common::model::AgentId(response.agent_id);
@@ -2470,7 +2470,7 @@ impl RustBridgeGenerator {
                 })
             }
             None => Ok(quote! {
-                async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<chrono::DateTime<chrono::Utc>>, #(#param_defs),*) -> Result<(golem_common::model::AgentId, uuid::Uuid, Option<()>), crate::__golem_bridge_runtime::ClientError> {
+                async fn #name(&self, mode: golem_client::model::AgentInvocationMode, when: Option<jiff::Timestamp>, #(#param_defs),*) -> Result<(golem_common::model::AgentId, uuid::Uuid, Option<()>), crate::__golem_bridge_runtime::ClientError> {
                     let method_parameters: crate::__golem_bridge_runtime::schema::SchemaValue = #params_value;
                     let response = self.invoke(#name_lit, method_parameters, mode, when).await?;
                     Ok((golem_common::model::AgentId(response.agent_id), response.idempotency_key, response.result.map(|_| ())))
@@ -4401,7 +4401,7 @@ impl RustBridgeGenerator {
                 match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Datetime { value } => crate::__golem_bridge_runtime::check_datetime(&value), __other => Err(format!("Expected datetime value, got {:?}", __other)) }
             },
             SchemaType::Duration { .. } => quote! {
-                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Duration(__p) => Ok(chrono::TimeDelta::nanoseconds(__p.nanoseconds)), __other => Err(format!("Expected duration value, got {:?}", __other)) }
+                match #val { crate::__golem_bridge_runtime::schema::SchemaValue::Duration(__p) => Ok(jiff::SignedDuration::from_nanos(__p.nanoseconds)), __other => Err(format!("Expected duration value, got {:?}", __other)) }
             },
             SchemaType::Secret { .. } if self.mode == RustBridgeMode::GuestWasmRpc => quote! {
                 <golem_rust::secrets::GuestSecretHandle as golem_rust::FromSchema>::from_value(&#val)
@@ -4578,8 +4578,8 @@ impl RustBridgeGenerator {
             SchemaType::Path { .. } => Ok(quote! { String }),
             SchemaType::Url { .. } => Ok(quote! { url::Url }),
             SchemaType::Uuid { .. } => Ok(self.uuid_type_tokens()),
-            SchemaType::Datetime { .. } => Ok(quote! { chrono::DateTime<chrono::Utc> }),
-            SchemaType::Duration { .. } => Ok(quote! { chrono::TimeDelta }),
+            SchemaType::Datetime { .. } => Ok(quote! { jiff::Timestamp }),
+            SchemaType::Duration { .. } => Ok(quote! { jiff::SignedDuration }),
             SchemaType::Secret { .. } if self.mode == RustBridgeMode::GuestWasmRpc => {
                 Ok(quote! { golem_rust::secrets::GuestSecretHandle })
             }
@@ -5146,7 +5146,7 @@ mod tests {
         let cargo_toml = std::fs::read_to_string(target_path.join("Cargo.toml")).unwrap();
         assert!(cargo_toml.contains("name = \"alpha-agent-client\""));
         for dependency in [
-            "chrono",
+            "jiff",
             "golem-client",
             "golem-common",
             "reqwest",
@@ -5163,9 +5163,8 @@ mod tests {
         assert!(cargo_toml.contains("[features]"));
         assert!(cargo_toml.contains("default = [\"client\"]"));
         assert!(
-            cargo_toml.contains(
-                "serde = [\"dep:serde\", \"chrono/serde\", \"url/serde\", \"uuid/serde\"]"
-            )
+            cargo_toml
+                .contains("serde = [\"dep:serde\", \"jiff/serde\", \"url/serde\", \"uuid/serde\"]")
         );
         assert!(cargo_toml.contains("uuid = \"1.18.1\""));
         assert!(cargo_toml.contains("\"uuid/v4\""));

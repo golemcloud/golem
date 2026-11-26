@@ -43,7 +43,7 @@ pub struct AgentTypeResolver {
     registry_service: Arc<dyn RegistryService>,
     type_ids: TypeIdResolutionCache,
     deployed: Cache<(EnvironmentId, AgentTypeName), (), FetchedDeployedType, RegistryServiceError>,
-    generations: Arc<InvalidationGenerations>,
+    generations: Arc<InvalidationGenerations<EnvironmentId>>,
 }
 
 #[derive(Clone)]

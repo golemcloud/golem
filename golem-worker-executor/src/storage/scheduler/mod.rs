@@ -17,7 +17,7 @@ pub mod postgres;
 pub mod sqlite;
 
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use golem_common::SafeDisplay;
 use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
 use golem_service_base::repo::RepoError;
@@ -29,7 +29,7 @@ use uuid::Uuid;
 pub struct ClaimedScheduledAction {
     pub schedule_id: ScheduleId,
     pub action: ScheduledAction,
-    pub due_at: DateTime<Utc>,
+    pub due_at: jiff::Timestamp,
     pub lease_owner: Uuid,
     pub attempt_count: u32,
 }
@@ -86,7 +86,7 @@ pub trait SchedulerStorage: Debug {
     async fn insert(
         &self,
         schedule_id: ScheduleId,
-        due_at: DateTime<Utc>,
+        due_at: jiff::Timestamp,
         shard_id: ShardId,
         action: &[u8],
     ) -> Result<(), SchedulerStorageError>;
@@ -104,12 +104,12 @@ pub trait SchedulerStorage: Debug {
         schedule_id: &ScheduleId,
         expected_action: &[u8],
         action: &[u8],
-        due_at: DateTime<Utc>,
+        due_at: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError>;
 
     async fn claim_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
         limit: u32,
         lease_ttl: Duration,
@@ -119,7 +119,7 @@ pub trait SchedulerStorage: Debug {
     /// including actions currently leased by an in-flight scheduler tick.
     async fn count_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError>;
 
@@ -132,8 +132,8 @@ pub trait SchedulerStorage: Debug {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
-        lease_until: DateTime<Utc>,
-        now: DateTime<Utc>,
+        lease_until: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError>;
 
     /// Deletes only a matching lease that is live as of the caller-supplied `now`.
@@ -142,7 +142,7 @@ pub trait SchedulerStorage: Debug {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError>;
 
     /// Moves a matching, live claim to a new deadline and releases its lease atomically.
@@ -150,16 +150,30 @@ pub trait SchedulerStorage: Debug {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
-        due_at: DateTime<Utc>,
-        now: DateTime<Utc>,
+        due_at: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError>;
 }
 
-pub fn datetime_to_millis(time: DateTime<Utc>) -> i64 {
-    time.timestamp_millis()
+pub fn datetime_to_millis(time: jiff::Timestamp) -> i64 {
+    time.as_nanosecond().div_euclid(1_000_000) as i64
 }
 
-pub fn millis_to_datetime(millis: i64) -> Result<DateTime<Utc>, String> {
-    DateTime::<Utc>::from_timestamp_millis(millis)
-        .ok_or_else(|| format!("Invalid timestamp milliseconds: {millis}"))
+pub fn millis_to_datetime(millis: i64) -> Result<jiff::Timestamp, String> {
+    jiff::Timestamp::from_millisecond(millis)
+        .map_err(|_| format!("Invalid timestamp milliseconds: {millis}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn scheduler_milliseconds_floor_before_the_epoch() {
+        let timestamp = jiff::Timestamp::from_nanosecond(-1).unwrap();
+        assert_eq!(datetime_to_millis(timestamp), -1);
+        assert_eq!(millis_to_datetime(-1).unwrap().as_nanosecond(), -1_000_000);
+        assert!(millis_to_datetime(i64::MAX).is_err());
+    }
 }

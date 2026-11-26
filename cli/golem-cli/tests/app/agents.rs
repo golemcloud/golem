@@ -1418,30 +1418,31 @@ async fn test_streaming_invocation_cli_end_to_end() {
             Duration::from_millis(25),
         )
         .await;
-    let mut takeover = ctx
-        .cli_process_after(
-            [
-                cmd::AGENT,
-                cmd::INVOKE,
-                &takeover_agent,
-                "produce_byte_then_wait",
-                flag::FORMAT,
-                "json",
-                "--no-stream",
-                "--takeover-session",
-                takeover_checkpoint.to_str().unwrap(),
-            ],
-            "\"kind\":\"accepted\"",
-            Duration::ZERO,
-        )
-        .await;
+    // A takeover attaches to the accepted invocation: the server answers with `InvocationReady`,
+    // which is not a new acceptance, so the takeover prints no event. Its effect is the
+    // revocation of the original attachment, while the takeover stays attached.
+    let mut takeover = ctx.cli_process([
+        cmd::AGENT,
+        cmd::INVOKE,
+        &takeover_agent,
+        "produce_byte_then_wait",
+        flag::FORMAT,
+        "json",
+        "--no-stream",
+        "--takeover-session",
+        takeover_checkpoint.to_str().unwrap(),
+    ]);
     assert!(
-        !tokio::time::timeout(Duration::from_secs(10), original_attachment.wait())
+        !tokio::time::timeout(Duration::from_secs(40), original_attachment.wait())
             .await
             .expect("the original attachment was not revoked by takeover")
             .unwrap()
             .success(),
         "the revoked original attachment exited successfully"
+    );
+    assert!(
+        takeover.try_wait().unwrap().is_none(),
+        "the takeover attachment exited instead of staying attached"
     );
     takeover.start_kill().unwrap();
     takeover.wait().await.unwrap();

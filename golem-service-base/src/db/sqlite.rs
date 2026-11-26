@@ -128,6 +128,12 @@ impl SqlitePool {
         self.read_pool.acquire().await
     }
 
+    pub(crate) async fn acquire_blob_writer(
+        &self,
+    ) -> Result<sqlx::pool::PoolConnection<Sqlite>, Error> {
+        self.write_pool.acquire().await
+    }
+
     pub fn with_ro(&self, svc_name: &'static str, api_name: &'static str) -> SqliteLabelledApi {
         SqliteLabelledApi {
             svc_name,

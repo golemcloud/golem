@@ -72,6 +72,9 @@ oplog-processor batches and external-tool invocations keep the settled path: the
   replay anchor stays open until its `AgentInvocationSettled` or the replay tail, so its
   `Start`/`End` entries may follow its terminal; abandoned-`Start` and closed-anchor checks run
   when the anchor closes.
+  Background work can continue live at the replay tail once that terminal is read, before the
+  result is recorded. The consumed terminal still decides the result: a Store that switched to
+  live in between records no second terminal.
 - **Authority ends at the return.** The final outcome hides the lent scope card from every host
   call made after the return: such a call can neither lend nor derive from a handle to that card
   or to a card derived from it. A call made before the return keeps its admitted authority across

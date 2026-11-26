@@ -23,7 +23,6 @@ use crate::api::invocation::{
     InvocationMethodResult, InvocationOutcome, InvocationPage, InvocationState, InvocationSummary,
     InvocationToolResult,
 };
-use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::worker::{Cursor, InvocationStart};
 use golem_api_grpc::proto::golem::workerexecutor::v1 as executor;
 use golem_common::SafeDisplay;
@@ -37,6 +36,7 @@ use golem_common::model::{
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use jiff::Timestamp;
 use std::time::SystemTime;
 use tracing::warn;
 
@@ -46,8 +46,8 @@ pub struct InvocationListQuery {
     pub operation: Option<String>,
     pub states: Vec<InvocationState>,
     pub kind: Option<InvocationKind>,
-    pub since: Option<DateTime<Utc>>,
-    pub until: Option<DateTime<Utc>>,
+    pub since: Option<Timestamp>,
+    pub until: Option<Timestamp>,
     pub page_size: Option<u32>,
     pub cursor: Option<String>,
 }
@@ -118,8 +118,14 @@ impl WorkerService {
             kind: query
                 .kind
                 .map(|kind| executor::InvocationKind::from(kind) as i32),
-            since: query.since.map(|since| SystemTime::from(since).into()),
-            until: query.until.map(|until| SystemTime::from(until).into()),
+            since: query.since.map(|since| prost_types::Timestamp {
+                seconds: since.as_nanosecond().div_euclid(1_000_000_000) as i64,
+                nanos: since.as_nanosecond().rem_euclid(1_000_000_000) as i32,
+            }),
+            until: query.until.map(|until| prost_types::Timestamp {
+                seconds: until.as_nanosecond().div_euclid(1_000_000_000) as i64,
+                nanos: until.as_nanosecond().rem_euclid(1_000_000_000) as i32,
+            }),
             page_size: query.page_size.unwrap_or(0),
             cursor: query.cursor.map(|value| Cursor { value }),
             ..Default::default()
@@ -667,8 +673,8 @@ fn summary_from_proto(
     let kind = InvocationKind::try_from(summary.kind).ok();
     let timestamp = |timestamp: prost_types::Timestamp| {
         SystemTime::try_from(timestamp)
-            .map(DateTime::<Utc>::from)
             .map_err(|_| invalid("timestamp"))
+            .and_then(|time| Timestamp::try_from(time).map_err(|_| invalid("timestamp")))
     };
     Ok(InvocationSummary {
         invocation_id: invocation_id.to_string(),
@@ -677,8 +683,14 @@ fn summary_from_proto(
         state,
         kind,
         operation: summary.operation,
-        accepted_at: summary.accepted_at.map(timestamp).transpose()?,
-        changed_at: timestamp(summary.changed_at.ok_or_else(|| invalid("change time"))?)?,
+        accepted_at: summary
+            .accepted_at
+            .map(timestamp)
+            .transpose()?
+            .map(golem_common::model::poem::datetime::OpenApiTimestamp),
+        changed_at: golem_common::model::poem::datetime::OpenApiTimestamp(timestamp(
+            summary.changed_at.ok_or_else(|| invalid("change time"))?,
+        )?),
     })
 }
 
