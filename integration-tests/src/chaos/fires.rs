@@ -372,10 +372,7 @@ impl ScheduleFireReport {
                     token: token.to_string(),
                     agent: record.agent.clone(),
                     window,
-                    detail: format!(
-                        "accepted registration due at {} never fired",
-                        due.to_string()
-                    ),
+                    detail: format!("accepted registration due at {} never fired", due),
                 }),
                 (Outcome::Indeterminate, 0) if !can_testify => report.unverifiable += 1,
                 (Outcome::Indeterminate, 0) => report.inconclusive += 1,
