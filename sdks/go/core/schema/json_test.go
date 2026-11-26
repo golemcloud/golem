@@ -117,6 +117,20 @@ func TestPackJSONUnrestrictedLeavesRestrictionsToValidate(t *testing.T) {
 	if err := r.Validate(v); err == nil || !strings.Contains(err.Error(), "above maximum 10") {
 		t.Errorf("Validate of the unrestricted value: %v", err)
 	}
+	small := UnionBranch{Tag: "small", Body: typ(U8Type{Restrictions: &NumericRestrictions{Max: &max}}), Discriminator: RegexRule{Pattern: `^\d+$`}}
+	big := UnionBranch{Tag: "big", Body: typ(U32Type{}), Discriminator: RegexRule{Pattern: `^\d+$`}}
+	u, err := NewRef(SchemaGraph{Root: typ(UnionType{Branches: []UnionBranch{small, big}})}).PackJSONUnrestricted(json.Number("50"))
+	if err != nil || u.(UnionValue).Tag != "big" {
+		t.Errorf("PackJSONUnrestricted of a union took %v, %v; want the branch whose restrictions hold", u, err)
+	}
+	only := NewRef(SchemaGraph{Root: typ(UnionType{Branches: []UnionBranch{small}})})
+	u, err = only.PackJSONUnrestricted(json.Number("50"))
+	if err != nil {
+		t.Fatalf("PackJSONUnrestricted of a union with one restricted branch: %v", err)
+	}
+	if err := only.Validate(u); err == nil || !strings.Contains(err.Error(), "above maximum 10") {
+		t.Errorf("Validate of the unrestricted union value: %v", err)
+	}
 	for _, root := range []SchemaType{typ(PathType{}), typ(UrlType{})} {
 		if _, err := NewRef(SchemaGraph{Root: root}).PackJSONUnrestricted(""); err == nil {
 			t.Errorf("PackJSONUnrestricted accepted an empty %T", root.Body)
