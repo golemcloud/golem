@@ -166,9 +166,7 @@ impl SqliteBlobStorage {
     fn namespace(namespace: BlobStorageNamespace) -> String {
         match namespace {
             BlobStorageNamespace::PublishedBlobs => "published_blobs".to_string(),
-            BlobStorageNamespace::CompilationCache { environment_id } => {
-                format!("compilation_cache-{environment_id}")
-            }
+            BlobStorageNamespace::CompilationCache => "compilation_cache".to_string(),
             BlobStorageNamespace::CustomStorage { environment_id } => {
                 format!("custom_data-{environment_id}")
             }

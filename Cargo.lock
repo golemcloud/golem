@@ -4277,6 +4277,7 @@ version = "0.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "blake3",
  "futures",
  "golem-api-grpc",
  "golem-common",
@@ -6091,6 +6092,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "sqlx",
  "test-r",
  "thiserror 2.0.21",

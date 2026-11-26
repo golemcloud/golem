@@ -89,6 +89,8 @@ and entity bodies), `retries.md` (in-function versus trap-based retries), and
 | Agent status **folded from the oplog** (`worker/status.rs`) | Status cache / checkpoints (baselines only) |
 | Persisted promises and scheduler actions (`WakeupScheduler`), `RunningWorkers` recovery index | Tokio timers, in-memory wake channels |
 
+The executor resolves metadata by component ID and revision before loading code. It shares loaded code for the same Wasm hash within one engine instance. The executor and compilation service share serialized artifacts by Wasm hash and the Wasmtime artifact fingerprint. Neither cache changes which metadata or deployment a worker uses.
+
 Anything in the right column may be rebuilt from the left column at any time; a design that needs
 something from the right column to survive a restart is wrong. Native resources are not preserved.
 P3 TCP bind records the selected local address; connect records both endpoints. The per-Store
