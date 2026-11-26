@@ -327,6 +327,12 @@ Their primary Store and tool bodies reconstruct after loss; completed host effec
 the oplog. Pending and scheduled invocations can be cancelled. Fork, update, revert and snapshots
 are refused; management reports `NotAnAgent` for both kinds of tool owner.
 
+A permanent primary startup failure can leave the accepted standalone invocation without an
+`AgentInvocationStarted` entry. Public invocation summaries report that invocation as failed,
+and result reads expose the recorded startup failure, before and after reconstruction. The status
+fold retains the failure's timestamp and oplog index, so later hints do not move its summary.
+Ordinary agent recovery failures leave their queued invocations pending.
+
 Finished standalone owners schedule `DeleteFinishedInvocation` under an address-derived UUIDv5
 schedule ID, and loading a finished owner repairs that timer. Delivery checks the fingerprint
 and finish timestamp plus the current `standalone_tool_invocation_retention` (default seven days),

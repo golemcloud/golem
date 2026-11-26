@@ -5,6 +5,115 @@ mod tool_lookup_tests {
     use test_r::test;
 
     #[test]
+    async fn standalone_startup_failure_is_readable_by_public_id_and_tool_key() {
+        use crate::api::invocation::{InvocationOutcome, InvocationState};
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            InvocationKind, InvocationLifecycleState,
+        };
+        use golem_common::model::{InvocationOwner, OwnedInvocationId, StandaloneToolInvocation};
+
+        let mut harness = RestHarness::new(AgentMode::Durable);
+        let component = harness
+            .worker_service
+            .component_service
+            .get_revision(harness.component_id, harness.component_revision)
+            .await
+            .unwrap();
+        let state = crate::service::component::tests::tool_deployment_state(
+            &component,
+            "weather",
+            weather_tool_definition(),
+            [ToolBindingOwner::ComponentBaseline {
+                component_id: component.id,
+            }],
+        );
+        harness.worker_service.agent_types = agent_type_resolver(Arc::new(TestRegistryService {
+            removed: false,
+            provisional_tool_state: Some(state),
+            resolved: ResolvedAgentType {
+                registered_agent_type: RegisteredAgentType {
+                    type_id: harness.type_id,
+                    agent_type: component.metadata.agent_types()[0].clone(),
+                    implemented_by: RegisteredAgentTypeImplementer {
+                        component_id: component.id,
+                        component_revision: component.revision,
+                        component_name: component.component_name.0.clone(),
+                        account_id: component.account_id,
+                        account_email: component.account_email.clone(),
+                    },
+                },
+                environment_id: harness.environment_id,
+                deployment_revision: DeploymentRevision::INITIAL,
+                current_deployment_revision: Some(CurrentDeploymentRevision::INITIAL),
+            },
+        }));
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let auth = scoped_invocation_auth();
+        let key = RestHarness::tool_key();
+        let tool = ToolName::try_from("weather").unwrap();
+        let unique = StandaloneToolInvocation::unique_part(
+            harness.environment_id,
+            &tool,
+            auth.idempotency_scope(),
+            "current",
+            Some(&key),
+        );
+        let id = OwnedInvocationId::new(InvocationOwner::Tool(tool.clone()), unique);
+        let owner = AgentId::standalone_tool_invocation(
+            harness.environment_id,
+            TypeId::try_from(1u32).unwrap(),
+            unique,
+        );
+        *harness.worker_client.invocation_summary.lock().unwrap() = Some(invocation_summary_proto(
+            unique,
+            InvocationLifecycleState::Failed,
+            InvocationKind::Tool,
+            Some("tool:weather/current".into()),
+        ));
+        *harness.worker_client.invocation_error.lock().unwrap() =
+            Some(WorkerExecutorError::failed_to_resume_worker(
+                owner,
+                WorkerExecutorError::runtime("primary instantiation refused"),
+            ));
+
+        let got = harness
+            .worker_service
+            .get_invocation(harness.environment_id, &id, auth.clone())
+            .await
+            .unwrap();
+        assert_eq!(got.summary.invocation_id, id.to_string());
+        assert_eq!(got.summary.state, InvocationState::Failed);
+        let Some(InvocationOutcome::Failure(failure)) = got.result else {
+            panic!("the public response must contain the recorded startup failure");
+        };
+        assert!(
+            failure.error.contains("primary instantiation refused"),
+            "{}",
+            failure.error
+        );
+        for command in [None, Some("current")] {
+            let found = harness
+                .worker_service
+                .lookup_invocations(
+                    harness.environment_id,
+                    None,
+                    &key,
+                    None,
+                    Some(&tool),
+                    command,
+                    auth.clone(),
+                )
+                .await
+                .unwrap();
+            assert_eq!(found.len(), 1);
+            assert_eq!(found[0].invocation_id, id.to_string());
+            assert_eq!(found[0].state, InvocationState::Failed);
+        }
+    }
+
+    #[test]
     async fn removed_tool_invocations_use_retained_names() {
         let mut harness = RestHarness::new(AgentMode::Durable);
         let component = harness

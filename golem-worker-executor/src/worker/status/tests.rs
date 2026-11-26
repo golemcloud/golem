@@ -1375,6 +1375,7 @@ async fn exhausted_semantic_retry_state_marks_status_failed() {
             move |mut status, timestamp| {
                 status.status = AgentStatus::Failed;
                 status.terminal_failure_at = Some(timestamp);
+                status.terminal_failure_index = Some(status.oplog_idx);
                 status.last_error_kind = Some(OplogErrorKind::Invocation);
                 status.current_retry_state.insert(retry_from, retry_state);
                 expect_ended(
@@ -1641,6 +1642,7 @@ fn recovery_success_in_deleted_region_must_not_clear_failure() {
         &deleted_regions,
         &entries,
         &mut None,
+        &mut None,
     );
 
     assert_eq!(status, AgentStatus::Failed);
@@ -1701,6 +1703,7 @@ fn recovery_success_preserves_retry_state_from_skipped_region() {
         &skipped_regions,
         &DeletedRegions::default(),
         &entries,
+        &mut None,
         &mut None,
     );
 
@@ -1777,6 +1780,7 @@ fn retry_deadline_belongs_to_the_waiting_call_until_its_terminal() {
         &DeletedRegions::default(),
         &entries,
         &mut None,
+        &mut None,
     );
 
     assert_eq!(
@@ -1818,6 +1822,7 @@ fn repeated_infrastructure_recovery_failures_do_not_consume_invocation_retry_sta
             &DeletedRegions::default(),
             &entries,
             &mut None,
+            &mut None,
         );
 
         assert_eq!(status, AgentStatus::Retrying);
@@ -1850,6 +1855,7 @@ async fn invocation_failure_is_classified_separately_from_recovery_failure() {
             move |mut status, timestamp| {
                 status.status = AgentStatus::Failed;
                 status.terminal_failure_at = Some(timestamp);
+                status.terminal_failure_index = Some(status.oplog_idx);
                 status.last_error_kind = Some(OplogErrorKind::Invocation);
                 status
                     .current_retry_state
@@ -1884,6 +1890,7 @@ async fn recovery_errors_are_not_treated_as_invocation_rejections() {
                 move |mut status, timestamp| {
                     status.status = AgentStatus::Failed;
                     status.terminal_failure_at = Some(timestamp);
+                    status.terminal_failure_index = Some(status.oplog_idx);
                     status.last_error_kind = Some(OplogErrorKind::Recovery);
                     status
                         .current_retry_state
@@ -1982,6 +1989,7 @@ fn invocation_local_failure_does_not_hide_unresolved_recovery_or_preserve_retry_
             &DeletedRegions::default(),
             &entries,
             &mut None,
+            &mut None,
         );
         if recovery {
             assert_eq!(status, AgentStatus::Retrying);
@@ -2076,6 +2084,7 @@ async fn background_work_after_invocation_result_runs_until_settled() {
             &DeletedRegions::default(),
             &entries,
             &mut None,
+            &mut None,
         )
         .0
     };
@@ -2110,6 +2119,7 @@ fn an_unsettled_result_keeps_the_agent_running_through_lifecycle_hints_until_it_
             &DeletedRegions::default(),
             &DeletedRegions::default(),
             &entries,
+            &mut None,
             &mut None,
         );
         (status, settling)
@@ -2185,6 +2195,7 @@ fn settled_clears_an_invocation_retry_but_not_an_unresolved_recovery() {
             &DeletedRegions::default(),
             &DeletedRegions::default(),
             &entries,
+            &mut None,
             &mut None,
         );
         if recovery {
@@ -10949,7 +10960,21 @@ fn terminal_failure_time_survives_checkpoint_reconstruction_before_invocation_st
     assert_eq!(full, incremental);
     assert_eq!(full.status, AgentStatus::Failed);
     assert_eq!(full.terminal_failure_at, Some(failed_at));
+    assert_eq!(full.terminal_failure_index, Some(OplogIndex::from_u64(2)));
     assert!(full.invocation_results.position(&key).is_none());
+    let summary = super::super::invocations::merge_invocations(
+        &full,
+        HashMap::new(),
+        Timestamp::from(1_700_000_001_000u64),
+        Some(key),
+    );
+    assert_eq!(summary.len(), 1);
+    assert_eq!(
+        summary[0].state,
+        super::super::invocations::InvocationState::Failed
+    );
+    assert_eq!(summary[0].changed_at, failed_at);
+    assert_eq!(summary[0].last_change, OplogIndex::from_u64(2));
     assert_eq!(
         super::super::retention::deadline(Some(key), &full, Duration::from_secs(17)),
         Some(
@@ -10963,6 +10988,7 @@ fn terminal_failure_time_survives_checkpoint_reconstruction_before_invocation_st
     );
     assert_eq!(repaired.status, AgentStatus::Idle);
     assert_eq!(repaired.terminal_failure_at, None);
+    assert_eq!(repaired.terminal_failure_index, None);
 }
 
 #[test]

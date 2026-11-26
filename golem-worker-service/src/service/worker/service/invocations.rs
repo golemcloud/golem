@@ -644,6 +644,7 @@ fn recorded_failure(error: &WorkerServiceError) -> Option<InvocationFailure> {
         WorkerServiceError::GolemError(
             WorkerExecutorError::InvocationFailed { .. }
             | WorkerExecutorError::PreviousInvocationFailed { .. }
+            | WorkerExecutorError::FailedToResumeAgent { .. }
             | WorkerExecutorError::PermissionDenied { .. }
             | WorkerExecutorError::InvalidRequest { .. },
         ) => Some(InvocationFailure {

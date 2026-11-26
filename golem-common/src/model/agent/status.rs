@@ -723,6 +723,8 @@ pub struct AgentStatusRecord {
     /// The time of the entry that established the current failed or exited state, including
     /// failures before an invocation starts. Cleared when execution leaves that state.
     pub terminal_failure_at: Option<Timestamp>,
+    /// The oplog index of the entry identified by `terminal_failure_at`.
+    pub terminal_failure_index: Option<OplogIndex>,
     pub skipped_regions: DeletedRegions,
     pub overridden_retry_config: Option<RetryConfig>,
     pub pending_invocations: Vec<PendingInvocationRef>,
@@ -818,6 +820,7 @@ impl Default for AgentStatusRecord {
             status: AgentStatus::Idle,
             last_error_kind: None,
             terminal_failure_at: None,
+            terminal_failure_index: None,
             skipped_regions: DeletedRegions::new(),
             overridden_retry_config: None,
             pending_invocations: Vec::new(),

@@ -24380,6 +24380,26 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
             .await?
             .is_some()
     );
+    let failed_id = golem_common::model::StandaloneToolInvocation::unique_part(
+        context.default_environment_id,
+        &tool_name,
+        scope,
+        "no-stream",
+        Some(&IdempotencyKey::new("standalone-startup-failure".into())),
+    );
+    let failed_summary = executor
+        .get_invocation(
+            &failed_owner.agent_id,
+            failed_owner.environment_id,
+            failed_id,
+        )
+        .await?
+        .expect("the failed standalone invocation must remain readable")
+        .expect("the accepted invocation must have a summary");
+    assert_eq!(
+        failed_summary.state,
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationLifecycleState::Failed as i32
+    );
     drop(executor);
     short_retention.configure = Some(Arc::new(|config| {
         config.standalone_tool_invocation_retention = Duration::from_secs(10);
@@ -24392,6 +24412,18 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
     assert_eq!(
         executor.stored_oplog(&failed_owner.agent_id).await,
         failed_history
+    );
+    assert_eq!(
+        executor
+            .get_invocation(
+                &failed_owner.agent_id,
+                failed_owner.environment_id,
+                failed_id
+            )
+            .await?
+            .expect("a restart must not hide the failed invocation"),
+        Some(failed_summary),
+        "the public summary must retain its terminal failure after restart"
     );
     failed_start.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32;
     let failure = tokio::time::timeout(

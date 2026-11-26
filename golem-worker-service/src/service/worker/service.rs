@@ -5255,6 +5255,7 @@ mod tests {
         invocation_session_resumes: Mutex<Vec<(AgentId, ResumeAttach)>>,
         effects: Mutex<Vec<&'static str>>,
         invocation_output: Mutex<AgentInvocationOutput>,
+        invocation_error: Mutex<Option<WorkerExecutorError>>,
         metadata_component_revision: Mutex<Option<ComponentRevision>>,
         listed_agents: Mutex<(Option<ScanCursor>, Vec<ExistingAgent>)>,
         file_read_missing: Mutex<bool>,
@@ -5295,6 +5296,7 @@ mod tests {
                 invocation_session_resumes: Mutex::new(Vec::new()),
                 effects: Mutex::new(Vec::new()),
                 invocation_output: Mutex::new(invocation_output),
+                invocation_error: Mutex::new(None),
                 metadata_component_revision: Mutex::new(None),
                 listed_agents: Mutex::new((None, Vec::new())),
                 file_read_missing: Mutex::new(false),
@@ -5978,6 +5980,9 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((*agent_id, start));
+            if let Some(error) = self.invocation_error.lock().unwrap().clone() {
+                return Err(error.into());
+            }
             let mut output = self.invocation_output.lock().unwrap().clone();
             output.agent_id = Some(*agent_id);
             output.idempotency_key.get_or_insert(key);
