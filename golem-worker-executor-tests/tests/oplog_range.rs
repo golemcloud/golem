@@ -392,7 +392,7 @@ async fn range_reads_across_the_oplog_layers_return_every_index_once_in_order(
         })
         .await?;
 
-    // A `to` after the end ends the read at the end, and a `to` before `from` is refused.
+    // A `to` after the end ends the read at the end. The executor refuses a `to` before `from`.
     let past_the_end = executor
         .read_oplog(agent_id, range(last - 1, last + 100), None)
         .await?;
@@ -433,8 +433,8 @@ async fn range_reads_across_the_oplog_layers_return_every_index_once_in_order(
     Ok(())
 }
 
-/// A search within a range returns the matching entries of the range: the matches before and
-/// after the range are left out.
+/// A search within a range returns the matching entries of the range. The search leaves out the
+/// matches before and after the range.
 #[test]
 #[timeout("4m")]
 async fn a_search_within_a_range_returns_only_the_matching_entries_in_the_range(
@@ -590,8 +590,8 @@ async fn a_read_that_follows_the_cursors_is_not_limited_by_the_scan_budget(
 
     // A search of the same range scans the oplog before its start for the component revision,
     // and the budget covers that scan. So its first page has no entry, and its cursor continues
-    // the scan before `from`. The cursors are followed without `from`, as `--page --cursor` and
-    // the MCP tool send them. The pages give only the matches from `from`.
+    // the scan before `from`. The test follows the cursors without `from`, as `--page --cursor`
+    // and the MCP tool send them. The pages give only the matches from `from`.
     let started_from = started
         .iter()
         .copied()

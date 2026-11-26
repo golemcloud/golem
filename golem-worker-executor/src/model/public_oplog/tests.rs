@@ -4417,7 +4417,7 @@ async fn an_oplog_range_read_stops_at_its_end_and_accounts_its_scan() {
     assert!(before.entries.is_empty());
     assert_eq!((before.next, before.scan.exhausted), (None, true));
 
-    // A cursor outside the range, or a range that ends before it starts, is refused.
+    // The read refuses a cursor outside the range, and a range that ends before it starts.
     let outside = OplogCursor {
         next_oplog_index: indices[9].as_u64(),
         current_component_revision: updated_revision.into(),
@@ -4779,7 +4779,7 @@ async fn a_remote_search_reads_at_least_one_batch_of_its_revision_scan_with_a_sp
                 "the search from {cursor:?} moves on"
             );
         });
-    // A scan cursor at index 0 is refused.
+    // The search refuses a scan cursor at index 0.
     let at_zero = search(Some(scan_cursor(OplogIndex::NONE))).await;
     assert!(
         matches!(at_zero, Err(WorkerExecutorError::InvalidRequest { .. })),

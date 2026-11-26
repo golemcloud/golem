@@ -416,11 +416,11 @@ enum OplogReadKind {
 /// the end of the range when that is earlier. A search needs the oplog up to the end of the range.
 /// A search cursor that continues the scan for the component revision needs the oplog from its
 /// search start, as [`OplogRange::resume_search`] gives it. The search returns no entry before
-/// that start. Before the read, the first entry of the oplog is not known. So a range
-/// without a start needs the oplog from index 1, the first index of an oplog. `OplogRange::new`
-/// and `OplogRange::resume` keep the end of a range at or after index 1 and at or after its start.
-/// So the resumed range always has a page from index 1. A resumed range without such a page would
-/// need the whole resumed range, which never asks for less.
+/// that start. Before the read, the worker service does not know the first entry of the oplog.
+/// So a range without a start needs the oplog from index 1, the first index of an oplog.
+/// `OplogRange::new` and `OplogRange::resume` keep the end of a range at or after index 1 and at
+/// or after its start. So the resumed range always has a page from index 1. A resumed range
+/// without such a page would need the whole resumed range, which never asks for less.
 fn oplog_read_resource(
     range: OplogRange,
     cursor: Option<&OplogCursor>,
@@ -7841,7 +7841,7 @@ mod tests {
         get_oplog(range(None, Some(60)), None, permitted(1, 60))
             .await
             .unwrap();
-        // A read with a start or with a cursor is not checked again.
+        // The worker service does not check a read with a start or with a cursor again.
         get_oplog(range(Some(5), None), None, permitted(5, 54))
             .await
             .unwrap();

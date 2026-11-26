@@ -291,9 +291,10 @@ impl OplogRange {
         }
     }
 
-    /// The count of the entries that a page of at most `limit` entries reads from `from`: `limit`,
-    /// or the count of the indices from `from` to the end of the range, when that is smaller. It
-    /// is 0 when `from` is after the end. A count that does not fit in `usize` gives `usize::MAX`.
+    /// The count of the entries that a page of at most `limit` entries reads from `from`. It is
+    /// `limit`, or the count of the indices from `from` to the end of the range when that is
+    /// smaller. It is 0 when `from` is after the end. A count that does not fit in `usize` gives
+    /// `usize::MAX`.
     pub fn page_count(&self, from: OplogIndex, limit: u64) -> usize {
         let in_range = self.end.map_or(u64::MAX, |end| {
             end.as_u64()

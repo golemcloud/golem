@@ -2146,8 +2146,8 @@ mod tests {
             .flatten()
             .try_for_each(|(index, message)| writer.write(log_view(index, message)))
             .unwrap();
-        // A page that starts again at an entry already written, or after a gap, is refused and
-        // writes nothing.
+        // The writer refuses a page that starts again at an entry that it wrote, or after a gap,
+        // and writes nothing.
         assert!(writer.write(log_view(3, "c")).is_err());
         assert!(writer.write(log_view(2, "b")).is_err());
         assert!(writer.write(log_view(5, "e")).is_err());
