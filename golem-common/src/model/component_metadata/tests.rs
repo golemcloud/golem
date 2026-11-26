@@ -211,13 +211,10 @@ fn component_metadata_grpc_roundtrip_preserves_agent_initial_permissions() {
             },
         )]),
     )
-    .with_component_config(
-        crate::schema::ComponentConfigSchema::default(),
-        ComponentProvisionConfig {
-            initial_permissions: card.clone(),
-            ..Default::default()
-        },
-    );
+    .with_component_provision_config(ComponentProvisionConfig {
+        initial_permissions: card.clone(),
+        ..Default::default()
+    });
 
     let proto: golem_api_grpc::proto::golem::component::ComponentMetadata =
         metadata.try_into().unwrap();
@@ -389,10 +386,7 @@ fn component_metadata_grpc_roundtrip_preserves_tool_envelope() {
         decoded.with_provision_configs(decoded.agent_type_provision_configs().clone()),
         decoded.with_tools(decoded.tools().clone()),
         decoded.with_tool_middlewares(decoded.tool_middlewares().clone()),
-        decoded.with_component_config(
-            decoded.config_schema().clone(),
-            decoded.component_provision_config().clone(),
-        ),
+        decoded.with_component_provision_config(decoded.component_provision_config().clone()),
     ] {
         transformed.redact_host_managed_values_for_external();
         assert_eq!(transformed.agent_type_ids(), &agent_type_ids);

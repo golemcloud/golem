@@ -27,10 +27,12 @@ use golem_service_base::custom_api::PathSegment;
 
 #[derive(Debug, Clone, thiserror::Error, PartialEq)]
 pub enum DeployValidationError {
-    #[error("Invalid static config in component {component_name}{agent}: {message}", agent = agent_type_name.as_ref().map(|name| format!(" for agent {name}")).unwrap_or_default())]
+    #[error(
+        "Invalid static config in component {component_name} for agent {agent_type_name}: {message}"
+    )]
     InvalidStaticConfig {
         component_name: ComponentName,
-        agent_type_name: Option<AgentTypeName>,
+        agent_type_name: AgentTypeName,
         message: String,
     },
     #[error(

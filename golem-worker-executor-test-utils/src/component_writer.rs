@@ -28,7 +28,6 @@ use golem_common::model::component_metadata::{
 };
 use golem_common::model::diff::{Hash, Hashable};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
-use golem_common::schema::ComponentConfigSchema;
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_service_base::model::component::Component;
 use golem_test_framework::dsl::default_test_agent_initial_permissions_for_account;
@@ -622,10 +621,7 @@ impl From<LocalFileSystemComponentMetadata> for Component {
                 value.agent_types,
                 value.agent_type_provision_configs,
             )
-            .with_component_config(
-                ComponentConfigSchema::default(),
-                value.component_provision_config,
-            ),
+            .with_component_provision_config(value.component_provision_config),
             created_at: Default::default(),
             wasm_hash: value.wasm_hash,
             package_metadata: None,

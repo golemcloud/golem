@@ -230,7 +230,6 @@ async fn remote_release_bridge_automatically_reconciles_its_environment_grant(
             &publisher_environment.id.0,
             &ComponentCreation {
                 package_metadata: None,
-                config_schema: Default::default(),
                 component_provision_config: Default::default(),
                 component_name: ComponentName::try_from("publisher-tools:search")
                     .map_err(anyhow::Error::msg)?,
@@ -739,7 +738,6 @@ async fn remote_middleware_release_is_pinned_across_accounts(
             &publisher_environment.id.0,
             &ComponentCreation {
                 package_metadata: None,
-                config_schema: Default::default(),
                 component_provision_config: Default::default(),
                 component_name: ComponentName::try_from("publisher-middleware:audit")
                     .map_err(anyhow::Error::msg)?,
@@ -925,7 +923,6 @@ environments:
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: publisher_component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
