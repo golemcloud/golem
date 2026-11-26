@@ -65,7 +65,48 @@ async fn paired_benchmark_cli_preserves_order_failures_and_timeout_evidence() {
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
     }
 
-    for mode in ["success", "failure", "timeout"] {
+    for environment in [
+        None,
+        Some(
+            json!({"runner_id": "deployment", "hardware_fingerprint": "aarch64-cpu",
+            "storage_profile": "postgres"}),
+        ),
+        Some(
+            json!({"runner_id": "deployment", "hardware_fingerprint": "aarch64-cpu",
+            "storage_profile": "postgres", "sockets_enabled": false}),
+        ),
+    ] {
+        let mut command = Command::new(&binary);
+        command.arg("validate-environment");
+        if let Some(value) = &environment {
+            command.env("GOLEM_BENCH_MEASUREMENT_ENVIRONMENT", value.to_string());
+        } else {
+            command.env_remove("GOLEM_BENCH_MEASUREMENT_ENVIRONMENT");
+        }
+        let output = command.output().await.unwrap();
+        let complete = environment
+            .as_ref()
+            .is_some_and(|value| value.get("sockets_enabled").is_some());
+        assert_eq!(output.status.success(), complete);
+        if !complete {
+            let error = String::from_utf8_lossy(&output.stderr);
+            assert!(
+                error.contains("GOLEM_BENCH_MEASUREMENT_ENVIRONMENT"),
+                "{error}"
+            );
+            assert!(!error.contains("panicked"), "{error}");
+        }
+    }
+
+    for (mode, pair_count) in [
+        ("success", 3),
+        ("success", 4),
+        ("drift", 4),
+        ("slowdown", 4),
+        ("speedup", 4),
+        ("failure", 3),
+        ("timeout", 3),
+    ] {
         let temp = tempfile::tempdir().unwrap();
         let root = temp.path();
         let bin = root.join("bin");
@@ -104,7 +145,13 @@ if [ "$source" = head ]; then
             ;;
     esac
 fi
-sed -e "s/PROCESS_ID/$id/g" -e "s/SOURCE_SHA/$source/g" "$DUMMY_ROOT/record.json" > "$output"
+value=20
+case "$DUMMY_MODE" in
+    drift) value=$((100 + $(wc -l < "$DUMMY_ROOT/launches"))) ;;
+    slowdown) [ "$source" != head ] || value=40 ;;
+    speedup) [ "$source" != head ] || value=10 ;;
+esac
+sed -e "s/PROCESS_ID/$id/g" -e "s/SOURCE_SHA/$source/g" -e "s/METRIC_VALUE/$value/g" "$DUMMY_ROOT/record.json" > "$output"
 "#,
         );
         let hash = format!("{:x}", Sha256::digest(std::fs::read(&harness).unwrap()));
@@ -134,12 +181,14 @@ sed -e "s/PROCESS_ID/$id/g" -e "s/SOURCE_SHA/$source/g" "$DUMMY_ROOT/record.json
                 "measurement_environment": {"runner_id": "dummy-runner", "hardware_fingerprint": "dummy-hardware",
                     "storage_profile": "dummy-storage", "sockets_enabled": false},
                 "runs": [config], "results": [{"run_config": config, "iteration_results": [{
-                    "index": 0, "duration_samples": {"latency": [11.0, 19.0, 31.0]},
+                    "index": 0, "duration_samples": {"latency": ["METRIC_VALUE"]},
                     "count_samples": {}, "failures": {}}]}]}]
         }]});
         std::fs::write(
             root.join("record.json"),
-            serde_json::to_vec(&record).unwrap(),
+            serde_json::to_string(&record)
+                .unwrap()
+                .replace("\"METRIC_VALUE\"", "METRIC_VALUE"),
         )
         .unwrap();
         std::fs::write(
@@ -171,7 +220,7 @@ sed -e "s/PROCESS_ID/$id/g" -e "s/SOURCE_SHA/$source/g" "$DUMMY_ROOT/record.json
             .arg(root.join("suite.yaml"))
             .args([
                 "--pairs",
-                "3",
+                &pair_count.to_string(),
                 "--runner-id",
                 "dummy-runner",
                 "--timeout-secs",
@@ -184,25 +233,53 @@ sed -e "s/PROCESS_ID/$id/g" -e "s/SOURCE_SHA/$source/g" "$DUMMY_ROOT/record.json
             .unwrap();
         let stderr = String::from_utf8_lossy(&output.stderr);
         let launches = std::fs::read_to_string(root.join("launches")).unwrap();
-        assert!(evidence.join("plan.json").is_file());
+        let plan: Value =
+            serde_json::from_slice(&std::fs::read(evidence.join("plan.json")).unwrap()).unwrap();
+        let orders = &[
+            ["base", "head"],
+            ["head", "base"],
+            ["base", "head"],
+            ["head", "base"],
+        ][..pair_count];
+        assert_eq!(plan["order"], json!(orders));
         assert!(evidence.join("0-base.json").is_file());
         assert_eq!(
             std::fs::read_to_string(evidence.join("0-head.log")).unwrap(),
             "dummy head\n"
         );
-        if mode == "success" {
+        if !matches!(mode, "failure" | "timeout") {
             assert!(output.status.success(), "{stderr}");
-            assert_eq!(launches, "base\nhead\nbase\nhead\nbase\nhead\n");
+            assert_eq!(
+                launches,
+                orders
+                    .iter()
+                    .flatten()
+                    .map(|side| format!("{side}\n"))
+                    .collect::<String>()
+            );
             let report: Value =
                 serde_json::from_slice(&std::fs::read(evidence.join("comparison.json")).unwrap())
                     .unwrap();
-            assert_eq!(report["process_pairs"], 3);
-            assert_eq!(report["results"][0]["relative_change"], 0.0);
-            assert_eq!(
-                report["results"][0]["confidence_interval"],
-                json!([0.0, 0.0])
+            assert_eq!(report["process_pairs"], pair_count);
+            let expected = match mode {
+                "slowdown" => 1.0,
+                "speedup" => -0.5,
+                // The middle paired changes under linear clock drift are -1/108 and 1/105.
+                "drift" => (-1.0 / 108.0 + 1.0 / 105.0) / 2.0,
+                _ => 0.0,
+            };
+            let change = report["results"][0]["relative_change"].as_f64().unwrap();
+            assert!(
+                (change - expected).abs() < 1e-12,
+                "{mode}: {change} != {expected}"
             );
-            for pair in 0..3 {
+            if mode == "success" {
+                assert_eq!(
+                    report["results"][0]["confidence_interval"],
+                    json!([0.0, 0.0])
+                );
+            }
+            for (pair, order) in orders.iter().enumerate() {
                 for side in ["base", "head"] {
                     let prefix = format!("{pair}-{side}");
                     let status: Value = serde_json::from_slice(
@@ -210,6 +287,12 @@ sed -e "s/PROCESS_ID/$id/g" -e "s/SOURCE_SHA/$source/g" "$DUMMY_ROOT/record.json
                     )
                     .unwrap();
                     assert_eq!(status["success"], true);
+                    assert_eq!(status["pair"], pair);
+                    assert_eq!(status["side"], side);
+                    assert_eq!(
+                        status["position"],
+                        order.iter().position(|item| *item == side).unwrap()
+                    );
                     assert!(evidence.join(format!("{prefix}.json")).is_file());
                 }
             }

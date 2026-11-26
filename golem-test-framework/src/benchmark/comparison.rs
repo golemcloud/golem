@@ -456,13 +456,30 @@ mod tests {
 
     #[test]
     fn paired_comparison_reports_missing_metrics_without_an_interval() {
-        let (base, mut head) = pairs();
+        let (mut base, mut head) = pairs();
+        for (runs, latency) in [(&mut base, 10.0), (&mut head, 20.0)] {
+            for run in runs {
+                for iteration in &mut run.results[0].results[0].iteration_results {
+                    iteration
+                        .duration_samples
+                        .insert(ResultKey::primary("rpc-remote"), vec![latency]);
+                }
+            }
+        }
         head[1].results[0].results[0].iteration_results[1]
             .duration_samples
-            .clear();
+            .remove(&ResultKey::primary("latency"));
         let report = BenchmarkComparison::from_pairs(&base, &head).unwrap();
         assert_eq!(report.results[0].status, "incomplete-pairs");
         assert!(report.results[0].confidence_interval.is_none());
+        let remote = report
+            .results
+            .iter()
+            .find(|result| result.metric == "rpc-remote")
+            .unwrap();
+        assert_eq!(remote.status, "regression");
+        assert_eq!(remote.relative_change, Some(1.0));
+        assert_eq!(remote.confidence_interval, Some([1.0, 1.0]));
         for run in &mut head {
             run.results.clear();
         }
@@ -504,6 +521,9 @@ mod tests {
         failure.failure(&ResultKey::primary("latency"), "timeout");
         inputs[1].results[0].results[0].add(failure);
         inputs[1].results[0].results[0].iteration_results[1].skipped = Some("setup".into());
+        // Model saved inputs, where aggregate sample buffers are intentionally absent.
+        let inputs: Vec<BenchmarkSuiteResult> =
+            serde_json::from_value(serde_json::to_value(inputs).unwrap()).unwrap();
         let merged = BenchmarkSuiteResult::merge_iterations(inputs.clone()).unwrap();
         let result = &merged.results[0].results[0];
         assert_eq!(merged.results[0].iterations, 9);
@@ -522,13 +542,41 @@ mod tests {
             result.count_results[&ResultKey::primary("calls")].all,
             vec![101, 1, 1, 101, 1, 1, 101, 1, 1]
         );
-        for mutation in 0..4 {
+        assert_eq!(
+            result.failures[&ResultKey::primary("latency")].per_iteration,
+            vec![vec!["timeout"]]
+        );
+        assert!(
+            BenchmarkSuiteResult::merge_iterations(vec![inputs[0].clone(), inputs[0].clone()])
+                .is_err()
+        );
+        let mut equal_values = inputs[0].clone();
+        equal_values.timestamp += jiff::SignedDuration::from_secs(1);
+        assert!(
+            BenchmarkSuiteResult::merge_iterations(vec![inputs[0].clone(), equal_values]).is_ok()
+        );
+        let mut anonymous = inputs[0].clone();
+        anonymous.run_id = None;
+        assert!(
+            BenchmarkSuiteResult::merge_iterations(vec![anonymous.clone(), anonymous]).is_err()
+        );
+        for mutation in 0..6 {
             let mut wrong = inputs.clone();
             match mutation {
                 0 => wrong[1].results[0].series_key = "other".into(),
                 1 => wrong[1].harness_version += 1,
                 2 => wrong[1].results[0].results[0].run_config.size += 1,
-                _ => wrong[1].source = None,
+                3 => wrong[1].source = None,
+                4 => wrong[1].results[0].results[0].iteration_results[0]
+                    .duration_samples
+                    .insert(ResultKey::primary("latency"), vec![-1.0])
+                    .map(|_| ())
+                    .unwrap(),
+                _ => wrong[1].results[0].results[0].iteration_results[0]
+                    .duration_samples
+                    .insert(ResultKey::primary("latency"), vec![f64::MAX])
+                    .map(|_| ())
+                    .unwrap(),
             }
             assert!(BenchmarkSuiteResult::merge_iterations(wrong).is_err());
         }

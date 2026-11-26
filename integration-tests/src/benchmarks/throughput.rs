@@ -488,9 +488,9 @@ fn select_rpc_agent_pairs(
         let Some(table) = routing_table else {
             return pair(format!("rpc-test-{target}"));
         };
-        // Alternate both across targets and across iterations. A single executor
-        // has no remote route; an odd target count gives local one extra on even iterations.
-        let local = table.all().len() == 1 || iteration % 2 == target % 2;
+        // Keep each target's route stable across iterations so every measured route
+        // has complete iteration evidence. Size 1 measures local only.
+        let local = table.all().len() == 1 || target % 2 == 0;
         const MAX_CANDIDATES: usize = 10_000;
         for candidate in 0..MAX_CANDIDATES {
             let selected = pair(format!("rpc-test-{target}-{candidate}"))?;
@@ -1458,7 +1458,7 @@ mod tests {
                             assert_eq!(pair.child_agent_id, callee);
                             assert_eq!(
                                 table.lookup(&caller) == table.lookup(&callee),
-                                iteration % 2 == (names.len() - 1) % 2
+                                (names.len() - 1) % 2 == 0
                             );
                         }
                         local_counts.push(
@@ -1468,16 +1468,7 @@ mod tests {
                                 .count(),
                         );
                     }
-                    assert_eq!(
-                        local_counts,
-                        vec![
-                            size.div_ceil(2),
-                            size / 2,
-                            size.div_ceil(2),
-                            size / 2,
-                            size.div_ceil(2)
-                        ]
-                    );
+                    assert_eq!(local_counts, vec![size.div_ceil(2); 5]);
                 }
             }
         }
@@ -1495,7 +1486,7 @@ mod tests {
                 environment,
                 ("BenchmarkAgent", child_type_id),
                 ("BenchmarkAgent", child_type_id),
-                1,
+                2,
                 1,
                 Some(&table)
             )

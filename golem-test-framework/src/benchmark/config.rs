@@ -473,6 +473,19 @@ pub enum BenchmarkPartition {
 }
 
 impl BenchmarkSuite {
+    pub fn validate_entry_names(&self) -> anyhow::Result<()> {
+        let mut names = std::collections::BTreeSet::new();
+        for item in &self.benchmarks {
+            let name = if item.disable_compilation_cache.unwrap_or_default() {
+                format!("{}-no-cache", item.name)
+            } else {
+                item.name.clone()
+            };
+            anyhow::ensure!(names.insert(name.clone()), "duplicate suite entry {name}");
+        }
+        Ok(())
+    }
+
     pub fn fixture_names(&self) -> std::collections::BTreeSet<&'static str> {
         let mut fixtures = std::collections::BTreeSet::new();
         for benchmark in &self.benchmarks {

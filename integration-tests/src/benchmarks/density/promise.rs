@@ -92,6 +92,7 @@ pub async fn run_cell(
     rate_ramp: Option<&[u32]>,
     manifest: &PrepManifest,
     deps: &BenchmarkTestDependencies,
+    measurement_environment: golem_test_framework::benchmark::MeasurementEnvironment,
 ) -> anyhow::Result<BenchmarkResult> {
     validate_payload_size(config.payload_size)?;
     let rates = validated_rates(rate_ramp.unwrap_or(DEFAULT_RATE_RAMP))?;
@@ -131,7 +132,7 @@ pub async fn run_cell(
     drop(ready_work);
     let recorder = BenchmarkRecorder::new();
     cleanup_pool(&user, workers, &recorder).await?;
-    Ok(outcome.into_benchmark_result(config, recorder))
+    Ok(outcome.into_benchmark_result(config, recorder, measurement_environment))
 }
 
 async fn resolve_component(
@@ -591,6 +592,7 @@ impl Outcome {
         self,
         config: &CellConfig,
         recorder: BenchmarkRecorder,
+        measurement_environment: golem_test_framework::benchmark::MeasurementEnvironment,
     ) -> BenchmarkResult {
         recorder.count(&ResultKey::primary("promise-completions"), self.completed);
         recorder.count(
@@ -670,8 +672,6 @@ impl Outcome {
         };
         let mut run_result = BenchmarkRunResult::new(run_config.clone());
         run_result.add_iteration(0, recorder);
-        let measurement_environment =
-            golem_test_framework::benchmark::MeasurementEnvironment::remote_from_env();
         BenchmarkResult {
             entry_version: 1,
             iterations: 1,

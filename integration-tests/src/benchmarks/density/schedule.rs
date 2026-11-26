@@ -66,6 +66,7 @@ pub async fn run_cell(
     manifest: &PrepManifest,
     deps: &BenchmarkTestDependencies,
     probe: &ExecutorProbe,
+    measurement_environment: golem_test_framework::benchmark::MeasurementEnvironment,
 ) -> anyhow::Result<BenchmarkResult> {
     if config.rate_period.is_zero() {
         anyhow::bail!("schedule rate period must be positive");
@@ -118,7 +119,7 @@ pub async fn run_cell(
         }
     }
 
-    Ok(outcome.into_benchmark_result(config, target_count))
+    Ok(outcome.into_benchmark_result(config, target_count, measurement_environment))
 }
 
 async fn resolve_uniform_component(
@@ -329,7 +330,12 @@ impl ScheduleOutcome {
         });
     }
 
-    fn into_benchmark_result(self, config: &CellConfig, targets: u32) -> BenchmarkResult {
+    fn into_benchmark_result(
+        self,
+        config: &CellConfig,
+        targets: u32,
+        measurement_environment: golem_test_framework::benchmark::MeasurementEnvironment,
+    ) -> BenchmarkResult {
         let recorder = BenchmarkRecorder::new();
         recorder.count(&ResultKey::primary("scheduled-actions"), self.scheduled);
         if self.expected_scheduled > 0 {
@@ -384,8 +390,6 @@ impl ScheduleOutcome {
         };
         let mut run_result = BenchmarkRunResult::new(run_config.clone());
         run_result.add_iteration(0, recorder);
-        let measurement_environment =
-            golem_test_framework::benchmark::MeasurementEnvironment::remote_from_env();
         if self.expected_scheduled > 0 {
             info!(
                 "Density-schedule[{}]: scheduled {} of {} expected actions at max {} per second across {} targets",
