@@ -21,7 +21,8 @@ use crate::services::scheduler::SchedulerService;
 use crate::services::shard::ShardService;
 use crate::storage::indexed::{
     AgentDataObservation, AgentIndexedState, IndexedStorage, IndexedStorageError,
-    IndexedStorageLabelledApi, IndexedStorageNamespace, ReleaseAgentResult, UnsealAgentResult,
+    IndexedStorageLabelledApi, IndexedStorageNamespace, MAX_INDEXED_ID, ReleaseAgentResult,
+    UnsealAgentResult,
 };
 use crate::storage::keyvalue::{
     KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
@@ -675,7 +676,7 @@ impl SealService {
                     },
                     &id.storage_key(),
                     0,
-                    u64::MAX,
+                    MAX_INDEXED_ID,
                 )
                 .await
                 .map_err(|error| Self::indexed_error(&id, error))?;

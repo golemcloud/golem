@@ -29,7 +29,7 @@ use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{
     IndexedStorage, IndexedStorageError, IndexedStorageLabelledApi, IndexedStorageMetaNamespace,
-    IndexedStorageNamespace, ScanResume,
+    IndexedStorageNamespace, MAX_INDEXED_ID, ScanResume,
 };
 use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
 use pretty_assertions::assert_eq;
@@ -6394,7 +6394,7 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
                         state.manifest_namespace(*level),
                         &key,
                         0,
-                        u64::MAX / 2
+                        MAX_INDEXED_ID
                     )
                     .await
                     .unwrap(),
@@ -6603,7 +6603,7 @@ async fn indexed_agent_transitions_refuse_without_removing_history(
                         state.manifest_namespace(*level),
                         &key,
                         0,
-                        i64::MAX as u64
+                        MAX_INDEXED_ID
                     )
                     .await
                     .unwrap(),

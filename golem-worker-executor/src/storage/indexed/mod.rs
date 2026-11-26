@@ -32,6 +32,9 @@ pub mod postgres;
 pub mod redis;
 pub mod sqlite;
 
+/// Largest entry id accepted by every indexed storage backend, including signed SQL ids.
+pub const MAX_INDEXED_ID: u64 = i64::MAX as u64;
+
 pub(crate) const STAGE_RESERVATION_NAMESPACE: &str = "stage-reservation";
 
 fn fresh_stage_token() -> i64 {

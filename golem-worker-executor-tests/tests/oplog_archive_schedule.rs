@@ -26,6 +26,7 @@ use golem_api_grpc::proto::golem::worker::{
     InvocationRequest, InvocationStart, invocation_request, invocation_response,
     invocation_session_completion, stream_terminal,
 };
+use golem_common::config::DbPostgresConfig;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::component::ComponentDto;
 use golem_common::model::durable_stream::{
@@ -49,11 +50,16 @@ use golem_service_base::storage::blob::{
     BlobStorageLabelledApi, BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath,
     PutIfAbsent, agent_path_segment,
 };
+use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::derive_disjoint_sqlite_config;
+use golem_worker_executor::services::golem_config::{
+    IndexedStorageConfig, IndexedStoragePostgresConfig,
+};
 use golem_worker_executor::services::oplog::{ArchiveWait, CommitLevel, DurableStreamOplogRecord};
 use golem_worker_executor::services::shard::ShardService;
 use golem_worker_executor::services::{HasOplog, HasOplogService, HasWorkerActivator};
+use golem_worker_executor::storage::indexed::postgres::PostgresIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use golem_worker_executor::storage::keyvalue::{
@@ -1610,18 +1616,61 @@ async fn sealed_cached_worker_is_reacquired_without_reusing_its_old_handle(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    sealed_cached_worker(last_unique_id, deps, host_api_tests, None).await
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn postgres_seal_preserves_frozen_history_and_reacquires_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let postgres = DockerPostgresRdb::new(&uuid::Uuid::new_v4().to_string(), false).await;
+    let url = url::Url::parse(&postgres.public_connection_string())?;
+    let config = IndexedStoragePostgresConfig {
+        postgres: DbPostgresConfig {
+            host: url.host_str().unwrap().to_string(),
+            port: url.port().unwrap(),
+            database: url.path().trim_start_matches('/').to_string(),
+            username: url.username().to_string(),
+            password: url.password().unwrap().to_string(),
+            max_connections: 10,
+            schema: None,
+            acquire_timeout: None,
+        },
+        drop_prefix_delete_batch_size: 1024,
+        max_concurrent_ops: None,
+    };
+    sealed_cached_worker(last_unique_id, deps, host_api_tests, Some(config)).await
+}
+
+async fn sealed_cached_worker(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host_api_tests: &PrecompiledComponent,
+    postgres: Option<IndexedStoragePostgresConfig>,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
     let executor = start_with_overrides(
         deps,
         &context,
         TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.oplog.indexed_storage_layers = 1;
-                config.oplog.blob_storage_layers = 1;
-                config.oplog.entry_count_limit = 1_000_000;
-                config.oplog.shard_lease_max_ttl = Duration::from_secs(300);
-                config.oplog.skew_margin = Duration::from_secs(1);
+            configure: Some(Arc::new({
+                let postgres = postgres.clone();
+                move |config| {
+                    if let Some(postgres) = &postgres {
+                        config.indexed_storage = IndexedStorageConfig::Postgres(postgres.clone());
+                    }
+                    config.oplog.indexed_storage_layers = 1;
+                    config.oplog.blob_storage_layers = 1;
+                    config.oplog.entry_count_limit = 1_000_000;
+                    config.oplog.shard_lease_max_ttl = Duration::from_secs(300);
+                    config.oplog.skew_margin = Duration::from_secs(1);
+                }
             })),
             wrap_shard_service: Some(Arc::new({
                 let shard = shard.clone();
@@ -1695,7 +1744,14 @@ async fn sealed_cached_worker_is_reacquired_without_reusing_its_old_handle(
     );
     let indexed_config =
         derive_disjoint_sqlite_config(&sqlite_storage_config(deps, &context), "indexed");
-    let indexed = SqliteIndexedStorage::configured(&indexed_config).await?;
+    let indexed: Arc<dyn IndexedStorage + Send + Sync> = match &postgres {
+        Some(config) => Arc::new(
+            PostgresIndexedStorage::configured(config)
+                .await
+                .map_err(anyhow::Error::msg)?,
+        ),
+        None => Arc::new(SqliteIndexedStorage::configured(&indexed_config).await?),
+    };
     let resident = indexed.observe_agent("test", "before_seal", &owned).await?;
     assert!(resident.has_data);
     let history = executor.stored_oplog(&owned.agent_id).await;
@@ -1723,14 +1779,34 @@ async fn sealed_cached_worker_is_reacquired_without_reusing_its_old_handle(
     assert!(!sealed.has_data, "seal must remove all indexed authority");
     assert_eq!(sealed.durable_marker, None);
     assert_eq!(sealed.ephemeral_marker, None);
-    let pool = sqlx::SqlitePool::connect_with(
-        sqlx::sqlite::SqliteConnectOptions::new()
-            .filename(&indexed_config.database)
-            .create_if_missing(false),
-    )
-    .await?;
-    let key = owned.storage_key();
-    let epochs: i64 = sqlx::query_scalar(
+    let epochs: i64 = if let Some(config) = &postgres {
+        let pool = sqlx::PgPool::connect_with(
+            sqlx::postgres::PgConnectOptions::new()
+                .host(&config.postgres.host)
+                .port(config.postgres.port)
+                .database(&config.postgres.database)
+                .username(&config.postgres.username)
+                .password(&config.postgres.password),
+        )
+        .await?;
+        let epochs = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM indexed_key_epoch WHERE env = $1 AND agent = $2",
+        )
+        .bind(owned.environment_id.0)
+        .bind(owned.agent_id.as_uuid())
+        .fetch_one(&pool)
+        .await?;
+        pool.close().await;
+        epochs
+    } else {
+        let pool = sqlx::SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&indexed_config.database)
+                .create_if_missing(false),
+        )
+        .await?;
+        let key = owned.storage_key();
+        let epochs: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM indexed_key_epoch WHERE key = ? OR (key >= ? || '#' AND key < ? || '$')",
     )
     .bind(&key)
@@ -1738,7 +1814,9 @@ async fn sealed_cached_worker_is_reacquired_without_reusing_its_old_handle(
     .bind(&key)
     .fetch_one(&pool)
     .await?;
-    pool.close().await;
+        pool.close().await;
+        epochs
+    };
     assert_eq!(epochs, 0, "seal must release every indexed epoch row too");
     assert!(!executor.worker_is_cached(&owned).await);
     assert!(old_oplog.is_retired());

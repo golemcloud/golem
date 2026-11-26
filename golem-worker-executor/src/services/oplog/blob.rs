@@ -78,6 +78,7 @@ impl BlobOplogArchiveService {
         }
     }
 
+    #[cfg(test)]
     pub(crate) async fn manifest_snapshot(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -85,7 +86,10 @@ impl BlobOplogArchiveService {
     ) -> OplogArchiveResult<BTreeMap<OplogIndex, BlobChunkRef>> {
         Ok(self
             .manifest(owned_agent_id, agent_mode)
-            .read(OplogIndex::NONE, OplogIndex::from_u64(u64::MAX))
+            .read(
+                OplogIndex::NONE,
+                OplogIndex::from_u64(crate::storage::indexed::MAX_INDEXED_ID),
+            )
             .await?
             .into_iter()
             .collect())
