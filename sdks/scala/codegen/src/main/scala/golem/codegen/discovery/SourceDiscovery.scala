@@ -1448,17 +1448,17 @@ object SourceDiscovery {
     caseClassIndex: Map[String, (String, Defn.Class)],
     path: List[String]
   ): Option[List[ConfigField]] = {
-    // Try FQN first, then simple name
-    val resolved = caseClassIndex
-      .get(typeName)
-      .orElse(caseClassIndex.get(if (currentPkg.isEmpty) typeName else s"$currentPkg.$typeName"))
+    def lookup(name: String, pkg: String): Option[(String, Defn.Class)] =
+      caseClassIndex.get(qualifiedName(pkg, name)).orElse(caseClassIndex.get(name))
+
+    val resolved = lookup(typeName, currentPkg)
 
     def containsSecret(tpe: Type, pkg: String, seen: Set[String]): Boolean =
       if (isSecretType(tpe)) true
       else if (seen(tpe.syntax)) false
       else {
         val next   = seen + tpe.syntax
-        val nested = caseClassIndex.get(tpe.syntax).orElse(caseClassIndex.get(qualifiedName(pkg, tpe.syntax)))
+        val nested = lookup(tpe.syntax, pkg)
         nested.exists { case (p, c) =>
           c.ctor.paramClauses.flatMap(_.values).exists(_.decltpe.exists(containsSecret(_, p, next)))
         } || (tpe match {
@@ -1478,11 +1478,11 @@ object SourceDiscovery {
           case Some(tpe) =>
             val typeStr = tpe.syntax
             // Try to resolve as a nested config case class
-            val nestedKey    = typeStr
-            val nestedFqnKey = if (classPkg.isEmpty) typeStr else s"$classPkg.$typeStr"
-            caseClassIndex.get(nestedKey).orElse(caseClassIndex.get(nestedFqnKey)) match {
+            lookup(typeStr, classPkg) match {
               case Some(_) if containsSecret(tpe, classPkg, Set.empty) =>
-                extractConfigFields(nestedKey, classPkg, caseClassIndex, fieldPath).getOrElse(Nil)
+                extractConfigFields(typeStr, classPkg, caseClassIndex, fieldPath).getOrElse(Nil)
+              case Some((pkg, record)) =>
+                List(ConfigField(fieldPath, s"_root_.${qualifiedName(pkg, record.name.value)}"))
               case _ =>
                 List(ConfigField(fieldPath, typeStr))
             }
