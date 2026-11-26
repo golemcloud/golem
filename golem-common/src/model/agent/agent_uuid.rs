@@ -31,7 +31,9 @@ use crate::base_model::agent_id::H_MASK;
 use crate::base_model::component::ComponentId;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::type_id::TypeId;
-use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey, RESERVED_TYPE_TAG};
+use crate::base_model::{
+    AgentFingerprint, AgentId, IdempotencyKey, InvocationId, RESERVED_TYPE_TAG,
+};
 
 const KEYED_DOMAIN: &str = "golem:agent-id:keyed:v1";
 const IDEMPOTENT_CREATE_DOMAIN: &str = "golem:agent-id:idempotent-create:v1";
@@ -42,6 +44,7 @@ const DURABLE_STREAM_SESSION_DOMAIN: &str = "golem:agent-id:durable-stream-sessi
 const IMPORTED_PHANTOM_DOMAIN: &str = "golem:agent-id:imported-phantom:v1";
 const ALLOCATED_DOMAIN: &str = "golem:agent-id:allocated:v1";
 const EXTERNAL_TOOL_OWNER_DOMAIN: &str = "golem:agent-id:external-tool-owner:v1";
+const TOOL_INVOCATION_DOMAIN: &str = "golem:agent-id:tool-invocation:v1";
 
 impl AgentId {
     /// The ID of the keyed agent that `key` selects. `type_id` must be the type ID
@@ -211,6 +214,22 @@ impl AgentId {
                 .fixed(component_id.0.as_bytes())
                 .variable(owner_key.value.as_bytes())
                 .h(),
+        )
+    }
+
+    /// The executor address of a standalone tool invocation. The public unique
+    /// part is a raw UUID, and the tag is the tool's registered type ID.
+    pub fn standalone_tool_invocation(
+        environment_id: EnvironmentId,
+        tool_type_id: TypeId,
+        unique_part: InvocationId,
+    ) -> Self {
+        Self::typed(
+            tool_type_id,
+            HashInput::new(TOOL_INVOCATION_DOMAIN)
+                .environment(environment_id)
+                .type_id(tool_type_id)
+                .fixed(unique_part.0.as_bytes()),
         )
     }
 

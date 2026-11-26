@@ -4,6 +4,17 @@ Test-running mechanics are in the `testing` skill; test patterns, tooling and ex
 durable execution are in `understanding-durable-execution` (`reference/testing-patterns.md`).
 Tests here must never spawn external processes (see the repository `AGENTS.md`).
 
+## Human-readable tests
+
+- Write each test as setup, action, then checks. Split independent scenarios into separate tests. Give phases that must share state across a restart their own named functions.
+- Use `golem-worker-executor-test-utils` and `golem-test-framework::dsl::TestDsl` as the main test interface. Extract repeated setup and protocol handling there; each new DSL helper must serve at least two tests.
+- Return fixtures as structs with named fields, not positional tuples. Keep server handles with the fixture so their lifetime is visible.
+- Build schema types and values with `IntoSchema`-derived structs, `data_value!`, or `IntoTypedSchemaValue`, rather than hand-built schema/value ADTs.
+- Group checks by the guarantee they prove, using the testing-plan wording when available. Explain non-obvious assertions with messages. Match error codes or typed error variants, not substrings of formatted errors.
+- Put imports at module scope and use short imported paths. Name timeouts and oplog positions instead of repeating literals.
+- Use a shared oplog-shape assertion for the invariants below. Make any permitted incomplete call or retained terminal explicit at the call site; do not weaken the common assertion for one scenario.
+- A readability refactor must preserve every scenario, crash window, effect counter and assertion. Run the same affected tests before and after it.
+
 ## Prefer production behavior over test-only runtime plumbing
 
 Exercise lifecycle and concurrency behavior through production APIs, existing dependency

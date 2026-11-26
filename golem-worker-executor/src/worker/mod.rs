@@ -81,6 +81,7 @@ mod outcome;
 pub mod owner_lane;
 pub(crate) mod owner_wallet;
 pub mod read_only_cache;
+mod retention;
 pub(crate) mod snapshot_selection;
 pub(crate) mod start_outcome;
 mod state_actor;
@@ -258,6 +259,7 @@ pub(crate) enum WorkerCreationMode {
     ComponentAgent,
     EphemeralExternalTool,
     OplogProcessor,
+    StandaloneTool,
 }
 
 /// The owner that a request creates when the owner it names does not exist yet.
@@ -270,6 +272,7 @@ pub struct NewOwner {
     pub constructor: Option<ParsedAgentKey>,
     /// Whether the agent owns the key of `constructor`. Its ID then derives from the key.
     pub keyed: bool,
+    pub standalone_tool: Option<Box<golem_common::model::oplog::StandaloneToolInvocation>>,
 }
 
 impl NewOwner {
@@ -278,6 +281,7 @@ impl NewOwner {
             component_id,
             constructor: Some(key),
             keyed: true,
+            standalone_tool: None,
         }
     }
 
@@ -286,6 +290,7 @@ impl NewOwner {
             component_id,
             constructor: Some(constructor),
             keyed: false,
+            standalone_tool: None,
         }
     }
 
@@ -295,6 +300,7 @@ impl NewOwner {
             component_id,
             constructor: None,
             keyed: false,
+            standalone_tool: None,
         }
     }
 
@@ -395,6 +401,7 @@ impl WorkerCreationMode {
             Self::ComponentAgent => OwnerKind::ComponentAgent,
             Self::EphemeralExternalTool => OwnerKind::EphemeralExternalTool,
             Self::OplogProcessor => OwnerKind::OplogProcessor,
+            Self::StandaloneTool => OwnerKind::StandaloneTool,
         }
     }
 }

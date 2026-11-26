@@ -601,9 +601,7 @@ async fn settled_oplog(
             .iter()
             .rev()
             .find_map(|entry| match &entry.entry {
-                PublicOplogEntry::AgentInvocationFinished(params) => {
-                    Some(params.invocation_id.clone())
-                }
+                PublicOplogEntry::AgentInvocationFinished(params) => Some(params.invocation_id),
                 _ => None,
             })
             .expect("Expected an AgentInvocationFinished in the source oplog");

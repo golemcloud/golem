@@ -1868,6 +1868,7 @@ function accepted(start, mappings = [], idempotencyKey = start.idempotencyKey) {
     version: 1,
     type: 'invocationAccepted',
     attemptId: start.attemptId,
+    invocationId: `${TEST_AGENT_ID}.${idempotencyKey}`,
     agentId: TEST_AGENT_ID,
     idempotencyKey,
     sessionToken: 'session',

@@ -16,10 +16,8 @@ componentTemplates:
           - project
           targets:
           - .golem/scala.js
-        - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
+        - preinitializeJs: .generated/agent_guest.wasm
           module: .golem/scala.js
-          into: "{{ golemTempDir }}/agents/scala_examples.dynamic.wasm"
-        - preinitializeJs: "{{ golemTempDir }}/agents/scala_examples.dynamic.wasm"
           into: "{{ golemTempDir }}/agents/scala_examples.preinitialized.wasm"
         componentWasm: "{{ golemTempDir }}/agents/scala_examples.preinitialized.wasm"
         customCommands:

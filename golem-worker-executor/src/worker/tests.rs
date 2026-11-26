@@ -2401,6 +2401,7 @@ fn create_intent_records_the_kind_and_only_the_key_that_identifies_the_create() 
         component_id,
         constructor: None,
         keyed: true,
+        standalone_tool: None,
     };
     let unkeyed = NewOwner::untyped(component_id);
     let recorded = |intent: CreateIntent| {
