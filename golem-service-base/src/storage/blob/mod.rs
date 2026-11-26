@@ -22,7 +22,7 @@ use futures::{StreamExt, TryStreamExt};
 use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId, Timestamp};
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::{decode, serialize};
 use std::fmt::Debug;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
@@ -1187,8 +1187,8 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
         path: &Path,
     ) -> Result<Option<T>, Error> {
         match self.get_raw(namespace, path).await? {
-            Some(data) => Ok(Some(deserialize(&data).map_err(|e| {
-                anyhow!(e).context("Failed deserializing blob storage data")
+            Some(data) => Ok(Some(decode(&data).map_err(|e| {
+                anyhow::Error::new(e).context("Failed deserializing blob storage data")
             })?)),
             None => Ok(None),
         }

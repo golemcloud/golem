@@ -22,15 +22,15 @@ use chrono::{DateTime, Utc};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{IdempotencyKey, ScheduleId, ScheduledAction};
 
-use super::state_actor::InvocationAppendOutcome;
+use super::state_actor::{InvocationAppendOutcome, StoredAppend};
 
 pub(super) enum EnqueueInvocationOutcome {
+    /// An invocation with the same key was already admitted.
     Existing,
-    Stored {
-        index: OplogIndex,
+    Appended {
+        stored: StoredAppend,
         read_only_epoch: Option<u64>,
     },
-    StoredButUnreadable(UnreadableOplog),
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -208,10 +208,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .await?
                 {
                     EnqueueInvocationOutcome::Existing => None,
-                    EnqueueInvocationOutcome::Stored {
-                        read_only_epoch, ..
+                    EnqueueInvocationOutcome::Appended {
+                        stored: StoredAppend::Reported(_),
+                        read_only_epoch,
                     } => read_only_epoch,
-                    EnqueueInvocationOutcome::StoredButUnreadable(error) => {
+                    EnqueueInvocationOutcome::Appended {
+                        stored: StoredAppend::Unreported(error),
+                        ..
+                    } => {
                         return Err(self
                             .resolve_committed_invocation_failure(error.into())
                             .await);
@@ -1172,8 +1176,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             )
             .await?
         {
-            EnqueueInvocationOutcome::Stored { index, .. } => Ok(index),
-            EnqueueInvocationOutcome::StoredButUnreadable(error) => Err(error.into()),
+            EnqueueInvocationOutcome::Appended {
+                stored: StoredAppend::Reported(index),
+                ..
+            } => Ok(index),
+            EnqueueInvocationOutcome::Appended {
+                stored: StoredAppend::Unreported(error),
+                ..
+            } => Err(error.into()),
             EnqueueInvocationOutcome::Existing => {
                 unreachable!("keyless manual update admission always appends an oplog entry")
             }
@@ -1298,7 +1308,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             };
 
             let mut caller_instance_guard = Some(instance_guard);
-            let admission_index = if let Some(idempotency_key) = semantic_idempotency_key.as_ref() {
+            let stored = if let Some(idempotency_key) = semantic_idempotency_key.as_ref() {
                 drop(caller_instance_guard.take());
                 loop {
                     let status = self.state_actor.try_status().await?;
@@ -1372,20 +1382,25 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .await?
                     {
                         InvocationAppendOutcome::Retry => continue,
-                        InvocationAppendOutcome::Stored(index) => break index,
-                        InvocationAppendOutcome::StoredButUnreadable(error) => {
-                            return Ok(EnqueueInvocationOutcome::StoredButUnreadable(error));
-                        }
+                        InvocationAppendOutcome::Appended(stored) => break stored,
                     }
                 }
             } else {
-                self.add_and_commit_oplog_internal(
+                // A keyless update has no key to look up after a failed report, so the stored
+                // entry is reported as stored, and the loop is woken for it.
+                self.add_and_commit_stored(
                     caller_instance_guard.as_ref().unwrap(),
                     entry,
-                    None,
+                    Some(WorkerCommand::WorkAvailable),
                 )
                 .await?
             };
+            if let StoredAppend::Unreported(_) = stored {
+                return Ok(EnqueueInvocationOutcome::Appended {
+                    stored,
+                    read_only_epoch: read_only_epoch_snapshot,
+                });
+            }
 
             if let Some(idempotency_key) = semantic_idempotency_key {
                 // Captured here, inside the producer span, because a consumer links
@@ -1403,16 +1418,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .insert(idempotency_key, origin);
             }
 
-            if let Some(instance_guard) = caller_instance_guard.as_ref()
-                && let WorkerInstance::Running(running) = instance_guard.state()
-            {
-                running.sender.send(WorkerCommand::WorkAvailable).unwrap();
-            };
-
             drop(caller_instance_guard);
 
-            Ok(EnqueueInvocationOutcome::Stored {
-                index: admission_index,
+            Ok(EnqueueInvocationOutcome::Appended {
+                stored,
                 read_only_epoch: read_only_epoch_snapshot,
             })
         }
@@ -1445,7 +1454,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // already begun its execution and accepts nothing new.
         let deadline = Timestamp::from(millis);
         if self.lookup_matching_invocation(&invocation).await? == LookupResult::New
-            && let EnqueueInvocationOutcome::StoredButUnreadable(error) = self
+            && let EnqueueInvocationOutcome::Appended {
+                stored: StoredAppend::Unreported(error),
+                ..
+            } = self
                 .enqueue_worker_invocation_with_effect(
                     invocation,
                     read_only_cache::InvocationEffect::UnknownAssumeMutating,

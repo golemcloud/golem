@@ -56,7 +56,7 @@ use golem_common::model::{
     ReceivedCardTransferState, ShardEpoch, ShardId, SourceCardTransferIndex,
     SourceCardTransferState, SuccessfulUpdateRecord,
 };
-use golem_common::serialization::{decode, deserialize, serialize};
+use golem_common::serialization::{decode, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex as StdMutex, Weak};

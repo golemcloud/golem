@@ -790,21 +790,13 @@ async fn download_recorded_request(
     start_idx: OplogIndex,
     request: OplogPayload<HostRequest>,
 ) -> Result<HostRequest, WorkerExecutorError> {
-    use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
+    use crate::services::oplog::UnreadableOplog;
 
     oplog
         .download_payload_classified(request)
         .await
         .map_err(|error| {
-            UnreadableOplog::new(
-                agent_id,
-                OplogReadError::of_payload(
-                    OplogReadSource::Other("durable call request"),
-                    start_idx,
-                    error,
-                ),
-            )
-            .into()
+            UnreadableOplog::of_payload(agent_id, "durable call request", start_idx, error).into()
         })
 }
 

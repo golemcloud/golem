@@ -14,14 +14,13 @@
 
 use crate::durable_host::durable_stream::metadata::{
     ProducerMetadataKey, ProducerMetadataProjection, ProducerMetadataRow, ProjectionError,
-    project_producer_metadata, read_projection,
+    project_producer_metadata, read_projection, unanswered_index_read,
 };
 use crate::durable_host::durable_stream::{SessionControlMetadata, SessionError};
 use crate::metrics::workers::record_derived_cache_publication_failed;
 use crate::services::activity::spawn_with_activity;
 use crate::services::oplog::{
-    OplogPayloadDownloadError, OplogReadError, OplogReadSource, OplogService, OplogServiceOps,
-    UnreadableOplog,
+    OplogPayloadDownloadError, OplogService, OplogServiceOps, UnreadableOplog,
 };
 use crate::services::shutdown::join_or_park_at_runtime_shutdown;
 use crate::services::worker::DERIVED_CACHE_EXPIRY;
@@ -259,7 +258,8 @@ impl StreamSessionIndexService {
                                 .kv
                                 .with_entity("stream_session_index", "read_cache", "snapshot")
                                 .get_many_raw(namespace.clone(), fields.clone())
-                                .await?;
+                                .await
+                                .map_err(|error| unanswered_index_read(namespace, error))?;
                             let expected = values[0].clone();
                             let metadata = expected
                                 .as_deref()
@@ -402,7 +402,10 @@ impl StreamSessionIndexService {
                     .kv
                     .with_entity("stream_session_index", "lookup_producer", "metadata")
                     .get_raw(Self::namespace(&id, fingerprint), METADATA_FIELD)
-                    .await?;
+                    .await
+                    .map_err(|error| {
+                        unanswered_index_read(&Self::namespace(&id, fingerprint), error)
+                    })?;
                 if current.as_ref() == Some(&expected) {
                     return result;
                 }
@@ -933,12 +936,14 @@ impl StreamSessionIndexService {
                 .kv
                 .with_entity("stream_session_index", "snapshot_clear", "metadata")
                 .get_raw(namespace.clone(), METADATA_FIELD)
-                .await?;
+                .await
+                .map_err(|error| unanswered_index_read(&namespace, error))?;
             let mut keys = self
                 .kv
                 .with("stream_session_index", "snapshot_clear")
                 .keys(namespace.clone())
-                .await?;
+                .await
+                .map_err(|error| unanswered_index_read(&namespace, error))?;
             if expected.is_none() && keys.is_empty() {
                 return Ok(());
             }
@@ -981,21 +986,15 @@ impl StreamSessionIndexService {
             .upgrade()
             .ok_or_else(|| "oplog service is unavailable".to_string())?;
         let payload_error = |index, error| {
-            UnreadableOplog::new(
-                &id.agent_id,
-                OplogReadError::of_payload(
-                    OplogReadSource::Other("stream index payload"),
-                    index,
-                    error,
-                ),
-            )
+            UnreadableOplog::of_payload(&id.agent_id, "stream index payload", index, error)
         };
         loop {
             let mut expected = self
                 .kv
                 .with_entity("stream_session_index", "read", "metadata")
                 .get_raw(namespace.clone(), METADATA_FIELD)
-                .await?;
+                .await
+                .map_err(|error| unanswered_index_read(&namespace, error))?;
             if expected.is_none() {
                 let initial = Metadata {
                     generation: Uuid::new_v4(),
@@ -1531,7 +1530,8 @@ impl StreamSessionIndexService {
                         .kv
                         .with_entity("stream_session_index", "read", "metadata")
                         .get_raw(namespace.clone(), METADATA_FIELD)
-                        .await?;
+                        .await
+                        .map_err(|error| unanswered_index_read(&namespace, error))?;
                     if current == expected {
                         return Err(*error);
                     }
@@ -1584,17 +1584,20 @@ impl StreamSessionIndexService {
         let scratch_keys = scratch
             .with("stream_session_index", "refold_read")
             .keys(namespace.clone())
-            .await?;
+            .await
+            .map_err(|error| unanswered_index_read(namespace, error))?;
         let scratch_values = scratch
             .with_entity("stream_session_index", "refold_read", "session")
             .get_many_raw(namespace.clone(), scratch_keys.clone().into())
-            .await?;
+            .await
+            .map_err(|error| unanswered_index_read(namespace, error))?;
         let retained = scratch_keys.iter().cloned().collect::<HashSet<_>>();
         let old_keys = self
             .kv
             .with("stream_session_index", "refold_read")
             .keys(namespace.clone())
-            .await?;
+            .await
+            .map_err(|error| unanswered_index_read(namespace, error))?;
         let deletes = old_keys
             .iter()
             .filter(|key| !retained.contains(*key))
@@ -1646,6 +1649,17 @@ impl StreamSessionIndexService {
                     .await?
             }
         };
+        let namespace = Self::namespace(id, fingerprint);
+        // A refold of an unreadable coverage rebuilds through the committed tail, which can be
+        // above the horizon of an exact lookup.
+        let coverage_unreadable = matches!(lookup, SessionLookup::Exact(_))
+            && self
+                .kv
+                .with_entity("stream_session_index", "lookup", "metadata")
+                .get_raw(namespace.clone(), METADATA_FIELD)
+                .await
+                .map_err(|error| unanswered_index_read(&namespace, error))?
+                .is_some_and(|bytes| decode::<Metadata>(&bytes).is_err());
         self.catch_up_inner(id, mode, fingerprint, horizon).await?;
         let lock = self.index_lock(id);
         let _guard = lock.inner.lock().await;
@@ -1665,6 +1679,12 @@ impl StreamSessionIndexService {
             )
             .await?;
         if metadata.covered_through > horizon && matches!(lookup, SessionLookup::Exact(_)) {
+            if coverage_unreadable {
+                // Fold the exact snapshot privately. The shared index keeps its higher coverage.
+                let scratch =
+                    Self::new(Arc::new(InMemoryKeyValueStorage::new()), self.oplog.clone());
+                return Box::pin(scratch.lookup_inner(id, mode, fingerprint, key, lookup)).await;
+            }
             return Err("stream session index is newer than the requested horizon".into());
         }
         let Some(mut value) = value else {
@@ -1707,5 +1727,207 @@ impl StreamSessionIndexService {
             || value.initial_attachment_epoch.is_some()
             || value.export_fork_initialized)
             .then_some(value))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::durable_host::durable_stream::SessionError;
+    use crate::services::oplog::tests::{
+        create_test_entry, default_execution_status, default_last_known_status, make_agent_metadata,
+    };
+    use crate::services::oplog::{CommitLevel, DurableStreamOplogRecord, PrimaryOplogService};
+    use crate::services::worker_fork::lineage::tests::prepared;
+    use crate::storage::indexed::memory::InMemoryIndexedStorage;
+    use crate::storage::keyvalue::KeyValueStorageError;
+    use crate::storage::keyvalue::fault_injecting::{
+        FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+    };
+    use golem_common::model::RetryConfig;
+    use golem_common::model::account::AccountId;
+    use golem_common::model::environment::EnvironmentId;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use test_r::test;
+
+    struct Fixture {
+        oplog_service: Arc<dyn OplogService>,
+        kv: Arc<InMemoryKeyValueStorage>,
+        faults: KeyValueStorageFaults,
+        index: StreamSessionIndexService,
+        id: OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    }
+
+    async fn fixture(name: &str) -> Fixture {
+        let oplog_service: Arc<dyn OplogService> = Arc::new(
+            PrimaryOplogService::new(
+                Arc::new(InMemoryIndexedStorage::new()),
+                Arc::new(InMemoryBlobStorage::new()),
+                1,
+                1,
+                100,
+                32,
+                RetryConfig::default(),
+            )
+            .await,
+        );
+        let kv = Arc::new(InMemoryKeyValueStorage::new());
+        let faults = KeyValueStorageFaults::default();
+        let index = StreamSessionIndexService::new(
+            Arc::new(FaultInjectingKeyValueStorage::new(
+                kv.clone(),
+                faults.clone(),
+            )),
+            Arc::downgrade(&oplog_service),
+        );
+        let id = OwnedAgentId::new(EnvironmentId::new(), &crate::test_agent_id(name));
+        Fixture {
+            oplog_service,
+            kv,
+            faults,
+            index,
+            id,
+            fingerprint: AgentFingerprint(Uuid::from_u128(0x5e55_1014)),
+        }
+    }
+
+    fn unanswered_read(error: &SessionError, id: &OwnedAgentId) -> bool {
+        matches!(error, SessionError::Unreadable(unreadable)
+            if unreadable.agent_id == id.agent_id && unreadable.is_transient())
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn an_unanswered_coverage_read_is_a_temporary_read_failure_of_the_agent() {
+        let fixture = fixture("index-coverage-read-fails").await;
+        fixture.faults.fail(
+            "read",
+            1,
+            KeyValueStorageError::other("index storage did not answer"),
+        );
+
+        let error = fixture
+            .index
+            .lookup_producer_identity(&fixture.id, AgentMode::Durable, fixture.fingerprint)
+            .await
+            .expect_err("the coverage read did not answer");
+
+        assert!(unanswered_read(&error, &fixture.id), "{error:?}");
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn an_unanswered_snapshot_read_is_a_temporary_read_failure_of_the_agent() {
+        let fixture = fixture("index-snapshot-read-fails").await;
+        fixture.faults.fail(
+            "read_cache",
+            1,
+            KeyValueStorageError::other("index storage did not answer"),
+        );
+
+        let error = fixture
+            .index
+            .lookup_latest(
+                &fixture.id,
+                AgentMode::Durable,
+                fixture.fingerprint,
+                &InvocationId(Uuid::from_u128(0x0016_28c5)),
+            )
+            .await
+            .expect_err("the snapshot read did not answer");
+
+        assert!(unanswered_read(&error, &fixture.id), "{error:?}");
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn an_exact_lookup_below_a_refold_of_corrupt_coverage_reads_its_own_horizon() {
+        let fixture = fixture("index-exact-below-refold").await;
+        let oplog = fixture
+            .oplog_service
+            .open(
+                &mut fixture
+                    .oplog_service
+                    .lock_lifecycle(&fixture.id.agent_id)
+                    .await,
+                &fixture.id,
+                AgentMode::Durable,
+                None,
+                make_agent_metadata(
+                    fixture.id.agent_id,
+                    AccountId::new(),
+                    fixture.id.environment_id,
+                ),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Durable),
+                None,
+            )
+            .await
+            .unwrap();
+        let key = StreamSessionKey {
+            callee_environment_id: fixture.id.environment_id,
+            callee: fixture.id.agent_id,
+            callee_fingerprint: fixture.fingerprint,
+            idempotency_key: InvocationId(Uuid::from_u128(0x0016_28c4)),
+        };
+        oplog
+            .add(create_test_entry(
+                fixture.id.agent_id,
+                AgentMode::Durable,
+                golem_common::model::component::ComponentRevision::INITIAL,
+                fixture.id.environment_id,
+                AccountId::new(),
+                fixture.fingerprint.0,
+            ))
+            .await
+            .unwrap();
+        let horizon = oplog
+            .add(
+                DurableStreamOplogRecord::Session(
+                    None,
+                    Box::new(StreamSessionRecord::Prepared(prepared(&key))),
+                )
+                .into_inline_entry(),
+            )
+            .await
+            .unwrap();
+        let tail = oplog.add(OplogEntry::grow_memory(7)).await.unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+        let namespace = StreamSessionIndexService::namespace(&fixture.id, fixture.fingerprint);
+        fixture
+            .kv
+            .set(
+                "test",
+                "corrupt",
+                "metadata",
+                namespace.clone(),
+                METADATA_FIELD,
+                &[0xff, 0x13],
+            )
+            .await
+            .unwrap();
+
+        let status = fixture
+            .index
+            .lookup_persisted(
+                &fixture.id,
+                AgentMode::Durable,
+                fixture.fingerprint,
+                horizon,
+                &key.idempotency_key,
+            )
+            .await
+            .expect("the exact snapshot is readable from the oplog")
+            .expect("the session is prepared at the horizon");
+
+        assert_eq!(status.first_prepared, Some(horizon));
+        let shared = fixture
+            .kv
+            .get("test", "check", "metadata", namespace, METADATA_FIELD)
+            .await
+            .unwrap()
+            .expect("the refold publishes the coverage");
+        assert_eq!(decode::<Metadata>(&shared).unwrap().covered_through, tail);
     }
 }

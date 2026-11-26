@@ -2286,12 +2286,12 @@ async fn handle_response(
             bail!("invocation attachment was revoked: {reason:?}");
         }
         ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome, .. }) => {
+            // The public protocol carries no typed oplog read failure, so every finish, a
+            // failure too, needs terminal output streams.
+            if output_streams.values().any(|stream| !stream.terminal) {
+                bail!("invocation finished before all output streams became terminal");
+            }
             let (outcome, error, stderr) = match outcome {
-                PublicInvocationOutcome::Success
-                    if output_streams.values().any(|stream| !stream.terminal) =>
-                {
-                    bail!("invocation finished before all output streams became terminal");
-                }
                 PublicInvocationOutcome::Success => ("success".to_string(), None, None),
                 PublicInvocationOutcome::Failure {
                     code,
@@ -3577,7 +3577,7 @@ mod public_tests {
     }
 
     #[test]
-    async fn invocation_failure_reaches_the_caller_with_an_open_output() {
+    async fn every_finish_with_an_open_output_is_rejected() {
         let (tx, _rx) = mpsc::channel(1);
         let output = OutputChannel {
             tx,
@@ -3618,24 +3618,26 @@ mod public_tests {
             )
             .await
         };
+        let rejection = "invocation finished before all output streams became terminal";
         assert_eq!(
             finish(PublicInvocationOutcome::Success)
                 .await
                 .unwrap_err()
                 .to_string(),
-            "invocation finished before all output streams became terminal"
+            rejection
         );
-        assert!(
+        assert_eq!(
             finish(PublicInvocationOutcome::Failure {
                 code: PublicErrorCode::InvocationFailed,
                 message: "invocation failed".to_string(),
                 stderr: None,
             })
             .await
-            .unwrap()
+            .unwrap_err()
+            .to_string(),
+            rejection
         );
-
-        assert_eq!(failure.unwrap().code, PublicErrorCode::InvocationFailed);
+        assert!(failure.is_none());
         assert!(!streams[&4].terminal);
     }
 

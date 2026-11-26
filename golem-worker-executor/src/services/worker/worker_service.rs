@@ -14,6 +14,7 @@
 
 use super::running_workers::stale_reason;
 use super::*;
+use golem_common::serialization::DecodeError;
 
 #[async_trait]
 impl WorkerService for DefaultWorkerService {
@@ -442,7 +443,7 @@ impl WorkerService for DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
     ) -> Result<HashSet<OplogIndex>, WorkerExecutorError> {
-        let value: Option<Result<Vec<OplogIndex>, String>> = self
+        let value: Option<Result<Vec<OplogIndex>, DecodeError>> = self
             .key_value_storage
             .with_entity("worker", "get_rejected_periodic_snapshots", "oplog_indexes")
             .get_attempt_deserialize(
@@ -454,7 +455,11 @@ impl WorkerService for DefaultWorkerService {
         value
             .transpose()
             .map(|indexes| indexes.into_iter().flatten().collect())
-            .map_err(WorkerExecutorError::runtime)
+            .map_err(|error| {
+                WorkerExecutorError::runtime(format!(
+                    "rejected periodic snapshots do not decode: {error}"
+                ))
+            })
     }
 
     async fn reject_periodic_snapshots(
@@ -478,9 +483,11 @@ impl WorkerService for DefaultWorkerService {
                 .await
                 .map_err(WorkerExecutorError::runtime)?;
             let current_indexes = match &current {
-                Some(current) => {
-                    deserialize::<Vec<OplogIndex>>(current).map_err(WorkerExecutorError::runtime)?
-                }
+                Some(current) => decode::<Vec<OplogIndex>>(current).map_err(|error| {
+                    WorkerExecutorError::runtime(format!(
+                        "rejected periodic snapshots do not decode: {error}"
+                    ))
+                })?,
                 None => Vec::new(),
             };
             let Some(to_store) = rejections_to_store(current_indexes, status, oplog_indexes) else {
@@ -578,7 +585,7 @@ impl WorkerService for DefaultWorkerService {
                     .map(|value| value.to_vec());
                 let persisted = observed_metadata
                     .as_deref()
-                    .map(deserialize::<InvocationResultIndexMetadata>)
+                    .map(decode::<InvocationResultIndexMetadata>)
                     .transpose();
                 let (mut metadata, mut expected_metadata) = match &persisted {
                     Ok(Some(metadata)) if metadata.revert_generation > status_generation => {
@@ -605,7 +612,7 @@ impl WorkerService for DefaultWorkerService {
                             .map(|(_, value)| value.to_vec());
                         let snapshot_decoded = snapshot_metadata
                             .as_deref()
-                            .map(deserialize::<InvocationResultIndexMetadata>)
+                            .map(decode::<InvocationResultIndexMetadata>)
                             .transpose();
                         match snapshot_decoded {
                             Ok(Some(metadata))
@@ -827,7 +834,7 @@ impl WorkerService for DefaultWorkerService {
         else {
             return Ok(None);
         };
-        let Ok(metadata) = deserialize::<InvocationResultIndexMetadata>(&raw_metadata) else {
+        let Ok(metadata) = decode::<InvocationResultIndexMetadata>(&raw_metadata) else {
             return Ok(None);
         };
         if metadata.revert_generation != status.invocation_results.revert_generation()
@@ -890,7 +897,15 @@ impl WorkerService for DefaultWorkerService {
         let Some(metadata) = values.first().and_then(Option::as_ref) else {
             return Ok(InvocationResultIndexLookup::Incomplete);
         };
-        let metadata: InvocationResultIndexMetadata = deserialize(metadata)?;
+        let Ok(metadata) = decode::<InvocationResultIndexMetadata>(metadata) else {
+            // Metadata that does not decode is a miss of the derived index: the next catch-up
+            // rebuilds it from the oplog.
+            let namespace = Self::invocation_result_index_namespace(owned_agent_id, fingerprint);
+            self.invalidate_invocation_result_index(&namespace, values[0].as_deref())
+                .await
+                .map_err(|error| error.to_string())?;
+            return Ok(InvocationResultIndexLookup::Incomplete);
+        };
         if metadata.revert_generation != status.invocation_results.revert_generation() {
             return Ok(InvocationResultIndexLookup::Incomplete);
         }

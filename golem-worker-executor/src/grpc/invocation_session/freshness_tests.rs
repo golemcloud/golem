@@ -330,7 +330,7 @@ mod retained_admission {
             "at oplog index {attachment_index}: corrupt payload: unknown serialization version: 99"
         );
         assert!(
-            matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details }
+            matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details, .. }
             if *agent_id == owner.agent_id && details.contains("stream execution config")
                 && details.contains(&expected)),
             "{error:?}"
@@ -1127,6 +1127,33 @@ fn same_origin_stream_join_preserves_execution_and_authority_checks() {
     assert_eq!(
         same_origin_stream_invocation(&unreadable, &fork_attempt),
         Err(golem_common::serialization::DecodeError::UnknownVersion(99))
+    );
+    // A retry whose configuration does not decode diverges; it is not a read error.
+    let mut undecodable_retry = fork_attempt.clone();
+    undecodable_retry.invocation.execution_config = vec![99];
+    assert_eq!(
+        same_origin_stream_invocation(&original, &undecodable_retry),
+        Ok(false)
+    );
+    // The same identity framing is a read error when it is stored and a divergence when a retry
+    // sends it.
+    let mut truncated_identity = 5u64.to_be_bytes().to_vec();
+    truncated_identity.push(0x2a);
+    let with_identity = |attempt: &golem_common::model::durable_stream::StartAttemptDescriptor| {
+        let mut attempt = attempt.clone();
+        attempt.effective_identity = truncated_identity.clone();
+        attempt.invocation.effective_identity = truncated_identity.clone();
+        attempt
+    };
+    assert_eq!(
+        same_origin_stream_invocation(&with_identity(&original), &fork_attempt),
+        Err(golem_common::serialization::DecodeError::InvalidData(
+            "invalid stream effective identity framing".to_string()
+        ))
+    );
+    assert_eq!(
+        same_origin_stream_invocation(&original, &with_identity(&fork_attempt)),
+        Ok(false)
     );
     for change in 0..4 {
         let mut changed = fork.clone();

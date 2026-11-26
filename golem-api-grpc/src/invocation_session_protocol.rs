@@ -14,7 +14,7 @@
 
 use crate::proto::golem::worker::input_stream_item::Payload;
 use crate::proto::golem::worker::v1::{
-    OplogReadFailure, RuntimeError, oplog_read_failure, worker_execution_error,
+    RuntimeError, WorkerExecutionError, oplog_read_failure, worker_execution_error,
 };
 use crate::proto::golem::worker::{
     AgentId, DurableStreamHandle, DurableStreamMapping, IdempotencyKey, InputStreamAck,
@@ -33,8 +33,24 @@ use std::collections::{HashMap, HashSet, VecDeque};
 type StreamBinding = (u64, (u64, u64));
 const MAX_PACKED_U8_STREAM_ITEM_SIZE: usize = 1024 * 1024;
 
-/// A permanent oplog read failure ends observation without requiring stream terminals.
+/// The failure code that the executor gives to a failure that a failed oplog read caused. The
+/// code is for presentation only. Decide on `oplog_read_failure` of the worker error.
 pub const OPLOG_UNREADABLE_FAILURE_CODE: &str = "oplog-unreadable";
+
+/// The kind of the failed oplog read that `error` carries. The read can be in a runtime error, or
+/// in the reason of a failed resume at any depth. A failed read is not an outcome of the
+/// invocation. A marker without a kind is not a failed read.
+pub fn oplog_read_failure(error: &WorkerExecutionError) -> Option<&oplog_read_failure::Kind> {
+    match error.error.as_ref()? {
+        worker_execution_error::Error::RuntimeError(RuntimeError { oplog_read, .. }) => {
+            oplog_read.as_ref()?.kind.as_ref()
+        }
+        worker_execution_error::Error::FailedToResumeAgent(failed) => {
+            oplog_read_failure(failed.reason.as_deref()?)
+        }
+        _ => None,
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum SessionPhase {
@@ -1618,24 +1634,13 @@ impl InvocationSessionState {
                         "worker execution details require an execution failure kind".to_string()
                     );
                 }
-                let oplog_unreadable = failure.code == OPLOG_UNREADABLE_FAILURE_CODE;
-                if oplog_unreadable
-                    && !matches!(
-                        failure
-                            .worker_error
-                            .as_ref()
-                            .and_then(|error| error.error.as_ref()),
-                        Some(worker_execution_error::Error::RuntimeError(RuntimeError {
-                            oplog_read: Some(OplogReadFailure {
-                                kind: Some(oplog_read_failure::Kind::Failed(_)),
-                            }),
-                            ..
-                        }))
-                    )
-                {
-                    return Err("an unreadable oplog failure requires a failed oplog read".into());
-                }
-                oplog_unreadable
+                // A failed oplog read is no outcome, so it does not need the stream terminals of
+                // one.
+                failure
+                    .worker_error
+                    .as_ref()
+                    .and_then(oplog_read_failure)
+                    .is_some()
             }
             Some(invocation_session_completion::Outcome::Success(_)) => false,
             None => return Err("invocation completion has no outcome".to_string()),
@@ -4672,10 +4677,10 @@ mod tests {
     }
 
     #[test]
-    fn an_unreadable_oplog_can_end_an_attachment_with_open_streams() {
+    fn only_a_typed_oplog_read_failure_ends_an_attachment_with_open_streams() {
         use crate::proto::golem::worker::v1::{
-            OplogReadFailure, OplogReadUnavailable, RuntimeError, WorkerExecutionError,
-            oplog_read_failure,
+            FailedToResumeAgent, OplogReadFailure, OplogReadUnavailable, RuntimeError,
+            WorkerExecutionError, oplog_read_failure,
         };
 
         let failure_frame = |code: &str, kind: InvocationFailureKind, worker_error| {
@@ -4692,91 +4697,174 @@ mod tests {
                 },
             ))
         };
-        let start = (public_start(stream(7)), accepted_with_inputs(&[7]));
-        let resume = (
-            resume_attach(Vec::new()),
-            resumed_acceptance(vec![mapping(8, StreamMappingRole::Output)]),
-        );
-        [(start, true), (resume, false)].into_iter().for_each(
-            |((request, acceptance), pending_input_ack)| {
-                let mut state = InvocationSessionState::default();
-                state.validate_public_request(&request).unwrap();
-                state.validate_response(&acceptance).unwrap();
-                if pending_input_ack {
+        let runtime_error = |oplog_read| WorkerExecutionError {
+            error: Some(worker_execution_error::Error::RuntimeError(RuntimeError {
+                details: "oplog entry 43 has unknown serialization version 255".to_string(),
+                oplog_read,
+                oplog_archive_write: None,
+            })),
+        };
+        let failed = runtime_error(Some(OplogReadFailure {
+            kind: Some(oplog_read_failure::Kind::Failed(
+                crate::proto::golem::worker::AgentId::default(),
+            )),
+        }));
+        let unavailable = runtime_error(Some(OplogReadFailure {
+            kind: Some(oplog_read_failure::Kind::Unavailable(
+                OplogReadUnavailable {},
+            )),
+        }));
+        let resume_failed = |reason: WorkerExecutionError| WorkerExecutionError {
+            error: Some(worker_execution_error::Error::FailedToResumeAgent(
+                Box::new(FailedToResumeAgent {
+                    agent_id: None,
+                    reason: Some(Box::new(reason)),
+                }),
+            )),
+        };
+        let open_session = |resume: bool| {
+            let mut state = InvocationSessionState::default();
+            if resume {
+                state
+                    .validate_public_request(&resume_attach(Vec::new()))
+                    .unwrap();
+                state
+                    .validate_response(&resumed_acceptance(vec![mapping(
+                        8,
+                        StreamMappingRole::Output,
+                    )]))
+                    .unwrap();
+            } else {
+                state
+                    .validate_public_request(&public_start(stream(7)))
+                    .unwrap();
+                state
+                    .validate_response(&accepted_with_inputs(&[7]))
+                    .unwrap();
+                state
+                    .validate_trusted_request(&trusted_request(
+                        invocation_request::Request::StreamEnd(input_end(7, 0)),
+                    ))
+                    .unwrap();
+            }
+            state.validate_response(&result(scalar(1))).unwrap();
+            assert!(state.validate_response(&success()).is_err());
+            state
+        };
+
+        // The code is presentation only: the typed marker, also inside the reason of a failed
+        // resume, decides.
+        let accepted = [
+            ("worker-execution", failed.clone()),
+            (OPLOG_UNREADABLE_FAILURE_CODE, failed.clone()),
+            ("worker-execution", unavailable.clone()),
+            ("worker-execution", resume_failed(failed.clone())),
+            ("worker-execution", resume_failed(unavailable.clone())),
+            (
+                "worker-execution",
+                resume_failed(resume_failed(unavailable.clone())),
+            ),
+        ];
+        let rejected = [
+            (
+                OPLOG_UNREADABLE_FAILURE_CODE,
+                InvocationFailureKind::Protocol,
+                Some(failed.clone()),
+            ),
+            (
+                OPLOG_UNREADABLE_FAILURE_CODE,
+                InvocationFailureKind::Execution,
+                Some(WorkerExecutionError::default()),
+            ),
+            (
+                OPLOG_UNREADABLE_FAILURE_CODE,
+                InvocationFailureKind::Execution,
+                Some(runtime_error(None)),
+            ),
+            (
+                OPLOG_UNREADABLE_FAILURE_CODE,
+                InvocationFailureKind::Execution,
+                Some(runtime_error(Some(OplogReadFailure { kind: None }))),
+            ),
+            (
+                "worker-execution",
+                InvocationFailureKind::Execution,
+                Some(resume_failed(runtime_error(None))),
+            ),
+            (
+                OPLOG_UNREADABLE_FAILURE_CODE,
+                InvocationFailureKind::Execution,
+                None,
+            ),
+        ];
+        [false, true].into_iter().for_each(|resume| {
+            let mut state = open_session(resume);
+            rejected.iter().for_each(|(code, kind, worker_error)| {
+                assert!(
                     state
-                        .validate_trusted_request(&trusted_request(
-                            invocation_request::Request::StreamEnd(input_end(7, 0)),
-                        ))
-                        .unwrap();
-                    assert!(state.all_inputs_terminal());
-                }
-                state.validate_response(&result(scalar(1))).unwrap();
-                assert!(state.validate_response(&success()).is_err());
-
-                let runtime_error = |oplog_read| {
-                    Some(WorkerExecutionError {
-                        error: Some(worker_execution_error::Error::RuntimeError(RuntimeError {
-                            details: "oplog entry 43 has unknown serialization version 255"
-                                .to_string(),
-                            oplog_read,
-                        })),
-                    })
-                };
-                let worker_error = runtime_error(Some(OplogReadFailure {
-                    kind: Some(oplog_read_failure::Kind::Failed(
-                        crate::proto::golem::worker::AgentId::default(),
-                    )),
-                }));
-                [
-                    failure_frame(
-                        "worker-execution",
-                        InvocationFailureKind::Execution,
-                        worker_error.clone(),
-                    ),
-                    failure_frame(
-                        OPLOG_UNREADABLE_FAILURE_CODE,
-                        InvocationFailureKind::Protocol,
-                        worker_error.clone(),
-                    ),
-                    failure_frame(
-                        OPLOG_UNREADABLE_FAILURE_CODE,
-                        InvocationFailureKind::Execution,
-                        Some(WorkerExecutionError::default()),
-                    ),
-                    failure_frame(
-                        OPLOG_UNREADABLE_FAILURE_CODE,
-                        InvocationFailureKind::Execution,
-                        runtime_error(None),
-                    ),
-                    failure_frame(
-                        OPLOG_UNREADABLE_FAILURE_CODE,
-                        InvocationFailureKind::Execution,
-                        runtime_error(Some(OplogReadFailure {
-                            kind: Some(oplog_read_failure::Kind::Unavailable(
-                                OplogReadUnavailable {},
-                            )),
-                        })),
-                    ),
-                    failure_frame(
-                        OPLOG_UNREADABLE_FAILURE_CODE,
-                        InvocationFailureKind::Execution,
-                        None,
-                    ),
-                ]
-                .into_iter()
-                .for_each(|response| assert!(state.validate_response(&response).is_err()));
-
+                        .validate_response(&failure_frame(code, *kind, worker_error.clone()))
+                        .is_err(),
+                    "{code} {kind:?} {worker_error:?}"
+                )
+            });
+            accepted.iter().cloned().for_each(|(code, worker_error)| {
+                let mut state = open_session(resume);
                 state
                     .validate_response(&failure_frame(
-                        OPLOG_UNREADABLE_FAILURE_CODE,
+                        code,
                         InvocationFailureKind::Execution,
-                        worker_error,
+                        Some(worker_error),
                     ))
                     .unwrap();
                 assert!(state.is_complete());
                 assert!(state.validate_response(&success()).is_err());
-            },
-        );
+            });
+        });
+    }
+
+    #[test]
+    fn oplog_read_failure_looks_inside_failed_resumes_only() {
+        use crate::proto::golem::worker::v1::{
+            FailedToResumeAgent, OplogReadFailure, OplogReadUnavailable, RuntimeError,
+            WorkerExecutionError, oplog_read_failure,
+        };
+        let unavailable = WorkerExecutionError {
+            error: Some(worker_execution_error::Error::RuntimeError(RuntimeError {
+                details: "primary storage of agent 7 did not answer".to_string(),
+                oplog_read: Some(OplogReadFailure {
+                    kind: Some(oplog_read_failure::Kind::Unavailable(
+                        OplogReadUnavailable {},
+                    )),
+                }),
+                oplog_archive_write: None,
+            })),
+        };
+        let wrapped = WorkerExecutionError {
+            error: Some(worker_execution_error::Error::FailedToResumeAgent(
+                Box::new(FailedToResumeAgent {
+                    agent_id: None,
+                    reason: Some(Box::new(unavailable.clone())),
+                }),
+            )),
+        };
+        let empty_resume = WorkerExecutionError {
+            error: Some(worker_execution_error::Error::FailedToResumeAgent(
+                Box::new(FailedToResumeAgent {
+                    agent_id: None,
+                    reason: None,
+                }),
+            )),
+        };
+        assert!(matches!(
+            oplog_read_failure(&unavailable),
+            Some(oplog_read_failure::Kind::Unavailable(_))
+        ));
+        assert!(matches!(
+            oplog_read_failure(&wrapped),
+            Some(oplog_read_failure::Kind::Unavailable(_))
+        ));
+        assert_eq!(oplog_read_failure(&empty_resume), None);
+        assert_eq!(oplog_read_failure(&WorkerExecutionError::default()), None);
     }
 
     fn round_trip<M>(message: M)

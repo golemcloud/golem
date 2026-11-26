@@ -1207,8 +1207,9 @@ impl Oplog for EphemeralOplog {
                 })
                 .await
             }
-            // Ephemeral agents fold their status at the explicit commit that ends each
-            // invocation, so the oplog reports nothing between explicit commits.
+            // `DurableOnly` commits nothing for an ephemeral agent. `ReportOnly` commits nothing
+            // and has nothing to report: an ephemeral oplog calls no auto-commit listener, and the
+            // explicit commit at the end of each invocation reports its own entries.
             CommitLevel::DurableOnly | CommitLevel::ReportOnly => Ok(BTreeMap::new()),
         }
     }

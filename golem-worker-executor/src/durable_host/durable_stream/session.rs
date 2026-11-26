@@ -15,7 +15,6 @@
 use super::index::registration_coordinate_depth;
 use super::registration::registration_record;
 use super::*;
-use crate::services::oplog::{OplogReadError, OplogReadSource};
 use futures::future::BoxFuture;
 use golem_common::model::oplog::DurableStreamEventSummary;
 
@@ -102,13 +101,11 @@ impl DurableStreamStore {
             .download_payload_classified(original)
             .await
             .map_err(|error| {
-                StreamStoreError::Unreadable(UnreadableOplog::new(
+                StreamStoreError::Unreadable(UnreadableOplog::of_payload(
                     agent_id,
-                    OplogReadError::of_payload(
-                        OplogReadSource::Other("consumer re-observation original"),
-                        original_index,
-                        error,
-                    ),
+                    "consumer re-observation original",
+                    original_index,
+                    error,
                 ))
             })?;
         if !record.has_supported_format() || !record.matches_reobserved(&original) {

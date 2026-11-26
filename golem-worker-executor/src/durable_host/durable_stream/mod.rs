@@ -136,16 +136,7 @@ async fn download_history_record<
     oplog
         .download_payload_classified(payload)
         .await
-        .map_err(|error| {
-            UnreadableOplog::new(
-                agent_id,
-                crate::services::oplog::OplogReadError::of_payload(
-                    crate::services::oplog::OplogReadSource::Other("stream history"),
-                    index,
-                    error,
-                ),
-            )
-        })
+        .map_err(|error| UnreadableOplog::of_payload(agent_id, "stream history", index, error))
 }
 
 fn qualify_local_stream(

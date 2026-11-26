@@ -205,6 +205,142 @@ async fn lazy_invocation_result_hydrates_a_valid_payload_once() {
     );
 }
 
+/// A persisted result index, or the background failure index of a result, that names a
+/// readable entry of another kind is a permanently unreadable oplog of the agent at that index.
+/// The result stays lazy, so nothing takes the read as an outcome.
+#[test]
+async fn a_result_index_at_an_entry_of_another_kind_is_unreadable_at_that_index() {
+    let invocation = AgentInvocationResult::AgentMethod {
+        output: golem_common::schema::SchemaValue::U32(42),
+    };
+    let (services, _, finished, id, fingerprint) = lazy_result(OplogPayload::SerializedInline {
+        bytes: golem_common::serialization::serialize(&invocation).unwrap(),
+        cached: None,
+    })
+    .await;
+    let suspend = OplogIndex::from_u64(finished.as_u64() - 1);
+    let cases = [
+        (suspend, None, "invocation result index"),
+        (finished, Some(suspend), "background failure index"),
+    ];
+    let outcomes = futures::future::join_all(cases.into_iter().map(
+        |(oplog_idx, background_failure, source)| {
+            let services = &services;
+            let id = &id;
+            async move {
+                let mut result = InvocationResult::Lazy {
+                    oplog_idx,
+                    background_failure,
+                };
+                let error = result
+                    .cache(id, AgentMode::Durable, fingerprint, services)
+                    .await
+                    .unwrap_err();
+                (result, oplog_idx, background_failure, source, error)
+            }
+        },
+    ))
+    .await;
+    assert!(
+        outcomes
+            .into_iter()
+            .all(|(result, oplog_idx, background_failure, source, error)| {
+                let message = error.to_string();
+                error.agent_id == id.agent_id
+                    && matches!(
+                        &error.error,
+                        OplogReadError::Corruption {
+                            source: crate::services::oplog::OplogReadSource::Other(named),
+                            ..
+                        } if *named == source
+                    )
+                    && message.contains(&format!("oplog index {suspend}"))
+                    && matches!(
+                        WorkerExecutorError::from(error),
+                        WorkerExecutorError::OplogFailed { .. }
+                    )
+                    && matches!(
+                        result,
+                        InvocationResult::Lazy { oplog_idx: idx, background_failure: failure }
+                            if idx == oplog_idx && failure == background_failure
+                    )
+            })
+    );
+}
+
+#[test]
+fn invocation_classification_uses_the_recovery_cause_and_the_resume_reason() {
+    let agent_id = golem_common::model::AgentId::from_parts(7, 1628);
+    let failed = WorkerExecutorError::oplog_failed(agent_id, "entry 4 has version 254");
+    let unavailable = WorkerExecutorError::oplog_read_unavailable("primary did not answer");
+    let other = WorkerExecutorError::recovery_required("stream output 3 is incomplete");
+    // An archive layer that did not store the oplog stops the agent, but it is not a read.
+    let archive_write =
+        WorkerExecutorError::from(crate::services::oplog::OplogError::ArchiveWrite(
+            crate::services::oplog::ArchiveWriteFailure {
+                agent_id,
+                level: 1,
+                details: "archive layer 1 refused the transfer".to_string(),
+            },
+        ));
+    let wrap = |error: &WorkerExecutorError| {
+        WorkerExecutorError::failed_to_resume_worker(agent_id, error.clone())
+    };
+    let cases = [
+        (
+            archive_write.clone(),
+            Some(InvocationObservationFailure::ArchiveWrite),
+            false,
+        ),
+        (
+            wrap(&archive_write),
+            Some(InvocationObservationFailure::ArchiveWrite),
+            false,
+        ),
+        (
+            failed.clone(),
+            Some(InvocationObservationFailure::PermanentRead),
+            true,
+        ),
+        (
+            wrap(&failed),
+            Some(InvocationObservationFailure::PermanentRead),
+            true,
+        ),
+        (
+            unavailable.clone(),
+            Some(InvocationObservationFailure::RetryableRead),
+            true,
+        ),
+        (
+            wrap(&wrap(&unavailable)),
+            Some(InvocationObservationFailure::RetryableRead),
+            true,
+        ),
+        (
+            other.clone(),
+            Some(InvocationObservationFailure::Recovery),
+            false,
+        ),
+        (wrap(&other), None, false),
+        (
+            WorkerExecutorError::ShardingNotReady,
+            Some(InvocationObservationFailure::Reroute),
+            false,
+        ),
+        (WorkerExecutorError::unknown("guest trapped"), None, false),
+    ];
+    let wrong = cases
+        .into_iter()
+        .filter(|(error, kind, read)| {
+            InvocationObservationFailure::classify(error) != *kind
+                || InvocationObservationFailure::is_stored_read(error) != *read
+        })
+        .map(|(error, _, _)| error)
+        .collect::<Vec<_>>();
+    assert!(wrong.is_empty(), "{wrong:?}");
+}
+
 #[test]
 fn invocation_rejection_lookup_preserves_the_typed_error() {
     let key = InvocationId(uuid::Uuid::new_v4());
@@ -635,17 +771,21 @@ async fn a_recovery_failure_of_an_unreadable_oplog_adds_no_entry() {
         unreadable,
         WorkerExecutorError::OplogFailed { .. }
     ));
-    for error in [
+    let errors = [
         unreadable.clone(),
         WorkerExecutorError::failed_to_resume_worker(worker.agent_id(), unreadable),
-    ] {
-        worker.record_recovery_failure(&error).await;
-        assert_eq!(
-            resident.oplog.current_oplog_index().await,
-            tail,
-            "{error} must not add an entry"
-        );
-    }
+    ];
+    futures::future::join_all(
+        errors
+            .iter()
+            .map(|error| worker.record_recovery_failure(error)),
+    )
+    .await;
+    assert_eq!(
+        resident.oplog.current_oplog_index().await,
+        tail,
+        "{errors:?} must not add an entry"
+    );
 
     worker
         .record_recovery_failure(&WorkerExecutorError::unknown("the guest stack overflowed"))
@@ -684,17 +824,21 @@ async fn a_transient_oplog_read_at_startup_adds_no_recovery_entry() {
     );
     resident.indexed.set_read_error(None);
 
-    for error in [
+    let errors = [
         read_error.clone(),
         WorkerExecutorError::failed_to_resume_worker(worker.agent_id(), read_error),
-    ] {
-        worker.record_recovery_failure(&error).await;
-        assert_eq!(
-            resident.oplog.current_oplog_index().await,
-            tail,
-            "{error} must not add an entry"
-        );
-    }
+    ];
+    futures::future::join_all(
+        errors
+            .iter()
+            .map(|error| worker.record_recovery_failure(error)),
+    )
+    .await;
+    assert_eq!(
+        resident.oplog.current_oplog_index().await,
+        tail,
+        "{errors:?} must not add an entry"
+    );
 
     worker
         .record_recovery_failure(&WorkerExecutorError::recovery_required(
@@ -793,6 +937,153 @@ async fn a_result_lookup_on_a_detached_status_gives_the_read_error() {
     assert_eq!(
         worker.lookup_invocation_result(&key).await.unwrap(),
         LookupResult::Pending
+    );
+    resident.stop().await;
+}
+
+/// A stop for a start whose oplog read failed fails the pending invocations with that error,
+/// wrapped in a failed resume. The read error is not an outcome: the stop caches no result for a
+/// pending invocation, a later lookup reads it as pending, and its waiter gets the read error.
+#[test]
+#[test_r::timeout("60s")]
+async fn a_pending_invocation_failed_with_a_wrapped_read_error_gets_no_cached_result() {
+    use crate::model::LookupResult;
+    use crate::services::oplog::{OplogOps, OplogReadSource, UnreadableOplog};
+    use golem_common::model::AgentInvocationPayload;
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::schema::SchemaValue;
+
+    let resident = ResidentWorker::start().await;
+    let worker = &resident.worker;
+    let key = InvocationId(uuid::Uuid::from_u128(0x1628_0b01));
+    let (operation, payload) = resident
+        .oplog
+        .upload_request(AgentInvocationPayload::AgentMethod {
+            method_name: "count".into(),
+            allow_streams: false,
+            input: SchemaValue::Tuple { elements: vec![] }.try_into().unwrap(),
+            caller: Caller::anonymous(),
+            scope_card: None,
+        })
+        .await
+        .unwrap();
+    let context = InvocationContextStack::fresh_rounded();
+    resident
+        .oplog
+        .add(OplogEntry::pending_agent_invocation(
+            None,
+            key,
+            Box::new(operation),
+            payload,
+            context.trace_id.clone(),
+            context.trace_states.clone(),
+            context.to_oplog_data(),
+        ))
+        .await
+        .unwrap();
+    worker
+        .commit_oplog_and_update_state(crate::services::oplog::CommitLevel::Always)
+        .await
+        .unwrap();
+    assert_eq!(
+        worker.try_lookup_invocation_result(&key).await.unwrap(),
+        LookupResult::Pending
+    );
+
+    let unreadable = WorkerExecutorError::from(UnreadableOplog::new(
+        &worker.agent_id(),
+        OplogReadError::corruption(
+            OplogReadSource::Primary,
+            "failed to decode oplog entry 3: unknown serialization version: 254",
+        ),
+    ));
+    let wrapped = WorkerExecutorError::failed_to_resume_worker(worker.agent_id(), unreadable);
+    let subscription = worker.events().subscribe();
+    worker.fail_pending_invocations(wrapped.clone()).await;
+
+    assert_eq!(
+        worker.try_lookup_invocation_result(&key).await.unwrap(),
+        LookupResult::Pending,
+        "the stop must cache no result for the read error"
+    );
+    let observed = worker.wait_for_invocation_result(&key, subscription).await;
+    assert_eq!(observed, Err(wrapped));
+    resident.stop().await;
+}
+
+/// An automatic update whose commit stored its `PendingUpdate` but whose status after the commit
+/// did not read fails with the read error. The caller's retry repairs the status before the
+/// duplicate check, finds the stored update, and appends nothing more.
+#[test]
+#[test_r::timeout("60s")]
+async fn a_retried_automatic_update_after_a_failed_report_appends_no_second_update() {
+    use crate::storage::indexed::IndexedStorageError;
+
+    let resident = ResidentWorker::start().await;
+    let worker = &resident.worker;
+    let tail = resident.oplog.current_oplog_index().await;
+    let target = ComponentRevision::new(2).unwrap();
+    resident
+        .indexed
+        .set_read_error(Some(IndexedStorageError::Transient(
+            "update report unavailable".into(),
+        )));
+    let first = worker
+        .enqueue_automatic_update(target, Caller::anonymous())
+        .await;
+    resident.indexed.set_read_error(None);
+    assert!(
+        matches!(&first, Err(error) if InvocationObservationFailure::is_stored_read(error)),
+        "{first:?}"
+    );
+    assert_eq!(resident.oplog.current_oplog_index().await, tail.next());
+
+    let retry = worker
+        .enqueue_automatic_update(target, Caller::anonymous())
+        .await;
+    assert!(
+        matches!(&retry, Err(WorkerExecutorError::InvalidRequest { details })
+            if details.contains("already in progress")),
+        "{retry:?}"
+    );
+    assert_eq!(resident.oplog.current_oplog_index().await, tail.next());
+    resident.stop().await;
+}
+
+/// A keyless manual update whose commit stored its entry but whose status after the commit did
+/// not read fails with the read error, not as a write that did not happen. The repaired status
+/// holds the stored update, which the duplicate check of a retried update reads.
+#[test]
+#[test_r::timeout("60s")]
+async fn a_manual_update_after_a_failed_report_is_stored_and_found_by_the_repaired_status() {
+    use crate::storage::indexed::IndexedStorageError;
+
+    let resident = ResidentWorker::start().await;
+    let worker = &resident.worker;
+    let tail = resident.oplog.current_oplog_index().await;
+    let target = ComponentRevision::new(3).unwrap();
+    resident
+        .indexed
+        .set_read_error(Some(IndexedStorageError::Transient(
+            "manual update report unavailable".into(),
+        )));
+    let first = worker
+        .enqueue_manual_update(target, Caller::anonymous())
+        .await;
+    resident.indexed.set_read_error(None);
+    assert!(
+        matches!(&first, Err(error) if InvocationObservationFailure::is_stored_read(error)),
+        "{first:?}"
+    );
+    assert_eq!(resident.oplog.current_oplog_index().await, tail.next());
+    let status = worker.try_get_repaired_status().await.unwrap();
+    assert!(
+        status
+            .pending_invocations
+            .iter()
+            .any(|pending| pending.manual_update_target_revision == Some(target)),
+        "{:?}",
+        status.pending_invocations
     );
     resident.stop().await;
 }

@@ -76,6 +76,11 @@ mod state;
 mod storage;
 
 use reader::{read_persisted_oplog_entries, retry_primary_read};
+#[cfg(test)]
+pub(crate) use storage::tests::{
+    UnconfirmedAppends, add_all as add_grow_memory_entries, create as create_test_oplog,
+    service as unconfirmed_appends_service,
+};
 use storage::{retry_maintenance_storage_op, retry_oplog_append, retry_storage_op};
 
 enum SerializedOplogAppend {
@@ -281,6 +286,9 @@ struct OplogReader {
     key: String,
     last_committed_idx: OplogIndex,
     buffer: VecDeque<OplogEntry>,
+    /// The read error of an append whose outcome is unknown. A read above `last_committed_idx`
+    /// returns it instead of the buffered entries, which the storage may not hold.
+    unconfirmed_tail: Option<OplogReadError>,
     replicas: u8,
 }
 
@@ -320,32 +328,63 @@ struct PrimaryOplogState {
     /// only moves when the shard changes owner, and then this oplog is the losing side.
     shard_epoch: Option<ShardEpoch>,
     /// Set once a write has been refused or its outcome stays unknown, or at open when the epoch
-    /// record already belonged to a newer owner. Every later write fails on it immediately, so
-    /// nothing is buffered or sent to the storage again. Shared with the handle, which answers
-    /// [`Oplog::fence`] from it without a round trip through the actor.
+    /// record already belonged to a newer owner. Every later add, commit and flush fails on it
+    /// immediately, so nothing is buffered or sent to the storage again. A prefix drop after a
+    /// fence does nothing; after an unconfirmed append it runs as before. Shared with the handle,
+    /// which answers [`Oplog::fence`] and [`Oplog::unconfirmed_append`] from it without a round
+    /// trip through the actor.
     latch: Arc<std::sync::OnceLock<WriteLatch>>,
 }
 
-/// Why an oplog handle accepts no more writes. The latch is set once and never cleared; a new
-/// handle, opened after the agent stopped, reads the storage again.
+/// Why an oplog handle accepts no more writes. The latch is set once, only through
+/// [`WriteLatch::transition`], and never cleared; a new handle, opened after the agent stopped,
+/// reads the storage again.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum WriteLatch {
     /// The storage refused a write: the shard has a new owner.
     Fenced(OplogFence),
     /// An append whose outcome stays unknown, because its read-back failed. Its entries can be
-    /// stored or absent, so a new append of the same indices could only conflict.
+    /// stored or absent, so a new append of the same indices could only conflict, and the
+    /// buffered copy of them is not history.
     Unconfirmed(UnreadableOplog),
 }
 
+/// An event that can close an oplog handle for writes.
+enum LatchEvent<'a> {
+    /// The handle opened while the epoch record already belonged to a newer owner.
+    Opened(OplogFence),
+    /// An append of the buffer failed with this error.
+    AppendFailed(&'a OplogError),
+    /// The storage refused a prefix drop: the shard has a new owner.
+    TrimFenced(OplogFence),
+}
+
 impl WriteLatch {
-    /// The latch that the failed append `error` sets, if any.
-    fn of_append(error: &OplogError) -> Option<Self> {
-        match error {
-            OplogError::Fenced(fence) => Some(Self::Fenced(fence.clone())),
-            OplogError::Unreadable(unreadable) => Some(Self::Unconfirmed(unreadable.clone())),
-            OplogError::Payload(_) | OplogError::Maintenance(_) | OplogError::ArchiveWrite(_) => {
-                None
+    /// The one transition of the latch: the latch that `event` sets on a handle whose latch is
+    /// `current`, or `None` when the latch does not change. A set latch never changes. A fence
+    /// sets it, and so does an append that fails as unreadable, because the append retries return
+    /// that error only when they cannot read back an append whose outcome is unknown. Every other
+    /// failure leaves the handle open.
+    fn transition(current: Option<&WriteLatch>, event: LatchEvent<'_>) -> Option<WriteLatch> {
+        match (current, event) {
+            (Some(_), _) => None,
+            (None, LatchEvent::Opened(fence) | LatchEvent::TrimFenced(fence)) => {
+                Some(Self::Fenced(fence))
             }
+            (None, LatchEvent::AppendFailed(OplogError::Fenced(fence))) => {
+                Some(Self::Fenced(fence.clone()))
+            }
+            (None, LatchEvent::AppendFailed(OplogError::Unreadable(unreadable))) => {
+                Some(Self::Unconfirmed(unreadable.clone()))
+            }
+            (
+                None,
+                LatchEvent::AppendFailed(
+                    OplogError::Payload(_)
+                    | OplogError::Maintenance(_)
+                    | OplogError::ArchiveWrite(_),
+                ),
+            ) => None,
         }
     }
 
@@ -357,11 +396,30 @@ impl WriteLatch {
         }
     }
 
-    /// The error with which every later write fails.
+    /// The append whose outcome is unknown, when the latch means that.
+    fn unconfirmed(&self) -> Option<&UnreadableOplog> {
+        match self {
+            Self::Fenced(_) => None,
+            Self::Unconfirmed(unreadable) => Some(unreadable),
+        }
+    }
+
+    /// The error with which every later add, commit and flush fails.
     fn error(&self) -> OplogError {
         match self {
             Self::Fenced(fence) => OplogError::Fenced(fence.clone()),
             Self::Unconfirmed(unreadable) => OplogError::Unreadable(unreadable.clone()),
         }
     }
+}
+
+/// Applies `event` to the shared `latch`. Returns the latch that the event set, or `None` when
+/// the latch did not change.
+fn close_latch<'l>(
+    latch: &'l std::sync::OnceLock<WriteLatch>,
+    event: LatchEvent<'_>,
+) -> Option<&'l WriteLatch> {
+    let next = WriteLatch::transition(latch.get(), event)?;
+    latch.set(next).ok()?;
+    latch.get()
 }

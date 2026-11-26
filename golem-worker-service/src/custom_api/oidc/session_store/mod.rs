@@ -38,6 +38,22 @@ use golem_service_base::repo::RepoError;
 pub enum SessionStoreError {
     #[error(transparent)]
     InternalError(#[from] anyhow::Error),
+    /// A stored record is there but does not decode. A missing record is `None`, not this error.
+    /// The error names the record and the decode problem, not the stored bytes.
+    #[error("stored {record} does not decode: {error}")]
+    Undecodable {
+        record: &'static str,
+        error: golem_common::serialization::DecodeError,
+    },
+}
+
+/// Decodes the stored `record`. A record that does not decode is `Undecodable`.
+pub(super) fn decode_record<R: desert_rust::BinaryDeserializer>(
+    bytes: &[u8],
+    record: &'static str,
+) -> Result<R, SessionStoreError> {
+    golem_common::serialization::decode(bytes)
+        .map_err(|error| SessionStoreError::Undecodable { record, error })
 }
 
 error_forwarding!(SessionStoreError, RepoError);
@@ -394,8 +410,7 @@ mod records {
         let Some(bytes) = bytes else {
             return Ok(None);
         };
-        let record: PendingPkceLoginRecord = golem_common::serialization::deserialize(&bytes)
-            .map_err(|e| anyhow!("PendingPkceLogin deserialization error: {e}"))?;
+        let record: PendingPkceLoginRecord = super::decode_record(&bytes, "PendingPkceLogin")?;
         let login = PendingPkceLogin::from(record);
         Ok((login.expires_at > Utc::now()).then_some(login))
     }
@@ -406,8 +421,8 @@ mod records {
         let Some(bytes) = bytes else {
             return Ok(None);
         };
-        let record: PkceAuthorizationCodeRecord = golem_common::serialization::deserialize(&bytes)
-            .map_err(|e| anyhow!("PkceAuthorizationCode deserialization error: {e}"))?;
+        let record: PkceAuthorizationCodeRecord =
+            super::decode_record(&bytes, "PkceAuthorizationCode")?;
         let code = PkceAuthorizationCode::try_from(record)?;
         Ok((code.expires_at > Utc::now()).then_some(code))
     }
@@ -420,8 +435,7 @@ mod records {
             return Ok(None);
         };
         let record: PkceBearerCredentialRecord =
-            golem_common::serialization::deserialize(&bytes)
-                .map_err(|e| anyhow!("PkceBearerCredential deserialization error: {e}"))?;
+            super::decode_record(&bytes, "PkceBearerCredential")?;
         let credential = PkceBearerCredential::try_from(record)?;
         Ok(
             (credential.expires_at > Utc::now() && credential.binding == *expected_binding)
@@ -565,6 +579,61 @@ mod tests {
         assert_eq!(session.issuer, session2.issuer);
         assert_eq!(session.expires_at, session2.expires_at);
         assert_eq!(session.scopes.len(), session2.scopes.len());
+    }
+
+    /// At the store boundary a missing record is `None` and a stored record that does not decode
+    /// is `Undecodable`, not an internal error and not `None`. The take stays single-use: the
+    /// refused record is gone afterwards.
+    #[test]
+    async fn a_missing_and_an_undecodable_record_stay_distinct_at_the_store() {
+        use super::{SessionStore, SessionStoreError};
+        use golem_common::serialization::DecodeError;
+        use sqlx::Connection;
+        use sqlx::sqlite::SqliteConnection;
+
+        let (store, file) = super::db::sqlite_test_session_store().await;
+        assert!(
+            store
+                .take_pending_oidc_login("missing-state")
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        store
+            .store_pending_oidc_login("corrupt-state", sample_pending_login())
+            .await
+            .unwrap();
+        let mut writer =
+            SqliteConnection::connect(&format!("sqlite://{}", file.path().to_string_lossy()))
+                .await
+                .unwrap();
+        sqlx::query("UPDATE oidc_pending_login SET value = X'FF00' WHERE state = 'corrupt-state'")
+            .execute(&mut writer)
+            .await
+            .unwrap();
+
+        let error = store
+            .take_pending_oidc_login("corrupt-state")
+            .await
+            .expect_err("an undecodable record is not a missing record");
+        assert!(
+            matches!(
+                error,
+                SessionStoreError::Undecodable {
+                    record: "PendingOidcLogin",
+                    error: DecodeError::UnknownVersion(255),
+                }
+            ),
+            "{error:?}"
+        );
+        assert!(
+            store
+                .take_pending_oidc_login("corrupt-state")
+                .await
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[test]

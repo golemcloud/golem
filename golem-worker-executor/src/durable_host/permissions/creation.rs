@@ -455,6 +455,7 @@ mod tests {
         let Some(WorkerExecutorError::OplogFailed {
             agent_id: failed,
             details,
+            ..
         }) = error.downcast_ref::<WorkerExecutorError>()
         else {
             panic!("expected an unreadable oplog, got {error:?}");

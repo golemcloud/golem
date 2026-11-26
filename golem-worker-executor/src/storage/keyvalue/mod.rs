@@ -27,7 +27,7 @@ use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::SafeDisplay;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, OwnedAgentId};
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::{DecodeError, decode, serialize};
 use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
 use std::fmt::{Debug, Display, Formatter};
 use std::sync::Arc;
@@ -471,6 +471,15 @@ pub struct LabelledEntityKeyValueStorage<'a, S: KeyValueStorage + ?Sized> {
 }
 
 impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
+    /// The error of a stored value that does not decode. It names the entity and the decode
+    /// error, not the stored value.
+    fn undecodable(&self, error: DecodeError) -> String {
+        format!(
+            "stored {}/{}/{} does not decode: {error}",
+            self.svc_name, self.api_name, self.entity_name
+        )
+    }
+
     fn record(&self, operation: &'static str) {
         golem_service_base::metrics::storage::record_logical_operation(
             "keyvalue",
@@ -677,17 +686,19 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         namespace: KeyValueStorageNamespace,
         key: &str,
     ) -> Result<Option<V>, String> {
-        match self.get_attempt_deserialize(namespace, key).await? {
-            Some(inner) => Ok(Some(inner?)),
-            None => Ok(None),
-        }
+        self.get_attempt_deserialize(namespace, key)
+            .await?
+            .transpose()
+            .map_err(|error| self.undecodable(error))
     }
 
+    /// Reads and decodes one value. The outer error is a failed storage read; the inner error is
+    /// a stored value that does not decode, which a cache reader can take as a miss.
     pub async fn get_attempt_deserialize<V: BinaryDeserializer>(
         &self,
         namespace: KeyValueStorageNamespace,
         key: &str,
-    ) -> Result<Option<Result<V, String>>, String> {
+    ) -> Result<Option<Result<V, DecodeError>>, String> {
         self.record("get");
         let maybe_bytes = self
             .storage
@@ -699,12 +710,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
                 key,
             )
             .await?;
-        if let Some(bytes) = maybe_bytes {
-            let value: Result<V, String> = deserialize(&bytes);
-            Ok(Some(value))
-        } else {
-            Ok(None)
-        }
+        Ok(maybe_bytes.map(|bytes| decode(&bytes)))
     }
 
     pub async fn get_raw(
@@ -744,7 +750,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
         let mut values = Vec::new();
         for maybe_bytes in maybe_bytes {
             if let Some(bytes) = maybe_bytes {
-                let value: V = deserialize(&bytes)?;
+                let value: V = decode(&bytes).map_err(|error| self.undecodable(error))?;
                 values.push(Some(value));
             } else {
                 values.push(None);
@@ -842,7 +848,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await?;
         let mut values = Vec::new();
         for bytes in maybe_bytes {
-            let value: V = deserialize(&bytes)?;
+            let value: V = decode(&bytes).map_err(|error| self.undecodable(error))?;
             values.push(value);
         }
         Ok(values)
@@ -910,7 +916,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await?;
         let mut values = Vec::new();
         for (score, bytes) in maybe_bytes {
-            let value: V = deserialize(&bytes)?;
+            let value: V = decode(&bytes).map_err(|error| self.undecodable(error))?;
             values.push((score, value));
         }
         Ok(values)
@@ -938,7 +944,7 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
             .await?;
         let mut values = Vec::new();
         for (score, bytes) in maybe_bytes {
-            let value: V = deserialize(&bytes)?;
+            let value: V = decode(&bytes).map_err(|error| self.undecodable(error))?;
             values.push((score, value));
         }
         Ok(values)
@@ -1007,6 +1013,56 @@ mod tests {
     use super::KeyValueStorageError;
     use golem_service_base::repo::RepoError;
     use test_r::test;
+
+    /// A missing value is `None`. A stored value that does not decode is an error that names the
+    /// decode problem and not the stored bytes: `get_attempt_deserialize` gives the typed decode
+    /// error, so a cache reader can take it as a miss, and `get` fails.
+    #[test]
+    async fn a_missing_value_and_an_undecodable_value_stay_distinct() {
+        use super::{KeyValueStorageLabelledApi, KeyValueStorageNamespace};
+        use crate::storage::keyvalue::memory::InMemoryKeyValueStorage;
+        use golem_common::serialization::DecodeError;
+
+        let storage = InMemoryKeyValueStorage::new();
+        let entity = storage.with_entity("test", "decode", "value");
+        let namespace = || KeyValueStorageNamespace::RunningWorkers;
+        entity
+            .set_raw(namespace(), "unknown-version", &[255, b's', b'e', b'c'])
+            .await
+            .unwrap();
+        entity
+            .set_raw(namespace(), "invalid-data", &[3, 0xff, 0xff])
+            .await
+            .unwrap();
+
+        assert_eq!(
+            entity
+                .get_attempt_deserialize::<String>(namespace(), "missing")
+                .await,
+            Ok(None)
+        );
+        assert_eq!(entity.get::<String>(namespace(), "missing").await, Ok(None));
+        assert_eq!(
+            entity
+                .get_attempt_deserialize::<String>(namespace(), "unknown-version")
+                .await,
+            Ok(Some(Err(DecodeError::UnknownVersion(255))))
+        );
+        assert!(matches!(
+            entity
+                .get_attempt_deserialize::<String>(namespace(), "invalid-data")
+                .await,
+            Ok(Some(Err(DecodeError::InvalidData(_))))
+        ));
+        let error = entity
+            .get::<String>(namespace(), "unknown-version")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error,
+            "stored test/decode/value does not decode: unknown serialization version: 255"
+        );
+    }
 
     /// A failure the backend never attempted may be retried whatever the operation is: repeating
     /// it cannot observe a write the first attempt made.

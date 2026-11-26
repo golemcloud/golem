@@ -246,9 +246,11 @@ impl WorkerService {
         summary_from_proto(agent_id, environment_id, summary)
     }
 
-    /// The result of a terminal invocation, read through the existing result lookup. When the
-    /// lookup fails and the failure is not the recorded outcome, the read fails. The error does
-    /// not show the details of the lookup failure, because they can contain stored data.
+    /// The result of a terminal invocation, read through the existing result lookup. A lookup
+    /// failure that is the recorded outcome is the result. A lookup that a failed oplog read
+    /// refuses fails with an internal error that does not show the details of the read. Every
+    /// other lookup failure, for example a missing agent, a denied permission or a routing miss,
+    /// is the error of the read.
     async fn invocation_outcome(
         &self,
         agent: &ManagedAgent,
@@ -279,10 +281,12 @@ impl WorkerService {
                 {
                     return Ok(Some(InvocationOutcome::Failure(failure)));
                 }
+                if !refused_by_a_failed_read(&error) {
+                    return Err(error);
+                }
                 warn!(
                     invocation_id = %invocation_id,
-                    error = error.to_safe_string(),
-                    "Failed to read the result of a terminal invocation"
+                    "The result of a terminal invocation cannot be read from the oplog"
                 );
                 return Err(WorkerServiceError::Internal(format!(
                     "the result of invocation {invocation_id} cannot be read"
@@ -365,6 +369,14 @@ pub(super) fn background_failure(failure: BackgroundFailure) -> InvocationFailur
 
 /// The recorded failure of an invocation, as the result lookup gives it. Any other error is a
 /// failure to read the result, such as an unavailable executor, and is not the outcome.
+fn refused_by_a_failed_read(error: &WorkerServiceError) -> bool {
+    match error {
+        WorkerServiceError::AcceptedInvocation { source, .. } => refused_by_a_failed_read(source),
+        WorkerServiceError::GolemError(error) => error.is_oplog_read_failure(),
+        _ => false,
+    }
+}
+
 fn recorded_failure(error: &WorkerServiceError) -> Option<InvocationFailure> {
     match error {
         WorkerServiceError::AcceptedInvocation { source, .. } => recorded_failure(source),

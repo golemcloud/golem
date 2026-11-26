@@ -25,7 +25,9 @@ use crate::services::agent_filesystem::{
 use crate::services::agent_filesystem_snapshots::Confirm;
 use crate::services::golem_config::SnapshotPolicy;
 use crate::services::oplog::plugin::ForwardingOplog;
-use crate::services::oplog::{CommitLevel, EphemeralOplog, OplogError, OplogOps, downcast_oplog};
+use crate::services::oplog::{
+    CommitLevel, EphemeralOplog, OplogError, OplogOps, UnreadableOplog, downcast_oplog,
+};
 use crate::services::resource_limits::{
     AtomicResourceEntry, MonthlyResourceCapacityError, MonthlyResourceExhaustion,
 };
@@ -376,6 +378,13 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
         let mut retry_was_live = false;
         'outer: loop {
+            // A retry on a handle with an unconfirmed append cannot pass: the handle refuses every
+            // write and the reads of that append. The generation stops instead, and the next
+            // activation reads the history from the storage on a fresh handle.
+            if let Some(unconfirmed) = self.parent.oplog().unconfirmed_append() {
+                self.stop_unconfirmed_generation(unconfirmed).await;
+                break;
+            }
             self.parent
                 .queue
                 .write()
@@ -563,6 +572,9 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                         {
                             break;
                         }
+                        continue;
+                    }
+                    if self.parent.oplog().unconfirmed_append().is_some() {
                         continue;
                     }
                     let delay = self.parent.next_infrastructure_recovery_delay();
@@ -1248,6 +1260,24 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
 
     fn release_concurrent_agent_permit(&mut self) {
         self.permit_state.release();
+    }
+
+    /// Stops this generation after its oplog handle latched an append whose outcome is unknown.
+    /// The waiters get the read error of that append, nothing is written to the oplog, and the
+    /// worker leaves the active-agent cache, so the next activation opens a fresh handle.
+    async fn stop_unconfirmed_generation(&mut self, unconfirmed: UnreadableOplog) {
+        warn!(
+            agent_id = %self.owned_agent_id,
+            error = %unconfirmed,
+            "Stopping the worker generation after an oplog append with an unknown outcome"
+        );
+        self.release_concurrent_agent_permit();
+        self.stop_unloaded(
+            Some(WorkerExecutorError::from(unconfirmed)),
+            PendingLiveInvocationDisposition::Fail,
+        )
+        .await;
+        self.parent.remove_from_active_agents().await;
     }
 }
 

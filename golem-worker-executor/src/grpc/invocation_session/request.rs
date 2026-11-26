@@ -587,6 +587,8 @@ pub(crate) fn build_durable_streaming_request(
 #[derive(Debug)]
 pub(crate) struct UndecodablePreparedInput {
     callee: AgentId,
+    /// The detail lives only until the caller turns the error into the read error of its
+    /// Prepared entry, so it stays an owned `String` and is not boxed or shared.
     detail: String,
 }
 

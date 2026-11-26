@@ -289,7 +289,8 @@ impl ReplayState {
                 self.cursor.progress.notify_waiters();
                 return Err(error);
             }
-            if let Some((refusal, terminal_index)) = matching_admission_refusal(admission, claim)?
+            if let Some((refusal, terminal_index)) =
+                matching_admission_refusal(&self.cursor.owned_agent_id.agent_id, admission, claim)?
                 && !st
                     .has_unclaimed_start_before(&self.cursor, claim, terminal_index)
                     .await?
@@ -344,7 +345,8 @@ impl ReplayState {
             self.cursor.progress.notify_waiters();
             return Err(error);
         }
-        if let Some((refusal, terminal_index)) = matching_admission_refusal(admission, claim)?
+        if let Some((refusal, terminal_index)) =
+            matching_admission_refusal(&self.cursor.owned_agent_id.agent_id, admission, claim)?
             && !tx
                 .st
                 .has_unclaimed_start_before(&self.cursor, claim, terminal_index)

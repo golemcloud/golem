@@ -202,6 +202,8 @@ impl OpenOplogs {
 /// Whether a live cached handle can be handed to an opener asking for `requested`. It cannot,
 /// and is replaced, when:
 /// - it is fenced: the storage refused one of its writes, so every later one is refused too;
+/// - it has an append whose outcome is unknown: it refuses writes and the reads of that append,
+///   so only a new handle can read the history of the agent from the storage;
 /// - or it belongs to an older ownership generation: `requested` is newer than the epoch it was
 ///   opened with (`None` is older than any epoch). The replacement records the newer epoch, on
 ///   the primary oplog or, for an ephemeral oplog, on its archive layers.
@@ -215,8 +217,9 @@ fn can_reuse(
     requested: Option<ShardEpoch>,
 ) -> bool {
     let fenced = oplog.fence().is_some();
+    let unconfirmed = oplog.unconfirmed_append().is_some();
     let older_generation = requested > opened_with;
-    !fenced && !older_generation
+    !fenced && !unconfirmed && !older_generation
 }
 
 impl Debug for OpenOplogs {

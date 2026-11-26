@@ -939,7 +939,10 @@ mod read_error_tests {
         .await
         .expect_err("an undecodable payload must fail the read");
 
-        let WorkerExecutorError::OplogFailed { agent_id, details } = &error else {
+        let WorkerExecutorError::OplogFailed {
+            agent_id, details, ..
+        } = &error
+        else {
             panic!("expected an unreadable oplog, got {error:?}");
         };
         assert_eq!(*agent_id, owned_agent_id.agent_id);
@@ -1011,7 +1014,10 @@ mod read_error_tests {
     /// The error is `OplogFailed` for the agent that owns the oplog, and names entry 6 and the
     /// version byte that does not decode.
     fn assert_unreadable_at_entry_6(owned_agent_id: &OwnedAgentId, error: WorkerExecutorError) {
-        let WorkerExecutorError::OplogFailed { agent_id, details } = &error else {
+        let WorkerExecutorError::OplogFailed {
+            agent_id, details, ..
+        } = &error
+        else {
             panic!("expected an unreadable oplog, got {error:?}");
         };
         assert_eq!(*agent_id, owned_agent_id.agent_id);

@@ -252,7 +252,7 @@ async fn failed_primary_reports_detach_before_same_key_admission_and_keep_storag
                 if queued_only {
                     oplog.add(entry.clone()).await.unwrap();
                 } else {
-                    let Ok(InvocationAppendOutcome::StoredButUnreadable(unreadable)) =
+                    let Ok(InvocationAppendOutcome::Appended(StoredAppend::Unreported(unreadable))) =
                         append().await
                     else {
                         panic!("expected the actor to report a stored invocation");
@@ -837,7 +837,10 @@ async fn old_invocation_result_index_preserves_authoritative_read_errors() {
         "unreadable recorded invocation".into(),
     )));
     let result = worker.lookup_invocation_result(&old_key).await;
-    let Err(WorkerExecutorError::OplogFailed { agent_id, details }) = result else {
+    let Err(WorkerExecutorError::OplogFailed {
+        agent_id, details, ..
+    }) = result
+    else {
         panic!("expected permanent authoritative failure, got {result:?}");
     };
     assert_eq!(agent_id, id.agent_id);

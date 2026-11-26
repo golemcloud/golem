@@ -10560,8 +10560,9 @@ mod tests {
         assert!(got.result.is_none());
     }
 
-    /// A completed invocation whose result the executor cannot read is an error, not an
-    /// invocation without a result. The error does not show the stored details.
+    /// A completed invocation whose result a failed oplog read refuses is an internal error, not
+    /// an invocation without a result, also when a failed resume wraps the read. The error does
+    /// not show the stored details. A lookup refusal that no read caused keeps its own error.
     #[test]
     async fn a_completed_invocation_with_an_unreadable_result_is_an_error() {
         use golem_api_grpc::proto::golem::workerexecutor::v1::{
@@ -10580,27 +10581,66 @@ mod tests {
             ProtoKind::Unspecified,
             Some("run".to_string()),
         ));
-        *harness
-            .worker_client
-            .invocation_lookup_error
-            .lock()
-            .unwrap() = Some(WorkerExecutorError::Runtime {
-            details: WorkerExecutorError::oplog_failed(
-                agent_id,
-                "oplog entry 43 has unknown serialization version 255",
-            )
-            .to_string(),
-        });
+        let read_with = async |lookup_error: WorkerExecutorError| {
+            *harness
+                .worker_client
+                .invocation_lookup_error
+                .lock()
+                .unwrap() = Some(lookup_error);
+            harness
+                .worker_service
+                .get_invocation(harness.environment_id, &owned, AuthCtx::system())
+                .await
+                .expect_err("a refused lookup is not an invocation without a result")
+        };
+        let failed = WorkerExecutorError::oplog_failed(
+            agent_id,
+            "oplog entry 43 has unknown serialization version 255",
+        );
+        let unavailable = WorkerExecutorError::oplog_read_unavailable(
+            "primary storage did not answer for entry 43 with version 255",
+        );
+        let reads = [
+            failed.clone(),
+            unavailable.clone(),
+            WorkerExecutorError::failed_to_resume_worker(agent_id, failed),
+            WorkerExecutorError::failed_to_resume_worker(agent_id, unavailable),
+        ];
+        futures::stream::iter(reads)
+            .for_each(|read| async {
+                let described = format!("{read:?}");
+                let error = read_with(read).await;
+                assert!(
+                    matches!(error, WorkerServiceError::Internal(_)),
+                    "{described}: {error:?}"
+                );
+                let public = golem_common::SafeDisplay::to_safe_string(&error);
+                assert!(public.contains(&invocation_id.to_string()), "{public}");
+                assert!(!public.contains("entry 43"), "{public}");
+                assert!(!public.contains("version 255"), "{public}");
+            })
+            .await;
 
-        let error = harness
-            .worker_service
-            .get_invocation(harness.environment_id, &owned, AuthCtx::system())
-            .await
-            .expect_err("an unreadable result is not an invocation without a result");
-
-        let public = golem_common::SafeDisplay::to_safe_string(&error);
-        assert!(public.contains(&invocation_id.to_string()), "{public}");
-        assert!(!public.contains("entry 43"), "{public}");
-        assert!(!public.contains("version 255"), "{public}");
+        let error = read_with(WorkerExecutorError::AgentNotFound { agent_id }).await;
+        assert!(
+            matches!(
+                error,
+                WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { agent_id: missing })
+                    if missing == agent_id
+            ),
+            "{error:?}"
+        );
+        let error = read_with(WorkerExecutorError::invalid_shard_id(
+            golem_common::model::ShardId::new(3),
+            std::collections::HashSet::new(),
+        ))
+        .await;
+        assert!(
+            matches!(
+                error,
+                WorkerServiceError::GolemError(WorkerExecutorError::InvalidShardId { .. })
+            ),
+            "{error:?}"
+        );
     }
 }

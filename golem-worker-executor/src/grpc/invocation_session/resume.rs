@@ -18,13 +18,26 @@ use super::{
     InvocationResponse, InvocationSessionResult, InvocationSessionState, InvocationStart,
     PersistedInvocationTarget, ResponseLease, ResumeAttach, SessionError, SessionStreamRole,
     UsesAllDeps, WorkerCtx, WorkerExecutorError, WorkerExecutorImpl, build_resume_attempt,
-    detach_durable_attachment, durable_stream_mapping_to_proto, ends_only_the_attachment,
-    invocation_response, is_attachment_termination, mpsc, persisted_result_and_finished,
+    durable_stream_mapping_to_proto, ends_only_the_attachment, invocation_response,
+    is_attachment_termination, mpsc, persisted_result_and_finished,
     pre_acceptance_rejection_reason, resumed_input_schema, route_durable_request,
-    send_attachment_revocation, send_protocol_failure, send_resumed_finished,
-    send_unvalidated_rejection, until_response_closed,
+    send_attachment_revocation, send_failed_attachment_check, send_protocol_failure,
+    send_resumed_finished, send_unvalidated_rejection, until_response_closed,
 };
-use crate::worker::InvocationObservationFailure;
+
+/// Why Resume stops before its acceptance.
+enum ResumeStop {
+    /// The worker refused or failed the resume.
+    Failed(WorkerExecutorError),
+    /// The check of the queued attachment failed after readiness.
+    AttachmentCheck(SessionError),
+}
+
+impl From<WorkerExecutorError> for ResumeStop {
+    fn from(error: WorkerExecutorError) -> Self {
+        Self::Failed(error)
+    }
+}
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>
@@ -40,8 +53,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     ) {
         let rejection_identity = (resume.idempotency_key, resume.agent_id);
         let mut was_queued = false;
-        let mut attachment_ended = false;
         let mut captured_method_input = None;
+        // Until a queued attachment is found, this transport holds nothing.
+        let mut queued_cleanup = AttachmentCleanup::new(None);
         let result = async {
             Self::validate_auth_ctx(&resume.auth_ctx)?;
             let attempt = build_resume_attempt(
@@ -104,6 +118,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 })) };
                 protocol_state.validate_response(&pending).map_err(WorkerExecutorError::runtime)?;
                 was_queued = true;
+                queued_cleanup = AttachmentCleanup::new(Some(streams.clone()));
                 *response_lease.lock().unwrap() = streams.response_lease();
                 let wait = async {
                     outward.send(pending).await.map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
@@ -114,28 +129,29 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     }
                 }.await;
                 if let Err(error) = wait {
-                    if InvocationObservationFailure::classify(&error).is_none() {
-                        detach_durable_attachment(Some(streams)).await;
-                    }
-                    return Err(error);
+                    queued_cleanup.observe(CleanupEvent::of_observation_failure(&error));
+                    return Err(error.into());
                 }
                 if let Err(error) = streams.ensure_current_attachment().await {
-                    send_attachment_revocation(&outward, Err(error)).await;
-                    attachment_ended = true;
-                    return Err(WorkerExecutorError::runtime("queued resume attachment ended"));
+                    queued_cleanup.observe_error(&error);
+                    queued_cleanup.observe(CleanupEvent::AuthorityEnded);
+                    return Err(ResumeStop::AttachmentCheck(error));
                 }
             }
-            worker.resume_durable_streaming_invocation(attempt).await
+            Ok::<_, ResumeStop>(worker.resume_durable_streaming_invocation(attempt).await?)
         }
         .await;
         let mut acceptance = match result {
             Ok(acceptance) => acceptance,
-            Err(error) => {
-                if attachment_ended {
-                    return;
-                }
+            Err(ResumeStop::AttachmentCheck(error)) => {
+                send_failed_attachment_check(&outward, error).await;
+                queued_cleanup.finish().await;
+                return;
+            }
+            Err(ResumeStop::Failed(error)) => {
                 if was_queued {
                     super::send_worker_failure(&outward, error).await;
+                    queued_cleanup.finish().await;
                     return;
                 }
                 tracing::warn!(
@@ -162,6 +178,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
         };
+        // The accepted session holds the attachment from here; the queued hold ends without a
+        // detach.
+        drop(queued_cleanup);
         *response_lease.lock().unwrap() = acceptance.streams.response_lease();
         let mut cleanup = AttachmentCleanup::new(Some(acceptance.streams.clone()));
         let forwarder_stopped = tokio_util::sync::CancellationToken::new();
@@ -173,23 +192,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     .invocation
                     .target_component_revision;
                 let (input_schema, input_element_types) =
-                    match resumed_input_schema(&acceptance.prepared) {
-                        Ok(schema) => schema,
-                        Err(error) => {
-                            let prepared = acceptance
-                                .streams
-                                .current_control_metadata()
-                                .await
-                                .map_err(|error| {
-                                    error.into_worker_executor_error(WorkerExecutorError::runtime)
-                                })?
-                                .prepared_position();
-                            return Err(match prepared {
-                                Some(index) => error.at(index).into(),
-                                None => error.into(),
-                            });
-                        }
-                    };
+                    resumed_input_schema(&acceptance.prepared)
+                        .map_err(|error| error.at(acceptance.prepared_index))?;
                 acceptance.streams = acceptance.streams.clone().with_input_schema(
                     Arc::new(input_schema),
                     component_revision,
@@ -375,7 +379,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         }
         if acceptance.replayed && let Err(error) = streams.ensure_current_attachment().await {
             cleanup.observe(CleanupEvent::AuthorityEnded);
-            send_attachment_revocation(&responses, Err(error)).await;
+            send_failed_attachment_check(&responses, error).await;
             drop(responses);
             let _ = forwarder.await;
             return;

@@ -17,14 +17,14 @@ use super::{
     InvocationAccepted, InvocationRejectionReason, InvocationRequest, InvocationResponse,
     InvocationSessionCompletion, InvocationSessionResult, InvocationSessionState, ResponseLease,
     SessionError, SessionStreamRole, StreamSession, UsesAllDeps, WorkerCtx, WorkerExecutorError,
-    WorkerExecutorImpl, detach_durable_attachment, durable_stream_mapping_to_proto,
-    end_attachment_on_failure, ends_only_the_attachment, invocation_request, invocation_response,
+    WorkerExecutorImpl, durable_stream_mapping_to_proto, end_attachment_on_failure,
+    ends_only_the_attachment, invocation_request, invocation_response,
     invocation_session_completion, invocation_session_result, mpsc, persisted_invocation_result,
     pre_acceptance_rejection_reason, proto_agent_id_string, race_invocation_acceptance,
     rejection_worker_error, request_agent_id, request_idempotency_key, route_durable_request,
-    send_attachment_revocation, send_protocol_failure, send_rejection,
-    send_rejection_with_worker_error, send_unvalidated_rejection, send_worker_failure,
-    until_response_closed,
+    send_attachment_revocation, send_failed_attachment_check, send_protocol_failure,
+    send_rejection, send_rejection_with_worker_error, send_unvalidated_rejection,
+    send_worker_failure, until_response_closed,
 };
 
 use crate::worker::InvocationObservationFailure;
@@ -266,6 +266,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let queued = accepted.queued.take();
         let was_queued = queued.is_some();
+        // Observation must never run attachment cleanup, even while the original is current.
+        let mut cleanup = AttachmentCleanup::new(
+            accepted
+                .durable_streams
+                .clone()
+                .filter(|_| !accepted.joined_origin_observer),
+        );
         if let Some((attached, mut readiness)) = queued {
             *response_lease.lock().unwrap() = accepted
                 .durable_streams
@@ -307,77 +314,47 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .await
                 .is_err()
             {
-                detach_durable_attachment(
-                    accepted
-                        .durable_streams
-                        .take()
-                        .filter(|_| !accepted.joined_origin_observer),
-                )
-                .await;
+                cleanup.finish().await;
                 return;
             }
-            if let Err(error) = observation.check_observation() {
-                send_worker_failure(&responses, error).await;
+            let Some(((prepared, streams), held)) = wait_for_queued_readiness(
+                &mut readiness,
+                &mut observation,
+                &mut inbound,
+                &outward,
+                &forwarder_stopped,
+                &responses,
+                accepted.joined_origin_observer,
+                cleanup,
+            )
+            .await
+            else {
                 return;
-            }
-            let mut inbound_open = true;
-            let ready = loop {
-                tokio::select! {
-                    ready = &mut readiness => break ready,
-                    () = observation.wait_for_completion() => {
-                        if let Err(error) = observation.check_observation() {
-                            send_worker_failure(&responses, error).await;
-                            return;
-                        }
-                    },
-                    _ = outward.closed() => {
-                        detach_durable_attachment(accepted.durable_streams.take().filter(|_| !accepted.joined_origin_observer)).await;
-                        return;
-                    },
-                    _ = forwarder_stopped.cancelled() => {
-                        detach_durable_attachment(accepted.durable_streams.take().filter(|_| !accepted.joined_origin_observer)).await;
-                        return;
-                    },
-                    request = inbound.message(), if inbound_open => {
-                        if matches!(request, Ok(None)) && accepted.joined_origin_observer {
-                            inbound_open = false;
-                            continue;
-                        }
-                        if let Ok(Some(_)) = request {
-                            send_protocol_failure(&responses, "stream controls require execution readiness").await;
-                        }
-                        detach_durable_attachment(accepted.durable_streams.take().filter(|_| !accepted.joined_origin_observer)).await;
-                        return;
-                    },
-                }
             };
-            match ready {
-                Ok((prepared, streams)) => {
-                    if let Some(queued) = &accepted.durable_streams
-                        && !accepted.joined_origin_observer
-                        && let Err(error) = queued.ensure_current_attachment().await
-                    {
-                        send_attachment_revocation(&responses, Err(error)).await;
-                        return;
-                    }
-                    accepted.component_revision =
-                        Some(prepared.attempt.invocation.target_component_revision);
-                    accepted.prepared = Some(prepared);
-                    accepted.durable_streams = Some(streams);
-                }
-                Err(error) => {
-                    send_worker_failure(&responses, error).await;
-                    return;
-                }
+            cleanup = held;
+            if let Some(queued) = &accepted.durable_streams
+                && !accepted.joined_origin_observer
+                && let Err(error) = queued.ensure_current_attachment().await
+            {
+                cleanup.observe_error(&error);
+                cleanup.observe(CleanupEvent::AuthorityEnded);
+                send_failed_attachment_check(&responses, error).await;
+                cleanup.finish().await;
+                return;
             }
+            accepted.component_revision =
+                Some(prepared.attempt.invocation.target_component_revision);
+            accepted.prepared = Some(prepared);
+            accepted.durable_streams = Some(streams);
+            // The ready session holds the attachment from here; the queued hold ends
+            // without a detach.
+            cleanup = AttachmentCleanup::new(
+                accepted
+                    .durable_streams
+                    .clone()
+                    .filter(|_| !accepted.joined_origin_observer),
+            );
         }
-        // Observation must never run attachment cleanup, even while the original is current.
-        let mut cleanup = AttachmentCleanup::new(
-            accepted
-                .durable_streams
-                .clone()
-                .filter(|_| !accepted.joined_origin_observer),
-        );
         let native_tool = start.external_tool.is_some();
         *response_lease.lock().unwrap() = accepted
             .durable_streams
@@ -580,8 +557,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             && let Err(error) = streams.ensure_current_attachment().await
         {
             // An unsuccessful authority check is not a transport detach.
+            cleanup.observe_error(&error);
             cleanup.observe(CleanupEvent::AuthorityEnded);
-            send_attachment_revocation(&responses, Err(error)).await;
+            send_failed_attachment_check(&responses, error).await;
             return;
         }
 
@@ -1051,12 +1029,186 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     }
 }
 
+/// Waits until a queued Start is ready to execute, and returns the ready session with the
+/// cleanup of the queued hold. When the wait ends without readiness, this writes the detach only
+/// while the queued attachment is held: a closed transport, a stopped forwarder or an inbound
+/// message writes it. A failed observation or a failed readiness changes the phase by its cause
+/// first, so a failed read writes no detach.
+#[allow(clippy::too_many_arguments)]
+async fn wait_for_queued_readiness<F, R, T, I>(
+    readiness: &mut R,
+    observation: &mut InvocationObservation<F>,
+    inbound: &mut I,
+    outward: &mpsc::Sender<InvocationResponse>,
+    forwarder_stopped: &tokio_util::sync::CancellationToken,
+    responses: &mpsc::Sender<InvocationResponse>,
+    joined_origin_observer: bool,
+    mut cleanup: AttachmentCleanup,
+) -> Option<(T, AttachmentCleanup)>
+where
+    F: Future<Output = Result<AgentInvocationOutput, WorkerExecutorError>> + Unpin,
+    R: Future<Output = Result<T, WorkerExecutorError>> + Unpin,
+    I: futures::Stream<Item = Result<InvocationRequest, tonic::Status>> + Unpin,
+{
+    use futures::StreamExt;
+
+    if let Err(error) = observation.check_observation() {
+        cleanup.observe(CleanupEvent::of_observation_failure(&error));
+        send_worker_failure(responses, error).await;
+        cleanup.finish().await;
+        return None;
+    }
+    let mut inbound_open = true;
+    let ready = loop {
+        tokio::select! {
+            ready = &mut *readiness => break ready,
+            () = observation.wait_for_completion() => {
+                if let Err(error) = observation.check_observation() {
+                    cleanup.observe(CleanupEvent::of_observation_failure(&error));
+                    send_worker_failure(responses, error).await;
+                    cleanup.finish().await;
+                    return None;
+                }
+            },
+            _ = outward.closed() => {
+                cleanup.finish().await;
+                return None;
+            },
+            _ = forwarder_stopped.cancelled() => {
+                cleanup.finish().await;
+                return None;
+            },
+            request = inbound.next(), if inbound_open => {
+                let request = request.transpose();
+                if matches!(request, Ok(None)) && joined_origin_observer {
+                    inbound_open = false;
+                    continue;
+                }
+                if let Ok(Some(_)) = request {
+                    send_protocol_failure(responses, "stream controls require execution readiness").await;
+                }
+                cleanup.finish().await;
+                return None;
+            },
+        }
+    };
+    match ready {
+        Ok(ready) => Some((ready, cleanup)),
+        Err(error) => {
+            // A failed readiness never wrote the detach: a failed read leaves the attachment
+            // unsettled, and any other failure ends this transport's hold.
+            cleanup.observe(CleanupEvent::of_observation_failure(&error));
+            cleanup.observe(CleanupEvent::AuthorityEnded);
+            send_worker_failure(responses, error).await;
+            cleanup.finish().await;
+            None
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use futures::FutureExt;
     use std::future::ready;
     use test_r::test;
+
+    /// The detach that a queued Start writes when it stops before readiness. The tail of the
+    /// oplog after the wait, and the frames that the wait sent.
+    async fn queued_wait_writes(
+        readiness: Option<Result<(), WorkerExecutorError>>,
+        close_transport: bool,
+    ) -> (bool, bool, Vec<InvocationResponse>) {
+        use super::super::tests::routed_stream_session;
+
+        let (streams, _state, _handle) = routed_stream_session(SessionStreamRole::Output).await;
+        let tail = streams.oplog.current_oplog_index().await;
+        let (outward, outward_rx) = mpsc::channel(1);
+        let _outward_rx = (!close_transport).then_some(outward_rx);
+        let mut readiness: futures::future::BoxFuture<'static, Result<(), WorkerExecutorError>> =
+            match readiness {
+                Some(result) => Box::pin(ready(result)),
+                None => Box::pin(pending()),
+            };
+        let mut observation = InvocationObservation::accepted(
+            pending::<Result<AgentInvocationOutput, WorkerExecutorError>>(),
+            None,
+        );
+        let mut inbound = futures::stream::pending::<Result<InvocationRequest, tonic::Status>>();
+        let (responses, mut sent) = mpsc::channel(4);
+        let ready = wait_for_queued_readiness(
+            &mut readiness,
+            &mut observation,
+            &mut inbound,
+            &outward,
+            &tokio_util::sync::CancellationToken::new(),
+            &responses,
+            false,
+            AttachmentCleanup::new(Some(streams.clone())),
+        )
+        .await;
+        drop(responses);
+        let frames = std::iter::from_fn(|| sent.try_recv().ok()).collect();
+        (
+            ready.is_some(),
+            streams.oplog.current_oplog_index().await > tail,
+            frames,
+        )
+    }
+
+    /// A queued Start whose transport closes before readiness writes the detach of its held
+    /// attachment. A readiness that fails with a read error, also inside a failed resume, writes
+    /// no detach: the history did not show what the attachment may write. The frame carries the
+    /// read error.
+    #[test]
+    async fn a_queued_start_detaches_on_a_closed_transport_but_not_after_an_unreadable_readiness() {
+        use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
+        use golem_common::model::AgentId;
+
+        let (ready, detached, frames) = queued_wait_writes(None, true).await;
+        assert!(!ready);
+        assert!(detached, "a closed transport must write the detach");
+        assert!(frames.is_empty(), "{frames:?}");
+
+        let agent_id = AgentId::from_parts(7, 1606);
+        let unreadable = WorkerExecutorError::from(UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::corruption(
+                OplogReadSource::Other("stream session payload"),
+                "invalid data for serialization version 3 at oplog index 9",
+            ),
+        ));
+        let reads = [
+            unreadable.clone(),
+            WorkerExecutorError::failed_to_resume_worker(agent_id, unreadable),
+            WorkerExecutorError::oplog_read_unavailable("primary storage did not answer"),
+        ];
+        let observed = futures::future::join_all(reads.iter().map(|error| async move {
+            (
+                error,
+                queued_wait_writes(Some(Err(error.clone())), false).await,
+            )
+        }))
+        .await;
+        observed.into_iter().for_each(|(error, (ready, detached, frames))| {
+            assert!(!ready);
+            assert!(!detached, "a failed read must write no detach: {error:?}");
+            let [InvocationResponse {
+                response:
+                    Some(invocation_response::Response::Finished(InvocationSessionCompletion {
+                        outcome: Some(invocation_session_completion::Outcome::Failure(failure)),
+                    })),
+            }] = frames.as_slice()
+            else {
+                panic!("expected one worker failure frame for {error:?}, got {frames:?}");
+            };
+            assert_eq!(failure.worker_error, Some(error.clone().into()));
+        });
+
+        let (ready, detached, _) = queued_wait_writes(Some(Ok(())), false).await;
+        assert!(ready);
+        assert!(!detached, "the ready session holds the attachment");
+    }
 
     #[test]
     fn joined_observer_reports_read_errors_without_repolling_an_observed_invocation() {
@@ -1111,21 +1263,22 @@ mod tests {
         use golem_common::model::{AgentId, OplogIndex};
 
         let (responses, mut rx) = mpsc::channel(1);
-        send_attachment_revocation(
-            &responses,
-            Err(SessionError::from(
-                "StaleEpoch: durable attachment has been fenced",
-            )),
-        )
-        .await;
-        assert!(matches!(
-            rx.try_recv().unwrap().response,
-            Some(invocation_response::Response::AttachmentRevoked(_))
-        ));
-
         let agent_id = AgentId::from_parts(7, 7);
         [
+            SessionError::from("StaleEpoch: durable attachment has been fenced"),
             SessionError::from("durable session has no attachment authority"),
+        ]
+        .into_iter()
+        .for_each(|error| {
+            send_failed_attachment_check(&responses, error)
+                .now_or_never()
+                .unwrap();
+            assert!(matches!(
+                rx.try_recv().unwrap().response,
+                Some(invocation_response::Response::AttachmentRevoked(_))
+            ));
+        });
+        [
             SessionError::Unreadable(UnreadableOplog::new(
                 &agent_id,
                 OplogReadError::Gap {
@@ -1141,13 +1294,13 @@ mod tests {
         ]
         .into_iter()
         .for_each(|error| {
-            let expected = (!matches!(&error, SessionError::Failed(_))).then(|| {
+            let expected = Some(
                 error
                     .clone()
                     .into_worker_executor_error(WorkerExecutorError::runtime)
-                    .into()
-            });
-            send_attachment_revocation(&responses, Err(error))
+                    .into(),
+            );
+            send_failed_attachment_check(&responses, error)
                 .now_or_never()
                 .unwrap();
             let Some(invocation_response::Response::Finished(InvocationSessionCompletion {

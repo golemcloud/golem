@@ -2002,9 +2002,11 @@ async fn fork_cut_keeps_the_index_and_class_of_an_unreadable_lineage_record() {
     let identity = identity();
     let owner = OwnedAgentId::new(identity.environment_id, &identity.agent_id);
     let oplog = TestOplog::default();
-    for size in 1..=3 {
-        oplog.add(OplogEntry::grow_memory(size)).await.unwrap();
-    }
+    let appends = &oplog;
+    futures::StreamExt::for_each(futures::stream::iter(1..=3), |size| async move {
+        appends.add(OplogEntry::grow_memory(size)).await.unwrap();
+    })
+    .await;
     let unreadable_index = oplog
         .add(OplogEntry::StreamSession {
             timestamp: Timestamp::now_utc(),

@@ -892,7 +892,9 @@ async fn invocation_index_metadata(
     service: &DefaultWorkerService,
     owned_agent_id: &OwnedAgentId,
 ) -> InvocationResultIndexMetadata {
-    let value: Option<Result<InvocationResultIndexMetadata, String>> = service
+    let value: Option<
+        Result<InvocationResultIndexMetadata, golem_common::serialization::DecodeError>,
+    > = service
         .key_value_storage
         .with_entity("test", "read_invocation_result_index", "metadata")
         .get_attempt_deserialize(
@@ -1790,7 +1792,7 @@ async fn stale_reset_cannot_delete_independent_newer_progress() {
     })
     .unwrap();
     malformed_metadata.pop();
-    assert!(deserialize::<InvocationResultIndexMetadata>(&malformed_metadata).is_err());
+    assert!(decode::<InvocationResultIndexMetadata>(&malformed_metadata).is_err());
     inner
         .set_many(
             "test",

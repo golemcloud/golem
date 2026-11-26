@@ -16,7 +16,7 @@ use crate::services::oplog::OplogPayloadDownloadError;
 use crate::services::oplog::multilayer::OplogArchiveError;
 use golem_common::model::AgentId;
 use golem_common::model::oplog::{OplogEntry, OplogIndex};
-use golem_common::serialization::{deserialize, serialize};
+use golem_common::serialization::{decode, serialize};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::error::Error;
@@ -162,6 +162,20 @@ impl UnreadableOplog {
             error,
         }
     }
+
+    /// The payload of the entry at `index` in the oplog of `agent_id`, which `source` names,
+    /// did not download. The error keeps whether a later read can pass.
+    pub fn of_payload(
+        agent_id: &AgentId,
+        source: &'static str,
+        index: OplogIndex,
+        error: OplogPayloadDownloadError,
+    ) -> Self {
+        Self::new(
+            agent_id,
+            OplogReadError::of_payload(OplogReadSource::Other(source), index, error),
+        )
+    }
 }
 
 impl Display for UnreadableOplog {
@@ -277,7 +291,7 @@ pub fn verify_persisted_entries(
             format!("failed to encode transferred oplog entries: {error}"),
         )
     })?;
-    let expected_entries: Vec<OplogEntry> = deserialize(&encoded).map_err(|error| {
+    let expected_entries: Vec<OplogEntry> = decode(&encoded).map_err(|error| {
         OplogReadError::corruption(
             source,
             format!("failed to decode transferred oplog entries: {error}"),

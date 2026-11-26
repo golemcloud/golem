@@ -204,8 +204,7 @@ use crate::services::linear_memory::{
     LinearMemoryTracker, SHARED_LINEAR_MEMORY_ERROR, UnsharedMemoryGrowth,
 };
 use crate::services::oplog::{
-    CommitLevel, Oplog, OplogError, OplogOps, OplogPayloadDownloadError, OplogService,
-    UnreadableOplog,
+    CommitLevel, Oplog, OplogError, OplogOps, OplogService, UnreadableOplog,
 };
 use crate::services::promise::PromiseService;
 use crate::services::quota::QuotaService;

@@ -257,11 +257,10 @@ impl SchedulerServiceDefault {
                         );
                     }
                 }
-                Err(SchedulerStorageError::Other(msg)) => {
-                    panic!("scheduler storage operation '{op_name}' failed for {target}: {msg}");
-                }
-                // Only `claim_due` decodes stored actions, and it does not run here.
-                Err(error @ SchedulerStorageError::Unreadable(_)) => {
+                Err(
+                    error
+                    @ (SchedulerStorageError::Other(_) | SchedulerStorageError::Unreadable(_)),
+                ) => {
                     panic!("scheduler storage operation '{op_name}' failed for {target}: {error}");
                 }
             }
@@ -280,7 +279,7 @@ impl SchedulerServiceDefault {
                     .map_err(|err| err.to_string())?;
 
                 for _ in 0..self.max_batches_per_tick {
-                    let claimed = self
+                    let (claimed, claimed_count) = match self
                         .scheduler_storage
                         .claim_due(
                             Utc::now(),
@@ -289,9 +288,27 @@ impl SchedulerServiceDefault {
                             self.lease_ttl,
                         )
                         .instrument(debug_span!("scheduler_storage_claim_due"))
-                        .await?;
-
-                    let claimed_count = claimed.len();
+                        .await
+                    {
+                        Ok(claimed) => {
+                            let count = claimed.len();
+                            (claimed, count)
+                        }
+                        // A row that does not decode stays leased and stored. It is neither
+                        // delivered nor acknowledged, and the healthy claims run as usual.
+                        Err(SchedulerStorageError::Unreadable(claims)) => {
+                            claims.unreadable.iter().for_each(|unreadable| {
+                                error!(
+                                    schedule_id = %unreadable.schedule_id,
+                                    error = %unreadable.error,
+                                    "Claimed scheduled action does not decode"
+                                )
+                            });
+                            let count = claims.selected();
+                            (claims.claimed, count)
+                        }
+                        Err(error) => return Err(error.into()),
+                    };
                     crate::metrics::scheduler::set_scheduler_queue_depth(claimed_count);
                     if claimed.is_empty() {
                         break;

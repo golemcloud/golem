@@ -35,10 +35,11 @@ use std::task::{Context, Poll, Waker};
 use test_r::test;
 
 /// A payload of an application snapshot that does not download skips a periodic record for
-/// the start attempt. A snapshot-assisted attempt whose payload store fails retries with the
-/// same record through the recovery path: the outcome table writes no failed update and
-/// rejects nothing for it. A snapshot-assisted attempt whose payload is missing or does not
-/// decode fails the update as a lost record and rejects the record.
+/// the start attempt, whatever the read error is. A snapshot-assisted attempt whose payload store
+/// fails retries with the same record through the recovery path that the read caused: the
+/// outcome table writes no failed update and rejects nothing for it. A snapshot-assisted attempt
+/// whose payload is missing or does not decode fails the update as a lost record and rejects the
+/// record.
 #[test]
 fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_store_failed() {
     use golem_common::model::{
@@ -69,50 +70,42 @@ fn a_payload_that_does_not_download_retries_an_assisted_attempt_only_when_its_st
             false,
         )
     };
-    let unavailable = payload_download_failure(
-        SnapshotReplayPurpose::AssistedUpdate,
-        false,
-        "blob store unavailable".to_string(),
-    );
-    let lost = payload_download_failure(
-        SnapshotReplayPurpose::AssistedUpdate,
-        true,
-        "referenced oplog payload is missing".to_string(),
-    );
+    use crate::services::oplog::OplogPayloadDownloadError;
+    let unreadable = |error: OplogPayloadDownloadError| {
+        UnreadableOplog::of_payload(
+            &agent_id,
+            "application snapshot payload",
+            OplogIndex::from_u64(7),
+            error,
+        )
+    };
+    let store_down = || {
+        unreadable(OplogPayloadDownloadError::Backend(anyhow::anyhow!(
+            "blob store unavailable"
+        )))
+    };
+    let missing = || {
+        unreadable(OplogPayloadDownloadError::Corrupt(anyhow::anyhow!(
+            "referenced oplog payload is missing"
+        )))
+    };
+    let unavailable = payload_download_failure(SnapshotReplayPurpose::AssistedUpdate, store_down());
+    let lost = payload_download_failure(SnapshotReplayPurpose::AssistedUpdate, missing());
 
-    [false, true].iter().for_each(|lost| {
-        assert!(matches!(
-            payload_download_failure(
-                SnapshotReplayPurpose::PeriodicRecovery,
-                *lost,
-                "down".to_string()
-            ),
-            SnapshotRecoveryResult::Retry(RetryDecision::Immediate)
-        ));
-        assert!(matches!(
-            payload_download_failure(SnapshotReplayPurpose::None, *lost, "down".to_string()),
-            SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. }, _)
-        ));
-    });
-    assert!(matches!(
-        payload_download_failure(
-            SnapshotReplayPurpose::AutomaticUpdate,
-            false,
-            "blob store unavailable".to_string()
-        ),
-        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. }, _)
-    ));
-    assert!(matches!(
-        payload_download_failure(
-            SnapshotReplayPurpose::AutomaticUpdate,
-            true,
-            "referenced oplog payload is missing".to_string()
-        ),
-        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::Runtime { .. }, _)
-    ));
+    assert!([store_down(), missing()].into_iter().all(|read| matches!(
+        payload_download_failure(SnapshotReplayPurpose::PeriodicRecovery, read),
+        SnapshotRecoveryResult::Retry(RetryDecision::Immediate)
+    )));
     assert!(matches!(
         unavailable,
-        SnapshotRecoveryResult::Unavailable(WorkerExecutorError::RecoveryRequired { .. }, _)
+        SnapshotRecoveryResult::Unavailable(
+            WorkerExecutorError::RecoveryRequired {
+                cause:
+                    golem_service_base::error::worker_executor::RecoveryCause::OplogReadUnavailable,
+                ..
+            },
+            _
+        )
     ));
     assert!(matches!(
         decide(&unavailable),

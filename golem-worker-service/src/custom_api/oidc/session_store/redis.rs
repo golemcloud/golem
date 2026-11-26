@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{SessionStore, SessionStoreError, credential_digest, records};
+use super::{SessionStore, SessionStoreError, credential_digest, decode_record, records};
 use crate::custom_api::model::OidcSession;
 use crate::custom_api::oidc::model::{
     AuthorizationCode, BearerToken, McpPendingAuth, McpProxyCodeEntry, PendingOidcLogin,
@@ -136,8 +136,7 @@ impl SessionStore for RedisSessionStore {
 
         if let Some(bytes) = maybe_bytes {
             let record: records::PendingOidcLoginRecord =
-                golem_common::serialization::deserialize(&bytes)
-                    .map_err(|e| anyhow!("PendingOidcLogin deserialization error: {e}"))?;
+                decode_record(&bytes, "PendingOidcLogin")?;
             Ok(Some(PendingOidcLogin::from(record)))
         } else {
             Ok(None)
@@ -290,9 +289,7 @@ impl SessionStore for RedisSessionStore {
             .await?;
 
         if let Some(bytes) = maybe_bytes {
-            let record: records::OidcSessionRecord =
-                golem_common::serialization::deserialize(&bytes)
-                    .map_err(|e| anyhow!("OidcSession deserialization error: {e}"))?;
+            let record: records::OidcSessionRecord = decode_record(&bytes, "OidcSession")?;
             let session = OidcSession::try_from(record)?;
 
             Ok(Some(session))
@@ -337,9 +334,7 @@ impl SessionStore for RedisSessionStore {
             .await?;
 
         if let Some(bytes) = maybe_bytes {
-            let record: records::McpPendingAuthRecord =
-                golem_common::serialization::deserialize(&bytes)
-                    .map_err(|e| anyhow!("McpPendingAuth deserialization error: {e}"))?;
+            let record: records::McpPendingAuthRecord = decode_record(&bytes, "McpPendingAuth")?;
 
             let _: i32 = self
                 .redis
@@ -389,8 +384,7 @@ impl SessionStore for RedisSessionStore {
 
         if let Some(bytes) = maybe_bytes {
             let record: records::McpProxyCodeEntryRecord =
-                golem_common::serialization::deserialize(&bytes)
-                    .map_err(|e| anyhow!("McpProxyCodeEntry deserialization error: {e}"))?;
+                decode_record(&bytes, "McpProxyCodeEntry")?;
 
             let _: i32 = self
                 .redis

@@ -18,7 +18,7 @@ use uuid::Uuid;
 use golem_common::model::IdempotencyKey;
 use golem_common::model::InvocationId;
 
-use crate::worker::state_actor::InvocationAppendOutcome;
+use crate::worker::state_actor::{InvocationAppendOutcome, StoredAppend};
 use crate::worker::*;
 
 #[derive(Clone, Debug)]
@@ -127,9 +127,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     ) -> Result<(), WorkerExecutorError> {
         match &status.status {
             AgentStatus::Failed => {
+                // An unreadable history gives its read error, not a prior failure.
                 let error_and_retry_count =
                     Ctx::get_last_error_and_retry_count(deps, owned_agent_id, agent_mode, status)
-                        .await;
+                        .await?;
                 if let Some(last_error) = error_and_retry_count {
                     if status.last_error_kind == Some(OplogErrorKind::Recovery) {
                         Err(WorkerExecutorError::failed_to_resume_worker(
@@ -1312,7 +1313,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             // A write refusal aborts construction. If the constructor was stored but cannot be
             // observed, abort construction with the read error as well. The next load reconstructs
             // from the oplog rather than publishing this worker with a detached status.
-            if let InvocationAppendOutcome::StoredButUnreadable(unreadable) = worker
+            if let InvocationAppendOutcome::Appended(StoredAppend::Unreported(unreadable)) = worker
                 .state_actor
                 .append_invocation_if_version(
                     entry,

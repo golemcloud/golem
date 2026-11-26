@@ -1114,8 +1114,9 @@ fn serialize_card_ids(card_ids: &[Uuid]) -> RepoResult<Option<Vec<u8>>> {
 
 fn deserialize_card_ids(bytes: Option<Vec<u8>>) -> RepoResult<Vec<Uuid>> {
     match bytes {
-        Some(bytes) => serialization::deserialize(&bytes)
-            .map_err(|e| RepoError::InternalError(anyhow::anyhow!(e))),
+        Some(bytes) => {
+            serialization::decode(&bytes).map_err(|e| RepoError::InternalError(anyhow::anyhow!(e)))
+        }
         None => Ok(Vec::new()),
     }
 }

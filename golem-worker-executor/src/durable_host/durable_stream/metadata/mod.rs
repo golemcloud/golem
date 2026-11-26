@@ -28,6 +28,7 @@ pub(super) use indexed::read_terminal_event;
 pub(crate) use projection::ForkControlProjection;
 pub(crate) use projection::{
     ProducerMetadataProjection, ProjectionError, project_producer_metadata, read_projection,
+    unanswered_index_read,
 };
 
 const ATTACHMENT_PAGE_SIZE: u64 = 128;

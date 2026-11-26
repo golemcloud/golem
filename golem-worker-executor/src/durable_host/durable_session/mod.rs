@@ -110,6 +110,9 @@ mod input_receive;
 mod output;
 mod output_replay;
 
+#[cfg(test)]
+pub(crate) use output_replay::undecodable_output_value;
+
 pub(crate) use forwarding::strip_typed_streams;
 use forwarding::{
     collect_stream_paths, forwarded_durable_input_reference, stream_element_schema,

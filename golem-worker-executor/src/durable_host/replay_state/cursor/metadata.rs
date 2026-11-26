@@ -36,13 +36,7 @@ pub(super) fn unreadable_history_payload(
     index: OplogIndex,
     error: crate::services::oplog::OplogPayloadDownloadError,
 ) -> WorkerExecutorError {
-    use crate::services::oplog::{OplogReadError, OplogReadSource};
-
-    UnreadableOplog::new(
-        agent_id,
-        OplogReadError::of_payload(OplogReadSource::Other(source), index, error),
-    )
-    .into()
+    UnreadableOplog::of_payload(agent_id, source, index, error).into()
 }
 
 impl ReplayState {
@@ -1014,9 +1008,10 @@ pub(super) mod read_error_tests {
         oplog: &Arc<dyn Oplog>,
         entries: Vec<OplogEntry>,
     ) {
-        for entry in entries {
+        futures::StreamExt::for_each(futures::stream::iter(entries), |entry| async move {
             oplog.add(entry).await.unwrap();
-        }
+        })
+        .await;
         oplog.commit(CommitLevel::Always).await.unwrap();
     }
 
@@ -1027,7 +1022,10 @@ pub(super) mod read_error_tests {
         owned_agent_id: &OwnedAgentId,
         index: u64,
     ) {
-        let WorkerExecutorError::OplogFailed { agent_id, details } = error else {
+        let WorkerExecutorError::OplogFailed {
+            agent_id, details, ..
+        } = error
+        else {
             panic!("expected an unreadable oplog, got {error:?}");
         };
         assert_eq!(*agent_id, owned_agent_id.agent_id);

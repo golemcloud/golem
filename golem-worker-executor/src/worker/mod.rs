@@ -437,6 +437,8 @@ pub struct DurableStreamingInvocationAcceptance {
 /// Durable state returned after resuming or taking over a streaming invocation.
 pub struct DurableStreamingResumeAcceptance {
     pub prepared: StreamSessionPreparedRecord,
+    /// The oplog index of `prepared`.
+    pub prepared_index: OplogIndex,
     pub mappings: Vec<StreamSessionMappingRecord>,
     pub streams: StreamSession,
     pub epoch: u64,

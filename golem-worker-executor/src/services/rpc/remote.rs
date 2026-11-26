@@ -630,7 +630,7 @@ fn unread_history_in(
 ) -> Option<WorkerExecutorError> {
     WorkerExecutorError::try_from(worker_error?.clone())
         .ok()
-        .filter(super::is_unread_history)
+        .filter(crate::worker::InvocationObservationFailure::is_stored_read)
 }
 
 /// A rejection of an awaited call whose worker error is a failed oplog read of the target is

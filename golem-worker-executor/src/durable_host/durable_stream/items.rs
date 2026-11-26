@@ -20,7 +20,6 @@ use super::publication::{STREAM_SEGMENT_MAX_EVENTS, STREAM_SEGMENT_TARGET_BYTES}
 use super::registration::{registration_matches, registration_record};
 use super::terminals::fenced_by_terminal;
 use super::*;
-use crate::services::oplog::{OplogReadError, OplogReadSource};
 
 /// Latest committed position and terminal state of a durable stream.
 pub struct StreamHead {
@@ -240,13 +239,11 @@ impl DurableStreamStore {
             .download_payload_classified(payload)
             .await
             .map_err(|error| {
-                UnreadableOplog::new(
+                UnreadableOplog::of_payload(
                     &self.producer,
-                    OplogReadError::of_payload(
-                        OplogReadSource::Other("stream history payload"),
-                        oplog_index,
-                        error,
-                    ),
+                    "stream history payload",
+                    oplog_index,
+                    error,
                 )
             })
     }

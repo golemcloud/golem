@@ -177,6 +177,9 @@ message RuntimeError {
   // Set only when a failed oplog read caused the error. A failed read is not an outcome of the
   // invocation.
   OplogReadFailure oplog_read = 2;
+  // Set only when an archive layer did not store the entries of the oplog of this agent. The
+  // agent stops for good. This is not a failed read, and it is not an outcome of the invocation.
+  AgentId oplog_archive_write = 3;
 }
 
 // An oplog read that failed.

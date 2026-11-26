@@ -997,6 +997,7 @@ mod tests {
         let WorkerExecutorError::OplogFailed {
             agent_id: failed,
             details,
+            ..
         } = &error
         else {
             panic!("expected an unreadable oplog, got {error:?}");

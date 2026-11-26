@@ -47,10 +47,10 @@ impl PrimaryOplog {
     ) -> Self {
         let account_id_label = account_id.to_string();
         let environment_id_label = owned_agent_id.environment_id().to_string();
-        let latch = Arc::new(match fence {
-            Some(fence) => std::sync::OnceLock::from(WriteLatch::Fenced(fence)),
-            None => std::sync::OnceLock::new(),
-        });
+        let latch = Arc::new(std::sync::OnceLock::new());
+        if let Some(fence) = fence {
+            close_latch(&latch, LatchEvent::Opened(fence));
+        }
         let auto_commit_listener = AutoCommitListener::default();
         let mut state = PrimaryOplogState {
             shard_epoch,
@@ -270,8 +270,8 @@ impl PrimaryOplog {
                         // The job has no error to reply with. A fence and an unconfirmed append
                         // are latched on the state, where `wait_for_replicas` reads them after this
                         // job, so the flush is reported with the typed error rather than lost;
-                        // every subsequent write fails on the latch without asking the storage
-                        // again.
+                        // every later add, commit and flush fails on the latch without asking the
+                        // storage again.
                         match state.auto_commit().await {
                             Ok(()) | Err(OplogError::Fenced(_) | OplogError::Unreadable(_)) => {}
                             Err(error) => panic!("oplog write: {error}"),
@@ -764,5 +764,9 @@ impl Oplog for PrimaryOplog {
 
     fn fence(&self) -> Option<OplogFence> {
         self.latch.get().and_then(WriteLatch::fence).cloned()
+    }
+
+    fn unconfirmed_append(&self) -> Option<UnreadableOplog> {
+        self.latch.get().and_then(WriteLatch::unconfirmed).cloned()
     }
 }

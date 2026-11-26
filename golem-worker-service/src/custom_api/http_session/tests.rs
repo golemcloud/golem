@@ -1158,63 +1158,117 @@ fn refused_with_runtime_error(
         error: Some(worker_execution_error::Error::RuntimeError(RuntimeError {
             details: "oplog entry 43 has unknown serialization version 255".into(),
             oplog_read: oplog_read.map(|kind| OplogReadFailure { kind: Some(kind) }),
+            oplog_archive_write: None,
         })),
     }))
 }
 
-/// A Resume refused because the oplog did not read, for good or for a time, is not an outcome:
-/// the session does not cancel the invocation or interrupt the agent.
-#[test]
-#[test_timeout("10s")]
-async fn resume_refused_on_an_unreadable_oplog_neither_cancels_nor_interrupts() {
-    use golem_api_grpc::proto::golem::worker::v1::{OplogReadUnavailable, oplog_read_failure};
-    for kind in [
-        oplog_read_failure::Kind::Failed(proto_agent()),
-        oplog_read_failure::Kind::Unavailable(OplogReadUnavailable {}),
-    ] {
-        let (_session, mut h) =
-            session_with_refused_resume(refused_with_runtime_error(Some(kind))).await;
-        assert!(
-            timeout(Duration::from_millis(150), h.cleanups.recv())
-                .await
-                .is_err(),
-            "{kind:?} must not clean up"
-        );
+/// The cleanups that the session made, read after the session task ended. The task owns the
+/// last other references to the transport, so the cleanup channel closes only after the task
+/// passed its only cleanup decision. The session, the calls and the response senders stay open
+/// meanwhile, so nothing but the refusal ends the session.
+async fn cleanups_after_the_session_ended(
+    session: HttpSession,
+    h: Harness,
+) -> Vec<(OwnedAgentId, InvocationId)> {
+    let Harness {
+        transport,
+        calls,
+        cleanups,
+        response_txs,
+    } = h;
+    drop(transport);
+    let made = timeout(
+        Duration::from_secs(5),
+        tokio_stream::wrappers::UnboundedReceiverStream::new(cleanups).collect::<Vec<_>>(),
+    )
+    .await
+    .expect("the session task ends after a refused Resume");
+    drop((session, calls, response_txs));
+    made
+}
+
+fn resume_failed(
+    reason: golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError,
+) -> InvocationResponse {
+    use golem_api_grpc::proto::golem::worker::v1::{
+        FailedToResumeAgent, WorkerExecutionError, worker_execution_error,
+    };
+    rejected_resume(Some(WorkerExecutionError {
+        error: Some(worker_execution_error::Error::FailedToResumeAgent(
+            Box::new(FailedToResumeAgent {
+                agent_id: Some(proto_agent()),
+                reason: Some(Box::new(reason)),
+            }),
+        )),
+    }))
+}
+
+fn read_failure(
+    kind: golem_api_grpc::proto::golem::worker::v1::oplog_read_failure::Kind,
+) -> golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError {
+    use golem_api_grpc::proto::golem::worker::v1::{
+        OplogReadFailure, RuntimeError, WorkerExecutionError, worker_execution_error,
+    };
+    WorkerExecutionError {
+        error: Some(worker_execution_error::Error::RuntimeError(RuntimeError {
+            details: "oplog entry 43 has unknown serialization version 255".into(),
+            oplog_read: Some(OplogReadFailure { kind: Some(kind) }),
+            oplog_archive_write: None,
+        })),
     }
 }
 
-/// A Resume refused with a runtime error that no oplog read caused, for example an incomplete
-/// output, keeps the right to clean up: the session cleans up once.
+/// A Resume refused because the oplog did not read, for good or for a time, also inside a
+/// failed resume, is not an outcome: the session ends without a cancel or an interrupt.
 #[test]
-#[test_timeout("10s")]
-async fn resume_refused_on_another_runtime_error_still_cleans_up_exactly_once() {
-    let (_session, mut h) = session_with_refused_resume(refused_with_runtime_error(None)).await;
-    let (agent, _) = timeout(Duration::from_secs(1), h.cleanups.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(agent, owned_agent());
-    assert!(
-        timeout(Duration::from_millis(50), h.cleanups.recv())
-            .await
-            .is_err()
-    );
+#[test_timeout("20s")]
+async fn resume_refused_on_an_unreadable_oplog_neither_cancels_nor_interrupts() {
+    use golem_api_grpc::proto::golem::worker::v1::{OplogReadUnavailable, oplog_read_failure};
+    let failed = || read_failure(oplog_read_failure::Kind::Failed(proto_agent()));
+    let unavailable = || {
+        read_failure(oplog_read_failure::Kind::Unavailable(
+            OplogReadUnavailable {},
+        ))
+    };
+    let refusals = [
+        rejected_resume(Some(failed())),
+        rejected_resume(Some(unavailable())),
+        resume_failed(failed()),
+        resume_failed(unavailable()),
+    ];
+    futures::stream::iter(refusals)
+        .for_each(|refusal| async move {
+            let described = format!("{refusal:?}");
+            let (session, h) = session_with_refused_resume(refusal).await;
+            assert_eq!(
+                cleanups_after_the_session_ended(session, h).await,
+                Vec::new(),
+                "{described} must not clean up"
+            );
+        })
+        .await;
 }
 
+/// A Resume refused with a runtime error that no oplog read caused, for example an incomplete
+/// output, or without a worker error, keeps the right to clean up: the session cleans up once.
 #[test]
-#[test_timeout("10s")]
-async fn resume_refused_without_a_worker_error_still_cleans_up_exactly_once() {
-    let (_session, mut h) = session_with_refused_resume(rejected_resume(None)).await;
-    let (agent, _) = timeout(Duration::from_secs(1), h.cleanups.recv())
-        .await
-        .unwrap()
-        .unwrap();
-    assert_eq!(agent, owned_agent());
-    assert!(
-        timeout(Duration::from_millis(50), h.cleanups.recv())
-            .await
-            .is_err()
-    );
+#[test_timeout("20s")]
+async fn resume_refused_without_a_failed_read_still_cleans_up_exactly_once() {
+    let refusals = [
+        refused_with_runtime_error(None),
+        rejected_resume(None),
+        resume_failed(golem_api_grpc::proto::golem::worker::v1::WorkerExecutionError::default()),
+    ];
+    futures::stream::iter(refusals)
+        .for_each(|refusal| async move {
+            let described = format!("{refusal:?}");
+            let (session, h) = session_with_refused_resume(refusal).await;
+            let made = cleanups_after_the_session_ended(session, h).await;
+            assert_eq!(made.len(), 1, "{described}");
+            assert_eq!(made[0].0, owned_agent(), "{described}");
+        })
+        .await;
 }
 
 #[test]

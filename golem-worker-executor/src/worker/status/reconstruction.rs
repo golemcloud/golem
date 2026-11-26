@@ -600,13 +600,11 @@ where
                 .download_payload(owned_agent_id, agent_mode, record.clone())
                 .await
                 .map_err(|error| {
-                    UnreadableOplog::new(
+                    UnreadableOplog::of_payload(
                         &owned_agent_id.agent_id,
-                        OplogReadError::of_payload(
-                            OplogReadSource::Other("stream session payload"),
-                            *index,
-                            error,
-                        ),
+                        "stream session payload",
+                        *index,
+                        error,
                     )
                 })?;
             *record = OplogPayload::Inline(Box::new(decoded));

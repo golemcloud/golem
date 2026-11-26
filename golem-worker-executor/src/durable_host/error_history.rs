@@ -30,7 +30,8 @@ fn backward_scan_window_start(end: OplogIndex) -> OplogIndex {
 }
 
 /// Finds the most recent error of the current invocation (if any) together with its retry point and
-/// the surrounding stderr logs.
+/// the surrounding stderr logs. A read of the oplog that fails gives its read error: an unreadable
+/// history is not a recorded error and not the absence of one.
 ///
 /// A possible future optimization is to maintain the relevant indices (last error, last invocation
 /// start) directly in the [`AgentStatusRecord`] so that no backward oplog scan is needed at all.
@@ -39,7 +40,7 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
     owned_agent_id: &OwnedAgentId,
     agent_mode: AgentMode,
     latest_worker_status: &AgentStatusRecord,
-) -> Option<LastError> {
+) -> Result<Option<LastError>, UnreadableOplog> {
     // Short-circuit: there is nothing to report unless the worker is currently in an error-bearing
     // state. `last_error` otherwise scans backward to the start of the current invocation, which is
     // unbounded for long-running invocations. A failed/retrying worker always has its error near the
@@ -50,19 +51,15 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
         AgentStatus::Failed | AgentStatus::Retrying
     ) && latest_worker_status.current_retry_state.is_empty()
     {
-        return None;
+        return Ok(None);
     }
 
-    let last_index = match this
+    let last_index = this
         .oplog_service()
         .get_last_index(owned_agent_id, agent_mode)
-        .await
-    {
-        Ok(last_index) => last_index,
-        Err(error) => return Some(unreadable_last_error(error)),
-    };
+        .await?;
     if last_index == OplogIndex::NONE {
-        return None;
+        return Ok(None);
     }
 
     let mut first_error = None;
@@ -74,7 +71,7 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
     let mut window_end = last_index;
     'scan: loop {
         let window_start = backward_scan_window_start(window_end);
-        let entries = match this
+        let entries = this
             .oplog_service()
             .read_exact(
                 owned_agent_id,
@@ -82,11 +79,7 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
                 window_start,
                 window_end.as_u64() - window_start.as_u64() + 1,
             )
-            .await
-        {
-            Ok(entries) => entries,
-            Err(error) => return Some(unreadable_last_error(error)),
-        };
+            .await?;
 
         let mut idx = window_end;
         loop {
@@ -150,23 +143,14 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
         window_end = window_start.previous();
     }
 
-    match first_error {
+    Ok(match first_error {
         Some(error) => Some(LastError {
             error,
             stderr: recover_stderr_logs(this, owned_agent_id, agent_mode, last_error_index).await,
             retry_from: first_retry_from,
         }),
         None => None,
-    }
-}
-
-/// The last error of an agent whose oplog does not read back to it: the read failure itself.
-fn unreadable_last_error(error: UnreadableOplog) -> LastError {
-    LastError {
-        error: AgentError::InternalError(WorkerExecutorError::from(error).to_string()),
-        stderr: String::new(),
-        retry_from: OplogIndex::NONE,
-    }
+    })
 }
 
 /// Reads back oplog entries starting from `last_oplog_idx` and collects stderr logs, with a maximum

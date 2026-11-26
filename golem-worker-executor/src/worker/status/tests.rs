@@ -1302,6 +1302,7 @@ async fn last_error_gives_the_error_and_the_stderr_of_the_failed_invocation() {
         &status,
     )
     .await
+    .expect("the oplog reads")
     .expect("a failed agent has a last error");
 
     assert_eq!(
@@ -5746,7 +5747,7 @@ async fn a_rebuild_with_regions_covering_the_empty_baseline_is_corrupt() {
         let error = WorkerExecutorError::from(OplogError::from(refusal));
         assert!(matches!(
             error,
-            WorkerExecutorError::OplogFailed { agent_id, details }
+            WorkerExecutorError::OplogFailed { agent_id, details, .. }
                 if agent_id == test_case.owned_agent_id.agent_id
                     && details.contains("empty status baseline")
         ));
@@ -7126,7 +7127,12 @@ async fn cold_recompute_classifies_external_stream_session_payload_failures_and_
             (WorkerExecutorError::RecoveryRequired { details, .. }, "unavailable") => {
                 assert!(details.contains("injected payload outage"), "{details}");
             }
-            (WorkerExecutorError::OplogFailed { agent_id, details }, "corrupt" | "missing") => {
+            (
+                WorkerExecutorError::OplogFailed {
+                    agent_id, details, ..
+                },
+                "corrupt" | "missing",
+            ) => {
                 assert_eq!(agent_id, &test_case.owned_agent_id.agent_id);
                 assert!(details.contains("stream session payload"), "{details}");
                 assert!(details.contains("oplog index 2"), "{details}");

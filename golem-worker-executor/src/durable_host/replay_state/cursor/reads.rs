@@ -602,13 +602,10 @@ impl ReplayState {
         index: OplogIndex,
         error: crate::services::oplog::OplogPayloadDownloadError,
     ) -> WorkerExecutorError {
-        use crate::services::oplog::{OplogReadError, OplogReadSource, UnreadableOplog};
+        use crate::services::oplog::UnreadableOplog;
 
-        UnreadableOplog::new(
-            &self.cursor.owned_agent_id.agent_id,
-            OplogReadError::of_payload(OplogReadSource::Other(source), index, error),
-        )
-        .into()
+        UnreadableOplog::of_payload(&self.cursor.owned_agent_id.agent_id, source, index, error)
+            .into()
     }
 
     /// Reports whether the replay-visible owner oplog contains a terminal for `start_index`.

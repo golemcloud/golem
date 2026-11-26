@@ -32,7 +32,8 @@ use crate::preview2::golem_api_1_x::oplog::HostSearchOplog;
 use crate::preview2::golem_api_1_x::oplog::OplogReadError;
 use crate::preview2::golem_api_1_x::oplog::SearchOplog;
 use crate::services::HasOplogService;
-use crate::services::rpc::{is_unread_history, observation_recovery};
+use crate::services::rpc::observation_recovery;
+use crate::worker::InvocationObservationFailure;
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
 use golem_common::base_model::caller::ClaimVisibility;
@@ -221,7 +222,7 @@ fn stored_read<T>(
 ) -> Result<Result<T, String>, WorkerExecutorError> {
     match result {
         Ok(value) => Ok(Ok(value)),
-        Err(error) if is_unread_history(&error) => Err(error),
+        Err(error) if InvocationObservationFailure::is_stored_read(&error) => Err(error),
         Err(error) => Ok(Err(error.to_string())),
     }
 }
@@ -1007,7 +1008,10 @@ mod tests {
             decode_error.into(),
         ))));
 
-        let Err(WorkerExecutorError::OplogFailed { agent_id, details }) = &result else {
+        let Err(WorkerExecutorError::OplogFailed {
+            agent_id, details, ..
+        }) = &result
+        else {
             panic!("expected an unreadable oplog, got {result:?}");
         };
         assert_eq!(*agent_id, AgentId::from_parts(9, 2));
@@ -1029,7 +1033,7 @@ mod tests {
         assert!(
             matches!(
                 &result,
-                Err(error @ WorkerExecutorError::RecoveryRequired { .. }) if is_unread_history(error)
+                Err(error @ WorkerExecutorError::RecoveryRequired { .. }) if InvocationObservationFailure::is_stored_read(error)
             ),
             "{result:?}"
         );

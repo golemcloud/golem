@@ -13,9 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use crate::services::oplog::{
-    OplogPayloadDownloadError, OplogReadError, OplogReadSource, UnreadableOplog,
-};
+use crate::services::oplog::{OplogPayloadDownloadError, UnreadableOplog};
 
 pub(super) fn host_response_to_public_value(
     response: HostResponse,
@@ -46,9 +44,11 @@ impl PublicEntryError {
         index: OplogIndex,
         error: OplogPayloadDownloadError,
     ) -> Self {
-        Self::Unreadable(UnreadableOplog::new(
+        Self::Unreadable(UnreadableOplog::of_payload(
             &owned_agent_id.agent_id,
-            OplogReadError::of_payload(OplogReadSource::Other("public oplog entry"), index, error),
+            "public oplog entry",
+            index,
+            error,
         ))
     }
 }

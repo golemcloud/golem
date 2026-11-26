@@ -377,37 +377,36 @@ pub(super) fn reassemble_cached_status(
 
     for (name, bytes) in fields {
         if name == STATUS_CORE_FIELD {
-            core = Some(deserialize::<AgentStatusRecord>(&bytes).ok()?);
+            core = Some(decode::<AgentStatusRecord>(&bytes).ok()?);
         } else if name == STATUS_MEMBERSHIP_FIELD {
-            invocation_results = Some(deserialize::<InvocationResultMembership>(&bytes).ok()?);
+            invocation_results = Some(decode::<InvocationResultMembership>(&bytes).ok()?);
         } else if name == STATUS_REGIONS_FIELD {
-            regions = Some(deserialize::<(DeletedRegions, DeletedRegions)>(&bytes).ok()?);
+            regions = Some(decode::<(DeletedRegions, DeletedRegions)>(&bytes).ok()?);
         } else if name == STATUS_UPDATES_FIELD {
             updates = Some(
-                deserialize::<(Vec<FailedUpdateRecord>, Vec<SuccessfulUpdateRecord>)>(&bytes)
-                    .ok()?,
+                decode::<(Vec<FailedUpdateRecord>, Vec<SuccessfulUpdateRecord>)>(&bytes).ok()?,
             );
         } else if name == STATUS_RESOLVED_NAMES_FIELD {
-            resolved_name_links = Some(deserialize(&bytes).ok()?);
+            resolved_name_links = Some(decode(&bytes).ok()?);
         } else if name == STATUS_FOLLOWED_LOOKUPS_FIELD {
-            followed_lookups = Some(deserialize(&bytes).ok()?);
+            followed_lookups = Some(decode(&bytes).ok()?);
         } else if name == STATUS_ENTITY_REPLAY_CONTINUATION_FIELD {
-            has_entity_replay_progress = deserialize::<bool>(&bytes).ok()?;
+            has_entity_replay_progress = decode::<bool>(&bytes).ok()?;
         } else if let Some(index) = name.strip_prefix(STATUS_ENTITY_REPLAY_BOUNDARY_PREFIX) {
             let index = OplogIndex::from_u64(index.parse().ok()?);
             entity_replay_progress
                 .completed
-                .insert(index, deserialize::<EntityReplayBoundary>(&bytes).ok()?);
+                .insert(index, decode::<EntityReplayBoundary>(&bytes).ok()?);
         } else if let Some(index) = name.strip_prefix(STATUS_ENTITY_REPLAY_OPEN_PREFIX) {
             let index = OplogIndex::from_u64(index.parse().ok()?);
             entity_replay_progress
                 .open
-                .insert(index, deserialize::<OpenEntityReplayScope>(&bytes).ok()?);
+                .insert(index, decode::<OpenEntityReplayScope>(&bytes).ok()?);
         } else if let Some(index) = name.strip_prefix(STATUS_ENTITY_REPLAY_ROUTE_PREFIX) {
             let index = OplogIndex::from_u64(index.parse().ok()?);
             entity_replay_progress
                 .routes
-                .insert(index, deserialize::<OplogIndex>(&bytes).ok()?);
+                .insert(index, decode::<OplogIndex>(&bytes).ok()?);
         } else if let Some(pair) = name.strip_prefix(STATUS_ENTITY_REPLAY_MEMBER_PREFIX) {
             let (entity, start) = pair.split_once(':')?;
             entity_replay_progress.route_members.insert(
@@ -415,7 +414,7 @@ pub(super) fn reassemble_cached_status(
                     OplogIndex::from_u64(entity.parse().ok()?),
                     OplogIndex::from_u64(start.parse().ok()?),
                 ),
-                deserialize::<()>(&bytes).ok()?,
+                decode::<()>(&bytes).ok()?,
             );
         } else if let Some(pair) = name.strip_prefix(STATUS_ENTITY_REPLAY_CHILD_PREFIX) {
             let (parent, child) = pair.split_once(':')?;
@@ -424,15 +423,15 @@ pub(super) fn reassemble_cached_status(
                     OplogIndex::from_u64(parent.parse().ok()?),
                     OplogIndex::from_u64(child.parse().ok()?),
                 ),
-                deserialize::<()>(&bytes).ok()?,
+                decode::<()>(&bytes).ok()?,
             );
         } else if let Some(transfer_id) = name.strip_prefix(STATUS_RECEIVED_CARD_TRANSFER_PREFIX) {
             let transfer_id = uuid::Uuid::parse_str(transfer_id).ok()?;
-            let state = deserialize::<ReceivedCardTransferState>(&bytes).ok()?;
+            let state = decode::<ReceivedCardTransferState>(&bytes).ok()?;
             received_card_transfers.insert(transfer_id, state);
         } else if let Some(transfer_id) = name.strip_prefix(STATUS_SOURCE_CARD_TRANSFER_PREFIX) {
             let transfer_id = uuid::Uuid::parse_str(transfer_id).ok()?;
-            let state = deserialize::<SourceCardTransferState>(&bytes).ok()?;
+            let state = decode::<SourceCardTransferState>(&bytes).ok()?;
             source_card_transfers.insert(transfer_id, state);
         }
         // Unknown fields are ignored.

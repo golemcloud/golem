@@ -187,15 +187,15 @@ use request::{effective_session_identity, require_expected_callee_fingerprint};
 mod response;
 use response::{
     persisted_invocation_result, persisted_result_and_finished, pre_acceptance_rejection_reason,
-    rejection_worker_error, send_attachment_revocation, send_protocol_failure, send_rejection,
-    send_rejection_with_worker_error, send_resumed_finished, send_unvalidated_rejection,
-    send_worker_failure,
+    rejection_worker_error, send_attachment_revocation, send_failed_attachment_check,
+    send_protocol_failure, send_rejection, send_rejection_with_worker_error, send_resumed_finished,
+    send_unvalidated_rejection, send_worker_failure,
 };
 
 mod attachment;
 use attachment::{
-    detach_durable_attachment, end_attachment_on_failure, ends_only_the_attachment,
-    is_attachment_termination, until_response_closed,
+    end_attachment_on_failure, ends_only_the_attachment, is_attachment_termination,
+    until_response_closed,
 };
 
 #[cfg(test)]

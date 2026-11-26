@@ -18,6 +18,7 @@ use golem_common::serialization::DecodeError;
 use std::ops::ControlFlow;
 
 use super::ingress::EnqueueInvocationOutcome;
+use super::state_actor::StoredAppend;
 
 enum StreamAttachment {
     FreshCommitted,
@@ -46,6 +47,7 @@ struct StreamAttachmentCompletion {
     acceptance: Result<DurableStreamingInvocationAcceptance, WorkerExecutorError>,
 }
 
+/// What admission does for one kind of stream attachment.
 struct StreamAttachmentActions {
     stage_pending: Option<Box<AgentInvocation>>,
     receipt: Option<StreamReceiptAction>,
@@ -55,7 +57,9 @@ struct StreamAttachmentActions {
     joined_origin_observer: bool,
 }
 
-fn transition_stream_attachment(
+/// The actions for `attachment`, a pure rule. A replay uses the foreign bindings only for the
+/// current attempt and not for a joined origin.
+fn stream_attachment_actions(
     attachment: StreamAttachment,
     current_attempt: bool,
 ) -> StreamAttachmentActions {
@@ -285,7 +289,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     attached.acceptance.expiry_deadline_millis).await?;
                 match worker.enqueue_worker_invocation_with_effect(invocation,
                     read_only_cache::InvocationEffect::UnknownAssumeMutating, None, Some(attached.clone())).await? {
-                    EnqueueInvocationOutcome::Stored { index, .. } => {
+                    EnqueueInvocationOutcome::Appended { stored: StoredAppend::Reported(index), .. } => {
                         attached.pending_invocation_oplog_index = index;
                         (attached, false)
                     }
@@ -294,7 +298,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                             .ok_or_else(|| WorkerExecutorError::runtime("committed invocation has no stream attachment"))?;
                         (retained, true)
                     }
-                    EnqueueInvocationOutcome::StoredButUnreadable(error) => {
+                    EnqueueInvocationOutcome::Appended { stored: StoredAppend::Unreported(error), .. } => {
                         drop(_session);
                         return Err(worker.resolve_committed_invocation_failure(error.into()).await);
                     }
@@ -511,7 +515,13 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     .ok_or_else(|| {
                         WorkerExecutorError::runtime("ready session has no attachment status")
                     })?;
-                let (graph, elements) = crate::grpc::resumed_input_schema(&prepared)?;
+                let (graph, elements) =
+                    crate::grpc::resumed_input_schema(&prepared).map_err(|error| {
+                        match status.first_prepared {
+                            Some(index) => error.at(index).into(),
+                            None => WorkerExecutorError::from(error),
+                        }
+                    })?;
                 let streams = streams
                     .with_attachment(
                         status.attachment_epoch.unwrap_or_default(),
@@ -848,12 +858,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         producer
                             .validate_registration(registration)
                             .await
-                            .map_err(|error| {
-                                SessionError::from(error).into_worker_executor_error(|_| {
+                            .map_err(|error| match error {
+                                StreamStoreError::RegistrationDivergence => {
                                     WorkerExecutorError::invalid_request(
                                         "IdempotencyConflict: persisted durable stream registration does not match the invocation descriptor",
                                     )
-                                })
+                                }
+                                error => SessionError::from(error)
+                                    .into_worker_executor_error(WorkerExecutorError::runtime),
                             })?,
                     );
                 }
@@ -1099,7 +1111,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             use_foreign_bindings,
             replayed,
             joined_origin_observer,
-        } = transition_stream_attachment(attachment, current_attempt);
+        } = stream_attachment_actions(attachment, current_attempt);
         let skip_foreign_bindings = !use_foreign_bindings
             || foreign_mappings.is_empty()
             || records
@@ -1361,7 +1373,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 )
             })
             .await
-            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))??;
+            .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+        // A stored read error fails the owner when it runs; the session stays as it is.
+        let acceptance = match acceptance {
+            Ok(acceptance) => acceptance,
+            Err(error) => return Err(self.resolve_committed_invocation_failure(error).await),
+        };
         let activate_foreign = if acceptance.replayed {
             match acceptance.streams.ensure_current_attachment().await {
                 Ok(()) => true,
@@ -1444,10 +1461,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         } = self
             .stream_session_records(&attempt.session_key, Some(attempt.attempt_id))
             .await?;
-        let prepared = records
+        let (prepared_index, prepared) = records
             .iter()
-            .find_map(|(_, record)| match record {
-                StreamSessionRecord::Prepared(record) => Some(record.clone()),
+            .find_map(|(index, record)| match record {
+                StreamSessionRecord::Prepared(record) => Some((*index, record.clone())),
                 _ => None,
             })
             .ok_or_else(|| {
@@ -1455,6 +1472,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     "NotFound: durable Stream Session preparation was not found",
                 )
             })?;
+        // The owner decodes this input when it runs, so an input that does not decode is a read
+        // error of the Prepared entry, not a refusal of this attempt.
+        crate::grpc::resumed_input_schema(&prepared).map_err(|error| error.at(prepared_index))?;
         if prepared.attempt.attempt_id == attempt.attempt_id {
             return Err(WorkerExecutorError::invalid_request(
                 "AttemptConflict: a Start attempt ID cannot be reused for resume or takeover",
@@ -1537,6 +1557,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 drop(session_guard);
                 return Ok(DurableStreamingResumeAcceptance {
                     prepared,
+                    prepared_index,
                     mappings: materialized_mappings,
                     streams,
                     epoch: existing.accepted_epoch,
@@ -1619,6 +1640,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let streams = make_streams(accepted_epoch, attempt.attempt_id)?;
         Ok(DurableStreamingResumeAcceptance {
             prepared,
+            prepared_index,
             mappings: materialized_mappings,
             streams,
             epoch: accepted_epoch,

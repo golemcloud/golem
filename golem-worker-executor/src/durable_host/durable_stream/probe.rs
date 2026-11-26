@@ -15,27 +15,31 @@
 use super::*;
 use crate::services::oplog::{OplogReadError, OplogReadSource};
 
-/// The stream error of a failed read of the metadata or the identity of `agent_id`. An oplog
-/// that does not read keeps its read class: `OplogFailed` stays unreadable for good, and
-/// `RecoveryRequired` stays unreadable until a later read passes.
+/// The stream error of a failed read of the metadata or the identity of `agent_id`. A failed
+/// stored read ([`InvocationObservationFailure::stored_read`]), also in the reason of a failed
+/// resume, keeps its read class: `OplogFailed` stays unreadable for good, and a recovery that a
+/// read caused stays unreadable until a later read passes. Any other error, also a recovery for
+/// another cause, is not a read.
 fn agent_read_error(agent_id: &AgentId, error: WorkerExecutorError) -> StreamStoreError {
-    match error {
-        WorkerExecutorError::OplogFailed { agent_id, details } => {
-            StreamStoreError::Unreadable(UnreadableOplog::new(
-                &agent_id,
-                OplogReadError::corruption(OplogReadSource::Other("agent identity"), details),
-            ))
-        }
-        WorkerExecutorError::RecoveryRequired { details, .. } => {
+    use crate::worker::InvocationObservationFailure;
+    let source = OplogReadSource::Other("agent identity");
+    match InvocationObservationFailure::stored_read(&error) {
+        Some((
+            _,
+            WorkerExecutorError::OplogFailed {
+                agent_id, details, ..
+            },
+        )) => StreamStoreError::Unreadable(UnreadableOplog::new(
+            agent_id,
+            OplogReadError::corruption(source, details.clone()),
+        )),
+        Some((_, WorkerExecutorError::RecoveryRequired { details, .. })) => {
             StreamStoreError::Unreadable(UnreadableOplog::new(
                 agent_id,
-                OplogReadError::source_unavailable(
-                    OplogReadSource::Other("agent identity"),
-                    details,
-                ),
+                OplogReadError::source_unavailable(source, details.clone()),
             ))
         }
-        error => StreamStoreError::Oplog(error.to_string()),
+        _ => StreamStoreError::Oplog(error.to_string()),
     }
 }
 
@@ -52,13 +56,11 @@ async fn consumer_record(
         .download_payload(consumer, agent_mode, record)
         .await
         .map_err(|error| {
-            StreamStoreError::Unreadable(UnreadableOplog::new(
+            StreamStoreError::Unreadable(UnreadableOplog::of_payload(
                 &consumer.agent_id,
-                OplogReadError::of_payload(
-                    OplogReadSource::Other("consumer journal record"),
-                    index,
-                    error,
-                ),
+                "consumer journal record",
+                index,
+                error,
             ))
         })
 }
@@ -748,9 +750,12 @@ mod read_error_tests {
             )
             .await
             .unwrap();
-        for size in 1..=5 {
-            oplog.add(OplogEntry::grow_memory(size)).await.unwrap();
-        }
+        use futures::{StreamExt, TryStreamExt};
+        futures::stream::iter(1..=5)
+            .then(|size| oplog.add(OplogEntry::grow_memory(size)))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
         oplog
             .add(OplogEntry::StreamSession {
                 timestamp: Timestamp::now_utc(),
@@ -814,7 +819,12 @@ mod read_error_tests {
 
         let temporary = agent_read_error(
             &agent_id,
-            WorkerExecutorError::recovery_required("oplog data from primary is unavailable"),
+            WorkerExecutorError::failed_to_resume_worker(
+                agent_id,
+                WorkerExecutorError::oplog_read_unavailable(
+                    "oplog data from primary is unavailable",
+                ),
+            ),
         );
         let StreamStoreError::Unreadable(unreadable) = &temporary else {
             panic!("expected an unreadable oplog, got {temporary:?}");
@@ -825,6 +835,21 @@ mod read_error_tests {
             unreadable
                 .to_string()
                 .contains("oplog data from primary is unavailable")
+        );
+    }
+
+    /// A recovery for a cause that is not a read is not an unreadable oplog.
+    #[test]
+    fn a_recovery_for_another_cause_is_not_an_unreadable_agent() {
+        let agent_id = crate::test_agent_id("probe-identity-recovery");
+        let error = agent_read_error(
+            &agent_id,
+            WorkerExecutorError::recovery_required("stream output 7 is incomplete"),
+        );
+        assert!(
+            matches!(&error, StreamStoreError::Oplog(details)
+                if details.contains("stream output 7 is incomplete")),
+            "{error:?}"
         );
     }
 }

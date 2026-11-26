@@ -371,14 +371,17 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         {
             Ok(data) => data,
             Err(err) => {
-                let lost = matches!(err, OplogPayloadDownloadError::Corrupt(_));
-                let error =
-                    format!("Failed to download snapshot payload at {snapshot_index}: {err}");
+                let unreadable = UnreadableOplog::of_payload(
+                    &store.as_context().data().owned_agent_id().agent_id,
+                    "application snapshot payload",
+                    snapshot_index,
+                    err,
+                );
                 Self::emit_snapshot_recovery_event(
                     store,
                     snapshot_index,
                     false,
-                    Some(error.clone()),
+                    Some(unreadable.to_string()),
                 );
                 let result = payload_download_failure(
                     store
@@ -387,8 +390,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .durable_ctx()
                         .state
                         .snapshot_replay_purpose,
-                    lost,
-                    error,
+                    unreadable,
                 );
                 if matches!(result, SnapshotRecoveryResult::Retry(_)) {
                     store
@@ -835,39 +837,34 @@ pub(in crate::durable_host) fn snapshot_entry_read_failure(
 }
 
 /// What a start gets when the payload of the application snapshot of its baseline does not
-/// download for `purpose`, with `error` as the text. `lost` tells that the payload is missing or
-/// does not decode, rather than that its store failed. A periodic record is skipped for the start
-/// attempt and the start retries at once (the caller marks it unavailable). A snapshot-assisted
-/// attempt whose store failed retries with the same record through the recovery path, and
-/// nothing marks the record; one whose payload is lost reports the selected record as lost. The
-/// replay for a pending automatic update retries a failed store through the recovery path too,
-/// and gets the runtime error for a lost payload. Any other baseline gets the runtime error.
+/// download for `purpose`. `unreadable` is the read error, with the agent, the index of the
+/// record and whether a later read can pass.
+///
+/// Candidate selection: a periodic record is skipped for the start attempt and the start retries
+/// at once (the caller marks it unavailable); nothing is recorded. The selected record of a
+/// snapshot-assisted update whose payload is missing or does not decode is a lost record, which
+/// the update reports.
+///
+/// Every other baseline gets the read error as it is: a store that did not answer is a recovery
+/// that the read caused, and a payload that does not decode is a failed oplog. The start passes
+/// both in every column, so a read error is never a failed update or a failed invocation.
 pub(in crate::durable_host) fn payload_download_failure(
     purpose: SnapshotReplayPurpose,
-    lost: bool,
-    error: String,
+    unreadable: UnreadableOplog,
 ) -> SnapshotRecoveryResult {
     match purpose {
         SnapshotReplayPurpose::PeriodicRecovery => {
             SnapshotRecoveryResult::Retry(RetryDecision::Immediate)
         }
-        SnapshotReplayPurpose::AssistedUpdate if lost => {
-            SnapshotRecoveryResult::Lost(WorkerExecutorError::runtime(error))
+        SnapshotReplayPurpose::AssistedUpdate if !unreadable.is_transient() => {
+            SnapshotRecoveryResult::Lost(WorkerExecutorError::runtime(unreadable.to_string()))
         }
-        SnapshotReplayPurpose::AssistedUpdate => SnapshotRecoveryResult::Unavailable(
-            WorkerExecutorError::recovery_required(error),
+        SnapshotReplayPurpose::AssistedUpdate
+        | SnapshotReplayPurpose::AutomaticUpdate
+        | SnapshotReplayPurpose::None => SnapshotRecoveryResult::Unavailable(
+            WorkerExecutorError::from(unreadable),
             FailureProvenance::Host,
         ),
-        SnapshotReplayPurpose::AutomaticUpdate if !lost => SnapshotRecoveryResult::Unavailable(
-            WorkerExecutorError::recovery_required(error),
-            FailureProvenance::Host,
-        ),
-        SnapshotReplayPurpose::None | SnapshotReplayPurpose::AutomaticUpdate => {
-            SnapshotRecoveryResult::Unavailable(
-                WorkerExecutorError::runtime(error),
-                FailureProvenance::Host,
-            )
-        }
     }
 }
 

@@ -61,6 +61,10 @@ pub use multilayer::{
     OplogArchiveService,
 };
 pub use primary::PrimaryOplogService;
+#[cfg(test)]
+pub(crate) use primary::{
+    UnconfirmedAppends, add_grow_memory_entries, create_test_oplog, unconfirmed_appends_service,
+};
 use std::any::{Any, TypeId};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Display, Formatter};
@@ -485,7 +489,7 @@ pub struct OplogFence {
 impl OplogFence {
     /// The fence a refused storage write reports for `agent_id`. Every caller passes an
     /// `IndexedStorageError::Fenced` that it has matched; the append retries build their fence
-    /// themselves and return an unconfirmed append as `OplogError::Unreadable`.
+    /// themselves and return an append whose outcome is unknown as `OplogError::Unreadable`.
     pub(crate) fn refused(agent_id: AgentId, error: IndexedStorageError) -> Self {
         match error {
             IndexedStorageError::Fenced {
@@ -504,14 +508,18 @@ impl OplogFence {
 ///
 /// A `Fenced` write is not a storage failure - the storage is healthy and refused the write on
 /// purpose - so it is returned rather than retried or panicked on, and the worker that hit it is
-/// stopped and left to the shard's new owner. Storage failures on execution-critical reads and
-/// writes keep their fail-stop semantics inside the oplog implementation. Fallible archive
-/// maintenance returns `Maintenance`, allowing the fenced cleanup to be retried without stopping
-/// the executor. `Payload` is an entry whose payload the caller-supplied builder could not produce.
+/// stopped and left to the shard's new owner. A write that storage rejects for another cause, and
+/// that no read explains, stops the executor. Fallible archive maintenance returns
+/// `Maintenance`, allowing the fenced cleanup to be retried without stopping the executor.
+/// `Payload` is an entry whose payload the caller-supplied builder could not produce.
 /// `ArchiveWrite` is a write to an archive layer that failed after its retries: it is latched, so
-/// the agent stops, and only that agent. `Unreadable` is a commit whose entries were stored, but
-/// whose status could not be rebuilt because the oplog does not read: the agent stops with the
-/// cause, and only that agent.
+/// the agent stops, and only that agent.
+///
+/// `Unreadable` is a read of the oplog that failed. It has two sources on a write path. A commit
+/// stored its entries, but its report or the status after it does not read. Or the primary oplog
+/// cannot read back an append whose outcome is unknown: the entries can be stored or absent, the
+/// handle latches the append, and [`Oplog::unconfirmed_append`] returns it. In both cases the
+/// agent stops with the cause, and only that agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum OplogError {
     Fenced(OplogFence),
@@ -539,10 +547,11 @@ impl Display for ArchiveWriteFailure {
     }
 }
 
-/// An archive layer that did not store the oplog fails the agent for good.
+/// An archive layer that did not store the oplog fails the agent for good. The error is
+/// `OplogFailed` with the `ArchiveWrite` stage, so it stops the agent but is not a failed read.
 impl From<ArchiveWriteFailure> for WorkerExecutorError {
     fn from(failure: ArchiveWriteFailure) -> Self {
-        WorkerExecutorError::oplog_failed(
+        WorkerExecutorError::oplog_archive_write_failed(
             failure.agent_id,
             format!(
                 "failed to write oplog data to archive layer {}: {}",
@@ -553,9 +562,10 @@ impl From<ArchiveWriteFailure> for WorkerExecutorError {
 }
 
 impl OplogError {
-    /// The failure of the agent that this error is: an archive layer that did not store the oplog,
-    /// or an oplog that does not read. It is `OplogFailed` for good, or `RecoveryRequired` when a
-    /// later read can pass. A fence, which moves the agent to the new owner of its shard, and a
+    /// The failure of the agent that this error is: an archive layer that did not store the oplog
+    /// (`OplogFailed` with the `ArchiveWrite` stage), or an oplog that does not read
+    /// (`OplogFailed` with the `Read` stage for good, or `RecoveryRequired` when a later read can
+    /// pass). A fence, which moves the agent to the new owner of its shard, and a
     /// write that failed alone give `None`.
     pub fn agent_failure(&self) -> Option<WorkerExecutorError> {
         match self {
@@ -613,10 +623,11 @@ impl std::error::Error for OplogError {}
 
 /// A write after which the agent cannot go on. Every other `OplogError` stays fail-stop.
 ///
-/// `Fenced` (the shard has a new owner) and `ArchiveWrite` (an archive layer of an ephemeral oplog
-/// did not store its entries after its retries) are latched on the oplog: every later add and
-/// commit fails the same way, so a path that cannot report the refusal leaves it to the next write
-/// that can.
+/// `Fenced` (the shard has a new owner), `ArchiveWrite` (an archive layer of an ephemeral oplog
+/// did not store its entries after its retries) and `Unconfirmed` (an append of the primary oplog
+/// whose outcome is unknown) are latched on the oplog: every later add, commit and flush fails the
+/// same way, so a path that cannot report the refusal leaves it to the next write that can. None
+/// of them is a commit, so the commit receipt is refused.
 ///
 /// `Unreadable` is not latched. A commit report can fail to read history after storage or ordered
 /// writer handoff succeeds. Status reconstruction can also return it. `ReportOnly` stores no
@@ -625,6 +636,9 @@ impl std::error::Error for OplogError {}
 pub enum OplogRefusal {
     Fenced(OplogFence),
     ArchiveWrite(ArchiveWriteFailure),
+    /// The append that [`Oplog::unconfirmed_append`] returns. As an [`OplogError`] it is
+    /// `Unreadable`, the error that the oplog returned for it.
+    Unconfirmed(UnreadableOplog),
     Unreadable(UnreadableOplog),
 }
 
@@ -633,7 +647,7 @@ impl OplogRefusal {
     pub fn fence(&self) -> Option<&OplogFence> {
         match self {
             Self::Fenced(fence) => Some(fence),
-            Self::ArchiveWrite(_) | Self::Unreadable(_) => None,
+            Self::ArchiveWrite(_) | Self::Unconfirmed(_) | Self::Unreadable(_) => None,
         }
     }
 }
@@ -655,7 +669,9 @@ impl From<OplogRefusal> for OplogError {
         match refusal {
             OplogRefusal::Fenced(fence) => Self::Fenced(fence),
             OplogRefusal::ArchiveWrite(failure) => Self::ArchiveWrite(failure),
-            OplogRefusal::Unreadable(unreadable) => Self::Unreadable(unreadable),
+            OplogRefusal::Unconfirmed(unreadable) | OplogRefusal::Unreadable(unreadable) => {
+                Self::Unreadable(unreadable)
+            }
         }
     }
 }
@@ -792,9 +808,11 @@ pub trait Oplog: Any + Debug + Send + Sync {
     }
 
     /// Commits buffered entries at the requested level and reports the committed entries.
-    /// `Unreadable` means report collection failed after the storage or ordered-handoff milestone
-    /// succeeded. For a durable primary oplog, `ReportOnly` reports prior commits without storing
-    /// the buffered tail. For an ephemeral oplog it returns an empty report.
+    /// `Unreadable` has two meanings. Report collection failed after the storage or
+    /// ordered-handoff milestone succeeded. Or an append has an unknown outcome, which is not a
+    /// commit: then [`Self::unconfirmed_append`] returns it after this call. For a durable primary
+    /// oplog, `ReportOnly` reports prior commits without storing the buffered tail. For an
+    /// ephemeral oplog it returns an empty report.
     async fn commit(
         &self,
         level: CommitLevel,
@@ -1011,6 +1029,16 @@ pub trait Oplog: Any + Debug + Send + Sync {
     /// and checkpoint.
     fn fence(&self) -> Option<OplogFence> {
         self.inner().and_then(|inner| inner.fence())
+    }
+
+    /// The append of this handle whose outcome is unknown, if any: its read back failed, so its
+    /// entries can be stored or absent. The handle then refuses every later add, commit and
+    /// flush, and every read of those entries, so it cannot give the history of its agent again.
+    /// A handle opened later reads that history from the storage. Answered without a round trip.
+    ///
+    /// Only the primary oplog knows it, so a wrapper answers from the oplog it wraps.
+    fn unconfirmed_append(&self) -> Option<UnreadableOplog> {
+        self.inner().and_then(|inner| inner.unconfirmed_append())
     }
 
     /// Returns the inner oplog wrapped by this implementation, if any.

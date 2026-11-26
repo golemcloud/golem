@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::{SessionStore, SessionStoreError, credential_digest, records};
+use super::{SessionStore, SessionStoreError, credential_digest, decode_record, records};
 use crate::custom_api::model::OidcSession;
 use crate::custom_api::oidc::model::{
     AuthorizationCode, BearerToken, McpPendingAuth, McpProxyCodeEntry, PendingOidcLogin,
@@ -132,14 +132,6 @@ pub async fn migrated_postgres_pool(config: &DbPostgresConfig) -> anyhow::Result
 
 fn now_millis() -> i64 {
     Utc::now().timestamp_millis()
-}
-
-fn decode_record<R: desert_rust::BinaryDeserializer>(
-    bytes: &[u8],
-    name: &str,
-) -> Result<R, SessionStoreError> {
-    golem_common::serialization::deserialize(bytes)
-        .map_err(|e| SessionStoreError::InternalError(anyhow!("{name} deserialization error: {e}")))
 }
 
 fn encode_record<R: desert_rust::BinarySerializer>(

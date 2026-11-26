@@ -98,6 +98,10 @@ pub(crate) fn next_scan_cursor(
     }
 }
 
+/// Runs a scan of the stored oplog keys under the retry policy. A refused resume point is an
+/// invalid request. A storage that does not answer after the retries gives an unavailable oplog
+/// read, which a later scan can pass. Any other storage failure gives a runtime failure. The scan
+/// does not panic.
 pub(crate) async fn retry_scan_storage_op<T, F, Fut>(
     retry_config: &golem_common::model::RetryConfig,
     op_name: &str,
@@ -128,14 +132,83 @@ where
                     );
                     tokio::time::sleep(delay).await;
                 } else {
-                    panic!(
+                    return Err(WorkerExecutorError::oplog_read_unavailable(format!(
                         "Indexed storage operation '{op_name}' failed for key '{target}' after {attempts} attempts: Transient storage error: {message}"
-                    );
+                    )));
                 }
             }
             Err(error) => {
-                panic!("Indexed storage operation '{op_name}' failed for key '{target}': {error}");
+                return Err(WorkerExecutorError::runtime(format!(
+                    "Indexed storage operation '{op_name}' failed for key '{target}': {error}"
+                )));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use golem_common::model::RetryConfig;
+    use golem_service_base::error::worker_executor::RecoveryCause;
+    use std::sync::atomic::{AtomicU32, Ordering};
+    use test_r::test;
+
+    fn retry_twice() -> RetryConfig {
+        RetryConfig {
+            max_attempts: 2,
+            min_delay: Duration::ZERO,
+            max_delay: Duration::ZERO,
+            multiplier: 1.0,
+            max_jitter_factor: None,
+        }
+    }
+
+    /// A scan whose storage does not answer after the retry budget returns an unavailable read,
+    /// which a later scan can pass. The budget stays the same.
+    #[test]
+    async fn an_exhausted_transient_scan_returns_an_unavailable_read() {
+        let attempts = AtomicU32::new(0);
+
+        let result: Result<(), _> =
+            retry_scan_storage_op(&retry_twice(), "scan", "prefix-7", || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                async {
+                    Err(IndexedStorageError::Transient(
+                        "injected outage".to_string(),
+                    ))
+                }
+            })
+            .await;
+
+        let error = result.expect_err("an exhausted scan is not a page");
+        let WorkerExecutorError::RecoveryRequired { cause, details, .. } = &error else {
+            panic!("expected an unavailable read, got {error:?}");
+        };
+        assert_eq!(*cause, RecoveryCause::OplogReadUnavailable);
+        assert!(details.contains("prefix-7"), "{details}");
+        assert!(details.contains("injected outage"), "{details}");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    /// A scan that fails for a cause the retries cannot remove returns the failure at once.
+    #[test]
+    async fn a_failed_scan_returns_a_runtime_failure() {
+        let attempts = AtomicU32::new(0);
+
+        let result: Result<(), _> =
+            retry_scan_storage_op(&retry_twice(), "scan", "prefix-9", || {
+                attempts.fetch_add(1, Ordering::SeqCst);
+                async { Err(IndexedStorageError::Other("injected failure".to_string())) }
+            })
+            .await;
+
+        let error = result.expect_err("a failed scan is not a page");
+        let WorkerExecutorError::Runtime { details } = &error else {
+            panic!("expected a runtime failure, got {error:?}");
+        };
+        assert!(details.contains("prefix-9"), "{details}");
+        assert!(details.contains("injected failure"), "{details}");
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
     }
 }

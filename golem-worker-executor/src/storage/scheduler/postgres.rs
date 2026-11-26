@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError, datetime_to_millis,
-    millis_to_datetime,
+    ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError, UnreadableClaims,
+    UnreadableScheduledAction, datetime_to_millis, millis_to_datetime,
 };
 use crate::services::golem_config::SchedulerStoragePostgresConfig;
 use async_trait::async_trait;
@@ -156,26 +156,26 @@ impl SchedulerStorage for PostgresSchedulerStorage {
             .await
             .map_err(SchedulerStorageError::from)?;
 
-        rows.into_iter()
+        let rows = rows
+            .into_iter()
             .map(|row| {
-                Ok(ClaimedScheduledAction {
-                    schedule_id: ScheduleId {
-                        id: row.schedule_id,
-                    },
-                    action: decode(&row.action).map_err(|error| {
-                        SchedulerStorageError::unreadable(
-                            ScheduleId {
-                                id: row.schedule_id,
-                            },
-                            error,
-                        )
-                    })?,
-                    due_at: millis_to_datetime(row.due_at_ms)?,
-                    lease_owner,
-                    attempt_count: row.attempt_count as u32,
+                let schedule_id = ScheduleId {
+                    id: row.schedule_id,
+                };
+                let due_at = millis_to_datetime(row.due_at_ms)?;
+                Ok(match decode(&row.action) {
+                    Ok(action) => Ok(ClaimedScheduledAction {
+                        schedule_id,
+                        action,
+                        due_at,
+                        lease_owner,
+                        attempt_count: row.attempt_count as u32,
+                    }),
+                    Err(error) => Err(UnreadableScheduledAction { schedule_id, error }),
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, SchedulerStorageError>>()?;
+        UnreadableClaims::of_rows(rows)
     }
 
     async fn count_due(

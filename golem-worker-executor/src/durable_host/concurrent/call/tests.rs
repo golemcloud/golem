@@ -1066,6 +1066,7 @@ async fn an_undecodable_recorded_request_is_unreadable_at_its_start() {
     let WorkerExecutorError::OplogFailed {
         agent_id: failed,
         details,
+        ..
     } = &error
     else {
         panic!("expected an unreadable oplog, got {error:?}");

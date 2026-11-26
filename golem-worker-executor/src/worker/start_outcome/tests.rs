@@ -864,40 +864,25 @@ fn each_raw_error_has_its_problem() {
     );
 }
 
-/// An oplog that does not read ends the start with its error from every step of the start
-/// that reads it, for every baseline and head: no record is skipped or rejected, and no
-/// update fails, because each of them would start the agent from another history.
+/// A failed stored read ends the start with its error from every step of the start that
+/// reads stored data, for every baseline and head: no record is skipped or rejected, no update
+/// fails and no invocation fails, because each of them would take the read error as an outcome
+/// or start the agent from another history. This holds for a read that fails for good, for a
+/// read that fails for a time, and for each of them in the reason of a failed resume.
 #[test]
-fn an_unreadable_oplog_fails_the_start_in_every_column() {
-    let unreadable = WorkerExecutorError::oplog_failed(
+fn a_failed_stored_read_fails_the_start_in_every_column() {
+    let permanent = WorkerExecutorError::oplog_failed(
         agent_id(),
         "corrupt oplog data from archive layer 1: failed to decode compressed oplog chunk",
     );
-    let failed =
-        SnapshotRecoveryResult::Failed(unreadable.clone(), crate::model::FailureProvenance::Host);
-    let unavailable = SnapshotRecoveryResult::Unavailable(
-        unreadable.clone(),
-        crate::model::FailureProvenance::Host,
+    let transient = WorkerExecutorError::oplog_read_unavailable(
+        "oplog data from application snapshot payload is unavailable: blob store timed out",
     );
-    let lost = SnapshotRecoveryResult::Lost(unreadable.clone());
-    let unreadable_creation = creation(&unreadable);
-    let errors = [
-        RawStartError::Replay {
-            error: &unreadable,
-            diverged: false,
-            provenance: None,
-        },
-        RawStartError::Replay {
-            error: &unreadable,
-            diverged: true,
-            provenance: None,
-        },
-        RawStartError::Load(&failed),
-        RawStartError::Load(&unavailable),
-        RawStartError::Load(&lost),
-        RawStartError::Instantiation(&unreadable_creation),
-        RawStartError::TargetLoad(&unreadable),
-        RawStartError::TargetFetch(&unreadable),
+    let reads = [
+        permanent.clone(),
+        transient.clone(),
+        WorkerExecutorError::failed_to_resume_worker(agent_id(), permanent),
+        WorkerExecutorError::failed_to_resume_worker(agent_id(), transient),
     ];
     let assisted = Arc::new(assisted_head());
     let manual = Arc::new(manual_head());
@@ -916,15 +901,52 @@ fn an_unreadable_oplog_fails_the_start_in_every_column() {
         ),
         (BaselineRole::AssistedPromoted, None),
     ];
-    for (role, head) in &starts {
-        for (index, error) in errors.iter().enumerate() {
-            let action = decide_now(role, *head, *error);
-            assert!(
-                matches!(&action, StartAction::Error(error) if *error == unreadable),
-                "{role:?} with error {index}: {action:?}"
+    let wrong = reads
+        .iter()
+        .flat_map(|read| {
+            let failed =
+                SnapshotRecoveryResult::Failed(read.clone(), crate::model::FailureProvenance::Host);
+            let unavailable = SnapshotRecoveryResult::Unavailable(
+                read.clone(),
+                crate::model::FailureProvenance::Host,
             );
-        }
-    }
+            let lost = SnapshotRecoveryResult::Lost(read.clone());
+            let read_creation = creation(read);
+            let errors = [
+                RawStartError::Replay {
+                    error: read,
+                    diverged: false,
+                    provenance: None,
+                },
+                RawStartError::Replay {
+                    error: read,
+                    diverged: true,
+                    provenance: None,
+                },
+                RawStartError::Load(&failed),
+                RawStartError::Load(&unavailable),
+                RawStartError::Load(&lost),
+                RawStartError::Instantiation(&read_creation),
+                RawStartError::TargetLoad(read),
+                RawStartError::TargetFetch(read),
+            ];
+            starts
+                .iter()
+                .flat_map(|(role, head)| {
+                    errors
+                        .iter()
+                        .enumerate()
+                        .map(|(index, error)| (role, index, decide_now(role, *head, *error)))
+                        .collect::<Vec<_>>()
+                })
+                .filter(|(_, _, action)| {
+                    !matches!(action, StartAction::Error(passed) if passed == read)
+                })
+                .map(|(role, index, action)| format!("{read} / {role:?} / {index}: {action:?}"))
+                .collect::<Vec<_>>()
+        })
+        .collect::<Vec<_>>();
+    assert!(wrong.is_empty(), "{wrong:#?}");
 }
 
 fn decide_now(
@@ -2561,10 +2583,15 @@ async fn an_unreadable_replayed_invocation_payload_keeps_an_automatic_update_pen
     let replay_error = async |entries: Vec<OplogEntry>| -> (OplogIndex, WorkerExecutorError) {
         let oplog = Arc::new(TestOplog::default());
         oplog.add(OplogEntry::recovery_succeeded()).await.unwrap();
-        let mut last = OplogIndex::INITIAL;
-        for entry in entries {
-            last = oplog.add(entry).await.unwrap();
-        }
+        use futures::{StreamExt, TryStreamExt};
+        let last = futures::stream::iter(entries)
+            .then(|entry| oplog.add(entry))
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap()
+            .last()
+            .copied()
+            .unwrap_or(OplogIndex::INITIAL);
         let horizon = oplog.current_oplog_index().await;
         let replay = ReplayState::new_for_owner(
             owned_agent_id.clone(),
@@ -2601,31 +2628,35 @@ async fn an_unreadable_replayed_invocation_payload_keeps_an_automatic_update_pen
         }),
     ])
     .await;
-    for (index, error) in [unreadable_request, unreadable_result] {
-        let WorkerExecutorError::OplogFailed {
-            agent_id: failed,
-            details,
-        } = &error
-        else {
-            panic!("expected the read error of entry {index}, got {error:?}");
-        };
-        assert_eq!(*failed, agent_id());
-        assert!(
-            details.contains(&format!("oplog index {index}")) && details.contains("version: 255"),
-            "{details}"
-        );
-        let action = decide_now(
-            &BaselineRole::InitialFiles,
-            Some(&automatic),
-            RawStartError::Replay {
-                error: &error,
-                diverged: false,
-                provenance: Some(FailureProvenance::Host),
-            },
-        );
-        assert!(
-            matches!(&action, StartAction::Error(passed) if *passed == error),
-            "{action:?}"
-        );
-    }
+    [unreadable_request, unreadable_result]
+        .into_iter()
+        .for_each(|(index, error)| {
+            let WorkerExecutorError::OplogFailed {
+                agent_id: failed,
+                details,
+                ..
+            } = &error
+            else {
+                panic!("expected the read error of entry {index}, got {error:?}");
+            };
+            assert_eq!(*failed, agent_id());
+            assert!(
+                details.contains(&format!("oplog index {index}"))
+                    && details.contains("version: 255"),
+                "{details}"
+            );
+            let action = decide_now(
+                &BaselineRole::InitialFiles,
+                Some(&automatic),
+                RawStartError::Replay {
+                    error: &error,
+                    diverged: false,
+                    provenance: Some(FailureProvenance::Host),
+                },
+            );
+            assert!(
+                matches!(&action, StartAction::Error(passed) if *passed == error),
+                "{action:?}"
+            );
+        });
 }

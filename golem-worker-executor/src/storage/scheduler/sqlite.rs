@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use super::{
-    ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError, datetime_to_millis,
-    millis_to_datetime,
+    ClaimedScheduledAction, SchedulerStorage, SchedulerStorageError, UnreadableClaims,
+    UnreadableScheduledAction, datetime_to_millis, millis_to_datetime,
 };
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
@@ -168,21 +168,26 @@ impl SchedulerStorage for SqliteSchedulerStorage {
             .await
             .map_err(SchedulerStorageError::from)?;
 
-        rows.into_iter()
+        let rows = rows
+            .into_iter()
             .map(|row| {
                 let schedule_id = ScheduleId {
                     id: Uuid::parse_str(&row.schedule_id).map_err(|err| err.to_string())?,
                 };
-                Ok(ClaimedScheduledAction {
-                    schedule_id,
-                    action: decode(&row.action)
-                        .map_err(|error| SchedulerStorageError::unreadable(schedule_id, error))?,
-                    due_at: millis_to_datetime(row.due_at_ms)?,
-                    lease_owner,
-                    attempt_count: row.attempt_count as u32 + 1,
+                let due_at = millis_to_datetime(row.due_at_ms)?;
+                Ok(match decode(&row.action) {
+                    Ok(action) => Ok(ClaimedScheduledAction {
+                        schedule_id,
+                        action,
+                        due_at,
+                        lease_owner,
+                        attempt_count: row.attempt_count as u32 + 1,
+                    }),
+                    Err(error) => Err(UnreadableScheduledAction { schedule_id, error }),
                 })
             })
-            .collect()
+            .collect::<Result<Vec<_>, SchedulerStorageError>>()?;
+        UnreadableClaims::of_rows(rows)
     }
 
     async fn count_due(
@@ -269,7 +274,6 @@ impl SchedulerStorage for SqliteSchedulerStorage {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::storage::scheduler::UnreadableScheduledAction;
     use test_r::test;
 
     #[test]
@@ -299,21 +303,99 @@ mod tests {
             )
             .await
             .unwrap_err();
-        let SchedulerStorageError::Unreadable(unreadable) = &error else {
+        let SchedulerStorageError::Unreadable(claims) = &error else {
             panic!("the failed decode must be an unreadable action: {error}");
         };
         assert_eq!(
-            **unreadable,
-            UnreadableScheduledAction {
+            claims.unreadable,
+            vec![UnreadableScheduledAction {
                 schedule_id,
                 error: golem_common::serialization::DecodeError::UnknownVersion(255),
-            }
+            }]
         );
+        assert!(claims.claimed.is_empty());
         assert_eq!(
             error.to_string(),
             format!(
                 "failed to decode scheduled action {schedule_id}: unknown serialization version: 255"
             )
         );
+    }
+
+    /// A batch with an action that does not decode returns the healthy claims with the error of
+    /// the bad row. The bad row is leased like the others but not acknowledged: it stays stored.
+    #[test]
+    async fn claim_due_returns_the_healthy_claims_with_the_unreadable_row() {
+        let dir = tempfile::tempdir().unwrap();
+        let storage = SqliteSchedulerStorage::configured(&DbSqliteConfig {
+            database: dir.path().join("scheduler.db").display().to_string(),
+            max_connections: 1,
+            foreign_keys: false,
+        })
+        .await
+        .unwrap();
+        let now = Utc::now();
+        let shard_id = ShardId::new(6);
+        let assignment = ShardAssignment::unexpiring(8, [shard_id]);
+        let action = golem_common::model::ScheduledAction::Resume {
+            agent_created_by: golem_common::model::account::AccountId::new(),
+            owned_agent_id: golem_common::model::OwnedAgentId::new(
+                golem_common::model::environment::EnvironmentId::new(),
+                &crate::test_agent_id("sqlite-scheduler-mixed-batch"),
+            ),
+            target_worker_fingerprint: golem_common::model::AgentFingerprint::new(),
+        };
+        let encoded = golem_common::serialization::serialize(&action).unwrap();
+        let first = ScheduleId::fresh();
+        let bad = ScheduleId::fresh();
+        let last = ScheduleId::fresh();
+        storage
+            .insert(
+                first,
+                now - chrono::Duration::seconds(3),
+                shard_id,
+                &encoded,
+            )
+            .await
+            .unwrap();
+        storage
+            .insert(
+                bad,
+                now - chrono::Duration::seconds(2),
+                shard_id,
+                b"\xfeprivate payload",
+            )
+            .await
+            .unwrap();
+        storage
+            .insert(last, now - chrono::Duration::seconds(1), shard_id, &encoded)
+            .await
+            .unwrap();
+
+        let error = storage
+            .claim_due(now, &assignment, 3, Duration::from_secs(30))
+            .await
+            .unwrap_err();
+
+        let SchedulerStorageError::Unreadable(claims) = &error else {
+            panic!("a bad row must be an unreadable claim: {error}");
+        };
+        assert_eq!(
+            claims
+                .claimed
+                .iter()
+                .map(|claim| (claim.schedule_id, claim.action.clone(), claim.attempt_count))
+                .collect::<Vec<_>>(),
+            vec![(first, action.clone(), 1), (last, action, 1)]
+        );
+        assert_eq!(
+            claims.unreadable,
+            vec![UnreadableScheduledAction {
+                schedule_id: bad,
+                error: golem_common::serialization::DecodeError::UnknownVersion(254),
+            }]
+        );
+        assert!(!error.to_string().contains("private payload"), "{error}");
+        assert_eq!(storage.count_due(now, &assignment).await.unwrap(), 3);
     }
 }

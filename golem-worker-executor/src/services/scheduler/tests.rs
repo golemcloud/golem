@@ -1628,6 +1628,45 @@ async fn process_completes_entries_older_than_previous_hour() {
     assert!(completed_promises.contains(&promise_id));
 }
 
+/// A tick whose batch holds an action that does not decode still delivers the healthy actions of
+/// the batch. The bad row is not acknowledged: it stays stored for a later claim.
+#[test]
+async fn process_delivers_the_healthy_claims_of_a_batch_with_an_unreadable_action() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let promise_service = create_promise_service_mock();
+    let svc = create_scheduler(storage.clone(), promise_service.clone()).await;
+    let now = Utc::now();
+    let before = promise(agent("mixed-batch-before"), 7);
+    let after = promise(agent("mixed-batch-after"), 9);
+    svc.schedule(
+        now - chrono::Duration::minutes(3),
+        complete_promise_action(before.clone()),
+    )
+    .await;
+    storage
+        .insert(
+            ScheduleId::fresh(),
+            now - chrono::Duration::minutes(2),
+            ShardId::new(0),
+            b"\xfdprivate payload",
+        )
+        .await
+        .unwrap();
+    svc.schedule(
+        now - chrono::Duration::minutes(1),
+        complete_promise_action(after.clone()),
+    )
+    .await;
+
+    svc.process(now).await.unwrap();
+
+    let completed = promise_service.all_completed().await;
+    assert!(completed.contains(&before), "{completed:?}");
+    assert!(completed.contains(&after), "{completed:?}");
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    assert_eq!(storage.count_due(now, &assignment).await.unwrap(), 1);
+}
+
 #[test]
 async fn scheduled_invoke_uses_active_worker_fingerprint_before_worker_service_lookup() {
     let storage = Arc::new(InMemorySchedulerStorage::new());

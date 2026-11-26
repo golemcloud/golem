@@ -19,7 +19,9 @@ use super::{
     WorkerExecutionError, WorkerExecutorError, decode_recursive_stream_value, invocation_response,
     invocation_session_completion, invocation_session_result, mpsc,
 };
-use golem_api_grpc::invocation_session_protocol::OPLOG_UNREADABLE_FAILURE_CODE;
+use golem_api_grpc::invocation_session_protocol::{
+    OPLOG_UNREADABLE_FAILURE_CODE, oplog_read_failure,
+};
 
 pub(super) async fn persisted_invocation_result(
     streams: &StreamSession,
@@ -82,9 +84,7 @@ pub(super) async fn send_attachment_revocation(
     responses: &mpsc::Sender<InvocationResponse>,
     revocation: Result<(), SessionError>,
 ) {
-    if let Err(error) = revocation
-        && !error.starts_with("StaleEpoch:")
-    {
+    if let Err(error) = revocation {
         send_protocol_failure(responses, error).await;
         return;
     }
@@ -97,6 +97,19 @@ pub(super) async fn send_attachment_revocation(
             )),
         })
         .await;
+}
+
+/// Answers an attachment check that failed. A check that the attachment state refuses revokes the
+/// attachment. A failed oplog read, a refused write and an incomplete output keep their type: the
+/// session finishes with the worker error, so the refusal is not taken as a revocation.
+pub(super) async fn send_failed_attachment_check(
+    responses: &mpsc::Sender<InvocationResponse>,
+    error: SessionError,
+) {
+    match error {
+        SessionError::Failed(_) => send_attachment_revocation(responses, Ok(())).await,
+        error => send_protocol_failure(responses, error).await,
+    }
 }
 
 pub(super) async fn send_resumed_finished(
@@ -318,7 +331,9 @@ pub(super) async fn send_worker_failure(
     responses: &mpsc::Sender<InvocationResponse>,
     error: WorkerExecutorError,
 ) {
-    let code = if matches!(error, WorkerExecutorError::OplogFailed { .. }) {
+    let message = error.to_string();
+    let worker_error = WorkerExecutionError::from(error);
+    let code = if oplog_read_failure(&worker_error).is_some() {
         OPLOG_UNREADABLE_FAILURE_CODE
     } else {
         "worker-execution"
@@ -327,8 +342,123 @@ pub(super) async fn send_worker_failure(
         responses,
         InvocationFailureKind::Execution,
         code,
-        error.to_string(),
-        Some(error.into()),
+        message,
+        Some(worker_error),
     )
     .await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::services::oplog::{OplogReadError, UnreadableOplog};
+    use futures::FutureExt;
+    use golem_common::model::{AgentId, OplogIndex};
+    use test_r::test;
+
+    fn failure_code(error: WorkerExecutorError) -> (String, Option<WorkerExecutionError>) {
+        let (responses, mut rx) = mpsc::channel(1);
+        send_worker_failure(&responses, error)
+            .now_or_never()
+            .unwrap();
+        let Some(invocation_response::Response::Finished(InvocationSessionCompletion {
+            outcome: Some(invocation_session_completion::Outcome::Failure(failure)),
+        })) = rx.try_recv().unwrap().response
+        else {
+            panic!("expected a failure frame");
+        };
+        (failure.code, failure.worker_error)
+    }
+
+    /// Every failure that a failed oplog read caused gets the read code and a typed read
+    /// marker, also when a failed resume wraps it. Other failures get neither.
+    #[test]
+    fn a_failed_oplog_read_keeps_its_marker_and_code_through_a_failed_resume() {
+        let agent_id = AgentId::from_parts(7, 0x43);
+        let failed = WorkerExecutorError::from(UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::Gap {
+                start: OplogIndex::from_u64(43),
+                end: OplogIndex::from_u64(44),
+            },
+        ));
+        let unavailable = WorkerExecutorError::oplog_read_unavailable(
+            "primary storage of agent 7 did not answer",
+        );
+        [
+            failed.clone(),
+            unavailable.clone(),
+            WorkerExecutorError::failed_to_resume_worker(agent_id, failed),
+            WorkerExecutorError::failed_to_resume_worker(agent_id, unavailable),
+        ]
+        .into_iter()
+        .for_each(|error| {
+            let (code, worker_error) = failure_code(error.clone());
+            assert_eq!(code, OPLOG_UNREADABLE_FAILURE_CODE, "{error:?}");
+            assert!(
+                worker_error.as_ref().and_then(oplog_read_failure).is_some(),
+                "{error:?}"
+            );
+        });
+        [
+            WorkerExecutorError::recovery_required("trapped body cleanup failed"),
+            WorkerExecutorError::runtime("oplog entry 43 has unknown serialization version 255"),
+            WorkerExecutorError::failed_to_resume_worker(
+                agent_id,
+                WorkerExecutorError::runtime("the component did not instantiate"),
+            ),
+        ]
+        .into_iter()
+        .for_each(|error| {
+            let (code, worker_error) = failure_code(error.clone());
+            assert_eq!(code, "worker-execution", "{error:?}");
+            assert!(
+                worker_error.as_ref().and_then(oplog_read_failure).is_none(),
+                "{error:?}"
+            );
+        });
+    }
+
+    /// An attachment check that the attachment state refuses revokes the attachment, whatever its
+    /// text. A failed read keeps its typed worker error and is no revocation.
+    #[test]
+    fn a_failed_attachment_check_revokes_only_on_a_refused_attachment_state() {
+        let (responses, mut rx) = mpsc::channel(1);
+        [
+            SessionError::from("durable session has no attachment authority"),
+            SessionError::from("an attachment state refusal with any text"),
+        ]
+        .into_iter()
+        .for_each(|error| {
+            send_failed_attachment_check(&responses, error)
+                .now_or_never()
+                .unwrap();
+            assert!(matches!(
+                rx.try_recv().unwrap().response,
+                Some(invocation_response::Response::AttachmentRevoked(_))
+            ));
+        });
+
+        let agent_id = AgentId::from_parts(7, 0x43);
+        let unreadable = UnreadableOplog::new(
+            &agent_id,
+            OplogReadError::Gap {
+                start: OplogIndex::from_u64(43),
+                end: OplogIndex::from_u64(44),
+            },
+        );
+        send_failed_attachment_check(&responses, SessionError::Unreadable(unreadable.clone()))
+            .now_or_never()
+            .unwrap();
+        let Some(invocation_response::Response::Finished(InvocationSessionCompletion {
+            outcome: Some(invocation_session_completion::Outcome::Failure(failure)),
+        })) = rx.try_recv().unwrap().response
+        else {
+            panic!("a failed read is no revocation");
+        };
+        assert_eq!(
+            failure.worker_error,
+            Some(WorkerExecutorError::from(unreadable).into())
+        );
+    }
 }

@@ -57,6 +57,27 @@ impl From<crate::services::oplog::UnreadableOplog> for ProjectionError {
     }
 }
 
+/// A read of the stream session index storage that did not answer. The index of an agent is read
+/// in place of its oplog, so the read is a temporary read failure of that agent, not a session
+/// failure.
+pub(crate) fn unanswered_index_read(
+    namespace: &KeyValueStorageNamespace,
+    error: String,
+) -> SessionError {
+    match namespace {
+        KeyValueStorageNamespace::AgentDurableStreamSessionIndex { owned_agent_id, .. } => {
+            SessionError::Unreadable(UnreadableOplog::new(
+                &owned_agent_id.agent_id,
+                OplogReadError::source_unavailable(
+                    OplogReadSource::Other("stream session index"),
+                    error,
+                ),
+            ))
+        }
+        _ => SessionError::Failed(error),
+    }
+}
+
 pub(crate) async fn read_projection<T: BinaryDeserializer>(
     storage: &(dyn KeyValueStorage + Send + Sync),
     namespace: KeyValueStorageNamespace,
@@ -64,8 +85,9 @@ pub(crate) async fn read_projection<T: BinaryDeserializer>(
 ) -> Result<Option<T>, ProjectionError> {
     storage
         .with_entity("stream_session_index", "read_cache", "row")
-        .get_attempt_deserialize(namespace, field)
-        .await?
+        .get_attempt_deserialize(namespace.clone(), field)
+        .await
+        .map_err(|error| unanswered_index_read(&namespace, error))?
         .transpose()
         .map_err(|_| ProjectionError::CacheMiss)
 }
@@ -138,7 +160,8 @@ impl Projection<'_> {
         self.storage
             .with_entity("stream_session_index", "read_cache", "row")
             .get_raw(self.namespace.clone(), &key.field()?)
-            .await?
+            .await
+            .map_err(|error| unanswered_index_read(&self.namespace, error))?
             .as_deref()
             .map(|bytes| ProducerMetadataRow::decode_for_key(key, bytes))
             .transpose()
@@ -554,14 +577,7 @@ pub(crate) async fn project_producer_metadata(
     lineage: &StreamForkLineage,
 ) -> Result<ProducerMetadataProjection, ProjectionError> {
     let payload_error = |index, error| {
-        UnreadableOplog::new(
-            &owner.agent_id,
-            OplogReadError::of_payload(
-                OplogReadSource::Other("stream metadata payload"),
-                index,
-                error,
-            ),
-        )
+        UnreadableOplog::of_payload(&owner.agent_id, "stream metadata payload", index, error)
     };
     let mut projection = Projection {
         index: ProducerStreamIndex::default(),

@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::worker::state_actor::StoredAppend;
 use crate::worker::*;
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
@@ -538,28 +539,47 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// of the add can fold the entry first, and that fold sends only a generic status wakeup.
     ///
     /// A refusal is returned rather than acknowledged: the management request that wrote the
-    /// entry must not report it as accepted.
+    /// entry must not report it as accepted. `OplogError::Unreadable` tells that the commit
+    /// stored the entry and only the status after it does not read: the wakeup is sent, and the
+    /// caller must not take the error as a write that did not happen.
     pub(in crate::worker) async fn add_and_commit_oplog_internal(
         &self,
         instance_guard: &WorkerLifecycle,
         entry: OplogEntry,
         wakeup: Option<WorkerCommand>,
     ) -> Result<OplogIndex, OplogError> {
+        match self
+            .add_and_commit_stored(instance_guard, entry, wakeup)
+            .await?
+        {
+            StoredAppend::Reported(index) => Ok(index),
+            StoredAppend::Unreported(unreadable) => Err(OplogError::Unreadable(unreadable)),
+        }
+    }
+    /// Appends and commits `entry`, and tells a stored entry whose report failed from an entry
+    /// that the commit did not store. The running loop gets `wakeup` for every stored entry.
+    pub(in crate::worker) async fn add_and_commit_stored(
+        &self,
+        instance_guard: &WorkerLifecycle,
+        entry: OplogEntry,
+        wakeup: Option<WorkerCommand>,
+    ) -> Result<StoredAppend, OplogError> {
         let index = self.add_to_oplog(entry).await?;
         // The caller holds the lifecycle lock. The actor only enqueues its notification and never
         // awaits that lock, so this commit and the caller's specific wakeup below cannot deadlock.
-        self.state_actor
-            .commit_and_update_state(CommitLevel::Always)
-            .await
-            .map_err(|refusal| self.refused_by(refusal))?;
-
+        let stored = StoredAppend::of_commit(
+            index,
+            self.state_actor
+                .commit_and_update_state(CommitLevel::Always)
+                .await,
+        )
+        .map_err(|refusal| self.refused_by(refusal))?;
         if let Some(wakeup) = wakeup
             && let WorkerInstance::Running(running) = instance_guard.state()
         {
             running.sender.send(wakeup).unwrap();
         };
-
-        Ok(index)
+        Ok(stored)
     }
     /// Writes a *clean* status checkpoint from the current in-memory status if eligible (see
     /// [`status_checkpointer::StatusCheckpointer::maybe_checkpoint`]).

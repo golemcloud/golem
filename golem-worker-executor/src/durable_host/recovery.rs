@@ -723,7 +723,7 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
-    ) -> Option<LastError> {
+    ) -> Result<Option<LastError>, crate::services::oplog::UnreadableOplog> {
         last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
     }
 
@@ -1064,13 +1064,15 @@ fn log_unreadable_recovered_agent(owned_agent_id: &OwnedAgentId, error: &dyn std
     error!(agent_id = %owned_agent_id, error = %error, "Worker oplog is unreadable during shard-assignment recovery; skipping agent");
 }
 
-/// Whether `error` is an oplog that failed, also when a failed resume carries it.
+/// Whether `error` is a stored read that failed for good, also when a failed resume carries it.
 fn is_failed_oplog(error: &WorkerExecutorError) -> bool {
-    match error {
-        WorkerExecutorError::OplogFailed { .. } => true,
-        WorkerExecutorError::FailedToResumeAgent { reason, .. } => is_failed_oplog(reason),
-        _ => false,
-    }
+    matches!(
+        crate::worker::InvocationObservationFailure::stored_read(error),
+        Some((
+            crate::worker::InvocationObservationFailure::PermanentRead,
+            _
+        ))
+    )
 }
 
 pub(in crate::durable_host) fn should_restart_after_shard_assignment_change(

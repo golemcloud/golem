@@ -22,7 +22,7 @@ use golem_common::model::OplogIndex;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, EphemeralCannotSuspendError};
 use golem_service_base::error::worker_executor::{
-    InterruptKind, RecoveryCause, WorkerExecutorError,
+    InterruptKind, OplogFailureStage, RecoveryCause, WorkerExecutorError,
 };
 
 #[cfg(test)]
@@ -77,23 +77,68 @@ pub(super) fn monthly_interrupt_error(
 
 use crate::worker::*;
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+/// Why an observation of an invocation gave no outcome. None of these is an outcome of the
+/// invocation: a waiter can learn from it why there is no answer, but nothing records, caches,
+/// cancels or appends because of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum InvocationObservationFailure {
+    /// A read of stored data failed, and every later read gives the same failure.
     PermanentRead,
+    /// A read of stored data failed for a time. A later read can pass.
     RetryableRead,
+    /// A reconstruction is necessary for a cause that is not a read.
+    Recovery,
+    /// An archive layer did not store the oplog, so the agent stopped before its oplog gave an
+    /// outcome. This is not a failed read.
+    ArchiveWrite,
+    /// The agent is not on this executor.
     Reroute,
 }
 
 impl InvocationObservationFailure {
-    pub(crate) fn classify(error: &WorkerExecutorError) -> Option<Self> {
+    /// The failed stored read that caused `error`, and its kind: `PermanentRead` or
+    /// `RetryableRead`. The read is also found in the reason of a failed resume. A recovery is a
+    /// read only when its cause is a read. This is the only rule that tells a failed stored read
+    /// from other errors.
+    pub(crate) fn stored_read(error: &WorkerExecutorError) -> Option<(Self, &WorkerExecutorError)> {
         match error {
-            WorkerExecutorError::OplogFailed { .. } => Some(Self::PermanentRead),
-            WorkerExecutorError::RecoveryRequired { .. } => Some(Self::RetryableRead),
-            WorkerExecutorError::InvalidShardId { .. } | WorkerExecutorError::ShardingNotReady => {
-                Some(Self::Reroute)
-            }
+            WorkerExecutorError::OplogFailed {
+                stage: OplogFailureStage::Read,
+                ..
+            } => Some((Self::PermanentRead, error)),
+            WorkerExecutorError::RecoveryRequired {
+                cause: RecoveryCause::OplogReadUnavailable,
+                ..
+            } => Some((Self::RetryableRead, error)),
+            WorkerExecutorError::FailedToResumeAgent { reason, .. } => Self::stored_read(reason),
             _ => None,
         }
+    }
+
+    /// Whether a failed stored read caused `error`, see [`Self::stored_read`].
+    pub(crate) fn is_stored_read(error: &WorkerExecutorError) -> bool {
+        Self::stored_read(error).is_some()
+    }
+
+    /// Why `error` gives no outcome, or `None` when `error` can be an outcome.
+    pub(crate) fn classify(error: &WorkerExecutorError) -> Option<Self> {
+        Self::stored_read(error)
+            .map(|(read, _)| read)
+            .or(match error {
+                WorkerExecutorError::RecoveryRequired { .. } => Some(Self::Recovery),
+                WorkerExecutorError::OplogFailed {
+                    stage: OplogFailureStage::ArchiveWrite,
+                    ..
+                } => Some(Self::ArchiveWrite),
+                WorkerExecutorError::FailedToResumeAgent { reason, .. }
+                    if Self::classify(reason) == Some(Self::ArchiveWrite) =>
+                {
+                    Some(Self::ArchiveWrite)
+                }
+                WorkerExecutorError::InvalidShardId { .. }
+                | WorkerExecutorError::ShardingNotReady => Some(Self::Reroute),
+                _ => None,
+            })
     }
 }
 
@@ -319,19 +364,32 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // outcome of the agent. For an oplog that failed for good, the caller stops the worker
         // and tells the waiters; for a read that failed for a time, the caller recovers the
         // worker again with the same delay. A lost shard also retires the worker.
-        if self.retire_if_shard_lost(error) || is_failed_oplog_read(error) {
+        if self.retire_if_shard_lost(error) || InvocationObservationFailure::is_stored_read(error) {
             return;
         }
 
         let latest_status = self.get_last_known_status().await;
         let previous_error = if latest_status.last_error_kind == Some(OplogErrorKind::Recovery) {
-            Ctx::get_last_error_and_retry_count(
+            match Ctx::get_last_error_and_retry_count(
                 self.all(),
                 &self.owned_agent_id,
                 self.agent_mode(),
                 &latest_status,
             )
             .await
+            {
+                Ok(previous_error) => previous_error,
+                // The retry point of the recorded failure is unknown. An entry without it would
+                // record a made-up retry point, so this failure adds no entry.
+                Err(unreadable) => {
+                    warn!(
+                        agent_id = %self.owned_agent_id,
+                        error = %unreadable,
+                        "The last recovery failure does not read; the recovery failure adds no entry"
+                    );
+                    return;
+                }
+            }
         } else {
             None
         };
@@ -777,12 +835,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         index: OplogIndex,
         error: OplogPayloadDownloadError,
     ) -> UnreadableOplog {
-        use crate::services::oplog::{OplogReadError, OplogReadSource};
-
-        UnreadableOplog::new(
-            &self.agent_id(),
-            OplogReadError::of_payload(OplogReadSource::Other(source), index, error),
-        )
+        UnreadableOplog::of_payload(&self.agent_id(), source, index, error)
     }
 
     /// A read error does not establish whether the invocation completed. The lookup reads a
@@ -1006,20 +1059,6 @@ pub(in crate::worker) fn invocation_result_index_unavailable(
             detail,
         },
     )
-}
-
-/// Whether `error` is an oplog that failed for good, also when a failed resume carries it.
-/// Whether a failed oplog read caused `error`, for good or for a time.
-fn is_failed_oplog_read(error: &WorkerExecutorError) -> bool {
-    match error {
-        WorkerExecutorError::OplogFailed { .. }
-        | WorkerExecutorError::RecoveryRequired {
-            cause: RecoveryCause::OplogReadUnavailable,
-            ..
-        } => true,
-        WorkerExecutorError::FailedToResumeAgent { reason, .. } => is_failed_oplog_read(reason),
-        _ => false,
-    }
 }
 
 pub(in crate::worker) fn recovery_agent_error(error: &WorkerExecutorError) -> AgentError {
@@ -1397,15 +1436,11 @@ impl InvocationResult {
                         .download_payload_classified(result)
                         .await
                         .map_err(|error| {
-                            UnreadableOplog::new(
+                            UnreadableOplog::of_payload(
                                 &owned_agent_id.agent_id,
-                                crate::services::oplog::OplogReadError::of_payload(
-                                    crate::services::oplog::OplogReadSource::Other(
-                                        "invocation result payload",
-                                    ),
-                                    oplog_idx,
-                                    error,
-                                ),
+                                "invocation result payload",
+                                oplog_idx,
+                                error,
                             )
                         })?;
                     let background_failure = match background_failure_idx {
@@ -1466,9 +1501,13 @@ impl InvocationResult {
                     trap_type: TrapType::Exit,
                     stderr: "".to_string(),
                 }),
-                _ => panic!(
-                    "Unexpected oplog entry pointed by invocation result at index {oplog_idx} for {owned_agent_id:?}"
-                ),
+                _ => {
+                    return Err(not_a_terminal(
+                        owned_agent_id,
+                        "invocation result index",
+                        oplog_idx,
+                    ));
+                }
             };
 
             *self = Self::Cached { result }
@@ -1494,8 +1533,29 @@ async fn read_background_failure<
             Ok(BackgroundFailure::Trapped { error, stderr })
         }
         OplogEntry::Exited { .. } => Ok(BackgroundFailure::Exited),
-        _ => panic!(
-            "Unexpected oplog entry pointed by a background failure at index {failure_idx} for {owned_agent_id:?}"
-        ),
+        _ => Err(not_a_terminal(
+            owned_agent_id,
+            "background failure index",
+            failure_idx,
+        )),
     }
+}
+
+/// The read error for a persisted index of `source` that names a readable entry of another
+/// kind. The index does not name the entry that it must name, so every read gives the same
+/// error: the oplog of the agent is unreadable at `index`.
+fn not_a_terminal(
+    owned_agent_id: &OwnedAgentId,
+    source: &'static str,
+    index: OplogIndex,
+) -> UnreadableOplog {
+    UnreadableOplog::new(
+        &owned_agent_id.agent_id,
+        crate::services::oplog::OplogReadError::corruption(
+            crate::services::oplog::OplogReadSource::Other(source),
+            format!(
+                "the entry at oplog index {index} is not the terminal entry that {source} names"
+            ),
+        ),
+    )
 }

@@ -38,8 +38,8 @@ pub struct ClaimedScheduledAction {
 /// Typed error for [`SchedulerStorage`] operations.
 ///
 /// `Transient` errors (pool exhaustion, connection resets) are retriable;
-/// `Other` errors (data issues, schema problems) are not. `Unreadable` is a stored action that
-/// does not decode; a repeated read gives the same error.
+/// `Other` errors (data issues, schema problems) are not. `Unreadable` is a claimed batch with
+/// stored actions that do not decode; a repeated read gives the same error.
 #[derive(Debug, Clone)]
 pub enum SchedulerStorageError {
     /// Transient error — pool exhaustion, connection reset, broken pipe.
@@ -48,14 +48,57 @@ pub enum SchedulerStorageError {
     /// Permanent error — data issue, unique violation, schema error.
     /// Caller should not retry.
     Other(String),
-    /// A stored action that does not decode. Caller should not retry.
-    Unreadable(Box<UnreadableScheduledAction>),
+    /// A claimed batch with stored actions that do not decode. It holds the healthy claims of the
+    /// batch, which the caller processes. The bad rows stay leased and stored: nothing processes
+    /// or acknowledges them.
+    Unreadable(Box<UnreadableClaims>),
 }
 
-impl SchedulerStorageError {
-    /// The error of the stored action of `schedule_id` that does not decode.
-    pub fn unreadable(schedule_id: ScheduleId, error: DecodeError) -> Self {
-        Self::Unreadable(Box::new(UnreadableScheduledAction { schedule_id, error }))
+/// The claims of a batch in which one or more stored actions do not decode.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnreadableClaims {
+    /// The claimed actions that decode, in claim order.
+    pub claimed: Vec<ClaimedScheduledAction>,
+    /// The claimed rows that do not decode, in claim order.
+    pub unreadable: Vec<UnreadableScheduledAction>,
+}
+
+impl UnreadableClaims {
+    /// The result of a claim from its decoded rows: the claims when every row decodes, otherwise
+    /// `Unreadable` with the healthy claims and the error of each bad row.
+    pub fn of_rows(
+        rows: Vec<Result<ClaimedScheduledAction, UnreadableScheduledAction>>,
+    ) -> Result<Vec<ClaimedScheduledAction>, SchedulerStorageError> {
+        let (claimed, unreadable): (Vec<_>, Vec<_>) = rows.into_iter().partition(Result::is_ok);
+        let claimed = claimed.into_iter().flatten().collect();
+        match unreadable
+            .into_iter()
+            .filter_map(Result::err)
+            .collect::<Vec<_>>()
+        {
+            unreadable if unreadable.is_empty() => Ok(claimed),
+            unreadable => Err(SchedulerStorageError::Unreadable(Box::new(Self {
+                claimed,
+                unreadable,
+            }))),
+        }
+    }
+
+    /// The number of rows that the claim leased.
+    pub fn selected(&self) -> usize {
+        self.claimed.len() + self.unreadable.len()
+    }
+}
+
+impl Display for UnreadableClaims {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        let unreadable = self
+            .unreadable
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>()
+            .join("; ");
+        write!(f, "{unreadable}")
     }
 }
 

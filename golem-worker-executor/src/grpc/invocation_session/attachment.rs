@@ -20,7 +20,7 @@ use super::{
     send_protocol_failure,
 };
 
-pub(super) async fn detach_durable_attachment(streams: Option<StreamSession>) {
+async fn detach_durable_attachment(streams: Option<StreamSession>) {
     if let Some(streams) = streams
         && let Err(error) = streams.detach_current().await
     {
@@ -61,8 +61,12 @@ impl CleanupEvent {
                 InvocationObservationFailure::PermanentRead
                 | InvocationObservationFailure::RetryableRead,
             ) => Self::ReadFailed,
-            Some(InvocationObservationFailure::Reroute) => Self::AuthorityEnded,
-            None => Self::OtherFailure,
+            // The oplog of the agent refuses every later write, so this transport writes no
+            // detach either.
+            Some(
+                InvocationObservationFailure::Reroute | InvocationObservationFailure::ArchiveWrite,
+            ) => Self::AuthorityEnded,
+            _ => Self::OtherFailure,
         }
     }
 

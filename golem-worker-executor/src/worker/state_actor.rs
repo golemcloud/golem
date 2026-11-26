@@ -204,10 +204,34 @@ impl CommitReceipt {
     }
 }
 
+/// What the commit of an appended entry stored.
+pub(super) enum StoredAppend {
+    /// The commit stored the entry at this index, and the status after the commit was read.
+    Reported(OplogIndex),
+    /// The commit stored the entry, but the status after the commit did not read.
+    Unreported(UnreadableOplog),
+}
+
+impl StoredAppend {
+    /// The rule for the storage stage of an append at `index`. An `Unreadable` refusal comes
+    /// after a commit that stored the entry, so only its report failed. Every other refusal
+    /// stored nothing, and this returns it.
+    pub(super) fn of_commit<T>(
+        index: OplogIndex,
+        commit: Result<T, OplogRefusal>,
+    ) -> Result<Self, OplogRefusal> {
+        match commit {
+            Ok(_) => Ok(Self::Reported(index)),
+            Err(OplogRefusal::Unreadable(unreadable)) => Ok(Self::Unreported(unreadable)),
+            Err(refusal) => Err(refusal),
+        }
+    }
+}
+
 pub(super) enum InvocationAppendOutcome {
+    /// The status changed after the caller read it; the caller looks up its key again.
     Retry,
-    Stored(OplogIndex),
-    StoredButUnreadable(UnreadableOplog),
+    Appended(StoredAppend),
 }
 
 /// A request processed by the status task, which exclusively owns the commit + status-fold
@@ -633,20 +657,16 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                     }
                                 })?;
                                 // This commit establishes storage even if its report or fold fails.
-                                let outcome = match state
-                                    .commit_and_update_state(CommitLevel::Always, None)
-                                    .await
-                                {
-                                    Ok(_) => InvocationAppendOutcome::Stored(index),
-                                    Err(OplogRefusal::Unreadable(unreadable)) => {
-                                        InvocationAppendOutcome::StoredButUnreadable(unreadable)
-                                    }
-                                    Err(refusal) => return Err(refusal.into()),
-                                };
+                                let stored = StoredAppend::of_commit(
+                                    index,
+                                    state
+                                        .commit_and_update_state(CommitLevel::Always, None)
+                                        .await,
+                                )?;
                                 if let WorkerInstance::Running(running) = instance_guard.state() {
                                     running.sender.send(WorkerCommand::WorkAvailable).unwrap();
                                 }
-                                Ok(outcome)
+                                Ok(InvocationAppendOutcome::Appended(stored))
                             },
                             done,
                         )
@@ -1338,10 +1358,15 @@ pub(super) fn reconstructed_status(
 }
 
 /// Answers the storage or ordered-handoff receipt and returns the report or typed failure.
-/// An unreadable report follows the successful storage milestone. Fenced and ArchiveWrite
-/// refuse that milestone and latch later writes. Other write errors are fail-stop.
+/// `unconfirmed` is the append that the oplog latched as unknown, read after the commit
+/// ([`Oplog::unconfirmed_append`]). While it is set, an unreadable error is not a commit: it
+/// becomes `Unconfirmed` and refuses the receipt, even when the entries of the caller may be
+/// stored. Without it, an unreadable error is a report that failed after the successful storage
+/// milestone, which answers the receipt. Fenced and ArchiveWrite refuse the milestone and latch
+/// later writes. Other write errors are fail-stop.
 fn settle_commit(
     result: Result<BTreeMap<OplogIndex, OplogEntry>, OplogError>,
+    unconfirmed: Option<UnreadableOplog>,
     committed: Option<CommitReceipt>,
 ) -> Result<BTreeMap<OplogIndex, OplogEntry>, OplogRefusal> {
     match result {
@@ -1353,6 +1378,12 @@ fn settle_commit(
         }
         Err(error) => match error.into_refusal() {
             Ok(refusal) => {
+                let refusal = match (refusal, unconfirmed) {
+                    (OplogRefusal::Unreadable(_), Some(unconfirmed)) => {
+                        OplogRefusal::Unconfirmed(unconfirmed)
+                    }
+                    (refusal, _) => refusal,
+                };
                 if let Some(committed) = committed {
                     match &refusal {
                         OplogRefusal::Unreadable(_) => committed.committed(),
@@ -1536,7 +1567,8 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
         // Reading the index is not a write, so a fenced oplog still answers it; the sample is
         // only consumed on the path where the commit below succeeded.
         let appended_through = self.oplog.current_oplog_index().await;
-        let new_entries = match settle_commit(self.oplog.commit(commit_level).await, committed) {
+        let commit = self.oplog.commit(commit_level).await;
+        let new_entries = match settle_commit(commit, self.oplog.unconfirmed_append(), committed) {
             Ok(entries) => entries,
             Err(refusal) => {
                 if matches!(&refusal, OplogRefusal::Unreadable(_)) {
@@ -1937,6 +1969,7 @@ mod tests {
         let (receipt, answer) = oneshot::channel();
         let settled = settle_commit(
             fixture.oplog.commit(CommitLevel::Always).await,
+            None,
             Some(CommitReceipt::Refusable(receipt)),
         );
 
@@ -1960,6 +1993,96 @@ mod tests {
                     crate::services::oplog::OplogError::ArchiveWrite(_)
                 ))
         );
+    }
+
+    /// Commits the oplog the way the status task does and returns what the receipt answered.
+    async fn receipt_of_a_commit(
+        oplog: &Arc<dyn Oplog>,
+    ) -> (
+        Result<std::collections::BTreeMap<OplogIndex, OplogEntry>, OplogRefusal>,
+        Result<(), OplogRefusal>,
+    ) {
+        let (receipt, answer) = oneshot::channel();
+        let commit = oplog.commit(CommitLevel::Always).await;
+        let settled = settle_commit(
+            commit,
+            oplog.unconfirmed_append(),
+            Some(CommitReceipt::Refusable(receipt)),
+        );
+        (settled, answer.await.unwrap())
+    }
+
+    /// Commits an append whose outcome is unknown, with a batch that lands or not, and checks
+    /// that the receipt is refused with `Unconfirmed`.
+    async fn assert_unconfirmed_append_refuses_the_receipt(batch_lands: bool) {
+        let storage = Arc::new(crate::services::oplog::UnconfirmedAppends::default());
+        let service = crate::services::oplog::unconfirmed_appends_service(storage.clone()).await;
+        let oplog = crate::services::oplog::create_test_oplog(
+            &service,
+            crate::test_agent_id("unconfirmed-receipt"),
+        )
+        .await
+        .unwrap();
+        storage.unconfirm(crate::storage::indexed::IndexedStorageError::Transient(
+            "read-back outage".to_string(),
+        ));
+        if !batch_lands {
+            storage.drop_appends();
+        }
+        crate::services::oplog::add_grow_memory_entries(&oplog, 70..=71).await;
+
+        let (settled, receipt) = receipt_of_a_commit(&oplog).await;
+
+        let unconfirmed = oplog.unconfirmed_append().expect("latched");
+        assert_eq!(settled, Err(OplogRefusal::Unconfirmed(unconfirmed.clone())));
+        assert_eq!(receipt, Err(OplogRefusal::Unconfirmed(unconfirmed)));
+    }
+
+    /// Gate: an append whose outcome is unknown and whose batch landed is not a commit.
+    #[test]
+    #[timeout("30s")]
+    async fn an_unconfirmed_batch_that_landed_refuses_the_commit_receipt() {
+        assert_unconfirmed_append_refuses_the_receipt(true).await;
+    }
+
+    /// Gate: an append whose outcome is unknown and whose batch did not land is not a commit.
+    #[test]
+    #[timeout("30s")]
+    async fn an_unconfirmed_batch_that_did_not_land_refuses_the_commit_receipt() {
+        assert_unconfirmed_append_refuses_the_receipt(false).await;
+    }
+
+    /// Gate: a commit that stored its batch and failed only to read its report answers the
+    /// receipt as committed, and returns the unreadable report.
+    #[test]
+    #[timeout("30s")]
+    async fn a_commit_whose_report_alone_fails_answers_the_receipt() {
+        let storage = Arc::new(crate::services::oplog::UnconfirmedAppends::default());
+        let service = crate::services::oplog::unconfirmed_appends_service(storage.clone()).await;
+        let oplog = crate::services::oplog::create_test_oplog(
+            &service,
+            crate::test_agent_id("report-only-receipt"),
+        )
+        .await
+        .unwrap();
+        crate::services::oplog::add_grow_memory_entries(&oplog, 80..=80).await;
+        oplog
+            .wait_for_replicas(1, std::time::Duration::from_secs(1))
+            .await
+            .unwrap();
+        crate::services::oplog::add_grow_memory_entries(&oplog, 81..=81).await;
+        storage.fail_next_read(crate::storage::indexed::IndexedStorageError::Other(
+            "report read failure".to_string(),
+        ));
+
+        let (settled, receipt) = receipt_of_a_commit(&oplog).await;
+
+        assert!(
+            matches!(settled, Err(OplogRefusal::Unreadable(_))),
+            "{settled:?}"
+        );
+        assert_eq!(receipt, Ok(()));
+        assert_eq!(oplog.unconfirmed_append(), None);
     }
 
     fn pending_invocation(key: InvocationId) -> PendingInvocationRef {

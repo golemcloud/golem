@@ -93,13 +93,6 @@ pub fn decode_with_version<T: BinaryDeserializer>(
     }
 }
 
-pub fn deserialize_with_version<T: BinaryDeserializer>(
-    data: &[u8],
-    version: u8,
-) -> Result<T, String> {
-    decode_with_version(data, version).map_err(|error| error.to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use crate::model::component::ComponentId;
@@ -192,11 +185,7 @@ mod tests {
         [0, 255].into_iter().for_each(|version| {
             let bytes = [version, b's', b'e', b'c', b'r', b'e', b't'];
             let expected = format!("unknown serialization version: {version}");
-            assert_eq!(super::deserialize::<String>(&bytes), Err(expected.clone()));
-            assert_eq!(
-                super::deserialize_with_version::<String>(&bytes[1..], version),
-                Err(expected)
-            );
+            assert_eq!(super::deserialize::<String>(&bytes), Err(expected));
             assert_eq!(
                 super::decode::<String>(&bytes),
                 Err(super::DecodeError::UnknownVersion(version))
@@ -233,10 +222,6 @@ mod tests {
         );
         assert_eq!(
             super::deserialize::<String>(&[SERIALIZATION_VERSION_V3]),
-            Err(error.to_string())
-        );
-        assert_eq!(
-            super::deserialize_with_version::<String>(&[], SERIALIZATION_VERSION_V3),
             Err(error.to_string())
         );
 

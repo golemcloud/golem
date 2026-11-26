@@ -156,27 +156,23 @@ impl PrimaryOplogState {
             record_oplog_epoch_fence("append", matches!(appended, Err(OplogError::Fenced(_))));
         }
         if let Err(error) = appended {
-            if let OplogError::Fenced(fence) = &error {
-                // The commit barrier above already awaited every payload the batch referenced, so
-                // those blobs are durable and stay behind with no stored entry pointing at them.
-                // The epoch the storage holds is reported, so a shard manager whose state lost
-                // history can mint above it. Warned only when it latches: each write after that
-                // fails fast on the latch without reaching the storage.
-                if self.latch.set(WriteLatch::Fenced(fence.clone())).is_ok() {
-                    warn!(
-                        agent_id = %self.owned_agent_id,
-                        expected_epoch = fence.expected_epoch.0,
-                        actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
-                        "Oplog append fenced: the shard has a new owner, refusing further writes"
-                    );
-                }
-            } else if let Some(latch) = WriteLatch::of_append(&error) {
-                // The read-back of the append failed, so its entries are neither stored nor
-                // absent for this handle. Nothing writes them again; the agent fails instead.
-                let _ = self.latch.set(latch);
+            // The commit barrier above already awaited every payload the batch referenced, so
+            // after a fence those blobs are durable and stay behind with no stored entry pointing
+            // at them. The epoch the storage holds is reported, so a shard manager whose state
+            // lost history can mint above it. Warned only when it latches: each later add and
+            // commit fails fast on the latch without reaching the storage.
+            if let Some(WriteLatch::Fenced(fence)) =
+                close_latch(&self.latch, LatchEvent::AppendFailed(&error))
+            {
+                warn!(
+                    agent_id = %self.owned_agent_id,
+                    expected_epoch = fence.expected_epoch.0,
+                    actual_epoch = ?fence.actual_epoch.map(|epoch| epoch.0),
+                    "Oplog append fenced: the shard has a new owner, refusing further writes"
+                );
             }
             // A fenced append and an append whose outcome stays unknown keep their entries in the
-            // buffer, so that every index this oplog handed out stays readable from it.
+            // buffer, so that `current_oplog_index` keeps its value. Nothing sends them again.
             self.retain_refused(pairs.into_iter().map(|(_, entry)| entry));
             return Err(error);
         }
@@ -202,7 +198,7 @@ impl PrimaryOplogState {
         ))
     }
 
-    /// Refuses a new write once a fence or an unconfirmed append has latched, before anything is
+    /// Refuses a new add once a fence or an unconfirmed append has latched, before anything is
     /// buffered or reserved.
     ///
     /// Without it an add below the commit threshold would only buffer, answer with an index, and
@@ -214,14 +210,15 @@ impl PrimaryOplogState {
         }
     }
 
-    /// Puts entries a fenced append turned away back at the head of the buffer, where `commit`
-    /// drained them from.
+    /// Puts entries that a fenced or unconfirmed append turned away back at the head of the
+    /// buffer, where `commit` drained them from.
     ///
-    /// Every index this oplog has handed out stays readable from it: `last_oplog_idx` is not
-    /// rolled back, and the reader maps the buffer from `last_committed_idx`. A reader that took
-    /// `current_oplog_index` before the refusal and reads after it would otherwise find a gap and
-    /// fail-stop the executor. The entries are never sent again, because every later append fails
-    /// on the latch, and the buffer cannot grow, because every later add is refused.
+    /// `last_oplog_idx` is not rolled back. After a fence, the reader still gives these entries
+    /// from the buffer, so a reader that took `current_oplog_index` before the refusal finds no
+    /// gap. After an unconfirmed append, the reader returns the error of that append for them
+    /// instead, because the storage may not hold them. The entries are never sent again, because
+    /// every later append fails on the latch, and the buffer cannot grow, because every later add
+    /// is refused.
     fn retain_refused(&mut self, entries: impl IntoIterator<Item = OplogEntry>) {
         let mut restored: VecDeque<OplogEntry> = entries.into_iter().collect();
         restored.append(&mut self.buffer);
@@ -292,6 +289,11 @@ impl PrimaryOplogState {
             key: self.key.clone(),
             last_committed_idx: self.last_committed_idx,
             buffer: self.buffer.clone(),
+            unconfirmed_tail: self
+                .latch
+                .get()
+                .and_then(WriteLatch::unconfirmed)
+                .map(|unconfirmed| unconfirmed.error.clone()),
             replicas: self.replicas,
         }
     }
@@ -378,7 +380,9 @@ impl PrimaryOplogState {
             Ok(()) => Ok(()),
             Err(error @ IndexedStorageError::Fenced { .. }) => {
                 let fence = OplogFence::refused(self.owned_agent_id.agent_id(), error);
-                if self.latch.set(WriteLatch::Fenced(fence.clone())).is_ok() {
+                if let Some(WriteLatch::Fenced(fence)) =
+                    close_latch(&self.latch, LatchEvent::TrimFenced(fence))
+                {
                     warn!(
                         agent_id = %self.owned_agent_id,
                         expected_epoch = fence.expected_epoch.0,

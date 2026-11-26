@@ -3735,7 +3735,7 @@ fn stream_session_index_survives_cache_and_checkpoint_binary_roundtrip() {
     status.durable_stream_sessions.insert(key, expected.clone());
 
     let bytes = serialize(&status).unwrap();
-    let decoded: AgentStatusRecord = deserialize(&bytes).unwrap();
+    let decoded: AgentStatusRecord = decode(&bytes).unwrap();
     assert_eq!(decoded.durable_stream_sessions.get(&key), Some(&expected));
 
     let mut checkpoint = decoded.clone();
@@ -5620,7 +5620,7 @@ async fn a_stream_index_rebuild_over_an_undecodable_later_chunk_keeps_the_unread
         .expect("the producer load over an undecodable chunk must fail")
         .into_worker_executor_error(WorkerExecutorError::runtime);
     assert!(
-        matches!(&producer, WorkerExecutorError::OplogFailed { agent_id, details }
+        matches!(&producer, WorkerExecutorError::OplogFailed { agent_id, details, .. }
             if agent_id == &id.agent_id && details.contains("archive layer 1")),
         "{producer:?}"
     );
@@ -5733,7 +5733,7 @@ async fn a_cached_status_write_over_an_undecodable_chunk_keeps_the_oplog_failure
             .await
             .expect_err("the catch-up over an undecodable chunk must fail");
         assert!(
-            matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details }
+            matches!(&error, WorkerExecutorError::OplogFailed { agent_id, details, .. }
                 if agent_id == &id.agent_id && details.contains("archive layer 1")),
             "stream history {has_durable_stream_history}: {error:?}"
         );

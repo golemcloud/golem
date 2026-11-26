@@ -50,7 +50,7 @@ fn unreadable() -> UnreadableOplog {
     }
 }
 
-async fn routed_stream_session(
+pub(super) async fn routed_stream_session(
     role: SessionStreamRole,
 ) -> (
     StreamSession,
@@ -779,11 +779,9 @@ async fn an_undecodable_output_value_fails_its_agent_at_its_entry_without_a_term
         panic!("an undecodable value is corrupt history, got {unreadable:?}");
     };
     assert_eq!(*source, OplogReadSource::Other("durable output value"));
-    assert!(
-        detail.starts_with(&format!(
-            "invalid durable output value at oplog index {entry}: "
-        )),
-        "{detail}"
+    assert_eq!(
+        detail,
+        &format!("invalid durable output value at oplog index {entry} item 0")
     );
 
     let mut detach = AttachmentCleanup::new(Some(streams.clone()));
@@ -797,13 +795,71 @@ async fn an_undecodable_output_value_fails_its_agent_at_its_entry_without_a_term
     )
     .await;
     drop(responses);
-    let mut sent = Vec::new();
-    while let Some(response) = received.recv().await {
-        sent.push(response);
-    }
+    let sent = futures::StreamExt::collect::<Vec<_>>(futures::stream::poll_fn(|context| {
+        received.poll_recv(context)
+    }))
+    .await;
     assert_eq!(
         failure_of(&sent).worker_error,
         Some(WorkerExecutorError::from(unreadable.clone()).into())
+    );
+    assert_eq!(detach.phase(), CleanupPhase::Unsettled);
+    detach.finish().await;
+    assert_eq!(streams.persisted_finished().await.unwrap(), None);
+    assert_eq!(streams.oplog.current_oplog_index().await, tail);
+}
+
+#[test]
+async fn an_undecodable_item_of_another_producer_names_it_and_ends_the_reader_without_a_terminal() {
+    use crate::durable_host::durable_session::undecodable_output_value;
+    use crate::services::oplog::OplogReadSource;
+    use futures::StreamExt;
+    use golem_common::model::durable_stream::StreamOffset;
+
+    let (streams, _state, handle) = routed_stream_session(SessionStreamRole::Output).await;
+    let foreign = AgentId::from_parts(0x5e55, 0x8);
+    assert_ne!(foreign, handle.producer);
+    let mut offset = [0u8; 24];
+    offset[8..16].copy_from_slice(&41u64.to_be_bytes());
+    offset[16..20].copy_from_slice(&3u32.to_be_bytes());
+    let offset = StreamOffset(offset);
+    let tail = streams.oplog.current_oplog_index().await;
+    let (responses, mut received) = mpsc::channel(8);
+
+    let error = undecodable_output_value(foreign, offset);
+    let SessionError::Unreadable(unreadable) = error.clone() else {
+        panic!("a stored item is history of its producer, got {error:?}");
+    };
+    assert_eq!(unreadable.agent_id, foreign);
+    assert_eq!(
+        unreadable.error,
+        OplogReadError::corruption(
+            OplogReadSource::Other("durable output value"),
+            format!(
+                "invalid durable output value at oplog index {} item {}",
+                offset.producer_oplog_index(),
+                offset.sub_index()
+            ),
+        )
+    );
+
+    let mut detach = AttachmentCleanup::new(Some(streams.clone()));
+    end_attachment_on_failure(
+        &streams,
+        &responses,
+        &HashMap::new(),
+        &mut detach,
+        error,
+        async { panic!("a read failure must not drain the output") },
+    )
+    .await;
+    drop(responses);
+    let sent = futures::stream::poll_fn(|context| received.poll_recv(context))
+        .collect::<Vec<_>>()
+        .await;
+    assert_eq!(
+        failure_of(&sent).worker_error,
+        Some(WorkerExecutorError::from(unreadable).into())
     );
     assert_eq!(detach.phase(), CleanupPhase::Unsettled);
     detach.finish().await;
@@ -846,8 +902,13 @@ fn only_a_held_attachment_changes_its_cleanup_phase() {
         ReadFailed
     );
     assert_eq!(
-        CleanupEvent::of_observation_failure(&WorkerExecutorError::recovery_required("later")),
+        CleanupEvent::of_observation_failure(&WorkerExecutorError::oplog_read_unavailable("later")),
         ReadFailed
+    );
+    // A reconstruction for a cause that is not a read keeps the attachment held.
+    assert_eq!(
+        CleanupEvent::of_observation_failure(&WorkerExecutorError::recovery_required("later")),
+        OtherFailure
     );
     assert_eq!(
         CleanupEvent::of_observation_failure(&WorkerExecutorError::ShardingNotReady),

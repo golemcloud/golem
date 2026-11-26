@@ -43,7 +43,7 @@ use crate::services::{
 };
 use crate::worker::invocation::validate_agent_method_invocation;
 use crate::worker::target::ResolvedTarget;
-use crate::worker::{CreateIntent, Worker};
+use crate::worker::{CreateIntent, InvocationObservationFailure, Worker};
 use crate::workerctx::WorkerCtx;
 use async_trait::async_trait;
 use futures::StreamExt;
@@ -73,7 +73,7 @@ use golem_common::model::{
 };
 use golem_common::schema::SchemaValue;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
-use golem_service_base::error::worker_executor::{RecoveryCause, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
@@ -377,7 +377,7 @@ impl From<RpcError> for RpcAwaitError {
 /// is the outcome that [`RpcError`] gives for it.
 impl From<WorkerExecutorError> for RpcAwaitError {
     fn from(value: WorkerExecutorError) -> Self {
-        if is_unread_history(&value) {
+        if InvocationObservationFailure::is_stored_read(&value) {
             Self::Unobserved(Box::new(value))
         } else {
             Self::Outcome(value.into())
@@ -399,19 +399,6 @@ pub fn rpc_await_outcome<T>(
     }
 }
 
-/// Whether a failed oplog read caused `error`, for good or for a time.
-pub(crate) fn is_unread_history(error: &WorkerExecutorError) -> bool {
-    match error {
-        WorkerExecutorError::OplogFailed { .. }
-        | WorkerExecutorError::RecoveryRequired {
-            cause: RecoveryCause::OplogReadUnavailable,
-            ..
-        } => true,
-        WorkerExecutorError::FailedToResumeAgent { reason, .. } => is_unread_history(reason),
-        _ => false,
-    }
-}
-
 /// The error with which `observer` stops a host call when the read of a stored history gave
 /// `error`. A failed oplog of `observer` stays as it is, so `observer` fails. A failed oplog of
 /// another agent fails only that agent: for `observer` it is a read that failed for a time, so
@@ -424,11 +411,11 @@ pub(crate) fn observation_recovery(
         WorkerExecutorError::FailedToResumeAgent { reason, .. } => {
             observation_recovery(observer, *reason)
         }
-        WorkerExecutorError::OplogFailed { agent_id, details } if agent_id != *observer => {
-            WorkerExecutorError::oplog_read_unavailable(format!(
-                "the oplog of agent {agent_id} failed: {details}"
-            ))
-        }
+        WorkerExecutorError::OplogFailed {
+            agent_id, details, ..
+        } if agent_id != *observer => WorkerExecutorError::oplog_read_unavailable(format!(
+            "the oplog of agent {agent_id} failed: {details}"
+        )),
         error => error,
     }
 }

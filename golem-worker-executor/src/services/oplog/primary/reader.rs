@@ -100,6 +100,11 @@ impl OplogReader {
         record_oplog_call("read");
 
         let buffer_start = self.last_committed_idx.next();
+        if oplog_index >= buffer_start
+            && let Some(error) = &self.unconfirmed_tail
+        {
+            return Err(error.clone());
+        }
         if oplog_index >= buffer_start {
             let offset = u64::from(oplog_index).saturating_sub(u64::from(buffer_start));
             if let Ok(offset) = usize::try_from(offset)
@@ -141,6 +146,11 @@ impl OplogReader {
         let Some(last_idx) = checked_range_end(oplog_index, n)? else {
             return Ok(BTreeMap::new());
         };
+        if last_idx > self.last_committed_idx
+            && let Some(error) = &self.unconfirmed_tail
+        {
+            return Err(error.clone());
+        }
 
         let mut result: BTreeMap<OplogIndex, OplogEntry> = if oplog_index <= self.last_committed_idx
         {
