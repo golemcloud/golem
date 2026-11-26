@@ -224,7 +224,7 @@ code exactly (positional constructor arguments, Effect results, `trigger` / `sch
 
 Each case copies one display file to `neg/<case>/<chapter>/<feature>/effect/`, applies one `sed`
 mutation, runs `check.sh neg/<case>` and requires that snippet's tsc run to fail and `ALL_OK` to
-be absent. It then checks there is one case per display file, reruns `check.sh` on the real files
+be absent. It then checks that each display file has at least one case, reruns `check.sh` on the real files
 and prints `NEG_OK`.
 
 | Case | Mutation | Error |
@@ -244,8 +244,10 @@ and prints `NEG_OK`.
 | chart-ts-inline-tag | `{ _tag: "inline", ... }` → `{ tag: "inline", ... }` (TS SDK shape) | TS2322 |
 | stream-endpoint-not-array | `http: [Http.post(…)]` → `http: Http.post(…)` (TS SDK shape) | TS2769 |
 | login-ts-undefined-none | `return Option.none()` → `return undefined` (TS SDK shape) | TS2322 |
+| login-caller-ref | `askedBy: caller.original.ref` → `askedBy: caller.ref` (a `Caller` has no `ref`) | TS2339 |
 | readonly-bad-flag | `readOnly: true` → `readOnly: "yes"` | TS2769 |
 | middleware-ts-create-promise | `Agents.Promises.create` → `Agents.Promises.createPromise` (TS SDK name) | TS2339 |
+| middleware-principal | `checkRateLimit(ctx.caller.original)` → `checkRateLimit(ctx.principal)` (the 1.6 middleware field) | TS2339 |
 | peruser-ts-returns | method `success:` → `returns:` (TS SDK name) | TS2769 |
 | routers-ts-implement-raw | `Exports.implement(` → `Exports.implementRaw(` (TS SDK name) | TS2551 |
 | signin-sub | `const { issuer, subject } = user` → `{ issuer, sub }` (the 1.6 OIDC field) | TS2339 |
