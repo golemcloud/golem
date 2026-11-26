@@ -53,7 +53,7 @@ impl StaticDefaultsAgent for StaticDefaultsAgentImpl {
     }
 
     fn read(&self) -> String {
-        serde_json::to_string(&self.config.get().expect("static config is captured")).unwrap()
+        serde_json::to_string(&self.config.get().expect("static config is stored")).unwrap()
     }
 }
 

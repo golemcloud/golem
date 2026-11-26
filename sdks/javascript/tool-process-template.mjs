@@ -25,8 +25,12 @@ const witBindgenP3 =
   "optional = true }";
 
 // `wasm-rquickjs generate-wrapper-crate` arguments shared by the SDK agent templates: the
-// native `golem-tool-process-bridge` module from the Golem-owned bridge crate, and the forked
-// wit-bindgen. The JavaScript modules are passed separately with `--js-modules`.
+// native `golem-tool-process-bridge` module from the Golem-owned bridge crate, the forked
+// wit-bindgen, and the tool exports that drain before they return. The templates build with
+// `post-return-drain`, so an agent method returns its result at `task.return` and the executor
+// drives its remaining work until it settles. The executor stops driving a tool or tool
+// middleware call at its return, so those exports drain their JavaScript work first. The
+// JavaScript modules are passed separately with `--js-modules`.
 export const templateGeneratorArgs = [
   "--native-module",
   "golem-tool-process-bridge=golem_js_tool_process_bridge::ToolProcessBridge",
@@ -34,4 +38,8 @@ export const templateGeneratorArgs = [
   `golem-js-tool-process-bridge={ path = ${JSON.stringify(bridge)} }`,
   "--dependency",
   `wit-bindgen-p3=${witBindgenP3}`,
+  "--drain-before-return",
+  "golem:tool/guest",
+  "--drain-before-return",
+  "golem:tool/tool-middleware-guest",
 ];

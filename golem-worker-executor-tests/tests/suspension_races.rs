@@ -8,7 +8,7 @@
 
 use crate::Tracing;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use golem_common::agent_key;
 use golem_common::model::oplog::{OplogIndex, PublicAgentInvocation, PublicOplogEntry};
 use golem_common::model::{
@@ -387,7 +387,7 @@ impl SchedulerStorage for InsertGate {
     async fn insert(
         &self,
         id: ScheduleId,
-        due: DateTime<Utc>,
+        due: jiff::Timestamp,
         shard: ShardId,
         action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
@@ -413,7 +413,7 @@ impl SchedulerStorage for InsertGate {
     }
     async fn claim_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
         limit: u32,
         ttl: Duration,
@@ -422,7 +422,7 @@ impl SchedulerStorage for InsertGate {
     }
     async fn count_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError> {
         self.inner.count_due(now, assignment).await
@@ -431,8 +431,8 @@ impl SchedulerStorage for InsertGate {
         &self,
         id: &ScheduleId,
         owner: Uuid,
-        until: DateTime<Utc>,
-        now: DateTime<Utc>,
+        until: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         self.inner.extend_lease(id, owner, until, now).await
     }
@@ -440,7 +440,7 @@ impl SchedulerStorage for InsertGate {
         &self,
         id: &ScheduleId,
         owner: Uuid,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         self.inner.ack(id, owner, now).await
     }

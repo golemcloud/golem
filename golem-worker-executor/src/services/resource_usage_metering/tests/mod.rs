@@ -1,7 +1,7 @@
 use super::*;
 use crate::filesystem::errors::OperationContext;
 use crate::services::active_agents::{ConcurrentAgentsScheduler, MemoryGrant};
-use chrono::TimeZone;
+
 use golem_common::model::AgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::BYTE_NANOSECONDS_PER_GB_SECOND;
@@ -43,7 +43,7 @@ async fn close_task_panic_reports_observer_loss_and_returns_physical_capacity() 
             self.inner.now()
         }
 
-        fn utc_now(&self) -> DateTime<Utc> {
+        fn utc_now(&self) -> jiff::Timestamp {
             assert!(
                 !self.fail.load(Ordering::Acquire),
                 "injected settlement clock failure"
@@ -121,15 +121,17 @@ fn window_open_failures_keep_bounded_typed_reasons() {
     }
 }
 
-fn ordinary_utc() -> DateTime<Utc> {
-    Utc.with_ymd_and_hms(2030, 6, 15, 12, 0, 0)
-        .single()
+fn ordinary_utc() -> jiff::Timestamp {
+    jiff::civil::DateTime::new(2030, 6, 15, 12, 0, 0, 0)
         .unwrap()
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp()
 }
 
 pub(crate) struct TestClock {
     base: Instant,
-    base_utc: DateTime<Utc>,
+    base_utc: jiff::Timestamp,
     offset_nanos: AtomicU64,
     sleep_deadline_nanos: AtomicU64,
     changed: tokio::sync::Notify,
@@ -140,7 +142,7 @@ impl TestClock {
         Self::new_at(base, ordinary_utc())
     }
 
-    pub(crate) fn new_at(base: Instant, base_utc: DateTime<Utc>) -> Arc<Self> {
+    pub(crate) fn new_at(base: Instant, base_utc: jiff::Timestamp) -> Arc<Self> {
         Arc::new(Self {
             base,
             base_utc,
@@ -176,9 +178,9 @@ impl MeteringClock for TestClock {
         self.base + Duration::from_nanos(self.offset_nanos.load(Ordering::Acquire))
     }
 
-    fn utc_now(&self) -> DateTime<Utc> {
+    fn utc_now(&self) -> jiff::Timestamp {
         self.base_utc
-            + chrono::Duration::nanoseconds(
+            + jiff::SignedDuration::from_nanos(
                 self.offset_nanos
                     .load(Ordering::Acquire)
                     .try_into()
@@ -978,11 +980,12 @@ async fn account_batch_flushes_active_memory_and_storage_without_close_duplicati
 async fn ordinary_window_close_settles_across_month_boundary_before_meter_drop() {
     for memory in [false, true] {
         for filesystem in [false, true] {
-            let base = Utc
-                .with_ymd_and_hms(2030, 1, 31, 23, 59, 59)
-                .single()
+            let base = jiff::civil::DateTime::new(2030, 1, 31, 23, 59, 59, 0)
                 .unwrap()
-                + chrono::Duration::milliseconds(500);
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                .unwrap()
+                .timestamp()
+                + jiff::SignedDuration::from_millis(500);
             let clock = TestClock::new_at(Instant::now(), base);
             let reader = ScriptedUsageReader::new(vec![
                 ObservationGate::ready(authoritative(100)),
@@ -1125,11 +1128,12 @@ async fn ordinary_retained_close_takes_final_sample_and_holds_returned_permit() 
 #[timeout("5s")]
 async fn active_memory_and_storage_are_split_at_the_utc_month_boundary() {
     let now = Instant::now();
-    let base_utc = Utc
-        .with_ymd_and_hms(2030, 1, 31, 23, 59, 59)
-        .single()
+    let base_utc = jiff::civil::DateTime::new(2030, 1, 31, 23, 59, 59, 0)
         .unwrap()
-        + chrono::Duration::milliseconds(500);
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp()
+        + jiff::SignedDuration::from_millis(500);
     let clock = TestClock::new_at(now, base_utc);
     let reader = ScriptedUsageReader::new(vec![ObservationGate::ready(authoritative(100))]);
     let entry = Arc::new(AtomicResourceEntry::new(0, 0, 0, 0, 1));
@@ -1214,11 +1218,12 @@ async fn ephemeral_meter_rollover_keeps_storage_separate_and_recovers_hard_limit
         year: 2030,
         month: 2,
     };
-    let base_utc = Utc
-        .with_ymd_and_hms(2030, 1, 31, 23, 59, 59)
-        .single()
+    let base_utc = jiff::civil::DateTime::new(2030, 1, 31, 23, 59, 59, 0)
         .unwrap()
-        + chrono::Duration::milliseconds(500);
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp()
+        + jiff::SignedDuration::from_millis(500);
     let clock = TestClock::new_at(now, base_utc);
     let reader = ScriptedUsageReader::new(vec![ObservationGate::ready(authoritative(100))]);
     let entry = Arc::new(AtomicResourceEntry::new_with_monthly_policy(

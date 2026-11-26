@@ -192,7 +192,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         };
                         let full_function_name = lowered.display_name.clone();
                         let stream_session = uses_streams.then_some(&idempotency_key);
-                        if lowered.records_result_at_return(stream_session)
+                        if lowered.records_result_at_return()
                             && let Err(error) = store
                                 .as_context_mut()
                                 .data_mut()

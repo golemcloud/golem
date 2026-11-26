@@ -12,8 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::cascade::error::{StoreAddLayerError, StoreGetValueError};
-use crate::cascade::layer::Layer;
+use crate::model::cascade::error::{StoreAddLayerError, StoreGetValueError};
+use crate::model::cascade::layer::Layer;
 use std::collections::HashMap;
 
 #[derive(Debug, Clone)]
@@ -131,8 +131,8 @@ impl<L: Layer> Store<L> {
 #[cfg(test)]
 mod test {
     use super::Store;
-    use crate::cascade::error::StoreGetValueError;
-    use crate::cascade::layer::Layer;
+    use crate::model::cascade::error::StoreGetValueError;
+    use crate::model::cascade::layer::Layer;
     use test_r::test;
 
     #[derive(Debug, Clone, serde::Serialize)]

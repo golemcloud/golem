@@ -40,7 +40,7 @@ pub(crate) fn capture_session_acceptance(
     let transport_stream_ids = request
         .input
         .as_ref()
-        .map(golem_common::schema::streaming::preflight_proto_recursive_stream_value)
+        .map(golem_common::schema::streaming::proto_method_input_stream_references)
         .transpose()
         .map_err(WorkerExecutorError::invalid_request)?
         .unwrap_or_default();
@@ -211,70 +211,75 @@ pub(crate) fn build_durable_streaming_request(
     } else {
         None
     };
-    let (graph, input_root, invocation_input, target, has_stdout, has_stderr) = match &invocation {
-        AgentInvocation::AgentMethod { method_name, .. } => {
-            let callee_agent_type = callee_agent_type
-                .ok_or_else(|| WorkerExecutorError::invalid_request("agent type not found"))?;
-            let agent_type = component_metadata
-                .find_agent_type_by_name_ref(callee_agent_type)
-                .ok_or_else(|| WorkerExecutorError::invalid_request("agent type not found"))?;
-            let method = agent_type
-                .methods
-                .iter()
-                .find(|method| &method.name == method_name)
-                .ok_or_else(|| WorkerExecutorError::invalid_request("agent method not found"))?;
-            let root = SchemaType::record(
-                method
-                    .input_schema
-                    .fields()
+    let (graph, input_root, invocation_input, target, has_stdout, has_stderr, uses_streams) =
+        match &invocation {
+            AgentInvocation::AgentMethod { method_name, .. } => {
+                let callee_agent_type = callee_agent_type
+                    .ok_or_else(|| WorkerExecutorError::invalid_request("agent type not found"))?;
+                let agent_type = component_metadata
+                    .find_agent_type_by_name_ref(callee_agent_type)
+                    .ok_or_else(|| WorkerExecutorError::invalid_request("agent type not found"))?;
+                let method = agent_type
+                    .methods
                     .iter()
-                    .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-                    .map(|field| NamedFieldType {
-                        name: field.name.clone(),
-                        body: field.schema.clone(),
-                        metadata: field.metadata.clone(),
-                    })
-                    .collect(),
-            );
-            (
-                &agent_type.schema,
-                root,
-                method_input.as_ref().expect("method input was decoded"),
-                PersistedInvocationTarget::AgentMethod {
-                    method_name: method_name.clone(),
-                },
-                false,
-                false,
-            )
-        }
-        AgentInvocation::ExternalTool {
-            tool_name,
-            command_path,
-            stdout,
-            stderr,
-            ..
-        } => {
-            let input = tool_input
-                .as_ref()
-                .expect("tool input envelope was constructed");
-            (
-                input.graph(),
-                input.root_type().clone(),
-                input.value(),
-                PersistedInvocationTarget::ExternalTool {
-                    tool_name: tool_name.to_string(),
-                    command_path: command_path.clone(),
-                },
-                *stdout,
-                *stderr,
-            )
-        }
-        _ => {
-            return Err(WorkerExecutorError::invalid_request(
-                "durable session requires a method or external tool invocation",
-            ));
-        }
-    };
+                    .find(|method| &method.name == method_name)
+                    .ok_or_else(|| {
+                        WorkerExecutorError::invalid_request("agent method not found")
+                    })?;
+                let root = SchemaType::record(
+                    method
+                        .input_schema
+                        .fields()
+                        .iter()
+                        .filter(|field| matches!(field.source, FieldSource::UserSupplied))
+                        .map(|field| NamedFieldType {
+                            name: field.name.clone(),
+                            body: field.schema.clone(),
+                            metadata: field.metadata.clone(),
+                        })
+                        .collect(),
+                );
+                (
+                    &agent_type.schema,
+                    root,
+                    method_input.as_ref().expect("method input was decoded"),
+                    PersistedInvocationTarget::AgentMethod {
+                        method_name: method_name.clone(),
+                    },
+                    false,
+                    false,
+                    method.uses_streams(&agent_type.schema),
+                )
+            }
+            AgentInvocation::ExternalTool {
+                tool_name,
+                command_path,
+                stdout,
+                stderr,
+                ..
+            } => {
+                let input = tool_input
+                    .as_ref()
+                    .expect("tool input envelope was constructed");
+                (
+                    input.graph(),
+                    input.root_type().clone(),
+                    input.value(),
+                    PersistedInvocationTarget::ExternalTool {
+                        tool_name: tool_name.to_string(),
+                        command_path: command_path.clone(),
+                    },
+                    *stdout,
+                    *stderr,
+                    true,
+                )
+            }
+            _ => {
+                return Err(WorkerExecutorError::invalid_request(
+                    "durable session requires a method or external tool invocation",
+                ));
+            }
+        };
     let session_key = StreamInvocationId {
         callee_environment_id: environment_id,
         callee,
@@ -295,7 +300,9 @@ pub(crate) fn build_durable_streaming_request(
             SessionStreamRole::Input
         },
     };
-    if input_encoded_len > MAX_DURABLE_STREAM_ITEM_SIZE {
+    // A scalar method also runs in a session, but its input is an ordinary method input, which
+    // has no logical value limit.
+    if uses_streams && input_encoded_len > MAX_DURABLE_STREAM_ITEM_SIZE {
         return Err(WorkerExecutorError::invalid_request(
             "ResourceExhausted: durable invocation input exceeds the 16 MiB logical value limit",
         ));

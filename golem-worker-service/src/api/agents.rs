@@ -6,7 +6,6 @@ use crate::metrics::{ActiveHttpApiStream, HttpApiStreamKind};
 use crate::model::WorkersMetadataResponse;
 use crate::service::auth::AuthService;
 use crate::service::worker::WorkerService;
-use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTypeName;
@@ -17,6 +16,7 @@ use golem_common::model::invocation_session_public::{
     INVOCATION_SESSION_SUBPROTOCOL, PublicErrorCode,
 };
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::poem::datetime::OpenApiTimestamp;
 use golem_common::model::tool::SerializableToolRpcError;
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, InvocationId, OwnedInvocationId,
@@ -619,7 +619,7 @@ pub struct AgentInvocationRequest {
     pub method: String,
     pub method_parameters: ExternalSchemaValue,
     pub mode: AgentInvocationMode,
-    pub schedule_at: Option<DateTime<Utc>>,
+    pub schedule_at: Option<OpenApiTimestamp>,
     pub expected_fingerprint: Option<AgentFingerprint>,
 }
 
@@ -650,7 +650,7 @@ pub struct NativeToolInvocationRequest {
     pub command_path: Vec<String>,
     pub input: Option<ExternalTypedSchemaValue>,
     pub mode: NativeToolInvocationMode,
-    pub schedule_at: Option<DateTime<Utc>>,
+    pub schedule_at: Option<OpenApiTimestamp>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
@@ -752,8 +752,8 @@ mod websocket_limit_tests;
 #[cfg(test)]
 mod tests {
     use super::{AgentInvocationRequest, CreateAgentRequest};
-    use chrono::{TimeZone, Utc};
     use golem_common::schema::{SchemaValue, SecretValuePayload};
+    use jiff::Timestamp;
     use poem_openapi::types::{ParseFromJSON, ToJSON};
     use serde_json::{Value, json};
     use test_r::test;
@@ -835,7 +835,7 @@ mod tests {
             secret_id: Uuid::nil(),
             config_key: None,
             version: 1,
-            resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+            resolved_at: Timestamp::new(0, 0).unwrap(),
             category: None,
         }))
         .unwrap();

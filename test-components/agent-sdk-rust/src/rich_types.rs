@@ -15,9 +15,9 @@
 //! Echo agent exercising the rich semantic schema types end-to-end
 //! (Path, Url, Datetime, Duration, Quantity).
 
-use chrono::{DateTime, Utc};
 use golem_rust::schema::TypeId;
 use golem_rust::{Quantity, QuantityUnit, agent_definition, agent_implementation};
+use jiff::Timestamp;
 use std::path::PathBuf;
 use std::time::Duration;
 use url::Url;
@@ -42,7 +42,7 @@ pub trait RichTypesAgent {
 
     fn echo_path(&self, value: PathBuf) -> PathBuf;
     fn echo_url(&self, value: Url) -> Url;
-    fn echo_datetime(&self, value: DateTime<Utc>) -> DateTime<Utc>;
+    fn echo_datetime(&self, value: Timestamp) -> Timestamp;
     fn echo_duration(&self, value: Duration) -> Duration;
     fn echo_quantity(&self, value: ByteQuantity) -> ByteQuantity;
 }
@@ -65,7 +65,7 @@ impl RichTypesAgent for RichTypesAgentImpl {
         value
     }
 
-    fn echo_datetime(&self, value: DateTime<Utc>) -> DateTime<Utc> {
+    fn echo_datetime(&self, value: Timestamp) -> Timestamp {
         value
     }
 

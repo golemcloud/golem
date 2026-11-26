@@ -11,6 +11,8 @@
  */
 import { Context, Schema } from "effect"
 import type * as AgentCommon from "golem:agent/common@2.0.0"
+import type { AgentId } from "./AgentId.js"
+import { agentIdFromWit } from "./internal/agentId.js"
 import { witPrincipalRefAnnotationKey } from "./WitTypes.js"
 
 /**
@@ -296,14 +298,14 @@ export class AccountPrincipal extends BasePrincipal {
 export class AgentPrincipal extends BasePrincipal {
   readonly kind = "agent" as const
   readonly ref: PrincipalRef
-  readonly agentId: AgentCommon.AgentId
+  readonly agentId: AgentId
   readonly agentType: string
   readonly environmentId: AgentCommon.EnvironmentId
 
   constructor(inner: AgentCommon.AgentPrincipal) {
     super()
     this.ref = refFromHost(inner.pair)
-    this.agentId = inner.agentId
+    this.agentId = agentIdFromWit(inner.agentId)
     this.agentType = inner.agentType
     this.environmentId = inner.environmentId
   }

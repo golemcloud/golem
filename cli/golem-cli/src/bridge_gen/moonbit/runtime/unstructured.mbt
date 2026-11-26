@@ -60,22 +60,10 @@ pub fn unstructured_text_to_schema_value(
 pub fn unstructured_text_from_schema_value(
   parameter_name : String,
   value : SchemaValue,
-  allowed_codes : Array[String],
 ) -> UnstructuredText raise {
   match value {
     VariantValue(1, Some(UrlValue(url))) => TextUrl(url)
-    VariantValue(0, Some(TextValue(text, language))) => {
-      match language {
-        Some(l) =>
-          if allowed_codes.length() > 0 && !allowed_codes.contains(l) {
-            raise BridgeError(
-              "Invalid value for parameter \{parameter_name}. Language code `\{l}` is not allowed.",
-            )
-          }
-        None => ()
-      }
-      TextInline(text, language)
-    }
+    VariantValue(0, Some(TextValue(text, language))) => TextInline(text, language)
     other =>
       raise BridgeError(
         "Invalid value for parameter \{parameter_name}. Expected an unstructured-text variant, got \{@debug.to_string(other)}",
@@ -98,22 +86,11 @@ pub fn unstructured_binary_to_schema_value(
 pub fn unstructured_binary_from_schema_value(
   parameter_name : String,
   value : SchemaValue,
-  allowed_mimes : Array[String],
 ) -> UnstructuredBinary raise {
   match value {
     VariantValue(1, Some(UrlValue(url))) => BinaryUrl(url)
-    VariantValue(0, Some(BinaryValue(bytes, mime_type))) => {
-      match mime_type {
-        Some(m) =>
-          if allowed_mimes.length() > 0 && !allowed_mimes.contains(m) {
-            raise BridgeError(
-              "Invalid value for parameter \{parameter_name}. MIME type `\{m}` is not allowed.",
-            )
-          }
-        None => ()
-      }
+    VariantValue(0, Some(BinaryValue(bytes, mime_type))) =>
       BinaryInline(bytes, mime_type)
-    }
     other =>
       raise BridgeError(
         "Invalid value for parameter \{parameter_name}. Expected an unstructured-binary variant, got \{@debug.to_string(other)}",

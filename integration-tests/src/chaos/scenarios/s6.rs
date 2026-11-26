@@ -76,7 +76,7 @@ use crate::chaos::split::{self, FaultWindow, PodSplit};
 use crate::chaos::summary::{ChaosSummary, Note, TerminationReason};
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
-use chrono::Utc;
+
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use std::time::Duration;
@@ -101,7 +101,7 @@ pub async fn run(
     signals: &FaultSignals,
     outputs: &OutputPaths,
 ) -> anyhow::Result<ChaosResult> {
-    let started_at = Utc::now();
+    let started_at = jiff::Timestamp::now();
     let delete_config = config.require_delete()?;
     let history = OperationHistory::new(ScenarioCode::S6.as_str());
     let key_prefix = crate::chaos::scenario_key_prefix(ScenarioCode::S6);
@@ -247,13 +247,13 @@ pub async fn run(
         agents.len(),
         config.phases.baseline()
     );
-    phases.baseline = Some(PhaseWindow::started(Utc::now()));
+    phases.baseline = Some(PhaseWindow::started(jiff::Timestamp::now()));
     let handle = deletions::start(ctx.clone(), delete_config);
     tokio::time::sleep(config.phases.baseline()).await;
     routing_snapshots.push(snapshot_routing(deps, "before-fault").await);
     ownership.push(sample_ownership(deps, "before-fault", ownership.last(), false).await);
     if let Some(window) = phases.baseline.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
 
     let baseline_operations = history.confirmed_in_phase(Phase::Baseline);
@@ -291,7 +291,7 @@ pub async fn run(
     );
     signals.write_baseline_ready(&BaselineReady {
         scenario_code: ScenarioCode::S6.as_str().to_string(),
-        ready_at: Utc::now(),
+        ready_at: jiff::Timestamp::now(),
         baseline_operations,
         fault_target: Some(FaultTarget {
             pod_address: split.pod_address.clone(),
@@ -361,7 +361,7 @@ pub async fn run(
 
     // ── Recovery ────────────────────────────────────────────────────────────
     ctx.phase.set(Phase::Recovery);
-    phases.recovery = Some(PhaseWindow::started(Utc::now()));
+    phases.recovery = Some(PhaseWindow::started(jiff::Timestamp::now()));
     info!(
         "S6: recovery phase, running for {:?}",
         config.phases.recovery()
@@ -370,7 +370,7 @@ pub async fn run(
 
     let mut rounds = handle.stop().await;
     if let Some(window) = phases.recovery.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
     routing_snapshots.push(snapshot_routing(deps, "after-recovery").await);
     ownership.push(sample_ownership(deps, "after-recovery", ownership.last(), true).await);
@@ -420,8 +420,8 @@ pub async fn run(
 }
 
 fn fault_window(
-    injected_at: Option<chrono::DateTime<Utc>>,
-    recovered_at: Option<chrono::DateTime<Utc>>,
+    injected_at: Option<jiff::Timestamp>,
+    recovered_at: Option<jiff::Timestamp>,
 ) -> Option<FaultWindow> {
     injected_at.map(|injected_at| FaultWindow {
         injected_at,

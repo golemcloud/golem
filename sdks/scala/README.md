@@ -136,9 +136,9 @@ val counter: CounterAgentRemote = CounterAgentClient.upsert("shard-id")
 // overrides are optional named parameters, and `env` is added to the manifest environment.
 val created: Future[CounterAgentRemote] = CounterAgentClient.create("shard-id", env = Map("MODE" -> "test"))
 
-// The existing agent with the given ID. Never creates the agent; an unknown ID fails with
-// `AgentRpcError.NotFound`.
-def byId(id: AgentId): Future[CounterAgentRemote] = CounterAgentClient.getById(id)
+// The existing agent with the given ID. Never creates the agent; an unknown ID throws
+// `AgentRpcException` with `AgentRpcError.NotFound`.
+def byId(id: AgentId): CounterAgentRemote = CounterAgentClient.getById(id)
 
 // The host-assigned ID of the agent behind a client.
 val id: Future[AgentId] = counter.agentId()

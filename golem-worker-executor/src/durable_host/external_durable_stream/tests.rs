@@ -22,7 +22,7 @@ fn auth() -> SecretValuePayload {
         secret_id: uuid::Uuid::from_u128(37),
         config_key: Some(vec!["streams".into(), "credential".into()]),
         version: 9,
-        resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        resolved_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         category: Some("external".into()),
     }
 }
@@ -38,7 +38,7 @@ fn reader_restores_recorded_auth_and_expands_request_independently_of_table_inde
         auth: Some(auth()),
     };
     let mut reconstructed = recorded.clone();
-    reconstructed.auth.as_mut().unwrap().resolved_at += chrono::Duration::seconds(123);
+    reconstructed.auth.as_mut().unwrap().resolved_at += jiff::SignedDuration::from_secs(123);
     let guest = DurableStreamReaderEntry::from_request(reconstructed.clone()).unwrap();
     let restored = DurableStreamReaderEntry::from_request(recorded).unwrap();
     validate_resource_id(

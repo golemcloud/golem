@@ -276,7 +276,7 @@ pub(crate) async fn authorize_live_permissions_at_serialized_initiation<Ctx: Wor
                 .state
                 .published_authority_generation
                 .load(Ordering::Acquire);
-            let now = chrono::Utc::now();
+            let now = jiff::Timestamp::now();
             if ctx.state.authority().is_current_at(
                 ctx.state.card_interest_index.authority_is_open(),
                 published_generation,

@@ -2128,7 +2128,6 @@ pub struct DeployPlanView<'a> {
     pub deployment_diff: &'a DeploymentDiff,
     pub tool_publications: &'a ToolPublicationPlan,
     pub environment_setup: Option<&'a EnvironmentSetupPlan>,
-    pub static_config: &'a [crate::model::config::StaticConfigFieldView],
 }
 
 #[derive(Serialize)]
@@ -2137,7 +2136,6 @@ struct DeployPlanFields<'a> {
     deployment_diff: &'a DeploymentDiff,
     tool_publications: &'a ToolPublicationPlan,
     environment_setup: Option<&'a EnvironmentSetupDisplay>,
-    static_config: &'a [crate::model::config::StaticConfigFieldView],
 }
 
 impl Serialize for DeployPlanView<'_> {
@@ -2155,7 +2153,6 @@ impl Serialize for DeployPlanView<'_> {
             deployment_diff: &deployment_diff,
             tool_publications: self.tool_publications,
             environment_setup: self.environment_setup.map(|setup| &setup.display),
-            static_config: self.static_config,
         }
         .serialize(serializer)
     }
@@ -2172,14 +2169,6 @@ impl TextOutput for DeployPlanView<'_> {
 
         if has_deployment_request_changes {
             self.deployment_diff.log();
-        }
-
-        if !self.static_config.is_empty() {
-            logln("Static config captures:");
-            for field in self.static_config {
-                field.log();
-            }
-            logln("");
         }
 
         if !self.tool_publications.entries.is_empty() {
@@ -2236,7 +2225,6 @@ impl StructuredOutput for DeployPlanView<'_> {
             deployment_diff: &deployment_diff,
             tool_publications: self.tool_publications,
             environment_setup: self.environment_setup.map(|setup| &setup.display),
-            static_config: self.static_config,
         }
         .serialize(serializer)
     }

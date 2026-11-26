@@ -99,7 +99,7 @@ pub fn reserve(
                 .ok_or(Admission::InvalidExpiry)?;
             if i64::try_from(deadline)
                 .ok()
-                .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
+                .and_then(|v| jiff::Timestamp::from_millisecond(v).ok())
                 .is_none()
             {
                 return Err(Admission::InvalidExpiry);
@@ -111,7 +111,7 @@ pub fn reserve(
             }
             if i64::try_from(expires_at_millis)
                 .ok()
-                .and_then(chrono::DateTime::<chrono::Utc>::from_timestamp_millis)
+                .and_then(|v| jiff::Timestamp::from_millisecond(v).ok())
                 .is_none()
             {
                 return Err(Admission::InvalidExpiry);

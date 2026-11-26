@@ -4,7 +4,7 @@
 use crate::base_model::durable_stream::{DurableStreamHandle, StreamMapSide, StreamValuePathStep};
 pub use crate::model::invocation_session_public::JsonMethodInput;
 use crate::schema::streaming::{
-    decode_recursive_stream_value, preflight_proto_recursive_stream_value,
+    decode_recursive_stream_value, proto_method_input_stream_references,
 };
 use crate::schema::{
     FromSchema, IntoSchema, IntoTypedSchemaValue, SchemaValue, TypedSchemaValue,
@@ -28,7 +28,7 @@ impl TryFrom<SchemaValue> for AgentMethodInput {
     type Error = String;
 
     fn try_from(value: SchemaValue) -> Result<Self, Self::Error> {
-        let value = value.try_into().map_err(|error| format!("{error}"))?;
+        let value: ProtoSchemaValue = value.try_into()?;
         let (input, _) = NativeMethodInput::capture(value, Vec::new())?;
         Ok(Self::Native(input))
     }
@@ -49,6 +49,12 @@ pub enum PublicMethodInput {
 }
 
 impl AgentMethodInput {
+    /// Whether the input came through external REST, which forbids host-managed result
+    /// capabilities.
+    pub fn is_external_rest(&self) -> bool {
+        matches!(self, Self::Native(input) if input.is_external_rest())
+    }
+
     /// Projects captured input without resolving a method or an execution revision.
     /// Raw JSON values include fields that execution can subsequently reject.
     pub fn to_public_value(&self) -> Result<TypedSchemaValue, String> {
@@ -99,7 +105,7 @@ impl NativeMethodInput {
         input: ProtoSchemaValue,
         foreign_streams: Vec<(u64, DurableStreamHandle)>,
     ) -> Result<(Self, Vec<u64>), String> {
-        let transport_ids = preflight_proto_recursive_stream_value(&input)?;
+        let transport_ids = proto_method_input_stream_references(&input)?;
         if transport_ids.iter().copied().collect::<HashSet<_>>().len() != transport_ids.len() {
             return Err("method input references a transport stream more than once".into());
         }
@@ -263,6 +269,31 @@ mod tests {
     }
 
     #[test]
+    fn a_method_input_is_not_bound_by_the_stream_item_limit() {
+        let value = SchemaValue::Tuple {
+            elements: vec![
+                SchemaValue::String("/large-input".into()),
+                SchemaValue::String("b".repeat(16 * 1024 * 1024)),
+            ],
+        };
+        let proto: ProtoSchemaValue = value.clone().try_into().unwrap();
+        assert!(
+            prost::Message::encoded_len(&proto)
+                > crate::base_model::durable_stream::MAX_DURABLE_STREAM_ITEM_SIZE
+        );
+        assert!(
+            crate::schema::streaming::preflight_proto_recursive_stream_value(&proto)
+                .unwrap_err()
+                .contains("16 MiB logical value limit")
+        );
+        let AgentMethodInput::Native(input) = AgentMethodInput::try_from(value.clone()).unwrap()
+        else {
+            panic!("expected native input");
+        };
+        assert_eq!(input.value, value);
+    }
+
+    #[test]
     fn public_method_input_keeps_uninterpreted_json() {
         let raw = JsonMethodInput::capture(br#"{"rejected":1e400,"value":-0.0}"#).unwrap();
         assert_eq!(
@@ -292,7 +323,7 @@ mod tests {
                                         secret_id: Uuid::from_u128(41),
                                         config_key: Some(vec!["private-config-key".into()]),
                                         version: 9,
-                                        resolved_at: chrono::DateTime::UNIX_EPOCH,
+                                        resolved_at: jiff::Timestamp::UNIX_EPOCH,
                                         category: None,
                                     }),
                                     SchemaValue::QuotaToken(QuotaTokenValuePayload {
@@ -302,7 +333,7 @@ mod tests {
                                         resource_name: "private-resource".into(),
                                         expected_use: 3,
                                         last_credit: 2,
-                                        last_credit_at: chrono::DateTime::UNIX_EPOCH,
+                                        last_credit_at: jiff::Timestamp::UNIX_EPOCH,
                                     }),
                                     SchemaValue::PermissionCard(PermissionCardValuePayload {
                                         card_id: Uuid::from_u128(43),

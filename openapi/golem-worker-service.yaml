@@ -3578,6 +3578,7 @@ components:
       required:
       - agentId
       - ownerKind
+      - origin
       - environmentId
       - createdBy
       - env
@@ -3607,6 +3608,11 @@ components:
         canonicalKey:
           type: string
           description: The canonical key text of a keyed agent. An agent without a key has none.
+        origin:
+          description: 'How the agent came to exist: keyed, created without a key, or forked.'
+          allOf:
+          - $ref: '#/components/schemas/AgentOrigin'
+          - description: 'How the agent came to exist: keyed, created without a key, or forked.'
         constructorParameters:
           type: string
           description: |-
@@ -3772,6 +3778,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentFilter'
+    AgentOrigin:
+      type: string
+      description: How an agent came to exist.
+      enum:
+      - keyed
+      - created
+      - forked
     AgentReference:
       type: object
       title: AgentReference

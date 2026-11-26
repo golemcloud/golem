@@ -12,19 +12,45 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-pub mod profile;
-pub mod server;
+#[cfg(test)]
+mod conformance;
+pub mod resolver;
 
-use crate::config::{AuthenticationConfig, ClientConfig, NamedProfile, ProfileConfig, ProfileName};
 use crate::model::cli_output::StructuredOutput;
 use crate::model::text_format::{TextOutput, logln};
+use anyhow::Context;
 use golem_common::model::agent::AgentTypeName;
-use golem_common::model::component::{AgentConfigEntryDto, ComponentName};
+use golem_common::model::component::{ComponentName, ConfigBindingDto};
+use golem_common::model::component_metadata::{ConfigBindingOrigin, ConfigOriginLocation};
 use golem_common::model::json::NormalizedJsonValue;
 use golem_common::schema::SchemaGraph;
 use golem_common::schema::config::ConfigOrigin;
-use serde::{Deserialize, Serialize};
-use url::Url;
+use serde::Serialize;
+use std::fmt::Display;
+use std::path::{Path, PathBuf};
+
+pub(crate) const CONFIG_FIELD: &str = "config";
+pub(crate) const CONFIG_SCHEMA_FIELD: &str = "configSchema";
+pub(crate) const PRESETS_FIELD: &str = "presets";
+
+pub(crate) fn manifest_property_origin(
+    file: &Path,
+    owner_path: &[String],
+    preset: Option<&str>,
+    property: &str,
+    layer: &impl Display,
+) -> ConfigOrigin {
+    let mut path = owner_path.to_vec();
+    if let Some(preset) = preset {
+        path.extend([PRESETS_FIELD.into(), preset.into()]);
+    }
+    path.push(property.into());
+    ConfigOrigin {
+        file: file.to_path_buf(),
+        path,
+        layer: layer.to_string(),
+    }
+}
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -46,11 +72,56 @@ pub struct StaticConfigFieldView {
 }
 
 impl StaticConfigFieldView {
-    pub fn config_entry(&self) -> AgentConfigEntryDto {
-        AgentConfigEntryDto {
+    pub fn config_binding(
+        &self,
+        app_root: &Path,
+        component_wasm: &Path,
+    ) -> anyhow::Result<ConfigBindingDto> {
+        let origins = self
+            .sources
+            .iter()
+            .map(|source| {
+                let location = if crate::fs::path_eq_normalized(&source.origin.file, component_wasm)
+                {
+                    ConfigOriginLocation::ComponentMetadata
+                } else {
+                    let file = crate::fs::absolute_lexical_path_from_base_dir(
+                        &source.origin.file,
+                        app_root,
+                    );
+                    let common = app_root
+                        .ancestors()
+                        .find(|root| file.starts_with(root))
+                        .context(
+                            "Config origin and application root must share a filesystem root",
+                        )?;
+                    let relative = app_root
+                        .strip_prefix(common)?
+                        .components()
+                        .map(|_| "..")
+                        .collect::<PathBuf>()
+                        .join(file.strip_prefix(common)?);
+                    ConfigOriginLocation::Manifest {
+                        file: crate::fs::path_to_unix_str(&relative)?,
+                    }
+                };
+                Ok(ConfigBindingOrigin {
+                    value_path: source
+                        .path
+                        .strip_prefix(self.path.as_slice())
+                        .expect("resolved config sources belong to their binding")
+                        .to_vec(),
+                    location,
+                    source_path: source.origin.path.clone(),
+                    layer: source.origin.layer.clone(),
+                })
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        Ok(ConfigBindingDto {
             path: self.path.clone(),
             value: self.fill.clone(),
-        }
+            origins: Some(origins),
+        })
     }
 }
 
@@ -114,62 +185,6 @@ impl StructuredOutput for ConfigGetView {
     const KIND: &'static str = "config.get";
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ProfileView {
-    pub is_active: bool,
-    pub name: ProfileName,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub url: Option<Url>,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub worker_url: Option<Url>,
-    #[serde(skip_serializing_if = "std::ops::Not::not", default)]
-    pub allow_insecure: bool,
-    #[serde(skip_serializing_if = "Option::is_none", default)]
-    pub authenticated: Option<bool>,
-    pub config: ProfileConfig,
-}
-
-impl ProfileView {
-    /// Builds the view of a profile. Built-in profiles show the effective URL of their built-in
-    /// server (`builtin_local_url` for `local`, the cloud URL for `cloud`) instead of the
-    /// connection fields stored in the config file, which are not used for them.
-    pub fn from_profile(
-        active: &ProfileName,
-        profile: NamedProfile,
-        builtin_local_url: &Url,
-    ) -> Self {
-        let NamedProfile { name, profile } = profile;
-
-        let authenticated = match &profile.auth {
-            AuthenticationConfig::OAuth2(inner) => Some(inner.data.is_some()),
-            AuthenticationConfig::Static(_) => None,
-        };
-
-        let (url, worker_url, allow_insecure) = match name.builtin_server() {
-            Some(server) => {
-                let client_config = ClientConfig::from_server(&server, builtin_local_url);
-                (Some(client_config.registry_url), None, false)
-            }
-            None => (
-                profile.custom_url,
-                profile.custom_worker_url,
-                profile.allow_insecure,
-            ),
-        };
-
-        ProfileView {
-            is_active: &name == active,
-            name,
-            url,
-            worker_url,
-            allow_insecure,
-            authenticated,
-            config: profile.config,
-        }
-    }
-}
-
 pub fn value_at_path<'a>(
     root: &'a serde_json::Value,
     path: &[String],
@@ -226,75 +241,10 @@ where
 
 #[cfg(test)]
 mod test {
-    use super::{ProfileView, collect_leaf_paths, collect_unused_leaf_paths, value_at_path};
-    use crate::config::{DEFAULT_CLOUD_URL, NamedProfile, Profile, ProfileName};
+    use super::{collect_leaf_paths, collect_unused_leaf_paths, value_at_path};
     use pretty_assertions::assert_eq;
     use serde_json::json;
     use test_r::test;
-    use url::Url;
-
-    /// A profile as it may be stored in an older or hand-edited config file.
-    fn profile_with_stored_connection() -> Profile {
-        Profile {
-            custom_url: Some(Url::parse("http://stale-stored-url:1111").unwrap()),
-            custom_worker_url: Some(Url::parse("http://stale-stored-worker-url:2222").unwrap()),
-            allow_insecure: true,
-            ..Profile::default()
-        }
-    }
-
-    #[test]
-    fn builtin_profile_views_show_the_effective_server_not_stored_fields() {
-        let builtin_local_url = Url::parse("http://192.0.2.10:9891").unwrap();
-        let active = ProfileName::local();
-
-        let local = ProfileView::from_profile(
-            &active,
-            NamedProfile {
-                name: ProfileName::local(),
-                profile: profile_with_stored_connection(),
-            },
-            &builtin_local_url,
-        );
-        assert_eq!(local.url, Some(builtin_local_url.clone()));
-        assert_eq!(local.worker_url, None);
-        assert!(!local.allow_insecure);
-        assert!(local.is_active);
-
-        let cloud = ProfileView::from_profile(
-            &active,
-            NamedProfile {
-                name: ProfileName::cloud(),
-                profile: profile_with_stored_connection(),
-            },
-            &builtin_local_url,
-        );
-        assert_eq!(cloud.url, Some(Url::parse(DEFAULT_CLOUD_URL).unwrap()));
-        assert_eq!(cloud.worker_url, None);
-        assert!(!cloud.allow_insecure);
-        assert!(!cloud.is_active);
-    }
-
-    #[test]
-    fn custom_profile_views_show_stored_fields() {
-        let view = ProfileView::from_profile(
-            &ProfileName::local(),
-            NamedProfile {
-                name: ProfileName("my-profile".to_string()),
-                profile: profile_with_stored_connection(),
-            },
-            &Url::parse("http://localhost:9881").unwrap(),
-        );
-        assert_eq!(
-            view.url,
-            Some(Url::parse("http://stale-stored-url:1111").unwrap())
-        );
-        assert_eq!(
-            view.worker_url,
-            Some(Url::parse("http://stale-stored-worker-url:2222").unwrap())
-        );
-        assert!(view.allow_insecure);
-    }
 
     #[test]
     fn value_at_path_returns_nested_values() {

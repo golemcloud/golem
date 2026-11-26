@@ -151,7 +151,7 @@ final class AgentRegistryDemoImpl(@unused private val name: String) extends Agen
       id      <- created.agentId()
       _        = sb.append(s"created counter $id\n")
       first   <- created.increment()
-      again   <- CounterClient.getById(id)
+      again    = CounterClient.getById(id)
       second  <- again.increment()
     } yield {
       sb.append(s"counter.increment() = $first\n")

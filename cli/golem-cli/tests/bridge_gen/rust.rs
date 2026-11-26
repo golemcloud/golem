@@ -1523,7 +1523,7 @@ fn guest_generation_emits_wasm_rpc_cargo_dependencies_and_api_shape() {
     assert!(cargo_toml.contains("name = \"alpha-agent-guest-client\""));
     assert!(cargo_toml.contains("golem-rust"));
     assert!(cargo_toml.contains("export_golem_agentic"));
-    assert!(cargo_toml.contains("chrono = \"0.4.42\""));
+    assert!(cargo_toml.contains("jiff = \"1.0.1\""));
     assert!(
         cargo_toml.contains("features = [\"export_golem_agentic\", \"macro\"]"),
         "{cargo_toml}"
@@ -3323,40 +3323,40 @@ fn time_url_agent() -> AgentTypeSchema {
 
 fn assert_time_url_types(source: &str) {
     for expected in [
-        "pub at: chrono::DateTime<chrono::Utc>",
-        "pub every: chrono::TimeDelta",
+        "pub at: jiff::Timestamp",
+        "pub every: jiff::SignedDuration",
         "pub link: url::Url",
         "pub file: String",
         "pub labels: Vec<(String, u32)>",
-        "pub next: Option<chrono::DateTime<chrono::Utc>>",
+        "pub next: Option<jiff::Timestamp>",
     ] {
         assert!(source.contains(expected), "missing {expected}:\n{source}");
     }
 }
 
 const TIME_URL_FIXTURE: &str = r#"
-        fn at() -> chrono::DateTime<chrono::Utc> {
-            chrono::DateTime::parse_from_rfc3339("2026-01-02T05:04:05.123456789+02:00").unwrap().with_timezone(&chrono::Utc)
+        fn at() -> jiff::Timestamp {
+            "2026-01-02T05:04:05.123456789+02:00".parse().unwrap()
         }
 
         fn schedule() -> Schedule {
             Schedule {
                 at: at(),
-                every: chrono::TimeDelta::nanoseconds(-1_500_000_001),
+                every: jiff::SignedDuration::from_nanos(-1_500_000_001),
                 link: url::Url::parse("https://example.com/a?b=c").unwrap(),
                 file: "/data/report.txt".to_string(),
                 labels: vec![("z".to_string(), 1), ("a".to_string(), 2), ("z".to_string(), 3)],
-                next: Some(chrono::DateTime::from_timestamp(0, 0).unwrap()),
+                next: Some(jiff::Timestamp::UNIX_EPOCH),
             }
         }
 
-        fn year(year: i32) -> chrono::DateTime<chrono::Utc> {
-            chrono::NaiveDate::from_ymd_opt(year, 1, 1).unwrap().and_hms_opt(0, 0, 0).unwrap().and_utc()
+        fn year(year: i16) -> jiff::Timestamp {
+            jiff::civil::date(year, 1, 1).at(0, 0, 0, 0).to_zoned_datetime(jiff::tz::TimeZone::UTC).unwrap().timestamp()
         }
 "#;
 
 #[test]
-fn external_datetime_duration_url_use_chrono_and_url_types() {
+fn external_datetime_duration_url_use_jiff_and_url_types() {
     let dir = TempDir::new().unwrap();
     let package_dir = Utf8Path::from_path(dir.path())
         .unwrap()
@@ -3369,10 +3369,7 @@ fn external_datetime_duration_url_use_chrono_and_url_types() {
     let lib_path = package_dir.join("src/lib.rs");
     let source = std::fs::read_to_string(&lib_path).unwrap();
     assert_time_url_types(&source);
-    assert!(
-        source.contains("until: chrono::DateTime<chrono::Utc>"),
-        "{source}"
-    );
+    assert!(source.contains("until: jiff::Timestamp"), "{source}");
 
     let client_module = "mod __golem_bridge_client {\n    use super::*;\n";
     assert!(source.contains(client_module), "{source}");
@@ -3416,14 +3413,14 @@ fn external_datetime_duration_url_use_chrono_and_url_types() {
         fn duration_covers_the_s64_nanosecond_range() {
             for nanoseconds in [i64::MIN, i64::MAX] {
                 let mut value = schedule();
-                value.every = chrono::TimeDelta::nanoseconds(nanoseconds);
+                value.every = jiff::SignedDuration::from_nanos(nanoseconds);
                 let fields = encoded_fields_of(value);
                 assert_eq!(fields[1], SchemaValue::Duration(DurationValuePayload { nanoseconds }));
                 let decoded = decode_Schedule(SchemaValue::Record { fields }).unwrap();
-                assert_eq!(decoded.every.num_nanoseconds(), Some(nanoseconds));
+                assert_eq!(decoded.every.as_nanos(), i128::from(nanoseconds));
             }
             let mut value = schedule();
-            value.every = chrono::TimeDelta::MAX;
+            value.every = jiff::SignedDuration::MAX;
             let error = encode_Schedule(value).unwrap_err();
             assert!(error.contains("nanosecond range"), "{error}");
         }
@@ -3440,7 +3437,9 @@ fn external_datetime_duration_url_use_chrono_and_url_types() {
                 value.at = year(edge);
                 assert!(encode_Schedule(value).is_ok());
             }
-            for outside in [-1, 10000] {
+            // Jiff cannot represent year 10000; negative years still need schema validation.
+            assert!("+010000-01-01T00:00:00Z".parse::<jiff::Timestamp>().is_err());
+            for outside in [-1, -9998] {
                 let mut value = schedule();
                 value.next = Some(year(outside));
                 let error = encode_Schedule(value).unwrap_err();
@@ -3491,7 +3490,7 @@ fn external_datetime_duration_url_use_chrono_and_url_types() {
 }
 
 #[test]
-fn guest_datetime_duration_url_use_chrono_and_url_types() {
+fn guest_datetime_duration_url_use_jiff_and_url_types() {
     let dir = TempDir::new().unwrap();
     let package_dir = Utf8Path::from_path(dir.path())
         .unwrap()
@@ -3540,7 +3539,7 @@ mod time_url_codec {
         let tree = encode(&schedule()).unwrap();
         let nodes = &tree.value_nodes;
         let expected_at = at();
-        assert!(matches!(&nodes[field_index(&tree, 0)], __wire::SchemaValueNode::DatetimeValue(d) if d.seconds == expected_at.timestamp() && d.nanoseconds == 123_456_789), "{nodes:?}");
+        assert!(matches!(&nodes[field_index(&tree, 0)], __wire::SchemaValueNode::DatetimeValue(d) if d.seconds == expected_at.as_second() && d.nanoseconds == 123_456_789), "{nodes:?}");
         assert!(matches!(&nodes[field_index(&tree, 1)], __wire::SchemaValueNode::DurationValue(d) if d.nanoseconds == -1_500_000_001), "{nodes:?}");
         assert!(matches!(&nodes[field_index(&tree, 2)], __wire::SchemaValueNode::UrlValue(u) if u == "https://example.com/a?b=c"), "{nodes:?}");
         assert!(matches!(&nodes[field_index(&tree, 3)], __wire::SchemaValueNode::PathValue(p) if p == "/data/report.txt"), "{nodes:?}");
@@ -3558,12 +3557,12 @@ mod time_url_codec {
     fn duration_covers_the_s64_nanosecond_range() {
         for nanoseconds in [i64::MIN, i64::MAX] {
             let mut value = schedule();
-            value.every = chrono::TimeDelta::nanoseconds(nanoseconds);
+            value.every = jiff::SignedDuration::from_nanos(nanoseconds);
             let decoded = decode(encode(&value).unwrap()).unwrap();
-            assert_eq!(decoded.every.num_nanoseconds(), Some(nanoseconds));
+            assert_eq!(decoded.every.as_nanos(), i128::from(nanoseconds));
         }
         let mut value = schedule();
-        value.every = chrono::TimeDelta::MAX;
+        value.every = jiff::SignedDuration::MAX;
         let error = encode(&value).unwrap_err();
         assert!(error.contains("nanosecond range"), "{error}");
         let error = preflight_Schedule(&value, &mut WirePreflight::default()).unwrap_err();
@@ -3578,7 +3577,8 @@ mod time_url_codec {
             assert!(encode(&value).is_ok());
             assert!(preflight_Schedule(&value, &mut WirePreflight::default()).is_ok());
         }
-        for outside in [-1, 10000] {
+        assert!("+010000-01-01T00:00:00Z".parse::<jiff::Timestamp>().is_err());
+        for outside in [-1, -9998] {
             let mut value = schedule();
             value.next = Some(year(outside));
             let error = encode(&value).unwrap_err();
@@ -3590,12 +3590,19 @@ mod time_url_codec {
             let index = field_index(&tree, 0);
             let outside = year(outside);
             tree.value_nodes[index] = __wire::SchemaValueNode::DatetimeValue(__wire::Datetime {
-                seconds: outside.timestamp(),
+                seconds: outside.as_second(),
                 nanoseconds: 0,
             });
             let error = decode(tree).unwrap_err();
             assert!(error.contains("outside the supported range"), "{error}");
         }
+        let mut tree = encode(&schedule()).unwrap();
+        let index = field_index(&tree, 0);
+        tree.value_nodes[index] = __wire::SchemaValueNode::DatetimeValue(__wire::Datetime {
+            seconds: 253_402_300_800,
+            nanoseconds: 0,
+        });
+        assert!(decode(tree).is_err());
     }
 
     #[test]
