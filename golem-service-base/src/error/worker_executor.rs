@@ -20,7 +20,7 @@ use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{AgentError, ReplayDivergence};
 use golem_common::model::quota::ResourceName;
-use golem_common::model::{AgentId, OplogIndex, PromiseId, ShardId, Timestamp};
+use golem_common::model::{AgentId, BackgroundFailure, OplogIndex, PromiseId, ShardId, Timestamp};
 use prost::Message;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -180,6 +180,12 @@ pub enum WorkerExecutorError {
         next_oplog_index: OplogIndex,
         reason: StaleCursorReason,
     },
+    /// The invocation was cancelled before it started (pending or scheduled). Its outcome is
+    /// `cancelled`; reusing its key returns this again and never runs it.
+    InvocationCancelled,
+    /// A cancel request for an invocation that is running. Cancelling a running invocation is
+    /// not supported yet; until it is, this typed answer replaces the spec's `202`.
+    CannotCancelRunningInvocation,
 }
 
 /// Why an oplog read refuses a cursor.
@@ -568,6 +574,10 @@ impl Display for WorkerExecutorError {
                 "Stale oplog cursor: the cursor to index {next_oplog_index} of the oplog of \
                  {agent_id} comes from the pages of another query"
             ),
+            Self::InvocationCancelled => write!(f, "Invocation was cancelled before execution"),
+            Self::CannotCancelRunningInvocation => {
+                write!(f, "The invocation is running and cannot be cancelled yet")
+            }
         }
     }
 }
@@ -619,6 +629,8 @@ impl Error for WorkerExecutorError {
             Self::ComponentServiceRefused { .. } => "Component service refused the request",
             Self::OplogFailed { .. } => "Oplog failed",
             Self::StaleCursor { .. } => "Stale oplog cursor",
+            Self::InvocationCancelled => "Invocation cancelled",
+            Self::CannotCancelRunningInvocation => "Cannot cancel a running invocation yet",
         }
     }
 }
@@ -662,6 +674,8 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::ComponentServiceRefused { .. } => "ComponentServiceRefused",
             Self::OplogFailed { .. } => "OplogFailed",
             Self::StaleCursor { .. } => "StaleCursor",
+            Self::InvocationCancelled => "InvocationCancelled",
+            Self::CannotCancelRunningInvocation => "CannotCancelRunningInvocation",
         }
     }
 
@@ -678,6 +692,8 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::InvalidShardId { .. }
             | Self::OplogFenced { .. }
             | Self::StaleCursor { .. }
+            | Self::InvocationCancelled
+            | Self::CannotCancelRunningInvocation
             | Self::ComponentNotFound { .. } => true,
             Self::InvalidRequest { .. }
             | Self::AgentCreationFailed { .. }
@@ -762,6 +778,8 @@ impl From<WorkerExecutorError> for Status {
         match value {
             error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
             | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
+            | WorkerExecutorError::InvocationCancelled
+            | WorkerExecutorError::CannotCancelRunningInvocation
             | WorkerExecutorError::AgentKeyCollision { .. }
             | WorkerExecutorError::AgentAlreadyExists { .. }) => {
                 let code = if matches!(error, WorkerExecutorError::AgentAlreadyExists { .. }) {
@@ -807,6 +825,32 @@ impl WorkerExecutorError {
             .ok()?
             .try_into()
             .ok()
+    }
+}
+
+/// A background failure is reported as the error that a fresh invocation of the failed agent gets.
+impl From<BackgroundFailure> for WorkerExecutorError {
+    fn from(value: BackgroundFailure) -> Self {
+        match value {
+            BackgroundFailure::Trapped { error, stderr } => {
+                WorkerExecutorError::PreviousInvocationFailed { error, stderr }
+            }
+            BackgroundFailure::Exited => WorkerExecutorError::PreviousInvocationExited,
+        }
+    }
+}
+
+impl TryFrom<WorkerExecutorError> for BackgroundFailure {
+    type Error = WorkerExecutorError;
+
+    fn try_from(value: WorkerExecutorError) -> Result<Self, Self::Error> {
+        match value {
+            WorkerExecutorError::PreviousInvocationFailed { error, stderr } => {
+                Ok(BackgroundFailure::Trapped { error, stderr })
+            }
+            WorkerExecutorError::PreviousInvocationExited => Ok(BackgroundFailure::Exited),
+            other => Err(other),
+        }
     }
 }
 
@@ -1102,6 +1146,20 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                 error: Some(
                     golem::worker::v1::worker_execution_error::Error::PermissionDenied(
                         golem::worker::v1::PermissionDenied { details },
+                    ),
+                ),
+            },
+            WorkerExecutorError::InvocationCancelled => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::InvocationCancelled(
+                        golem::worker::v1::InvocationCancelled {},
+                    ),
+                ),
+            },
+            WorkerExecutorError::CannotCancelRunningInvocation => Self {
+                error: Some(
+                    golem::worker::v1::worker_execution_error::Error::CannotCancelRunningInvocation(
+                        golem::worker::v1::CannotCancelRunningInvocation {},
                     ),
                 ),
             },
@@ -1429,6 +1487,12 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                     },
                 })
             }
+            Some(golem::worker::v1::worker_execution_error::Error::InvocationCancelled(_)) => {
+                Ok(Self::InvocationCancelled)
+            }
+            Some(
+                golem::worker::v1::worker_execution_error::Error::CannotCancelRunningInvocation(_),
+            ) => Ok(Self::CannotCancelRunningInvocation),
         }
     }
 }
@@ -1589,6 +1653,8 @@ mod read_only_violation_trap_tests {
                 agent_id: golem_common::model::AgentId::from_parts(7, 3),
                 requested_key: "Cart(\"a\")".to_string(),
             },
+            WorkerExecutorError::InvocationCancelled,
+            WorkerExecutorError::CannotCancelRunningInvocation,
         ] {
             let status: Status = expected.clone().into();
             assert_eq!(status.code(), tonic::Code::FailedPrecondition);

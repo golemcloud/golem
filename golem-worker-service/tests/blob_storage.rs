@@ -20,6 +20,7 @@ use aws_sdk_s3::Client;
 use aws_sdk_s3::config::Credentials;
 use bytes::{BufMut, Bytes, BytesMut};
 use futures::{StreamExt, TryStreamExt};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId};
@@ -32,6 +33,7 @@ use golem_service_base::storage::blob::*;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, fs, memory, s3};
 use golem_test_framework::components::s3::{DockerRustFs, S3Server};
 use pretty_assertions::assert_eq;
+use sha2::{Digest, Sha256};
 use sqlx::sqlite::SqlitePoolOptions;
 use std::collections::BTreeSet;
 use std::fmt::Debug;
@@ -281,11 +283,7 @@ async fn sqlite() -> Arc<dyn GetBlobStorage + Send + Sync> {
 
 #[test_dep(scope = PerWorker, tagged_as = "cc")]
 fn compilation_cache() -> BlobStorageNamespace {
-    BlobStorageNamespace::CompilationCache {
-        environment_id: EnvironmentId(
-            Uuid::parse_str("4c8c5ff4-2a42-4e81-ac48-e63005f609fd").unwrap(),
-        ),
-    }
+    BlobStorageNamespace::CompilationCache
 }
 
 #[test_dep(scope = PerWorker, tagged_as = "co")]
@@ -681,6 +679,33 @@ async fn sqlite_range_native_memory_is_bounded() {
         .execute(&pool)
         .await
         .unwrap();
+    let block = Bytes::from(vec![42; BLOB_STREAM_CHUNK_SIZE]);
+    let blocks = total as usize / block.len();
+    let mut hash = Sha256::new();
+    for _ in 0..blocks {
+        hash.update(&block);
+    }
+    let digest = format!("sha256:{:x}", hash.finalize());
+    // SAFETY: This test runs alone with process-global SQLite allocator counters.
+    let baseline = unsafe {
+        libsqlite3_sys::sqlite3_memory_highwater(1);
+        libsqlite3_sys::sqlite3_memory_used()
+    };
+    let input = futures::stream::iter((0..blocks).map(|_| Ok(block.clone()))).boxed();
+    let (_, outcome) = storage.store_published_blob(&digest, input).await.unwrap();
+    assert_eq!(outcome, PutIfAbsent::Written);
+    let mut output = storage.read_published_blob(&digest).await.unwrap().unwrap();
+    let mut hash = Sha256::new();
+    while let Some(chunk) = output.try_next().await.unwrap() {
+        assert!(chunk.len() <= BLOB_STREAM_CHUNK_SIZE);
+        hash.update(chunk);
+    }
+    assert_eq!(format!("sha256:{:x}", hash.finalize()), digest);
+    let growth = unsafe { libsqlite3_sys::sqlite3_memory_highwater(0) } - baseline;
+    assert!(
+        growth < 4 * 1024 * 1024,
+        "SQLite allocated {growth} bytes for a {total}-byte published blob"
+    );
     sqlx::query("INSERT INTO blob_storage (namespace, parent, name, value, size) VALUES (?, '', 'large', zeroblob(?), ?)")
         .bind(format!("initial_agent_files-{environment_id}")).bind(total).bind(total).execute(&pool).await.unwrap();
     for (offset, length) in [(total as u64 - 19, 13), (0, total as u64)] {
@@ -840,6 +865,225 @@ async fn get_put_get_new_dir_streaming(
 
     assert!(result1.is_none());
     assert_eq!(result2, data.to_vec());
+}
+
+#[test]
+async fn published_package_blob_is_verified_and_created_once(
+    #[dimension(layout_storage)] test: &Arc<dyn GetBlobStorage + Send + Sync>,
+) {
+    let storage = test.get_blob_storage().await;
+    let bytes = vec![42; 3 * BLOB_STREAM_CHUNK_SIZE + 17];
+    let digest = format!("sha256:{:x}", Sha256::digest(&bytes));
+    let input = || {
+        futures::stream::iter(
+            bytes
+                .chunks(BLOB_STREAM_CHUNK_SIZE)
+                .map(|chunk| Ok(Bytes::copy_from_slice(chunk))),
+        )
+        .boxed()
+    };
+    let bad_input = || futures::stream::iter([Ok(Bytes::from_static(b"wrong"))]).boxed();
+
+    assert!(
+        storage
+            .store_published_blob(&digest, bad_input())
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .read_published_blob(&digest)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    let (first, second) = tokio::join!(
+        storage.store_published_blob(&digest, input()),
+        storage.store_published_blob(&digest, input()),
+    );
+    let (_, first) = first.unwrap();
+    let (_, second) = second.unwrap();
+    assert_ne!(first, second);
+    assert!(
+        storage
+            .store_published_blob(&digest, bad_input())
+            .await
+            .is_err()
+    );
+    let mut output = storage.read_published_blob(&digest).await.unwrap().unwrap();
+    let mut hash = Sha256::new();
+    let mut chunks = 0;
+    while let Some(chunk) = output.try_next().await.unwrap() {
+        chunks += 1;
+        hash.update(chunk);
+    }
+    assert!(
+        chunks > 1,
+        "The backend returned the entire object as one chunk"
+    );
+    assert_eq!(format!("sha256:{:x}", hash.finalize()), digest);
+    let source = Path::new(digest.strip_prefix("sha256:").unwrap());
+    let destination = BlobStorageNamespace::ComponentUploads {
+        account_id: AccountId::new(),
+    };
+    let path = Path::new("copied-package");
+    storage
+        .copy_between(
+            "test",
+            "copy",
+            BlobStorageNamespace::PublishedBlobs,
+            source,
+            destination.clone(),
+            path,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        storage
+            .get_raw("test", "get", destination, path)
+            .await
+            .unwrap()
+            .unwrap(),
+        bytes
+    );
+}
+
+#[test]
+async fn published_package_blob_rejects_generic_mutation() {
+    let storage = memory::InMemoryBlobStorage::new();
+    let bytes = Bytes::from_static(b"verified bytes");
+    let hex = format!("{:x}", Sha256::digest(&bytes));
+    let path = Path::new(&hex);
+    let digest = format!("sha256:{hex}");
+    let published = BlobStorageNamespace::PublishedBlobs;
+    let other = BlobStorageNamespace::ComponentUploads {
+        account_id: AccountId::new(),
+    };
+    let target = Path::new("other");
+    let stream = vec![1]
+        .map_item(|item| item.map_err(widen_infallible))
+        .map_error(widen_infallible)
+        .erased();
+    let label = "published_blobs_test";
+    let (_, outcome) = storage
+        .store_published_blob(&digest, futures::stream::iter([Ok(bytes)]).boxed())
+        .await
+        .unwrap();
+    assert_eq!(outcome, PutIfAbsent::Written);
+    storage
+        .put_raw(label, "seed", other.clone(), target, b"overwrite")
+        .await
+        .unwrap();
+
+    assert!(
+        storage
+            .put_raw(label, "put", published.clone(), path, b"overwrite")
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .put_raw_if_absent(
+                label,
+                "put_if_absent",
+                published.clone(),
+                target,
+                b"overwrite"
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .put_stream(label, "put_stream", published.clone(), path, &stream)
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .create_dir(label, "mkdir", published.clone(), target)
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .delete_dir(label, "rmdir", published.clone(), Path::new("."))
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .delete(label, "delete", published.clone(), path)
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .delete_many(
+                label,
+                "delete_many",
+                published.clone(),
+                &[path.to_path_buf()]
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .copy(label, "copy", published.clone(), path, target)
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .copy_between(
+                label,
+                "copy_between",
+                other,
+                target,
+                published.clone(),
+                path
+            )
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .r#move(label, "move", published, path, target)
+            .await
+            .is_err()
+    );
+    assert!(
+        storage
+            .read_published_blob(&digest)
+            .await
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+async fn published_package_blob_streams_large_archive() {
+    let root = tempdir().unwrap();
+    let storage = fs::FileSystemBlobStorage::new(root.path()).await.unwrap();
+    // The 256 MiB input never exists as a single buffer, even in the test fixture.
+    let block = Bytes::from(vec![0x4a; BLOB_STREAM_CHUNK_SIZE]);
+    let block_count = 4096;
+    let mut expected = Sha256::new();
+    for _ in 0..block_count {
+        expected.update(&block);
+    }
+    let digest = format!("sha256:{:x}", expected.finalize());
+    let input = futures::stream::iter((0..block_count).map(|_| Ok(block.clone()))).boxed();
+    let (_, result) = storage.store_published_blob(&digest, input).await.unwrap();
+    assert_eq!(result, PutIfAbsent::Written);
+    let mut read = storage.read_published_blob(&digest).await.unwrap().unwrap();
+    let mut actual = Sha256::new();
+    while let Some(chunk) = read.try_next().await.unwrap() {
+        assert!(chunk.len() <= BLOB_STREAM_CHUNK_SIZE);
+        actual.update(chunk);
+    }
+    assert_eq!(format!("sha256:{:x}", actual.finalize()), digest);
 }
 
 #[test]
@@ -2811,12 +3055,12 @@ async fn list_blobs_below_finds_nested_blobs_with_sizes(
     assert_eq!(listed_below_blob, Vec::new());
 }
 
-/// The namespace of the same kind in another environment.
+/// A different namespace, of the same kind when the namespace is environment-scoped.
 fn in_another_environment(namespace: &BlobStorageNamespace) -> BlobStorageNamespace {
     let environment_id = EnvironmentId(Uuid::new_v4());
     match namespace.clone() {
-        BlobStorageNamespace::CompilationCache { .. } => {
-            BlobStorageNamespace::CompilationCache { environment_id }
+        BlobStorageNamespace::CompilationCache => {
+            BlobStorageNamespace::CustomStorage { environment_id }
         }
         BlobStorageNamespace::InitialAgentFiles { .. } => {
             BlobStorageNamespace::InitialAgentFiles { environment_id }
@@ -2844,8 +3088,11 @@ fn in_another_environment(namespace: &BlobStorageNamespace) -> BlobStorageNamesp
             agent_mode,
             level,
         },
-        BlobStorageNamespace::Components { .. } => {
-            BlobStorageNamespace::Components { environment_id }
+        BlobStorageNamespace::ComponentUploads { .. } => BlobStorageNamespace::ComponentUploads {
+            account_id: AccountId::new(),
+        },
+        BlobStorageNamespace::PublishedBlobs => {
+            panic!("Published blobs do not belong to an environment")
         }
         BlobStorageNamespace::FilesystemSnapshots {
             agent_id,
@@ -2892,10 +3139,12 @@ fn namespaces_of_one_environment() -> Vec<BlobStorageNamespace> {
     let agent_id = snapshot_agent();
     let type_tag = agent_id.type_tag();
     let mut namespaces = vec![
-        BlobStorageNamespace::CompilationCache { environment_id },
+        BlobStorageNamespace::CompilationCache,
         BlobStorageNamespace::CustomStorage { environment_id },
         BlobStorageNamespace::InitialAgentFiles { environment_id },
-        BlobStorageNamespace::Components { environment_id },
+        BlobStorageNamespace::ComponentUploads {
+            account_id: AccountId(environment_id.0),
+        },
         filesystem_snapshots_of(
             environment,
             agent_id,
@@ -5234,12 +5483,23 @@ fn probed_paths() -> Vec<PathBuf> {
     ]
     .map(PathBuf::from)
     .to_vec();
-    #[cfg(unix)]
-    {
-        use std::os::unix::ffi::OsStrExt;
+    platform::append_non_utf8_path(&mut paths);
+    paths
+}
+
+#[cfg(unix)]
+mod platform {
+    use std::os::unix::ffi::OsStrExt;
+    use std::path::PathBuf;
+
+    pub(super) fn append_non_utf8_path(paths: &mut Vec<PathBuf>) {
         paths.push(PathBuf::from(std::ffi::OsStr::from_bytes(b"non\xFFutf8")));
     }
-    paths
+}
+
+#[cfg(not(unix))]
+mod platform {
+    pub(super) fn append_non_utf8_path(_paths: &mut Vec<std::path::PathBuf>) {}
 }
 
 /// Gives the text of an answer that is the same on two backends that agree: a value as its debug

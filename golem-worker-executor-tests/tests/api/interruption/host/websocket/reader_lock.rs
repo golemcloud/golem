@@ -134,9 +134,10 @@ async fn durable_websocket_two_receive_interruption(
         &InvocationContextStack::fresh(),
         callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
-        golem_worker_executor::worker::CreateIntent::Invocation {
+        golem_worker_executor::worker::CreateIntent::Create {
             owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
             idempotency_key: None,
+            exclusive: false,
         },
     )
     .await?;
@@ -223,7 +224,7 @@ async fn durable_websocket_two_receive_interruption(
 
 macro_rules! lock_case {
     ($name:ident, Storage, $mode:ident) => {
-        lock_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
+        lock_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
     };
     ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
         $(#[$attr])*
@@ -266,16 +267,22 @@ lock_case!(
     Compute,
     Ephemeral
 );
-lock_case!(
-    durable_websocket_reader_lock_stop_only_managed_xfs_storage_quota,
-    Storage,
-    Durable
-);
-lock_case!(
-    ephemeral_websocket_reader_lock_stop_only_managed_xfs_storage_quota,
-    Storage,
-    Ephemeral
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    lock_case!(
+        durable_websocket_reader_lock_stop_only_managed_xfs_storage_quota,
+        Storage,
+        Durable
+    );
+    lock_case!(
+        ephemeral_websocket_reader_lock_stop_only_managed_xfs_storage_quota,
+        Storage,
+        Ephemeral
+    );
+}
 
 fn lock_receive_starts(
     entries: &[PublicOplogEntryWithIndex],
@@ -827,9 +834,10 @@ async fn durable_websocket_two_receives_with_second_frame_timeout(
         &InvocationContextStack::fresh(),
         callers::anonymous(),
         golem_common::model::agent::InvocationFreshnessDisposition::MayExist,
-        golem_worker_executor::worker::CreateIntent::Invocation {
+        golem_worker_executor::worker::CreateIntent::Create {
             owner: golem_worker_executor::worker::NewOwner::keyed(component.id, name.clone()),
             idempotency_key: None,
+            exclusive: false,
         },
     )
     .await?;

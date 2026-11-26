@@ -22,6 +22,7 @@ use crate::services::rdbms::sqlx_common::{
     BeginTransactionSupport, PoolCreator, QueryExecutor, QueryParamsBinder, SqlxDbResultStream,
     SqlxDbTransaction, SqlxRdbms, TransactionSupport, create_db_result,
 };
+use crate::services::rdbms::sqlx_types::SqlValue;
 use crate::services::rdbms::{
     DbResult, DbResultStream, DbRow, Rdbms, RdbmsError, RdbmsTransactionStatus,
 };
@@ -33,7 +34,7 @@ use golem_common::model::oplog::types::{Enumeration, EnumerationType, SparseVec,
 use golem_common::model::{RdbmsPoolKey, TransactionId};
 use mac_address::MacAddress;
 use serde_json::json;
-use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange, PgTimeTz};
+use sqlx::postgres::types::{Oid, PgInterval, PgMoney, PgRange};
 use sqlx::postgres::{PgConnectOptions, PgTypeKind};
 use sqlx::{Column, ConnectOptions, Pool, Row, TransactionManager, Type, TypeInfo, ValueRef};
 use sqlx_core::executor::Executor;
@@ -73,6 +74,7 @@ impl PoolCreator<sqlx::Postgres> for RdbmsPoolKey {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl BeginTransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
     async fn begin_transaction(
         key: &RdbmsPoolKey,
@@ -106,6 +108,7 @@ impl BeginTransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl TransactionSupport<PostgresType, sqlx::Postgres> for PostgresType {
     async fn pre_commit_transaction(
         _pool: &Pool<sqlx::Postgres>,
@@ -366,24 +369,24 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
             }
         }),
         DbColumnType::Timestamptz => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Timestamptz(r) => r)
+            try_match!(v, DbValue::Timestamptz(r) => SqlValue(r))
                 .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Timestamp => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Timestamp(r) => r)
+            try_match!(v, DbValue::Timestamp(r) => SqlValue(r))
                 .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Date => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Date(r) => r)
+            try_match!(v, DbValue::Date(r) => SqlValue(r))
                 .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Time => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Time(r) => r)
+            try_match!(v, DbValue::Time(r) => SqlValue(r))
                 .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Timetz => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Timetz(v) = v {
-                PgTimeTz::try_from(v)
+                Ok(SqlValue(v))
             } else {
                 Err(get_unexpected_value_error(column_type))
             }
@@ -408,10 +411,11 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
                 .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Bit => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Bit(r) => r).map_err(|_| get_unexpected_value_error(column_type))
+            try_match!(v, DbValue::Bit(r) => SqlValue(r))
+                .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Varbit => setter.try_set_db_value(value, value_category, |v| {
-            try_match!(v, DbValue::Varbit(r) => r)
+            try_match!(v, DbValue::Varbit(r) => SqlValue(r))
                 .map_err(|_| get_unexpected_value_error(column_type))
         }),
         DbColumnType::Int4range => setter.try_set_db_value(value, value_category, |v| {
@@ -437,21 +441,21 @@ fn set_value_helper<'a, S: PgValueSetter<'a>>(
         }),
         DbColumnType::Tsrange => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Tsrange(v) = v {
-                Ok(PgRange::from(v))
+                Ok(SqlValue(v))
             } else {
                 Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Tstzrange => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Tstzrange(v) = v {
-                Ok(PgRange::from(v))
+                Ok(SqlValue(v))
             } else {
                 Err(get_unexpected_value_error(column_type))
             }
         }),
         DbColumnType::Daterange => setter.try_set_db_value(value, value_category, |v| {
             if let DbValue::Daterange(v) = v {
-                Ok(PgRange::from(v))
+                Ok(SqlValue(v))
             } else {
                 Err(get_unexpected_value_error(column_type))
             }
@@ -660,23 +664,26 @@ fn get_db_value_helper<G: PgValueGetter>(
         DbColumnType::Xml => {
             getter.try_get_db_value::<PgXml>(value_category, |v| DbValue::Xml(v.0))?
         }
-        DbColumnType::Timestamp => {
-            getter.try_get_db_value::<chrono::NaiveDateTime>(value_category, DbValue::Timestamp)?
-        }
-        DbColumnType::Timestamptz => getter.try_get_db_value::<chrono::DateTime<chrono::Utc>>(
-            value_category,
-            DbValue::Timestamptz,
-        )?,
-        DbColumnType::Date => {
-            getter.try_get_db_value::<chrono::NaiveDate>(value_category, DbValue::Date)?
-        }
-        DbColumnType::Time => {
-            getter.try_get_db_value::<chrono::NaiveTime>(value_category, DbValue::Time)?
-        }
+        DbColumnType::Timestamp => getter
+            .try_get_db_value::<SqlValue<jiff::civil::DateTime>>(value_category, |v| {
+                DbValue::Timestamp(v.0)
+            })?,
+        DbColumnType::Timestamptz => getter
+            .try_get_db_value::<SqlValue<jiff::Timestamp>>(value_category, |v| {
+                DbValue::Timestamptz(v.0)
+            })?,
+        DbColumnType::Date => getter
+            .try_get_db_value::<SqlValue<jiff::civil::Date>>(value_category, |v| {
+                DbValue::Date(v.0)
+            })?,
+        DbColumnType::Time => getter
+            .try_get_db_value::<SqlValue<jiff::civil::Time>>(value_category, |v| {
+                DbValue::Time(v.0)
+            })?,
         DbColumnType::Timetz => getter
-            .try_get_db_value::<PgTimeTz<chrono::NaiveTime, chrono::FixedOffset>>(
+            .try_get_db_value::<SqlValue<golem_common::model::oplog::types::TimeTz>>(
                 value_category,
-                |v| DbValue::Timetz(v.into()),
+                |v| DbValue::Timetz(v.0),
             )?,
         DbColumnType::Interval => getter
             .try_get_db_value::<PgInterval>(value_category, |v| DbValue::Interval(v.into()))?,
@@ -685,21 +692,21 @@ fn get_db_value_helper<G: PgValueGetter>(
         DbColumnType::Macaddr => {
             getter.try_get_db_value::<MacAddress>(value_category, DbValue::Macaddr)?
         }
-        DbColumnType::Bit => getter.try_get_db_value::<BitVec>(value_category, DbValue::Bit)?,
+        DbColumnType::Bit => {
+            getter.try_get_db_value::<SqlValue<BitVec>>(value_category, |v| DbValue::Bit(v.0))?
+        }
         DbColumnType::Varbit => {
-            getter.try_get_db_value::<BitVec>(value_category, DbValue::Varbit)?
+            getter.try_get_db_value::<SqlValue<BitVec>>(value_category, |v| DbValue::Varbit(v.0))?
         }
         DbColumnType::Bytea => {
             getter.try_get_db_value::<Vec<u8>>(value_category, DbValue::Bytea)?
         }
-        DbColumnType::Tstzrange => getter
-            .try_get_db_value::<PgRange<chrono::DateTime<chrono::Utc>>>(value_category, |v| {
-                DbValue::Tstzrange(v.into())
-            })?,
-        DbColumnType::Tsrange => getter
-            .try_get_db_value::<PgRange<chrono::NaiveDateTime>>(value_category, |v| {
-                DbValue::Tsrange(v.into())
-            })?,
+        DbColumnType::Tstzrange => getter.try_get_db_value::<SqlValue<
+            golem_common::model::oplog::types::ValuesRange<jiff::Timestamp>,
+        >>(value_category, |v| DbValue::Tstzrange(v.0))?,
+        DbColumnType::Tsrange => getter.try_get_db_value::<SqlValue<
+            golem_common::model::oplog::types::ValuesRange<jiff::civil::DateTime>,
+        >>(value_category, |v| DbValue::Tsrange(v.0))?,
         DbColumnType::Numrange => getter
             .try_get_db_value::<PgRange<BigDecimal>>(value_category, |v| {
                 DbValue::Numrange(v.into())
@@ -708,10 +715,9 @@ fn get_db_value_helper<G: PgValueGetter>(
             .try_get_db_value::<PgRange<i32>>(value_category, |v| DbValue::Int4range(v.into()))?,
         DbColumnType::Int8range => getter
             .try_get_db_value::<PgRange<i64>>(value_category, |v| DbValue::Int8range(v.into()))?,
-        DbColumnType::Daterange => getter
-            .try_get_db_value::<PgRange<chrono::NaiveDate>>(value_category, |v| {
-                DbValue::Daterange(v.into())
-            })?,
+        DbColumnType::Daterange => getter.try_get_db_value::<SqlValue<
+            golem_common::model::oplog::types::ValuesRange<jiff::civil::Date>,
+        >>(value_category, |v| DbValue::Daterange(v.0))?,
         DbColumnType::Money => {
             getter.try_get_db_value::<PgMoney>(value_category, |v| DbValue::Money(v.0))?
         }

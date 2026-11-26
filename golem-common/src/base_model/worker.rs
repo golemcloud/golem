@@ -132,6 +132,8 @@ declare_structs! {
         pub agent_type_name: Option<crate::base_model::agent::AgentTypeName>,
         /// The canonical key text of a keyed agent. An agent without a key has none.
         pub canonical_key: Option<String>,
+        /// How the agent came to exist: keyed, created without a key, or forked.
+        pub origin: crate::base_model::agent::AgentOrigin,
         /// The canonical constructor parameter text of a component agent, without its type
         /// name. Agents without a key have it too.
         pub constructor_parameters: Option<String>,
@@ -199,7 +201,6 @@ declare_structs! {
     #[cfg_attr(feature = "full", desert(evolution()))]
     pub struct ResolvedRevert {
         pub last_oplog_index: OplogIndex,
-        pub observed_oplog_index: OplogIndex,
     }
 
     pub struct AgentFileSystemNode {

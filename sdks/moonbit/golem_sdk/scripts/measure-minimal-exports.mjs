@@ -25,6 +25,12 @@ for (const entry of WebAssembly.Module.imports(module)) {
     if (entry.name === "[waitable-set-new]") return 1;
     if (entry.name === "[waitable-set-drop]") return;
     if (entry.name === "[subtask-drop]") return;
+    if (entry.module === "golem:agent/invocation-context@2.0.0" && entry.name === "caller") {
+      const view = new DataView(instance.exports.memory.buffer);
+      view.setUint8(args[0], 3);
+      view.setUint8(args[0] + 112, 3);
+      return;
+    }
     if (entry.module === "golem:tool/streams@0.1.0") {
       const view = new DataView(instance.exports.memory.buffer);
       if (entry.name === "[async-lower][method]tool-output-writer.write") {
@@ -139,7 +145,7 @@ const invoke = (commandName = "ping") => {
     return ptr;
   };
   // Canonical memory layout of invoke's single indirect parameter record.
-  const args = alloc(160), tool = string("probe"), command = string(commandName);
+  const args = alloc(72), tool = string("probe"), command = string(commandName);
   const path = alloc(8), type = alloc(144), value = alloc(32);
   // The MoonBit lift consumes every list buffer, including empty lists.
   const emptyLists = Array.from({length: 5}, () => alloc(1));
@@ -157,7 +163,6 @@ const invoke = (commandName = "ping") => {
   put(args + 36, value); put(args + 40, 1);
   put(value, 13); // empty record-value
   put(value + 8, emptyLists[4]);
-  put(args + 72, 3); // anonymous principal, after stdout and stderr
   if (commandName === "burst") {
     put(args + 56, 1); put(args + 60, 77);
     streamOffset = streamWrites = streamFinishes = streamDrops = 0;
@@ -169,7 +174,7 @@ const invoke = (commandName = "ping") => {
     state = e["[callback][async-lift]golem:tool/guest@0.1.0#invoke"](0, 0, 0);
   }
   assert.equal(state, 0);
-  e.cabi_realloc(args, 160, 8, 0);
+  // Async export lifting consumes the indirect argument block.
   assert.equal(invocation, commandName === "ping" ? "pong" : "burst");
   if (commandName === "burst") {
     assert.equal(streamOffset, streamBytes.length);

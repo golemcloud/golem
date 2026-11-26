@@ -32,11 +32,11 @@ interactive examples; preserve unrelated content and verify changed walkthrough 
 ## Durable versus resident state
 
 Authoritative: oplog entries and payloads, `PendingAgentInvocation` / `AgentInvocationStarted` /
-`AgentInvocationFinished`, idempotency keys and recorded results, `Start`/`End`/`Cancelled` and
-`CompletionDelivered`/`CompletionDiscarded` markers, update and snapshot entries, and status folded
-from the oplog. Derived and disposable: `Store` memory, in-memory queues, caches, event
-subscriptions, spawned store tasks, sockets. Never let correctness after a restart depend on
-anything in the second list.
+`AgentInvocationFinished` / `AgentInvocationSettled`, idempotency keys and recorded results,
+`Start`/`End`/`Cancelled` and `CompletionDelivered`/`CompletionDiscarded` markers, update and
+snapshot entries, and status folded from the oplog. Derived and disposable: `Store` memory,
+in-memory queues, caches, event subscriptions, spawned store tasks, sockets. Never let
+correctness after a restart depend on anything in the second list.
 
 A host resource drop that has no guest-observable result and no remote effect must not open a
 durable call: the guest may release the resource at different points in different runs (garbage
@@ -48,6 +48,67 @@ never wait for recorded history on the guest thread or in a cleanup drain. Defer
 under the resident runtime's task ownership. Missing terminals may continue live only at the
 natural replay tail. A changed disposal time does not permit changed guest reads, completed
 effects, call identities, or terminal kinds.
+
+## Invocation settlement
+
+The result of a successful constructor and of an agent method that uses no streams is recorded
+(`AgentInvocationFinished` or `AgentInvocationFailed`, with `awaits_settlement`) at the export's
+return, when the guest calls `task.return`. A constructor error is not recorded at the return: its
+background work drains first, within both `max_invocation_duration` and
+`tail_work_settle_timeout`, and the error then takes the constructor's fatal path with no
+`awaits_settlement` terminal. Tool children that already run, or need no admission,
+settle before the result is recorded, and their failure fails the invocation. The background work
+of that invocation (spawned guest tasks, active store tasks, retained durable calls) then drains,
+bounded by neither `max_invocation_duration` nor `tail_work_settle_timeout`; capable tool children
+staged until their parent ends are admitted at the end of the drain (`end_tool_parent`) and settle
+before `AgentInvocationSettled`. The end of the drain records the hint
+`AgentInvocationSettled { invocation_id, consumed_fuel }`, and only then does the next invocation
+start (`worker/invocation.rs::record_at_return_and_drain`). Methods that use streams (stream
+inputs or a stream result), snapshot save and load (including a manual update's),
+oplog-processor batches and external-tool invocations keep the settled path: their terminal comes after their work, and they write no
+`AgentInvocationSettled`.
+
+- **Replay** consumes the terminal at the return, where the live run wrote it. The invocation's
+  replay anchor stays open until its `AgentInvocationSettled` or the replay tail, so its
+  `Start`/`End` entries may follow its terminal; abandoned-`Start` and closed-anchor checks run
+  when the anchor closes.
+  Background work can continue live at the replay tail once that terminal is read, before the
+  result is recorded. The consumed terminal still decides the result: a Store that switched to
+  live in between records no second terminal.
+- **Authority ends at the return.** The final outcome hides the lent scope card from every host
+  call made after the return: such a call can neither lend nor derive from a handle to that card
+  or to a card derived from it. A call made before the return keeps its admitted authority across
+  awaits and store tasks. Attribution (`invocation-id()`) stays the method's, and the card stays
+  installed until the drain ends.
+- **Failures after the result** never replace it. A trap during the drain is retried by
+  reconstruction under the retry policy; an interrupt or suspension stops the agent as it does
+  during the method, and the resumed agent reconstructs. Replay consumes the recorded terminal, so
+  the method does not run again. Giving up fails the agent and the queued invocations but publishes
+  no failure for the recorded one; an interrupt also fails the queued invocations. A give-up of the
+  primary Store records an exhausted retry state, so a successful result that settles becomes
+  `background-failed` (`InvocationEnd::BackgroundFailed`, folded from that `Error` or an
+  `Exited`; no new oplog entry). A same-key retry or lookup returns the recorded result with its
+  `background_failure`; RPC callers get the plain result. A recorded method failure stays
+  `failed`, and a later `AgentInvocationSettled` of the invocation keeps `background-failed`. A rejection
+  trap (`PermissionDenied`, `InvalidRequest`) after the result is an ordinary trap of the agent.
+  A stop or capacity failure that lands before `AgentInvocationSettled` stops the agent even when
+  no background work is left: a durable agent reconstructs to write `Settled`, and an ephemeral
+  agent fails (`EphemeralCannotSuspend`) while keeping the recorded result.
+- **Read-only strictness** of a read-only method lasts through its drain: background work that
+  attempts a write side effect (`WriteLocal` or `WriteRemote`) traps with `ReadOnlyViolation`
+  after the result, which fails the agent without replacing the recorded result.
+- **Status** stays `Running` from a terminal with `awaits_settlement` until its
+  `AgentInvocationSettled` (`AgentStatusRecord::settling_invocation`), so interrupts, crash
+  recovery and shard assignment treat a draining agent as running.
+- **The `Settled` commit** of a live durable invocation whose next work is a due queued
+  invocation is left to the `AgentInvocationStarted` commit of that invocation, which stores both
+  entries with one status fold (`Worker::defer_settlement_commit`). The invocation loop commits a
+  deferred `Settled` on its own before other work, before it waits for a command or a permit, and
+  when it exits; a failure of the next invocation before its start commits it before it reads the
+  retry state. The start of the next invocation (payload hydration, scope card, instance lock)
+  runs with `Settled` buffered and the status `Running`. `Settled` is committed on its own when
+  nothing is queued, for ephemeral agents, at the replay tail, and before resident work, an idle
+  turn or a pending update.
 
 ## External effects
 
@@ -94,6 +155,8 @@ re-executing it after a crash is safe.
 A new or changed `OplogEntry` requires updating, in the same change: `is_hint()` classification,
 the WIT `oplog-entry` / `public-oplog-entry` variants in `wit/deps/golem-1.x/golem-oplog.wit`
 (the `oplog_macro` binds `wit_raw_type` / `wit_public_type`; load `modifying-wit-interfaces`),
-replay claims (`src/durable_host/replay_state/claims.rs`), cut-point validation
+replay claims (`src/durable_host/replay_state/claims.rs`), the replay cursor's invocation
+anchors when the entry can appear between an invocation's terminal and its settlement
+(`src/durable_host/replay_state/cursor/`), cut-point validation
 (`src/worker/cut_point.rs`), status folding (`src/worker/status/`), public oplog rendering, and
 a test that restarts a worker across the new entry.

@@ -326,8 +326,8 @@ fn write_ts(ctx: &TestContext) {
                   );
                   check(await configured.label() === 'ts', 'config override');
                   const unkeyedId = await (await RustUuidTarget.create(id)).agentId();
-                  (await RustUuidTarget.getById(unkeyedId)).touch.trigger();
-                  check(await (await RustUuidTarget.getById(unkeyedId)).touch() === 2, 'trigger by agent ID');
+                  RustUuidTarget.getById(unkeyedId).touch.trigger();
+                  check(await RustUuidTarget.getById(unkeyedId).touch() === 2, 'trigger by agent ID');
                   return `ok:${await target.touch()}`;
                 },
               },

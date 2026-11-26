@@ -145,6 +145,7 @@ where
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<T, DB> Rdbms<T> for SqlxRdbms<T, DB>
 where
     T: RdbmsType
@@ -647,6 +648,7 @@ where
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<T, DB> DbTransaction<T> for SqlxDbTransaction<T, DB>
 where
     T: RdbmsType + Sync + QueryExecutor<T, DB> + TransactionSupport<T, DB>,
@@ -989,6 +991,7 @@ where
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<T, DB> DbResultStream<T> for SqlxDbResultStream<'_, T, DB>
 where
     T: RdbmsType + Sync,

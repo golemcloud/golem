@@ -134,7 +134,7 @@ impl ManagementTool {
     }
 }
 
-/// The MCP tool name of a command path: `agent cancel-invocation` is `agent_cancel_invocation`.
+/// The MCP tool name of a command path: `invocation cancel` is `invocation_cancel`.
 pub fn tool_name(path: &[&str]) -> String {
     path.join("_").replace('-', "_")
 }
@@ -2006,6 +2006,64 @@ mod tests {
         assert!(refused.contains("at most 50"), "{refused}");
     }
 
+    /// The oplog tool shows the verified claims of the users among the callers only on request,
+    /// as `agent oplog --show-claims` does. In the result, the claims are a JSON object.
+    #[test]
+    fn agent_oplog_tool_shows_the_claims_only_on_request() {
+        use crate::command_handler::log::render_command_output_document;
+        use crate::model::agent::oplog::AgentOplogPageView;
+        use crate::model::agent::oplog::test_support::{
+            CLAIMS, CLAIMS_POINTER, entry_of_a_signed_in_user,
+        };
+        use crate::model::format::Format;
+
+        let oplog = tool("agent_oplog");
+        assert_eq!(
+            oplog.tool.input_schema["properties"]["show_claims"]["type"],
+            "boolean"
+        );
+
+        // The argument becomes the flag of the command, and it is off when the call leaves it out.
+        let show_claims = |arguments: Value| {
+            let crate::command::GolemCliSubcommand::Agent {
+                subcommand: crate::command::worker::AgentSubcommand::Oplog { show_claims, .. },
+            } = parse(argv("agent_oplog", arguments).unwrap()).subcommand
+            else {
+                panic!("not agent oplog");
+            };
+            show_claims
+        };
+        assert!(show_claims(
+            json!({"agent_id": "A(\"a\")", "show_claims": true})
+        ));
+        assert!(!show_claims(json!({"agent_id": "A(\"a\")"})));
+        assert!(!show_claims(
+            json!({"agent_id": "A(\"a\")", "show_claims": false})
+        ));
+
+        // The result of the tool is the page that the command prints.
+        let result_of = |with_claims: bool| {
+            let page = render_command_output_document(
+                Format::Json,
+                false,
+                AgentOplogPageView {
+                    entries: vec![entry_of_a_signed_in_user(with_claims)],
+                    cursor: None,
+                },
+            )
+            .unwrap();
+            success(&oplog, format!("{page}\n").as_bytes())
+                .structured_content
+                .expect("the tool gives a structured result")
+        };
+        let claims_pointer = format!("/entries/0{CLAIMS_POINTER}");
+        let shown = result_of(true);
+        let claims = shown.pointer(&claims_pointer).expect("the claims");
+        assert!(claims.is_object(), "{claims}");
+        assert_eq!(claims, &serde_json::from_str::<Value>(CLAIMS).unwrap());
+        assert!(result_of(false).pointer(&claims_pointer).is_none());
+    }
+
     #[test]
     fn a_tool_returns_only_its_own_output_types() {
         let oplog = tool("agent_oplog");
@@ -2157,7 +2215,7 @@ mod tests {
         use crate::oplog_export::export::OplogExportError;
         use crate::oplog_export::model::{
             OplogExportCoverage, OplogExportHeader, OplogExportReport, OplogReportHeader,
-            ReportAgentRef, ReportToken,
+            ReportAgentRef,
         };
         // Escaped and non-ASCII text, so that bytes, characters and the text differ in length.
         let report = OplogExportReport {
@@ -2169,7 +2227,10 @@ mod tests {
                     keep_error_text: false,
                     filtered: false,
                     root: ReportAgentRef {
-                        token: ReportToken("agent:00".to_string()),
+                        agent_id: golem_common::model::AgentId::from_parts(7, 1),
+                        agent_type: Some(golem_common::model::agent::AgentTypeName(
+                            "Zähler \"quoted\"".to_string(),
+                        )),
                     },
                     cli_version: "1.0 \"quoted\"\n\u{1F600}".to_string(),
                     generated_at: "2026-11-18T00:00:00+00:00 Zürich".to_string(),

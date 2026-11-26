@@ -1,0 +1,235 @@
+{
+  "tier": "pr",
+  "description": "Parameters: positionals, specials, arrays, namerefs and attributes.",
+  "cases": [
+    {
+      "name": "param: readonly assignment abandons its line",
+      "script": "readonly r=1\nr=2; echo same-line\necho next=$?\nf() { r=3; echo in-f; }\nf; echo after-f\necho last",
+      "tags": [
+        "param.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: nameref as a for variable",
+      "script": "target=\"\"; declare -n ref=target; for ref in a b c; do echo \"loop: target=$target\"; done; echo \"final: target=$target\"",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: exported nameref reaches a child as its name",
+      "script": "target=value; declare -nx myref=target; bash -c 'echo \"myref: $myref\"'",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: nameref to an element in arithmetic",
+      "script": "arr=(0 1 0); declare -n ref='arr[1]'; echo $(( ref ? 100 : 200 ))",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: positional parameters",
+      "script": "set -- a \"b c\" d; echo $# \"$1\" \"$2\"; echo \"$@\"; echo \"${10-none}\"; set -- 1 2 3 4 5 6 7 8 9 10 11; echo ${10} ${11} $10",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: dollar zero and dash",
+      "script": "echo $- | grep -q h && echo hashall; case $- in *c*) echo command-string;; esac; set -u; case $- in *u*) echo nounset;; esac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: last argument",
+      "script": "echo a b c >/dev/null; echo $_; true last; echo $_",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: status and pid",
+      "script": "false; echo $?; echo $? ; [ $$ -gt 0 ] && echo pid; sleep 0.01 & [ $! -gt 0 ] && echo bgpid; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: indexed arrays",
+      "script": "a=(zero one two); echo ${a[0]} ${a[@]} ${#a[@]}; a[5]=five; echo ${#a[@]} ${!a[@]}; a+=(six); echo ${a[6]}; echo ${a[-1]} ${a[@]: -2}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: array assignment forms",
+      "script": "a=([2]=two [0]=zero); echo ${!a[@]}; b=(\"${a[@]}\"); echo ${#b[@]}; c=(); echo ${#c[@]}; d[3]=x; echo ${d[@]}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: array quoting",
+      "script": "a=(\"x y\" z); for e in \"${a[@]}\"; do echo \"[$e]\"; done; for e in ${a[@]}; do echo \"<$e>\"; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: array element operations",
+      "script": "a=(apple banana cherry); echo ${a[1]:0:3} ${a[@]^} ${#a[2]}; unset a; echo ${#a[@]}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: negative index errors",
+      "script": "a=(1 2); echo ${a[-3]}; echo status=$?; a[-3]=x; echo status=$?",
+      "tags": [
+        "error"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: associative arrays",
+      "script": "declare -A m; m[one]=1; m[two]=2; m[\"with space\"]=3; echo ${m[one]} ${#m[@]} \"${m[with space]}\"; for k in \"${!m[@]}\"; do echo \"$k=${m[$k]}\"; done | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: associative literal and unset",
+      "script": "declare -A m=([a]=1 [b]=2 [c]=3); unset \"m[b]\"; echo ${#m[@]}; [[ -v m[a] ]] && echo has-a; [[ -v m[b] ]] || echo no-b; printf \"%s\\n\" \"${m[@]}\" | sort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: associative arrays need declare",
+      "script": "m[k]=v; echo ${m[k]} ${m[0]}; declare -p m",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: namerefs",
+      "script": "declare -n r=target; r=value; echo $target; target=changed; echo $r; f() { local -n out=$1; out=result; }; f dest; echo $dest",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: namerefs to arrays",
+      "script": "arr=(1 2 3); declare -n ref=arr; echo ${ref[1]} ${#ref[@]}; ref+=(4); echo ${arr[@]}",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: nameref loops",
+      "script": "a=1 b=2; for n in a b; do declare -n v=$n; echo $v; done; declare +n v; echo done",
+      "tags": [
+        "param.nameref"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: integer attribute",
+      "script": "declare -i i=10; i+=5; echo $i; i=\"i*2\"; echo $i; declare +i i; i=3+3; echo $i",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: export reaches children only when exported",
+      "script": "x=plain; export y=exported; bash -c 'echo \"[${x-}] [${y-}]\"'; z=inline bash -c 'echo \"[${z-}]\"'",
+      "tags": [
+        "param.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: allexport",
+      "script": "set -a; w=auto; set +a; bash -c 'echo \"[${w-}]\"'",
+      "tags": [
+        "option.allexport",
+        "param.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: export -n and -p",
+      "script": "export e=1; export -n e; bash -c 'echo \"[${e-}]\"'; export -p | grep -c \" e=\" ; echo status=$?",
+      "tags": [
+        "param.export"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: readonly and declare -r in functions",
+      "script": "f() { local -r c=1; c=2; echo status=$?; }; f 2>/dev/null; readonly -f f 2>/dev/null; echo done",
+      "tags": [
+        "param.readonly"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: RANDOM and SECONDS",
+      "script": "[[ $RANDOM =~ ^[0-9]+$ ]] && (( RANDOM < 32768 )) && echo random; (( SECONDS >= 0 )) && echo seconds; [[ $EPOCHSECONDS =~ ^[0-9]+$ ]] && echo epoch",
+      "tags": [
+        "param.random"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: BASH_SOURCE and LINENO in a script",
+      "script": "echo \"[${BASH_SOURCE[0]-}]\"; echo $LINENO\necho $LINENO",
+      "tags": [
+        "param.callstack"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: unset variables in nounset",
+      "script": "set -u; echo \"${x-default}\"; echo \"${arr[@]-}\"; ( echo $undefined ) 2>/dev/null; echo status=$?",
+      "tags": [
+        "option.nounset"
+      ],
+      "options": {}
+    },
+    {
+      "name": "param: special parameters in functions",
+      "script": "f() { echo \"$0|$#|$*\"; }; f a b; set -- x; f; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: assignment before a command",
+      "script": "x=outer; x=inner true; echo $x; f() { echo $x; }; x=temp f; echo $x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: variable names",
+      "script": "a_1=1 _b=2; echo $a_1 $_b; 1x=3 2>/dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: a nameref to an array element reads and assigns it",
+      "script": "a=(1 2 3); declare -n r='a[1]'; echo \"read=[$r]\"; r=x; echo \"${a[*]}\"; r+=z; echo \"${a[*]}\"; (( r = 7 )); echo \"${a[*]}\"; (( r += 5 )); echo \"${a[*]}\"; declare -A m=([k]=v); declare -n mr='m[k]'; echo \"[$mr]\"; mr=w; echo \"${m[k]}\"; i=2; declare -n ri='a[$i]'; ri=last; echo \"${a[*]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: a nameref to an element in a function and an arithmetic for loop",
+      "script": "f() { local -n e=$1; e=changed; }; b=(1 2 3); f 'b[1]'; echo \"${b[*]}\"; arr=(0); declare -n ref='arr[0]'; for (( ref=1; ref<=3; ref++ )); do echo \"ref=$ref arr0=${arr[0]}\"; done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "param: read into an array element",
+      "script": "read -r 'c[3]' <<< val; echo \"[${c[3]}] ${#c[@]}\"",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

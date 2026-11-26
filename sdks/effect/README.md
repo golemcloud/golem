@@ -21,7 +21,7 @@ also apply to collection elements and map keys and values.
 Other declared verbs keep remaining inputs in the body; explicit query templates still
 work on those verbs. Inference uses the declared verb, not expanded DurableStreams
 resource verbs. In 2.0, typed agent endpoints reject unknown query keys with a named `400`,
-including on body methods and cache hits. Declared phantom selectors and applicable
+including on body methods and cache hits. Declared agent ID bindings and applicable
 DurableStreams read controls remain recognized. File routes still ignore query strings;
 raw handlers receive them unchanged.
 
@@ -114,8 +114,9 @@ const program = Effect.scoped(
 - Every durable remote client has `agentId: Effect<AgentId, RemoteCallError>`, read from the host.
   On a client of `upsert` it creates the agent when it is missing. A method named `agentId` is not
   part of a typed client.
-- `AgentId.parse(text)` and `AgentId.format(id)` convert an ID to and from its UUID text. The
-  parse checks only the text form; only the host knows whether an agent has the ID.
+- An `AgentId` is a branded string: its lower-case UUID text. Use it as text where a `string` is
+  expected; `AgentId.parse(text)` reads text back into an `AgentId`. The parse checks only the
+  text form; only the host knows whether an agent has the ID.
 
 Awaited RPC is interruptible: fiber interruption cancels the result handle. Cancellation is best
 effort; remote side effects may already have happened. Triggering and scheduling methods whose
@@ -327,7 +328,7 @@ Config is never stored in snapshots. Restoration reads current host values.
 
 Snapshotting agents initialize runtime state with `init(id)`. The implementation's snapshot
 strategy restores that state before `methods(state)` constructs handlers. Custom restoration
-receives a `SnapshotRestorationContext` containing `id`, `principal`, the typed `agentId`, and
+receives a `SnapshotRestorationContext` containing `id`, the typed `agentId`, and
 current `config`; it must not perform fresh-instance initialization effects. `id` is the
 constructor input that the host passes to `load-snapshot`, decoded as `initialize` decodes it.
 

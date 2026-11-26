@@ -137,7 +137,8 @@ func init() {
 			func(payload string) golem.Result[string, string] {
 				return golem.Ok[string, string](fetch(payload))
 			},
-			func(string, string) golem.Result[golem.Unit, string] {
+			func(payload string, _ string) golem.Result[golem.Unit, string] {
+				fetch("undo-" + payload)
 				return golem.Ok[golem.Unit, string](golem.Unit{})
 			},
 		)
@@ -149,6 +150,9 @@ func init() {
 			second := tx.Step(call, in.Payload+"-2")
 			if second.IsErr() {
 				return second
+			}
+			if os.Getenv("SAGA_FAIL") == "true" {
+				return golem.Err[string, string]("fail after both HTTP effects")
 			}
 			return golem.Ok[string, string](first.Ok() + "," + second.Ok())
 		})

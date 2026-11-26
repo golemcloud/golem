@@ -78,6 +78,7 @@ pub(crate) struct DurableOutgoingDatagramStream {
 /// Without a native stream the stream is ready at once: its next operation rebuilds the endpoint
 /// or reports the loss.
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl wasmtime_wasi::p2::Pollable for DurableIncomingDatagramStream {
     async fn ready(&mut self) {
         if let Some(native) = &mut self.native {
@@ -87,6 +88,7 @@ impl wasmtime_wasi::p2::Pollable for DurableIncomingDatagramStream {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl wasmtime_wasi::p2::Pollable for DurableOutgoingDatagramStream {
     async fn ready(&mut self) {
         if let Some(native) = &mut self.native {

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use async_trait::async_trait;
-use chrono::Utc;
+
 use golem_common::SafeDisplay;
 use golem_common::model::card::{CardId, CardManagedByRuntimeDerived, ScopeCard, StoredCard};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
@@ -163,6 +163,7 @@ pub async fn validate_scope_card(
 pub struct NoopCardService;
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl CardService for NoopCardService {
     async fn record_revoked_cards(&self, _card_ids: &[CardId]) {}
 
@@ -205,7 +206,7 @@ impl CardServiceDefault {
 
     fn card_is_expired(card: &StoredCard) -> bool {
         card.expires_at()
-            .is_some_and(|expires_at| expires_at <= Utc::now())
+            .is_some_and(|expires_at| expires_at <= jiff::Timestamp::now())
     }
 
     fn cached_card_states(
@@ -270,6 +271,7 @@ impl CardServiceDefault {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl CardService for CardServiceDefault {
     async fn record_revoked_cards(&self, card_ids: &[CardId]) {
         let mut state = self.state.write().await;

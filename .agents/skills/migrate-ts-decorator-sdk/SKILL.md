@@ -194,11 +194,12 @@ removed decorator surface.
 
 **Current forms:**
 - **`readOnly` cache policies.** `@readonly({ cache: 'no-cache' | 'until-write' | { ttl } })` → `method({ readOnly: { cache: 'no-cache' | 'until-write' | { ttlNanos: <bigint> }, usesPrincipal?: boolean } })`. Bare `readOnly: true` uses the `until-write` policy (the base default); principal-dependent caching → `usesPrincipal: true`.
-- **Config-on-RPC (`getWithConfig`).** `Agent.getWithConfig(id, overrides)` →
-  `Def.client.get(id, overrides)`. For an existing phantom agent, use
-  `Def.client.getPhantom(id, phantomId, overrides)`; for a fresh phantom agent, use
-  `Def.client.newPhantom(id, overrides)`. Non-secret override leaves are encoded and applied at
-  call time; secret overrides are rejected because secrets remain host-provisioned.
+- **Config-on-RPC (`getWithConfig`).** Only a create takes overrides:
+  `Agent.getWithConfig(id, overrides)` → `await Def.client.create(id, { keyed: true, config })`
+  for the keyed agent of `id`, which rejects with `conflict` when that agent exists, or
+  `await Def.client.create(id, { config })` for a new agent without a key. `upsert(id)` and
+  `getById(agentId)` take no overrides. Secret overrides are rejected because secrets remain
+  host-provisioned.
 - **Cancelable / abortable RPC.** Pass `{ signal }` to an awaited client method, for example
   `await client.run(input, { signal })`. `client.run.schedule(at, input)` returns a
   `CancellationToken` whose `.cancel()` cancels the scheduled invocation. Fire-and-forget remains

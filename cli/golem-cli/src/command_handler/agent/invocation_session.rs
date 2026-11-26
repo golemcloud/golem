@@ -40,9 +40,10 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
-    INVOCATION_SESSION_VERSION, InvocationSelector, PublicClientMessage, PublicConfigEntry,
-    PublicErrorCode, PublicInvocationOutcome, PublicInvocationResult, PublicResumeOperation,
-    PublicServerMessage, PublicStreamDirection, PublicStreamError, PublicStreamOutcome,
+    INVOCATION_SESSION_VERSION, InvocationSelector, PublicAgentTarget, PublicClientMessage,
+    PublicConfigEntry, PublicErrorCode, PublicInvocationOutcome, PublicInvocationResult,
+    PublicResumeOperation, PublicServerMessage, PublicStreamDirection, PublicStreamError,
+    PublicStreamOutcome,
 };
 use golem_common::schema::agent::{
     AgentMethodSchema, AgentTypeSchema, OutputSchema, ParsedAgentKey,
@@ -241,7 +242,7 @@ pub(super) struct InvocationSessionArgs {
     pub application_name: String,
     pub environment_name: String,
     pub agent_type: AgentTypeSchema,
-    pub parsed_agent_id: ParsedAgentKey,
+    pub target: PublicAgentTarget,
     pub method_name: String,
     pub arguments: Vec<String>,
     pub config: Vec<AgentConfigEntryDto>,
@@ -302,12 +303,13 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 })
         },
     )?;
-    let selector = invocation_selector(
-        &args.application_name,
-        &args.environment_name,
-        &args.parsed_agent_id,
-        &args.method_name,
-    )?;
+    let selector = InvocationSelector {
+        agent_type: args.agent_type.type_name.to_string(),
+        application: args.application_name.clone(),
+        target: args.target.clone(),
+        environment: args.environment_name.clone(),
+        method: args.method_name.clone(),
+    };
     let schema_evidence = schema_evidence(&args.agent_type, &method)?;
     let config = args
         .config
@@ -329,7 +331,7 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 attempt_id,
                 config: config.clone(),
                 idempotency_key: idempotency_key_value.clone(),
-                method_parameters: method_parameters.clone(),
+                method_parameters: method_parameters.clone().try_into()?,
                 selector: Box::new(selector.clone()),
                 version: INVOCATION_SESSION_VERSION,
             };
@@ -683,18 +685,25 @@ pub(super) async fn invoke(ctx: Arc<Context>, args: InvocationSessionArgs) -> an
                 if let ServerFrame::Message(PublicServerMessage::InvocationAccepted {
                     agent_id,
                     idempotency_key,
+                    mappings,
+                    ..
+                } | PublicServerMessage::InvocationReady {
+                    agent_id,
+                    idempotency_key,
+                    mappings,
                     ..
                 }) = &server_frame
                 {
                     accepted = true;
                     accepted_key = idempotency_key.to_string();
-                    if let Some(live_output) = &args.live_output {
+                    let ready = matches!(&server_frame, ServerFrame::Message(PublicServerMessage::InvocationReady { .. }));
+                    if let Some(live_output) = &args.live_output && !ready {
                         live_output
                             .accepted(agent_id, &args.selected_agent_name, *idempotency_key)
                             .await?;
                     }
                     output_streams.clear();
-                    if let Some(binding) = input_binding.as_mut() {
+                    if let Some(binding) = input_binding.as_mut() && (ready || !mappings.is_empty()) {
                         let (channel, stream_token) = session
                             .input_binding(&input_buffer)
                             .ok_or_else(|| anyhow!("invocation acceptance omitted the stdin stream mapping"))?;
@@ -900,6 +909,16 @@ fn invocation_selector(
     parsed_agent_id: &ParsedAgentKey,
     method_name: &str,
 ) -> anyhow::Result<InvocationSelector> {
+    Ok(InvocationSelector {
+        agent_type: parsed_agent_id.agent_type.to_string(),
+        application: application_name.to_string(),
+        target: key_target(parsed_agent_id)?,
+        environment: environment_name.to_string(),
+        method: method_name.to_string(),
+    })
+}
+
+pub(super) fn key_target(parsed_agent_id: &ParsedAgentKey) -> anyhow::Result<PublicAgentTarget> {
     let constructor_parameters = encode_public_schema_value(
         parsed_agent_id.parameters.graph(),
         &parsed_agent_id.parameters.graph().root,
@@ -911,12 +930,8 @@ fn invocation_selector(
             ))
         },
     )?;
-    Ok(InvocationSelector {
-        agent_type: parsed_agent_id.agent_type.to_string(),
-        application: application_name.to_string(),
+    Ok(PublicAgentTarget::Key {
         constructor_parameters,
-        environment: environment_name.to_string(),
-        method: method_name.to_string(),
     })
 }
 
@@ -1013,7 +1028,7 @@ pub(super) async fn invoke_scalar(
         attempt_id: uuid::Uuid::new_v4(),
         config: Vec::new(),
         idempotency_key: args.idempotency_key.value.clone(),
-        method_parameters,
+        method_parameters: method_parameters.try_into()?,
         selector: Box::new(invocation_selector(
             &args.application_name,
             &args.environment_name,
@@ -1073,6 +1088,7 @@ pub(super) async fn invoke_scalar(
                 }
                 accepted_key = Some(idempotency_key);
             }
+            PublicServerMessage::InvocationReady { .. } => {}
             PublicServerMessage::InvocationResult { result: value, .. } => {
                 result = match *value {
                     PublicInvocationResult::Value {
@@ -1189,7 +1205,7 @@ fn load_checkpoint(path: &Path) -> anyhow::Result<InvocationSessionCheckpoint> {
         .map(|pending| pending_operation_kind(&pending.request))
         .transpose()?;
     if let Some(pending) = &checkpoint.pending_operation {
-        golem_common::model::invocation_session_public::encode_text(&pending.request)
+        golem_common::model::invocation_session_public::encode_client_text(&pending.request)
             .context("invocation session file contains an invalid pending operation")?;
     }
     if checkpoint.session_token.is_none() && pending_kind != Some(PendingOperationKind::Start) {
@@ -1226,10 +1242,11 @@ fn validate_pending_start(
     else {
         bail!("pending operation is not an invocation start");
     };
+    let saved_parameters = serde_json::from_str(saved_parameters.as_str())?;
     let saved_values = decode_public_schema_value(
         input_graph,
         &input_graph.root,
-        saved_parameters,
+        &saved_parameters,
         PublicStreamReferencePolicy::Provisional,
         |reference, _| {
             let PublicStreamReference::Provisional(reference) = reference else {
@@ -1292,7 +1309,7 @@ fn validate_pending_start(
         attempt_id: *attempt_id,
         config: config.to_vec(),
         idempotency_key: idempotency_key.to_string(),
-        method_parameters: expected_parameters,
+        method_parameters: expected_parameters.try_into()?,
         selector: Box::new(selector.clone()),
         version: INVOCATION_SESSION_VERSION,
     };
@@ -1858,6 +1875,7 @@ fn cancel_announced_outputs(
 ) -> Vec<PublicClientMessage> {
     let ServerFrame::Message(
         PublicServerMessage::InvocationAccepted { mappings, .. }
+        | PublicServerMessage::InvocationReady { mappings, .. }
         | PublicServerMessage::InvocationResult { mappings, .. }
         | PublicServerMessage::OutputStreamItem { mappings, .. }
         | PublicServerMessage::InputStreamAck { mappings, .. },
@@ -2024,6 +2042,7 @@ async fn handle_response(
 ) -> anyhow::Result<bool> {
     let mut failed = false;
     match response {
+        ServerFrame::Message(PublicServerMessage::InvocationReady { .. }) => {}
         ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. }) => {
             if structured {
                 let mut event = event(AgentInvocationSessionEventKind::Accepted, idempotency_key);
@@ -3093,7 +3112,7 @@ fn schema_value_to_json(
 mod public_tests {
     use super::*;
     use golem_common::model::invocation_session_public::{
-        PublicStreamDirection, PublicStreamMapping,
+        JsonMethodInput, PublicStreamDirection, PublicStreamMapping,
     };
     use golem_common::schema::metadata::MetadataEnvelope;
     use std::io::ErrorKind;
@@ -3107,7 +3126,9 @@ mod public_tests {
             selector: InvocationSelector {
                 agent_type: "counter".to_string(),
                 application: "app".to_string(),
-                constructor_parameters: serde_json::json!({}),
+                target: PublicAgentTarget::Key {
+                    constructor_parameters: serde_json::json!({}),
+                },
                 environment: "prod".to_string(),
                 method: "run".to_string(),
             },
@@ -3144,6 +3165,34 @@ mod public_tests {
             expected.accepted_invocation
         );
 
+        let mut queued = expected.clone();
+        queued.session_token = None;
+        queued.accepted_invocation = None;
+        queued.delivered_output_cursors.clear();
+        queued.stable_stream_bindings.clear();
+        queued.pending_operation = Some(PendingOperation {
+            request: PublicClientMessage::InvocationStart {
+                attempt_id: uuid::Uuid::new_v4(),
+                config: Vec::new(),
+                idempotency_key: queued.idempotency_key.clone(),
+                method_parameters: JsonMethodInput::capture(
+                    br#"{"huge":1e400,"precise":1.00000000000000001,"zero":-0.0}"#,
+                )
+                .unwrap(),
+                selector: Box::new(queued.selector.clone()),
+                version: INVOCATION_SESSION_VERSION,
+            },
+        });
+        write_checkpoint(&path, &queued).unwrap();
+        assert_eq!(
+            load_checkpoint(&path)
+                .unwrap()
+                .pending_operation
+                .unwrap()
+                .request,
+            queued.pending_operation.unwrap().request
+        );
+
         expected
             .delivered_output_cursors
             .insert("opaque-stream-token".to_string(), "new-cursor".to_string());
@@ -3152,6 +3201,14 @@ mod public_tests {
             load_checkpoint(&path).unwrap().delivered_output_cursors,
             BTreeMap::from([("opaque-stream-token".to_string(), "new-cursor".to_string(),)])
         );
+        expected.selector.target = PublicAgentTarget::Id {
+            agent_id: golem_common::model::AgentId::from_parts(7, 4),
+            expected_fingerprint: Some(golem_common::model::AgentFingerprint(
+                uuid::Uuid::from_u128(8),
+            )),
+        };
+        write_checkpoint(&path, &expected).unwrap();
+        assert_eq!(load_checkpoint(&path).unwrap().selector, expected.selector);
         let encoded = std::fs::read_to_string(path).unwrap();
         for private_name in [
             "attachmentId",
@@ -3238,7 +3295,9 @@ mod public_tests {
                     {"kind":"stream","value":{"provisionalRef":saved_reference}},
                     {"kind":"string","value":"tail"}
                 ]}
-            }),
+            })
+            .try_into()
+            .unwrap(),
             selector: Box::new(selector.clone()),
             version: INVOCATION_SESSION_VERSION,
         };
@@ -3301,7 +3360,7 @@ mod public_tests {
                 attempt_id: uuid::Uuid::new_v4(),
                 config: Vec::new(),
                 idempotency_key: "invocation-key".to_string(),
-                method_parameters: parameters,
+                method_parameters: parameters.try_into().unwrap(),
                 selector: Box::new(selector.clone()),
                 version: INVOCATION_SESSION_VERSION,
             };
@@ -3333,7 +3392,9 @@ mod public_tests {
                     {"kind":"stream","value":{"provisionalRef":saved_reference}},
                     {"kind":"string","value":"tail"}
                 ]}
-            }),
+            })
+            .try_into()
+            .unwrap(),
             selector: Box::new(selector.clone()),
             version: INVOCATION_SESSION_VERSION,
         };

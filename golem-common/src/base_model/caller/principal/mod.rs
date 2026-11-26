@@ -151,8 +151,9 @@ impl AccountPrincipal {
 /// How an account authenticated.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec, poem_openapi::Enum))]
 #[cfg_attr(feature = "full", desert(evolution()))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
 pub enum AccountAuthentication {
     ApiToken,
     BootstrapToken,
@@ -475,6 +476,16 @@ impl Caller {
 
     pub fn anonymous() -> Self {
         Self::entry(Principal::Anonymous)
+    }
+
+    /// The caller of a call that an agent or tool makes inside the invocation that has this
+    /// caller: the same original caller and tokens, and `immediate` as the immediate caller.
+    pub fn propagate(&self, immediate: Principal) -> Caller {
+        Caller {
+            original: self.original.clone(),
+            immediate,
+            tokens: self.tokens.clone(),
+        }
     }
 }
 

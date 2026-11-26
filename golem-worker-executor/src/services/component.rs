@@ -23,18 +23,21 @@ use golem_common::model::account::AccountId;
 use golem_common::model::application::ApplicationId;
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
+use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::tracing::TraceOrigin;
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::component::Component;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use golem_service_base::service::compiled_component::CompiledComponentServiceConfig;
+use golem_service_base::service::type_id_resolution::InvalidationGenerations;
 use golem_service_base::storage::blob::BlobStorage;
 use std::sync::Arc;
 use std::time::Duration;
 use std::time::Instant;
 use tokio::task::spawn_blocking;
-use tracing::{debug, info_span, warn};
+use tracing::{Instrument, debug, info_span, warn};
 use wasmtime::Engine;
 
 /// Service for downloading a specific Golem component from the Golem Component API
@@ -109,13 +112,22 @@ pub fn configured(
     ))
 }
 
+#[derive(Clone)]
 pub struct ComponentServiceDefault {
-    component_cache: Cache<ComponentKey, (), wasmtime::component::Component, WorkerExecutorError>,
+    component_cache: LoadedComponentCache,
     component_metadata_cache: Cache<ComponentKey, (), Component, WorkerExecutorError>,
-    current_component_metadata_cache: Cache<ComponentId, (), Component, WorkerExecutorError>,
+    current_component_metadata_cache:
+        Cache<ComponentId, (), FetchedCurrentMetadata, WorkerExecutorError>,
+    current_metadata_generations: Arc<InvalidationGenerations>,
     compiled_component_service: Arc<dyn CompiledComponentService>,
     registry_client: Arc<dyn RegistryService>,
     compilation_limiter: CompilationLimiter,
+}
+
+#[derive(Clone)]
+struct FetchedCurrentMetadata {
+    generation: u64,
+    metadata: Component,
 }
 
 impl ComponentServiceDefault {
@@ -138,6 +150,7 @@ impl ComponentServiceDefault {
                 max_metadata_capacity,
                 time_to_idle,
             ),
+            current_metadata_generations: Arc::default(),
             compiled_component_service,
             compilation_limiter: CompilationLimiter::new(max_concurrent_compilations),
         }
@@ -145,6 +158,7 @@ impl ComponentServiceDefault {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentService for ComponentServiceDefault {
     async fn get(
         &self,
@@ -152,107 +166,39 @@ impl ComponentService for ComponentServiceDefault {
         component_id: ComponentId,
         component_revision: ComponentRevision,
     ) -> Result<(wasmtime::component::Component, Component), WorkerExecutorError> {
-        let key = ComponentKey {
-            component_id,
-            component_revision,
-        };
-        let engine = engine.clone();
-        let compiled_component_service = self.compiled_component_service.clone();
-        let compilation_limiter = self.compilation_limiter.clone();
         let metadata = self
             .get_metadata(component_id, Some(component_revision))
             .await?;
-        let environment_id = metadata.environment_id;
+        let wasm_hash = metadata.wasm_hash;
+        let key = LoadedComponentKey(wasm_hash, engine.clone());
+        let revision_key = ComponentKey {
+            component_id,
+            component_revision,
+        };
 
-        let component = self
+        let service = self.clone();
+        let load_engine = engine.clone();
+        let load_metadata = metadata.clone();
+        let load_revision = revision_key.clone();
+        let origin = TraceOrigin::capture_current();
+        let result = self
             .component_cache
-            .get_or_insert_simple(&key.clone(), || {
-                Box::pin(async move {
-                    let result = compiled_component_service
-                        .get(environment_id, component_id, component_revision, &engine)
-                        .await;
-
-                    let component = match result {
-                        Ok(component) => component,
-                        Err(err) => {
-                            warn!("Failed to download compiled component {:?}: {}", key, err);
-                            None
-                        }
-                    };
-
-                    match component {
-                        Some(component) => Ok(component),
-                        None => {
-                            // Bound the local compile fallback working set when
-                            // both the in-process cache and compiled artifact
-                            // store miss.
-                            compilation_limiter
-                                .run(async move {
-                                    let bytes = self
-                                        .registry_client
-                                        .download_component(component_id, component_revision)
-                                        .await
-                                        .map_err(|error| {
-                                            registry_error(
-                                                RegistryCall::DownloadComponent,
-                                                component_id,
-                                                Some(component_revision),
-                                                error,
-                                            )
-                                        })?;
-
-                                    let start = Instant::now();
-                                    let span = info_span!("Loading WASM component");
-                                    let component = spawn_blocking(move || {
-                                        let _enter = span.enter();
-                                        wasmtime::component::Component::from_binary(&engine, &bytes)
-                                            .map_err(|e| {
-                                                WorkerExecutorError::ComponentParseFailed {
-                                                    component_id,
-                                                    component_revision,
-                                                    reason: format!("{e}"),
-                                                }
-                                            })
-                                    })
-                                    .await
-                                    .map_err(compilation_join_error)??;
-                                    let end = Instant::now();
-
-                                    let compilation_time = end.duration_since(start);
-                                    record_compilation_time(compilation_time);
-                                    debug!(
-                                        "Compiled {} in {}ms",
-                                        component_id,
-                                        compilation_time.as_millis(),
-                                    );
-
-                                    let result = compiled_component_service
-                                        .put(
-                                            environment_id,
-                                            component_id,
-                                            component_revision,
-                                            &component,
-                                        )
-                                        .await;
-
-                                    match result {
-                                        Ok(_) => Ok(component),
-                                        Err(err) => {
-                                            warn!(
-                                                "Failed to upload compiled component {:?}: {}",
-                                                key, err
-                                            );
-                                            Ok(component)
-                                        }
-                                    }
-                                })
-                                .await
-                        }
-                    }
-                })
+            .get_or_insert_simple_spawned(&key, move || {
+                let span = golem_common::related_span!(origin, tracing::Level::INFO, "Load shared component", %wasm_hash);
+                async move {
+                    service
+                        .load_component(&load_engine, &load_metadata)
+                        .await
+                        .map_err(|error| (load_revision, error))
+                }.instrument(span)
             })
-            .await?;
-
+            .await;
+        let component = match result {
+            Ok(component) => component,
+            Err((owner, error)) if owner == revision_key => return Err(error),
+            // A download failure for another revision must not prevent this one from loading.
+            Err(_) => self.load_component(engine, &metadata).await?,
+        };
         Ok((component, metadata))
     }
 
@@ -289,42 +235,57 @@ impl ComponentService for ComponentServiceDefault {
                     )
                     .await
             }
-            None => {
+            None => loop {
                 let client = self.registry_client.clone();
-                let metadata = self
+                let generations = self.current_metadata_generations.clone();
+                let fetched = self
                     .current_component_metadata_cache
-                    .get_or_insert_simple(&component_id, || {
-                        Box::pin(async move {
-                            client
-                                .get_deployed_component_metadata(component_id)
-                                .await
-                                .map_err(|error| {
-                                    registry_error(
-                                        RegistryCall::Metadata,
-                                        component_id,
-                                        None,
-                                        error,
-                                    )
-                                })
+                    .get_or_insert_simple_spawned(&component_id, move || async move {
+                        let generation = generations.current();
+                        let metadata = client
+                            .get_deployed_component_metadata(component_id)
+                            .await
+                            .map_err(|error| {
+                            registry_error(RegistryCall::Metadata, component_id, None, error)
+                        })?;
+                        Ok(FetchedCurrentMetadata {
+                            generation,
+                            metadata,
                         })
                     })
                     .await?;
 
-                self.component_metadata_cache
-                    .get_or_insert_simple(
-                        &ComponentKey {
-                            component_id,
-                            component_revision: metadata.revision,
-                        },
-                        || {
-                            let metadata = metadata.clone();
-                            Box::pin(async move { Ok(metadata) })
-                        },
-                    )
-                    .await?;
+                if self
+                    .current_metadata_generations
+                    .is_current(fetched.metadata.environment_id, fetched.generation)
+                {
+                    self.component_metadata_cache
+                        .get_or_insert_simple(
+                            &ComponentKey {
+                                component_id,
+                                component_revision: fetched.metadata.revision,
+                            },
+                            || {
+                                let metadata = fetched.metadata.clone();
+                                Box::pin(async move { Ok(metadata) })
+                            },
+                        )
+                        .await?;
 
-                Ok(metadata)
-            }
+                    // Invalidation can run while the revision-keyed cache is populated.
+                    if self
+                        .current_metadata_generations
+                        .is_current(fetched.metadata.environment_id, fetched.generation)
+                    {
+                        return Ok(fetched.metadata);
+                    }
+                }
+                self.current_component_metadata_cache
+                    .remove_if_cached(&component_id, |cached| {
+                        cached.generation == fetched.generation
+                    })
+                    .await;
+            },
         }
     }
 
@@ -365,9 +326,11 @@ impl ComponentService for ComponentServiceDefault {
     }
 
     async fn invalidate_current_deployed_metadata(&self) {
-        let keys = self.current_component_metadata_cache.keys().await;
-        for key in keys {
-            self.current_component_metadata_cache.remove(&key).await;
+        let generation = self.current_metadata_generations.invalidate_all();
+        for (key, _) in self.current_component_metadata_cache.iter().await {
+            self.current_component_metadata_cache
+                .remove_if_cached(&key, |cached| cached.generation < generation)
+                .await;
         }
     }
 
@@ -375,18 +338,16 @@ impl ComponentService for ComponentServiceDefault {
         &self,
         environment_id: EnvironmentId,
     ) {
-        let keys = self
-            .current_component_metadata_cache
-            .iter()
-            .await
-            .into_iter()
-            .filter_map(|(component_id, component)| {
-                (component.environment_id == environment_id).then_some(component_id)
-            })
-            .collect::<Vec<_>>();
-
-        for key in keys {
-            self.current_component_metadata_cache.remove(&key).await;
+        let generation = self.current_metadata_generations.invalidate(environment_id);
+        for (key, fetched) in self.current_component_metadata_cache.iter().await {
+            if fetched.metadata.environment_id == environment_id {
+                self.current_component_metadata_cache
+                    .remove_if_cached(&key, |cached| {
+                        cached.metadata.environment_id == environment_id
+                            && cached.generation < generation
+                    })
+                    .await;
+            }
         }
     }
 
@@ -425,6 +386,83 @@ struct ComponentKey {
     component_revision: ComponentRevision,
 }
 
+impl ComponentServiceDefault {
+    async fn load_component(
+        &self,
+        engine: &Engine,
+        metadata: &Component,
+    ) -> Result<wasmtime::component::Component, WorkerExecutorError> {
+        let Component {
+            id: component_id,
+            revision: component_revision,
+            wasm_hash,
+            environment_id,
+            ..
+        } = *metadata;
+        match self
+            .compiled_component_service
+            .get(wasm_hash, component_id, component_revision, engine)
+            .await
+        {
+            Ok(Some(component)) => return Ok(component),
+            Ok(None) => (),
+            Err(error) => {
+                warn!(%component_id, %component_revision, %error, "Failed to download compiled component")
+            }
+        }
+
+        // Bound the local compile fallback working set when both caches miss.
+        self.compilation_limiter.run(async {
+            let bytes = self.registry_client.download_component(component_id, component_revision).await
+                .map_err(|error| registry_error(RegistryCall::DownloadComponent, component_id, Some(component_revision), error))?;
+            let start = Instant::now();
+            let span = info_span!("Loading WASM component");
+            let engine = engine.clone();
+            let component = spawn_blocking(move || {
+                let _enter = span.enter();
+                if blake3::hash(&bytes) != *wasm_hash.as_blake3_hash() {
+                    return Err(WorkerExecutorError::component_download_failed(component_id, component_revision, "Wasm hash mismatch".to_string()));
+                }
+                wasmtime::component::Component::from_binary(&engine, &bytes)
+                    .map_err(|error| WorkerExecutorError::ComponentParseFailed { component_id, component_revision, reason: error.to_string() })
+            }).await.map_err(compilation_join_error)??;
+            let compilation_time = start.elapsed();
+            record_compilation_time(compilation_time);
+            debug!(%component_id, compilation_time_ms = compilation_time.as_millis(), "Compiled component");
+
+            if let Err(error) = self.compiled_component_service.put(environment_id, wasm_hash, component_id, component_revision, &component).await {
+                warn!(%component_id, %component_revision, %error, "Failed to upload compiled component");
+            }
+            Ok(component)
+        }).await
+    }
+}
+
+// Loaded components belong to an engine instance, not just a compatible engine configuration.
+#[derive(Clone, Debug)]
+struct LoadedComponentKey(Hash, Engine);
+
+type LoadedComponentCache = Cache<
+    LoadedComponentKey,
+    (),
+    wasmtime::component::Component,
+    (ComponentKey, WorkerExecutorError),
+>;
+
+impl PartialEq for LoadedComponentKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.0 == other.0 && Engine::same(&self.1, &other.1)
+    }
+}
+
+impl Eq for LoadedComponentKey {}
+
+impl std::hash::Hash for LoadedComponentKey {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.0, state);
+    }
+}
+
 fn create_component_metadata_cache(
     max_capacity: usize,
     time_to_idle: Duration,
@@ -443,7 +481,7 @@ fn create_component_metadata_cache(
 fn create_current_component_metadata_cache(
     max_capacity: usize,
     time_to_idle: Duration,
-) -> Cache<ComponentId, (), Component, WorkerExecutorError> {
+) -> Cache<ComponentId, (), FetchedCurrentMetadata, WorkerExecutorError> {
     Cache::new(
         Some(max_capacity),
         FullCacheEvictionMode::LeastRecentlyUsed(1),
@@ -455,10 +493,7 @@ fn create_current_component_metadata_cache(
     )
 }
 
-fn create_component_cache(
-    max_capacity: usize,
-    time_to_idle: Duration,
-) -> Cache<ComponentKey, (), wasmtime::component::Component, WorkerExecutorError> {
+fn create_component_cache(max_capacity: usize, time_to_idle: Duration) -> LoadedComponentCache {
     Cache::new(
         Some(max_capacity),
         FullCacheEvictionMode::LeastRecentlyUsed(1),
@@ -569,8 +604,12 @@ mod tests {
     use golem_service_base::model::environment::EnvironmentState;
     use golem_service_base::model::{AccountResourceLimits, ResourceLimits};
     use golem_service_base::service::compiled_component::CompiledComponentServiceDisabled;
-    use std::collections::HashMap;
-    use test_r::test;
+    use golem_service_base::service::compiled_component::DefaultCompiledComponentService;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use std::collections::{HashMap, VecDeque};
+    use std::sync::Mutex;
+    use test_r::{test, timeout};
+    use tokio::sync::Notify;
 
     #[test]
     fn component_support_validation_distinguishes_shared_and_unshared_memory() {
@@ -594,20 +633,63 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct MetadataLookupGate {
+        started: Notify,
+        release: Notify,
+    }
+
     struct MockRegistryService {
-        components: HashMap<ComponentId, Component>,
+        components: Mutex<HashMap<(ComponentId, ComponentRevision), Component>>,
+        deployed_revisions: Mutex<HashMap<ComponentId, ComponentRevision>>,
+        deployed_lookup_gates: Mutex<HashMap<ComponentId, VecDeque<Arc<MetadataLookupGate>>>>,
         deployed_component_calls: Arc<std::sync::Mutex<HashMap<ComponentId, usize>>>,
+        wasm: HashMap<ComponentId, Vec<u8>>,
+        missing_wasm_gate: Option<(tokio::sync::Notify, tokio::sync::Notify)>,
     }
 
     impl MockRegistryService {
         fn new(components: impl IntoIterator<Item = Component>) -> Self {
+            let components = components.into_iter().collect::<Vec<_>>();
             Self {
-                components: components
-                    .into_iter()
-                    .map(|component| (component.id, component))
-                    .collect(),
+                deployed_revisions: Mutex::new(
+                    components
+                        .iter()
+                        .map(|component| (component.id, component.revision))
+                        .collect(),
+                ),
+                components: Mutex::new(
+                    components
+                        .into_iter()
+                        .map(|component| ((component.id, component.revision), component))
+                        .collect(),
+                ),
+                deployed_lookup_gates: Mutex::default(),
                 deployed_component_calls: Arc::new(std::sync::Mutex::new(HashMap::new())),
+                wasm: HashMap::new(),
+                missing_wasm_gate: None,
             }
+        }
+
+        fn set_deployed_revision(&self, component_id: ComponentId, revision: u64) {
+            let mut deployed = self.deployed_revisions.lock().unwrap();
+            let previous = deployed[&component_id];
+            let mut components = self.components.lock().unwrap();
+            let mut component = components[&(component_id, previous)].clone();
+            component.revision = ComponentRevision::new(revision).unwrap();
+            deployed.insert(component_id, component.revision);
+            components.insert((component_id, component.revision), component);
+        }
+
+        fn gate_deployed_lookup(&self, component_id: ComponentId) -> Arc<MetadataLookupGate> {
+            let gate = Arc::new(MetadataLookupGate::default());
+            self.deployed_lookup_gates
+                .lock()
+                .unwrap()
+                .entry(component_id)
+                .or_default()
+                .push_back(gate.clone());
+            gate
         }
 
         fn deployed_component_calls(&self) -> Arc<std::sync::Mutex<HashMap<ComponentId, usize>>> {
@@ -675,19 +757,30 @@ mod tests {
 
         async fn download_component(
             &self,
-            _component_id: ComponentId,
+            component_id: ComponentId,
             _component_revision: ComponentRevision,
         ) -> Result<Vec<u8>, RegistryServiceError> {
-            unimplemented!()
+            if let Some(wasm) = self.wasm.get(&component_id) {
+                return Ok(wasm.clone());
+            }
+            let (entered, release) = self
+                .missing_wasm_gate
+                .as_ref()
+                .expect("unexpected Wasm download");
+            entered.notify_one();
+            release.notified().await;
+            Err(RegistryServiceError::NotFound("missing Wasm".into()))
         }
 
         async fn get_component_metadata(
             &self,
             component_id: ComponentId,
-            _component_revision: ComponentRevision,
+            component_revision: ComponentRevision,
         ) -> Result<Component, RegistryServiceError> {
             self.components
-                .get(&component_id)
+                .lock()
+                .unwrap()
+                .get(&(component_id, component_revision))
                 .cloned()
                 .ok_or_else(|| RegistryServiceError::NotFound("missing component".to_string()))
         }
@@ -696,14 +789,33 @@ mod tests {
             &self,
             component_id: ComponentId,
         ) -> Result<Component, RegistryServiceError> {
-            let mut calls = self.deployed_component_calls.lock().unwrap();
-            *calls.entry(component_id).or_default() += 1;
-            drop(calls);
-
-            self.components
-                .get(&component_id)
-                .cloned()
-                .ok_or_else(|| RegistryServiceError::NotFound("missing component".to_string()))
+            {
+                let mut calls = self.deployed_component_calls.lock().unwrap();
+                *calls.entry(component_id).or_default() += 1;
+            }
+            let component = {
+                let deployed = self.deployed_revisions.lock().unwrap();
+                let revision = deployed.get(&component_id).ok_or_else(|| {
+                    RegistryServiceError::NotFound("missing component".to_string())
+                })?;
+                self.components
+                    .lock()
+                    .unwrap()
+                    .get(&(component_id, *revision))
+                    .cloned()
+                    .unwrap()
+            };
+            let gate = self
+                .deployed_lookup_gates
+                .lock()
+                .unwrap()
+                .get_mut(&component_id)
+                .and_then(VecDeque::pop_front);
+            if let Some(gate) = gate {
+                gate.started.notify_one();
+                gate.release.notified().await;
+            }
+            Ok(component)
         }
 
         async fn get_all_deployed_component_revisions(
@@ -846,11 +958,155 @@ mod tests {
             environment_name: EnvironmentName::try_from("test-env").unwrap(),
             component_size: 1,
             metadata: golem_common::model::component_metadata::ComponentMetadata::default(),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             wasm_hash: golem_common::model::diff::Hash::new(blake3::hash(b"wasm-hash")),
             package_metadata: None,
             object_store_key: "test-object".to_string(),
         }
+    }
+
+    #[test]
+    async fn loads_shared_wasm_once_per_engine_and_keeps_revision_metadata() -> anyhow::Result<()> {
+        let config = golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache();
+        let engine = Engine::new(&config)?;
+        let other_engine = Engine::new(&config)?;
+        let mut first = make_component(ComponentId::new(), EnvironmentId::new());
+        let mut second = make_component(ComponentId::new(), EnvironmentId::new());
+        let original = wat::parse_str("(component)")?;
+        let different = wat::parse_str("(component (core module (memory 1)))")?;
+        first.wasm_hash = blake3::hash(&original).into();
+        second.wasm_hash = first.wasm_hash;
+        let mut updated = first.clone();
+        updated.revision = ComponentRevision::new(2).unwrap();
+        updated.wasm_hash = blake3::hash(&different).into();
+        let compiled = Arc::new(DefaultCompiledComponentService::new(Arc::new(
+            InMemoryBlobStorage::new(),
+        )));
+        for (metadata, bytes) in [(&first, &original), (&updated, &different)] {
+            let artifact = wasmtime::component::Component::from_binary(&engine, bytes)?;
+            compiled
+                .put(
+                    metadata.environment_id,
+                    metadata.wasm_hash,
+                    metadata.id,
+                    metadata.revision,
+                    &artifact,
+                )
+                .await?;
+        }
+        // The registry mock does not implement Wasm downloads: a persistent cache miss fails the test.
+        let registry = Arc::new(MockRegistryService::new([
+            first.clone(),
+            second.clone(),
+            updated.clone(),
+        ]));
+        let service = ComponentServiceDefault::new(
+            registry.clone(),
+            8,
+            8,
+            Duration::from_secs(60),
+            1,
+            compiled.clone(),
+        );
+        let (first_loaded, _) = service.get(&engine, first.id, first.revision).await?;
+        let (second_loaded, second_metadata) =
+            service.get(&engine, second.id, second.revision).await?;
+        assert!(wasmtime::component::Component::same(
+            &first_loaded,
+            &second_loaded
+        ));
+        assert_eq!(second_metadata.id, second.id);
+        assert_eq!(second_metadata.environment_id, second.environment_id);
+        let (updated_loaded, _) = service.get(&engine, updated.id, updated.revision).await?;
+        assert!(!wasmtime::component::Component::same(
+            &first_loaded,
+            &updated_loaded
+        ));
+        let (still_original, _) = service.get(&engine, second.id, second.revision).await?;
+        assert!(wasmtime::component::Component::same(
+            &first_loaded,
+            &still_original
+        ));
+        let (other_loaded, _) = service
+            .get(&other_engine, second.id, second.revision)
+            .await?;
+        assert!(Engine::same(other_loaded.engine(), &other_engine));
+        let fresh =
+            ComponentServiceDefault::new(registry, 8, 8, Duration::from_secs(60), 1, compiled);
+        fresh.get(&engine, second.id, second.revision).await?;
+        Ok(())
+    }
+
+    #[test]
+    async fn rejects_mismatched_wasm_without_populating_compiled_cache() -> anyhow::Result<()> {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let mut metadata = make_component(ComponentId::new(), EnvironmentId::new());
+        metadata.wasm_hash = blake3::hash(&wat::parse_str("(component)")?).into();
+        let mut registry = MockRegistryService::new([metadata.clone()]);
+        registry.wasm.insert(
+            metadata.id,
+            wat::parse_str("(component (core module (memory 1)))")?,
+        );
+        let compiled = Arc::new(DefaultCompiledComponentService::new(Arc::new(
+            InMemoryBlobStorage::new(),
+        )));
+        let service = ComponentServiceDefault::new(
+            Arc::new(registry),
+            8,
+            8,
+            Duration::from_secs(60),
+            1,
+            compiled.clone(),
+        );
+
+        assert!(matches!(
+            service.get(&engine, metadata.id, metadata.revision).await,
+            Err(WorkerExecutorError::ComponentDownloadFailed { component_id, .. })
+                if component_id == metadata.id
+        ));
+        assert!(!compiled.exists(metadata.wasm_hash, &engine).await?);
+        Ok(())
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn shared_cache_miss_does_not_share_revision_download_errors() -> anyhow::Result<()> {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())?;
+        let bytes = wat::parse_str("(component)")?;
+        let mut missing = make_component(ComponentId::new(), EnvironmentId::new());
+        let mut present = make_component(ComponentId::new(), EnvironmentId::new());
+        missing.wasm_hash = blake3::hash(&bytes).into();
+        present.wasm_hash = missing.wasm_hash;
+        let mut registry = MockRegistryService::new([missing.clone(), present.clone()]);
+        registry.wasm.insert(present.id, bytes);
+        registry.missing_wasm_gate = Some(Default::default());
+        let registry = Arc::new(registry);
+        let (entered, release) = registry.missing_wasm_gate.as_ref().unwrap();
+        let service = ComponentServiceDefault::new(
+            registry.clone(),
+            8,
+            8,
+            Duration::from_secs(60),
+            1,
+            Arc::new(CompiledComponentServiceDisabled::new()),
+        );
+
+        let miss = service.get(&engine, missing.id, missing.revision);
+        let hit = async {
+            entered.notified().await;
+            let mut pending = std::pin::pin!(service.get(&engine, present.id, present.revision));
+            assert!(futures::poll!(pending.as_mut()).is_pending());
+            release.notify_one();
+            pending.await
+        };
+        let (miss, hit) = tokio::join!(miss, hit);
+        assert!(
+            matches!(miss, Err(WorkerExecutorError::ComponentServiceRefused { component_id, .. }) if component_id == missing.id)
+        );
+        assert_eq!(hit?.1.id, present.id);
+        Ok(())
     }
 
     #[test]
@@ -966,6 +1222,202 @@ mod tests {
             calls.get(&second_component_id).copied().unwrap_or_default(),
             1,
             "other environments should stay cached"
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn current_metadata_lookup_retries_a_fill_crossing_invalidation() {
+        for global in [false, true] {
+            let component_id = ComponentId::new();
+            let environment_id = EnvironmentId::new();
+            let registry = Arc::new(MockRegistryService::new([make_component(
+                component_id,
+                environment_id,
+            )]));
+            let gate = registry.gate_deployed_lookup(component_id);
+            let service = Arc::new(ComponentServiceDefault::new(
+                registry.clone(),
+                1,
+                8,
+                Duration::from_secs(60),
+                0,
+                Arc::new(CompiledComponentServiceDisabled::new()),
+            ));
+            let lookup = tokio::spawn({
+                let service = service.clone();
+                async move { service.get_metadata(component_id, None).await.unwrap() }
+            });
+            gate.started.notified().await;
+            registry.set_deployed_revision(component_id, 2);
+            if global {
+                service.invalidate_all().await;
+            } else {
+                service
+                    .invalidate_current_deployed_metadata_for_environment(environment_id)
+                    .await;
+            }
+            gate.release.notify_one();
+
+            assert_eq!(lookup.await.unwrap().revision.get(), 2);
+            assert_eq!(
+                service
+                    .get_metadata(component_id, None)
+                    .await
+                    .unwrap()
+                    .revision
+                    .get(),
+                2
+            );
+            assert_eq!(
+                service
+                    .get_metadata(component_id, Some(ComponentRevision::new(1).unwrap()))
+                    .await
+                    .unwrap()
+                    .revision
+                    .get(),
+                1
+            );
+            assert_eq!(
+                registry.deployed_component_calls.lock().unwrap()[&component_id],
+                2
+            );
+        }
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn current_metadata_lookup_retries_successive_invalidations() {
+        let component_id = ComponentId::new();
+        let environment_id = EnvironmentId::new();
+        let registry = Arc::new(MockRegistryService::new([make_component(
+            component_id,
+            environment_id,
+        )]));
+        let first = registry.gate_deployed_lookup(component_id);
+        let second = registry.gate_deployed_lookup(component_id);
+        let service = Arc::new(ComponentServiceDefault::new(
+            registry.clone(),
+            1,
+            8,
+            Duration::from_secs(60),
+            0,
+            Arc::new(CompiledComponentServiceDisabled::new()),
+        ));
+        let lookup = tokio::spawn({
+            let service = service.clone();
+            async move { service.get_metadata(component_id, None).await.unwrap() }
+        });
+        for (gate, revision) in [(first, 2), (second, 3)] {
+            gate.started.notified().await;
+            registry.set_deployed_revision(component_id, revision);
+            service
+                .invalidate_current_deployed_metadata_for_environment(environment_id)
+                .await;
+            gate.release.notify_one();
+        }
+        assert_eq!(lookup.await.unwrap().revision.get(), 3);
+        assert_eq!(
+            service
+                .get_metadata(component_id, None)
+                .await
+                .unwrap()
+                .revision
+                .get(),
+            3
+        );
+        assert_eq!(
+            registry.deployed_component_calls.lock().unwrap()[&component_id],
+            3
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn current_metadata_lookup_ignores_other_environment_invalidations() {
+        let component_id = ComponentId::new();
+        let environment_id = EnvironmentId::new();
+        let registry = Arc::new(MockRegistryService::new([make_component(
+            component_id,
+            environment_id,
+        )]));
+        let gate = registry.gate_deployed_lookup(component_id);
+        let service = Arc::new(ComponentServiceDefault::new(
+            registry.clone(),
+            1,
+            8,
+            Duration::from_secs(60),
+            0,
+            Arc::new(CompiledComponentServiceDisabled::new()),
+        ));
+        let lookup = tokio::spawn({
+            let service = service.clone();
+            async move { service.get_metadata(component_id, None).await.unwrap() }
+        });
+        gate.started.notified().await;
+        registry.set_deployed_revision(component_id, 2);
+        service
+            .invalidate_current_deployed_metadata_for_environment(EnvironmentId::new())
+            .await;
+        gate.release.notify_one();
+        assert_eq!(lookup.await.unwrap().revision.get(), 1);
+        assert_eq!(
+            service
+                .get_metadata(component_id, None)
+                .await
+                .unwrap()
+                .revision
+                .get(),
+            1
+        );
+        assert_eq!(
+            registry.deployed_component_calls.lock().unwrap()[&component_id],
+            1
+        );
+    }
+
+    #[test]
+    #[timeout("10s")]
+    async fn current_metadata_lookup_recovers_after_cancellation_and_invalidation() {
+        let component_id = ComponentId::new();
+        let environment_id = EnvironmentId::new();
+        let registry = Arc::new(MockRegistryService::new([make_component(
+            component_id,
+            environment_id,
+        )]));
+        let gate = registry.gate_deployed_lookup(component_id);
+        let service = Arc::new(ComponentServiceDefault::new(
+            registry.clone(),
+            1,
+            8,
+            Duration::from_secs(60),
+            0,
+            Arc::new(CompiledComponentServiceDisabled::new()),
+        ));
+        let lookup = tokio::spawn({
+            let service = service.clone();
+            async move { service.get_metadata(component_id, None).await.unwrap() }
+        });
+        gate.started.notified().await;
+        lookup.abort();
+        assert!(lookup.await.unwrap_err().is_cancelled());
+        registry.set_deployed_revision(component_id, 2);
+        service
+            .invalidate_current_deployed_metadata_for_environment(environment_id)
+            .await;
+        gate.release.notify_one();
+        assert_eq!(
+            service
+                .get_metadata(component_id, None)
+                .await
+                .unwrap()
+                .revision
+                .get(),
+            2
+        );
+        assert_eq!(
+            registry.deployed_component_calls.lock().unwrap()[&component_id],
+            2
         );
     }
 

@@ -31,7 +31,7 @@ default = ["rich-validation"]
 bigdecimal = ["dep:bigdecimal"]
 bit_vec = ["dep:bit-vec"]
 bytes = ["dep:bytes"]
-chrono = []
+jiff = []
 derive = []
 full = ["rich-validation", "protobuf", "dep:desert_rust", "dep:poem", "dep:poem-openapi"]
 guest = ["dep:wasip2", "dep:wit-bindgen"]
@@ -56,9 +56,9 @@ bigdecimal = { workspace = true, optional = true }
 bit-vec = { workspace = true, optional = true }
 blake3 = { workspace = true }
 bytes = { workspace = true, optional = true }
-chrono = { workspace = true }
 desert_rust = { workspace = true, optional = true }
 http = { workspace = true }
+jiff = { workspace = true }
 mac_address = { workspace = true, optional = true }
 nonempty-collections = { workspace = true, optional = true }
 num-bigint = { workspace = true, optional = true }

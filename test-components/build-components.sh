@@ -192,12 +192,13 @@ should_clean() {
 
 restore_fixture() {
   [ -n "${GOLEM_FIXTURE_CACHE:-}" ] && [ "$clean_only" = false ] && [ "$check_only" = false ] &&
-    python3 "${REPO_ROOT}/.github/main-validation/fixture-cache.py" restore "$1" "$2"
+    bun "${REPO_ROOT}/.github/main-validation/fixture-cache.ts" restore "$1" "$2"
 }
 
 stage_fixture() {
   if [ -n "${GOLEM_FIXTURE_CACHE:-}" ] && [ "$clean_only" = false ] && [ "$check_only" = false ]; then
-    python3 "${REPO_ROOT}/.github/main-validation/fixture-cache.py" stage "$1" "$2"
+    bun "${REPO_ROOT}/.github/main-validation/fixture-cache.ts" stage "$1" "$2" ||
+      echo "Fixture cache stage unavailable: $1 ($2); continuing without reuse" >&2
   fi
 }
 
@@ -429,6 +430,9 @@ build_sdk_apps() {
           ;;
         agent-sdk-moonbit)
           test -s ../golem_it_agent_sdk_moonbit.wasm
+          "$GOLEM_CLI" --preset release-gc build --yes --skip-check
+          "$GOLEM_CLI" --preset release-gc exec copy
+          test -s ../golem_it_agent_sdk_moonbit_gc.wasm
           ;;
         fault-matrix-moonbit)
           test -s ../golem_it_fault_matrix_moonbit.wasm

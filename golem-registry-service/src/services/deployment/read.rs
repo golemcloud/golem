@@ -140,6 +140,9 @@ impl DeploymentService {
             .collect()
     }
 
+    /// Authorizes viewing the environment. A deleted environment is still authorized for the
+    /// callers that could view it, so its agents are not found for them, while an environment
+    /// that never existed is not found for every caller.
     pub async fn authorize_environment(
         &self,
         environment_id: EnvironmentId,
@@ -147,8 +150,14 @@ impl DeploymentService {
     ) -> Result<(), DeploymentError> {
         let environment = self
             .environment_service
-            .get(environment_id, false, &AuthCtx::system())
-            .await?;
+            .get(environment_id, true, &AuthCtx::system())
+            .await
+            .map_err(|error| match error {
+                EnvironmentError::EnvironmentNotFound(environment_id) => {
+                    DeploymentError::ParentEnvironmentNotFound(environment_id)
+                }
+                other => other.into(),
+            })?;
         authorize_environment_permission(auth, &environment, EnvironmentVerb::View)?;
         Ok(())
     }

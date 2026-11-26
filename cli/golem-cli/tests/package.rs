@@ -19,12 +19,20 @@ use std::io::Cursor;
 use std::net::TcpListener;
 use std::path::Path;
 use test_r::{test, timeout};
+use testcontainers::{
+    ContainerAsync, GenericImage,
+    core::{IntoContainerPort, WaitFor},
+    runners::AsyncRunner,
+};
 use tokio::process::Command;
 
 async fn run_cli(dir: &Path, args: &[&str]) -> std::process::Output {
     Command::new(env!("CARGO_BIN_EXE_golem-cli"))
         .kill_on_drop(true)
         .current_dir(dir)
+        .env("DOCKER_CONFIG", dir.join("isolated-docker-config"))
+        .env("HTTP_PROXY", "http://127.0.0.1:1")
+        .env("NO_PROXY", "")
         .arg("--config-dir")
         .arg(dir.join("isolated-config"))
         .args(["--format", "json"])
@@ -43,6 +51,259 @@ async fn cli(dir: &Path, args: &[&str]) -> Value {
         String::from_utf8_lossy(&result.stdout)
     );
     serde_json::from_slice(&result.stdout).unwrap()
+}
+
+#[test]
+#[timeout("45s")]
+async fn install_oci_refuses_authentication_over_loopback_http() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let root = dir.path();
+    fs::write(
+        root.join("golem.yaml"),
+        format!(
+            "manifestVersion: {}\napp: installer\n",
+            versions::sdk::MANIFEST
+        ),
+    )?;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let host = listener.local_addr()?;
+    let docker_config = root.join("isolated-docker-config");
+    fs::create_dir(&docker_config)?;
+    fs::write(
+        docker_config.join("config.json"),
+        format!(r#"{{"auths":{{"{host}":{{"auth":"dXNlcjpwYXNz"}}}}}}"#),
+    )?;
+    let (requests, mut seen) = tokio::sync::mpsc::unbounded_channel();
+    let server = tokio::spawn(async move {
+        let app = axum::Router::new().fallback(move |headers: axum::http::HeaderMap| async move {
+            let _ = requests.send(headers.contains_key(axum::http::header::AUTHORIZATION));
+            (
+                axum::http::StatusCode::UNAUTHORIZED,
+                [(
+                    axum::http::header::WWW_AUTHENTICATE,
+                    "Basic realm=\"registry\"",
+                )],
+            )
+        });
+        axum::serve(listener, app).await.unwrap();
+    });
+    let source = format!("oci://{host}/packages/remote:1.0");
+    assert_cli_error(root, &["install", &source], "must allow anonymous pulls").await;
+    server.abort();
+    assert_eq!(seen.try_recv(), Ok(false));
+    assert!(seen.try_recv().is_err(), "unexpected authentication retry");
+    assert!(!root.join("golem.lock").exists());
+    Ok(())
+}
+
+#[test]
+#[timeout("45s")]
+async fn install_url_pins_digest_and_cold_build_rejects_replacement() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    fs::write(
+        root.join("golem.yaml"),
+        format!(
+            "manifestVersion: {}\napp: installer\nenvironments:\n  local: {{ server: local }}\n",
+            versions::sdk::MANIFEST
+        ),
+    )
+    .unwrap();
+    let archive = root.join("package.tar");
+    let digest = write_install_fixture(&archive, "remote", wat::parse_str("(component)").unwrap());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}/package.tar", listener.local_addr().unwrap());
+    assert_cli_error(
+        root,
+        &["install", &format!("{url}?token=not-a-real-secret")],
+        "no credentials, query string, or fragment",
+    )
+    .await;
+    assert!(!root.join("golem.lock").exists());
+    let server = tokio::spawn({
+        let serve = axum::Router::new().route(
+            "/package.tar",
+            axum::routing::get(move || {
+                let archive = archive.clone();
+                async move { fs::read(archive).unwrap() }
+            }),
+        );
+        async move { axum::serve(listener, serve).await.unwrap() }
+    });
+    let result = run_cli(root, &["install", &url]).await;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let lock = fs::read(root.join("golem.lock")).unwrap();
+    let pins: serde_yaml::Value = serde_yaml::from_slice(&lock).unwrap();
+    assert_eq!(
+        pins["packages"]["remote"]["source"].as_str(),
+        Some(url.as_str())
+    );
+    assert_eq!(
+        pins["packages"]["remote"]["digest"].as_str(),
+        Some(digest.as_str())
+    );
+    assert_eq!(cli(root, &["build"]).await["built"], true);
+
+    let replacement = write_install_fixture(
+        &root.join("package.tar"),
+        "remote",
+        wat::parse_str("(component (core module))").unwrap(),
+    );
+    assert_ne!(digest, replacement);
+    assert_eq!(cli(root, &["build"]).await["built"], true);
+    let cache = root.join("isolated-config/package-cache");
+    fs::remove_dir_all(&cache).unwrap();
+    assert_cli_error(root, &["build"], "Package digest mismatch").await;
+    assert_eq!(fs::read(root.join("golem.lock")).unwrap(), lock);
+    assert!(!cache.exists());
+    server.abort();
+}
+
+#[test]
+#[timeout("2m")]
+async fn install_oci_cold_build_fetches_the_pinned_manifest_after_tag_moves() -> anyhow::Result<()>
+{
+    let dir = tempfile::tempdir()?;
+    let root = dir.path();
+    fs::write(
+        root.join("golem.yaml"),
+        format!(
+            "manifestVersion: {}\napp: installer\nenvironments:\n  local: {{ server: local }}\n",
+            versions::sdk::MANIFEST
+        ),
+    )?;
+    let (registry, host) = start_registry().await?;
+    let reference = format!("{host}/packages/remote:1.0");
+    let source = format!("oci://{reference}");
+    let archive = root.join("package.tar");
+    let digest = write_install_fixture(&archive, "remote", wat::parse_str("(component)")?);
+    push_package(&reference, &fs::read(&archive)?).await?;
+    let result = run_cli(root, &["install", &source]).await;
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    let lock_path = root.join("golem.lock");
+    let lock = fs::read(&lock_path)?;
+    let pins: serde_yaml::Value = serde_yaml::from_slice(&lock)?;
+    assert_eq!(
+        pins["packages"]["remote"]["source"].as_str(),
+        Some(source.as_str())
+    );
+    assert_eq!(
+        pins["packages"]["remote"]["digest"].as_str(),
+        Some(digest.as_str())
+    );
+    assert_eq!(cli(root, &["build"]).await["built"], true);
+
+    let replacement = write_install_fixture(
+        &archive,
+        "remote",
+        wat::parse_str("(component (core module))")?,
+    );
+    assert_ne!(replacement, digest);
+    push_package(&reference, &fs::read(&archive)?).await?;
+    let tag = reqwest::Client::new()
+        .get(format!("http://{host}/v2/packages/remote/manifests/1.0"))
+        .header(reqwest::header::ACCEPT, package::MANIFEST)
+        .send()
+        .await?
+        .error_for_status()?;
+    assert_eq!(tag.headers()["docker-content-digest"], replacement.as_str());
+    fs::remove_file(archive)?;
+    let cache = root.join("isolated-config/package-cache");
+    fs::remove_dir_all(&cache)?;
+    let before = registry.stderr_to_vec().await?;
+    assert_eq!(cli(root, &["build"]).await["built"], true);
+    let after = registry.stderr_to_vec().await?;
+    let requests = String::from_utf8_lossy(after.strip_prefix(before.as_slice()).unwrap());
+    assert!(
+        requests.contains(&format!("/manifests/{digest}")),
+        "{requests}"
+    );
+    assert!(!requests.contains("/manifests/1.0"), "{requests}");
+    let downloaded = package::read(fs::File::open(
+        cache.join(digest.strip_prefix("sha256:").unwrap()),
+    )?)?;
+    assert_eq!(downloaded.digest(), digest);
+    assert_eq!(fs::read(&lock_path)?, lock);
+
+    registry.stop().await?;
+    fs::remove_dir_all(cache)?;
+    let failed = run_cli(root, &["build"]).await;
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&failed.stderr),
+        String::from_utf8_lossy(&failed.stdout)
+    );
+    assert!(
+        !failed.status.success()
+            && output.contains(&source)
+            && output.contains(&format!("Docker credential key {host}")),
+        "{output}"
+    );
+    assert_eq!(fs::read(lock_path)?, lock);
+    Ok(())
+}
+
+pub(crate) async fn start_registry() -> anyhow::Result<(ContainerAsync<GenericImage>, String)> {
+    let registry = GenericImage::new(
+        "registry",
+        "3.1.2@sha256:82f6ff4a7f982960c8aa51617fea3aabc485df6e55cce80d22deb1de36f1bc3c",
+    )
+    .with_exposed_port(5000.tcp())
+    .with_wait_for(WaitFor::message_on_stderr("listening on"))
+    .start()
+    .await?;
+    let host = format!("127.0.0.1:{}", registry.get_host_port_ipv4(5000).await?);
+    Ok((registry, host))
+}
+
+pub(crate) async fn push_package(reference: &str, archive: &[u8]) -> anyhow::Result<()> {
+    use oci_client::{
+        Client, Reference,
+        client::{ClientConfig, ClientProtocol},
+        secrets::RegistryAuth,
+    };
+    use std::io::Read;
+
+    let reference: Reference = reference.parse()?;
+    let client = Client::try_from(ClientConfig {
+        protocol: ClientProtocol::Http,
+        ..Default::default()
+    })?;
+    client
+        .store_auth_if_needed(reference.resolve_registry(), &RegistryAuth::Anonymous)
+        .await;
+    let digest = package::read(archive)?.digest().to_owned();
+    let mut manifest = None;
+    for entry in tar::Archive::new(archive).entries()? {
+        let mut entry = entry?;
+        let path = entry.path()?.into_owned();
+        let Some(hex) = path
+            .to_str()
+            .and_then(|path| path.strip_prefix("blobs/sha256/"))
+        else {
+            continue;
+        };
+        let blob_digest = format!("sha256:{hex}");
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes)?;
+        if blob_digest == digest {
+            manifest = Some(bytes);
+        } else {
+            client.push_blob(&reference, bytes, &blob_digest).await?;
+        }
+    }
+    client
+        .push_manifest_raw(&reference, manifest.unwrap(), package::MANIFEST.parse()?)
+        .await?;
+    Ok(())
 }
 
 #[test]

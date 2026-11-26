@@ -29,11 +29,14 @@
 //! - Anonymous responses vary on credential headers independently of principal usage
 //! - Authenticated responses are private and require revalidation
 
-use super::assert_json_content_type;
+use super::{assert_invocation_receipt, assert_json_content_type, assert_no_invocation_receipt};
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::model::{AgentId, OplogIndex, OwnedAgentId};
 use golem_test_framework::config::EnvBasedTestDependencies;
+use golem_test_framework::dsl::TestDsl;
 use pretty_assertions::assert_eq;
 use reqwest::header::{CACHE_CONTROL, CONTENT_LENGTH, ETAG, HeaderValue, IF_NONE_MATCH, VARY};
 use test_r::{define_matrix_dimension, test_dep};
@@ -90,6 +93,26 @@ fn header_str(value: Option<&HeaderValue>) -> Option<&str> {
     value.and_then(|v| v.to_str().ok())
 }
 
+/// The agent and the oplog index that an ETag
+/// `"<environment-id>/<agent-id>/<fingerprint>/<caller>:<oplog-index>"` names.
+fn etag_agent_and_index(
+    agent: &HttpTestContext,
+    etag: &str,
+) -> anyhow::Result<(OwnedAgentId, u64)> {
+    let inner = etag.trim_matches('"');
+    let (token, index) = inner
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow::anyhow!("malformed ETag {etag}"))?;
+    let agent_id = token
+        .split('/')
+        .nth(1)
+        .ok_or_else(|| anyhow::anyhow!("malformed ETag {etag}"))?;
+    Ok((
+        OwnedAgentId::new(agent.env_id, &AgentId(agent_id.parse()?)),
+        index.parse()?,
+    ))
+}
+
 /// True if `header_value` contains `token` as a complete comma-separated
 /// entry, case-insensitive. Used for `Vary` assertions so that an entry like
 /// `X-Authorization-Mode` cannot satisfy a check for `Authorization`.
@@ -97,6 +120,60 @@ fn header_has_token(header_value: &str, token: &str) -> bool {
     header_value
         .split(',')
         .any(|part| part.trim().eq_ignore_ascii_case(token))
+}
+
+#[test]
+async fn invocation_receipts_do_not_deduplicate_external_keys(
+    #[dimension(db)] agent: &HttpTestContext,
+) -> anyhow::Result<()> {
+    let mut ids = Vec::new();
+    for count in [1, 2] {
+        let response = agent
+            .client
+            .post(
+                agent
+                    .base_url
+                    .join("/readonly-agents/invocation-headers/increment")?,
+            )
+            .header("Idempotency-Key", "Same/Case-Sensitive:Key")
+            .send()
+            .await?;
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        ids.push(assert_invocation_receipt(agent, &response).await?);
+        assert_eq!(
+            response.json::<serde_json::Value>().await?,
+            serde_json::json!(count.to_string())
+        );
+    }
+    assert_eq!(ids[0].agent_id(), ids[1].agent_id());
+    assert_ne!(ids[0].id(), ids[1].id());
+
+    let failed = agent
+        .client
+        .get(
+            agent
+                .base_url
+                .join("/readonly-agents/invocation-failure/fail")?,
+        )
+        .send()
+        .await?;
+    assert_eq!(failed.status(), reqwest::StatusCode::INTERNAL_SERVER_ERROR);
+    assert_invocation_receipt(agent, &failed).await?;
+
+    let invalid = agent
+        .client
+        .post(
+            agent
+                .base_url
+                .join("/readonly-agents/invocation-headers/increment")?,
+        )
+        .header("Idempotency-Key", "")
+        .send()
+        .await?;
+    assert_eq!(invalid.status(), reqwest::StatusCode::BAD_REQUEST);
+    assert_no_invocation_receipt(&invalid);
+    assert!(invalid.text().await?.contains("Idempotency-Key"));
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -167,6 +244,7 @@ async fn h2_if_none_match_returns_304(
         reqwest::StatusCode::NOT_MODIFIED,
         "If-None-Match with the current ETag must return 304"
     );
+    assert_no_invocation_receipt(&revalidate);
 
     // 304 responses must echo the same ETag and Cache-Control so caches can
     // refresh their freshness state without re-downloading the body.
@@ -184,6 +262,66 @@ async fn h2_if_none_match_returns_304(
     }
     let body = revalidate.text().await?;
     assert!(body.is_empty(), "304 response body must be empty");
+
+    // The result is recorded before its background work drains, and the
+    // `AgentInvocationSettled` after the drain does not change the state the
+    // ETag names: revalidation still hits once the settlement is in the oplog.
+    let (agent_id, finished) = etag_agent_and_index(agent, &etag)?;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !agent
+        .user
+        .get_oplog(&agent_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .any(|entry| {
+            u64::from(entry.oplog_index) > finished
+                && matches!(entry.entry, PublicOplogEntry::AgentInvocationSettled(_))
+        })
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the read did not settle"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let settled = agent
+        .client
+        .get(agent.base_url.join(path)?)
+        .header(IF_NONE_MATCH, etag.clone())
+        .send()
+        .await?;
+    assert_eq!(settled.status(), reqwest::StatusCode::NOT_MODIFIED);
+    assert_eq!(header_str(settled.headers().get(ETAG)), Some(etag.as_str()));
+
+    // A write after the settlement still invalidates the validator.
+    let write = agent
+        .client
+        .post(agent.base_url.join("/readonly-agents/h2-agent/increment")?)
+        .send()
+        .await?;
+    assert_eq!(write.status(), reqwest::StatusCode::OK);
+    let after_write = agent
+        .client
+        .get(agent.base_url.join(path)?)
+        .header(IF_NONE_MATCH, etag.clone())
+        .send()
+        .await?;
+    assert_eq!(after_write.status(), reqwest::StatusCode::OK);
+    let new_etag = header_str(after_write.headers().get(ETAG))
+        .expect("expected ETag after the write")
+        .to_string();
+    assert_ne!(new_etag, etag);
+    assert_eq!(
+        after_write.json::<serde_json::Value>().await?,
+        serde_json::json!("1")
+    );
+    let current = agent
+        .client
+        .get(agent.base_url.join(path)?)
+        .header(IF_NONE_MATCH, new_etag)
+        .send()
+        .await?;
+    assert_eq!(current.status(), reqwest::StatusCode::NOT_MODIFIED);
 
     let unknown_query = agent
         .client
@@ -384,9 +522,24 @@ async fn h5_ttl_method_returns_max_age(
     );
 
     // TTL still supports revalidation, so an ETag must be emitted as well.
-    assert!(
-        response.headers().get(ETAG).is_some(),
-        "TTL read must also emit an ETag for conditional GETs"
+    let etag = header_str(response.headers().get(ETAG))
+        .expect("TTL read must also emit an ETag for conditional GETs")
+        .to_string();
+
+    let revalidate = agent
+        .client
+        .get(agent.base_url.join("/readonly-agents/h5-agent/ttl-count")?)
+        .header(IF_NONE_MATCH, etag.clone())
+        .send()
+        .await?;
+    assert_eq!(revalidate.status(), reqwest::StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        header_str(revalidate.headers().get(ETAG)),
+        Some(etag.as_str())
+    );
+    assert_eq!(
+        header_str(revalidate.headers().get(CACHE_CONTROL)),
+        Some("public, max-age=2")
     );
 
     Ok(())

@@ -61,6 +61,16 @@ export type AgentInitializationParameters = OplogTypes.AgentInitializationParame
 export type AgentMethodInvocationParameters = OplogTypes.AgentMethodInvocationParameters;
 export type LoadSnapshotParameters = OplogTypes.LoadSnapshotParameters;
 export type ProcessOplogEntriesParameters = OplogTypes.ProcessOplogEntriesParameters;
+export type SaveSnapshotParameters = OplogTypes.SaveSnapshotParameters;
+export type PublicCaller = OplogTypes.PublicCaller;
+export type PublicPrincipal = OplogTypes.PublicPrincipal;
+export type PublicPrincipalRef = OplogTypes.PublicPrincipalRef;
+export type PublicUserPrincipal = OplogTypes.PublicUserPrincipal;
+export type PublicAccountPrincipal = OplogTypes.PublicAccountPrincipal;
+export type PublicAccountAuthentication = OplogTypes.PublicAccountAuthentication;
+export type PublicAgentPrincipal = OplogTypes.PublicAgentPrincipal;
+export type PublicToolPrincipal = OplogTypes.PublicToolPrincipal;
+export type PublicTokenProvenance = OplogTypes.PublicTokenProvenance;
 export type ManualUpdateParameters = OplogTypes.ManualUpdateParameters;
 export type AgentInvocation = OplogTypes.AgentInvocation;
 export type AgentInvocationStartedParameters = OplogTypes.AgentInvocationStartedParameters;
@@ -69,6 +79,7 @@ export type FallibleResultParameters = OplogTypes.FallibleResultParameters;
 export type SaveSnapshotResultParameters = OplogTypes.SaveSnapshotResultParameters;
 export type AgentInvocationResult = OplogTypes.AgentInvocationResult;
 export type AgentInvocationFinishedParameters = OplogTypes.AgentInvocationFinishedParameters;
+export type AgentInvocationSettledParameters = OplogTypes.AgentInvocationSettledParameters;
 export type PendingAgentInvocationParameters = OplogTypes.PendingAgentInvocationParameters;
 export type UpdateDescription = OplogTypes.UpdateDescription;
 export type PendingUpdateParameters = OplogTypes.PendingUpdateParameters;
@@ -173,6 +184,7 @@ export type PublicOplogEntry =
   | { tag: 'cancelled'; val: CancelledParameters }
   | { tag: 'agent-invocation-started'; val: AgentInvocationStartedParameters }
   | { tag: 'agent-invocation-finished'; val: AgentInvocationFinishedParameters }
+  | { tag: 'agent-invocation-settled'; val: AgentInvocationSettledParameters }
   | { tag: 'suspend'; val: Timestamp }
   | { tag: 'error'; val: ErrorParameters }
   | { tag: 'recovery-succeeded'; val: Timestamp }
@@ -207,7 +219,7 @@ export type PublicOplogEntry =
 // Wrapping helpers
 
 function wrapAgentId(raw: RawAgentId): AgentId {
-  return AgentId.from(raw);
+  return AgentId.fromWit(raw);
 }
 
 function wrapPublicOplogEntry(raw: RawPublicOplogEntry): PublicOplogEntry {
@@ -241,8 +253,8 @@ function wrapPublicOplogEntry(raw: RawPublicOplogEntry): PublicOplogEntry {
 export class GetOplog {
   private readonly inner: RawGetOplog;
 
-  constructor(agentId: RawAgentId, start: OplogIndex) {
-    this.inner = new RawGetOplog(agentId, start);
+  constructor(agentId: AgentId, start: OplogIndex) {
+    this.inner = new RawGetOplog(AgentId.toWit(agentId), start);
   }
 
   getNext(): PublicOplogEntry[] | undefined {
@@ -254,8 +266,8 @@ export class GetOplog {
 export class SearchOplog {
   private readonly inner: RawSearchOplog;
 
-  constructor(agentId: RawAgentId, text: string) {
-    this.inner = new RawSearchOplog(agentId, text);
+  constructor(agentId: AgentId, text: string) {
+    this.inner = new RawSearchOplog(AgentId.toWit(agentId), text);
   }
 
   getNext(): [OplogIndex, PublicOplogEntry][] | undefined {
@@ -270,11 +282,14 @@ export class SearchOplog {
 
 export function enrichOplogEntries(
   environmentId: RawEnvironmentId,
-  agentId: RawAgentId,
+  agentId: AgentId,
   entries: [OplogIndex, import('golem:api/oplog@1.5.0').OplogEntry][],
   componentRevision: ComponentRevision,
 ): PublicOplogEntry[] {
-  return rawEnrichOplogEntries(environmentId, agentId, entries, componentRevision).map(
-    wrapPublicOplogEntry,
-  );
+  return rawEnrichOplogEntries(
+    environmentId,
+    AgentId.toWit(agentId),
+    entries,
+    componentRevision,
+  ).map(wrapPublicOplogEntry);
 }

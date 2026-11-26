@@ -455,6 +455,7 @@ return 1
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl IndexedStorage for RedisIndexedStorage {
     async fn number_of_replicas(
         &self,

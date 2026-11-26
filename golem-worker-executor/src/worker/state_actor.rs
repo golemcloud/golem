@@ -66,13 +66,15 @@ use crate::services::{
 };
 use crate::workerctx::WorkerCtx;
 use arc_swap::ArcSwap;
-use chrono::Utc;
+
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
 use golem_common::model::InvocationId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
-use golem_common::model::oplog::{FilesystemSnapshotName, OplogEntry, OplogIndex};
+use golem_common::model::oplog::{
+    DurableStreamEventSummary, FilesystemSnapshotName, OplogEntry, OplogIndex,
+};
 use golem_common::model::{
     AgentFingerprint, AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction, Timestamp,
 };
@@ -230,6 +232,7 @@ enum StatusJob {
     },
     AppendInvocationIfVersion {
         entry: Box<OplogEntry>,
+        attachment: Option<Box<golem_common::model::durable_stream::StreamSessionAttachedRecord>>,
         idempotency_key: InvocationId,
         expected_result_generation: u64,
         expected_revert_generation: u64,
@@ -519,6 +522,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                     }
                     StatusJob::AppendInvocationIfVersion {
                         entry,
+                        attachment,
                         idempotency_key,
                         expected_result_generation,
                         expected_revert_generation,
@@ -556,7 +560,17 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
                                 drop(status);
                                 // Returned rather than reported as a moved version: the caller
                                 // retries on `false`, and a fenced oplog refuses every retry.
-                                if let Err(error) = state.oplog.add(*entry).await {
+                                let appended = if let Some(mut attachment) = attachment {
+                                    state.oplog.add_pair(*entry, Box::new(move |index| {
+                                        attachment.pending_invocation_oplog_index = index;
+                                        let record = golem_common::model::durable_stream::StreamSessionRecord::Attached(*attachment);
+                                        let summary = DurableStreamEventSummary::session(&record);
+                                        OplogEntry::stream_session(None, golem_common::model::oplog::OplogPayload::Inline(Box::new(record)), summary)
+                                    })).await.map(|_| ())
+                                } else {
+                                    state.oplog.add(*entry).await.map(|_| ())
+                                };
+                                if let Err(error) = appended {
                                     if let OplogError::Fenced(fence) = &error {
                                         state.retire_fenced_agent(fence.clone());
                                     }
@@ -904,6 +918,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
     pub async fn append_invocation_if_version(
         &self,
         entry: OplogEntry,
+        attachment: Option<golem_common::model::durable_stream::StreamSessionAttachedRecord>,
         idempotency_key: InvocationId,
         expected_result_generation: u64,
         expected_revert_generation: u64,
@@ -912,6 +927,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         self.commit
             .run_status_job(|done| StatusJob::AppendInvocationIfVersion {
                 entry: Box::new(entry),
+                attachment: attachment.map(Box::new),
                 idempotency_key,
                 expected_result_generation,
                 expected_revert_generation,
@@ -1498,14 +1514,17 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             authority_change_count = authority_change_count.max(1);
         }
 
-        // Compared without the index, which moves on nearly every fold, to tell a fold that changed
+        // Compared without the indexes, which move on nearly every fold, to tell a fold that changed
         // other fields. Empty folds still finalize checkpoint pruning; do not bypass them on an
         // empty receipt.
         let mut updated_status = updated_status;
         let updated_index = updated_status.oplog_idx;
+        let updated_state_index = updated_status.state_oplog_idx;
         updated_status.oplog_idx = old_status.oplog_idx;
+        updated_status.state_oplog_idx = old_status.state_oplog_idx;
         let fields_changed = reconstructed || updated_status != *old_status;
         updated_status.oplog_idx = updated_index;
+        updated_status.state_oplog_idx = updated_state_index;
         let changed = if fields_changed || updated_index != old_status.oplog_idx {
             let updated_status = self.update_last_known_status(updated_status).await;
             if reconstructed {
@@ -1599,7 +1618,7 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             self.deps
                 .scheduler_service()
                 .schedule(
-                    Utc::now() + archive_interval,
+                    jiff::Timestamp::now() + archive_interval,
                     ScheduledAction::ArchiveOplog {
                         account_id: self.created_by,
                         owned_agent_id: self.owned_agent_id.clone(),
@@ -1645,7 +1664,7 @@ fn can_append_invocation(
     status.invocation_results.change_generation() == expected_result_generation
         && status.invocation_results.revert_generation() == expected_revert_generation
         && !status.invocation_results.contains_key(idempotency_key)
-        && status.current_idempotency_key.as_ref() != Some(idempotency_key)
+        && status.current_idempotency_key() != Some(idempotency_key)
         && !status
             .pending_invocations
             .iter()
@@ -1860,6 +1879,7 @@ mod tests {
             oplog_index: OplogIndex::INITIAL,
             idempotency_key: Some(key),
             manual_update_target_revision: None,
+            operation: None,
         }
     }
 
@@ -2144,6 +2164,10 @@ mod tests {
         golem_common::model::InvocationResultPosition {
             terminal,
             request: None,
+            end: golem_common::model::InvocationEnd::Completed,
+            operation: None,
+            accepted_at: None,
+            changed_at: golem_common::model::Timestamp::from(0),
         }
     }
 
@@ -2163,7 +2187,16 @@ mod tests {
         ));
 
         status.pending_invocations.clear();
-        status.current_idempotency_key = Some(key);
+        status.running = Some(golem_common::model::RunningInvocation {
+            key,
+            request: golem_common::model::InvocationRequestRef {
+                index: OplogIndex::INITIAL,
+                accepted_at: golem_common::model::Timestamp::from(0),
+                operation: None,
+            },
+            last_change: OplogIndex::INITIAL,
+            last_change_at: golem_common::model::Timestamp::from(0),
+        });
         assert!(!can_append_invocation(
             &status,
             &key,
@@ -2171,7 +2204,7 @@ mod tests {
             revert_generation
         ));
 
-        status.current_idempotency_key = None;
+        status.running = None;
         status
             .invocation_results
             .insert(InvocationId(Uuid::new_v4()), result_at(OplogIndex::INITIAL));

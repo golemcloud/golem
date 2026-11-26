@@ -199,6 +199,125 @@ impl WireSchemaBuilder {
             root,
         }
     }
+
+    /// Copies only the nodes and named definitions reachable from `root`.
+    /// The source arena can contain schemas for unrelated command inputs,
+    /// results and errors; those are not part of a single-root payload.
+    pub fn project(&self, root: wire::TypeNodeIndex) -> wire::SchemaGraph {
+        fn copy(
+            source: &WireSchemaBuilder,
+            target: &mut wire::SchemaGraph,
+            copied: &mut [Option<wire::TypeNodeIndex>],
+            definitions: &mut [Option<wire::DefIndex>],
+            index: wire::TypeNodeIndex,
+        ) -> wire::TypeNodeIndex {
+            use wire::SchemaTypeBody::*;
+            if let Some(index) = copied[index as usize] {
+                return index;
+            }
+            let mut node = source.type_nodes[index as usize].clone();
+            let output = target.type_nodes.len() as wire::TypeNodeIndex;
+            target.type_nodes.push(wire::SchemaTypeNode {
+                body: BoolType,
+                metadata: empty_metadata(),
+            });
+            copied[index as usize] = Some(output);
+            let mut child = |index| copy(source, target, copied, definitions, index);
+            match &mut node.body {
+                RefType(definition) => {
+                    let source_index = *definition as usize;
+                    let index = if let Some(index) = definitions[source_index] {
+                        index
+                    } else {
+                        let def = &source.defs[source_index];
+                        let index = target.defs.len() as wire::DefIndex;
+                        definitions[source_index] = Some(index);
+                        target.defs.push(wire::SchemaTypeDef {
+                            id: def.id.clone(),
+                            name: def.name.clone(),
+                            body: -1,
+                        });
+                        let body = copy(source, target, copied, definitions, def.body);
+                        target.defs[index as usize].body = body;
+                        index
+                    };
+                    *definition = index;
+                }
+                RecordType(fields) => {
+                    for field in fields {
+                        field.body = child(field.body);
+                    }
+                }
+                VariantType(cases) => {
+                    for case in cases {
+                        case.payload = case.payload.map(&mut child);
+                    }
+                }
+                TupleType(elements) => {
+                    for element in elements {
+                        *element = child(*element);
+                    }
+                }
+                ListType(element) | OptionType(element) => *element = child(*element),
+                FixedListType(spec) => spec.element = child(spec.element),
+                MapType(spec) => {
+                    spec.key = child(spec.key);
+                    spec.value = child(spec.value);
+                }
+                ResultType(spec) => {
+                    spec.ok = spec.ok.map(&mut child);
+                    spec.err = spec.err.map(&mut child);
+                }
+                UnionType(spec) => {
+                    for branch in &mut spec.branches {
+                        branch.body = child(branch.body);
+                    }
+                }
+                SecretType(spec) => spec.inner = child(spec.inner),
+                FutureType(inner) | StreamType(inner) => *inner = inner.map(&mut child),
+                BoolType
+                | S8Type(_)
+                | S16Type(_)
+                | S32Type(_)
+                | S64Type(_)
+                | U8Type(_)
+                | U16Type(_)
+                | U32Type(_)
+                | U64Type(_)
+                | F32Type(_)
+                | F64Type(_)
+                | CharType
+                | StringType
+                | EnumType(_)
+                | FlagsType(_)
+                | TextType(_)
+                | BinaryType(_)
+                | PathType(_)
+                | UrlType(_)
+                | UuidType
+                | DatetimeType
+                | DurationType
+                | QuantityType(_)
+                | QuotaTokenType(_)
+                | PermissionCardType(_) => {}
+            }
+            target.type_nodes[output as usize] = node;
+            output
+        }
+        let mut target = wire::SchemaGraph {
+            type_nodes: Vec::new(),
+            defs: Vec::new(),
+            root: 0,
+        };
+        target.root = copy(
+            self,
+            &mut target,
+            &mut vec![None; self.type_nodes.len()],
+            &mut vec![None; self.defs.len()],
+            root,
+        );
+        target
+    }
 }
 
 pub fn empty_metadata() -> wire::MetadataEnvelope {
@@ -256,22 +375,22 @@ wire_schema_scalar! {
     f32 => wire::SchemaTypeBody::F32Type(None), f64 => wire::SchemaTypeBody::F64Type(None),
     char => wire::SchemaTypeBody::CharType, String => wire::SchemaTypeBody::StringType,
     str => wire::SchemaTypeBody::StringType,
-    chrono::DateTime<chrono::Utc> => wire::SchemaTypeBody::DatetimeType,
+    jiff::Timestamp => wire::SchemaTypeBody::DatetimeType,
     std::time::Duration => wire::SchemaTypeBody::DurationType,
 }
 
-impl IntoWire for chrono::DateTime<chrono::Utc> {
+impl IntoWire for jiff::Timestamp {
     fn write_wire(&self, writer: &mut WireWriter) -> Result<ValueNodeIndex, WireError> {
         Ok(
             writer.push(wire::SchemaValueNode::DatetimeValue(wire::Datetime {
-                seconds: self.timestamp(),
-                nanoseconds: self.timestamp_subsec_nanos(),
+                seconds: self.as_nanosecond().div_euclid(1_000_000_000) as i64,
+                nanoseconds: self.as_nanosecond().rem_euclid(1_000_000_000) as u32,
             })),
         )
     }
 }
 
-impl FromWire for chrono::DateTime<chrono::Utc> {
+impl FromWire for jiff::Timestamp {
     fn read_wire(reader: &mut WireReader, index: ValueNodeIndex) -> Result<Self, WireError> {
         let wire::SchemaValueNode::DatetimeValue(value) = reader.take(index)? else {
             return Err(WireError::Shape("datetime"));
@@ -1149,7 +1268,7 @@ scalar! {
     feature = "rust_decimal",
     feature = "num_bigint",
     feature = "serde_json_types",
-    feature = "chrono"
+    feature = "jiff"
 ))]
 macro_rules! wire_string {
     ($ty:ty, $encode:expr, $decode:expr) => {
@@ -1199,7 +1318,7 @@ macro_rules! wire_string {
     feature = "rust_decimal",
     feature = "num_bigint",
     feature = "serde_json_types",
-    feature = "chrono"
+    feature = "jiff"
 ))]
 pub(crate) use wire_string;
 

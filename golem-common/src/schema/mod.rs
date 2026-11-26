@@ -26,6 +26,8 @@ pub mod external;
 pub mod protobuf;
 pub mod public_json;
 pub mod render;
+#[cfg(feature = "full")]
+pub mod streaming;
 pub mod tool;
 pub mod validation;
 

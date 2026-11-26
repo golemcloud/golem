@@ -9,4 +9,4 @@ import {
 
 warnings = "-result_error_return"
 
-supported_targets = "+wasm"
+supported_targets = "+wasm+wasm-gc"

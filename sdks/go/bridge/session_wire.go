@@ -199,6 +199,11 @@ type mapping struct {
 	provisional string
 	highWater   uint64
 	terminal    bool
+	// serverEnd is set when the server, not the client, ended the input: a
+	// *StreamError for a failure, a *StreamCancelled for a consumer cancellation,
+	// and nil for a clean end.
+	serverEnd     error
+	endedByServer bool
 }
 
 func (m message) mappings() ([]mapping, error) {
@@ -254,7 +259,7 @@ func (m message) mappings() ([]mapping, error) {
 			if err != nil {
 				return nil, err
 			}
-			if err := hw.membersOnly("inputHighWater", []string{"sequence", "terminal"}); err != nil {
+			if err := hw.membersOnly("inputHighWater", []string{"sequence", "terminal"}, "outcome"); err != nil {
 				return nil, err
 			}
 			if mp.highWater, err = hw.u64("sequence"); err != nil {
@@ -262,6 +267,19 @@ func (m message) mappings() ([]mapping, error) {
 			}
 			if mp.terminal, err = hw.boolean("terminal"); err != nil {
 				return nil, err
+			}
+			if hw.has("outcome") {
+				if !mp.terminal {
+					return nil, protocolErrorf("an open input high-water has an outcome")
+				}
+				outcome, err := hw.object("outcome")
+				if err != nil {
+					return nil, err
+				}
+				if _, mp.serverEnd, err = outcome.streamOutcome(); err != nil {
+					return nil, err
+				}
+				mp.endedByServer = true
 			}
 		}
 		if channels[mp.channel] || tokens[mp.token] {
@@ -462,13 +480,23 @@ func (m message) streamEnd(server bool) (string, error, error) {
 	if err != nil {
 		return "", nil, err
 	}
-	kind, err := outcome.str("kind")
+	kind, end, err := outcome.streamOutcome()
 	if err != nil {
 		return "", nil, err
 	}
 	consumer := kind == "consumer-cancelled"
 	if !server && consumer != (direction == "output") {
 		return "", nil, protocolErrorf("invalid stream-end direction and outcome")
+	}
+	return direction, end, nil
+}
+
+// streamOutcome decodes a stream outcome: nil for a clean end, a
+// *StreamCancelled for a consumer cancellation and a *StreamError for a failure.
+func (outcome message) streamOutcome() (string, error, error) {
+	kind, err := outcome.str("kind")
+	if err != nil {
+		return "", nil, err
 	}
 	var end error
 	switch kind {
@@ -493,7 +521,7 @@ func (m message) streamEnd(server bool) (string, error, error) {
 	default:
 		err = protocolErrorf("invalid stream outcome %q", kind)
 	}
-	return direction, end, err
+	return kind, end, err
 }
 
 func (m message) streamFailure() (*StreamError, error) {

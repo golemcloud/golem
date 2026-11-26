@@ -31,6 +31,14 @@ components:
     dir: .
     templates: scala-test-component
 
+tools:
+  fault-matrix: {}
+
+agents:
+  FaultMatrixFixture:
+    tools:
+      fault-matrix: {}
+
 environments:
   local:
     server: local

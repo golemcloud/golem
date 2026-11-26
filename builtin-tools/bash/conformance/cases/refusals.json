@@ -1,0 +1,416 @@
+{
+  "tier": "pr",
+  "description": "Refusals and the builtins at their edge: `exec`, `source`, `bind`, `history`, `enable`, `ulimit`\nand `fc`.\n\nEach case name starts with `refusals: `.",
+  "cases": [
+    {
+      "name": "refusals: exec ls -l is not exec -l",
+      "script": "exec ls -l /tmp/does-not-exist-xyz 2>/dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: exec wc -l is not exec -l",
+      "script": "printf 'a\\nb\\nc\\n' >/tmp/wcl-xyz; exec wc -l /tmp/wcl-xyz",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: exec sort -c is not exec -c",
+      "script": "printf 'a\\nb\\nc\\n' >/tmp/sc-xyz; exec sort -c /tmp/sc-xyz; echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: exec -- passes through to the command",
+      "script": "exec -- true; echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: exec -l is still refused",
+      "script": "exec -l true; echo after",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: exec -a, -c and -l are unsupported in bash-tool\n"
+        },
+        "reason": "fixture (exec -a/-l): -a and -l are documented refusals; the oracle's coreutils multiplexer, not bash, produces the comparison output for a real run"
+      }
+    },
+    {
+      "name": "refusals: exec -a name is still refused",
+      "script": "exec -a myname true; echo after",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: exec -a, -c and -l are unsupported in bash-tool\n"
+        },
+        "reason": "fixture (exec -a/-l): -a and -l are documented refusals; the oracle's coreutils multiplexer, not bash, produces the comparison output for a real run"
+      }
+    },
+    {
+      "name": "refusals: a failed exec ends the script",
+      "script": "exec nosuchcommand123; echo continued",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: a successful exec still ends the script",
+      "script": "exec true; echo continued",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: a failed exec ends the subshell it's in",
+      "script": "(exec nosuchcommand123; echo notreached); echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: a successful exec ends the subshell it's in",
+      "script": "(exec echo hi; echo notreached); echo after",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: read -e reads plainly from input that is no terminal",
+      "script": "read -e x <<< hi; echo \"$x\" $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: mapfile -C runs its callback",
+      "script": "printf 'a\\nb\\n' | mapfile -C echo -c 1 arr; echo done=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: extended test -N is refused",
+      "script": "[[ -N /tmp ]]; echo s=$?; echo after",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: [[ -N ]] is unsupported in bash-tool\n"
+        },
+        "reason": "fixture: a canonical refusal for a Brush placeholder Bash itself implements; not a WASI limit, but implementing readline/dlopen/job-control/man-pages is out of scope"
+      }
+    },
+    {
+      "name": "refusals: cd -@ is refused",
+      "script": "cd -@; echo s=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: cd -@ is unsupported in bash-tool\n"
+        },
+        "reason": "fixture: a canonical refusal for a Brush placeholder Bash itself implements; not a WASI limit, but implementing readline/dlopen/job-control/man-pages is out of scope"
+      }
+    },
+    {
+      "name": "refusals: enable -f is refused",
+      "script": "enable -f /tmp/x.so foo; echo s=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: enable -f is unsupported in bash-tool\n"
+        },
+        "reason": "fixture: a canonical refusal for a Brush placeholder Bash itself implements; not a WASI limit, but implementing readline/dlopen/job-control/man-pages is out of scope"
+      }
+    },
+    {
+      "name": "refusals: enable -d of a name that is no builtin",
+      "script": "enable -d foo; echo s=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: help -m is refused",
+      "script": "help -m cd; echo s=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: help -m is unsupported in bash-tool\n"
+        },
+        "reason": "fixture: a canonical refusal for a Brush placeholder Bash itself implements; not a WASI limit, but implementing readline/dlopen/job-control/man-pages is out of scope"
+      }
+    },
+    {
+      "name": "refusals: read still works",
+      "script": "read x <<< hi; echo \"$x\" $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: jobs with no args still works",
+      "script": "jobs; echo s=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: jobs -l still works",
+      "script": "sleep 0.1 & jobs -l >/dev/null; echo s=$?; wait",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: cd still works",
+      "script": "cd /tmp && pwd",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: cd /proc/self/fd works like cd /dev/fd",
+      "script": "cd /dev/fd && pwd; cd /proc/self/fd && pwd",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: source of process substitution works",
+      "script": "source <(printf 'x=1\\n'); echo $x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: source of /dev/stdin is refused",
+      "script": "printf 'y=2\\n' | { source /dev/stdin; echo $y; }",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "\n"
+        },
+        "stderr": {
+          "text": "bash: source of /dev/stdin, /dev/stdout or /dev/stderr is unsupported in bash-tool\n"
+        },
+        "reason": "fixture: sourcing a live stream would block forever in this single-threaded cooperative model before the pipeline feeding it could run; a documented refusal, not a WASI limit"
+      }
+    },
+    {
+      "name": "refusals: source searches PATH",
+      "script": "mkdir -p /tmp/fixes-sourcepath; echo 'echo hi from sourced' >/tmp/fixes-sourcepath/myfile.sh; PATH=\"/tmp/fixes-sourcepath:$PATH\" source myfile.sh",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: sourced syntax error names the file",
+      "script": "printf 'echo ok\\nif then\\n' >/tmp/fixes-badsrc.sh; source /tmp/fixes-badsrc.sh; echo after=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "after=2\n"
+        },
+        "stderr": {
+          "text": "/tmp/fixes-badsrc.sh: line 2: syntax error near unexpected token `then'\n/tmp/fixes-badsrc.sh: line 2: `if then'\n"
+        },
+        "reason": "fixture: bash-tool's documented all-or-nothing preflight (README.md) means nothing before a later syntax error runs either, unlike bash itself, which executes each command as it is read"
+      }
+    },
+    {
+      "name": "refusals: sourced runtime error names the file",
+      "script": "printf 'set -u\\necho $UNSET_VAR\\n' >/tmp/fixes-badsrc2.sh; source /tmp/fixes-badsrc2.sh; echo after=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: bind binding form warns and succeeds",
+      "script": "bind '\"\\C-x\\C-x\": \"hi\"'; echo s=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: bind -x warns and succeeds",
+      "script": "bind -x '\"\\C-t\": true'; echo s=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: bind -q is refused",
+      "script": "bind -q abort >/dev/null; echo s=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: bind's query options (-l, -p, -P, -s, -S, -v, -V, -q, -u, -X) are unsupported in bash-tool\n"
+        },
+        "reason": "fixture: bash's own readline tables are compiled in and answer these queries even under `bash -c` (confirmed against the oracle: `bind -q abort` succeeds, printing bash's own warning and then its real answer) -- Brush has no equivalent table built, not a WASI/terminal limit; reproducing bash's actual emacs/vi defaults just for these query forms is disproportionate"
+      }
+    },
+    {
+      "name": "refusals: bind -l is refused",
+      "script": "bind -l >/dev/null; echo s=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: bind's query options (-l, -p, -P, -s, -S, -v, -V, -q, -u, -X) are unsupported in bash-tool\n"
+        },
+        "reason": "fixture: bash's own readline tables are compiled in and answer these queries even under `bash -c` (confirmed against the oracle: `bind -q abort` succeeds, printing bash's own warning and then its real answer) -- Brush has no equivalent table built, not a WASI/terminal limit; reproducing bash's actual emacs/vi defaults just for these query forms is disproportionate"
+      }
+    },
+    {
+      "name": "refusals: history -s and display",
+      "script": "history -s foo; history",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: history -p expands !!",
+      "script": "history -s foo; history -p '!!'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: history -c clears",
+      "script": "history -s foo; history -c; history; echo s=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: history -d deletes an offset",
+      "script": "history -s foo; history -s bar; history -d 1; history",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: history -w then -r round-trips a file",
+      "script": "history -s foo; history -w /tmp/fixes-histfile-wr; history -c; history -r /tmp/fixes-histfile-wr; history",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: history -a appends to a file",
+      "script": "history -s foo; history -a /tmp/fixes-histfile-a; cat /tmp/fixes-histfile-a",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: history -n reads a file",
+      "script": "printf 'foo\\nbar\\n' >/tmp/fixes-histfile-n; history -n /tmp/fixes-histfile-n; history",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: history rejects a non-numeric N",
+      "script": "history 3x; echo s=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: history -p reports a bad event",
+      "script": "history -p '!nonexistentxyz'; echo s=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: unreadable -d @file exits 26",
+      "script": "curl -d @/tmp/fixes-no-such-file-xyz http://127.0.0.1:1/; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "refusals: ulimit is refused",
+      "script": "ulimit -S -n 64; ulimit -n; echo s=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: ulimit is unsupported in bash-tool\n"
+        },
+        "reason": "fixture: a documented refusal (README.md's \"Commands\" section) this platform genuinely cannot support -- WASI has no resource limits (ulimit), no history list to edit (fc), and no argv[0] override (exec -a)"
+      }
+    },
+    {
+      "name": "refusals: ulimit is refused at run time too",
+      "script": "cmd=ulimit; $cmd -S -n 64; $cmd -n; echo s=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "s=2\n"
+        },
+        "stderr": {
+          "text": "bash: ulimit is unsupported in bash-tool\nbash: ulimit is unsupported in bash-tool\n"
+        },
+        "reason": "fixture: a documented refusal (README.md's \"Commands\" section) this platform genuinely cannot support -- WASI has no resource limits (ulimit), no history list to edit (fc), and no argv[0] override (exec -a)"
+      }
+    },
+    {
+      "name": "refusals: fc is refused",
+      "script": "fc -l; echo s=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: background/history execution (fc) is unsupported in bash-tool\n"
+        },
+        "reason": "fixture: a documented refusal (README.md's \"Commands\" section) this platform genuinely cannot support -- WASI has no resource limits (ulimit), no history list to edit (fc), and no argv[0] override (exec -a)"
+      }
+    },
+    {
+      "name": "refusals: exec -a is refused at run time too",
+      "script": "cmd=exec; $cmd -a foo true; echo s=$?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "s=2\n"
+        },
+        "stderr": {
+          "text": "bash: exec -a, -c and -l are unsupported in bash-tool\n"
+        },
+        "reason": "fixture: a documented refusal (README.md's \"Commands\" section) this platform genuinely cannot support -- WASI has no resource limits (ulimit), no history list to edit (fc), and no argv[0] override (exec -a)"
+      }
+    }
+  ]
+}

@@ -67,11 +67,11 @@ async fn scala_gol40_generated_and_reflected_clients_match_live() {
     assert_eq!(observation["typedErrorMatches"], true);
     assert_eq!(observation["principalMatches"], true);
     assert_eq!(observation["streamMatches"], true);
-    // The caller is the CLI's account: its kind and its pair, under the server's Golem issuer.
+    // The tool's immediate caller is the calling agent: its kind and its pair, under the
+    // server's Golem issuer.
     let generated_principal = observation["generatedPrincipal"].as_str().unwrap();
     assert!(
-        generated_principal.starts_with("account (\"")
-            && generated_principal.contains(",\"account:"),
+        generated_principal.starts_with("agent (\"") && generated_principal.contains(",\"agent:"),
         "{generated_principal}"
     );
     assert_eq!(

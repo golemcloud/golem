@@ -270,6 +270,66 @@ impl NapFetchOwner for NapFetchOwnerImpl {
     }
 }
 
+/// Both roles of a caller: `<original>|<immediate>`, each as `<kind> <pair text>` or `anonymous`.
+fn caller_text(caller: &golem_rust::agentic::Caller) -> String {
+    format!("{}|{}", caller.original(), caller.immediate())
+}
+
+/// An agent that reports the caller of each of its invocations and counts its bumps.
+#[agent_definition]
+pub trait CallerReport {
+    fn new(name: String) -> Self;
+
+    async fn report(&self, context: InvocationContext) -> String;
+
+    fn bump(&mut self);
+
+    fn count(&self) -> u32;
+
+    /// Counts the call as a bump and reports its caller.
+    async fn report_and_bump(&mut self, context: InvocationContext) -> String;
+}
+
+struct CallerReportImpl {
+    count: u32,
+}
+
+#[agent_implementation]
+impl CallerReport for CallerReportImpl {
+    fn new(_name: String) -> Self {
+        Self { count: 0 }
+    }
+
+    async fn report(&self, context: InvocationContext) -> String {
+        caller_text(context.caller())
+    }
+
+    fn bump(&mut self) {
+        self.count += 1;
+    }
+
+    fn count(&self) -> u32 {
+        self.count
+    }
+
+    async fn report_and_bump(&mut self, context: InvocationContext) -> String {
+        self.count += 1;
+        caller_text(context.caller())
+    }
+}
+
+/// Two seconds from now, for a scheduled call.
+fn two_seconds_from_now() -> golem_rust::bindings::golem::agent::host::Datetime {
+    let at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("the clock is after the epoch")
+        + std::time::Duration::from_secs(2);
+    golem_rust::bindings::golem::agent::host::Datetime {
+        seconds: at.as_secs() as i64,
+        nanoseconds: at.subsec_nanos(),
+    }
+}
+
 #[derive(Debug, Clone, ToolError)]
 pub enum ClockRaceError {
     #[tool_error(kind = "runtime-error", exit_code = 1)]
@@ -501,9 +561,10 @@ pub trait Artifact {
 
 struct MatrixArtifactImpl;
 
-/// `"<kind> <pair text>"`, or `"anonymous"`.
-fn matrix_principal(principal: &Principal) -> String {
-    principal.to_string()
+/// Both roles of the caller: `"<original>|<immediate>"`, each `"<kind> <pair text>"` or
+/// `"anonymous"`.
+fn matrix_principal(caller: &golem_rust::agentic::Caller) -> String {
+    caller_text(caller)
 }
 
 #[tool_implementation]
@@ -536,7 +597,7 @@ impl Artifact for MatrixArtifactImpl {
                 .rev()
                 .collect::<Vec<_>>()
                 .join("|"),
-            principal: matrix_principal(&principal),
+            principal: matrix_principal(context.caller()),
             owner_agent_id: metadata.agent_id.uuid.to_string(),
         })
     }
@@ -655,7 +716,7 @@ impl MatrixPermissionIssuer for MatrixPermissionIssuerImpl {
         PermissionIssue {
             card,
             issuer: "rust".to_string(),
-            principal: matrix_principal(context.caller().immediate()),
+            principal: matrix_principal(context.caller()),
             owner_agent_id,
         }
     }
@@ -702,7 +763,7 @@ impl MatrixResource for MatrixResourceImpl {
     }
 }
 
-fn matrix_resource_evidence(principal: &Principal) -> (String, String, String) {
+fn matrix_resource_evidence(caller: &golem_rust::agentic::Caller) -> (String, String, String) {
     let owner_agent_id = golem_rust::get_self_metadata()
         .expect("matrix resource owner metadata")
         .agent_id
@@ -710,7 +771,7 @@ fn matrix_resource_evidence(principal: &Principal) -> (String, String, String) {
         .to_string();
     (
         "rust".to_string(),
-        matrix_principal(principal),
+        matrix_principal(caller),
         owner_agent_id,
     )
 }
@@ -734,7 +795,7 @@ impl Secret for SecretImpl {
         context: InvocationContext,
     ) -> SecretExchange {
         let (provider, principal, owner_agent_id) =
-            matrix_resource_evidence(context.caller().immediate());
+            matrix_resource_evidence(context.caller());
         let revealed = reveal_string(&secret)
             .map(|value| value == "matrix-secret-value")
             .unwrap_or(false);
@@ -767,7 +828,7 @@ impl Quota for QuotaImpl {
         context: InvocationContext,
     ) -> QuotaExchange {
         let (provider, principal, owner_agent_id) =
-            matrix_resource_evidence(context.caller().immediate());
+            matrix_resource_evidence(context.caller());
         let reserved = token
             .0
             .reserve(1)
@@ -804,7 +865,7 @@ impl Permissions for PermissionsImpl {
         // Panics unless the received card is present and known to the host.
         let _ = card.id();
         let (provider, principal, owner_agent_id) =
-            matrix_resource_evidence(context.caller().immediate());
+            matrix_resource_evidence(context.caller());
         PermissionExchange {
             provider,
             principal,
@@ -1307,6 +1368,63 @@ struct RawCapableInput {
     path: String,
 }
 
+/// The canonical input of `bash run`: the positional script, then the options.
+#[derive(IntoSchema)]
+struct RawBashInput {
+    script: String,
+    cwd: String,
+    timeout: u32,
+}
+
+#[derive(FromSchema)]
+struct BashOutput {
+    stdout: String,
+    stderr: String,
+    exit_code: u8,
+    #[allow(dead_code)]
+    cwd: String,
+}
+
+/// Runs `script` with the built-in `bash` tool and returns what the script wrote to stdout.
+async fn run_bash(script: &str) -> String {
+    let input = RawBashInput {
+        script: script.to_string(),
+        cwd: String::new(),
+        timeout: 60,
+    }
+    .into_typed_schema_value()
+    .expect("encode bash input");
+    let result = ToolRpc::create("bash")
+        .expect("bash tool RPC creation failed")
+        .invoke_and_await(
+            vec!["run".to_string()],
+            golem_rust::encode_typed_schema_value(&input).expect("encode bash wire input"),
+            None,
+            None,
+            None,
+        )
+        .await
+        .expect("bash result");
+    let value = golem_rust::decode_typed_schema_value_owned(
+        result.result.expect("bash returns its output"),
+    )
+    .expect("decode bash output");
+    let output = BashOutput::from_value(value.value()).expect("bash output record");
+    assert_eq!(output.exit_code, 0, "bash failed: {}", output.stderr);
+    output.stdout
+}
+
+/// Writes `text` to stdout and finishes it.
+async fn write_text(mut stdout: OutputStream, text: String) -> Result<StreamSummary, StreamingError> {
+    let output_closed = !write_chunk(&mut stdout, text.into_bytes()).await;
+    let _ = stdout.finish().await;
+    Ok(StreamSummary {
+        chunks_read: 0,
+        bytes_read: 0,
+        output_closed,
+    })
+}
+
 #[tool_definition(version = "1.0.0")]
 pub trait Streaming {
     async fn run(
@@ -1647,6 +1765,33 @@ async fn run_nested_principal(
     })
 }
 
+/// Runs the `caller` mode of this tool as a nested tool call and returns what it wrote.
+async fn run_nested_caller() -> String {
+    use futures_concurrency::prelude::*;
+
+    let rpc = ToolRpc::create("streaming").expect("tool RPC creation failed");
+    let (nested_target, nested_stdout) = tool_host::create_output();
+    let nested = rpc.invoke_and_await(
+        vec!["run".to_string()],
+        raw_run_input("caller"),
+        Some(pump_tool_stdin(nested_input(Vec::new()))),
+        Some(nested_target),
+        None,
+    );
+    let (nested_result, nested_output) = (nested, async move {
+        let mut output = Vec::new();
+        let mut nested_stdout = nested_stdout;
+        while let Some(item) = nested_stdout.next().await {
+            output.extend(item.expect("nested caller stdout failed"));
+        }
+        output
+    })
+        .join()
+        .await;
+    nested_result.expect("nested caller tool result");
+    String::from_utf8(nested_output).expect("caller text is UTF-8")
+}
+
 async fn run_nested_capable(bytes: Vec<u8>) -> Vec<u8> {
     use futures_concurrency::prelude::*;
 
@@ -1788,6 +1933,34 @@ async fn run_nested_capable_parent_end(
         bytes_read: 0,
         output_closed,
     })
+}
+
+// Connects a WebSocket to `WEBSOCKET_HOLD_PORT`, whose peer never sends, and keeps a `receive` in
+// flight. Pauses at a promise checkpoint, then writes one stdout chunk and waits without further
+// host calls until the caller cancels the tool invocation.
+async fn run_open_websocket_receive_wait(
+    mut stdout: OutputStream,
+) -> Result<StreamSummary, StreamingError> {
+    use futures_concurrency::prelude::*;
+
+    let port = std::env::var("WEBSOCKET_HOLD_PORT").expect("WEBSOCKET_HOLD_PORT is configured");
+    let connection = golem_rust::websocket::WebsocketConnection::connect(
+        &format!("ws://127.0.0.1:{port}/hold"),
+        None,
+        None,
+    )
+    .expect("connect the held WebSocket");
+    let receive = async {
+        let message = connection.receive().await;
+        panic!("the held WebSocket received {message:?}");
+    };
+    let checkpoint = async {
+        wait_at_promise_checkpoint("open-call-held").await;
+        assert!(write_chunk(&mut stdout, b"open-call-held".to_vec()).await);
+        std::future::pending::<()>().await;
+    };
+    (receive, checkpoint).join().await;
+    unreachable!("the open receive wait returns only through cancellation")
 }
 
 fn write_owner_file(path: &str, bytes: &[u8]) -> Result<(), String> {
@@ -2098,6 +2271,9 @@ impl Streaming for StreamingImpl {
         if mode.starts_with("http-") {
             return stream_through_http(mode, stdin, stdout).await;
         }
+        if mode == "open-receive-wait" {
+            return run_open_websocket_receive_wait(stdout).await;
+        }
         if let Some(size) = mode.strip_prefix("piped-unread-source:") {
             let size: usize = size.parse().expect("source chunk size");
             for byte in [0x13, 0xa7, 0x42] {
@@ -2128,6 +2304,47 @@ impl Streaming for StreamingImpl {
                 bytes_read: 0,
                 output_closed,
             });
+        }
+        if mode == "caller" {
+            return write_text(stdout, caller_text(context.caller())).await;
+        }
+        if mode == "nested-caller" {
+            let nested = run_nested_caller().await;
+            return write_text(
+                stdout,
+                format!("{}\n{nested}", caller_text(context.caller())),
+            )
+            .await;
+        }
+        if let Some(name) = mode.strip_prefix("call-agent:") {
+            let report = CallerReportClient::upsert(name.to_string()).report().await;
+            return write_text(stdout, report).await;
+        }
+        if let Some(name) = mode.strip_prefix("call-agent-bump:") {
+            let report = CallerReportClient::upsert(name.to_string())
+                .report_and_bump()
+                .await;
+            return write_text(
+                stdout,
+                format!("{}\n{report}", caller_text(context.caller())),
+            )
+            .await;
+        }
+        if let Some(name) = mode.strip_prefix("schedule-bump:") {
+            CallerReportClient::upsert(name.to_string())
+                .schedule_bump(two_seconds_from_now())
+                .expect("schedule bump");
+            return write_text(stdout, "scheduled".to_string()).await;
+        }
+        if let Some(name) = mode.strip_prefix("schedule-and-cancel-bump:") {
+            let token = CallerReportClient::upsert(name.to_string())
+                .schedule_cancelable_bump(two_seconds_from_now())
+                .expect("schedule cancelable bump");
+            token.cancel();
+            return write_text(stdout, "cancelled".to_string()).await;
+        }
+        if let Some(script) = mode.strip_prefix("bash:") {
+            return write_text(stdout, run_bash(script).await).await;
         }
         if mode == "nested-principal" {
             return run_nested_principal(context.caller().immediate(), stdout).await;

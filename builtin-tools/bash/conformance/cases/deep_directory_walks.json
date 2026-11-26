@@ -1,0 +1,30 @@
+{
+  "tier": "pr",
+  "description": "`grep -r`/`-R` and `diff -r` over a directory tree several hundred levels deep: both walks are\niterative now (one explicit stack frame per directory level, not one native call frame), so\nordinary correctness at this depth is what these check.\n\nThese depths are a fast, CI-sized regression check, not the stress case that found the bug:\nbuilding a real directory tree this deep costs roughly the *square* of its depth (each `mkdir`\nalong the way re-resolves its whole path from the sandbox root), which makes the thousands-of-\nlevels trees that actually used to trap the old native-recursive walk impractically slow to\nbuild here. That reproduction instead lives in the fixing round's own x86-64 rig notes.",
+  "cases": [
+    {
+      "name": "deep walk: grep -r finds a match several hundred levels down",
+      "script": "p=$(printf \"d/%.0s\" $(seq 1 200)); mkdir -p \"$p\"; echo needle > \"$p/f\"; grep -rl needle d; echo status=$?",
+      "tags": [],
+      "options": {
+        "timeout": 45
+      }
+    },
+    {
+      "name": "deep walk: grep -r reports no match the same way at depth",
+      "script": "p=$(printf \"d/%.0s\" $(seq 1 200)); mkdir -p \"$p\"; echo needle > \"$p/f\"; grep -rl nomatch d; echo status=$?",
+      "tags": [],
+      "options": {
+        "timeout": 45
+      }
+    },
+    {
+      "name": "deep walk: diff -rq reports a differing file several hundred levels down",
+      "script": "p=$(printf \"d/%.0s\" $(seq 1 220)); mkdir -p a/\"$p\" b/\"$p\"; echo one > a/\"$p/f\"; echo two > b/\"$p/f\"; diff -rq a b; echo status=$?",
+      "tags": [],
+      "options": {
+        "timeout": 45
+      }
+    }
+  ]
+}

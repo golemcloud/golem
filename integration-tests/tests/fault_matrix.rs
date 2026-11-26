@@ -29,7 +29,7 @@ mod rows {
     use crate::http_test_context::{HttpTestContext, make_test_context};
     use anyhow::{Context, ensure};
     use golem_api_grpc::proto::golem::worker::{
-        ResumeOperation, invocation_response, invocation_session_completion,
+        ResumeOperation, ToolByteStreamRole, invocation_response, invocation_session_completion,
         invocation_session_result, stream_terminal,
     };
     use golem_client::model::ComponentDto;
@@ -40,7 +40,7 @@ mod rows {
     use golem_common::model::durable_stream::StreamSessionRecord;
     use golem_common::model::oplog::{OplogIndex, PublicOplogEntry};
     use golem_common::model::{AgentId, PromiseId, RoutingTable};
-    use golem_common::schema::{FromSchema, SchemaValue};
+    use golem_common::schema::{FromSchema, IntoTypedSchemaValue, SchemaValue};
     use golem_common::tracing::{TracingConfig, init_tracing_with_default_debug_env_filter};
     use golem_common::{agent_key, data_value};
     use golem_schema::proto::golem::schema::{SchemaValue as ProtoValue, schema_value};
@@ -54,7 +54,7 @@ mod rows {
     use golem_test_framework::dsl::{TestDsl, TestDslExtended};
     use integration_tests::agents::{agent_type_id, keyed_agent_id};
     use integration_tests::fault_matrix::{
-        Delivery, FIXTURE_AGENT_TYPE, FIXTURES, Fixture, InjectorEffect, Terminal,
+        Delivery, FIXTURE_AGENT_TYPE, FIXTURE_TOOL, FIXTURES, Fixture, InjectorEffect, Terminal,
         assert_fail_clean, assert_resumed,
     };
     use integration_tests::invocation_session::{
@@ -188,6 +188,7 @@ mod rows {
             .component(&environment.id, fixture.wasm)
             .name(fixture.component)
             .unique()
+            .with_tool_agent_binding(FIXTURE_TOOL, FIXTURE_AGENT_TYPE)?
             .store()
             .await?;
         let type_id = agent_type_id(
@@ -253,29 +254,51 @@ mod rows {
             .into_iter()
             .map(u32_value)
             .collect::<anyhow::Result<Vec<_>>>()?;
-        let terminal = match output
-            .terminal
-            .as_ref()
-            .and_then(|terminal| terminal.response.as_ref())
-        {
-            None => Terminal::Open,
-            Some(invocation_response::Response::StreamEnd(end)) => match end
-                .outcome
+        Ok(Delivery::new(records, terminal(output)?))
+    }
+
+    /// The records of a byte stream, each 4 big-endian bytes.
+    fn byte_delivery(output: &OutputObservation) -> anyhow::Result<Delivery> {
+        let bytes = output.bytes()?;
+        ensure!(
+            bytes.len() % 4 == 0,
+            "the stream ended inside a record: {} bytes",
+            bytes.len()
+        );
+        let records = bytes
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .map(|record| u32::from_be_bytes(*record))
+            .collect();
+        Ok(Delivery::new(records, terminal(output)?))
+    }
+
+    fn terminal(output: &OutputObservation) -> anyhow::Result<Terminal> {
+        Ok(
+            match output
+                .terminal
                 .as_ref()
-                .and_then(|outcome| outcome.terminal.as_ref())
+                .and_then(|terminal| terminal.response.as_ref())
             {
-                Some(stream_terminal::Terminal::Finished(_)) => Terminal::End,
-                Some(stream_terminal::Terminal::Failed(error)) => {
-                    Terminal::Failed(format!("{:?}", error.error))
-                }
-                Some(stream_terminal::Terminal::ConsumerCancelled(cancelled)) => {
-                    Terminal::Cancelled(cancelled.details.clone().unwrap_or_default())
-                }
-                None => anyhow::bail!("output stream end has no outcome"),
+                None => Terminal::Open,
+                Some(invocation_response::Response::StreamEnd(end)) => match end
+                    .outcome
+                    .as_ref()
+                    .and_then(|outcome| outcome.terminal.as_ref())
+                {
+                    Some(stream_terminal::Terminal::Finished(_)) => Terminal::End,
+                    Some(stream_terminal::Terminal::Failed(error)) => {
+                        Terminal::Failed(format!("{:?}", error.error))
+                    }
+                    Some(stream_terminal::Terminal::ConsumerCancelled(cancelled)) => {
+                        Terminal::Cancelled(cancelled.details.clone().unwrap_or_default())
+                    }
+                    None => anyhow::bail!("output stream end has no outcome"),
+                },
+                Some(other) => anyhow::bail!("unexpected output terminal {other:?}"),
             },
-            Some(other) => anyhow::bail!("unexpected output terminal {other:?}"),
-        };
-        Ok(Delivery::new(records, terminal))
+        )
     }
 
     fn records(value: SchemaValue) -> anyhow::Result<Vec<u32>> {
@@ -675,6 +698,72 @@ mod rows {
             .ensure_happened()?;
             assert_resumed(run, COUNT, &delivery(&report.outputs[&id])?)
                 .with_context(|| format!("{}: deploy mid-stream", fixture.sdk))?;
+        }
+        Ok(())
+    }
+
+    // ---- PR subset: tool command stdout ----------------------------------------------------
+
+    fn stdout(report: &SessionCheckpoint) -> anyhow::Result<StreamId> {
+        let id = report
+            .acceptance
+            .as_ref()
+            .context("the tool session was not accepted")?
+            .stream_mappings
+            .iter()
+            .find(|mapping| {
+                mapping.tool_byte_stream_role == Some(ToolByteStreamRole::Stdout as i32)
+            })
+            .and_then(|mapping| mapping.handle.as_ref())
+            .and_then(|handle| handle.stream_id)
+            .context("the tool session has no stdout")?;
+        Ok((id.high_bits, id.low_bits))
+    }
+
+    #[test]
+    #[timeout("8 minutes")]
+    async fn tool_command_stdout_survives_executor_kill(matrix: &Matrix) -> anyhow::Result<()> {
+        let deps = &matrix.deps;
+        for &fixture in FIXTURES {
+            let row = row(deps, fixture).await?;
+            let agent = fresh_agent();
+            let run = next_run();
+            let gate = gate(&row, &agent).await?;
+            let mut session = InvocationSession::start_tool(
+                deps,
+                &row.component,
+                gate.agent_id,
+                gate.fingerprint,
+                FIXTURE_TOOL,
+                &["produce"],
+                vec![
+                    ("run", SchemaValue::U32(run)),
+                    ("count", SchemaValue::U32(COUNT)),
+                    ("pause_after", SchemaValue::U32(PAUSE_AFTER)),
+                    ("gate", gate.into_typed_schema_value()?.into_parts().1),
+                ],
+                PHASE,
+            )
+            .await?;
+            let id = stdout(session.checkpoint())?;
+            // The command waits at its gate after `PAUSE_AFTER` records of 4 bytes each.
+            while session.checkpoint().outputs.get(&id).map_or(0, |output| {
+                output.items.iter().map(|item| item.packed_u8.len()).sum()
+            }) < 4 * PAUSE_AFTER as usize
+            {
+                session.receive().await?;
+            }
+            let before = kill_executors(deps).await?;
+            let checkpoint = session.disconnect();
+            let effect = restart_executors(deps, before).await?;
+            let (resumed, _) =
+                InvocationSession::reattach(deps, checkpoint, ResumeOperation::Takeover, PHASE)
+                    .await?;
+            row.open_gate(&gate).await?;
+            let report = resumed.finish().await?;
+            effect.ensure_happened()?;
+            assert_resumed(run, COUNT, &byte_delivery(&report.outputs[&id])?)
+                .with_context(|| format!("{}: tool stdout executor kill", fixture.sdk))?;
         }
         Ok(())
     }

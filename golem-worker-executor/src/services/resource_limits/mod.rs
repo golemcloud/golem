@@ -20,7 +20,7 @@ use crate::metrics::resources::{
 use crate::services::byte_time_accumulator::ByteTimeSettlement;
 use crate::services::golem_config::{ResourceLimitsConfig, ResourceUsageMeteringConfig};
 use async_trait::async_trait;
-use chrono::Utc;
+
 use golem_common::SafeDisplay;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
@@ -377,6 +377,7 @@ struct ConfiguredResourceLimitsDisabled {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ResourceLimits for ConfiguredResourceLimitsDisabled {
     async fn initialize_account(
         &self,
@@ -401,6 +402,7 @@ impl ResourceLimits for ConfiguredResourceLimitsDisabled {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ResourceLimits for ResourceLimitsDisabled {
     async fn initialize_account(
         &self,
@@ -701,7 +703,7 @@ impl AtomicResourceEntry {
             filesystem_limit_update: AsyncMutex::new(()),
             filesystem_limit_updates: OnceLock::new(),
             agent_filesystem_limit_targets: scc::HashMap::new(),
-            last_refresh_secs: AtomicI64::new(Utc::now().timestamp()),
+            last_refresh_secs: AtomicI64::new(jiff::Timestamp::now().as_second()),
             per_invocation_http_call_limit: AtomicU64::new(per_invocation_http_call_limit),
             per_invocation_rpc_call_limit: AtomicU64::new(per_invocation_rpc_call_limit),
             available_http_calls_from_server: AtomicU64::new(available_http_calls),

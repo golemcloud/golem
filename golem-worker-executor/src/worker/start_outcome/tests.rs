@@ -2211,6 +2211,7 @@ fn host_call(function_name: &str, request: Option<&str>) -> ReplayStep {
         parent_start_index: None,
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         carries_request: true,
         request: request
             .map(|request| Box::new(request.to_string().into_typed_schema_value().unwrap())),
@@ -2229,6 +2230,7 @@ fn the_class_of_a_failed_replay_follows_its_provenance() {
         expected: host_call("random::get_random_bytes", Some("recorded")),
         actual: host_call("random::get_random_u64", Some("replayed")),
         mismatched: vec![StartIdentityField::FunctionName],
+        replay_start: None,
     };
     let unexpected = WorkerExecutorError::UnexpectedOplogEntry {
         divergence: Box::new(divergence.clone()),

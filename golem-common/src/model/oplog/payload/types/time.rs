@@ -14,7 +14,7 @@
 
 use std::time::{Duration, SystemTime};
 
-use chrono::{DateTime, Utc};
+use jiff::Timestamp as JiffTimestamp;
 
 use super::SerializableDateTime;
 
@@ -131,30 +131,31 @@ impl From<SystemTime> for SerializableDateTime {
     }
 }
 
-impl From<SerializableDateTime> for DateTime<Utc> {
+impl From<SerializableDateTime> for JiffTimestamp {
     fn from(value: SerializableDateTime) -> Self {
-        // Chrono cannot represent the full i64 second range (its bounds are
-        // roughly ±262,000 years), so out-of-range values clamp to
-        // `DateTime::<Utc>::MIN_UTC` / `MAX_UTC`.
-        DateTime::<Utc>::from_timestamp(value.seconds, value.nanoseconds).unwrap_or({
+        // Jiff cannot represent the full i64 second range, so out-of-range
+        // instants clamp to its nearest representable bound.
+        JiffTimestamp::from_nanosecond(
+            i128::from(value.seconds) * 1_000_000_000 + i128::from(value.nanoseconds),
+        )
+        .unwrap_or({
             if value.seconds < 0 {
-                DateTime::<Utc>::MIN_UTC
+                JiffTimestamp::MIN
             } else {
-                DateTime::<Utc>::MAX_UTC
+                JiffTimestamp::MAX
             }
         })
     }
 }
 
-impl From<DateTime<Utc>> for SerializableDateTime {
-    fn from(value: DateTime<Utc>) -> Self {
-        // `timestamp()` is the floored second (negative for pre-epoch), matching
-        // the `SerializableDateTime` representation directly. Chrono represents
-        // leap seconds with a subsecond nano count >= 1e9; those clamp to the
-        // last nanosecond of the preceding second.
+impl From<JiffTimestamp> for SerializableDateTime {
+    fn from(value: JiffTimestamp) -> Self {
+        // Jiff uses signed subseconds. The oplog uses a floored second and a
+        // non-negative nanosecond offset, including for pre-epoch instants.
+        let nanos = value.as_nanosecond();
         Self {
-            seconds: value.timestamp(),
-            nanoseconds: value.timestamp_subsec_nanos().min(999_999_999),
+            seconds: nanos.div_euclid(1_000_000_000) as i64,
+            nanoseconds: nanos.rem_euclid(1_000_000_000) as u32,
         }
     }
 }

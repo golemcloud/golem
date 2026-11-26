@@ -285,7 +285,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             get_ctx,
             activity,
         };
-        let captured = store.with(|mut access| get_ctx(access.data_mut()).attribution.capture());
+        let captured = crate::durable_host::attribution::with_import_access(store, |mut access| {
+            get_ctx(access.data_mut()).attribution.capture()
+        });
         store
             .spawn(async move |store| captured.run(task.run(store)).await)
             .map_err(|error| {

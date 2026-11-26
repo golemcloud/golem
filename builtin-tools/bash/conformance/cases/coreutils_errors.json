@@ -1,0 +1,288 @@
+{
+  "tier": "pr",
+  "description": "Error paths for the uutils-backed commands that otherwise have only a happy-path case.\n\nEvery case compares the exit status and the exact diagnostic with GNU coreutils: the utility's own\nname, the translated message (curly quotes in this shell's UTF-8 locale), and no Rust\n`(os error N)` suffix or raw clap usage block.",
+  "cases": [
+    {
+      "name": "coreutils errors: md5sum missing file",
+      "script": "md5sum /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: sha1sum missing file",
+      "script": "sha1sum /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: sha256sum missing file",
+      "script": "sha256sum /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: sha512sum missing file",
+      "script": "sha512sum /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: b2sum missing file",
+      "script": "b2sum /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: cksum missing file",
+      "script": "cksum /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: sha256sum check reports a mismatch",
+      "script": "printf 'a\\n' > /tmp/c; printf '%064d  /tmp/c\\n' 0 | sha256sum -c; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: base32 missing file",
+      "script": "base32 /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: base64 invalid input",
+      "script": "printf '!!!' | base64 -d; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: basenc without an encoding",
+      "script": "basenc </dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: nl missing file",
+      "script": "nl /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: paste missing file",
+      "script": "paste /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: fold missing file",
+      "script": "fold /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: fold invalid width",
+      "script": "echo x | fold -w 0x; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: fmt missing file",
+      "script": "fmt /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: expand missing file",
+      "script": "expand /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: unexpand missing file",
+      "script": "unexpand /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: comm missing file",
+      "script": "printf 'a\\n' > /tmp/a; comm /tmp/a /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: tsort missing file",
+      "script": "tsort /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: tsort odd token count",
+      "script": "echo a b c | tsort; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: csplit missing file",
+      "script": "csplit /nope 1; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: shuf missing file",
+      "script": "shuf /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: expr syntax error",
+      "script": "expr 1 +; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: expr non-integer",
+      "script": "expr a + 1; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: expr false result",
+      "script": "expr 0; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: factor invalid number",
+      "script": "factor x; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: numfmt invalid number",
+      "script": "numfmt x; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: date invalid date",
+      "script": "date -d 'not a date'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: rmdir missing directory",
+      "script": "rmdir /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: rmdir non-empty directory",
+      "script": "mkdir -p /tmp/d/e; rmdir /tmp/d; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: unlink missing file",
+      "script": "unlink /nope; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: link missing operand",
+      "script": "link /tmp; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: realpath -e missing path",
+      "script": "realpath -e /nope/x; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: readlink on a regular file",
+      "script": "touch /tmp/r; readlink /tmp/r; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: truncate without a size",
+      "script": "truncate /tmp/t; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: mktemp in a missing directory",
+      "script": "mktemp /nope/XXXXXX; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: env unset needs a name",
+      "script": "env -u; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: env unknown option",
+      "script": "env --bogus; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: touch invalid date",
+      "script": "touch -d 'not a date' /tmp/x; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: rm directory without -r",
+      "script": "mkdir -p /tmp/rd; rm /tmp/rd; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: mv renames a file",
+      "script": "printf x > /tmp/m1; mv /tmp/m1 /tmp/m2; cat /tmp/m2; ls /tmp/m1 2>/dev/null; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: mv into a directory",
+      "script": "mkdir -p /tmp/md; printf y > /tmp/m3; mv /tmp/m3 /tmp/md/; cat /tmp/md/m3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: mv missing source",
+      "script": "mv /nope /tmp/x; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: mv one operand keeps the shell alive",
+      "script": "mv /tmp; echo status=$?; echo survived",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: mktemp unknown option keeps the shell alive",
+      "script": "mktemp --bogus; echo status=$?; echo survived",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: env unknown option with a command keeps the shell alive",
+      "script": "env --bogus true; echo status=$?; echo survived",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "coreutils errors: uniq unknown option keeps the shell alive",
+      "script": "uniq --bogus </dev/null; echo status=$?; echo survived",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

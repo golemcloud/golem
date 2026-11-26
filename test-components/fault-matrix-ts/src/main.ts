@@ -8,7 +8,9 @@ import {
   createPromise,
   defineAgent,
   method,
+  ok,
   s,
+  toolDefinition,
   Uuid,
 } from "@golemcloud/golem-ts-sdk";
 import type { PromiseId } from "golem:api/host@1.5.0";
@@ -132,3 +134,36 @@ export const FaultMatrixFixtureImpl = FaultMatrixFixture.implement({
     },
   },
 });
+
+const recordBytes = (run: number, seq: number) => {
+  const bytes = new Uint8Array(4);
+  new DataView(bytes.buffer).setUint32(0, record(run, seq));
+  return bytes;
+};
+
+toolDefinition("fault-matrix")
+  .version("1.0.0")
+  .command("produce", (produce) =>
+    produce.body((body) =>
+      body
+        .positional("run", U32)
+        .positional("count", U32)
+        .positional("pause-after", U32)
+        .positional("gate", PromiseIdSchema)
+        .stdout({ required: true })
+        .returns(U32),
+    ),
+  )
+  .implement({
+    produce: async ({ run, count, pauseAfter, gate }, context) => {
+      const stdout = context.stdout.getWriter();
+      for (let seq = 1; seq <= count; seq++) {
+        if (seq === pauseAfter + 1) {
+          await awaitPromise(gate as unknown as PromiseId);
+        }
+        await stdout.write(recordBytes(run, seq));
+      }
+      await stdout.close();
+      return ok(count);
+    },
+  });

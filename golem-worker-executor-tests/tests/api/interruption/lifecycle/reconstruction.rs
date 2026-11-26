@@ -473,12 +473,12 @@ mod post_export {
         tokio::time::timeout(Duration::from_secs(10), request)
             .await
             .context("spawned HTTP request entered held handler")??;
-        let (started, chunk) = pending_tail(&worker, &stored_key).await?;
+        let (started, finished, chunk) = pending_tail(&worker, &stored_key).await?;
         let prefix = executor.stored_oplog(&id.agent_id).await;
         limits.initialize_account(context.account_id).await?;
         let admitted_revision = registry.current_limits().monthly_policy_revision;
         eprintln!(
-            "[monthly-tail] method Start={started}, HTTP chunk Start={chunk}, response body held"
+            "[monthly-tail] method Start={started}, Finished={finished}, HTTP chunk Start={chunk}, response body held"
         );
 
         let (selected, release_outcome) = executor
@@ -500,7 +500,10 @@ mod post_export {
             Some(registry.current_limits().monthly_policy_revision)
         );
         assert!(matches!(cause, InterruptKind::Suspend(_)));
-        assert_eq!(pending_tail(&worker, &stored_key).await?, (started, chunk));
+        assert_eq!(
+            pending_tail(&worker, &stored_key).await?,
+            (started, finished, chunk)
+        );
         let mut receipt = published_interrupt_receipt(worker.as_ref()).await?;
         assert!(matches!(
             receipt.try_recv(),
@@ -566,12 +569,19 @@ mod post_export {
                 .count(),
             2
         );
+        // The constructor's result and the method's result, recorded at its export's return.
         assert_eq!(
             stopped
                 .values()
                 .filter(|e| matches!(e, OplogEntry::AgentInvocationFinished { .. }))
                 .count(),
-            1
+            2
+        );
+        assert!(
+            !stopped.values().any(|e| matches!(e,
+                OplogEntry::AgentInvocationSettled { invocation_id, .. } if invocation_id == &stored_key
+            )),
+            "the stop retired the drain before it settled"
         );
         assert_eq!(
             stopped
@@ -585,10 +595,19 @@ mod post_export {
                 .values()
                 .any(|e| matches!(e, OplogEntry::Error { .. } | OplogEntry::Interrupted { .. }))
         );
-        assert!(!stopped.range(started.next()..).any(|(_, e)| matches!(
-            e,
-            OplogEntry::AgentInvocationFinished { .. } | OplogEntry::Cancelled { .. }
-        )));
+        assert_eq!(
+            stopped
+                .range(started.next()..)
+                .filter(|(_, e)| matches!(e, OplogEntry::AgentInvocationFinished { .. }))
+                .map(|(index, _)| *index)
+                .collect::<Vec<_>>(),
+            vec![finished]
+        );
+        assert!(
+            !stopped
+                .range(started.next()..)
+                .any(|(_, e)| matches!(e, OplogEntry::Cancelled { .. }))
+        );
         assert!(
             !stopped.values().any(|e| matches!(e,
                 OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. }
@@ -604,17 +623,20 @@ mod post_export {
         limits.run_batch_for_test().await;
         assert_eq!(registry.applied_memory_byte_nanoseconds(), usage);
         eprintln!(
-            "[monthly-tail] cleanup joined, receipt once, one Suspend, keyed method unfinished, no false HTTP cancellation, tail inactive, permit released, settled byte-nanoseconds={usage}; oplog={stopped:#?}"
+            "[monthly-tail] cleanup joined, receipt once, one Suspend, keyed method's drain unsettled, no false HTTP cancellation, tail inactive, permit released, settled byte-nanoseconds={usage}; oplog={stopped:#?}"
         );
         server_shutdown.cancel();
         tokio::time::timeout(Duration::from_secs(10), server).await???;
         Ok(())
     }
 
+    /// Waits for the committed method `Start`, its `Finished` recorded at the export's return,
+    /// and the spawned task's open HTTP body chunk `Start` after it, before the invocation
+    /// settles.
     async fn pending_tail(
         worker: &Worker<Context>,
         key: &golem_common::model::InvocationId,
-    ) -> anyhow::Result<(OplogIndex, OplogIndex)> {
+    ) -> anyhow::Result<(OplogIndex, OplogIndex, OplogIndex)> {
         tokio::time::timeout(Duration::from_secs(10), async {
         loop {
             let oplog = worker.oplog();
@@ -626,21 +648,32 @@ mod post_export {
                 _ => None,
             }).collect::<Vec<_>>();
             if let [started] = starts.as_slice() {
-                assert!(!entries.range(started.next()..).any(|(_, e)| matches!(e, OplogEntry::AgentInvocationFinished { .. })));
+                let finishes = entries.range(started.next()..).filter_map(|(index, entry)| match entry {
+                    OplogEntry::AgentInvocationFinished { invocation_id, awaits_settlement, .. } => {
+                        assert_eq!(invocation_id, key);
+                        assert!(*awaits_settlement);
+                        Some(*index)
+                    }
+                    _ => None,
+                }).collect::<Vec<_>>();
+                assert!(!entries.values().any(|entry| matches!(entry,
+                    OplogEntry::AgentInvocationSettled { invocation_id, .. } if invocation_id == key
+                )));
                 let chunks = entries.range(started.next()..).filter_map(|(index, entry)| match entry {
                     OplogEntry::Start { function_name, .. } if function_name.to_string() == "http::types::response::consume-body-chunk" => Some(*index),
                     _ => None,
                 }).collect::<Vec<_>>();
-                if let [chunk] = chunks.as_slice() {
+                if let ([finished], [chunk]) = (finishes.as_slice(), chunks.as_slice()) {
+                    assert!(finished < chunk, "the result is recorded before the spawned body read");
                     assert!(!entries.values().any(|entry| matches!(entry,
                         OplogEntry::End { start_index, .. } | OplogEntry::Cancelled { start_index, .. }
                             if start_index == chunk
                     )));
-                    return Ok((*started, *chunk));
+                    return Ok((*started, *finished, *chunk));
                 }
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
         }
-    }).await.context("committed method and HTTP Starts without Finished or HTTP terminal")?
+    }).await.context("committed method Start, its Finished and the HTTP chunk Start, without Settled or HTTP terminal")?
     }
 }

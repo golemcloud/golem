@@ -41,33 +41,27 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
     @endpoint("GET", "/latest") def latest(): String
   }
 
-  @agentDefinition(mount = "/c/{customer}/{instance}", phantomIdPath = "instance")
+  @agentDefinition(
+    mount = "/c/{instance}",
+    agentIdPath = "instance",
+    createRoute = "/{agent-type}/create",
+    exposeFiles = Array(("/*", "/public/$1"))
+  )
   trait SelectedPath {
     class Id(val customer: String)
     @endpoint("GET", "/read") def read(): String
   }
-  @agentDefinition(mount = "/c/{customer}/{instance}", phantomIdPath = "instance", phantomIdOptional = true)
-  trait OptionalPath {
-    class Id(val customer: String)
-    @endpoint("GET", "/read") def read(): String
-  }
-  @agentDefinition(mount = "/c/{customer}", phantomIdQuery = "instance")
+  @agentDefinition(mount = "/c", agentIdQuery = "instance", createRoute = "/c/create")
   trait SelectedQuery {
     class Id(val customer: String)
     @endpoint("GET", "/read") def read(): String
   }
-  @agentDefinition(mount = "/c/{customer}", phantomIdQuery = "instance", phantomIdOptional = true)
-  trait OptionalQuery {
-    class Id(val customer: String)
-    @endpoint("GET", "/read") def read(): String
-  }
-
-  @agentDefinition(mount = "/c/{customer}", phantomIdQuery = " instance ")
+  @agentDefinition(mount = "/c", agentIdQuery = " instance ")
   trait PaddedQuery {
     class Id(val customer: String)
     @endpoint("GET", "/read") def read(): String
   }
-  @agentDefinition(mount = "/c/{customer}", phantomIdQuery = " ", phantomAgent = true)
+  @agentDefinition(mount = "/c", agentIdQuery = " ")
   trait WhitespaceQuery {
     class Id(val customer: String)
     @endpoint("GET", "/read") def read(): String
@@ -146,46 +140,70 @@ object HttpRouterMacroSpec extends ZIOSpecDefault {
       val padded     = AgentDefinitionMacro.generateWire[PaddedQuery]
       val whitespace = AgentDefinitionMacro.generateWire[WhitespaceQuery]
       assertTrue(
-        padded.httpMount.get.phantomIdBinding.contains(PhantomIdBinding.Query(" instance ")),
-        whitespace.httpMount.get.phantomIdBinding.contains(PhantomIdBinding.Query(" ")),
-        whitespace.httpMount.get.phantomAgent
+        padded.httpMount.get.agentIdBinding.contains(AgentIdBinding.Query(" instance ")),
+        whitespace.httpMount.get.agentIdBinding.contains(AgentIdBinding.Query(" "))
       )
     },
     test("selector annotations survive compiled wire metadata without constructor arguments") {
-      val path          = AgentDefinitionMacro.generateWire[SelectedPath]
-      val optionalPath  = AgentDefinitionMacro.generateWire[OptionalPath]
-      val query         = AgentDefinitionMacro.generateWire[SelectedQuery]
-      val optionalQuery = AgentDefinitionMacro.generateWire[OptionalQuery]
+      val path  = AgentDefinitionMacro.generateWire[SelectedPath]
+      val query = AgentDefinitionMacro.generateWire[SelectedQuery]
       assertTrue(
-        path.httpMount.get.phantomIdBinding.contains(PhantomIdBinding.Path("instance")),
-        optionalPath.httpMount.get.phantomIdBinding.contains(PhantomIdBinding.Path("instance", true)),
-        query.httpMount.get.phantomIdBinding.contains(PhantomIdBinding.Query("instance")),
-        optionalQuery.httpMount.get.phantomIdBinding.contains(PhantomIdBinding.Query("instance", true))
+        path.httpMount.get.agentIdBinding.contains(AgentIdBinding.Path("instance")),
+        path.httpMount.get.createRoute
+          .contains(List(PathSegment.SystemVariable("agent-type"), PathSegment.Literal("create"))),
+        path.httpMount.get.filesystemBindings.nonEmpty,
+        query.httpMount.get.agentIdBinding.contains(AgentIdBinding.Query("instance")),
+        query.httpMount.get.createRoute.contains(List(PathSegment.Literal("c"), PathSegment.Literal("create")))
       )
     },
-    test("phantom selectors reject ambiguous ownership and restricted modes at compile time") {
+    test("ID bindings reject ambiguous ownership and restricted modes at compile time") {
       val extra: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
         import golem.runtime.annotations.*
-        @agentDefinition(mount="/c/{instance}/{other}", phantomIdPath="instance")
+        @agentDefinition(mount="/c/{instance}/{other}", agentIdPath="instance")
         trait A { class Id(); @endpoint("GET", "/read") def read(): String }
         golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
       """)
       val conflict: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
         import golem.runtime.annotations.*
-        @agentDefinition(mount="/c/{instance}", phantomIdPath="instance")
+        @agentDefinition(mount="/c/{instance}", agentIdPath="instance", phantomAgent=true)
         trait A { class Id(val instance: String); @endpoint("GET", "/read") def read(): String }
         golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
       """)
       val ephemeral: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
         import golem.runtime.annotations.*
-        @agentDefinition(mount="/c", phantomIdQuery="instance", mode=DurabilityMode.Ephemeral)
+        @agentDefinition(mount="/c", agentIdQuery="instance", mode=DurabilityMode.Ephemeral)
         trait A { class Id(); @endpoint("GET", "/read") def read(): String }
         golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
       """)
       assertTrue(
-        extra.exists(_.message.contains("other")),
-        conflict.exists(_.message.contains("constructor parameter")),
+        extra.exists(_.message.contains("constructor bindings")),
+        conflict.exists(_.message.contains("phantomAgent")),
         ephemeral.exists(_.message.contains("durable"))
+      )
+    },
+    test("create declarations and implicit query collisions fail during wire generation") {
+      val keyed: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/c/{customer}", createRoute="/c/create")
+        trait A { class Id(val customer: String) }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      val capture: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/c", agentIdQuery="id", createRoute="/c/{id}")
+        trait A { class Id(val customer: String) }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      val implicitQuery: List[scala.compiletime.testing.Error] = scala.compiletime.testing.typeCheckErrors("""
+        import golem.runtime.annotations.*
+        @agentDefinition(mount="/c", agentIdQuery="id")
+        trait A { class Id(val customer: String); @endpoint("GET", "/read") def read(id: String): String }
+        golem.runtime.macros.AgentDefinitionMacro.generateWire[A]
+      """)
+      assertTrue(
+        keyed.exists(_.message.contains("requires an agent ID binding")),
+        capture.exists(_.message.contains("literal and system")),
+        implicitQuery.exists(_.message.contains("conflicts"))
       )
     },
     test("combined router uses normal named methods and ordered mappings") {

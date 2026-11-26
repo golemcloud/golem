@@ -412,7 +412,7 @@ impl ResourceLimitsGrpc {
                 .store(updated_limits.oplog_writes_per_second, Ordering::Release);
             entry
                 .last_refresh_secs
-                .store(Utc::now().timestamp(), Ordering::Release);
+                .store(jiff::Timestamp::now().as_second(), Ordering::Release);
         }
     }
 
@@ -455,6 +455,7 @@ impl ResourceLimitsGrpc {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ResourceLimits for ResourceLimitsGrpc {
     async fn initialize_account(
         &self,

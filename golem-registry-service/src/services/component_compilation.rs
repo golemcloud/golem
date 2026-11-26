@@ -21,6 +21,7 @@ use golem_api_grpc::proto::golem::componentcompilation::v1::{
 use golem_common::base_model::api::error_code::INTERNAL_COMPILATION_QUEUE_FULL;
 use golem_common::model::component::ComponentId;
 use golem_common::model::component::ComponentRevision;
+use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::grpc::client::GrpcClient;
 use std::fmt::{Debug, Formatter};
@@ -38,6 +39,7 @@ pub trait ComponentCompilationService: Debug + Send + Sync {
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
+        wasm_hash: Hash,
     );
 
     fn set_own_grpc_port(&self, grpc_port: u16);
@@ -88,12 +90,14 @@ impl Debug for GrpcComponentCompilationService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentCompilationService for GrpcComponentCompilationService {
     async fn enqueue_compilation(
         &self,
         environment_id: EnvironmentId,
         component_id: ComponentId,
         component_revision: ComponentRevision,
+        wasm_hash: Hash,
     ) {
         let component_service_port = match self.own_grpc_port.load(Ordering::Acquire) {
             0 => None,
@@ -107,6 +111,7 @@ impl ComponentCompilationService for GrpcComponentCompilationService {
                     component_revision: component_revision.into(),
                     component_service_port,
                     environment_id: Some(environment_id.into()),
+                    wasm_hash: Some(wasm_hash.into()),
                 };
 
                 client.enqueue_compilation(request).await
@@ -161,12 +166,14 @@ impl Debug for DisabledComponentCompilationService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl ComponentCompilationService for DisabledComponentCompilationService {
     async fn enqueue_compilation(
         &self,
         _environment_id: EnvironmentId,
         _component_id: ComponentId,
         _component_revision: ComponentRevision,
+        _wasm_hash: Hash,
     ) {
     }
     fn set_own_grpc_port(&self, _grpc_port: u16) {}
@@ -193,6 +200,7 @@ mod tests {
     struct CompilationServer;
 
     #[async_trait]
+    #[golem_async_trait::region_simple]
     impl GrpcService for CompilationServer {
         async fn enqueue_compilation(
             &self,
@@ -273,6 +281,7 @@ mod tests {
                     EnvironmentId::new(),
                     ComponentId::new(),
                     ComponentRevision::new(revision).unwrap(),
+                    Hash::empty(),
                 ),
             )
             .await
@@ -300,6 +309,7 @@ mod tests {
                 EnvironmentId::new(),
                 ComponentId::new(),
                 ComponentRevision::INITIAL,
+                Hash::empty(),
             ),
         )
         .await

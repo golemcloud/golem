@@ -803,29 +803,33 @@ async fn postgres_create_insert_select_test(
 
         if i % 2 == 0 {
             let tstzbounds = ValuesRange::new(
-                Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2023, 3, 2 + i as u32).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                    chrono::Utc,
-                )),
-                Bound::Excluded(chrono::DateTime::from_naive_utc_and_offset(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2024, 1, 1 + i as u32).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                    chrono::Utc,
-                )),
+                Bound::Included(
+                    jiff::civil::DateTime::from_parts(
+                        jiff::civil::Date::new(2023, 3, (2 + i as u32) as i8).unwrap(),
+                        jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                    )
+                    .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                    .unwrap()
+                    .timestamp(),
+                ),
+                Bound::Excluded(
+                    jiff::civil::DateTime::from_parts(
+                        jiff::civil::Date::new(2024, 1, (1 + i as u32) as i8).unwrap(),
+                        jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                    )
+                    .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                    .unwrap()
+                    .timestamp(),
+                ),
             );
             let tsbounds = ValuesRange::new(
-                Bound::Included(chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2022, 2, 2 + i as u32).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
+                Bound::Included(jiff::civil::DateTime::from_parts(
+                    jiff::civil::Date::new(2022, 2, (2 + i as u32) as i8).unwrap(),
+                    jiff::civil::Time::new(16, 50, 30, 0).unwrap(),
                 )),
-                Bound::Excluded(chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2024, 1, 1 + i as u32).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                Bound::Excluded(jiff::civil::DateTime::from_parts(
+                    jiff::civil::Date::new(2024, 1, (1 + i as u32) as i8).unwrap(),
+                    jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
                 )),
             );
 
@@ -845,23 +849,25 @@ async fn postgres_create_insert_select_test(
                 postgres_types::DbValue::Text("text".to_string()),
                 postgres_types::DbValue::Varchar("varchar".to_string()),
                 postgres_types::DbValue::Bpchar("0123456789".to_string()),
-                postgres_types::DbValue::Timestamp(chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                postgres_types::DbValue::Timestamp(jiff::civil::DateTime::from_parts(
+                    jiff::civil::Date::new(2023, 1, 1).unwrap(),
+                    jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
                 )),
-                postgres_types::DbValue::Timestamptz(chrono::DateTime::from_naive_utc_and_offset(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                    chrono::Utc,
-                )),
-                postgres_types::DbValue::Date(chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap()),
-                postgres_types::DbValue::Time(chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap()),
-                postgres_types::DbValue::Timetz(TimeTz::new(
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    chrono::FixedOffset::west_opt(3 * 60 * 60).unwrap(),
-                )),
+                postgres_types::DbValue::Timestamptz(
+                    jiff::civil::DateTime::from_parts(
+                        jiff::civil::Date::new(2026, 1, 1).unwrap(),
+                        jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                    )
+                    .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                    .unwrap()
+                    .timestamp(),
+                ),
+                postgres_types::DbValue::Date(jiff::civil::Date::new(2023, 1, 1).unwrap()),
+                postgres_types::DbValue::Time(jiff::civil::Time::new(10, 20, 30, 0).unwrap()),
+                postgres_types::DbValue::Timetz(TimeTz {
+                    time: jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                    offset: 3 * 60 * 60,
+                }),
                 postgres_types::DbValue::Interval(Interval::new(10, 20, 30)),
                 postgres_types::DbValue::Bytea("bytea".as_bytes().to_vec()),
                 postgres_types::DbValue::Uuid(Uuid::new_v4()),
@@ -905,7 +911,7 @@ async fn postgres_create_insert_select_test(
                 postgres_types::DbValue::Tstzrange(tstzbounds),
                 postgres_types::DbValue::Daterange(ValuesRange::new(
                     Bound::Included(
-                        chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 2, 3).unwrap(),
+                        jiff::civil::Date::new((2023 + i as i32) as i16, 2, 3).unwrap(),
                     ),
                     Bound::Unbounded,
                 )),
@@ -1593,29 +1599,33 @@ async fn postgres_create_insert_select_array_test(
 
         if i % 2 == 0 {
             let tstzbounds = ValuesRange::new(
-                Bound::Included(chrono::DateTime::from_naive_utc_and_offset(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2023, 3, 2 + i as u32).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                    chrono::Utc,
-                )),
-                Bound::Excluded(chrono::DateTime::from_naive_utc_and_offset(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2024, 1, 1 + i as u32).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                    chrono::Utc,
-                )),
+                Bound::Included(
+                    jiff::civil::DateTime::from_parts(
+                        jiff::civil::Date::new(2023, 3, (2 + i as u32) as i8).unwrap(),
+                        jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                    )
+                    .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                    .unwrap()
+                    .timestamp(),
+                ),
+                Bound::Excluded(
+                    jiff::civil::DateTime::from_parts(
+                        jiff::civil::Date::new(2024, 1, (1 + i as u32) as i8).unwrap(),
+                        jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                    )
+                    .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                    .unwrap()
+                    .timestamp(),
+                ),
             );
             let tsbounds = ValuesRange::new(
-                Bound::Included(chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2022, 2, 2 + i as u32).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(16, 50, 30).unwrap(),
+                Bound::Included(jiff::civil::DateTime::from_parts(
+                    jiff::civil::Date::new(2022, 2, (2 + i as u32) as i8).unwrap(),
+                    jiff::civil::Time::new(16, 50, 30, 0).unwrap(),
                 )),
-                Bound::Excluded(chrono::NaiveDateTime::new(
-                    chrono::NaiveDate::from_ymd_opt(2024, 1, 1 + i as u32).unwrap(),
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                Bound::Excluded(jiff::civil::DateTime::from_parts(
+                    jiff::civil::Date::new(2024, 1, (1 + i as u32) as i8).unwrap(),
+                    jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
                 )),
             );
 
@@ -1650,30 +1660,30 @@ async fn postgres_create_insert_select_array_test(
                     "0123456789".to_string(),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timestamp(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    jiff::civil::DateTime::from_parts(
+                        jiff::civil::Date::new(2023, 1, 1).unwrap(),
+                        jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
                     ),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timestamptz(
-                    chrono::DateTime::from_naive_utc_and_offset(
-                        chrono::NaiveDateTime::new(
-                            chrono::NaiveDate::from_ymd_opt(2026, 1, 1).unwrap(),
-                            chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                        ),
-                        chrono::Utc,
-                    ),
+                    jiff::civil::DateTime::from_parts(
+                        jiff::civil::Date::new(2026, 1, 1).unwrap(),
+                        jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                    )
+                    .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                    .unwrap()
+                    .timestamp(),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Date(
-                    chrono::NaiveDate::from_ymd_opt(2023, 1, 1).unwrap(),
+                    jiff::civil::Date::new(2023, 1, 1).unwrap(),
                 )]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Time(
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
+                    jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
                 )]),
-                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timetz(TimeTz::new(
-                    chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    chrono::FixedOffset::east_opt(5 * 60 * 60).unwrap(),
-                ))]),
+                postgres_types::DbValue::Array(vec![postgres_types::DbValue::Timetz(TimeTz {
+                    time: jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                    offset: -5 * 60 * 60,
+                })]),
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Interval(
                     Interval::new(10, 20, 30),
                 )]),
@@ -1734,7 +1744,7 @@ async fn postgres_create_insert_select_array_test(
                 postgres_types::DbValue::Array(vec![postgres_types::DbValue::Daterange(
                     ValuesRange::new(
                         Bound::Included(
-                            chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 2, 3).unwrap(),
+                            jiff::civil::Date::new((2023 + i as i32) as i16, 2, 3).unwrap(),
                         ),
                         Bound::Unbounded,
                     ),
@@ -2518,22 +2528,26 @@ async fn mysql_create_insert_select_test(
                 mysql_types::DbValue::Double(7.0),
                 mysql_types::DbValue::Decimal(BigDecimal::from_str("80.00").unwrap()),
                 mysql_types::DbValue::Date(
-                    chrono::NaiveDate::from_ymd_opt(2030 + i as i32, 10, 12).unwrap(),
+                    jiff::civil::Date::new((2030 + i as i32) as i16, 10, 12).unwrap(),
                 ),
-                mysql_types::DbValue::Datetime(chrono::DateTime::from_naive_utc_and_offset(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 1, 1).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                    chrono::Utc,
-                )),
-                mysql_types::DbValue::Timestamp(chrono::DateTime::from_naive_utc_and_offset(
-                    chrono::NaiveDateTime::new(
-                        chrono::NaiveDate::from_ymd_opt(2023 + i as i32, 1, 1).unwrap(),
-                        chrono::NaiveTime::from_hms_opt(10, 20, 30).unwrap(),
-                    ),
-                    chrono::Utc,
-                )),
+                mysql_types::DbValue::Datetime(
+                    jiff::civil::DateTime::from_parts(
+                        jiff::civil::Date::new((2023 + i as i32) as i16, 1, 1).unwrap(),
+                        jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                    )
+                    .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                    .unwrap()
+                    .timestamp(),
+                ),
+                mysql_types::DbValue::Timestamp(
+                    jiff::civil::DateTime::from_parts(
+                        jiff::civil::Date::new((2023 + i as i32) as i16, 1, 1).unwrap(),
+                        jiff::civil::Time::new(10, 20, 30, 0).unwrap(),
+                    )
+                    .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                    .unwrap()
+                    .timestamp(),
+                ),
                 mysql_types::DbValue::Fixchar("0123456789".to_string()),
                 mysql_types::DbValue::Varchar(format!("name-{}", Uuid::new_v4())),
                 mysql_types::DbValue::Tinytext("Tinytext".to_string()),
@@ -2563,7 +2577,7 @@ async fn mysql_create_insert_select_test(
                 mysql_types::DbValue::IntUnsigned(40),
                 mysql_types::DbValue::BigintUnsigned(50),
                 mysql_types::DbValue::Year(2020),
-                mysql_types::DbValue::Time(chrono::NaiveTime::from_hms_opt(1, 20, 30).unwrap()),
+                mysql_types::DbValue::Time(jiff::civil::Time::new(1, 20, 30, 0).unwrap()),
             ]);
         } else {
             for _ in 0..34 {
@@ -3143,6 +3157,86 @@ async fn postgres_connection_err_test(rdbms_service: &RdbmsServiceDefault) {
         ),
     )
     .await
+}
+
+#[test]
+async fn postgres_temporal_decoding_rejects_out_of_range_values(
+    postgres: &DockerPostgresRdb,
+    rdbms_service: &RdbmsServiceDefault,
+) {
+    let rdbms = rdbms_service.postgres();
+    let agent_id = new_agent_id();
+    let key = rdbms
+        .create(&postgres.public_connection_string(), &agent_id)
+        .await
+        .unwrap();
+
+    for expression in [
+        "'10000-01-01'::date",
+        "'10000-01-01'::timestamp",
+        "'10000-01-01 UTC'::timestamptz",
+        "ARRAY['10000-01-01'::date]",
+        "ARRAY['10000-01-01'::timestamp]",
+        "ARRAY['10000-01-01 UTC'::timestamptz]",
+        "daterange('10000-01-01', NULL)",
+        "tsrange('10000-01-01', NULL)",
+        "tstzrange('10000-01-01 UTC', NULL)",
+        "ARRAY[daterange(NULL, '10000-01-01')]",
+        "ARRAY[tsrange(NULL, '10000-01-01')]",
+        "ARRAY[tstzrange(NULL, '10000-01-01 UTC')]",
+        "'infinity'::date",
+        "'-infinity'::timestamp",
+    ] {
+        let statement = format!("SELECT {expression}");
+        let result = rdbms.query(&key, &agent_id, &statement, vec![]).await;
+        assert!(
+            matches!(&result, Err(RdbmsError::QueryResponseFailure(_))),
+            "{statement} must return a response error, got {result:?}"
+        );
+    }
+
+    for expression in [
+        "'1969-12-31 23:59:59.999999'::timestamp",
+        "ARRAY['1969-12-31 23:59:59.999999 UTC'::timestamptz]",
+        "daterange('1969-12-31', NULL)",
+        "ARRAY[tsrange(NULL, '1969-12-31 23:59:59.999999')]",
+        "'empty'::tstzrange",
+        "NULL::date, NULL::timestamp, NULL::daterange",
+    ] {
+        let statement = format!("SELECT {expression}");
+        let result = rdbms.query(&key, &agent_id, &statement, vec![]).await;
+        assert!(result.is_ok(), "{statement} must decode, got {result:?}");
+    }
+    assert!(rdbms.remove(&key, &agent_id).await);
+}
+
+#[test]
+async fn postgres_repository_datetime_decoding_rejects_out_of_range_values(
+    postgres: &DockerPostgresRdb,
+) {
+    use golem_service_base::repo::SqlDateTime;
+
+    let pool = sqlx::PgPool::connect(&postgres.public_connection_string())
+        .await
+        .unwrap();
+    for expression in ["'10000-01-01'::timestamp", "'infinity'::timestamp"] {
+        let result = sqlx::query_scalar::<_, SqlDateTime>(&format!("SELECT {expression}"))
+            .fetch_one(&pool)
+            .await;
+        assert!(
+            matches!(&result, Err(sqlx::Error::ColumnDecode { .. })),
+            "{expression} must return a decode error, got {result:?}"
+        );
+    }
+    let actual: SqlDateTime = sqlx::query_scalar("SELECT '1969-12-31 23:59:59.999999'::timestamp")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        actual.into_utc(),
+        jiff::Timestamp::from_nanosecond(-1_000).unwrap()
+    );
+    pool.close().await;
 }
 
 #[test]

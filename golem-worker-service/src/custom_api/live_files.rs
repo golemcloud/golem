@@ -10,12 +10,12 @@ use super::error::RequestHandlerError;
 use super::file_response::{FileRequest, representation_headers, verified_stream};
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RichRequest, RouteExecutionResult};
-use crate::service::worker::{WorkerService, WorkerServiceError};
+use crate::service::worker::{AgentBinding, WorkerService, WorkerServiceError};
 use bytes::Bytes;
 use futures::{StreamExt, stream::BoxStream};
 use golem_common::model::agent::ParsedAgentKey;
-use golem_common::model::component::ComponentId;
 use golem_common::model::filesystem::{FileByteSelection, FileReadHead};
+use golem_service_base::custom_api::MountAgent;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use http::{HeaderMap, HeaderValue, Method, StatusCode, header};
 use std::io;
@@ -27,8 +27,9 @@ pub(super) async fn serve(
     worker: &WorkerService,
     request: &RichRequest,
     selected: &ResolvedRouteEntry,
-    component_id: ComponentId,
-    constructor: &ParsedAgentKey,
+    agent: &MountAgent,
+    constructor: Option<&ParsedAgentKey>,
+    binding: AgentBinding,
     path: &str,
     directory_request: bool,
     deadline: Instant,
@@ -50,8 +51,10 @@ pub(super) async fn serve(
     };
     let read = match worker
         .read_mounted_file(
-            component_id,
+            agent.component_id,
+            &agent.agent_type,
             constructor,
+            binding,
             path,
             selection,
             selected.route.environment_id,
@@ -66,6 +69,9 @@ pub(super) async fn serve(
             }),
         ) => {
             return Err(RequestHandlerError::AgentInvocationFailed(error));
+        }
+        Err(WorkerServiceError::AgentNotFound(_)) => {
+            return Ok(Some(empty_response(StatusCode::NOT_FOUND)));
         }
         Err(error) => return Err(RequestHandlerError::InternalError(error.into())),
     };
