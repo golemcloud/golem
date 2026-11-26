@@ -12,10 +12,12 @@ const removed: [string, RegExp][] = [
   ["Effect principal schema", /\bPrincipalSchema\b/],
   ["Effect principal service", /\bPrincipal\.Principal\b/],
   ["principal field of a context", /\b(ctx|context|init|initContext|InitContext|ic)\.principal\b/],
+  ["principal field of the init context", /\bInitContext\b[^{}\n]{0,8}\{[^}]*\bprincipal\b/],
   ["Go principal accessor", /\bPrincipal\(\)/],
   ["principal cache flag", /\buses[-_]?[Pp]rincipal\b/],
-  ["principal parameter", /\b\w+\s*:\s*&?(golem\.|@\w+\.)?Principal\b(?![.\w])/],
+  ["principal parameter", /\b\w+\s*:\s*&?(golem\.|@\w+\.|(\w+::)+)?Principal\b(?![.\w])/],
   ["Go principal field", /^\s*\w+\s+golem\.Principal\b/m],
+  ["Go principal field in a one-line struct", /\bstruct\s*\{[^}]*\b\w+\s+golem\.Principal\b/],
   ["injected principal", /\binjected\s+`?(golem\.|@\w+\.)?Principal\b/i],
   ["skipped principal field", /\b(skip|exclude|excluding)\s+`?(golem\.|@\w+\.)?Principal`?\s+fields?\b/i],
   ["per-principal cache", /\bper-principal\b/i],
@@ -68,6 +70,9 @@ test("the removed-API patterns match the 1.6 shapes and spare the 2.0 ones", () 
     "There is no `uses_principal` option.",
     "Skip `golem.Principal` fields: the host fills them.",
     "## Per-principal caching",
+    "fn my_visible_items(&self, principal: golem_rust::agentic::Principal) -> Vec<Item>;",
+    "| Audit | `type AuditIn struct{ Principal golem.Principal; Note string }` |",
+    "`init` receives an `InitContext` (`{ id, principal, config }`).",
   ]) {
     expect({ line, matches: matches(line) }).toEqual({ line, matches: true })
   }
@@ -83,6 +88,8 @@ test("the removed-API patterns match the 1.6 shapes and spare the 2.0 ones", () 
     "A `Principal` or a `Caller` cannot be a method input or result.",
     "`original caller:` is the principal that started the chain of calls",
     "case user: Principal.User => user.subject",
+    "`init` receives an `InitContext` (`{ id, config, caller }`).",
+    "func checkRateLimit(who golem.Principal) error {",
   ]) {
     expect({ line, matches: matches(line) }).toEqual({ line, matches: false })
   }
