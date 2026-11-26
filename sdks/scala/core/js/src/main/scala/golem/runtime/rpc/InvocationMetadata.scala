@@ -12,32 +12,7 @@ package golem.runtime.rpc
 
 import golem.{AgentId, InvocationId}
 
-import scala.concurrent.Future
-
 final case class InvocationMetadata(agentId: AgentId, invocationId: InvocationId)
 
+/** The result of an awaited invocation together with its final identity. */
 final case class InvocationResult[+A](metadata: InvocationMetadata, value: A)
-
-final case class InvocationReceipt(metadata: InvocationMetadata)
-
-private[rpc] final case class AsyncInvocation[+A](
-  metadata: Option[InvocationMetadata],
-  result: Future[A],
-  cancellationToken: CancellationToken
-)
-
-/**
- * A started asynchronous invocation. `metadata` is `None` when the host
- * rejected the call before it started; `result` then fails with the rejection
- * error.
- */
-final case class CancelableAsyncInvocation[+A](
-  metadata: Option[InvocationMetadata],
-  result: Future[A],
-  cancellationToken: CancellationToken
-)
-
-final case class CancelableInvocationReceipt(
-  metadata: InvocationMetadata,
-  cancellationToken: CancellationToken
-)

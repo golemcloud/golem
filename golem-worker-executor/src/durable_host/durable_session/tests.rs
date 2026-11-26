@@ -3421,6 +3421,19 @@ struct AttachedProducerRpc {
 #[async_trait::async_trait]
 #[golem_async_trait::region_simple]
 impl Rpc for AttachedProducerRpc {
+    async fn invocation_handle(
+        &self,
+        _invocation_id: &golem_common::model::OwnedInvocationId,
+        _caller: &golem_common::model::caller::Principal,
+        _operation: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation,
+        _auth: &AuthCtx,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        WorkerExecutorError,
+    > {
+        unreachable!("test RPC only serves attached stream segments")
+    }
+
     async fn create_and_initialize(
         &self,
         _target: ResolvedTarget,
@@ -3437,19 +3450,6 @@ impl Rpc for AttachedProducerRpc {
         unreachable!("test RPC only serves attached stream segments")
     }
 
-    async fn cancel_scheduled_invocation(
-        &self,
-        _target: &OwnedAgentId,
-        _key: golem_common::model::InvocationId,
-        _receipt: golem_common::model::ScheduleId,
-        _canceller: &golem_common::model::caller::Principal,
-        _auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
-        Err(RpcError::ProtocolError {
-            details: "schedule cancellation is not supported by this test RPC".to_string(),
-        })
-    }
-
     async fn schedule_invocation(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -3459,7 +3459,7 @@ impl Rpc for AttachedProducerRpc {
         _scheduled_at: jiff::Timestamp,
         _self_agent_id: &golem_common::model::AgentId,
         _auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+    ) -> Result<(), RpcError> {
         Err(RpcError::ProtocolError {
             details: "scheduling is not supported by this test RPC".to_string(),
         })

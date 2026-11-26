@@ -11,7 +11,7 @@ use std::collections::HashMap;
 pub trait InvocationContext {
     fn new(name: String) -> Self;
     async fn test1(&self);
-    fn test2(&self);
+    async fn test2(&self);
     fn test3(&self);
     fn span_roundtrip(&mut self) -> String;
     fn last_span(&self) -> String;
@@ -39,7 +39,7 @@ impl InvocationContext for InvocationContextImpl {
         other.test2().await;
     }
 
-    fn test2(&self) {
+    async fn test2(&self) {
         broadcast_current_invocation_context("test2a");
 
         let span = start_span("custom");
@@ -50,7 +50,10 @@ impl InvocationContext for InvocationContextImpl {
         _span2.set_attribute("z", &AttributeValue::String("3".to_string()));
 
         let other = InvocationContextClient::upsert("w1".to_string());
-        other.trigger_test3();
+        other
+            .trigger_test3()
+            .await
+            .expect("failed to trigger test3");
     }
 
     fn test3(&self) {

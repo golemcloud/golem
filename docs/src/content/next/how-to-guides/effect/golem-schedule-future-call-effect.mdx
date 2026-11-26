@@ -48,9 +48,11 @@ scheduling failure, map it to a domain error declared in the method's `error` sc
 - Remote method inputs are named records. Pass `{}` for a method declared with `input: {}`.
 - `.schedule(...)` takes the absolute datetime first and the method input second.
 - Both `client.upsert(...)` and `.schedule(...)` are lazy Effects and must be yielded.
-- Yielding `.schedule(...)` waits only for schedule submission, not for future execution.
+- Yielding `.schedule(...)` waits only until the target accepted the invocation, not for future
+  execution. It requires a `Scope`, which owns the returned handle; wrap the Effect in
+  `Effect.scoped` as shown.
 - Scheduling reports only submission failures. The target method's later success or typed failure
-  is not returned to the caller.
+  is reported only by the handle's `awaitResult`.
 
 For a no-parameter method:
 
@@ -61,8 +63,8 @@ const scheduleIncrement = Effect.gen(function* () {
 });
 ```
 
-Do not translate the Promise-based TypeScript SDK mechanically. In this Effect SDK there is no
-generated `.scheduleCancelable()` variant. `.schedule(...)` accepts `Datetime.Input`: a WIT
+Do not translate the Promise-based TypeScript SDK mechanically: the handle's `status`,
+`awaitResult` and `cancel` are Effects, not methods. `.schedule(...)` accepts `Datetime.Input`: a WIT
 datetime, a JavaScript `Date`, an Effect `DateTime`, or a numeric epoch-millisecond timestamp.
 ISO strings are not supported. Invalid or out-of-range values fail during normalization.
 
@@ -86,8 +88,8 @@ agent can delay execution beyond that instant.
 
 ## Cancellation
 
-Every `.schedule(...)` call returns a `Client.ScheduledInvocation` owned by its allocating Scope.
-Use it for cancellation only while that Scope remains open:
+Every `.schedule(...)` call succeeds with an `InvocationId.Invocation` handle owned by the current
+Scope. Its `cancel` Effect withdraws the invocation while it has not started:
 
 ```typescript
 const cancelBeforeStart = Effect.gen(function* () {
@@ -96,22 +98,35 @@ const cancelBeforeStart = Effect.gen(function* () {
   });
 
   // Before execution starts, within this same open Scope:
-  yield* scheduled.cancel();
+  const withdrawn = yield* scheduled.cancel;
 }).pipe(Effect.scoped);
 ```
 
-Cancellation is best-effort and becomes a no-op once execution has started. Dropping the handle
-does not cancel the schedule. The handle wraps a live host resource and is not schema-serializable:
+`cancel` succeeds with `true` when it withdrew the invocation, `false` when it already finished or
+was already cancelled, and fails with `RpcCannotCancelRunning` when it is running. Awaiting a
+cancelled invocation with `scheduled.awaitResult` fails with `RpcCancelled`. Closing the Scope, or
+dropping the handle, does not cancel the schedule.
 
-- closing the allocating Scope drops the cancellation resource; a `Ref` does not extend its
-  lifetime, and a handle saved past `Effect.scoped` cannot be used by a later invocation;
-- do not put it in `Snapshot.define(...)` state;
-- the pinned SDK exposes no stable schedule id or API for reopening the handle after restoration.
+The handle wraps a live host resource and is not schema-serializable. To cancel from a later
+invocation, store its ID as text and rebuild the handle without a remote call:
 
-For later cancellation, persist a generation number, include it in the scheduled method input,
-and let stale invocations exit without doing work. Increment the generation on cancellation and
-restart; a boolean alone allows an old invocation to resume work after a restart. See the complete
-workflow in [`golem-recurring-task-effect`](/next/how-to-guides/effect/golem-recurring-task-effect).
+```typescript
+import { InvocationId } from "@golemcloud/effect-golem";
+
+// When scheduling: keep the text in snapshot state.
+const pendingText = InvocationId.format(scheduled.id);
+
+// In a later invocation, inside a scoped Effect:
+const id = yield* InvocationId.parse(pendingText);
+const handle = yield* InvocationId.get(id, DelayedRecorderDefinition.methods.recordCount);
+yield* handle.cancel;
+```
+
+The ID only locates the invocation; it is not authority. Only the agent that scheduled it, or a
+caller with management permission, can observe or cancel it. `.schedule(...)` never sends a scope
+card and rejects methods with streams. For a recurring loop, combine cancellation with a persisted
+generation number so stale invocations exit without doing work; see
+[`golem-recurring-task-effect`](/next/how-to-guides/effect/golem-recurring-task-effect).
 
 ## Use Cases
 

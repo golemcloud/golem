@@ -139,7 +139,7 @@ async dispatchAndCollect({ regions }) {
     await Promise.all(
         regions.map(async (region, i) => {
             const worker = await RegionWorker.client.create({ region });
-            worker.runReport.trigger({ promiseId: encodePromiseId(promiseIds[i]) });
+            await worker.runReport.trigger({ promiseId: encodePromiseId(promiseIds[i]) });
         }),
     );
 
@@ -149,6 +149,13 @@ async dispatchAndCollect({ regions }) {
     );
 }
 ```
+
+`.trigger()` resolves to an `Invocation` handle once the child accepted the
+invocation. When the coordinator only needs each child's return value, it can
+keep the handles instead of promises and `await Promise.all(handles.map((h) =>
+h.awaitResult()))`. To collect in a later invocation, store `h.id.toString()`
+and rebuild the handle with `Invocation.get(InvocationId.parse(text),
+RegionWorker.methods.runReport)`. Dropping a handle does not stop the child.
 
 ### Error Handling
 
@@ -247,6 +254,13 @@ async multiFork({ n }) {
     );
 }
 ```
+
+`.trigger()` resolves to an `Invocation` handle once the child accepted the
+invocation. When the coordinator only needs each child's return value, it can
+keep the handles instead of promises and `await Promise.all(handles.map((h) =>
+h.awaitResult()))`. To collect in a later invocation, store `h.id.toString()`
+and rebuild the handle with `Invocation.get(InvocationId.parse(text),
+RegionWorker.methods.runReport)`. Dropping a handle does not stop the child.
 
 ## When to Use Which Approach
 

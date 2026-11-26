@@ -67,7 +67,10 @@ pub(super) fn embedded_invocation_span_builder<Ctx: WorkerCtx>(
     ctx: &DurableWorkerCtx<Ctx>,
     connection_span_id: &SpanId,
     function_name: &str,
-) -> Result<impl Fn(&IdempotencyKey) -> SpanStarted + Send + Sync + 'static, WorkerExecutorError> {
+) -> Result<
+    impl Fn(&IdempotencyKey) -> SpanStarted + Send + Sync + 'static + use<Ctx>,
+    WorkerExecutorError,
+> {
     let connection_origin = ctx
         .state
         .invocation_state()

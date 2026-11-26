@@ -40,6 +40,16 @@ pub enum InvocationState {
     Cancelled,
 }
 
+pub(crate) enum ObservedInvocationResult {
+    /// The agent no longer has the invocation: a revert removed it during the wait.
+    NotFound,
+    Invocation(AgentInvocationOutput),
+    Session {
+        value: crate::durable_host::durable_session::SessionValue,
+        component_revision: golem_common::model::component::ComponentRevision,
+    },
+}
+
 /// One invocation of an agent.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct InvocationListEntry {
@@ -122,6 +132,246 @@ impl InvocationListEntry {
 }
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Checks the persisted immediate starter, not the holder of an invocation ID, with the
+    /// identity that scheduled cancellation compares: the principal's pair, which names the
+    /// starter's incarnation. The caller comes from the authenticated calling host; guest input
+    /// must not supply it.
+    pub(crate) async fn invocation_was_started_by(
+        &self,
+        key: &InvocationId,
+        caller: &golem_common::model::caller::Principal,
+    ) -> Result<bool, WorkerExecutorError> {
+        self.get_pinned_status().await?;
+        let payload = self.accepted_invocation_payload(key).await?;
+        Ok(matches!(
+            payload,
+            Some(AgentInvocationPayload::AgentMethod { caller: accepted, .. })
+                if accepted.immediate.equals(caller)
+        ))
+    }
+
+    /// Waits for an accepted invocation without starting or resuming its owner. Events only
+    /// wake the observer: the committed record, not an operational failure notification, decides
+    /// the invocation's outcome. Dropping this future releases only its subscription.
+    ///
+    /// The wait follows the agent across its generations: when the observed generation retires
+    /// for an interrupt or a revert, the wait goes on in the generation that replaces it, which
+    /// is loaded suspended, as this incarnation, once the retiring one has left the cache.
+    pub(crate) async fn observe_invocation_result(
+        self: &Arc<Self>,
+        key: &InvocationId,
+    ) -> Result<Result<ObservedInvocationResult, WorkerExecutorError>, WorkerExecutorError> {
+        let mut owner = self.clone();
+        let mut subscription = self.events().subscribe();
+        let mut ownership_check = tokio::time::interval(INVOCATION_OWNERSHIP_RECHECK_INTERVAL);
+        // A streaming invocation prepares its session only when its execution starts, so a
+        // queued one has none yet: it is looked up again until it is found.
+        let mut session = None;
+        // A reroute that ends the wait once the committed result has been read again.
+        let mut reroute = None;
+        loop {
+            let pass = owner.observe_invocation_pass(key, &mut session).await;
+            match pass {
+                Ok(Some(done)) => return Ok(done),
+                Ok(None) => {}
+                // A reroute decides over a read that failed because the owner left.
+                Err(error) => return Err(reroute.take().unwrap_or(error)),
+            }
+            // A committed result read above beats a reroute.
+            if let Some(error) = reroute.take() {
+                return Err(error);
+            }
+
+            let stopped = tokio::select! {
+                biased;
+                _ = owner.tasks.stopped() => true,
+                _ = owner.owner_retirement_requested.cancelled() => true,
+                _ = ownership_check.tick() => {
+                    // Only a moved shard ends the wait; an assignment that is not set yet does
+                    // not, as in `wait_for_invocation_result`.
+                    if let Err(error @ WorkerExecutorError::InvalidShardId { .. }) =
+                        owner.shard_service().check_worker(&owner.agent_id())
+                    {
+                        reroute = Some(error);
+                    }
+                    false
+                }
+                result = async {
+                    match &session {
+                        Some((_, streams)) => streams.wait_persisted_result().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    result.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
+                    false
+                }
+                event = subscription.wait_for(|event| match event {
+                    Event::InvocationCompleted { agent_id, idempotency_key, .. }
+                        if *agent_id == owner.agent_id() && idempotency_key == key => Some(()),
+                    _ => None,
+                }) => match event {
+                    Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => false,
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                        return Err(WorkerExecutorError::runtime("Invocation event stream closed"));
+                    }
+                }
+            };
+            if stopped {
+                if owner.answers_as_deleted().await {
+                    return Err(WorkerExecutorError::worker_not_found(owner.agent_id()));
+                }
+                // An interrupt or a revert retires the generation for good, and the agent goes on
+                // in the next one. A lost shard, or tasks stopped without a retirement, end the
+                // wait here once the committed result has been read again.
+                if owner.owner_retirement_requested.is_cancelled()
+                    && !owner.retired_for_lost_shard()
+                {
+                    // A stream session is bound to the generation that opened it.
+                    session = None;
+                    owner = owner.successor_generation().await?;
+                } else {
+                    reroute = Some(owner.retirement_error());
+                }
+            }
+        }
+    }
+
+    /// The generation of this incarnation that replaces this retiring one, loaded suspended once
+    /// this one has left the cache. A missing owner or another incarnation is `AgentNotFound`.
+    /// A retirement that ends with this generation still cached has failed, and its error, not
+    /// a successor, is the answer.
+    async fn successor_generation(self: &Arc<Self>) -> Result<Arc<Self>, WorkerExecutorError> {
+        let unreplaced =
+            || WorkerExecutorError::runtime("Worker ownership retired without a successor");
+        loop {
+            // A shard lost while the retirement runs sends the caller to the new owner.
+            if self.retired_for_lost_shard() {
+                return Err(self.retirement_error());
+            }
+            let next = self
+                .deps
+                .active_agents()
+                .get_existing_with_fingerprint(
+                    &self.deps,
+                    &self.owned_agent_id,
+                    Some(self.initial_worker_metadata.fingerprint),
+                )
+                .await?;
+            if !Arc::ptr_eq(&next, self) {
+                return Ok(next);
+            }
+            drop(next);
+            // A retirement whose stop failed keeps its generation cached for good.
+            if let WorkerInstance::CleanupFailed(error) = self.instance.lock().await.state() {
+                return Err(error.clone());
+            }
+            // A deletion removes this generation itself when it finishes; one that failed leaves
+            // it in place.
+            if self.deletion_failed().await {
+                return Err(unreplaced());
+            }
+            if !self.deletion_owns_retirement().await {
+                match self.owner_retirement.get() {
+                    // An interrupt: its shared stop removes this generation before it ends.
+                    Some(retirement) => {
+                        if let Some(stop) = retirement.stop.get() {
+                            stop.clone().await?;
+                            if self.is_current_cached_owner().await
+                                && !self.deletion_owns_retirement().await
+                            {
+                                return Err(unreplaced());
+                            }
+                        }
+                    }
+                    // A revert holds the owner cleanup from before it requests the retirement
+                    // until it removes this generation, so once the cleanup is free a generation
+                    // still cached before removal is one the revert failed to replace.
+                    None => {
+                        let cleanup = self.owner_cleanup.lock().await;
+                        if *cleanup == OwnerCleanupState::PreRemoval
+                            && self.is_current_cached_owner().await
+                            && !self.deletion_owns_retirement().await
+                        {
+                            return Err(unreplaced());
+                        }
+                    }
+                }
+            }
+            // The retirement's stop removes this generation from the cache; poll rather than spin.
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+    }
+
+    /// One read of [`Self::observe_invocation_result`]: the committed result of the invocation,
+    /// or `None` while it has none. `session` keeps the invocation's stream session once found.
+    async fn observe_invocation_pass(
+        &self,
+        key: &InvocationId,
+        session: &mut Option<(
+            golem_common::model::durable_stream::StreamSessionPreparedRecord,
+            crate::durable_host::durable_session::StreamSession,
+        )>,
+    ) -> Result<Option<Result<ObservedInvocationResult, WorkerExecutorError>>, WorkerExecutorError>
+    {
+        self.get_pinned_status().await?;
+        if session.is_none() {
+            *session = self.native_tool_session(key).await?;
+        }
+        if let Some((prepared, streams)) = session
+            && let Some(value) = streams
+                .persisted_result()
+                .await
+                .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?
+        {
+            return Ok(Some(Ok(ObservedInvocationResult::Session {
+                value,
+                component_revision: prepared.attempt.invocation.target_component_revision,
+            })));
+        }
+        // The handle found the invocation before the wait, so a later generation that has none
+        // lost it to a revert.
+        let Some(entry) = self.get_invocation(key).await? else {
+            return Ok(Some(Ok(ObservedInvocationResult::NotFound)));
+        };
+        match entry.state {
+            InvocationState::Completed
+            | InvocationState::Failed
+            | InvocationState::Cancelled
+            | InvocationState::BackgroundFailed => {
+                // A session result can commit between the first read and the terminal.
+                // It remains observable even if producing its streams subsequently failed.
+                if session.is_none() {
+                    *session = self.native_tool_session(key).await?;
+                }
+                if let Some((prepared, streams)) = session
+                    && let Some(value) = streams.persisted_result().await.map_err(|error| {
+                        error.into_worker_executor_error(WorkerExecutorError::runtime)
+                    })?
+                {
+                    return Ok(Some(Ok(ObservedInvocationResult::Session {
+                        value,
+                        component_revision: prepared.attempt.invocation.target_component_revision,
+                    })));
+                }
+                return match self.try_lookup_invocation_result(key).await? {
+                    LookupResult::Complete(result) => {
+                        Ok(Some(result.map(ObservedInvocationResult::Invocation)))
+                    }
+                    _ => Err(WorkerExecutorError::recovery_required(
+                        "Invocation terminal has no readable result",
+                    )),
+                };
+            }
+            InvocationState::Pending
+            | InvocationState::Scheduled
+            | InvocationState::Running
+            | InvocationState::Waiting
+            | InvocationState::Retrying
+            | InvocationState::Interrupted => {}
+        }
+        Ok(None)
+    }
+
     /// One page of the listed invocations of the agent that match `filter`, in the list order,
     /// and the position the next page starts after when more may follow.
     ///
@@ -166,12 +416,30 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         &self,
         key: &InvocationId,
     ) -> Result<Option<InvocationListEntry>, WorkerExecutorError> {
-        Ok(self
-            .merged_invocations()
-            .await?
-            .into_iter()
-            .find(|entry| entry.key == *key)
-            .filter(InvocationListEntry::is_listed))
+        let status = self.state_actor.try_status().await?;
+        let recent = status.invocation_results.position(key);
+        let mut results = HashMap::new();
+        if !status.invocation_results.is_exact_complete()
+            && status.invocation_results.might_contain(key)
+            && recent.is_none_or(|position| position.end == InvocationEnd::Cancelled)
+            && let Some(position) = self
+                .resolve_old_invocation_result_index(&status, key)
+                .await?
+        {
+            keep_latest(&mut results, *key, position);
+        }
+        if let Some(position) = recent {
+            keep_latest(&mut results, *key, position.clone());
+        }
+        Ok(merge_invocations(
+            &status,
+            results,
+            Timestamp::now_utc(),
+            self.standalone_invocation_id(),
+        )
+        .into_iter()
+        .find(|entry| entry.key == *key)
+        .filter(InvocationListEntry::is_listed))
     }
 
     /// The invocations of the agent that `request_key` started, at most one per operation.

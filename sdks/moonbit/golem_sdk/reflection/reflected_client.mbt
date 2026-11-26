@@ -405,11 +405,14 @@ pub async fn ReflectedAgentClient::invoke_value(
   method_name : String,
   input : @model.SchemaValue,
   scope_card? : @permissions.ScopeCard,
-) -> Invocation[@model.SchemaValue?] {
+) -> InvocationOutput[@model.SchemaValue?] {
   let entry = self.require_method(method_name)
   entry.input.validate_value(input)
   let invocation = self.transport.invoke_value(method_name, input, scope_card)
-  validate_invocation_output(entry, invocation)
+  {
+    metadata: invocation.metadata,
+    value: validate_output(entry, invocation.value),
+  }
 }
 
 ///|
@@ -420,14 +423,26 @@ pub async fn ReflectedAgentClient::invoke_json(
   method_name : String,
   input : Json,
   scope_card? : @permissions.ScopeCard,
-) -> Invocation[Json?] {
+) -> InvocationOutput[Json?] {
   let entry = self.require_method(method_name)
   let invocation = self.transport.invoke_value(
     method_name,
     entry.input.pack_json(input),
     scope_card,
   )
-  let value = match (entry.output, invocation.value) {
+  {
+    metadata: invocation.metadata,
+    value: unpack_output_json(entry, invocation.value),
+  }
+}
+
+///|
+/// Reads a method's result as canonical JSON against the snapshot.
+fn unpack_output_json(
+  entry : AgentMethod,
+  output : @model.SchemaValue?,
+) -> Json? raise ReflectError {
+  match (entry.output, output) {
     (None, None) => None
     (Some(schema), Some(value)) => {
       let json = {
@@ -443,58 +458,77 @@ pub async fn ReflectedAgentClient::invoke_json(
     }
     (Some(_), None) => raise Schema("value-returning method returned unit")
   }
-  { metadata: invocation.metadata, value, }
 }
 
 ///|
-pub fn ReflectedAgentClient::trigger_value(
+/// Starts a method without waiting for its result, and returns the handle of
+/// the invocation once the target has durably accepted it. The handle's result
+/// is validated against the snapshot. A trigger never attaches a scope card,
+/// and is unavailable for a streaming method. The handle's methods raise
+/// `@agentHost.RpcError`.
+pub async fn ReflectedAgentClient::trigger_value(
   self : ReflectedAgentClient,
   method_name : String,
   input : @model.SchemaValue,
-) -> InvocationMetadata raise ReflectError {
+) -> @rpc.Invocation[@model.SchemaValue?] {
   let entry = self.require_method(method_name)
   entry.input.validate_value(input)
   reject_non_awaited_streams(entry, "trigger")
-  self.transport.trigger_value(method_name, input)
+  self.transport.trigger_value(method_name, input, value => {
+    validate_output(entry, value)
+  })
 }
 
 ///|
-pub fn ReflectedAgentClient::trigger_json(
+/// `trigger_value` with canonical JSON input, whose handle reads the result as
+/// canonical JSON.
+pub async fn ReflectedAgentClient::trigger_json(
   self : ReflectedAgentClient,
   method_name : String,
   input : Json,
-) -> InvocationMetadata raise ReflectError {
+) -> @rpc.Invocation[Json?] {
   let entry = self.require_method(method_name)
   reject_non_awaited_streams(entry, "trigger")
-  self.transport.trigger_value(method_name, entry.input.pack_json(input))
+  self.transport.trigger_value(method_name, entry.input.pack_json(input), value => {
+    unpack_output_json(entry, value)
+  })
 }
 
 ///|
-pub fn ReflectedAgentClient::schedule_value(
+/// Schedules a method for `scheduled_at`, and returns the handle of the
+/// invocation once the target has durably accepted it; the handle can cancel
+/// it until it starts. A schedule never attaches a scope card, and is
+/// unavailable for a streaming method.
+pub async fn ReflectedAgentClient::schedule_value(
   self : ReflectedAgentClient,
   scheduled_at : @systemClock.Instant,
   method_name : String,
   input : @model.SchemaValue,
-) -> ScheduledInvocation raise ReflectError {
+) -> @rpc.Invocation[@model.SchemaValue?] {
   let entry = self.require_method(method_name)
   entry.input.validate_value(input)
   reject_non_awaited_streams(entry, "schedule")
-  self.transport.schedule_value(scheduled_at, method_name, input)
+  self.transport.schedule_value(scheduled_at, method_name, input, value => {
+    validate_output(entry, value)
+  })
 }
 
 ///|
-pub fn ReflectedAgentClient::schedule_json(
+/// `schedule_value` with canonical JSON input, whose handle reads the result
+/// as canonical JSON.
+pub async fn ReflectedAgentClient::schedule_json(
   self : ReflectedAgentClient,
   scheduled_at : @systemClock.Instant,
   method_name : String,
   input : Json,
-) -> ScheduledInvocation raise ReflectError {
+) -> @rpc.Invocation[Json?] {
   let entry = self.require_method(method_name)
   reject_non_awaited_streams(entry, "schedule")
   self.transport.schedule_value(
     scheduled_at,
     method_name,
     entry.input.pack_json(input),
+    value => unpack_output_json(entry, value),
   )
 }
 
@@ -515,18 +549,19 @@ fn reject_non_awaited_streams(
 }
 
 ///|
-fn validate_invocation_output(
+/// Checks a method's result against the snapshot.
+fn validate_output(
   entry : AgentMethod,
-  invocation : Invocation[@model.SchemaValue?],
-) -> Invocation[@model.SchemaValue?] raise ReflectError {
-  match (entry.output, invocation.value) {
-    (None, None) => invocation
+  output : @model.SchemaValue?,
+) -> @model.SchemaValue? raise ReflectError {
+  match (entry.output, output) {
+    (None, None) => output
     (Some(schema), Some(value)) => {
       {
         errdefer value.release_resources(@model_host.resource_drops())
         schema.validate_value(value)
       }
-      invocation
+      output
     }
     (None, Some(value)) => {
       value.release_resources(@model_host.resource_drops())

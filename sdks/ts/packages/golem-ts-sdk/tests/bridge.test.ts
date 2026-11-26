@@ -6,7 +6,15 @@ import { SchemaValueStream, type SchemaValueTree } from 'golem:core/types@2.0.0'
 import type { ToolRpcError as RpcError } from 'golem:core/types@2.0.0';
 import { createStdin, ToolRpc, type ByteStreamFailure } from 'golem:tool/host@0.1.0';
 import { describe, expect, it, vi } from 'vitest';
-import { bridge, s, type PermissionCard, PolymorphicPermissionCard } from '../src';
+import { z } from 'zod';
+import {
+  bridge,
+  defineAgentClient,
+  method,
+  s,
+  type PermissionCard,
+  PolymorphicPermissionCard,
+} from '../src';
 import { compileSchema } from '../src/schema/adapter';
 import {
   fakeRawCard,
@@ -15,8 +23,17 @@ import {
   rawOfPermissionCard,
   scopeCardFromRaw,
 } from './permissionCardTestSupport';
-import { GuestSchemaValueStreamHandle, validateSchemaGraph } from '../src/internal/schema-model';
-import { hostInvocationMetadata, sdkInvocationMetadata } from './invocationMetadataTestSupport';
+import {
+  GuestSchemaValueStreamHandle,
+  SchemaEncodeError,
+  validateSchemaGraph,
+} from '../src/internal/schema-model';
+import {
+  fakeHostInvocation,
+  hostInvocationResult,
+  sdkInvocationMetadata,
+} from './invocationMetadataTestSupport';
+import { takeDroppedImports } from './mocks/importAbort';
 
 const graph = (root: bridge.SchemaType): bridge.SchemaGraph => ({ defs: new Map(), root });
 const streamFailures = [
@@ -750,15 +767,11 @@ describe('public bridge runtime', () => {
   it('wraps malformed raw agent output with agent and method context', async () => {
     const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
-      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+      invokeAndAwait: ReturnType<typeof vi.fn>;
     };
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata(),
-      future: {
-        get: vi.fn().mockResolvedValue({ tag: 'not-a-schema-value' }),
-        cancel: vi.fn(),
-      },
-    });
+    rpc.invokeAndAwait.mockResolvedValue(
+      hostInvocationResult({ tag: 'not-a-schema-value' } as unknown as SchemaValueTree),
+    );
     await expect(remote.invokeAndAwait('broken', bridge.v.tuple([]))).rejects.toMatchObject({
       _tag: 'RemoteOutputError',
       message: expect.stringContaining('.broken returned an invalid schema value'),
@@ -816,18 +829,20 @@ describe('public bridge runtime', () => {
         error: { tag: 'invalid-agent-id', details: 'bad agent id' },
       },
     },
+    {
+      raw: { tag: 'cancelled', val: 'withdrawn' },
+      mapped: { tag: 'cancelled', details: 'withdrawn' },
+    },
+    {
+      raw: { tag: 'cannot-cancel-running', val: 'running' },
+      mapped: { tag: 'cannot-cancel-running', details: 'running' },
+    },
   ])('maps $raw.tag agent RPC failures to the public cause model', async ({ raw, mapped }) => {
     const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
-      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+      invokeAndAwait: ReturnType<typeof vi.fn>;
     };
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata(),
-      future: {
-        get: vi.fn().mockRejectedValue(raw),
-        cancel: vi.fn(),
-      },
-    });
+    rpc.invokeAndAwait.mockRejectedValue(raw);
 
     await expect(remote.invokeAndAwait('broken', bridge.v.tuple([]))).rejects.toMatchObject({
       _tag: 'RemoteCallError',
@@ -835,34 +850,84 @@ describe('public bridge runtime', () => {
     });
   });
 
-  it('returns scheduled invocation metadata when requested', () => {
+  it('returns the handle of a scheduled invocation without a scope card', async () => {
     const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
-      scheduleInvocation: ReturnType<typeof vi.fn>;
+      schedule: ReturnType<typeof vi.fn>;
     };
-    const receipt = { metadata: hostInvocationMetadata() };
-    rpc.scheduleInvocation.mockReturnValue(receipt);
+    const raw = fakeHostInvocation();
+    raw.status.mockResolvedValue('scheduled');
+    raw.await_.mockResolvedValue({ valueNodes: [{ tag: 'u32-value', val: 7 }], root: 0 });
+    rpc.schedule.mockResolvedValue(raw);
     const at = { seconds: 1n, nanoseconds: 0 };
 
-    const scheduled = remote.scheduleWithMetadata(at, 'run', bridge.v.tuple([]));
-    expect(scheduled).toStrictEqual({ metadata: sdkInvocationMetadata() });
-    expect(scheduled).not.toBe(receipt);
-    expect(Object.isFrozen(scheduled.metadata)).toBe(true);
-    expect(rpc.scheduleInvocation).toHaveBeenCalledWith(at, 'run', expect.anything(), undefined);
+    const scheduled = await remote.schedule(at, 'run', bridge.v.tuple([]));
+    expect(rpc.schedule).toHaveBeenCalledWith(at, 'run', expect.anything());
+    expect(rpc.schedule.mock.calls[0]).toHaveLength(3);
+    expect(scheduled).toBeInstanceOf(bridge.Invocation);
+    expect(scheduled.id).toEqual(sdkInvocationMetadata().invocationId);
+    await expect(scheduled.status()).resolves.toBe('scheduled');
+    await expect(scheduled.awaitResult()).resolves.toEqual(bridge.v.u32(7));
+    await expect(scheduled.cancel()).resolves.toBe(true);
+  });
+
+  it('maps handle failures to the public cause model', async () => {
+    const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
+      trigger: ReturnType<typeof vi.fn>;
+    };
+    const raw = fakeHostInvocation();
+    raw.status.mockRejectedValue({ tag: 'not-found', val: 'gone' });
+    raw.await_.mockRejectedValue({ tag: 'cancelled', val: 'withdrawn' });
+    raw.cancel.mockRejectedValue({ tag: 'cannot-cancel-running', val: 'running' });
+    rpc.trigger.mockResolvedValue(raw);
+
+    const invocation = await remote.trigger('run', bridge.v.tuple([]));
+    await expect(invocation.status()).rejects.toMatchObject({
+      _tag: 'RemoteCallError',
+      cause: { tag: 'not-found', details: 'gone' },
+    });
+    await expect(invocation.awaitResult()).rejects.toMatchObject({
+      _tag: 'RemoteCallError',
+      cause: { tag: 'cancelled', details: 'withdrawn' },
+    });
+    await expect(invocation.cancel()).rejects.toMatchObject({
+      _tag: 'RemoteCallError',
+      cause: { tag: 'cannot-cancel-running', details: 'running' },
+    });
+  });
+
+  it('detaches from a handle await when its signal aborts', async () => {
+    const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
+      trigger: ReturnType<typeof vi.fn>;
+    };
+    const raw = fakeHostInvocation();
+    raw.await_.mockReturnValue(new Promise<never>(() => {}));
+    rpc.trigger.mockResolvedValue(raw);
+    const invocation = await remote.trigger('run', bridge.v.tuple([]));
+    takeDroppedImports();
+
+    const aborted = new AbortController();
+    aborted.abort(new Error('not started'));
+    await expect(invocation.awaitResult({ signal: aborted.signal })).rejects.toThrow('not started');
+    expect(raw.await_).not.toHaveBeenCalled();
+
+    const controller = new AbortController();
+    const pending = invocation.awaitResult({ signal: controller.signal });
+    await vi.waitFor(() => expect(raw.await_).toHaveBeenCalledOnce());
+    controller.abort(new Error('detached'));
+    await expect(pending).rejects.toThrow('detached');
+    expect(takeDroppedImports()).toBe(1);
+    expect(raw.cancel).not.toHaveBeenCalled();
   });
 
   it('returns unit output from an awaited agent invocation', async () => {
     const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
-      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+      invokeAndAwait: ReturnType<typeof vi.fn>;
     };
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata(),
-      future: {
-        get: vi.fn().mockResolvedValue(undefined),
-        cancel: vi.fn(),
-      },
-    });
+    rpc.invokeAndAwait.mockResolvedValue(hostInvocationResult());
 
     await expect(remote.invokeAndAwait('ping', bridge.v.tuple([]))).resolves.toBeUndefined();
   });
@@ -870,15 +935,9 @@ describe('public bridge runtime', () => {
   it('passes a recursively nested native stream to an awaited agent invocation', async () => {
     const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
-      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+      invokeAndAwait: ReturnType<typeof vi.fn>;
     };
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata(),
-      future: {
-        get: vi.fn().mockResolvedValue(undefined),
-        cancel: vi.fn(),
-      },
-    });
+    rpc.invokeAndAwait.mockResolvedValue(hostInvocationResult());
     const source = (async function* () {})();
     const params = bridge.v.record([
       bridge.v.option(
@@ -890,7 +949,7 @@ describe('public bridge runtime', () => {
 
     await remote.invokeAndAwait('consume', params);
 
-    const tree = rpc.asyncInvokeAndAwait.mock.calls[0][1];
+    const tree = rpc.invokeAndAwait.mock.calls[0][1];
     const streamNode = tree.valueNodes.find((node: { tag: string }) => node.tag === 'stream-value');
     expect(streamNode).toMatchObject({ tag: 'stream-value' });
     expect(streamNode.val).toMatchObject({ reader: source });
@@ -899,7 +958,7 @@ describe('public bridge runtime', () => {
   it('aborts during native wrapping before starting RPC and disposes the wrapped input', async () => {
     const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
-      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+      invokeAndAwait: ReturnType<typeof vi.fn>;
     };
     const dispose = vi.fn();
     const wrapped = { [Symbol.dispose]: dispose } as unknown as SchemaValueStream;
@@ -927,7 +986,7 @@ describe('public bridge runtime', () => {
       controller.abort(reason);
       release(wrapped);
       await expect(pending).rejects.toBe(reason);
-      expect(rpc.asyncInvokeAndAwait).not.toHaveBeenCalled();
+      expect(rpc.invokeAndAwait).not.toHaveBeenCalled();
       expect(dispose).toHaveBeenCalledOnce();
       await expect(stream.next()).rejects.toThrow('transferred');
     } finally {
@@ -993,7 +1052,7 @@ describe('public bridge runtime', () => {
   it('checks the scope card before moving argument cards and gives them back on early failure', async () => {
     const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
-      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+      invokeAndAwait: ReturnType<typeof vi.fn>;
     };
     const card = permissionCardFromRaw(fakeRawCard({ id: 'argument-card' }));
     const template = polymorphicPermissionCardFromRaw(fakeRawCard({ id: 'template-argument' }));
@@ -1025,14 +1084,14 @@ describe('public bridge runtime', () => {
     expect(rawOfPermissionCard(card)).toMatchObject({ id: 'argument-card' });
     expect(template.isMoved()).toBe(false);
     expect(rawOfPermissionCard(template)).toMatchObject({ id: 'template-argument' });
-    expect(rpc.asyncInvokeAndAwait).not.toHaveBeenCalled();
+    expect(rpc.invokeAndAwait).not.toHaveBeenCalled();
     expect(scope.isMoved()).toBe(false);
   });
 
   it('disposes all still-owned WIT resources after partial RPC start lowering fails', async () => {
     const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
-      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+      invokeAndAwait: ReturnType<typeof vi.fn>;
     };
     const resources = Array.from({ length: 4 }, () => ({
       owned: true,
@@ -1060,7 +1119,7 @@ describe('public bridge runtime', () => {
       root: 4,
     } as unknown as SchemaValueTree);
     const reason = new Error('native lowering failed');
-    rpc.asyncInvokeAndAwait.mockImplementation(() => {
+    rpc.invokeAndAwait.mockImplementation(() => {
       resources[0].owned = false; // Native take_handle's consumed sentinel.
       throw reason;
     });
@@ -1080,7 +1139,7 @@ describe('public bridge runtime', () => {
     async (fails) => {
       const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
       const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
-        asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+        invokeAndAwait: ReturnType<typeof vi.fn>;
       };
       const dispose = vi.fn();
       const wrapped = { [Symbol.dispose]: dispose } as unknown as SchemaValueStream;
@@ -1088,12 +1147,9 @@ describe('public bridge runtime', () => {
         new GuestSchemaValueStreamHandle({ kind: 'wrapped', value: wrapped }),
       );
       const reason = new Error('start failed');
-      rpc.asyncInvokeAndAwait.mockImplementation(() => {
+      rpc.invokeAndAwait.mockImplementation(async () => {
         if (fails) throw reason;
-        return {
-          metadata: hostInvocationMetadata(),
-          future: { get: async () => undefined, cancel: vi.fn() },
-        };
+        return hostInvocationResult();
       });
       const pending = remote.invokeAndAwait('forward', params);
       if (fails) {
@@ -1106,51 +1162,92 @@ describe('public bridge runtime', () => {
     },
   );
 
-  it.each(['invoke', 'schedule'] as const)(
-    'rejects native streams at the non-awaited %s boundary',
-    (boundary) => {
+  it.each(['trigger', 'schedule'] as const)(
+    'rejects native streams at the %s boundary',
+    async (boundary) => {
       const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
       const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
-        invoke: ReturnType<typeof vi.fn>;
-        scheduleInvocation: ReturnType<typeof vi.fn>;
+        trigger: ReturnType<typeof vi.fn>;
+        schedule: ReturnType<typeof vi.fn>;
       };
       const source = (async function* () {})();
       const params = bridge.v.option(
         bridge.v.stream(new GuestSchemaValueStreamHandle({ kind: 'native', value: source })),
       );
 
-      expect(() => {
-        if (boundary === 'invoke') remote.invoke('consume', params);
-        else remote.schedule({ seconds: 1n, nanoseconds: 0 }, 'consume', params);
-      }).toThrow('native schema value streams require asynchronous encoding');
-      expect(rpc.invoke).not.toHaveBeenCalled();
-      expect(rpc.scheduleInvocation).not.toHaveBeenCalled();
+      await expect(
+        boundary === 'trigger'
+          ? remote.trigger('consume', params)
+          : remote.schedule({ seconds: 1n, nanoseconds: 0 }, 'consume', params),
+      ).rejects.toThrow('native schema value streams require asynchronous encoding');
+      expect(rpc.trigger).not.toHaveBeenCalled();
+      expect(rpc.schedule).not.toHaveBeenCalled();
     },
   );
 
-  it('cancels an agent future when the caller aborts', async () => {
+  const streamingClient = defineAgentClient({
+    name: 'StreamingExample',
+    id: { name: z.string() },
+    methods: {
+      consume: method({ input: { items: s.stream(s.u32()) }, returns: s.u32() }),
+      watch: method({ input: {}, returns: s.stream(s.u32()) }),
+      watchNested: method({
+        input: {},
+        returns: s.option(z.array(s.result(s.stream(s.u32()), s.u32()))),
+      }),
+    },
+  });
+
+  it.each([
+    ['trigger', 'consume'],
+    ['schedule', 'consume'],
+    ['trigger', 'watch'],
+    ['schedule', 'watch'],
+    ['trigger', 'watchNested'],
+    ['schedule', 'watchNested'],
+  ] as const)(
+    'rejects a typed %s of the streaming method %s before the host call',
+    async (boundary, name) => {
+      const client = streamingClient.client.upsert({ name: 'one' });
+      const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
+        trigger: ReturnType<typeof vi.fn>;
+        schedule: ReturnType<typeof vi.fn>;
+      };
+      const input = name === 'consume' ? { items: (async function* () {})() } : {};
+      const target = client[name] as unknown as {
+        trigger(input: unknown): Promise<unknown>;
+        schedule(at: bridge.Datetime, input: unknown): Promise<unknown>;
+      };
+
+      const pending =
+        boundary === 'trigger'
+          ? target.trigger(input)
+          : target.schedule({ seconds: 1n, nanoseconds: 0 }, input);
+      await expect(pending).rejects.toBeInstanceOf(SchemaEncodeError);
+      await expect(pending).rejects.toThrow(
+        `Remote agent StreamingExample.${name}: live streams require invoke-and-await`,
+      );
+      expect(rpc.trigger).not.toHaveBeenCalled();
+      expect(rpc.schedule).not.toHaveBeenCalled();
+    },
+  );
+
+  it('drops an awaited agent call when the caller aborts', async () => {
     const remote = bridge.upsertRemoteAgent('Example', bridge.v.tuple([]));
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value as {
-      asyncInvokeAndAwait: ReturnType<typeof vi.fn>;
+      invokeAndAwait: ReturnType<typeof vi.fn>;
     };
     const controller = new AbortController();
-    const cancel = vi.fn();
-    const get = vi.fn().mockReturnValue(new Promise<never>(() => {}));
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata(),
-      future: {
-        get,
-        cancel,
-      },
-    });
+    rpc.invokeAndAwait.mockReturnValue(new Promise<never>(() => {}));
+    takeDroppedImports();
 
     const invocation = remote.invokeAndAwait('ping', bridge.v.tuple([]), controller.signal);
-    await vi.waitFor(() => expect(get).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(rpc.invokeAndAwait).toHaveBeenCalledOnce());
     controller.abort(new Error('cancelled by caller'));
 
     await expect(invocation).rejects.toThrow('cancelled by caller');
-    expect(cancel).toHaveBeenCalledOnce();
-    expect(get).toHaveBeenCalledOnce();
+    expect(takeDroppedImports()).toBe(1);
+    expect(rpc.invokeAndAwait).toHaveBeenCalledOnce();
   });
 
   it.each([1.5, Number.NaN])('rejects invalid datetime nanoseconds (%s)', (nanoseconds) => {

@@ -2,12 +2,15 @@ import { z } from "zod";
 import {
   AgentStream,
   awaitPromise,
+  completePromise,
   createPromise,
+  Datetime,
   defineAgent,
   defineAgentClient,
   getAgentTypeByAgentId,
   getAllAgentTypes,
   getReflectedAgentType,
+  Invocation,
   isRemoteCallError,
   method,
   s,
@@ -398,8 +401,53 @@ export const TsCancelTester = defineAgent({
       input: { counterName: z.string() },
       returns: z.number(),
     }),
+    testInvocationHandles: method({
+      input: { counterName: z.string() },
+      returns: z.object({
+        triggeredStatus: z.string(),
+        cancelCompleted: z.boolean(),
+        rebuiltValue: z.number(),
+        scheduledStatus: z.string(),
+        cancelScheduled: z.boolean(),
+        cancelledStatus: z.string(),
+        awaitCancelled: z.string(),
+        value: z.number(),
+      }),
+    }),
+    testCancelRunning: method({
+      input: { blockerName: z.string() },
+      returns: z.object({
+        runningStatus: z.string(),
+        cancelError: z.string(),
+        completed: z.boolean(),
+        result: z.number(),
+        finalStatus: z.string(),
+      }),
+    }),
+    testCollectedHandle: method({
+      input: { blockerName: z.string() },
+      returns: z.object({
+        collected: z.boolean(),
+        result: z.number(),
+        finalStatus: z.string(),
+      }),
+    }),
   },
 });
+
+/**
+ * Triggers `getCompletedCount` behind the blocked `doBlock` and leaves its handle reachable only
+ * from a reference cycle, so only a garbage collection releases it. Returns its ID and a weak
+ * reference that tells whether the handle was collected.
+ */
+async function triggerAndAbandon(
+  blocker: ReturnType<typeof TsBlockingAgent.client.upsert>,
+) {
+  const handle = await blocker.getCompletedCount.trigger();
+  const cycle: { handle: typeof handle; self?: unknown } = { handle };
+  cycle.self = cycle;
+  return { id: handle.id, weak: new WeakRef(handle) };
+}
 
 export const TsCancelTesterImpl = TsCancelTester.implement({
   init: ({ id }) => ({ name: id.name }),
@@ -444,6 +492,113 @@ export const TsCancelTesterImpl = TsCancelTester.implement({
       controller.abort("late abort");
 
       return await counter.getValue();
+    },
+
+    /**
+     * Triggers and schedules TsCounter calls, then inspects, awaits, cancels
+     * and rebuilds their invocation handles.
+     */
+    async testInvocationHandles({ counterName }) {
+      const counter = TsCounter.client.upsert({ name: counterName });
+
+      const triggered = await counter.incBy.trigger({ value: 3 });
+      await triggered.awaitResult();
+      const triggeredStatus = await triggered.status();
+      const cancelCompleted = await triggered.cancel();
+
+      const read = await counter.getValue.trigger();
+      const rebuiltValue = await Invocation.get(
+        read.id,
+        TsCounter.methods.getValue,
+      ).awaitResult();
+
+      const scheduled = await counter.incBy.schedule(
+        Datetime.fromDate(new Date(Date.now() + 3_600_000)),
+        { value: 100 },
+      );
+      const scheduledStatus = await scheduled.status();
+      const cancelScheduled = await scheduled.cancel();
+      const cancelledStatus = await scheduled.status();
+      let awaitCancelled = "unexpected:completed";
+      try {
+        await scheduled.awaitResult();
+      } catch (error) {
+        awaitCancelled = isRemoteCallError(error)
+          ? error.cause.tag
+          : `unexpected:error:${String(error)}`;
+      }
+
+      return {
+        triggeredStatus,
+        cancelCompleted,
+        rebuiltValue,
+        scheduledStatus,
+        cancelScheduled,
+        cancelledStatus,
+        awaitCancelled,
+        value: await counter.getValue(),
+      };
+    },
+
+    /**
+     * Triggers TsBlockingAgent.doBlock, waits until it started, and checks that
+     * cancelling the running invocation fails with cannot-cancel-running. Then
+     * completes the promise it waits for and awaits its result.
+     */
+    async testCancelRunning({ blockerName }) {
+      const blocker = TsBlockingAgent.client.upsert({ name: blockerName });
+      const promiseId = await blocker.prepareBlock();
+      const running = await blocker.doBlock.trigger();
+
+      let runningStatus = await running.status();
+      for (let i = 0; i < 300 && runningStatus === "pending"; i++) {
+        await sleep(100);
+        runningStatus = await running.status();
+      }
+
+      let cancelError = "unexpected:cancelled";
+      try {
+        const cancelled = await running.cancel();
+        cancelError = `unexpected:${String(cancelled)}`;
+      } catch (error) {
+        cancelError = isRemoteCallError(error)
+          ? error.cause.tag
+          : `unexpected:error:${String(error)}`;
+      }
+
+      const completed = completePromise(
+        promiseId as unknown as PromiseId,
+        new Uint8Array(),
+      );
+      const result = await running.awaitResult();
+      return {
+        runningStatus,
+        cancelError,
+        completed,
+        result,
+        finalStatus: await running.status(),
+      };
+    },
+
+    /**
+     * Abandons the handle of an invocation that is pending behind a blocked one, and lets a
+     * garbage collection release it while a handle rebuilt from its ID awaits the invocation.
+     * Then unblocks the target. Releasing a handle must not cancel its invocation or end the
+     * other handle's await.
+     */
+    async testCollectedHandle({ blockerName }) {
+      const blocker = TsBlockingAgent.client.upsert({ name: blockerName });
+      const promiseId = await blocker.prepareBlock();
+      const running = await blocker.doBlock.trigger();
+      const { id, weak } = await triggerAndAbandon(blocker);
+      const rebuilt = Invocation.get(id, TsBlockingAgent.methods.getCompletedCount);
+      const awaiting = rebuilt.awaitResult();
+      await collectGarbage();
+      const collected = weak.deref() === undefined;
+      completePromise(promiseId as unknown as PromiseId, new Uint8Array());
+      await running.awaitResult();
+      const result = await awaiting;
+      return { collected, result, finalStatus: await rebuilt.status() };
     },
   },
 });

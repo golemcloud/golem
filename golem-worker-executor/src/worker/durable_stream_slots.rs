@@ -1603,11 +1603,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     })?,
                 )
                 .await?;
+            // The method may count as started before its session is prepared, as on an ephemeral
+            // target whose execution began; its streams then stay open for it.
+            if self.cancel_invocation(session_key).await? == super::CancelInvocationOutcome::Running
+            {
+                return Err(WorkerExecutorError::CannotCancelRunningInvocation);
+            }
             streams
                 .cancel_session_streams()
                 .await
                 .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
-            self.cancel_invocation(session_key).await?;
             return Ok(ExportStreamControlResult::Applied);
         };
         if !matches!(&prepared.attempt.invocation.target,

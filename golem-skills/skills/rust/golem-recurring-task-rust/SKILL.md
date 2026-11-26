@@ -53,15 +53,18 @@ impl PollerAgent for PollerAgentImpl {
 
         let me = PollerAgentClient::upsert(self.name.clone());
         me.schedule_poll(endpoint, after(Duration::from_secs(60)))
+            .await
             .expect("failed to schedule next poll");
     }
 }
 ```
 
-Generated durable-agent scheduling methods return
-`Result<(), golem_rust::golem_agentic::golem::agent::host::RpcError>`. Never discard
-that result: a failed enqueue breaks the recurring chain. For a method with arguments, the
-signature is `schedule_<method>(arguments..., scheduled_time)`; `ScheduledTime` is always last.
+Generated scheduling methods are async and return
+`Result<golem_rust::Invocation<R>, golem_rust::GolemReflectError>` once the target has durably
+accepted the invocation. Never discard the error: a failed enqueue breaks the recurring chain.
+Dropping the returned handle does not cancel the scheduled invocation. For a method with
+arguments, the signature is `schedule_<method>(arguments..., scheduled_time)`; `ScheduledTime` is
+always last.
 
 ## Backoff
 
@@ -79,28 +82,43 @@ let delay = if succeeded {
 
 PollerAgentClient::upsert(self.name.clone())
     .schedule_poll(endpoint, after(Duration::from_secs(delay)))
+    .await
     .expect("failed to schedule retry");
 ```
 
 ## Cancel the pending tick
 
-`schedule_cancelable_<method>(arguments..., scheduled_time)` returns
-`Result<CancellationToken, RpcError>` for a durable agent. Store the token in agent state
-and call `cancel()` to prevent that scheduled invocation from starting:
+`schedule_<method>` returns the handle of the scheduled invocation. Store its ID, a
+`golem_rust::OwnedInvocationId`, in agent state, and rebuild the handle with
+`golem_rust::Invocation::<R>::get` when a later invocation must cancel the tick:
 
 ```rust
-let token = PollerAgentClient::upsert(self.name.clone())
-    .schedule_cancelable_poll(endpoint, after(Duration::from_secs(60)))
-    .expect("failed to schedule next poll");
-self.pending = Some(token);
+use golem_rust::{Invocation, OwnedInvocationId};
 
-if let Some(token) = self.pending.take() {
-    token.cancel();
+// In `poll`, after scheduling the next tick (`self.pending: Option<OwnedInvocationId>`):
+let next = PollerAgentClient::upsert(self.name.clone())
+    .schedule_poll(endpoint, after(Duration::from_secs(60)))
+    .await
+    .expect("failed to schedule next poll");
+self.pending = Some(next.id().clone());
+
+// In a `stop` method:
+self.stopped = true;
+if let Some(id) = self.pending.take() {
+    Invocation::<()>::get(&id)
+        .cancel()
+        .await
+        .expect("failed to cancel the pending poll");
 }
 ```
 
-A state flag is still useful because a tick may already have started when cancellation races with
-delivery. Keep only one pending tick unless overlapping schedules are intentional.
+`cancel` returns `true` when it withdrew the tick before it started and `false` when the tick
+already finished or was already cancelled. It fails with `GolemReflectError::CannotCancelRunning`
+for a running invocation; the agent runs one invocation at a time, so its own pending tick is not
+running while `stop` runs. The agent that scheduled the tick may cancel it; other callers need
+management permission. Keep the state flag as well: a tick whose ID is not in `self.pending`,
+for example one started from the CLI, still exits without doing work. Keep only one pending tick
+unless overlapping schedules are intentional.
 
 Recurring invocations grow the oplog. For long-lived or frequent loops, configure periodic
 snapshots; do not try to bypass durability. Load `golem-custom-snapshot-rust` for that workflow.

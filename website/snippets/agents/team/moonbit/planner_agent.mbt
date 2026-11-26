@@ -12,7 +12,8 @@ pub async fn PlannerAgent::plan(self : Self) -> Plan {
   let facts = @research.ResearchAgentClient::upsert(self.topic) //@
     .gather() //@
   // send now, without waiting for a result:
-  @slack.SlackAgentClient::upsert("ops").trigger_post(facts.summary) //@
+  @slack.SlackAgentClient::upsert("ops") //@
+    .trigger_post(facts.summary).drop() //@
   // discover agents, their methods, and available tools:
   let agents = @reflection.get_all_agent_types().map(a => //@
     "\{a.name()}: \{a.methods().map(m => m.name()).join(", ")}") //@

@@ -54,7 +54,7 @@ use golem_common::model::agent::{
     ParsedAgentKey,
 };
 use golem_common::model::agent::{
-    AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget, ScheduleId,
+    AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget,
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::caller::{
@@ -2034,44 +2034,30 @@ impl WorkerService {
                 &accepted_id,
                 agent_id.environment_id,
                 auth_ctx,
-                None,
                 Some(agent.metadata.fingerprint),
             )
             .await
     }
 
-    /// Internal token control uses the recorded scheduling caller, not operator permission: the
-    /// target cancels only when `canceller` is the immediate caller recorded for the call.
-    pub async fn cancel_scheduled_invocation(
+    /// The target, not the routing service, authorizes the persisted starter or manager.
+    pub async fn invocation_handle(
         &self,
-        target: &OwnedAgentId,
-        key: &golem_common::model::InvocationId,
-        receipt: ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: AuthCtx,
-    ) -> WorkerResult<bool> {
-        if !matches!(&auth, AuthCtx::System | AuthCtx::Agent(_)) {
+        request: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleRequest,
+    ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess>
+    {
+        let auth: AuthCtx = request
+            .auth_ctx
+            .clone()
+            .ok_or_else(|| WorkerExecutorError::invalid_request("auth_ctx not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        if !matches!(auth, AuthCtx::System | AuthCtx::Agent(_)) {
             return Err(WorkerExecutorError::invalid_request(
-                "schedule cancellation requires an authenticated internal caller",
+                "invocation handles require an authenticated internal caller",
             )
             .into());
         }
-        self.worker_client
-            .cancel_invocation(
-                &target.agent_id(),
-                key,
-                target.environment_id,
-                auth,
-                Some(
-                    golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation {
-                        schedule_id: Some(receipt.id.into()),
-                        target_environment_id: Some(target.environment_id.into()),
-                        canceller: Some(canceller.clone().into()),
-                    },
-                ),
-                None,
-            )
-            .await
+        self.worker_client.invocation_handle(request).await
     }
 
     pub async fn process_oplog_entries(
@@ -2499,6 +2485,7 @@ impl WorkerService {
         caller: golem_api_grpc::proto::golem::component::Caller,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
+        requires_own_record: bool,
     ) -> WorkerResult<AgentInvocationOutput> {
         let resource = method_name
             .as_ref()
@@ -2546,6 +2533,7 @@ impl WorkerService {
             caller,
             scope_card,
             expected_fingerprint,
+            requires_own_record,
         )
         .await
     }
@@ -3014,6 +3002,7 @@ impl WorkerService {
         };
         let component_revision = invocation_component.revision;
         let mut trusted_start = InvocationStart {
+            requires_own_record: false,
             target: None,
             constructor: None,
             component_id: None,
@@ -3345,6 +3334,7 @@ impl WorkerService {
         validate_identity(&identity)?;
         let caller: golem_api_grpc::proto::golem::component::Caller = caller.into();
         let mut trusted_start = InvocationStart {
+            requires_own_record: false,
             target: None,
             constructor: None,
             component_id: None,
@@ -3569,6 +3559,7 @@ impl WorkerService {
         caller: golem_api_grpc::proto::golem::component::Caller,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
+        requires_own_record: bool,
     ) -> WorkerResult<AgentInvocationOutput> {
         let observation_only =
             mode == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Lookup as i32;
@@ -3608,6 +3599,7 @@ impl WorkerService {
                 caller,
                 scope_card,
                 expected_fingerprint,
+                requires_own_record,
             )
             .await?;
         output.agent_id.get_or_insert(target.agent_id);
@@ -4022,6 +4014,7 @@ impl WorkerService {
         let caller: golem_api_grpc::proto::golem::component::Caller =
             self.rest_caller(&auth).into();
         let mut start = InvocationStart {
+            requires_own_record: false,
             target: None,
             constructor: None,
             component_id: None,
@@ -4502,6 +4495,7 @@ impl WorkerService {
                 caller,
                 None,
                 expected_fingerprint,
+                false,
             )
             .await?;
 
@@ -5414,6 +5408,14 @@ mod tests {
 
     #[async_trait]
     impl WorkerClient for RecordingWorkerClient {
+        async fn invocation_handle(
+            &self,
+            _: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleRequest,
+        ) -> WorkerResult<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess>
+        {
+            unreachable!("this test does not observe invocation handles")
+        }
+
         async fn prepare(
             &self,
             target: &RoutedTarget,
@@ -5825,7 +5827,6 @@ mod tests {
             _: &golem_common::model::InvocationId,
             _: EnvironmentId,
             _: AuthCtx,
-            _: Option<golem_api_grpc::proto::golem::worker::ScheduledInvocationCancellation>,
             expected_fingerprint: Option<AgentFingerprint>,
         ) -> WorkerResult<bool> {
             assert_eq!(expected_fingerprint, Some(self.fingerprint));
@@ -5905,6 +5906,7 @@ mod tests {
             _: golem_api_grpc::proto::golem::component::Caller,
             _: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
             expected_fingerprint: Option<AgentFingerprint>,
+            _requires_own_record: bool,
         ) -> WorkerResult<AgentInvocationOutput> {
             let agent_id = target.agent_id;
             self.invocation_inputs.lock().unwrap().push(input);
@@ -9097,6 +9099,7 @@ mod tests {
                         Caller::anonymous().into(),
                         None,
                         fingerprint,
+                        false,
                     )
                     .await
                     .unwrap();
@@ -9159,6 +9162,7 @@ mod tests {
                 Caller::anonymous().into(),
                 None,
                 fingerprint,
+                false,
             )
         };
 
@@ -9301,6 +9305,7 @@ mod tests {
                     Caller::anonymous().into(),
                     None,
                     None,
+                    false,
                 )
                 .await;
             assert!(result.is_ok(), "unexpected result: {result:?}");
@@ -9529,6 +9534,7 @@ mod tests {
                     Caller::anonymous().into(),
                     None,
                     None,
+                    false,
                 )
             };
             invoke(input)

@@ -175,7 +175,7 @@ Tests: `tests/api/mod.rs::lost_card_transfer_response_converges_after_source_and
 `tests/rpc.rs::counter_resource_test_2_with_restart` covers the weaker "completed call is not
 re-executed across restart" property (1 then 2).
 
-The serialized `invoke` and non-streaming `invoke_and_await` paths record an admitted call as
+The asynchronous `trigger` and non-streaming `invoke_and_await` calls record an admitted call as
 `Start(span_started = S) → End(span_finished = S)` (or a `Cancelled` carrying the close).
 Replay claims the call by its invocation id before restoring `S`; tracing metadata does not
 participate in matching and the cursor has no span-specific tail. Each committed prefix is
@@ -189,8 +189,8 @@ recoverable:
 
 Synchronous local denials remain spanless and persist the denial decision in the request before
 `End(Denied)`, so incomplete replay completes the denial without dispatch or re-authorization.
-Asynchronous validation and activation denials use their existing short durable operation with
-an embedded opening and failed/denied close; their baked future owns no later cleanup.
+An awaited call that fails validation returns its error without a `Start`; a denied awaited
+call records its denial in the `Start` and closes its embedded span in the `End`.
 
 Resource and guest-created spans can outlive their opening call. Explicit finish and successful
 attribute mutation are short ordinary local operations whose terminals carry the close or
@@ -204,7 +204,7 @@ defer replay waits outside the guest thread.
 ## 7. Individual call repair keeps the RPC key
 
 ```
-#50 Start { rpc/invoke, request }   key = derived(invocation key, #50)
+#50 Start { rpc/invoke-and-await, request }   key = derived(invocation key, #50)
      target accepts and completes; caller loses its Store before recording End
      → reconstruction re-dispatches the incomplete call with the same key
      target returns its recorded result, without executing again
@@ -456,7 +456,7 @@ Owner O oplog
 ```
 
 #66 records how the body ended; host tasks select it, so its position says nothing about when
-O saw the result. O's result await (`invoke-and-await`, `future-invoke-result.get`,
+O saw the result. O's result await (`invoke-and-await`,
 `get-invoke-results`, `underlying-invoke-result.get`) is its own guest-facing call #65, and #68
 is the guest boundary. Replay releases the result at #68, at a blocked wait.
 

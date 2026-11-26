@@ -171,7 +171,7 @@ Nothing was invented for Effect; every library is real.
 - Golem: `@golemcloud/effect-golem` (`defineAgent`, `method`, `Http.mount/get/post/put` with
   `exposeFiles` (live-file mapping `/*` → `/out/$1`, docs
   `invoke/making-custom-apis/http-routers/semantics.mdx:72`), `auth` (`src/Http.ts:768`), `cors`,
-  query bindings `?region={region}` (`src/Http.ts:67`); `Webhook.create`; definition clients `.client.get`, `.schedule`, `ScheduledInvocation.cancel()`;
+  query bindings `?region={region}` (`src/Http.ts:67`); `Webhook.create`; definition clients `.client.get`, `.schedule`, the `InvocationId.Invocation` handle's `cancel` Effect;
   `Reflection.getAllAgentTypes` / `getAllToolTypes()`; `Tool.toolDefinition` with
   `requiresFilesystem`, `WitTypes.Secret`, `Secrets.reveal`, `Tool.ok/err`, `.client()`;
   `Permissions.deriveFromWallet/derive/install/revoke`, `Lifespan.fromIso8601`, `Holder.agent`;
@@ -217,8 +217,8 @@ The stubs are `declare class` types built only from real exported SDK types (`Br
 `Bridge.RemoteCallError`, `Bridge.ConnectionRequirements`, `BridgeTool.ToolRuntimeError`,
 `BridgeTool.ToolRequirements`, `BridgeTool.StartedToolInvocation`). They have no runtime body. Generating the real clients needs a
 running Golem environment with the provider components; the stub signatures follow the generator
-code exactly (positional constructor arguments, Effect results, `trigger` / `schedule` /
-`scheduleCancelable` on stream-free methods).
+code exactly (positional constructor arguments, Effect results, `trigger` / `schedule` on
+stream-free methods, each succeeding with a scoped `InvocationId.Invocation` handle).
 
 ## Negative controls (`neg.sh`)
 

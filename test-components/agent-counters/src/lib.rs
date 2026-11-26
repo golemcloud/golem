@@ -511,7 +511,7 @@ impl ScheduleCounter for ScheduleCounterImpl {
 trait ScheduleEmitter {
     fn new(id: String) -> Self;
     fn warm(&self);
-    fn schedule_poll_at(
+    async fn schedule_poll_at(
         &self,
         target_name: String,
         seconds: u64,
@@ -525,7 +525,13 @@ trait ScheduleEmitter {
     /// scenarios already on the poll path measure dispatch cost, and giving
     /// their scheduled action an argument and a growing log would change what
     /// they measure.
-    fn schedule_fire_at(&self, target_name: String, seconds: u64, nanoseconds: u32, token: String);
+    async fn schedule_fire_at(
+        &self,
+        target_name: String,
+        seconds: u64,
+        nanoseconds: u32,
+        token: String,
+    );
 }
 
 struct ScheduleEmitterImpl {
@@ -540,7 +546,7 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
 
     fn warm(&self) {}
 
-    fn schedule_poll_at(
+    async fn schedule_poll_at(
         &self,
         target_name: String,
         seconds: u64,
@@ -556,10 +562,17 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
                 seconds: i64::try_from(seconds).expect("schedule timestamp exceeds i64 range"),
                 nanoseconds,
             })
+            .await
             .expect("failed to schedule poll");
     }
 
-    fn schedule_fire_at(&self, target_name: String, seconds: u64, nanoseconds: u32, token: String) {
+    async fn schedule_fire_at(
+        &self,
+        target_name: String,
+        seconds: u64,
+        nanoseconds: u32,
+        token: String,
+    ) {
         let mut target = ScheduleCounterClient::upsert(target_name);
         let scheduled_millis = seconds * 1000 + (nanoseconds / 1_000_000) as u64;
         target
@@ -571,6 +584,7 @@ impl ScheduleEmitter for ScheduleEmitterImpl {
                     nanoseconds,
                 },
             )
+            .await
             .expect("failed to schedule fire");
     }
 }
@@ -653,6 +667,7 @@ impl ConstructorCalls for ConstructorCallsImpl {
             seconds: 0,
             nanoseconds: 0,
         })
+        .await
         .expect("schedule during construction");
         let promise = golem_rust::create_promise();
         println!("constructor-calls:promise:{}", promise.oplog_idx);

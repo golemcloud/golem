@@ -54,6 +54,9 @@ use golem_api_grpc::proto::golem::worker::{
     ResumeAttach, ResumeOperation, StreamInvocationIdentity, invocation_request,
     invocation_response, invocation_session_completion, invocation_session_result,
 };
+use golem_api_grpc::proto::golem::workerexecutor::v1::{
+    InvocationHandleOperation, InvocationHandleSuccess,
+};
 use golem_common::base_model::durable_stream::{
     DurableStreamReadRequest, StreamAttachmentControlRequest,
 };
@@ -109,20 +112,45 @@ where
     }
 }
 
+/// The environment an invocation handle resolves its invocation in: the calling agent's or tool's.
+pub(crate) fn invocation_handle_environment(
+    caller: &Principal,
+) -> Result<golem_common::model::environment::EnvironmentId, WorkerExecutorError> {
+    match caller {
+        Principal::Agent(agent) => Ok(agent.environment_id),
+        Principal::Tool(tool) => Ok(tool.environment_id),
+        _ => Err(WorkerExecutorError::invalid_request(
+            "invocation handles require a calling agent or tool",
+        )),
+    }
+}
+
+/// The agent that owns the invocation a handle addresses. Handles address agent method
+/// invocations only, so a tool-owned ID is refused before any authority or storage read.
+pub(crate) fn invocation_handle_owner(
+    invocation_id: &golem_common::model::OwnedInvocationId,
+) -> Result<&AgentId, WorkerExecutorError> {
+    invocation_id.agent_id().ok_or_else(|| {
+        WorkerExecutorError::invalid_request(
+            "invocation handles address agent invocations, not tool-owned invocations",
+        )
+    })
+}
+
 #[async_trait]
 pub trait Rpc: Send + Sync {
-    /// Routes cancellation to the target executor, which validates the incarnation-bound receipt
-    /// and that `canceller` is the immediate caller recorded for the scheduled call, and commits
-    /// pending removal before returning true. Removing only the scheduler wake does not withdraw
-    /// work already accepted in the target oplog.
-    async fn cancel_scheduled_invocation(
+    /// Observes or cancels an existing accepted invocation in the caller's environment. The
+    /// target answers only its recorded immediate starter, compared with `caller` as scheduled
+    /// cancellation compares it, or a caller with the applicable management permission; any
+    /// other caller is denied before anything about the owner or invocation is answered. Never
+    /// creates, starts or resumes the owner and never admits work.
+    async fn invocation_handle(
         &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::ScheduleId,
-        canceller: &Principal,
+        invocation_id: &golem_common::model::OwnedInvocationId,
+        caller: &Principal,
+        operation: InvocationHandleOperation,
         auth: &AuthCtx,
-    ) -> Result<bool, RpcError>;
+    ) -> Result<InvocationHandleSuccess, WorkerExecutorError>;
 
     /// Routes acceptance to the target executor, which commits the invocation and deadline in
     /// the expected incarnation's oplog without running guest code, then registers its wake.
@@ -137,7 +165,7 @@ pub trait Rpc: Send + Sync {
         scheduled_at: jiff::Timestamp,
         self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, RpcError>;
+    ) -> Result<(), RpcError>;
 
     /// Explicit creation observes the constructor outcome; preparation never starts execution.
     /// An `exclusive` creation fails when the agent already exists, unless it is a retry of
@@ -245,6 +273,9 @@ pub trait Rpc: Send + Sync {
         .into())
     }
 
+    /// Admits the invocation with its own durable record on the target, skipping a read-only
+    /// cache hit, and returns once the target accepted it. An invocation with the same key that
+    /// already ended, also with an error, counts as accepted.
     /// `expected_callee_fingerprint` has the same meaning as for [`Rpc::invoke_and_await`].
     async fn invoke(
         &self,
@@ -350,6 +381,14 @@ pub enum RpcError {
     Conflict {
         details: String,
     },
+    /// The awaited invocation was cancelled before it started.
+    Cancelled {
+        details: String,
+    },
+    /// A cancellation found the invocation already running.
+    CannotCancelRunning {
+        details: String,
+    },
 }
 
 impl From<SerializableRpcError> for RpcError {
@@ -363,6 +402,10 @@ impl From<SerializableRpcError> for RpcError {
             }
             SerializableRpcError::RemoteAgentError { error } => Self::RemoteAgentError { error },
             SerializableRpcError::Conflict { details } => Self::Conflict { details },
+            SerializableRpcError::Cancelled { details } => Self::Cancelled { details },
+            SerializableRpcError::CannotCancelRunning { details } => {
+                Self::CannotCancelRunning { details }
+            }
         }
     }
 }
@@ -380,6 +423,10 @@ impl From<RpcError> for SerializableRpcError {
                 SerializableRpcError::RemoteAgentError { error }
             }
             RpcError::Conflict { details } => SerializableRpcError::Conflict { details },
+            RpcError::Cancelled { details } => SerializableRpcError::Cancelled { details },
+            RpcError::CannotCancelRunning { details } => {
+                SerializableRpcError::CannotCancelRunning { details }
+            }
         }
     }
 }
@@ -395,6 +442,10 @@ impl Display for RpcError {
             }
             RpcError::RemoteAgentError { error } => write!(f, "Remote agent error: {error}"),
             RpcError::Conflict { details } => write!(f, "Conflict: {details}"),
+            RpcError::Cancelled { details } => write!(f, "Cancelled: {details}"),
+            RpcError::CannotCancelRunning { details } => {
+                write!(f, "Cannot cancel a running invocation: {details}")
+            }
         }
     }
 }
@@ -439,13 +490,15 @@ impl From<WorkerExecutorError> for RpcError {
                 details: "Invalid account".to_string(),
             },
             WorkerExecutorError::PermissionDenied { details } => RpcError::Denied { details },
-            // Permanent: every retry under the same key is cancelled again. The detail string
-            // identifies a cancelled callee until the agent `rpc-error` gains a `cancelled` case.
-            error @ WorkerExecutorError::InvocationCancelled => RpcError::RemoteAgentError {
-                error: Box::new(ModelAgentError::InvalidInput(format!(
-                    "invocation-cancelled: {error}"
-                ))),
+            // Permanent: every retry under the same key is cancelled again.
+            error @ WorkerExecutorError::InvocationCancelled => RpcError::Cancelled {
+                details: error.to_string(),
             },
+            error @ WorkerExecutorError::CannotCancelRunningInvocation => {
+                RpcError::CannotCancelRunning {
+                    details: error.to_string(),
+                }
+            }
             WorkerExecutorError::InvalidRequest { details } => RpcError::RemoteAgentError {
                 error: Box::new(ModelAgentError::InvalidInput(details)),
             },
@@ -480,6 +533,8 @@ impl From<crate::preview2::golem::agent::host::RpcError> for RpcError {
             WitRpcError::NotFound(details) => Self::NotFound { details },
             WitRpcError::RemoteInternalError(details) => Self::RemoteInternalError { details },
             WitRpcError::Conflict(details) => Self::Conflict { details },
+            WitRpcError::Cancelled(details) => Self::Cancelled { details },
+            WitRpcError::CannotCancelRunning(details) => Self::CannotCancelRunning { details },
             WitRpcError::RemoteAgentError(err) => {
                 match golem_common::schema::agent::wit::decode_agent_error(err) {
                     Ok(error) => Self::RemoteAgentError {
@@ -502,6 +557,8 @@ impl From<RpcError> for crate::preview2::golem::agent::host::RpcError {
             RpcError::NotFound { details } => Self::NotFound(details),
             RpcError::RemoteInternalError { details } => Self::RemoteInternalError(details),
             RpcError::Conflict { details } => Self::Conflict(details),
+            RpcError::Cancelled { details } => Self::Cancelled(details),
+            RpcError::CannotCancelRunning { details } => Self::CannotCancelRunning(details),
             RpcError::RemoteAgentError { error } => {
                 match golem_common::schema::agent::wit::encode_agent_error(&error) {
                     Ok(error) => Self::RemoteAgentError(error),

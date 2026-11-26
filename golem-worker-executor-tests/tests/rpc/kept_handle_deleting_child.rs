@@ -8,12 +8,12 @@
 
 use super::*;
 use crate::panic_watch::{panics_naming, watch_panics_naming};
+use golem_common::model::AgentInvocation;
 use golem_common::model::agent::{
     AgentConfigEntryDto, InvocationFreshnessDisposition, ParsedAgentKey,
 };
 use golem_common::model::component::ComponentId;
 use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::{AgentInvocation, ScheduleId};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::services::component::ComponentService;
 use golem_worker_executor::services::rpc::{Rpc, RpcDemand};
@@ -197,16 +197,18 @@ impl Rpc for GatedSchedule {
             .await
     }
 
-    async fn cancel_scheduled_invocation(
+    async fn invocation_handle(
         &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
+        invocation_id: &golem_common::model::OwnedInvocationId,
+        caller: &golem_common::model::caller::Principal,
+        operation: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation,
         auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
+            .invocation_handle(invocation_id, caller, operation, auth)
             .await
     }
 
@@ -219,7 +221,7 @@ impl Rpc for GatedSchedule {
         scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<ScheduleId, RpcError> {
+    ) -> Result<(), RpcError> {
         let is_target = self.gate.target_agent.lock().unwrap().as_ref() == Some(owned_agent_id);
         if is_target && self.gate.armed.swap(false, Ordering::AcqRel) {
             self.gate.entered.add_permits(1);
@@ -491,20 +493,27 @@ struct GatedDeletionAnswers {
     panics: Vec<String>,
 }
 
-// A failed schedule through the kept handle traps the caller, so the caller's invocation fails
-// with `refusal`. Resolving the cached generation does not panic on its stopped state actor,
-// which aborts an executor built with panic = "abort".
-fn assert_schedule_refused_without_a_panic(answers: &GatedDeletionAnswers, refusal: &str) {
+// A failed schedule through the kept handle returns its error to the guest, as the other calls
+// do, so the answers include the schedule. Resolving the cached generation does not panic on its
+// stopped state actor, which aborts an executor built with panic = "abort".
+fn kept_answers_without_a_panic(
+    answers: GatedDeletionAnswers,
+) -> Vec<(String, Result<(), String>)> {
     assert!(
         answers.panics.is_empty(),
-        "the kept schedule must not panic on the stopped state actor: {:#?}",
+        "the kept calls must not panic on the stopped state actor: {:#?}",
         answers.panics
     );
-    assert!(
-        matches!(&answers.schedule, Err(error) if error.contains(refusal)),
-        "the kept schedule must fail the caller's invocation with {refusal:?}: {:?}",
-        answers.schedule
-    );
+    let schedule = match answers.schedule {
+        Ok(schedule) => schedule,
+        Err(error) => panic!(
+            "the kept schedule must not fail the caller's invocation: {error}; calls: {:?}",
+            answers.calls
+        ),
+    };
+    let mut calls = answers.calls;
+    calls.push(("kept_agent_rpc_schedule_result".to_string(), schedule));
+    calls
 }
 
 #[test]
@@ -527,8 +536,7 @@ async fn kept_handle_to_a_child_whose_durable_state_is_removed_is_not_found(
         "removed",
     )
     .await?;
-    assert_schedule_refused_without_a_panic(&results, "Not found: Worker");
-    for (method, result) in results.calls {
+    for (method, result) in kept_answers_without_a_panic(results) {
         assert!(
             matches!(&result, Err(error) if error.starts_with("RpcError::NotFound(")),
             "{method} through a handle to a child whose durable state is removed must fail as \
@@ -558,11 +566,7 @@ async fn kept_handle_to_a_child_being_deleted_is_refused(
         "running",
     )
     .await?;
-    assert_schedule_refused_without_a_panic(
-        &results,
-        "Remote agent error: Invalid input: Worker is being deleted",
-    );
-    assert_refused_as_being_deleted(results.calls);
+    assert_refused_as_being_deleted(kept_answers_without_a_panic(results));
     Ok(())
 }
 
@@ -586,9 +590,18 @@ async fn kept_handle_to_a_child_whose_deletion_failed_is_refused(
         "failed",
     )
     .await?;
-    assert_schedule_refused_without_a_panic(
-        &results,
-        "Remote agent error: Invalid input: Worker is being deleted",
+    // The schedule answers the failed deletion with a retryable error, which traps the caller's
+    // invocation instead of reaching the guest.
+    assert!(
+        results.panics.is_empty(),
+        "the kept calls must not panic on the stopped state actor: {:#?}",
+        results.panics
+    );
+    assert!(
+        matches!(&results.schedule, Err(error)
+            if error.contains("the agent's failed deletion blocks the request; try again")),
+        "the kept schedule must fail the caller's invocation with the failed-deletion refusal: {:?}",
+        results.schedule
     );
     assert_refused_as_being_deleted(results.calls);
     Ok(())
@@ -825,9 +838,9 @@ async fn kept_handle_schedule_overtaken_by_the_deletion_is_not_found_without_a_p
 ) -> anyhow::Result<()> {
     // The deletion removes the child's durable state and stops its state actor while the schedule
     // is held before it acquires the child, which the cache still holds. The schedule then reads
-    // the status of the stopped state actor. A failed schedule traps the caller, so every attempt the caller makes must fail
-    // as not found, as the pinned calls do above, and none with an internal error from the
-    // stopped state actor.
+    // the status of the stopped state actor. The schedule returns its error to the guest, as the
+    // pinned calls do above: not found, not an internal error from the stopped state actor, and
+    // without failing the caller's invocation.
     let answers = pinned_call_racing_deletion(
         last_unique_id,
         deps,
@@ -839,18 +852,13 @@ async fn kept_handle_schedule_overtaken_by_the_deletion_is_not_found_without_a_p
     .await?;
     assert!(answers.panics.is_empty(), "{:#?}", answers.panics);
     assert!(
-        matches!(&answers.result, Err(error) if error.contains("Not found: Worker")),
-        "the caller's invocation must fail as not found: {:?}",
+        matches!(&answers.result, Ok(Err(error)) if error.starts_with("RpcError::NotFound(")),
+        "the pinned schedule overtaken by the deletion must fail as not found: {:?}",
         answers.result
     );
     assert!(
-        !answers.caller_errors.is_empty()
-            && answers
-                .caller_errors
-                .iter()
-                .all(|error| error.contains("Not found: Worker")),
-        "every attempt of the pinned schedule overtaken by the deletion must fail as not found: \
-         {:#?}",
+        answers.caller_errors.is_empty(),
+        "a schedule refused as not found must not fail an attempt of the caller: {:#?}",
         answers.caller_errors
     );
     Ok(())

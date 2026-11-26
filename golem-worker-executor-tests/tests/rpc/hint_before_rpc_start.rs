@@ -43,6 +43,21 @@ impl DispatchThenHangRpc {
 
 #[async_trait]
 impl Rpc for DispatchThenHangRpc {
+    async fn invocation_handle(
+        &self,
+        invocation_id: &golem_common::model::OwnedInvocationId,
+        caller: &golem_common::model::caller::Principal,
+        operation: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation,
+        auth: &AuthCtx,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner
+            .invocation_handle(invocation_id, caller, operation, auth)
+            .await
+    }
+
     async fn create_and_initialize(
         &self,
         target: ResolvedTarget,
@@ -73,19 +88,6 @@ impl Rpc for DispatchThenHangRpc {
             .await
     }
 
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
-        self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
-            .await
-    }
-
     async fn schedule_invocation(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -95,7 +97,7 @@ impl Rpc for DispatchThenHangRpc {
         scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+    ) -> Result<(), RpcError> {
         self.inner
             .schedule_invocation(
                 owned_agent_id,
@@ -229,7 +231,7 @@ impl Rpc for DispatchThenHangRpc {
 
 #[test]
 #[timeout("3m")]
-async fn sync_rpc_repair_after_stdout_hint_executes_target_once(
+async fn awaited_rpc_repair_after_stdout_hint_executes_target_once(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
@@ -247,7 +249,7 @@ async fn sync_rpc_repair_after_stdout_hint_executes_target_once(
 
 #[test]
 #[timeout("3m")]
-async fn fire_and_forget_rpc_repair_after_stdout_hint_executes_target_once(
+async fn triggered_rpc_repair_after_stdout_hint_executes_target_once(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
@@ -257,8 +259,8 @@ async fn fire_and_forget_rpc_repair_after_stdout_hint_executes_target_once(
         last_unique_id,
         deps,
         fixture,
-        "invoke",
-        "golem::rpc::wasm-rpc::invoke",
+        "trigger",
+        "golem::rpc::wasm-rpc::trigger",
     )
     .await
 }

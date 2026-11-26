@@ -137,12 +137,15 @@ let created = counter_type
 let agent_id = created.agent_id().await?;
 ```
 
-Reflected methods also expose `trigger_value`, `pending_value`, and
-`schedule_value`. Pending invocations are futures and can be cancelled before
-completion. Scheduled invocations return a cancellation token. Live stream
-inputs and outputs are supported by awaited `invoke_value` calls. They are not
-supported by trigger or scheduled calls; a pending call cannot accept a live
-stream input.
+Reflected methods also expose the async `trigger_value(input)` and
+`schedule_value(at, input)`. Both return a `golem_rust::Invocation<Option<SchemaValue>>`
+handle once the target has durably accepted the invocation; its async `status`,
+`await_result` and `cancel` observe or withdraw it, and `method.invocation(&id)`
+rebuilds the handle from its `OwnedInvocationId` without a remote call. Only the
+caller that started the invocation, or a caller with management permission, may
+use the handle; dropping it only detaches. Live stream inputs and outputs are
+supported by awaited `invoke_value` calls. Trigger and schedule reject methods
+with streams and never lend a scope card.
 
 ## Define a Caller-Owned Typed Client
 
@@ -167,9 +170,11 @@ fn connect(agent_id: &AgentId) -> Result<CounterApiClient, golem_rust::GolemRefl
 
 Method-only clients do not declare a name, constructor, mode, or config and
 do not discover the remote lifecycle. They never create an agent. Statically
-named methods are awaited calls. The client also generates
-`trigger_<method>`, `pending_<method>`, and `schedule_<method>`, and an async
-`agent_id()`.
+named methods are awaited calls returning
+`Result<InvocationOutput<R>, GolemReflectError>`. The client also generates the
+async `trigger_<method>(args...)` and `schedule_<method>(at, args...)`, which
+return a `golem_rust::Invocation<R>` handle, and an async `agent_id()`. Unlike
+`#[agent_definition]` clients, the scheduled time is the first argument.
 
 A fully defined client declares exactly one static constructor returning `Self`
 and must also declare `type_name`. Either half without the other is a compile
@@ -251,7 +256,7 @@ and `get_by_id`; the method-only definition has only `get_by_id`. The config of
 fully defined caller-authored `#[agent_client]`
 reports invocation failures through `Result`; ordinary RPC clients
 keep their established call signatures. Malformed declared remote outputs,
-including unexpected unit values on awaited or pending calls, report
+including unexpected unit values on awaited calls or awaited handles, report
 `GolemReflectError::MalformedRemoteOutput`.
 
 ## Look Up and Connect by Agent ID
@@ -293,8 +298,9 @@ let result = golem_rust::DynamicAgentClient::from_agent_id(&agent_id)?
     .await?;
 ```
 
-Dynamic methods also support `trigger_value`, `pending_value`, and
-`schedule_value`. They never use caller-authored or reflected schemas.
+Dynamic methods also support `trigger_value` and `schedule_value`, which return
+an invocation handle; `DynamicAgentMethod::invocation(&id)` rebuilds one from its
+ID. They never use caller-authored or reflected schemas.
 
 ## Discovery to a Fully Dynamic Agent
 
@@ -351,9 +357,10 @@ async fn search_dynamically() -> Result<Value, GolemReflectError> {
 }
 ```
 
-This awaited example owns no stream or pending handle. If packed values contain
+This awaited example owns no stream or invocation handle. If packed values contain
 owned streams, transfer each input once and consume or close every returned
-stream; cancel or await any pending invocation before abandoning it.
+stream. Dropping an invocation handle only detaches; call `cancel` first when a
+not-yet-started invocation is no longer wanted.
 
 ## Discover and Call Tools
 

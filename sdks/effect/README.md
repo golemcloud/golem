@@ -92,9 +92,10 @@ const program = Effect.scoped(
   Effect.gen(function* () {
     const counter = yield* Counter.client.upsert({ name: "orders" })
     yield* counter.add({ by: 2 })
-    yield* counter.add.trigger({ by: 3 })
+    const triggered = yield* counter.add.trigger({ by: 3 })
+    const total = yield* triggered.awaitResult
     const scheduled = yield* counter.add.schedule("10 minutes", { by: 1 })
-    // yield* scheduled.cancel()
+    const withdrawn = yield* scheduled.cancel
     const id = yield* counter.agentId
     const again = yield* Counter.client.getById(id)
     yield* again.add({ by: 1 })
@@ -118,11 +119,27 @@ const program = Effect.scoped(
   expected; `AgentId.parse(text)` reads text back into an `AgentId`. The parse checks only the
   text form; only the host knows whether an agent has the ID.
 
-Awaited RPC is interruptible: fiber interruption cancels the result handle. Cancellation is best
-effort; remote side effects may already have happened. Triggering and scheduling methods whose
-schema contains a live stream is rejected because streams require an awaited invocation. An
-ephemeral call returns `{ metadata, value }`, and an ephemeral trigger/schedule exposes invocation
-metadata: the target `agentId` and the typed `invocationId`. `InvocationId.format` and
+Awaited RPC is interruptible: fiber interruption drops the awaited host call, and the host
+withdraws the invocation when it has not started yet. Withdrawal is best effort; remote side
+effects may already have happened.
+
+`trigger` and `schedule` succeed with an `Invocation` handle once the target has durably accepted
+the invocation. The handle has the invocation `id` and the Effects `status`, `awaitResult`, and
+`cancel`. The current scope owns the handle:
+
+- The ID only locates the invocation; it is not authority. Only the caller that started the
+  invocation, or a caller with the applicable management permission, can observe or cancel it.
+  Rebuild a handle from a stored ID with `InvocationId.get(id, Counter.methods.add)`.
+- Closing the scope, or interrupting `awaitResult`, only detaches: the invocation keeps running.
+- `cancel` withdraws an invocation that has not started and succeeds with `true`; it succeeds with
+  `false` when the invocation already finished or was already cancelled. Cancelling a running
+  invocation is not supported and fails with `RpcCannotCancelRunning`. `awaitResult` of a
+  withdrawn invocation fails with `RpcCancelled`.
+- `trigger` and `schedule` never send a scope card. Methods whose schema contains a live stream
+  cannot be triggered or scheduled, because streams require an awaited invocation.
+
+An ephemeral call returns `{ metadata, value }` with the target `agentId` and the typed
+`invocationId`; invocation metadata exists only on awaited results. `InvocationId.format` and
 `InvocationId.parse` convert an invocation ID to and from its `<agent-uuid>.<uuid>` text form.
 
 Use `defineAgentClient` for caller-owned clients. A full client definition has a declared name,
@@ -585,8 +602,8 @@ const program = Effect.scoped(
 
 Guest bridges use the same affine received streams and capability handles as the SDK. Their host
 service requirements flow through the Effect environment; the agent dispatcher supplies live
-services. Stream-free methods also expose `.trigger(...)` and `.schedule(...)`, with cancelable
-scheduling. Streaming methods cannot be triggered or scheduled.
+services. Stream-free methods also expose `.trigger(...)` and `.schedule(...)`, which return
+`Invocation` handles. Streaming methods cannot be triggered or scheduled.
 
 Generated tool clients expose independent Effect stdin/stdout/stderr streams and an Effect result.
 Consume both declared outputs and the result concurrently when the tool can block writing output:

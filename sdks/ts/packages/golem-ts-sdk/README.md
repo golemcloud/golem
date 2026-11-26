@@ -455,13 +455,25 @@ try {
   const abort = new AbortController();
   const result = await add.invoke({ by: 1, note: null }, abort.signal);
   console.log(result.value, result.metadata.agentId);
-  const scheduled = add.schedule({ seconds: 1n, nanoseconds: 0 }, { by: 2, note: null });
-  scheduled.cancellationToken.cancel();
+  const scheduled = await add.schedule({ seconds: 1n, nanoseconds: 0 }, { by: 2, note: null });
+  console.log(scheduled.id.toString(), await scheduled.status());
+  await scheduled.cancel();
 } catch (error) {
   if (isRemoteCallError(error)) console.error(error.cause);
   else throw error;
 }
 ```
+
+`trigger` and `schedule` resolve to an `Invocation` handle once the target has durably accepted
+the invocation. Its `id` only locates the invocation; it is not authority. Only the caller that
+started the invocation, or a caller with the applicable management permission, can read its
+`status()`, `awaitResult()` or `cancel()` it. Dropping the handle, or aborting `awaitResult`
+through its `signal`, only detaches: the invocation keeps running. `trigger` and `schedule`
+reject methods with stream inputs or outputs and never send a scope card. `cancel()` withdraws an
+invocation that has not started and resolves to `false` when it already finished or was already cancelled; cancelling a
+running invocation is not supported and rejects with a `cannot-cancel-running`
+`RemoteCallError`. Rebuild a handle from a stored ID with `Invocation.get(id, Def.methods.add)`,
+whose method spec decodes the result. Invocation metadata is only part of awaited results.
 
 ## Runtime tool reflection
 

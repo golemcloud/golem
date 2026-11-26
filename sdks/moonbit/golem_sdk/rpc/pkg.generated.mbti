@@ -34,17 +34,22 @@ pub fn AgentClient::check_scope_card(Self, scope_card? : @permissions.ScopeCard)
 pub async fn AgentClient::create(String, @types.SchemaValueTree, keyed? : Bool, config? : Array[@common.TypedAgentConfigValue], env? : Array[(String, String)]) -> Self
 pub fn AgentClient::drop(Self) -> Unit
 pub fn AgentClient::get_by_id(String, @schema.AgentId) -> Self raise @host.RpcError
-pub fn AgentClient::invoke(Self, String, @types.SchemaValueTree) -> InvocationMetadata
 pub async fn AgentClient::invoke_and_await(Self, String, @types.SchemaValueTree, scope_card? : @permissions.ScopeCard) -> InvocationResult[@types.SchemaValueTree?]
-pub fn AgentClient::schedule_cancelable_invocation(Self, @system-clock.Instant, String, @types.SchemaValueTree) -> CancelableScheduledInvocationReceipt
-pub fn AgentClient::schedule_invocation(Self, @system-clock.Instant, String, @types.SchemaValueTree) -> ScheduledInvocationReceipt
+pub async fn[T] AgentClient::schedule(Self, @system-clock.Instant, String, @types.SchemaValueTree, (@types.SchemaValueTree?) -> T raise) -> Invocation[T]
 pub fn AgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
+pub async fn[T] AgentClient::trigger(Self, String, @types.SchemaValueTree, (@types.SchemaValueTree?) -> T raise) -> Invocation[T]
 pub fn AgentClient::upsert(String, @types.SchemaValueTree) -> Self raise @host.RpcError
 
-pub(all) struct CancelableScheduledInvocationReceipt {
-  metadata : InvocationMetadata
-  cancellation_token : @host.CancellationToken
+pub struct Invocation[T] {
+  // private fields
 }
+pub async fn[T] Invocation::await_result(Self[T]) -> T
+pub async fn[T] Invocation::cancel(Self[T]) -> Bool
+pub fn[T] Invocation::drop(Self[T]) -> Unit
+pub fn[T] Invocation::from_raw(@host.Invocation, (@types.SchemaValueTree?) -> T raise) -> Self[T]
+pub fn[T] Invocation::get(InvocationId, (@types.SchemaValueTree?) -> T raise) -> Self[T]
+pub fn[T] Invocation::id(Self[T]) -> InvocationId
+pub async fn[T] Invocation::status(Self[T]) -> InvocationStatus
 
 pub struct InvocationId {
   agent_id : @schema.AgentId
@@ -53,6 +58,7 @@ pub struct InvocationId {
 pub fn InvocationId::agent_id(Self) -> @schema.AgentId
 pub fn InvocationId::equal(Self, Self) -> Bool
 pub fn InvocationId::from_host(@host.InvocationMetadata) -> Self
+pub fn InvocationId::from_wit(@types.InvocationId) -> Self
 pub fn InvocationId::hash(Self) -> Int32
 pub fn InvocationId::hash_combine(Self, Hasher) -> Unit
 pub fn InvocationId::new(@schema.AgentId, @schema.Uuid) -> Self
@@ -61,6 +67,7 @@ pub fn InvocationId::output(Self, &Logger) -> Unit
 pub fn InvocationId::parse(String) -> Self raise InvocationIdParseError
 pub fn InvocationId::to_repr(Self) -> @debug.Repr
 pub fn InvocationId::to_string(Self) -> String
+pub fn InvocationId::to_wit(Self) -> @types.InvocationId
 pub fn InvocationId::uuid(Self) -> @schema.Uuid
 pub impl Show for InvocationId
 
@@ -74,9 +81,21 @@ pub(all) struct InvocationResult[T] {
   value : T
 }
 
-pub(all) struct ScheduledInvocationReceipt {
-  metadata : InvocationMetadata
-}
+pub(all) enum InvocationStatus {
+  Pending
+  Scheduled
+  Running
+  Waiting
+  Retrying
+  Interrupted
+  Completed
+  Failed
+  Cancelled
+  BackgroundFailed
+} derive(Eq, @debug.Debug)
+pub fn InvocationStatus::equal(Self, Self) -> Bool
+pub fn InvocationStatus::not_equal(Self, Self) -> Bool
+pub fn InvocationStatus::to_repr(Self) -> @debug.Repr
 
 // Type aliases
 

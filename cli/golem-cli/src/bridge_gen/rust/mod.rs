@@ -86,7 +86,6 @@ struct GuestMethodNames {
     await_name: Ident,
     trigger_name: Ident,
     schedule_name: Ident,
-    schedule_cancelable_name: Ident,
     internal_name: Ident,
     scheduled_time_param: Ident,
     scope_card_param: Ident,
@@ -368,8 +367,6 @@ impl RustRuntimeConfig {
             RustBridgeMode::GuestWasmRpc => quote! {
                 use golem_rust::schema::wit::wire as __wire;
                 pub mod __golem_bridge_runtime {
-                    pub use golem_rust::agentic::EphemeralInvocationResult;
-
                     #scalar_checks
 
                     #[derive(Debug, Clone)]
@@ -384,6 +381,22 @@ impl RustRuntimeConfig {
                         NotFound { message: String },
                         /// A keyed create found an existing agent with the key.
                         Conflict { message: String },
+                        /// The caller lacks the permission for the operation. Creating an agent
+                        /// and invoking a method need the applicable permission on the target.
+                        /// Observing or cancelling an invocation needs the caller to be the
+                        /// starter of the invocation or a manager of its target.
+                        PermissionDenied { message: String },
+                        /// The awaited invocation was cancelled.
+                        Cancelled { message: String },
+                        /// The invocation is already running, and running invocations cannot be
+                        /// cancelled.
+                        CannotCancelRunning { message: String },
+                    }
+
+                    impl From<golem_rust::golem_agentic::golem::agent::host::RpcError> for ClientError {
+                        fn from(error: golem_rust::golem_agentic::golem::agent::host::RpcError) -> Self {
+                            golem_rust::agentic::reflection::agentic_rpc_error_to_reflect(error).into()
+                        }
                     }
 
                     impl From<golem_rust::GolemReflectError> for ClientError {
@@ -391,7 +404,11 @@ impl RustRuntimeConfig {
                             match error {
                                 golem_rust::GolemReflectError::RemoteNotFound(message) => ClientError::NotFound { message },
                                 golem_rust::GolemReflectError::Conflict(message) => ClientError::Conflict { message },
+                                golem_rust::GolemReflectError::Denied(message) => ClientError::PermissionDenied { message },
+                                golem_rust::GolemReflectError::Cancelled(message) => ClientError::Cancelled { message },
+                                golem_rust::GolemReflectError::CannotCancelRunning(message) => ClientError::CannotCancelRunning { message },
                                 golem_rust::GolemReflectError::SchemaEncode(message) => ClientError::SchemaEncodeFailed { message },
+                                golem_rust::GolemReflectError::SchemaDecode(message) => ClientError::SchemaDecodeFailed { message },
                                 error => ClientError::RpcFailed { message: error.to_string() },
                             }
                         }
@@ -2046,7 +2063,6 @@ impl RustBridgeGenerator {
             self.guest_await_method(method, names)?,
             self.guest_trigger_method(method, names)?,
             self.guest_schedule_method(method, names)?,
-            self.guest_schedule_cancelable_method(method, names)?,
             self.guest_internal_method(method, names)?,
         ])
     }
@@ -2075,8 +2091,6 @@ impl RustBridgeGenerator {
                     Self::ident_from_name(impl_names.fresh(format!("trigger_{base}")));
                 let schedule_name =
                     Self::ident_from_name(impl_names.fresh(format!("schedule_{base}")));
-                let schedule_cancelable_name =
-                    Self::ident_from_name(impl_names.fresh(format!("schedule_cancelable_{base}")));
                 let internal_name = Self::ident_from_name(
                     impl_names.fresh(format!("__golem_bridge_invoke_{base}")),
                 );
@@ -2094,7 +2108,6 @@ impl RustBridgeGenerator {
                     await_name,
                     trigger_name,
                     schedule_name,
-                    schedule_cancelable_name,
                     internal_name,
                     scheduled_time_param,
                     scope_card_param,
@@ -2152,10 +2165,10 @@ impl RustBridgeGenerator {
 
         match return_type {
             Some(return_type) if ephemeral => Ok(quote! {
-                pub async fn #name(&self, #(#param_defs),*) -> Result<crate::__golem_bridge_runtime::EphemeralInvocationResult<#return_type>, crate::__golem_bridge_runtime::ClientError> {
+                pub async fn #name(&self, #(#param_defs),*) -> Result<golem_rust::InvocationOutput<#return_type>, crate::__golem_bridge_runtime::ClientError> {
                     let (metadata, result) = #client.#internal_name(#(#param_refs,)* #scope_card).await?;
                     let value = result.ok_or_else(|| crate::__golem_bridge_runtime::ClientError::MissingResult { method: #name_lit.to_string() })?;
-                    Ok(crate::__golem_bridge_runtime::EphemeralInvocationResult { metadata, value })
+                    Ok(golem_rust::InvocationOutput { metadata, value })
                 }
             }),
             Some(return_type) => Ok(quote! {
@@ -2165,9 +2178,9 @@ impl RustBridgeGenerator {
                 }
             }),
             None if ephemeral => Ok(quote! {
-                pub async fn #name(&self, #(#param_defs),*) -> Result<crate::__golem_bridge_runtime::EphemeralInvocationResult<()>, crate::__golem_bridge_runtime::ClientError> {
+                pub async fn #name(&self, #(#param_defs),*) -> Result<golem_rust::InvocationOutput<()>, crate::__golem_bridge_runtime::ClientError> {
                     let (metadata, _) = #client.#internal_name(#(#param_refs,)* #scope_card).await?;
-                    Ok(crate::__golem_bridge_runtime::EphemeralInvocationResult { metadata, value: () })
+                    Ok(golem_rust::InvocationOutput { metadata, value: () })
                 }
             }),
             None => Ok(quote! {
@@ -2189,24 +2202,13 @@ impl RustBridgeGenerator {
             self.input_param_defs_with_ident_names(&method.input_schema, &names.param_names)?;
         let name_lit = method.name.as_str();
         let params_wire = self.guest_input_wire(&method.input_schema, &names.param_names, false)?;
-
-        if self.agent_type.mode == AgentMode::Ephemeral {
-            return Ok(quote! {
-                pub fn #name(&self, #(#param_defs),*) -> Result<golem_rust::InvocationMetadata, crate::__golem_bridge_runtime::ClientError> {
-                    let method_parameters = #params_wire;
-                    self.wasm_rpc.invoke(#name_lit, method_parameters, None)
-                        .map(golem_rust::InvocationMetadata::from)
-                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
-                }
-            });
-        }
+        let (handle_type, decoder) = self.guest_handle_decoder(method)?;
 
         Ok(quote! {
-            pub fn #name(&self, #(#param_defs),*) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
+            pub async fn #name(&self, #(#param_defs),*) -> Result<golem_rust::Invocation<#handle_type>, crate::__golem_bridge_runtime::ClientError> {
                 let method_parameters = #params_wire;
-                self.wasm_rpc.invoke(#name_lit, method_parameters, None)
-                    .map(|_| ())
-                    .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
+                let invocation = self.wasm_rpc.trigger(#name_lit.to_string(), method_parameters).await?;
+                Ok(golem_rust::Invocation::__from_agentic(invocation, #decoder)?)
             }
         })
     }
@@ -2222,59 +2224,55 @@ impl RustBridgeGenerator {
             self.input_param_defs_with_ident_names(&method.input_schema, &names.param_names)?;
         let name_lit = method.name.as_str();
         let params_wire = self.guest_input_wire(&method.input_schema, &names.param_names, false)?;
-
-        if self.agent_type.mode == AgentMode::Ephemeral {
-            return Ok(quote! {
-                pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::InvocationMetadata, crate::__golem_bridge_runtime::ClientError> {
-                    let method_parameters = #params_wire;
-                    self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters, None)
-                        .map(|__receipt| golem_rust::InvocationMetadata::from(__receipt.metadata))
-                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
-                }
-            });
-        }
+        let (handle_type, decoder) = self.guest_handle_decoder(method)?;
 
         Ok(quote! {
-            pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<(), crate::__golem_bridge_runtime::ClientError> {
+            pub async fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::Invocation<#handle_type>, crate::__golem_bridge_runtime::ClientError> {
                 let method_parameters = #params_wire;
-                self.wasm_rpc.schedule_invocation(#scheduled_time_param, #name_lit, method_parameters, None)
-                    .map(|_| ())
-                    .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
+                let invocation = self.wasm_rpc.schedule(#scheduled_time_param, #name_lit.to_string(), method_parameters).await?;
+                Ok(golem_rust::Invocation::__from_agentic(invocation, #decoder)?)
             }
         })
     }
 
-    fn guest_schedule_cancelable_method(
+    /// The result type of the handle `trigger_*` and `schedule_*` return, and the decoder of its
+    /// result.
+    fn guest_handle_decoder(
         &mut self,
         method: &AgentMethodSchema,
-        names: &GuestMethodNames,
-    ) -> anyhow::Result<TokenStream> {
-        let name = &names.schedule_cancelable_name;
-        let scheduled_time_param = &names.scheduled_time_param;
-        let param_defs =
-            self.input_param_defs_with_ident_names(&method.input_schema, &names.param_names)?;
+    ) -> anyhow::Result<(TokenStream, TokenStream)> {
         let name_lit = method.name.as_str();
-        let params_wire = self.guest_input_wire(&method.input_schema, &names.param_names, false)?;
-
-        if self.agent_type.mode == AgentMode::Ephemeral {
-            return Ok(quote! {
-                pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::ScheduledInvocation, crate::__golem_bridge_runtime::ClientError> {
-                    let method_parameters = #params_wire;
-                    self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters, None)
-                        .map(golem_rust::ScheduledInvocation::from)
-                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
-                }
-            });
-        }
-
-        Ok(quote! {
-            pub fn #name(&self, #(#param_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::CancellationToken, crate::__golem_bridge_runtime::ClientError> {
-                let method_parameters = #params_wire;
-                self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #name_lit, method_parameters, None)
-                    .map(|__receipt| golem_rust::CancellationToken::from(__receipt.cancellation_token))
-                    .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })
+        match self.output_return_type(&method.output_schema)? {
+            Some(return_type) => {
+                let decode_body = self.guest_output_wire(&method.output_schema)?;
+                Ok((
+                    return_type.clone(),
+                    quote! {
+                        |__response: Option<golem_rust::schema::wit::wire::SchemaValueTree>| -> Result<#return_type, golem_rust::GolemReflectError> {
+                            let __value = __response.ok_or_else(|| golem_rust::GolemReflectError::MalformedRemoteOutput(
+                                format!("method `{}` returned unit instead of a value", #name_lit),
+                            ))?;
+                            (|| -> Result<#return_type, String> {
+                                #decode_body
+                            })().map_err(golem_rust::GolemReflectError::SchemaDecode)
+                        }
+                    },
+                ))
             }
-        })
+            None => Ok((
+                quote! { () },
+                quote! {
+                    |__response: Option<golem_rust::schema::wit::wire::SchemaValueTree>| -> Result<(), golem_rust::GolemReflectError> {
+                        match __response {
+                            None => Ok(()),
+                            Some(_) => Err(golem_rust::GolemReflectError::MalformedRemoteOutput(
+                                format!("method `{}` returned a value instead of unit", #name_lit),
+                            )),
+                        }
+                    }
+                },
+            )),
+        }
     }
 
     fn guest_internal_method(
@@ -2298,11 +2296,9 @@ impl RustBridgeGenerator {
                     async fn #name(&self, #(#param_defs,)* #scope_card_param: Option<&golem_rust::permissions::ScopeCard>) -> Result<(golem_rust::InvocationMetadata, Option<#return_type>), crate::__golem_bridge_runtime::ClientError> {
                         let #scope_card_param = self.__golem_default_scope_card.resolve(#scope_card_param);
                         let method_parameters = #params_wire;
-                        let invocation = golem_rust::permissions::__async_invoke_and_await(&self.wasm_rpc, #name_lit, method_parameters, #scope_card_param.as_ref());
-                        let response = invocation.future.get().await
-                            .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
-                        let metadata = invocation.metadata.map(golem_rust::InvocationMetadata::from).ok_or_else(|| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: "the host completed an RPC call it did not accept".to_string() })?;
-                        match response {
+                        let completed = golem_rust::permissions::__invoke_and_await(&self.wasm_rpc, #name_lit, method_parameters, #scope_card_param.as_ref()).await?;
+                        let metadata = golem_rust::InvocationMetadata::from(completed.metadata);
+                        match completed.result {
                             Some(__value) => {
                                 let __decoded: #return_type = (|| -> Result<#return_type, String> {
                                     #decode_body
@@ -2320,10 +2316,8 @@ impl RustBridgeGenerator {
                     async fn #name(&self, #(#param_defs,)* #scope_card_param: Option<&golem_rust::permissions::ScopeCard>) -> Result<Option<#return_type>, crate::__golem_bridge_runtime::ClientError> {
                         let #scope_card_param = self.__golem_default_scope_card.resolve(#scope_card_param);
                         let method_parameters = #params_wire;
-                        let rpc_result_future = golem_rust::permissions::__async_invoke_and_await(&self.wasm_rpc, #name_lit, method_parameters, #scope_card_param.as_ref()).future;
-                        let response = rpc_result_future.get().await
-                            .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
-                        match response {
+                        let completed = golem_rust::permissions::__invoke_and_await(&self.wasm_rpc, #name_lit, method_parameters, #scope_card_param.as_ref()).await?;
+                        match completed.result {
                             Some(__value) => {
                                 let __decoded: #return_type = (|| -> Result<#return_type, String> {
                                     #decode_body
@@ -2338,21 +2332,16 @@ impl RustBridgeGenerator {
             None if ephemeral => Ok(quote! {
                 async fn #name(&self, #(#param_defs,)* #scope_card_param: Option<&golem_rust::permissions::ScopeCard>) -> Result<(golem_rust::InvocationMetadata, Option<()>), crate::__golem_bridge_runtime::ClientError> {
                     let #scope_card_param = self.__golem_default_scope_card.resolve(#scope_card_param);
-                        let method_parameters = #params_wire;
-                    let invocation = golem_rust::permissions::__async_invoke_and_await(&self.wasm_rpc, #name_lit, method_parameters, #scope_card_param.as_ref());
-                    let _response = invocation.future.get().await
-                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
-                    let metadata = invocation.metadata.map(golem_rust::InvocationMetadata::from).ok_or_else(|| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: "the host completed an RPC call it did not accept".to_string() })?;
-                    Ok((metadata, Some(())))
+                    let method_parameters = #params_wire;
+                    let completed = golem_rust::permissions::__invoke_and_await(&self.wasm_rpc, #name_lit, method_parameters, #scope_card_param.as_ref()).await?;
+                    Ok((golem_rust::InvocationMetadata::from(completed.metadata), Some(())))
                 }
             }),
             None => Ok(quote! {
                 async fn #name(&self, #(#param_defs,)* #scope_card_param: Option<&golem_rust::permissions::ScopeCard>) -> Result<Option<()>, crate::__golem_bridge_runtime::ClientError> {
                     let #scope_card_param = self.__golem_default_scope_card.resolve(#scope_card_param);
-                        let method_parameters = #params_wire;
-                    let rpc_result_future = golem_rust::permissions::__async_invoke_and_await(&self.wasm_rpc, #name_lit, method_parameters, #scope_card_param.as_ref()).future;
-                    let _response = rpc_result_future.get().await
-                        .map_err(|__e| crate::__golem_bridge_runtime::ClientError::RpcFailed { message: format!("{__e:?}") })?;
+                    let method_parameters = #params_wire;
+                    golem_rust::permissions::__invoke_and_await(&self.wasm_rpc, #name_lit, method_parameters, #scope_card_param.as_ref()).await?;
                     Ok(Some(()))
                 }
             }),
@@ -5339,12 +5328,12 @@ mod tests {
     }
 
     #[test]
-    fn guest_generation_schedule_cancelable_name_matches_macro_collision_order() {
+    fn guest_generation_schedule_name_matches_macro_collision_order() {
         let dir = tempfile::TempDir::new().unwrap();
         let target_path =
             Utf8PathBuf::from_path_buf(dir.path().join("alpha-agent-guest-client")).unwrap();
         let mut agent_type = minimal_agent_type("AlphaAgent");
-        for method_name in ["run", "cancelable_run"] {
+        for method_name in ["run", "schedule_run"] {
             agent_type.methods.push(AgentMethodSchema {
                 name: method_name.to_string(),
                 description: String::new(),
@@ -5367,8 +5356,8 @@ mod tests {
 
         let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
         let method_start = lib_rs
-            .find("pub fn schedule_cancelable_run(")
-            .expect("generated guest client should expose schedule_cancelable_run");
+            .find("pub async fn schedule_run1(")
+            .expect("generated guest client should expose the deconflicted schedule_run1");
         let body_start = method_start
             + lib_rs[method_start..]
                 .find('{')
@@ -5391,16 +5380,25 @@ mod tests {
         let method_src = &lib_rs[method_start..method_end.expect("method body should close")];
 
         assert!(
-            method_src.contains("golem_rust::ScheduledInvocation"),
-            "schedule_cancelable_run should be the cancelable wrapper for run, not another method's plain schedule wrapper:\n{method_src}"
+            method_src.contains("golem_rust::Invocation<()>"),
+            "schedule_run1 should return the handle of the scheduled invocation:\n{method_src}"
         );
         assert!(
-            method_src.contains("schedule_cancelable_invocation"),
-            "schedule_cancelable_run should call the cancelable scheduler:\n{method_src}"
+            method_src.contains(".schedule(golem_bridge_scheduled_time"),
+            "schedule_run1 should call the scheduler:\n{method_src}"
         );
         assert!(
             method_src.contains("\"run\""),
-            "schedule_cancelable_run should target the run method to match macro client name allocation:\n{method_src}"
+            "schedule_run1 should target the run method to match macro client name allocation:\n{method_src}"
+        );
+        assert!(
+            method_src.contains("MalformedRemoteOutput")
+                && method_src.contains("returned a value instead of unit"),
+            "the unit handle decoder of schedule_run1 should reject a value:\n{method_src}"
+        );
+        assert!(
+            !lib_rs.contains("schedule_cancelable"),
+            "generated guest client must not expose cancelable schedule wrappers:\n{lib_rs}"
         );
     }
 

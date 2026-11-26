@@ -44,6 +44,14 @@ object AgentClientTypeEndToEndSpec extends ZIOSpecDefault {
 
   private lazy val asyncEchoDefn = AgentImplementation.registerClass[AsyncEchoAgent, AsyncEchoAgentImpl]
 
+  private val metadata = {
+    val agentId = golem.AgentId(java.util.UUID.fromString("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"))
+    InvocationMetadata(
+      agentId,
+      golem.InvocationId(agentId, java.util.UUID.fromString("3f2a1b0c-9d8e-4f7a-b6c5-d4e3f2a1b0c9"))
+    )
+  }
+
   def spec = suite("AgentClientTypeEndToEndSpec")(
     test("client type loopback via AgentClientRuntime.resolve (Future-returning method)") {
       ZIO.fromFuture { implicit ec =>
@@ -57,42 +65,27 @@ object AgentClientTypeEndToEndSpec extends ZIOSpecDefault {
             functionName: String,
             input: JsSchemaValueTree,
             scopeCard: Option[golem.host.PermissionsApi.ScopeCard]
-          ): Either[String, Option[JsSchemaValueTree]] =
-            if (functionName != "echo") Left(s"unexpected method: $functionName")
-            else Right(SchemaRpcCodec.encodeSingleResult("hello world"))
-
-          override def asyncInvokeAndAwait(
-            functionName: String,
-            input: JsSchemaValueTree,
-            scopeCard: Option[golem.host.PermissionsApi.ScopeCard]
-          ): scala.concurrent.Future[Option[JsSchemaValueTree]] =
+          ): scala.concurrent.Future[InvocationResult[Option[JsSchemaValueTree]]] =
             if (functionName != "echo")
-              scala.concurrent.Future.failed(js.JavaScriptException(s"unexpected method: $functionName"))
-            else scala.concurrent.Future.successful(SchemaRpcCodec.encodeSingleResult("hello world"))
+              scala.concurrent.Future
+                .failed(AgentRpcException(AgentRpcError.NotFound(s"unexpected method: $functionName")))
+            else
+              scala.concurrent.Future.successful(
+                InvocationResult(metadata, SchemaRpcCodec.encodeSingleResult("hello world"))
+              )
 
-          override def cancelableAsyncInvokeAndAwait(
-            functionName: String,
-            input: JsSchemaValueTree,
-            scopeCard: Option[golem.host.PermissionsApi.ScopeCard]
-          ): (scala.concurrent.Future[Option[JsSchemaValueTree]], CancellationToken) =
-            (asyncInvokeAndAwait(functionName, input, scopeCard), CancellationToken.fromFunction(() => ()))
+          override def trigger(
+            @unused functionName: String,
+            @unused input: JsSchemaValueTree
+          ): scala.concurrent.Future[Invocation[Option[JsSchemaValueTree]]] =
+            scala.concurrent.Future.failed(new UnsupportedOperationException("not used"))
 
-          override def invoke(functionName: String, input: JsSchemaValueTree): Either[String, Unit] =
-            Left("not used")
-
-          override def scheduleInvocation(
+          override def schedule(
             @unused datetime: golem.Datetime,
             @unused functionName: String,
             @unused input: JsSchemaValueTree
-          ): Either[String, Unit] =
-            Left("not used")
-
-          override def scheduleCancelableInvocation(
-            @unused datetime: golem.Datetime,
-            @unused functionName: String,
-            @unused input: JsSchemaValueTree
-          ): Either[String, CancellationToken] =
-            Left("not used")
+          ): scala.concurrent.Future[Invocation[Option[JsSchemaValueTree]]] =
+            scala.concurrent.Future.failed(new UnsupportedOperationException("not used"))
         }
 
         val resolvedAgent =

@@ -21,10 +21,10 @@ const METHOD: &str = "await_counter";
 const STOP_BOUND: Duration = Duration::from_secs(8);
 
 macro_rules! pending_case {
-    ($name:ident, Storage, $mode:ident, $asynchronous:expr) => {
-        pending_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode, $asynchronous);
+    ($name:ident, Storage, $mode:ident) => {
+        pending_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode);
     };
-    ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident, $asynchronous:expr) => {
+    ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident) => {
         $(#[$attr])*
         #[test]
         #[timeout("2m")]
@@ -40,7 +40,6 @@ macro_rules! pending_case {
                 fixture,
                 Resource::$resource,
                 AgentMode::$mode,
-                $asynchronous,
                 false,
             )
             .await
@@ -48,63 +47,22 @@ macro_rules! pending_case {
     };
 }
 
-pending_case!(durable_sync_rpc_memory_quota, Memory, Durable, false);
-pending_case!(ephemeral_sync_rpc_memory_quota, Memory, Ephemeral, false);
-pending_case!(
-    durable_sync_rpc_compute_quota_prepaid,
-    Compute,
-    Durable,
-    false
-);
-pending_case!(
-    ephemeral_sync_rpc_compute_quota_prepaid,
-    Compute,
-    Ephemeral,
-    false
-);
+pending_case!(durable_rpc_memory_quota, Memory, Durable);
+pending_case!(ephemeral_rpc_memory_quota, Memory, Ephemeral);
+pending_case!(durable_rpc_compute_quota_prepaid, Compute, Durable);
+pending_case!(ephemeral_rpc_compute_quota_prepaid, Compute, Ephemeral);
 #[cfg(target_os = "linux")]
 mod storage {
     use super::*;
     use test_r::test;
 
-    pending_case!(
-        durable_sync_rpc_managed_xfs_storage_quota,
-        Storage,
-        Durable,
-        false
-    );
-    pending_case!(
-        ephemeral_sync_rpc_managed_xfs_storage_quota,
-        Storage,
-        Ephemeral,
-        false
-    );
-    pending_case!(
-        durable_async_rpc_managed_xfs_storage_quota,
-        Storage,
-        Durable,
-        true
-    );
-    pending_case!(
-        ephemeral_async_rpc_managed_xfs_storage_quota,
-        Storage,
-        Ephemeral,
-        true
-    );
+    pending_case!(durable_rpc_managed_xfs_storage_quota, Storage, Durable);
+    pending_case!(ephemeral_rpc_managed_xfs_storage_quota, Storage, Ephemeral);
 }
-
-pending_case!(durable_async_rpc_memory_quota, Memory, Durable, true);
-pending_case!(ephemeral_async_rpc_memory_quota, Memory, Ephemeral, true);
-pending_case!(
-    ephemeral_async_rpc_compute_quota_prepaid,
-    Compute,
-    Ephemeral,
-    true
-);
 
 #[test]
 #[timeout("2m")]
-async fn durable_sync_rpc_result_before_quota_stop_and_completed_history(
+async fn durable_rpc_result_before_quota_stop_and_completed_history(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
@@ -116,7 +74,6 @@ async fn durable_sync_rpc_result_before_quota_stop_and_completed_history(
         fixture,
         Resource::Memory,
         AgentMode::Durable,
-        false,
         true,
     )
     .await
@@ -128,7 +85,6 @@ async fn pending_rpc(
     fixture: &PrecompiledComponent,
     resource: Resource,
     mode: AgentMode,
-    asynchronous: bool,
     completion_first: bool,
 ) -> anyhow::Result<()> {
     pending_rpc_scenario(
@@ -137,7 +93,6 @@ async fn pending_rpc(
         fixture,
         resource,
         mode,
-        asynchronous,
         refund_ordering::Scenario::Quota { completion_first },
     )
     .await
@@ -149,7 +104,6 @@ async fn pending_rpc_scenario(
     fixture: &PrecompiledComponent,
     resource: Resource,
     mode: AgentMode,
-    asynchronous: bool,
     scenario: refund_ordering::Scenario,
 ) -> anyhow::Result<()> {
     let completion_first = match scenario {
@@ -161,7 +115,7 @@ async fn pending_rpc_scenario(
     let hold_target_acceptance = resource == Resource::Compute && !held_growth && !completion_first;
     if held_growth {
         ensure!(resource == Resource::Compute && mode == AgentMode::Durable);
-        ensure!(asynchronous && !completion_first);
+        ensure!(!completion_first);
     }
     let mut policy = resource.policy();
     // Both the caller and its durable target need a real prepaid reservation.
@@ -319,7 +273,7 @@ async fn pending_rpc_scenario(
                     &name,
                     &key,
                     METHOD,
-                    data_value!(target_name, promise, asynchronous),
+                    data_value!(target_name, promise),
                 )
                 .await
         }
@@ -333,7 +287,7 @@ async fn pending_rpc_scenario(
                 executor.commit_oplog(&target_id.agent_id).await?;
                 let caller_entries = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
                 let target_entries = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
-                if let Some(call) = history::caller(&caller_entries, &stored_key, &target_id.agent_id, asynchronous, false, 0)? {
+                if let Some(call) = history::caller(&caller_entries, &stored_key, &target_id.agent_id, false, 0)? {
                     let target_key = executor.finalized_invocation_key(&target_id.agent_id, &golem_common::model::InvocationRequestKey::Internal(call.target_key.clone()), "inc_after_promise").await?;
                     if let Some(wait) = history::target(&target_entries, &target_key, false)? {
                     ensure!(count_agent_invocation_pair_since(&caller_entries, OplogIndex::INITIAL) == (caller_invocations, caller_invocations - 1));
@@ -404,7 +358,7 @@ async fn pending_rpc_scenario(
             tokio::time::timeout(Duration::from_secs(10), selected).await??;
             executor.commit_oplog(&id).await?;
             executor.commit_oplog(&target_id.agent_id).await?;
-            ensure!(history::caller(&executor.get_oplog(&owned, OplogIndex::INITIAL).await?, &stored_key, &target_id.agent_id, asynchronous, true, 0)? == Some(original.clone()));
+            ensure!(history::caller(&executor.get_oplog(&owned, OplogIndex::INITIAL).await?, &stored_key, &target_id.agent_id, true, 0)? == Some(original.clone()));
             ensure!(history::target(&executor.get_oplog(&target_id, OplogIndex::INITIAL).await?, &target_key, true)? == Some(target_wait));
             Some(release)
         } else { None };
@@ -518,14 +472,14 @@ async fn pending_rpc_scenario(
             if resource == Resource::Storage {
                 ensure!(!account.monthly_capacity_is_exhausted_for_test(if durable { AgentMode::Ephemeral } else { AgentMode::Durable }));
             }
-            info!(?resource, ?mode, asynchronous, completion_first, caller_user_stop, stop_elapsed = ?stop_started.elapsed(), "RPC stop retired caller");
+            info!(?resource, ?mode, completion_first, caller_user_stop, stop_elapsed = ?stop_started.elapsed(), "RPC stop retired caller");
             Ok::<_, anyhow::Error>(())
         }).await.context("RPC monthly stop exceeded 8s physical cleanup bound")??;
         if completion_first {
             ensure!(tokio::time::timeout(Duration::from_secs(5), &mut invocation).await???.into_typed::<u64>()? == 7);
         }
         let stopped = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
-        ensure!(history::caller(&stopped, &stored_key, &target_id.agent_id, asynchronous, completion_first, usize::from(completion_first))? == Some(original.clone()));
+        ensure!(history::caller(&stopped, &stored_key, &target_id.agent_id, completion_first, usize::from(completion_first))? == Some(original.clone()));
         let entries = worker.oplog().read_exact(OplogIndex::INITIAL, worker.oplog().current_oplog_index().await.as_u64()).await?;
         let mut errors = Vec::new();
         let mut suspends = 0;
@@ -638,12 +592,12 @@ async fn pending_rpc_scenario(
         if durable {
             if !completion_first {
                 if caller_user_stop { executor.resume(&owned, false).await?; }
-                let resumed = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD, data_value!(target_name, promise.clone(), asynchronous))).await??;
+                let resumed = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD, data_value!(target_name, promise.clone()))).await??;
                 ensure!(resumed.into_typed::<u64>()? == 7);
                 if !caller_user_stop { ensure!(tokio::time::timeout(Duration::from_secs(5), &mut invocation).await???.into_typed::<u64>()? == 7); }
             }
             let recovered = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
-            ensure!(history::caller(&recovered, &stored_key, &target_id.agent_id, asynchronous, true, 1)? == Some(original.clone()));
+            ensure!(history::caller(&recovered, &stored_key, &target_id.agent_id, true, 1)? == Some(original.clone()));
             if let Some(index) = user_interrupt_index {
                 history::settled_after_user_interrupt(&recovered, index)?;
             } else { history::settled(&recovered)?; }
@@ -657,7 +611,7 @@ async fn pending_rpc_scenario(
                 worker.retained_cleanup_for_test().await
             }).await.context("idle unload before completed RPC replay")??;
             let fresh_key = IdempotencyKey::fresh();
-            let fresh = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, METHOD, data_value!(target_name, promise.clone(), asynchronous))).await??;
+            let fresh = tokio::time::timeout(Duration::from_secs(15), executor.invoke_and_await_agent_with_key(&component, &name, &fresh_key, METHOD, data_value!(target_name, promise.clone()))).await??;
             ensure!(fresh.into_typed::<u64>()? == 14);
             let after = dispatches.lock().unwrap().clone();
             ensure!(after.len() == attempts_before.len() + 1 && after[..attempts_before.len()] == attempts_before);
@@ -667,7 +621,7 @@ async fn pending_rpc_scenario(
             history::invocation(&replayed, &stored_key, METHOD, 1)?;
             let stored_fresh_key = executor.external_invocation_key(&id, &fresh_key, METHOD).await?;
             history::invocation(&replayed, &stored_fresh_key, METHOD, 1)?;
-            history::terminal(&replayed, original.start, true, usize::from(asynchronous))?;
+            history::terminal(&replayed, original.start, true, 1)?;
             if let Some(index) = user_interrupt_index {
                 history::settled_after_user_interrupt(&replayed, index)?;
             } else { history::settled(&replayed)?; }
@@ -686,9 +640,9 @@ async fn pending_rpc_scenario(
                 }
             }).await.context("terminal ephemeral caller must leave the active-agent cache")?;
             ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
-            ensure!(tokio::time::timeout(Duration::from_secs(5), executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD, data_value!(target_name, promise.clone(), asynchronous))).await?.is_err());
+            ensure!(tokio::time::timeout(Duration::from_secs(5), executor.invoke_and_await_agent_with_key(&component, &name, &key, METHOD, data_value!(target_name, promise.clone()))).await?.is_err());
             let failed = executor.get_oplog(&owned, OplogIndex::INITIAL).await?;
-            ensure!(history::caller(&failed, &stored_key, &target_id.agent_id, asynchronous, false, 0)? == Some(original.clone()));
+            ensure!(history::caller(&failed, &stored_key, &target_id.agent_id, false, 0)? == Some(original.clone()));
             ensure!(failed.iter().filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_))).count() == 1);
             ensure!(!worker.is_loaded().await);
             ensure!(worker.selected_owner_failure_for_test().await == Some(ToolOwnerFailureMetadata::Lifecycle));
@@ -747,7 +701,7 @@ async fn pending_rpc_scenario(
     }
     if let Err(error) = &result {
         eprintln!(
-            "RPC case failed before test cleanup: resource={resource:?}, mode={mode:?}, asynchronous={asynchronous}, completion_first={completion_first}: {error:#}"
+            "RPC case failed before test cleanup: resource={resource:?}, mode={mode:?}, completion_first={completion_first}: {error:#}"
         );
         for (id, worker) in [(&id, &worker), (&target_id.agent_id, &target)] {
             let _ = tokio::time::timeout(

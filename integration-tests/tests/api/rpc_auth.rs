@@ -42,6 +42,9 @@
 //! case_idx 2 => NotFound { details: String }
 //! case_idx 3 => ProtocolError { details: String }
 //! case_idx 4 => RemoteInternalError { details: String }
+//! case_idx 5 => Conflict { details: String }
+//! case_idx 6 => Cancelled { details: String }
+//! case_idx 7 => CannotCancelRunning { details: String }
 //! ```
 
 use golem_client::api::RegistryServiceClient;

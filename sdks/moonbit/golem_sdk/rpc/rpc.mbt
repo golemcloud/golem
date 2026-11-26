@@ -33,17 +33,6 @@ pub(all) struct InvocationResult[T] {
 }
 
 ///|
-pub(all) struct ScheduledInvocationReceipt {
-  metadata : InvocationMetadata
-}
-
-///|
-pub(all) struct CancelableScheduledInvocationReceipt {
-  metadata : InvocationMetadata
-  cancellation_token : @agentHost.CancellationToken
-}
-
-///|
 /// Converts a typed configuration override carrier into the leaf values sent
 /// when creating an agent. The agent code generator implements this trait for
 /// generated `*Override` types.
@@ -187,13 +176,18 @@ pub fn AgentClient::check_scope_card(
 ///|
 /// Invoke a method and await its result and final invocation metadata. The
 /// result is `None` when the output schema is `unit`, and `Some(tree)` for a
-/// single returned value.
+/// single returned value. A remote failure raises the typed
+/// `@agentHost.RpcError`; a call that the target withdrew before it started
+/// raises `RpcError::Cancelled`.
 ///
 /// `scope_card` lends an invocation-local scope card (see
 /// `@permissions.derive_scope`) to the callee for this call; it overrides the
 /// client default. The card is borrowed, not consumed. Aborts if the scope card
 /// was dropped; call `check_scope_card` before encoding `input` to abort
 /// before any argument card moves.
+///
+/// Cancelling the calling task withdraws the invocation on a best-effort basis
+/// while it has not started.
 pub async fn AgentClient::invoke_and_await(
   self : AgentClient,
   function_name : String,
@@ -201,91 +195,56 @@ pub async fn AgentClient::invoke_and_await(
   scope_card? : @permissions.ScopeCard,
 ) -> InvocationResult[@types.SchemaValueTree?] {
   let raw_scope_card = @scope_card.resolve(scope_card, self.default_scope_card)
-  let invocation = self.rpc.async_invoke_and_await(
-    function_name, input, raw_scope_card,
-  )
-  defer invocation.future.drop()
-  let result = {
-    errdefer invocation.future.cancel()
-    invocation.future.get()
-  }
-  match (result, invocation.metadata) {
-    (Ok(value), Some(metadata)) =>
-      { metadata: invocation_metadata(metadata), value, }
-    (Ok(_), None) =>
-      abort(
-        "RPC protocol error: completed invocation has no invocation metadata",
-      )
-    (Err(e), _) => panic_on_rpc_error(e)
-  }
-}
-
-///|
-pub fn AgentClient::invoke(
-  self : AgentClient,
-  function_name : String,
-  input : @types.SchemaValueTree,
-) -> InvocationMetadata {
-  match self.rpc.invoke(function_name, input, None) {
-    Ok(value) => invocation_metadata(value)
-    Err(e) => panic_on_rpc_error(e)
-  }
-}
-
-///|
-pub fn AgentClient::schedule_invocation(
-  self : AgentClient,
-  scheduled_at : @systemClock.Instant,
-  function_name : String,
-  input : @types.SchemaValueTree,
-) -> ScheduledInvocationReceipt {
-  match self.rpc.schedule_invocation(scheduled_at, function_name, input, None) {
-    Ok(value) => { metadata: invocation_metadata(value.metadata), }
-    Err(e) => panic_on_rpc_error(e)
-  }
-}
-
-///|
-pub fn AgentClient::schedule_cancelable_invocation(
-  self : AgentClient,
-  scheduled_at : @systemClock.Instant,
-  function_name : String,
-  input : @types.SchemaValueTree,
-) -> CancelableScheduledInvocationReceipt {
-  match
-    self.rpc.schedule_cancelable_invocation(
-      scheduled_at,
-      function_name,
-      input,
-      None,
-    ) {
-    Ok(value) =>
+  match self.rpc.invoke_and_await(function_name, input, raw_scope_card) {
+    Ok(completed) =>
       {
-        metadata: invocation_metadata(value.metadata),
-        cancellation_token: value.cancellation_token,
+        metadata: invocation_metadata(completed.metadata),
+        value: completed.result,
       }
-    Err(e) => panic_on_rpc_error(e)
+    Err(error) => raise error
+  }
+}
+
+///|
+/// Starts a method without waiting for its result, and returns the handle of
+/// the invocation once the target has durably accepted it. `decode` reads the
+/// result that `Invocation::await_result` returns. A trigger never attaches a
+/// scope card. A failure to start the invocation raises the typed
+/// `@agentHost.RpcError`.
+pub async fn[T] AgentClient::trigger(
+  self : AgentClient,
+  function_name : String,
+  input : @types.SchemaValueTree,
+  decode : (@types.SchemaValueTree?) -> T raise,
+) -> Invocation[T] {
+  match self.rpc.trigger(function_name, input) {
+    Ok(raw) => Invocation::from_raw(raw, decode)
+    Err(error) => raise error
+  }
+}
+
+///|
+/// Schedules a method for `scheduled_at`, and returns the handle of the
+/// invocation once the target has durably accepted it. The handle can cancel
+/// the invocation until it starts. `decode` reads the result that
+/// `Invocation::await_result` returns. A schedule never attaches a scope card.
+/// A failure to schedule raises the typed `@agentHost.RpcError`.
+pub async fn[T] AgentClient::schedule(
+  self : AgentClient,
+  scheduled_at : @systemClock.Instant,
+  function_name : String,
+  input : @types.SchemaValueTree,
+  decode : (@types.SchemaValueTree?) -> T raise,
+) -> Invocation[T] {
+  match self.rpc.schedule(scheduled_at, function_name, input) {
+    Ok(raw) => Invocation::from_raw(raw, decode)
+    Err(error) => raise error
   }
 }
 
 ///|
 pub fn AgentClient::drop(self : AgentClient) -> Unit {
   self.rpc.drop()
-}
-
-///|
-fn[T] panic_on_rpc_error(e : @agentHost.RpcError) -> T {
-  match e {
-    @agentHost.RpcError::ProtocolError(msg) =>
-      abort("RPC protocol error: " + msg)
-    @agentHost.RpcError::Denied(msg) => abort("RPC denied: " + msg)
-    @agentHost.RpcError::NotFound(msg) => abort("RPC not found: " + msg)
-    @agentHost.RpcError::RemoteInternalError(msg) =>
-      abort("RPC remote internal error: " + msg)
-    @agentHost.RpcError::RemoteAgentError(e) =>
-      abort("RPC remote agent error: \{Repr(e)}")
-    @agentHost.RpcError::Conflict(msg) => abort("RPC conflict: " + msg)
-  }
 }
 
 ///|

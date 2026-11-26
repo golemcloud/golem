@@ -256,8 +256,8 @@ func init() {
 	ops.Handle(TimerVsRPC, func(*golem.Context[opsState], golem.Unit) string {
 		start := time.Now()
 		done := make(chan string, 1)
-		fut := Slow.CallAsync(Source.Upsert(SourceID{Name: "slow"}), golem.Unit{})
-		go func() { done <- fut.MustGet() }()
+		inv := Slow.MustTrigger(Source.Upsert(SourceID{Name: "slow"}), golem.Unit{})
+		go func() { done <- golem.Must(inv.AwaitResult()) }()
 		select {
 		case r := <-done:
 			return fmt.Sprintf("rpc-first:%s:%dms", r, time.Since(start).Milliseconds())
@@ -299,15 +299,15 @@ func init() {
 		if err != nil {
 			return "call: " + err.Error()
 		}
-		pending, err := c.CallAsync("greet", map[string]any{})
+		pending, err := c.Trigger("greet", map[string]any{})
 		if err != nil {
-			return "callAsync: " + err.Error()
+			return "trigger: " + err.Error()
 		}
-		awaited, err := pending.Get()
+		awaited, err := pending.AwaitResult()
 		if err != nil {
 			return "wait: " + err.Error()
 		}
-		return fmt.Sprintf("%v|%v|%t", called, awaited, pending.Metadata.AgentID == golem.Must(c.AgentID()))
+		return fmt.Sprintf("%v|%v|%t", called, awaited, pending.ID().AgentID == golem.Must(c.AgentID()))
 	})
 
 	// A failed production must not reach the reader as a clean end.

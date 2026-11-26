@@ -139,6 +139,7 @@ pub async fn invoke_tool(
                 proto_caller,
                 None,
                 None,
+                false,
             )
             .await
     }

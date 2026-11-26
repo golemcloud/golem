@@ -13,6 +13,7 @@ use std::future::Future;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 mod gc_timing;
+mod handle_probe;
 mod http_router;
 mod input_gc;
 
@@ -232,6 +233,7 @@ impl ConstructorSelfScheduler for ConstructorSelfSchedulerImpl {
                 nanoseconds: 0,
             },
         )
+        .await
         .expect("failed to schedule an invocation on itself from the constructor");
         Self {
             global: 0,
@@ -257,6 +259,7 @@ impl ConstructorSelfScheduler for ConstructorSelfSchedulerImpl {
                 nanoseconds: 0,
             },
         )
+        .await
         .expect("schedule on bound incarnation");
         let id = this
             .agent_id()
@@ -278,22 +281,23 @@ pub trait ScheduledInvocationClient {
     fn new(name: String) -> Self;
 
     /// Schedule inc_global_by on the server agent 200ms in the future
-    fn test1(&self, server_agent_name: String);
+    async fn test1(&self, server_agent_name: String);
 
     /// Schedule inc_global_by on the server agent 200ms in the future, then cancel it
-    fn test2(&self, server_agent_name: String);
+    async fn test2(&self, server_agent_name: String);
 
     /// Schedule inc_global_by on self 200ms in the future
-    fn test3(&mut self);
+    async fn test3(&mut self);
 
-    /// Schedules `inc_global_by(17)` on the server and keeps the receipt
-    fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32);
-    fn cancel_scheduled(&self);
-    /// The invocation ID of the receipt kept by `schedule_at`, in its text form
+    /// Schedules `inc_global_by(17)` on the server and keeps the ID of the invocation
+    async fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32);
+    /// Cancels the kept invocation through a handle rebuilt from its ID
+    async fn cancel_scheduled(&self) -> bool;
+    /// The ID of the invocation kept by `schedule_at`, in its text form
     fn scheduled_invocation_id(&self) -> Option<String>;
 
-    /// Schedules `inc(hold_ms)` on a new ephemeral target and keeps its cancellation token
-    fn schedule_ephemeral_at(
+    /// Schedules `inc(hold_ms)` on a new ephemeral target and keeps the ID of the invocation
+    async fn schedule_ephemeral_at(
         &mut self,
         target_name: String,
         hold_ms: u64,
@@ -310,8 +314,7 @@ pub trait ScheduledInvocationClient {
 struct ScheduledInvocationClientImpl {
     _name: String,
     global: u64,
-    token: Option<golem_rust::CancellationToken>,
-    scheduled_invocation_id: Option<String>,
+    scheduled: Option<golem_rust::OwnedInvocationId>,
 }
 
 #[agent_implementation]
@@ -320,77 +323,72 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
         Self {
             _name: name,
             global: 0,
-            token: None,
-            scheduled_invocation_id: None,
+            scheduled: None,
         }
     }
 
-    fn test1(&self, server_agent_name: String) {
+    async fn test1(&self, server_agent_name: String) {
         let mut server = ScheduledInvocationServerClient::upsert(server_agent_name);
         let scheduled_for = datetime_200ms_from_now();
         server
             .schedule_inc_global_by(1, scheduled_for)
+            .await
             .expect("failed to schedule invocation");
     }
 
-    fn test2(&self, server_agent_name: String) {
+    async fn test2(&self, server_agent_name: String) {
         let mut server = ScheduledInvocationServerClient::upsert(server_agent_name);
         let scheduled_for = datetime_200ms_from_now();
-        let token = server
-            .schedule_cancelable_inc_global_by(1, scheduled_for)
-            .expect("failed to schedule cancelable invocation");
-        token.cancel();
+        let invocation = server
+            .schedule_inc_global_by(1, scheduled_for)
+            .await
+            .expect("failed to schedule invocation");
+        assert!(
+            invocation
+                .cancel()
+                .await
+                .expect("failed to cancel the scheduled invocation"),
+            "a scheduled invocation that has not started must be cancellable"
+        );
     }
 
-    fn test3(&mut self) {
+    async fn test3(&mut self) {
         let mut self_client = ScheduledInvocationClientClient::upsert(self._name.clone());
         let scheduled_for = datetime_200ms_from_now();
         self_client
             .schedule_inc_global_by(1, scheduled_for)
+            .await
             .expect("failed to schedule invocation");
     }
 
-    fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32) {
-        // The generated durable client drops the receipt metadata, so this calls the host directly.
-        use golem_rust::golem_agentic::golem::agent::host as agentic_host;
-        let server = agentic_host::WasmRpc::upsert(
-            "ScheduledInvocationServer",
-            encode_single_parameter(server_agent_name),
-        )
-        .expect("failed to create the RPC client");
-        let receipt = server
-            .schedule_cancelable_invocation(
-                agentic_host::Datetime {
+    async fn schedule_at(&mut self, server_agent_name: String, seconds: u64, nanoseconds: u32) {
+        let mut server = ScheduledInvocationServerClient::upsert(server_agent_name);
+        let invocation = server
+            .schedule_inc_global_by(
+                17,
+                Datetime {
                     seconds: seconds as i64,
                     nanoseconds,
                 },
-                "inc_global_by",
-                encode_single_parameter(17u64),
-                None,
             )
-            .expect("failed to schedule cancelable invocation");
-        self.scheduled_invocation_id = Some(
-            golem_rust::InvocationMetadata::from(receipt.metadata)
-                .invocation_id
-                .to_string(),
-        );
-        self.token = Some(golem_rust::CancellationToken::from(
-            receipt.cancellation_token,
-        ));
+            .await
+            .expect("failed to schedule invocation");
+        self.scheduled = Some(invocation.id().clone());
     }
 
-    fn cancel_scheduled(&self) {
-        self.token
-            .as_ref()
-            .expect("no scheduled invocation")
-            .cancel();
+    async fn cancel_scheduled(&self) -> bool {
+        let id = self.scheduled.as_ref().expect("no scheduled invocation");
+        golem_rust::Invocation::<()>::get(id)
+            .cancel()
+            .await
+            .expect("failed to cancel the scheduled invocation")
     }
 
     fn scheduled_invocation_id(&self) -> Option<String> {
-        self.scheduled_invocation_id.clone()
+        self.scheduled.as_ref().map(ToString::to_string)
     }
 
-    fn schedule_ephemeral_at(
+    async fn schedule_ephemeral_at(
         &mut self,
         target_name: String,
         hold_ms: u64,
@@ -398,18 +396,17 @@ impl ScheduledInvocationClient for ScheduledInvocationClientImpl {
         nanoseconds: u32,
     ) {
         let target = ScheduledEphemeralTargetClient::upsert(target_name);
-        self.token = Some(
-            target
-                .schedule_cancelable_inc(
-                    hold_ms,
-                    Datetime {
-                        seconds: seconds as i64,
-                        nanoseconds,
-                    },
-                )
-                .expect("failed to schedule cancelable ephemeral invocation")
-                .cancellation_token,
-        );
+        let invocation = target
+            .schedule_inc(
+                hold_ms,
+                Datetime {
+                    seconds: seconds as i64,
+                    nanoseconds,
+                },
+            )
+            .await
+            .expect("failed to schedule ephemeral invocation");
+        self.scheduled = Some(invocation.id().clone());
     }
 
     fn read_effects(&self, target_name: String) -> (u64, u64) {
@@ -568,6 +565,14 @@ pub trait StreamingRpcTarget {
         input: AgentStream<u32>,
         gate: PromiseId,
     ) -> Result<u64, String>;
+    /// Polls an awaited `inc_by(1)` call on `RpcCounter` once, drops it, and returns a declared
+    /// error. The stream input makes the method record its result after its background work
+    /// drained.
+    async fn drop_awaited_call_then_return_error(
+        &self,
+        input: AgentStream<u32>,
+        counter_name: String,
+    ) -> Result<u64, String>;
     fn produce_drop_probe(&mut self, gate: PromiseId) -> AgentStream<u32>;
     async fn consume_before_timer(&mut self, input: AgentStream<u32>) -> Vec<u32>;
     async fn consume_bytes_before_timer(&mut self, input: AgentStream<u8>) -> Vec<u8>;
@@ -668,6 +673,25 @@ impl StreamingRpcTarget for StreamingRpcTargetImpl {
         };
         assert_eq!(input.next().await, None);
         result
+    }
+
+    async fn drop_awaited_call_then_return_error(
+        &self,
+        input: AgentStream<u32>,
+        counter_name: String,
+    ) -> Result<u64, String> {
+        drop(input);
+        let rpc = WasmRpc::upsert("RpcCounter", encode_single_parameter(counter_name))
+            .expect("failed to create the RPC client");
+        let mut call = Box::pin(rpc.invoke_and_await(
+            "inc_by".to_string(),
+            encode_single_parameter(1u64),
+            None,
+        ));
+        let pending =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(call.as_mut().poll(cx).is_pending()))
+                .await;
+        Err(format!("dropped a pending awaited call: {pending}"))
     }
 
     fn produce_drop_probe(&mut self, gate: PromiseId) -> AgentStream<u32> {
@@ -1242,6 +1266,7 @@ pub trait StreamingRpcCaller {
     ) -> Vec<u64>;
     async fn drop_new_increment_output(&self);
     async fn drop_gated_output(&self, gate: PromiseId) -> u64;
+    async fn call_drop_awaited_call_then_return_error(&self, counter_name: String) -> String;
     async fn streaming_increment(&self, synchronous: bool) -> Vec<u64>;
     async fn call_producer_error(&self) -> Vec<u32>;
     async fn catch_producer_outcome(&self, kind: u8) -> Vec<u32>;
@@ -1281,7 +1306,10 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             })
             .await
             .unwrap();
-            let result = rpc.invoke_and_await("transform", input, None).unwrap();
+            let result = rpc
+                .invoke_and_await("transform".to_string(), input, None)
+                .await
+                .unwrap();
             AgentStream::<u32>::from_value(
                 &golem_rust::decode_schema_value(result.result.unwrap()).unwrap(),
             )
@@ -1415,6 +1443,13 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
         42
     }
 
+    async fn call_drop_awaited_call_then_return_error(&self, counter_name: String) -> String {
+        StreamingRpcTargetClient::upsert(self.name.clone())
+            .drop_awaited_call_then_return_error(agent_stream(Vec::new()), counter_name)
+            .await
+            .expect_err("the target method fails")
+    }
+
     async fn transfer_input_after_timer(&self) -> Vec<u32> {
         let (mut writer, input) = AgentStream::new();
         spawn_local(async move {
@@ -1438,7 +1473,8 @@ impl StreamingRpcCaller for StreamingRpcCallerImpl {
             .expect("failed to create the RPC client");
             let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
             let result = rpc
-                .invoke_and_await("increment_stream", input, None)
+                .invoke_and_await("increment_stream".to_string(), input, None)
+                .await
                 .unwrap();
             AgentStream::<u64>::from_value(
                 &golem_rust::decode_schema_value(result.result.unwrap()).unwrap(),
@@ -2005,6 +2041,8 @@ pub enum RpcCallOutcome {
     ProtocolError { details: String },
     RemoteInternalError { details: String },
     Conflict { details: String },
+    Cancelled { details: String },
+    CannotCancelRunning { details: String },
 }
 
 impl From<RpcError> for RpcCallOutcome {
@@ -2018,6 +2056,8 @@ impl From<RpcError> for RpcCallOutcome {
                 details: "remote agent error".to_string(),
             },
             RpcError::Conflict(details) => Self::Conflict { details },
+            RpcError::Cancelled(details) => Self::Cancelled { details },
+            RpcError::CannotCancelRunning(details) => Self::CannotCancelRunning { details },
         }
     }
 }
@@ -2033,13 +2073,11 @@ pub trait RpcAuthTester {
     /// Returns `RpcCallOutcome::Ok` on success or a typed denial/error on failure.
     async fn try_call_counter(&self, counter_name: String) -> RpcCallOutcome;
 
-    fn try_ephemeral_call(&self) -> RpcCallOutcome;
+    async fn try_ephemeral_call(&self) -> RpcCallOutcome;
 
-    async fn try_ephemeral_call_async(&self) -> RpcCallOutcome;
-
-    async fn denied_streaming_metadata(&self) -> Option<String>;
-
-    fn invalid_async_call_without_get(&self) -> Option<String>;
+    /// Polls an awaited call of a method that the target does not have once, and drops it
+    /// if it is still pending. Returns the outcome when the first poll already completed it.
+    async fn invalid_awaited_call_dropped_after_poll(&self) -> Option<RpcCallOutcome>;
 }
 
 struct RpcAuthTesterImpl {
@@ -2052,43 +2090,54 @@ struct RpcAuthTesterImpl {
 pub trait CancelTester {
     fn new(name: String) -> Self;
 
-    /// Starts an async RPC call and immediately cancels it, does not call get()
-    fn test_cancel_before_await(&self, counter_name: String);
+    /// Triggers `inc_after_promise(promise_id)` on the blocking counter, then triggers
+    /// `inc_by(1)` behind it and cancels that pending invocation. Returns the answer of the
+    /// cancellation and the outcome of awaiting the cancelled invocation.
+    async fn cancel_pending_trigger(
+        &self,
+        counter_name: String,
+        promise_id: PromiseId,
+    ) -> (bool, RpcCallOutcome);
 
-    /// Starts an async RPC call, awaits its completion, then cancels (should be no-op)
-    async fn test_cancel_completed(&self, counter_name: String) -> u64;
+    /// Polls an awaited `inc_by(1)` call once and drops it. Returns whether the call was
+    /// still pending when it was dropped.
+    async fn drop_awaited_call_before_completion(&self, counter_name: String) -> bool;
 
-    /// Polls an async RPC get until it is pending, then drops the get and RPC resources.
-    async fn drop_pending_get(&self, counter_name: String, promise_id: PromiseId);
+    /// Polls a trigger of `inc_by(1)` once, then drops it. Returns whether the first poll left
+    /// the trigger pending.
+    async fn drop_trigger_before_acceptance(&self, counter_name: String) -> bool;
+
+    /// Triggers `inc_by(5)`, awaits its result, then cancels the finished invocation.
+    /// Returns the answer of the cancellation and the counter value.
+    async fn test_cancel_completed(&self, counter_name: String) -> (bool, u64);
+
+    /// Polls an awaited `inc_after_promise` call until it is pending, then drops it.
+    async fn drop_awaited_call_after_poll(&self, counter_name: String, promise_id: PromiseId);
+
+    /// Triggers `inc_after_promise(promise_id)` on the blocking counter, polls an await of its
+    /// handle once and drops the await. Keeps the ID of the invocation for `await_detached`.
+    async fn drop_handle_await(&mut self, counter_name: String, promise_id: PromiseId) -> bool;
+
+    /// Awaits the invocation kept by `drop_handle_await` through a handle rebuilt from its ID.
+    async fn await_detached(&self) -> u64;
 
     fn name(&self) -> String;
 
     /// Grows the linear memory by one page
     fn grow_memory(&self);
 
-    fn grow_memory_before_rpc_activation(&self, counter_name: String);
+    async fn grow_memory_before_rpc_activation(&self, counter_name: String);
 
     /// Activates the RPC target with `get_value`, writes to stdout, then increments the
-    /// counter by 1 with `mode` (`await` or `invoke`), so a hint entry directly
+    /// counter by 1 with `mode` (`await` or `trigger`), so a hint entry directly
     /// precedes the increment's `Start`.
-    fn inc_after_stdout(&self, counter_name: String, mode: String);
+    async fn inc_after_stdout(&self, counter_name: String, mode: String);
 
-    async fn await_counter(
-        &self,
-        counter_name: String,
-        promise_id: PromiseId,
-        asynchronous: bool,
-    ) -> u64;
+    async fn await_counter(&self, counter_name: String, promise_id: PromiseId) -> u64;
 
     async fn receive_large_rpc_result(&self, counter_name: String) -> u64;
 
     async fn await_counter_after_timer(&self, counter_name: String, promise_id: PromiseId) -> u64;
-
-    async fn sync_counter_with_pending_timer(
-        &self,
-        counter_name: String,
-        promise_id: PromiseId,
-    ) -> u64;
 
     async fn grow_memory_after_rpc_result(&self, counter_name: String);
 
@@ -2103,22 +2152,28 @@ pub trait CancelTester {
         counter: String,
         rounds: u32,
     ) -> u64;
+
+    /// Awaits `inc_after_promise` on two gated counters at once and returns both results in
+    /// call order, whatever order they complete in.
+    async fn await_two_gated(
+        &self,
+        target_a: String,
+        gate_a: PromiseId,
+        target_b: String,
+        gate_b: PromiseId,
+    ) -> (u64, u64);
 }
 
 struct CancelTesterImpl {
     _name: String,
+    detached: Option<golem_rust::OwnedInvocationId>,
 }
 
 #[agent_definition(mode = "ephemeral")]
 pub trait EphemeralRpcCaller {
     fn new(name: String) -> Self;
 
-    async fn await_counter(
-        &self,
-        counter_name: String,
-        promise_id: PromiseId,
-        asynchronous: bool,
-    ) -> u64;
+    async fn await_counter(&self, counter_name: String, promise_id: PromiseId) -> u64;
 }
 
 struct EphemeralRpcCallerImpl;
@@ -2129,38 +2184,27 @@ impl EphemeralRpcCaller for EphemeralRpcCallerImpl {
         Self
     }
 
-    async fn await_counter(
-        &self,
-        counter_name: String,
-        promise_id: PromiseId,
-        asynchronous: bool,
-    ) -> u64 {
-        await_counter_result(counter_name, promise_id, asynchronous).await
+    async fn await_counter(&self, counter_name: String, promise_id: PromiseId) -> u64 {
+        await_counter_result(counter_name, promise_id).await
     }
 }
 
-async fn await_counter_result(
-    counter_name: String,
-    promise_id: PromiseId,
-    asynchronous: bool,
-) -> u64 {
+async fn await_counter_result(counter_name: String, promise_id: PromiseId) -> u64 {
     let rpc = WasmRpc::upsert("RpcBlockingCounter", encode_single_parameter(counter_name))
         .expect("failed to create the RPC client");
     let input = encode_single_parameter(promise_id);
-    let result = if asynchronous {
-        rpc.async_invoke_and_await("inc_after_promise", input, None)
-            .future
-            .get()
-            .await
-            .unwrap()
-            .unwrap()
-    } else {
-        rpc.invoke_and_await("inc_after_promise", input, None)
-            .unwrap()
-            .result
-            .unwrap()
-    };
+    let result = rpc
+        .invoke_and_await("inc_after_promise".to_string(), input, None)
+        .await
+        .unwrap()
+        .result
+        .unwrap();
     u64::from_value(&golem_rust::decode_schema_value(result).unwrap()).unwrap()
+}
+
+fn no_rpc_input() -> golem_rust::schema::wit::wire::SchemaValueTree {
+    encode_schema_value(&SchemaValue::Record { fields: Vec::new() })
+        .expect("failed to encode empty RPC input")
 }
 
 #[agent_implementation]
@@ -2169,64 +2213,40 @@ impl RpcAuthTester for RpcAuthTesterImpl {
         Self { _name: name }
     }
 
-    fn try_ephemeral_call(&self) -> RpcCallOutcome {
+    async fn try_ephemeral_call(&self) -> RpcCallOutcome {
         let rpc = WasmRpc::upsert(
             "EphemeralStreamingRpcTarget",
             encode_single_parameter("denied-target".to_string()),
         )
         .expect("failed to create the RPC client");
-        let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
-        match rpc.invoke_and_await("spin", input, None) {
+        match rpc
+            .invoke_and_await("spin".to_string(), no_rpc_input(), None)
+            .await
+        {
             Ok(_) => RpcCallOutcome::Ok,
             Err(error) => RpcCallOutcome::from(error),
         }
     }
 
-    async fn try_ephemeral_call_async(&self) -> RpcCallOutcome {
-        let rpc = WasmRpc::upsert(
-            "EphemeralStreamingRpcTarget",
-            encode_single_parameter("denied-target".to_string()),
-        )
-        .expect("failed to create the RPC client");
-        let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
-        let result = rpc.async_invoke_and_await("spin", input, None);
-        match result.future.get().await {
-            Ok(_) => RpcCallOutcome::Ok,
-            Err(error) => RpcCallOutcome::from(error),
-        }
-    }
-
-    async fn denied_streaming_metadata(&self) -> Option<String> {
-        let rpc = WasmRpc::upsert(
-            "EphemeralStreamingRpcTarget",
-            encode_single_parameter("denied-streaming-target".to_string()),
-        )
-        .expect("failed to create the RPC client");
-        let input = encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap();
-        let result = rpc.async_invoke_and_await("produce_siblings", input, None);
-        assert!(matches!(
-            result.future.get().await,
-            Err(RpcError::Denied(_))
-        ));
-        result
-            .metadata
-            .map(|metadata| golem_rust::Uuid::from(metadata.invocation_id.id).to_string())
-    }
-
-    fn invalid_async_call_without_get(&self) -> Option<String> {
+    async fn invalid_awaited_call_dropped_after_poll(&self) -> Option<RpcCallOutcome> {
         let rpc = WasmRpc::upsert(
             "RpcCounter",
             encode_single_parameter("invalid-async-target".to_string()),
         )
         .expect("failed to create the RPC client");
-        let result = rpc.async_invoke_and_await(
-            "method-that-does-not-exist",
-            encode_schema_value(&SchemaValue::Record { fields: vec![] }).unwrap(),
+        let mut call = Box::pin(rpc.invoke_and_await(
+            "method-that-does-not-exist".to_string(),
+            no_rpc_input(),
             None,
-        );
-        result
-            .metadata
-            .map(|metadata| golem_rust::Uuid::from(metadata.invocation_id.id).to_string())
+        ));
+        std::future::poll_fn(|cx| {
+            std::task::Poll::Ready(match call.as_mut().poll(cx) {
+                std::task::Poll::Ready(Ok(_)) => Some(RpcCallOutcome::Ok),
+                std::task::Poll::Ready(Err(error)) => Some(RpcCallOutcome::from(error)),
+                std::task::Poll::Pending => None,
+            })
+        })
+        .await
     }
 
     async fn try_call_counter(&self, counter_name: String) -> RpcCallOutcome {
@@ -2240,7 +2260,7 @@ impl RpcAuthTester for RpcAuthTesterImpl {
 
         let arg = encode_single_parameter(1u64);
 
-        match rpc.invoke_and_await("inc_by", arg, None) {
+        match rpc.invoke_and_await("inc_by".to_string(), arg, None).await {
             Ok(_) => RpcCallOutcome::Ok,
             Err(e) => RpcCallOutcome::from(e),
         }
@@ -2250,7 +2270,10 @@ impl RpcAuthTester for RpcAuthTesterImpl {
 #[agent_implementation]
 impl CancelTester for CancelTesterImpl {
     fn new(name: String) -> Self {
-        Self { _name: name }
+        Self {
+            _name: name,
+            detached: None,
+        }
     }
 
     async fn replay_barrier_probe(
@@ -2271,14 +2294,16 @@ impl CancelTester for CancelTesterImpl {
             let rpc = WasmRpc::upsert("RpcCounter", encode_single_parameter(counter))
                 .expect("failed to create the RPC client");
             for _ in 0..rounds {
-                rpc.invoke_and_await("inc_by", encode_single_parameter(3u64), None)
+                rpc.invoke_and_await("inc_by".to_string(), encode_single_parameter(3u64), None)
+                    .await
                     .unwrap();
             }
             let value = RpcBlockingCounterClient::upsert(target_b)
                 .inc_after_promise(gate_b)
                 .await;
             for _ in 0..rounds {
-                rpc.invoke_and_await("inc_by", encode_single_parameter(5u64), None)
+                rpc.invoke_and_await("inc_by".to_string(), encode_single_parameter(5u64), None)
+                    .await
                     .unwrap();
             }
             value
@@ -2304,104 +2329,123 @@ impl CancelTester for CancelTesterImpl {
         .await
     }
 
+    async fn await_two_gated(
+        &self,
+        target_a: String,
+        gate_a: PromiseId,
+        target_b: String,
+        gate_b: PromiseId,
+    ) -> (u64, u64) {
+        let mut client_a = RpcBlockingCounterClient::upsert(target_a);
+        let mut client_b = RpcBlockingCounterClient::upsert(target_b);
+        let mut a = Box::pin(client_a.inc_after_promise(gate_a));
+        let mut b = Box::pin(client_b.inc_after_promise(gate_b));
+        let mut result_a = None;
+        let mut result_b = None;
+        std::future::poll_fn(|cx| {
+            if result_a.is_none()
+                && let std::task::Poll::Ready(value) = a.as_mut().poll(cx)
+            {
+                result_a = Some(value);
+            }
+            if result_b.is_none()
+                && let std::task::Poll::Ready(value) = b.as_mut().poll(cx)
+            {
+                result_b = Some(value);
+            }
+            match (result_a, result_b) {
+                (Some(a), Some(b)) => std::task::Poll::Ready((a, b)),
+                _ => std::task::Poll::Pending,
+            }
+        })
+        .await
+    }
+
     fn grow_memory(&self) {
         assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
     }
 
-    fn grow_memory_before_rpc_activation(&self, counter_name: String) {
+    async fn grow_memory_before_rpc_activation(&self, counter_name: String) {
         let constructor = encode_single_parameter(counter_name);
         let input = encode_single_parameter(1u64);
         let rpc =
             WasmRpc::upsert("RpcCounter", constructor).expect("failed to create the RPC client");
         assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
-        rpc.invoke_and_await("inc_by", input, None).unwrap();
+        rpc.invoke_and_await("inc_by".to_string(), input, None)
+            .await
+            .unwrap();
     }
 
-    fn inc_after_stdout(&self, counter_name: String, mode: String) {
+    async fn inc_after_stdout(&self, counter_name: String, mode: String) {
         let rpc = WasmRpc::upsert("RpcCounter", encode_single_parameter(counter_name))
             .expect("failed to create the RPC client");
-        let no_input = encode_schema_value(&SchemaValue::Record { fields: Vec::new() })
-            .expect("failed to encode empty RPC input");
-        rpc.invoke_and_await("get_value", no_input, None).unwrap();
+        rpc.invoke_and_await("get_value".to_string(), no_rpc_input(), None)
+            .await
+            .unwrap();
         println!("incrementing with {mode}");
         let input = encode_single_parameter(1u64);
         match mode.as_str() {
             "await" => {
-                rpc.invoke_and_await("inc_by", input, None).unwrap();
+                rpc.invoke_and_await("inc_by".to_string(), input, None)
+                    .await
+                    .unwrap();
             }
-            "invoke" => {
-                rpc.invoke("inc_by", input, None).unwrap();
+            "trigger" => {
+                rpc.trigger("inc_by".to_string(), input).await.unwrap();
             }
             _ => panic!("unknown RPC mode: {mode}"),
         }
     }
 
-    async fn await_counter(
-        &self,
-        counter_name: String,
-        promise_id: PromiseId,
-        asynchronous: bool,
-    ) -> u64 {
-        await_counter_result(counter_name, promise_id, asynchronous).await
+    async fn await_counter(&self, counter_name: String, promise_id: PromiseId) -> u64 {
+        await_counter_result(counter_name, promise_id).await
     }
 
     async fn await_counter_after_timer(&self, counter_name: String, promise_id: PromiseId) -> u64 {
         let rpc = WasmRpc::upsert("RpcBlockingCounter", encode_single_parameter(counter_name))
             .expect("failed to create the RPC client");
-        let future = rpc
-            .async_invoke_and_await(
-                "inc_after_promise",
-                encode_single_parameter(promise_id),
-                None,
-            )
-            .future;
-        golem_rust::wasip3::clocks::monotonic_clock::wait_for(20_000_000_000).await;
-        let result = future.get().await.unwrap().unwrap();
-        u64::from_value(&golem_rust::decode_schema_value(result).unwrap()).unwrap()
-    }
-
-    async fn sync_counter_with_pending_timer(
-        &self,
-        counter_name: String,
-        promise_id: PromiseId,
-    ) -> u64 {
-        let rpc = WasmRpc::upsert("RpcBlockingCounter", encode_single_parameter(counter_name))
-            .expect("failed to create the RPC client");
-        let deadline = golem_rust::wasip3::clocks::monotonic_clock::now() + 30_000_000_000;
-        let mut timer = Box::pin(golem_rust::wasip3::clocks::monotonic_clock::wait_until(
-            deadline,
+        let mut call = Box::pin(rpc.invoke_and_await(
+            "inc_after_promise".to_string(),
+            encode_single_parameter(promise_id),
+            None,
         ));
-        // Poll the timer before borrowing the Store for the synchronous host call.
-        // Keeping both in this poll prevents a timer-only suspension between them.
-        let result = std::future::poll_fn(|cx| {
-            assert!(timer.as_mut().poll(cx).is_pending());
-            std::task::Poll::Ready(
-                rpc.invoke_and_await(
-                    "inc_after_promise",
-                    encode_single_parameter(promise_id.clone()),
-                    None,
-                )
-                .unwrap()
-                .result
-                .unwrap(),
-            )
+        let mut timer = Box::pin(golem_rust::wasip3::clocks::monotonic_clock::wait_for(
+            20_000_000_000,
+        ));
+        let mut result = None;
+        let mut timer_elapsed = false;
+        std::future::poll_fn(|cx| {
+            if result.is_none()
+                && let std::task::Poll::Ready(value) = call.as_mut().poll(cx)
+            {
+                result = Some(value.unwrap().result.unwrap());
+            }
+            if !timer_elapsed && timer.as_mut().poll(cx).is_ready() {
+                timer_elapsed = true;
+            }
+            if result.is_some() && timer_elapsed {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
         })
         .await;
-        timer.await;
-        u64::from_value(&golem_rust::decode_schema_value(result).unwrap()).unwrap()
+        u64::from_value(&golem_rust::decode_schema_value(result.unwrap()).unwrap()).unwrap()
     }
 
     async fn receive_large_rpc_result(&self, counter_name: String) -> u64 {
         let rpc = WasmRpc::upsert("RpcCounter", encode_single_parameter(counter_name))
             .expect("failed to create the RPC client");
-        let future = rpc
-            .async_invoke_and_await(
-                "inc_and_return_text",
+        let result = rpc
+            .invoke_and_await(
+                "inc_and_return_text".to_string(),
                 encode_single_parameter(4 * 1024 * 1024u32),
                 None,
             )
-            .future;
-        let result = future.get().await.unwrap().unwrap();
+            .await
+            .unwrap()
+            .result
+            .unwrap();
         let value = golem_rust::decode_schema_value(result).unwrap();
         let text = String::from_value(&value).unwrap();
         assert!(text.bytes().all(|byte| byte == b'x'));
@@ -2411,10 +2455,9 @@ impl CancelTester for CancelTesterImpl {
     async fn grow_memory_after_rpc_result(&self, counter_name: String) {
         let rpc = WasmRpc::upsert("RpcCounter", encode_single_parameter(counter_name))
             .expect("failed to create the RPC client");
-        let future = rpc
-            .async_invoke_and_await("inc_by", encode_single_parameter(1u64), None)
-            .future;
-        future.get().await.unwrap();
+        rpc.invoke_and_await("inc_by".to_string(), encode_single_parameter(1u64), None)
+            .await
+            .unwrap();
         assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
     }
 
@@ -2426,10 +2469,13 @@ impl CancelTester for CancelTesterImpl {
         };
         let rpc = WasmRpc::upsert("RpcCounter", encode_single_parameter(counter_name))
             .expect("failed to create the RPC client");
-        let future = rpc
-            .async_invoke_and_await("inc_by", encode_single_parameter(1u64), None)
-            .future;
-        assert!(future.get().await.unwrap().is_none());
+        assert!(
+            rpc.invoke_and_await("inc_by".to_string(), encode_single_parameter(1u64), None)
+                .await
+                .unwrap()
+                .result
+                .is_none()
+        );
         assert_ne!(core::arch::wasm32::memory_grow::<0>(1), usize::MAX);
 
         match operation.as_str() {
@@ -2439,17 +2485,17 @@ impl CancelTester for CancelTesterImpl {
             "config-get" => {
                 let _ = wasi_config::get("missing").unwrap();
             }
-            "fire-and-forget-rpc" => {
-                rpc.invoke("inc_by", encode_single_parameter(7u64), None)
+            "trigger-rpc" => {
+                rpc.trigger("inc_by".to_string(), encode_single_parameter(7u64))
+                    .await
                     .unwrap();
             }
-            "async-rpc" => {
+            "awaited-rpc" => {
                 assert!(
-                    rpc.async_invoke_and_await("inc_by", encode_single_parameter(7u64), None)
-                        .future
-                        .get()
+                    rpc.invoke_and_await("inc_by".to_string(), encode_single_parameter(7u64), None)
                         .await
                         .unwrap()
+                        .result
                         .is_none()
                 );
             }
@@ -2468,67 +2514,112 @@ impl CancelTester for CancelTesterImpl {
         }
     }
 
-    fn test_cancel_before_await(&self, counter_name: String) {
-        let constructor_data = encode_single_parameter(counter_name);
-        let wasm_rpc = WasmRpc::upsert("RpcCounter", constructor_data)
-            .expect("failed to create the RPC client");
-
-        let input = encode_single_parameter(1u64);
-        let future = wasm_rpc
-            .async_invoke_and_await("inc_by", input, None)
-            .future;
-
-        // Cancel immediately before polling/awaiting
-        future.cancel();
-        // Don't call get() - that would trigger retry logic
-        // The test verifies from outside that the counter was NOT incremented
+    async fn cancel_pending_trigger(
+        &self,
+        counter_name: String,
+        promise_id: PromiseId,
+    ) -> (bool, RpcCallOutcome) {
+        let mut counter = RpcBlockingCounterClient::upsert(counter_name);
+        counter
+            .trigger_inc_after_promise(promise_id)
+            .await
+            .expect("failed to trigger the blocking invocation");
+        let pending = counter
+            .trigger_inc_by(1)
+            .await
+            .expect("failed to trigger the queued invocation");
+        let cancelled = pending
+            .cancel()
+            .await
+            .expect("failed to cancel the pending invocation");
+        let awaited = match pending.await_result().await {
+            Ok(()) => RpcCallOutcome::Ok,
+            Err(golem_rust::GolemReflectError::Cancelled(details)) => {
+                RpcCallOutcome::Cancelled { details }
+            }
+            Err(error) => RpcCallOutcome::ProtocolError {
+                details: error.to_string(),
+            },
+        };
+        (cancelled, awaited)
     }
 
-    async fn drop_pending_get(&self, counter_name: String, promise_id: PromiseId) {
+    async fn drop_awaited_call_before_completion(&self, counter_name: String) -> bool {
+        let rpc = WasmRpc::upsert("RpcCounter", encode_single_parameter(counter_name))
+            .expect("failed to create the RPC client");
+        let mut call = Box::pin(rpc.invoke_and_await(
+            "inc_by".to_string(),
+            encode_single_parameter(1u64),
+            None,
+        ));
+        std::future::poll_fn(|cx| std::task::Poll::Ready(call.as_mut().poll(cx).is_pending())).await
+    }
+
+    async fn drop_trigger_before_acceptance(&self, counter_name: String) -> bool {
+        let rpc = WasmRpc::upsert("RpcCounter", encode_single_parameter(counter_name))
+            .expect("failed to create the RPC client");
+        let mut call = Box::pin(rpc.trigger("inc_by".to_string(), encode_single_parameter(1u64)));
+        std::future::poll_fn(|cx| std::task::Poll::Ready(call.as_mut().poll(cx).is_pending())).await
+    }
+
+    async fn drop_awaited_call_after_poll(&self, counter_name: String, promise_id: PromiseId) {
         let rpc = WasmRpc::upsert("RpcBlockingCounter", encode_single_parameter(counter_name))
             .expect("failed to create the RPC client");
-        let result = rpc
-            .async_invoke_and_await(
-                "inc_after_promise",
-                encode_single_parameter(promise_id),
-                None,
-            )
-            .future;
-        let mut get = Box::pin(result.get());
-
-        std::future::poll_fn(|cx| match get.as_mut().poll(cx) {
+        let mut call = Box::pin(rpc.invoke_and_await(
+            "inc_after_promise".to_string(),
+            encode_single_parameter(promise_id),
+            None,
+        ));
+        std::future::poll_fn(|cx| match call.as_mut().poll(cx) {
             std::task::Poll::Pending => std::task::Poll::Ready(()),
             std::task::Poll::Ready(_) => panic!("promise-blocked RPC completed unexpectedly"),
         })
         .await;
     }
 
+    async fn drop_handle_await(&mut self, counter_name: String, promise_id: PromiseId) -> bool {
+        let invocation = RpcBlockingCounterClient::upsert(counter_name)
+            .trigger_inc_after_promise(promise_id)
+            .await
+            .expect("failed to trigger the blocking invocation");
+        let pending = {
+            let mut awaiting = Box::pin(invocation.await_result());
+            std::future::poll_fn(|cx| {
+                std::task::Poll::Ready(awaiting.as_mut().poll(cx).is_pending())
+            })
+            .await
+        };
+        self.detached = Some(invocation.id().clone());
+        pending
+    }
+
+    async fn await_detached(&self) -> u64 {
+        let id = self.detached.as_ref().expect("no detached invocation");
+        golem_rust::Invocation::<u64>::get(id)
+            .await_result()
+            .await
+            .expect("failed to await the detached invocation")
+    }
+
     fn name(&self) -> String {
         self._name.clone()
     }
 
-    async fn test_cancel_completed(&self, counter_name: String) -> u64 {
-        let constructor_data = encode_single_parameter(counter_name.clone());
-        let wasm_rpc = WasmRpc::upsert("RpcCounter", constructor_data)
-            .expect("failed to create the RPC client");
-
-        // First, call inc_by to increment the counter
-        let input = encode_single_parameter(5u64);
-        let future = wasm_rpc
-            .async_invoke_and_await("inc_by", input, None)
-            .future;
-
-        // Wait for completion. The P3 Golem WIT replaced `subscribe()`/pollable
-        // polling of `future-invoke-result` with an `async get()`, so we just
-        // await it directly.
-        let _ = future.get().await;
-
-        // Cancel after completion - should be a no-op
-        future.cancel();
-
-        // Now get the value through the generated client to verify
-        let counter = RpcCounterClient::upsert(counter_name);
-        counter.get_value().await
+    async fn test_cancel_completed(&self, counter_name: String) -> (bool, u64) {
+        let mut counter = RpcCounterClient::upsert(counter_name);
+        let invocation = counter
+            .trigger_inc_by(5)
+            .await
+            .expect("failed to trigger the invocation");
+        invocation
+            .await_result()
+            .await
+            .expect("failed to await the invocation");
+        let cancelled = invocation
+            .cancel()
+            .await
+            .expect("failed to cancel the finished invocation");
+        (cancelled, counter.get_value().await)
     }
 }
 
@@ -2577,6 +2668,7 @@ impl HttpPollingSelfScheduler for HttpPollingSelfSchedulerImpl {
 
         let me = HttpPollingSelfSchedulerClient::upsert(self.name.clone());
         me.schedule_tick(host, port, datetime_500ms_from_now())
+            .await
             .expect("failed to schedule polling tick");
     }
 }

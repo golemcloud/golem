@@ -201,9 +201,11 @@ removed decorator surface.
   `getById(agentId)` take no overrides. Secret overrides are rejected because secrets remain
   host-provisioned.
 - **Cancelable / abortable RPC.** Pass `{ signal }` to an awaited client method, for example
-  `await client.run(input, { signal })`. `client.run.schedule(at, input)` returns a
-  `CancellationToken` whose `.cancel()` cancels the scheduled invocation. Fire-and-forget remains
-  `client.run.trigger(input)`. There are no `.abortable` or `.scheduleCancelable` client methods.
+  `await client.run(input, { signal })`; aborting withdraws a not-yet-started invocation on a
+  best-effort basis. `await client.run.trigger(input)` and `await client.run.schedule(at, input)`
+  resolve to an `Invocation` handle once the target accepted the invocation; its `.cancel()`
+  withdraws it before it starts, and `Invocation.get(id, Def.methods.run)` rebuilds it from a
+  stored ID. There are no `.abortable`, `.scheduleCancelable` or cancellation-token APIs.
 - **`Principal` as data + auto-injected input.** `s.principal()` carries a `Principal` as a method return / nested value, and a bare `s.principal()` method (or constructor) parameter is auto-injected with the per-call caller principal — it consumes no wire field and is not bound from HTTP/RPC callers (the replacement for the decorator's injected `Principal` parameter). `this.getPrincipal()` still reads the init-time principal.
 
 **Known remaining deltas (verify against `src/` before assuming this list is exhaustive):**

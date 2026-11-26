@@ -13,10 +13,9 @@
 // limitations under the License.
 
 use crate::model::oplog::payload::{
-    HostResponseGolemRpcInvokeAndAwait, HostResponseGolemRpcInvokeGet,
-    HostResponseGolemRpcScheduledInvocationCompat, HostResponseGolemRpcUnitOrFailure,
+    HostResponseGolemRpcInvocationAccepted, HostResponseGolemRpcInvokeAndAwait,
 };
-use crate::model::oplog::types::{SerializableInvokeResult, SerializableRpcError};
+use crate::model::oplog::types::SerializableRpcError;
 
 fn denied(denial: &str) -> SerializableRpcError {
     SerializableRpcError::Denied {
@@ -30,23 +29,11 @@ pub fn invoke_and_await<R>(_request: &R, denial: &str) -> HostResponseGolemRpcIn
     }
 }
 
-pub fn invoke<R>(_request: &R, denial: &str) -> HostResponseGolemRpcUnitOrFailure {
-    HostResponseGolemRpcUnitOrFailure {
-        result: Err(denied(denial)),
-    }
-}
-
-pub fn future_invoke_result_get<R>(_request: &R, denial: &str) -> HostResponseGolemRpcInvokeGet {
-    HostResponseGolemRpcInvokeGet {
-        result: SerializableInvokeResult::Completed(Err(denied(denial))),
-    }
-}
-
-pub fn schedule_invocation<R>(
+pub fn invocation_accepted<R>(
     _request: &R,
     denial: &str,
-) -> HostResponseGolemRpcScheduledInvocationCompat {
-    HostResponseGolemRpcScheduledInvocationCompat {
+) -> HostResponseGolemRpcInvocationAccepted {
+    HostResponseGolemRpcInvocationAccepted {
         result: Err(denied(denial)),
     }
 }

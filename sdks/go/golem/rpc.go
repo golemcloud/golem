@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
+	"github.com/golemcloud/golem/sdks/go/golem/internal/link"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
 	types "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_core_types"
 	clock "github.com/golemcloud/golem/sdks/go/golem/internal/wit/wasi_clocks_0_3_0_system_clock"
@@ -41,23 +42,17 @@ import (
 // the callee's parameters, before anything is sent. The runtime handles
 // transient failures and replays deterministically, so a failure that reaches
 // the guest is terminal.
-// Each call form has a Must variant ([MethodDef.MustCall], [Future.MustGet], …)
-// that panics instead; a panic in an agent method traps the component, as in
-// Rust, so the worker fails. Model *expected* outcomes as a [Result] in the
-// method's output.
+// Each call form has a Must variant ([MethodDef.MustCall],
+// [MethodDef.MustTrigger], …) that panics instead; a panic in an agent method
+// traps the component, as in Rust, so the worker fails. Model *expected*
+// outcomes as a [Result] in the method's output.
 //
-// Misuse — a zero Client, a stream on a fire-and-forget form — panics in every
+// Misuse — a zero Client, a stream on a Trigger or a Schedule — panics in every
 // form.
-
-// noScopeCard is the scope card of the invocations that do not wait for their
-// result: the host accepts a scope card only on an awaited call.
-func noScopeCard() witTypes.Option[*types.PermissionCard] {
-	return witTypes.None[*types.PermissionCard]()
-}
 
 // Scope cards.
 //
-// An awaited call — Call, MustCall or CallAsync — may carry a [ScopeCard] from
+// An awaited call — Call or MustCall — may carry a [ScopeCard] from
 // [DeriveScope]. The callee holds the card's grants for that invocation only,
 // and loses them when the invocation ends. Attaching a card lends it: the
 // caller keeps it and may attach it again within the same invocation. Trigger
@@ -95,73 +90,97 @@ func (m MethodDef[Id, In, Out]) WithScopeCard(card ScopeCard) ScopedMethod[Id, I
 
 // Call is [MethodDef.Call] carrying the scope card.
 func (s ScopedMethod[Id, In, Out]) Call(c Client[Id], in In) (Out, error) {
-	return s.m.callAsync(c, in, s.card).Get()
+	return s.m.call(c, in, s.card)
 }
 
 // MustCall is [MethodDef.MustCall] carrying the scope card.
 func (s ScopedMethod[Id, In, Out]) MustCall(c Client[Id], in In) Out {
-	return s.m.callAsync(c, in, s.card).MustGet()
-}
-
-// CallAsync is [MethodDef.CallAsync] carrying the scope card.
-func (s ScopedMethod[Id, In, Out]) CallAsync(c Client[Id], in In) *Future[Out] {
-	return s.m.callAsync(c, in, s.card)
+	return Must(s.m.call(c, in, s.card))
 }
 
 // Call invokes the method and waits for its result. A remote failure is
-// returned as a [RemoteCallError].
+// returned as a [RemoteCallError]; a call that the target withdrew before it
+// started is one of kind [RemoteCancelled].
 //
-// It is [MethodDef.CallAsync] followed by [Future.Get]: the call goes through the
-// asynchronous import, as every other SDK's does, which is the form the executor
-// resumes into after suspending a caller that waited past its RPC idle window. A
-// call that outlasts that window therefore suspends the worker and resumes it
-// with the result, rather than holding it resident.
+// The call goes through the asynchronous import, as every other SDK's does,
+// which is the form the executor resumes into after suspending a caller that
+// waited past its RPC idle window. A call that outlasts that window therefore
+// suspends the worker and resumes it with the result, rather than holding it
+// resident.
 //
 // While it waits, other goroutines of the same invocation may run: Call is a
-// yield point, exactly like Future.Get. To have several calls in flight at once,
-// use [MethodDef.CallAsync] directly.
+// yield point. To have several calls in flight at once, make each in its own
+// goroutine. A single target instance handles one invocation at a time, so
+// calls to the same agent instance do not run in parallel; concurrency is
+// across different targets.
+//
+// An awaited call cannot be withdrawn by abandoning it: Go cannot cancel one
+// call in flight, so the goroutine that makes it waits for its result. Use
+// [MethodDef.Trigger] and [Invocation.Cancel] for work that may need to be
+// withdrawn before it starts.
 func (m MethodDef[Id, In, Out]) Call(c Client[Id], in In) (Out, error) {
-	return m.callAsync(c, in, ScopeCard{}).Get()
+	return m.call(c, in, ScopeCard{})
 }
 
 // MustCall is [MethodDef.Call] that panics on a remote failure.
 func (m MethodDef[Id, In, Out]) MustCall(c Client[Id], in In) Out {
-	return m.callAsync(c, in, ScopeCard{}).MustGet()
+	return Must(m.call(c, in, ScopeCard{}))
 }
 
-// Trigger invokes the method without waiting for a result, returning the
-// invocation's metadata. A failure to start the invocation is returned as a
-// [RemoteCallError]; failures after the invocation is accepted are not
-// reported here.
-func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) (InvocationMetadata, error) {
+// call makes an awaited call carrying scope, or the client's default scope
+// card when scope is the zero ScopeCard.
+func (m MethodDef[Id, In, Out]) call(c Client[Id], in In, scope ScopeCard) (Out, error) {
+	var zero Out
+	if c.rpc == nil {
+		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
+	}
+	tree, card, err := m.awaitedCallArgs(c, in, scope)
+	if err != nil {
+		return zero, err
+	}
+	res := c.rpc.InvokeAndAwait(m.name, tree, card)
+	if res.IsErr() {
+		return zero, rpcErrorToGo(c.target(), m.name, res.Err())
+	}
+	return decodeOutput[Out](c.target(), m.name, res.Ok().Result)
+}
+
+// Trigger starts the method without waiting for its result, and returns the
+// handle of the invocation once the target has durably accepted it. A failure
+// to start the invocation is returned as a [RemoteCallError]; the handle's
+// [Invocation.AwaitResult] reports how the invocation ended.
+//
+// A Trigger never carries a scope card, and it panics for a method that takes
+// or returns a stream.
+func (m MethodDef[Id, In, Out]) Trigger(c Client[Id], in In) (*Invocation[Out], error) {
 	if c.rpc == nil {
 		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
 	m.refuseStreams("Trigger")
 	tree, err := m.encodeInput(c.target(), in)
 	if err != nil {
-		return InvocationMetadata{}, err
+		return nil, err
 	}
-	res := c.rpc.Invoke(m.name, tree, noScopeCard())
+	res := c.rpc.Trigger(m.name, tree)
 	if res.IsErr() {
-		return InvocationMetadata{}, rpcErrorToGo(c.target(), m.name, res.Err())
+		return nil, rpcErrorToGo(c.target(), m.name, res.Err())
 	}
-	return invocationMetadataFrom(res.Ok()), nil
+	return typedInvocation[Out](res.Ok(), m.name), nil
 }
 
 // MustTrigger is [MethodDef.Trigger] that panics on a remote failure.
-func (m MethodDef[Id, In, Out]) MustTrigger(c Client[Id], in In) InvocationMetadata {
-	metadata, err := m.Trigger(c, in)
-	if err != nil {
-		panic(err)
-	}
-	return metadata
+func (m MethodDef[Id, In, Out]) MustTrigger(c Client[Id], in In) *Invocation[Out] {
+	return Must(m.Trigger(c, in))
 }
 
-// Schedule arranges for the method to be invoked at the given time and returns a
-// token that can cancel it beforehand. A failure to schedule is returned as a
-// [RemoteCallError].
-func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) (*ScheduledInvocation, error) {
+// Schedule arranges for the method to be invoked at the given time, and
+// returns the handle of the invocation once the target has durably accepted
+// it. The handle's [Invocation.Cancel] withdraws the invocation until it
+// starts. A failure to schedule is returned as a [RemoteCallError].
+//
+// A Schedule never carries a scope card, and it panics for a method that takes
+// or returns a stream.
+func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) (*Invocation[Out], error) {
 	if c.rpc == nil {
 		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
 	}
@@ -170,60 +189,31 @@ func (m MethodDef[Id, In, Out]) Schedule(c Client[Id], at time.Time, in In) (*Sc
 	if err != nil {
 		return nil, err
 	}
-	res := c.rpc.ScheduleCancelableInvocation(instantFrom(at), m.name, tree, noScopeCard())
+	res := c.rpc.Schedule(instantFrom(at), m.name, tree)
 	if res.IsErr() {
 		return nil, rpcErrorToGo(c.target(), m.name, res.Err())
 	}
-	receipt := res.Ok()
-	return &ScheduledInvocation{
-		Metadata: invocationMetadataFrom(receipt.Metadata),
-		token:    receipt.CancellationToken,
-	}, nil
+	return typedInvocation[Out](res.Ok(), m.name), nil
 }
 
 // MustSchedule is [MethodDef.Schedule] that panics on a remote failure.
-func (m MethodDef[Id, In, Out]) MustSchedule(c Client[Id], at time.Time, in In) *ScheduledInvocation {
-	s, err := m.Schedule(c, at, in)
-	if err != nil {
-		panic(err)
-	}
-	return s
+func (m MethodDef[Id, In, Out]) MustSchedule(c Client[Id], at time.Time, in In) *Invocation[Out] {
+	return Must(m.Schedule(c, at, in))
 }
 
-// CallAsync starts the invocation and returns immediately with a future. A
-// failure to start, including an input that does not encode, is reported by
-// the future's Get, as the host's asynchronous import has no error result of
-// its own.
-//
-// This is the only way to have several invocations in flight: `invoke-and-await`
-// is a synchronous import and blocks the component, whereas the future's Get is
-// async, so a goroutine blocked in it yields to the component-model event loop
-// and lets other goroutines proceed.
-//
-// Note the platform contract: a single target instance handles one invocation at
-// a time, so fanning out to the SAME agent instance does not run in parallel.
-// Concurrency is across DIFFERENT targets.
-func (m MethodDef[Id, In, Out]) CallAsync(c Client[Id], in In) *Future[Out] {
-	return m.callAsync(c, in, ScopeCard{})
+// Invocation rebuilds the handle of an invocation of the method from its ID,
+// as an earlier [MethodDef.Trigger] or [MethodDef.Schedule] returned it, for
+// example in an earlier invocation of the calling agent. It makes no remote
+// call: the ID only locates the invocation, and the target authorizes every
+// operation on the handle.
+func (m MethodDef[Id, In, Out]) Invocation(id InvocationID) *Invocation[Out] {
+	m.refuseStreams("Invocation")
+	return newInvocation(link.GetInvocationOps(invocationIDToWit(id)), m.name, decodeOutput[Out])
 }
 
-// callAsync starts an awaited call carrying scope, or the client's default
-// scope card when scope is the zero ScopeCard.
-func (m MethodDef[Id, In, Out]) callAsync(c Client[Id], in In, scope ScopeCard) *Future[Out] {
-	if c.rpc == nil {
-		panic(fmt.Errorf("golem: %s: called on a zero Client", m.name))
-	}
-	tree, card, err := m.awaitedCallArgs(c, in, scope)
-	if err != nil {
-		return &Future[Out]{method: m.name, target: c.target(), done: true, err: err}
-	}
-	inv := c.rpc.AsyncInvokeAndAwait(m.name, tree, card)
-	return &Future[Out]{
-		Metadata: asyncInvocationMetadata(inv.Metadata),
-		fut:      inv.Future,
-		method:   m.name,
-		target:   c.target(),
-	}
+// typedInvocation is the handle of an invocation a typed client started.
+func typedInvocation[Out any](raw *host.Invocation, method string) *Invocation[Out] {
+	return newInvocation(link.HostInvocationOps(raw), method, decodeOutput[Out])
 }
 
 // ---------------------------------------------------------------------------
@@ -347,35 +337,21 @@ func invocationMetadataFrom(m host.InvocationMetadata) InvocationMetadata {
 	}
 }
 
-// asyncInvocationMetadata is the identity of an asynchronous invocation, or nil
-// when the host rejected the call before it started. The future of a rejected
-// call reports the rejection.
-func asyncInvocationMetadata(m witTypes.Option[host.InvocationMetadata]) *InvocationMetadata {
-	if m.IsNone() {
-		return nil
+// invocationIDFromWit reads the ID of an agent invocation. An agent method
+// invocation always belongs to an agent, so another owner is a broken host.
+func invocationIDFromWit(id types.InvocationId) InvocationID {
+	if id.Owner.Tag() != types.InvocationOwnerAgent {
+		panic(fmt.Errorf("golem: the host returned an agent invocation that a tool owns (%q)", id.Owner.Tool()))
 	}
-	metadata := invocationMetadataFrom(m.Some())
-	return &metadata
+	return InvocationID{AgentID: agentIDFromWit(id.Owner.Agent()), UUID: uuidFromWit(id.Id)}
 }
 
-// ScheduledInvocation is a future invocation that has not run yet.
-type ScheduledInvocation struct {
-	Metadata InvocationMetadata
-	token    *host.CancellationToken
-}
-
-// Cancel prevents the invocation, if it has not already started.
-func (s *ScheduledInvocation) Cancel() {
-	if s.token != nil {
-		s.token.Cancel()
-		dropCancellationToken(s.token)
-		s.token = nil
+func invocationIDToWit(id InvocationID) types.InvocationId {
+	return types.InvocationId{
+		Owner: types.MakeInvocationOwnerAgent(agentIDToWit(id.AgentID)),
+		Id:    uuidToWit(id.UUID),
 	}
 }
-
-// dropCancellationToken releases a used token. The component build binds it
-// to the resource's Drop; a native build has no host resource to release.
-var dropCancellationToken = func(*host.CancellationToken) {}
 
 func instantFrom(t time.Time) clock.Instant {
 	return clock.Instant{
@@ -407,10 +383,20 @@ const (
 	// RemoteConflict means a keyed create found an agent that already has the
 	// key, or the agent at the ID that a key derives has another key.
 	RemoteConflict
+	// RemoteCancelled means the awaited invocation was withdrawn before it
+	// started.
+	RemoteCancelled
+	// RemoteCannotCancelRunning means a cancellation found the invocation
+	// already running, which cannot be withdrawn.
+	RemoteCannotCancelRunning
 )
 
 func (k RemoteCallErrorKind) String() string {
 	switch k {
+	case RemoteCancelled:
+		return "cancelled"
+	case RemoteCannotCancelRunning:
+		return "cannot cancel running"
 	case RemoteDenied:
 		return "denied"
 	case RemoteNotFound:
@@ -468,20 +454,24 @@ func rpcErrorToGo(target, method string, e host.RpcError) error {
 		err.Message = err.Cause.Error()
 	case host.RpcErrorConflict:
 		err.Kind, err.Message = RemoteConflict, e.Conflict()
+	case host.RpcErrorCancelled:
+		err.Kind, err.Message = RemoteCancelled, e.Cancelled()
+	case host.RpcErrorCannotCancelRunning:
+		err.Kind, err.Message = RemoteCannotCancelRunning, e.CannotCancelRunning()
 	default:
 		panic(fmt.Sprintf("golem: unhandled rpc-error case %d", e.Tag()))
 	}
 	return err
 }
 
-// refuseStreams rejects the fire-and-forget invocation forms for a method that
-// carries a stream. Both return before the call completes, so neither can hand
-// the caller a stream endpoint — including when the only stream is in the
-// output. Await the call instead.
+// refuseStreams rejects the invocation handle forms for a method that carries a
+// stream. A trigger and a schedule return before the call completes, so neither
+// can hand the caller a stream endpoint — including when the only stream is in
+// the output. Await the call instead.
 func (m MethodDef[Id, In, Out]) refuseStreams(form string) {
 	if defs.CarriesStream(reflect.TypeFor[In]()) || defs.CarriesStream(reflect.TypeFor[Out]()) {
 		panic(fmt.Errorf(
-			"golem: %s: %s cannot carry a stream; await the call with Call or CallAsync instead",
+			"golem: %s: %s cannot carry a stream; await the call with Call instead",
 			m.name, form))
 	}
 }

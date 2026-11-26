@@ -52,7 +52,7 @@ test "reflected output rejection releases stale and unexpected streams" {
     }),
     output: Some(string),
   }
-  let invocation = fn(id : Int32) -> Invocation[@model.SchemaValue?] {
+  let invocation = fn(id : Int32) -> InvocationOutput[@model.SchemaValue?] {
     {
       metadata: {
         agent_id: @schema.AgentId::from_uuid(@schema.Uuid::from_bits(0, 2)),
@@ -71,7 +71,7 @@ test "reflected output rejection releases stale and unexpected streams" {
     }
   }
   reset_reflection_resource_drop_counts()
-  try validate_invocation_output(entry, invocation(301)) catch {
+  try validate_output(entry, invocation(301).value) catch {
     Schema(_) => ()
     error => fail("unexpected stale-output failure: \{repr(error)}")
   } noraise {
@@ -79,7 +79,7 @@ test "reflected output rejection releases stale and unexpected streams" {
   }
   assert_eq(reflection_resource_drop_count(3), 1)
   let unit_entry = { ..entry, output: None, }
-  try validate_invocation_output(unit_entry, invocation(302)) catch {
+  try validate_output(unit_entry, invocation(302).value) catch {
     Schema(_) => ()
     error => fail("unexpected unit-output failure: \{repr(error)}")
   } noraise {

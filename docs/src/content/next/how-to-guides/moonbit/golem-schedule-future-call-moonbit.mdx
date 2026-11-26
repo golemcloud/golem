@@ -2,17 +2,17 @@
 
 ## Overview
 
-A **scheduled invocation** enqueues a method call on the target agent to be executed at a specific future time. The call returns immediately; the target agent processes it when the scheduled time arrives.
+A **scheduled invocation** enqueues a method call on the target agent to be executed at a specific future time. The call returns once the target has durably accepted the invocation; the target agent processes it when the scheduled time arrives.
 
 This is for **agent-to-agent scheduled calls from code**. To schedule an invocation from the CLI, see the [`golem-schedule-agent-moonbit`](/next/how-to-guides/moonbit/golem-schedule-agent-moonbit) skill instead.
 
 ## Usage
 
-Methods with recursively stream-free inputs and outputs have a generated `schedule_` variant. These examples use durable clients. Ephemeral clients have only `upsert` and `scoped_upsert`, and each scheduled invocation runs on a new one-shot instance. Use `AgentClient::scoped_upsert` inside an async function to obtain a client and call the synchronous enqueue method with a `scheduled_at` instant and the method arguments. The scoped helper and its callback are async even though scheduling itself is synchronous:
+Methods with recursively stream-free inputs and outputs have a generated async `schedule_` variant. These examples use durable clients. Ephemeral clients have only `upsert` and `scoped_upsert`, and each scheduled invocation runs on a new one-shot instance. Use `AgentClient::scoped_upsert` inside an async function to obtain a client and call `schedule_<method>` with a `scheduled_at` instant and the method arguments. It returns an `@rpc.Invocation[T]` handle, and raises when the invocation was not accepted. Always `drop()` the handle; dropping does not cancel the invocation:
 
 ```moonbit
 AgentClient::scoped_upsert("param", async fn(client) {
-  client.schedule_increment(scheduled_at)
+  client.schedule_increment(scheduled_at).drop()
 })
 ```
 
@@ -26,7 +26,7 @@ AgentClient::scoped_upsert("my-counter", async fn(client) {
     seconds: now.seconds + 60,
     nanoseconds: 0,
   }
-  client.schedule_increment(scheduled_at)
+  client.schedule_increment(scheduled_at).drop()
 })
 ```
 
@@ -38,7 +38,7 @@ ReportAgentClient::scoped_upsert("daily", async fn(client) {
     seconds: tomorrow_midnight,
     nanoseconds: 0,
   }
-  client.schedule_generate_report(scheduled_at, "summary")
+  client.schedule_generate_report(scheduled_at, "summary").drop()
 })
 ```
 
@@ -53,9 +53,9 @@ let scheduled_at = @systemClock.Instant::{
 }
 ```
 
-## Cancelable Variant
+## Cancellation
 
-Stream-free methods on durable clients also have a `schedule_cancelable_` variant that returns a `CancellationToken`. Ephemeral clients return a receipt containing the token and invocation metadata instead. Call `.cancel()` on the token to prevent the scheduled invocation from firing:
+The handle that `schedule_` returns cancels the invocation before it starts:
 
 ```moonbit
 AgentClient::scoped_upsert("my-counter", async fn(client) {
@@ -64,12 +64,25 @@ AgentClient::scoped_upsert("my-counter", async fn(client) {
     seconds: now.seconds + 60,
     nanoseconds: 0,
   }
-  let token = client.schedule_cancelable_increment(scheduled_at)
-  defer token.drop()
-  // Later, to cancel: token.cancel()
-  // cancel() borrows the token; defer releases it whether cancelled or not.
+  let run = client.schedule_increment(scheduled_at)
+  defer run.drop()
+  // Later, to cancel:
+  let withdrawn = run.cancel()
+  // ...
 })
 ```
+
+`cancel()` returns `true` when it withdrew the invocation, `false` when it already finished or was already cancelled, and raises `RpcError::CannotCancelRunning` when it is running. `await_result()` on a cancelled invocation raises `RpcError::Cancelled`.
+
+To cancel from a later invocation of the same agent, keep `run.id().to_string()` in agent state and rebuild the handle with the generated static `get_<method>_invocation` (no remote call):
+
+```moonbit
+let pending = AgentClient::get_increment_invocation(@rpc.InvocationId::parse(self.pending_run))
+defer pending.drop()
+let _ = pending.cancel()
+```
+
+The ID only locates the invocation; it is not authority. Only the agent that scheduled the invocation, or a caller with management permission, may observe or cancel it. Scheduled calls never lend a scope card.
 
 ## Use Cases
 

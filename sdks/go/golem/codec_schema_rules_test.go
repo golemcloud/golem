@@ -161,11 +161,11 @@ func TestAStructWithOnlyUnexportedFieldsIsRefused(t *testing.T) {
 	}
 }
 
-// A Future is a handle on a call in flight, not data.
-func TestAFutureIsNotSendable(t *testing.T) {
-	mustInvalidCompile(t, "golem.Future", reflect.TypeFor[Future[int64]]())
-	if why := graphInvalid(reflect.TypeFor[*Future[int64]]()); !strings.Contains(why, "golem.Future") {
-		t.Fatalf("*Future compiled: %q", why)
+// An Invocation is a handle on an accepted invocation, not data.
+func TestAnInvocationIsNotSendable(t *testing.T) {
+	mustInvalidCompile(t, "golem.Invocation", reflect.TypeFor[Invocation[int64]]())
+	if why := graphInvalid(reflect.TypeFor[*Invocation[int64]]()); !strings.Contains(why, "golem.Invocation") {
+		t.Fatalf("*Invocation compiled: %q", why)
 	}
 }
 

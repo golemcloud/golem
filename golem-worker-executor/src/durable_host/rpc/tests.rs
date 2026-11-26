@@ -20,6 +20,7 @@ use crate::services::rpc::RpcDemand;
 use crate::worker::target::ResolvedTarget;
 use golem_common::model::AgentId;
 use golem_common::model::IdempotencyKey;
+use golem_common::model::InvocationRequestKey;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
@@ -33,7 +34,6 @@ use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::DurableFunctionType;
 use golem_common::model::oplog::HostPayloadPair;
 use golem_common::model::oplog::host_functions::GolemRpcWasmRpcUpsert;
-use golem_common::model::{InvocationRequestKey, OwnedInvocationId};
 use golem_common::schema::schema_value::SchemaValue;
 use golem_schema::schema::wit::PermissionCardHandleDropper;
 use golem_schema::schema::wit::PermissionCardHandleRep;
@@ -44,7 +44,6 @@ use std::sync::Arc;
 use std::time::Duration;
 use wasmtime::component::Resource;
 
-use super::schedule::validate_cancellation_token_owner;
 use super::*;
 use crate::services::rpc::RpcError as ServiceRpcError;
 use async_trait::async_trait;
@@ -326,6 +325,19 @@ impl PermissionCardHandleDropper for TableCapabilityDropper {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl Rpc for ActivatingRpc {
+    async fn invocation_handle(
+        &self,
+        _invocation_id: &golem_common::model::OwnedInvocationId,
+        _caller: &golem_common::model::caller::Principal,
+        _operation: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation,
+        _auth: &AuthCtx,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        WorkerExecutorError,
+    > {
+        unreachable!("test only exercises invoke-and-await dispatch")
+    }
+
     async fn create_and_initialize(
         &self,
         _target: ResolvedTarget,
@@ -345,19 +357,6 @@ impl Rpc for ActivatingRpc {
         }))
     }
 
-    async fn cancel_scheduled_invocation(
-        &self,
-        _target: &OwnedAgentId,
-        _key: golem_common::model::InvocationId,
-        _receipt: golem_common::model::ScheduleId,
-        _canceller: &golem_common::model::caller::Principal,
-        _auth: &AuthCtx,
-    ) -> Result<bool, ServiceRpcError> {
-        Err(ServiceRpcError::ProtocolError {
-            details: "schedule cancellation is not supported by this test RPC".to_string(),
-        })
-    }
-
     async fn schedule_invocation(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -367,7 +366,7 @@ impl Rpc for ActivatingRpc {
         _scheduled_at: jiff::Timestamp,
         _self_agent_id: &golem_common::model::AgentId,
         _auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+    ) -> Result<(), ServiceRpcError> {
         Err(ServiceRpcError::ProtocolError {
             details: "scheduling is not supported by this test RPC".to_string(),
         })
@@ -439,6 +438,19 @@ impl Rpc for ActivatingRpc {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl Rpc for RecordingScopeCardRpc {
+    async fn invocation_handle(
+        &self,
+        _invocation_id: &golem_common::model::OwnedInvocationId,
+        _caller: &golem_common::model::caller::Principal,
+        _operation: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation,
+        _auth: &AuthCtx,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        WorkerExecutorError,
+    > {
+        unreachable!("test only exercises invoke-and-await dispatch")
+    }
+
     async fn create_and_initialize(
         &self,
         _target: ResolvedTarget,
@@ -457,19 +469,6 @@ impl Rpc for RecordingScopeCardRpc {
         }))
     }
 
-    async fn cancel_scheduled_invocation(
-        &self,
-        _target: &OwnedAgentId,
-        _key: golem_common::model::InvocationId,
-        _receipt: golem_common::model::ScheduleId,
-        _canceller: &golem_common::model::caller::Principal,
-        _auth: &AuthCtx,
-    ) -> Result<bool, ServiceRpcError> {
-        Err(ServiceRpcError::ProtocolError {
-            details: "schedule cancellation is not supported by this test RPC".to_string(),
-        })
-    }
-
     async fn schedule_invocation(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -479,7 +478,7 @@ impl Rpc for RecordingScopeCardRpc {
         _scheduled_at: jiff::Timestamp,
         _self_agent_id: &golem_common::model::AgentId,
         _auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
+    ) -> Result<(), ServiceRpcError> {
         Err(ServiceRpcError::ProtocolError {
             details: "scheduling is not supported by this test RPC".to_string(),
         })
@@ -548,41 +547,6 @@ impl Rpc for RecordingScopeCardRpc {
 
 fn agent_id(h: u128) -> AgentId {
     AgentId::from_parts(7, h)
-}
-
-fn cancellation_token(owner: OwnedAgentId, recipient: OwnedAgentId) -> CancellationTokenEntry {
-    CancellationTokenEntry {
-        schedule_id: vec![],
-        metadata: invocation_metadata(&OwnedInvocationId::new(
-            recipient.agent_id(),
-            Uuid::from_u128(42).into(),
-        ))
-        .unwrap(),
-        owner,
-        recipient,
-    }
-}
-
-#[test]
-fn scheduled_invocation_owner_can_cancel_its_token() {
-    let owner = OwnedAgentId::new(EnvironmentId::new(), &agent_id(1));
-    let recipient = OwnedAgentId::new(EnvironmentId::new(), &agent_id(2));
-    let token = cancellation_token(owner.clone(), recipient);
-
-    assert_eq!(validate_cancellation_token_owner(&token, &owner), Ok(()));
-}
-
-#[test]
-fn scheduled_invocation_non_owner_cannot_cancel_token() {
-    let owner = OwnedAgentId::new(EnvironmentId::new(), &agent_id(1));
-    let recipient = OwnedAgentId::new(EnvironmentId::new(), &agent_id(2));
-    let non_owner = OwnedAgentId::new(EnvironmentId::new(), &agent_id(3));
-    let token = cancellation_token(owner, recipient);
-
-    assert!(matches!(
-        validate_cancellation_token_owner(&token, &non_owner),
-        Err(WorkerExecutorError::PermissionDenied { .. })
-    ));
 }
 
 #[test]
@@ -676,85 +640,6 @@ async fn await_dispatch_forwards_the_resolved_scope_card_to_the_rpc_layer() {
         .expect("dispatch should not fail at the host layer")
         .expect("RPC invocation should succeed");
     assert_eq!(*rpc.dispatched_scope_card.lock().unwrap(), Some(scope_card));
-}
-
-#[test]
-fn non_await_variants_reject_any_scope_card_argument() {
-    let scope_card = Some(Resource::<PermissionCardHandleRep>::new_borrow(1));
-
-    for operation in [
-        "invoke",
-        "schedule-invocation",
-        "schedule-cancelable-invocation",
-    ] {
-        let mut dropper = TableCapabilityDropper {
-            table: ResourceTable::new(),
-        };
-        let input = || core_wire::SchemaValueTree {
-            value_nodes: vec![core_wire::SchemaValueNode::BoolValue(false)],
-            root: 0,
-        };
-        assert!(
-            reject_non_await_scope_card(&scope_card, input(), operation, &mut dropper).is_err()
-        );
-        assert!(reject_non_await_scope_card(&None, input(), operation, &mut dropper).is_ok());
-    }
-}
-
-#[test]
-fn rejected_scope_card_call_consumes_owned_capabilities_from_rpc_input() {
-    let mut dropper = TableCapabilityDropper {
-        table: ResourceTable::new(),
-    };
-    let input_quota = dropper
-        .table
-        .push(QuotaTokenHandleRep::new(()))
-        .expect("input quota token should be inserted");
-    let input_secret = dropper
-        .table
-        .push(SecretHandleRep::new(()))
-        .expect("input secret should be inserted");
-    let input_card = dropper
-        .table
-        .push(PermissionCardHandleRep::new(()))
-        .expect("input card should be inserted");
-    let input_quota_rep = input_quota.rep();
-    let input_secret_rep = input_secret.rep();
-    let input_card_rep = input_card.rep();
-    let input = core_wire::SchemaValueTree {
-        value_nodes: vec![
-            core_wire::SchemaValueNode::QuotaTokenHandle(input_quota),
-            core_wire::SchemaValueNode::SecretValue(input_secret),
-            core_wire::SchemaValueNode::PermissionCardHandle(input_card),
-            core_wire::SchemaValueNode::TupleValue(vec![0, 1, 2]),
-        ],
-        root: 3,
-    };
-    let scope_card = Some(Resource::<PermissionCardHandleRep>::new_borrow(1));
-
-    assert!(reject_non_await_scope_card(&scope_card, input, "invoke", &mut dropper).is_err());
-    assert!(
-        dropper
-            .table
-            .get(&Resource::<QuotaTokenHandleRep>::new_borrow(
-                input_quota_rep
-            ))
-            .is_err()
-    );
-    assert!(
-        dropper
-            .table
-            .get(&Resource::<SecretHandleRep>::new_borrow(input_secret_rep))
-            .is_err()
-    );
-    assert!(
-        dropper
-            .table
-            .get(&Resource::<PermissionCardHandleRep>::new_borrow(
-                input_card_rep
-            ))
-            .is_err()
-    );
 }
 
 #[test]
@@ -881,40 +766,9 @@ fn ephemeral_invocation_target_is_derived_from_the_host_call_key() {
 }
 
 #[test]
-fn asynchronous_rejections_have_no_identity_and_keep_the_error_in_the_future() {
-    for error in [
-        ServiceRpcError::Denied {
-            details: "denied".to_string(),
-        },
-        ServiceRpcError::ProtocolError {
-            details: "invalid input".to_string(),
-        },
-    ] {
-        let mut table = ResourceTable::new();
-        let invocation = super::denial::bake_closed_async_error(&mut table, error.clone()).unwrap();
-        assert!(invocation.metadata.is_none());
-        let entry = table.get(&invocation.future).unwrap();
-        let state = entry
-            .payload
-            .as_any()
-            .downcast_ref::<FutureInvokeResultState>()
-            .unwrap();
-        match state {
-            FutureInvokeResultState::Baked {
-                result: Ok(Err(recorded)),
-            } => {
-                assert_eq!(format!("{recorded:?}"), format!("{error:?}"));
-            }
-            _ => panic!("a rejected asynchronous invocation must expose a baked error"),
-        }
-    }
-}
-
-#[test]
-fn final_rpc_metadata_uses_recorded_preparation_and_schedule_receipts() {
-    use golem_common::model::oplog::types::SerializableScheduleId;
+fn final_rpc_metadata_uses_recorded_preparation_and_accepted_invocation() {
     use golem_common::model::oplog::{
-        HostResponseGolemRpcPrepareInvocation, HostResponseGolemRpcScheduledInvocation,
+        HostResponseGolemRpcInvocationAccepted, HostResponseGolemRpcPrepareInvocation,
     };
 
     let target = agent_id(6);
@@ -935,23 +789,16 @@ fn final_rpc_metadata_uses_recorded_preparation_and_schedule_receipts() {
         key.finalize(target, AgentFingerprint(Uuid::from_u128(43)), "run")
     );
 
-    let receipt = HostResponseGolemRpcScheduledInvocation {
-        schedule_id: SerializableScheduleId {
-            id: Uuid::from_u128(44),
-        },
-        invocation_id: final_id.clone(),
+    let accepted = HostResponseGolemRpcInvocationAccepted {
+        result: Ok(final_id.clone()),
     };
-    let bytes = desert_rust::serialize_to_byte_vec(&receipt).unwrap();
-    let replayed: HostResponseGolemRpcScheduledInvocation =
+    let bytes = desert_rust::serialize_to_byte_vec(&accepted).unwrap();
+    let replayed: HostResponseGolemRpcInvocationAccepted =
         desert_rust::deserialize(&bytes).unwrap();
-    assert_eq!(replayed.invocation_id, final_id);
+    let replayed_id = replayed.result.unwrap();
+    assert_eq!(replayed_id, final_id);
     assert_eq!(
-        Uuid::from(
-            invocation_metadata(&replayed.invocation_id)
-                .unwrap()
-                .invocation_id
-                .id
-        ),
+        Uuid::from(super::invocation::wire_invocation_id(&replayed_id).id),
         final_id.uuid()
     );
     let tool_target = OwnedInvocationId::new(

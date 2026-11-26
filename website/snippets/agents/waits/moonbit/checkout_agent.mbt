@@ -14,11 +14,12 @@ pub async fn CheckoutAgent::pay(self : Self, amount : Int) -> Unit {
   create_payment_link(self.order_id, amount, paid.url())
   // schedule a call on another agent for tomorrow:
   let reminder = MailerAgentClient::upsert(self.order_id) //@
-    .schedule_cancelable_remind(in_days(1)) //@
+    .schedule_remind(in_days(1)) //@
   // it waits here for days if needed, using no CPU or memory:
   let body = @json.parse(paid.wait().text()) //@
   let event : PaymentEvent = @json.from_json(body)
-  reminder.cancel()
+  let _ = try reminder.cancel() catch { _ => false }
+  reminder.drop()
   if event.status != "succeeded" { return }
   // sleep for a week; its deadline survives restarts:
   @monotonicClock.wait_for(7UL * 24 * 60 * 60 * 1_000_000_000) //@

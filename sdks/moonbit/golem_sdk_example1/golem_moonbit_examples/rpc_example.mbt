@@ -12,7 +12,8 @@ fn RpcExampleAgent::new() -> RpcExampleAgent {
 }
 
 ///|
-/// Calls a remote Counter agent, increments three times, reads value, then decrements
+/// Calls a remote Counter agent, increments three times, reads value, then
+/// triggers a decrement and drops its handle without waiting for it
 pub async fn RpcExampleAgent::counter_rpc_example(self : Self) -> UInt64 {
   CounterClient::scoped_upsert("my-counter", async fn(counter) {
     counter.increment()
@@ -20,7 +21,7 @@ pub async fn RpcExampleAgent::counter_rpc_example(self : Self) -> UInt64 {
     counter.increment()
     let value = counter.get_value()
     self.last_value = value
-    counter.trigger_decrement()
+    counter.trigger_decrement().drop()
     value
   })
 }

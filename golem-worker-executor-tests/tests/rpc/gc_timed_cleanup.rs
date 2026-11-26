@@ -860,16 +860,18 @@ async fn assert_divergent_snapshot_rejected(
         "only the original increment may have a durable Start"
     );
     assert_eq!(
-        starts_named(&history, "golem::rpc::wasm-rpc::invoke").count(),
+        starts_named(&history, "golem::rpc::wasm-rpc::trigger").count(),
         0,
-        "the changed fire-and-forget call must be rejected before dispatch"
+        "the changed triggered call must be rejected before dispatch"
     );
     assert_settled_history(&history);
     Ok(())
 }
 
-/// Runs `abandon_then_await` (an un-awaited RPC future dropped `live` before or after the next
-/// call) up to its promise, restarts, and replays it with the future dropped `after_restore`.
+/// Runs `abandon_then_await` (the handle of a triggered invocation dropped `live` before or after
+/// the next call) up to its promise, restarts, and replays it with the handle dropped
+/// `after_restore`. Dropping a handle releases only local resources: it records no durable call,
+/// so a changed drop schedule cannot diverge.
 async fn abandon_while_awaiting(
     deps: &WorkerExecutorTestDependencies,
     context: &TestContext,
@@ -892,11 +894,15 @@ async fn abandon_while_awaiting(
             data_value!(blocking, gate, false, promise.clone()),
         )
         .await?;
-    let live_cancelled = usize::from(live.drop_at != NEVER.drop_at);
+    let live = caller.oplog().await?;
     assert_eq!(
-        cancelled_count(&caller.oplog().await?),
-        live_cancelled,
-        "the live run cancels the future once if it drops it"
+        cancelled_count(&live),
+        0,
+        "dropping the handle must not cancel the invocation"
+    );
+    assert_eq!(
+        starts_named(&live, "golem::rpc::wasm-rpc::trigger").count(),
+        1
     );
 
     let caller = caller
@@ -919,8 +925,13 @@ async fn abandon_while_awaiting(
     assert_settled_history(&oplog);
     assert_eq!(
         cancelled_count(&oplog),
+        0,
+        "replay must not record a cancellation for a dropped handle"
+    );
+    assert_eq!(
+        starts_named(&oplog, "golem::rpc::wasm-rpc::trigger").count(),
         1,
-        "the future is cancelled exactly once: replay claims a recorded Cancelled, or records it live"
+        "replay must claim the recorded trigger and append none"
     );
     Ok(caller)
 }
@@ -932,11 +943,11 @@ fn cancelled_count(oplog: &[PublicOplogEntryWithIndex]) -> usize {
         .count()
 }
 
-/// The restored heap drops the un-awaited future before the next call; the live run dropped it
-/// after, so the recorded `Cancelled` follows that call.
+/// The restored heap drops the invocation handle before the next call; the live run dropped it
+/// after.
 #[test]
 #[timeout("3 minutes")]
-async fn replay_drops_future_earlier_than_recorded(
+async fn replay_drops_handle_earlier_than_recorded(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
@@ -955,11 +966,11 @@ async fn replay_drops_future_earlier_than_recorded(
     Ok(())
 }
 
-/// The restored heap drops the un-awaited future after the next call; the live run dropped it
+/// The restored heap drops the invocation handle after the next call; the live run dropped it
 /// before.
 #[test]
 #[timeout("3 minutes")]
-async fn replay_drops_future_later_than_recorded(
+async fn replay_drops_handle_later_than_recorded(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
@@ -978,11 +989,11 @@ async fn replay_drops_future_later_than_recorded(
     Ok(())
 }
 
-/// The restored heap never drops the un-awaited future; the agent keeps it in its state and
+/// The restored heap never drops the invocation handle; the agent keeps it in its state and
 /// continues live.
 #[test]
 #[timeout("3 minutes")]
-async fn replay_never_drops_future(
+async fn replay_never_drops_handle(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
@@ -1004,11 +1015,11 @@ async fn replay_never_drops_future(
     Ok(())
 }
 
-/// The restored heap drops an un-awaited future the live run kept, so the oplog has no
-/// `Cancelled` for it: replay finishes and the cancellation is recorded live.
+/// The restored heap drops an invocation handle the live run kept: replay finishes without
+/// recording anything for the drop.
 #[test]
 #[timeout("3 minutes")]
-async fn replay_drops_future_the_original_never_dropped(
+async fn replay_drops_handle_the_original_never_dropped(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
@@ -1029,19 +1040,21 @@ async fn replay_drops_future_the_original_never_dropped(
     Ok(())
 }
 
-/// The restored heap drops an un-awaited future one invocation earlier than the live run, whose
-/// `Cancelled` belongs to the next invocation. The earlier invocation must finish without
-/// waiting for it.
+/// The restored heap drops an invocation handle one invocation earlier than the live run. The
+/// drop records nothing, so the earlier invocation finishes without waiting for the later one.
 #[test]
 #[timeout("3 minutes")]
-async fn replay_drops_future_an_invocation_earlier_than_recorded(
+async fn replay_drops_handle_an_invocation_earlier_than_recorded(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let overrides = || snapshot_every_nth_invocation(2);
+    // The agent initialization counts as an invocation and a retained invocation handle does not
+    // hold back a snapshot, so the snapshot after the fourth invocation, which creates
+    // `completed`, is the last one before the abandoning invocation.
+    let overrides = || snapshot_every_nth_invocation(4);
     let caller = Caller::start(
         deps,
         &context,
@@ -1078,24 +1091,15 @@ async fn replay_drops_future_an_invocation_earlier_than_recorded(
         )
         .await?;
     let oplog = caller.oplog().await?;
-    assert_eq!(cancelled_count(&oplog), 1);
-    let cancelled_at = oplog
-        .iter()
-        .find(|entry| matches!(&entry.entry, PublicOplogEntry::Cancelled(_)))
-        .map(|entry| entry.oplog_index)
-        .unwrap();
+    assert_eq!(cancelled_count(&oplog), 0);
     let invocations = oplog
         .iter()
         .filter(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
         .map(|entry| entry.oplog_index)
         .collect::<Vec<_>>();
-    let [.., abandon_started, drop_started] = invocations[..] else {
+    let [.., abandon_started, _drop_started] = invocations[..] else {
         panic!("the history has the abandoning and the dropping invocations");
     };
-    assert!(
-        cancelled_at > drop_started,
-        "the live run records the Cancelled in the dropping invocation"
-    );
     let last_snapshot = oplog
         .iter()
         .rev()
@@ -1124,8 +1128,8 @@ async fn replay_drops_future_an_invocation_earlier_than_recorded(
     assert_settled_history(&oplog);
     assert_eq!(
         cancelled_count(&oplog),
-        1,
-        "replay claims the recorded Cancelled and appends none"
+        0,
+        "replay must not record a cancellation for a dropped handle"
     );
     Ok(())
 }

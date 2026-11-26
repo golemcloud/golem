@@ -45,7 +45,8 @@ async fn full_clients(agent_id: &golem_rust::AgentId) {
     let complete = CompleteSearchApiClient::upsert("default".to_string())
         .expect("fallible full client creation");
     let _status = complete.status();
-    let _pending = complete.pending_status();
+    let _: Result<golem_rust::Invocation<String>, golem_rust::GolemReflectError> =
+        complete.trigger_status().await;
     let _: Result<golem_rust::AgentId, golem_rust::GolemReflectError> = complete.agent_id().await;
     let _ = CompleteSearchApiClient::create(
         "default".to_string(),
@@ -66,7 +67,8 @@ async fn full_clients(agent_id: &golem_rust::AgentId) {
     let ephemeral = EphemeralSearchApiClient::upsert("default".to_string())
         .expect("fallible ephemeral creation");
     let _status = ephemeral.status();
-    let _pending = ephemeral.pending_status();
+    let _: Result<golem_rust::Invocation<String>, golem_rust::GolemReflectError> =
+        ephemeral.trigger_status().await;
     let method_only = SearchApiClient::get_by_id(agent_id).expect("method-only client");
     let _: Result<golem_rust::AgentId, golem_rust::GolemReflectError> =
         method_only.agent_id().await;

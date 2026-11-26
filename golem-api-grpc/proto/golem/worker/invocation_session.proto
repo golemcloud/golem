@@ -58,6 +58,9 @@ message InvocationStart {
   optional bytes captured_method_input = 24;
   // Logical method API capability; independent of Await and this RPC's transport.
   bool allow_streams = 25;
+  // Set by a call that returns an invocation handle: a new key is admitted with its own durable
+  // record even when the read-only cache holds a matching result, so its ID can be looked up.
+  bool requires_own_record = 26;
 }
 
 message ExternalToolInvocation {

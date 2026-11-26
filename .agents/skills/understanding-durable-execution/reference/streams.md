@@ -6,7 +6,8 @@ Detailed mechanics behind the "Streaming invocations" section of `SKILL.md`. Pat
 
 A streaming RPC is an ordinary durable RPC whose method signature carries input or output streams
 (`remote_method_uses_streams` in `durable_host/rpc/mod.rs`). Live streams require
-invoke-and-await; a fire-and-forget streaming call is rejected with `RpcError::ProtocolError`.
+invoke-and-await: `trigger` rejects a streaming method with `RpcError::ProtocolError`, and
+`schedule` traps on one.
 
 ### Identity
 
@@ -54,12 +55,12 @@ runs after preparation commits; recovery uses that topology evidence without rep
 request or input bindings. Resume serialization follows producer admission, session lock, then
 worker instance lock; the instance guard remains held through the resume commit.
 
-Cancelling an asynchronous streaming RPC also terminalizes its open caller-owned
-`AgentHostedInput` streams, including cancellation before target acceptance. The producer checks
+Dropping an unfinished awaited streaming RPC also terminalizes its open caller-owned
+`AgentHostedInput` streams, including a drop before target acceptance. The producer checks
 both handle ownership and the RPC session key; forwarded foreign inputs are not cancelled.
 An existing terminal is preserved. This lets input producer tasks settle even when the remote
-invocation was never accepted, so best-effort remote cancellation cannot leave local tail work
-waiting on an orphaned input (`durable_host/rpc/future.rs`).
+invocation was never accepted, so best-effort remote withdrawal cannot leave local tail work
+waiting on an orphaned input (`durable_host/rpc/invoke_and_await.rs`, `PendingWithdrawal`).
 
 An exact-prefix fork retains the remote invocation key and the original logical streaming origin.
 The original caller and fork therefore join one target invocation, keeping the first accepted
@@ -174,7 +175,8 @@ HTTP stream responses expose no fork headers; Golem's session manifest exposes p
 Tests: `exported_fork_initial_content_and_receipt_survive_lost_resume_response`, the custom-API
 fork tests, and the CLI `reference_client_export_protocol_compatibility` scenarios.
 
-The target is pinned by `streaming_target_fingerprint`: `AgentFingerprint`
+The target is pinned by the fingerprint the client recorded (`recorded_target_fingerprint`), or
+by the recorded preparation of an ephemeral target: `AgentFingerprint`
 (`golem-common/src/base_model/worker.rs`) is minted once at agent creation and stable across
 restarts, so a deleted-and-recreated agent with the same `AgentId` is a different producer.
 For an ephemeral target, the first live preparation after the caller's `Start` commit uses

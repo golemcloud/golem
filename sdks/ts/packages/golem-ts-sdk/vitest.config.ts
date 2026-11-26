@@ -25,6 +25,7 @@ export default defineConfig({
         __dirname,
         'types/wasm-rquickjs-custom-invocation-context.d.ts',
       ),
+      'wasm-rquickjs:import-abort': path.resolve(__dirname, 'tests/mocks/importAbort.ts'),
       'golem:agent/common@1.5.0': path.resolve(__dirname, 'types/golem_agent_1_5_0_common.d.ts'),
       'golem:agent/host@1.5.0': path.resolve(__dirname, 'types/golem_agent_1_5_0_host.d.ts'),
       'golem:core/types@2.0.0': path.resolve(__dirname, 'types/golem_core_2_0_0_types.d.ts'),

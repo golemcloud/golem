@@ -26,10 +26,13 @@ Use these client conventions:
 - `.schedule(at, input)` accepts `Datetime.Input`: a WIT wall-clock value with
   `{ seconds: bigint, nanoseconds: number }`, a JavaScript `Date`, an Effect `DateTime`, or
   a numeric epoch-millisecond timestamp.
-- `.schedule(...)` is already cancelable and returns `Client.ScheduledInvocation`.
-- Cancel with `yield* scheduled.cancel()`. There is no `.scheduleCancelable()` method.
-- The handle belongs to the allocating Scope. Closing that Scope drops the host cancellation
-  resource, but does not cancel the invocation. A `Ref` does not extend that lifetime.
+- `.schedule(...)` succeeds with an `InvocationId.Invocation` handle once the target accepted
+  the invocation.
+- Cancel with `yield* scheduled.cancel`; `cancel`, `status` and `awaitResult` are Effects, not
+  methods.
+- The handle belongs to the current Scope. Closing that Scope releases the handle, but does not
+  cancel the invocation. A `Ref` does not extend that lifetime; store
+  `InvocationId.format(scheduled.id)` and rebuild the handle with `InvocationId.get` instead.
 - Both `client.upsert(...)` and `.schedule(...)` are lazy Effects and must be yielded.
 
 The client normalizes supported inputs. To construct a WIT datetime explicitly from an Effect
@@ -149,10 +152,14 @@ cancel or restart. A boolean alone is insufficient for a restartable loop: an ol
 state. If adding snapshots, save and restore the generation, running flag, and tick count together;
 never reset the generation while old schedules can still arrive.
 
-`Client.ScheduledInvocation` is a live scoped host resource, not schema-serializable state. Call
-`cancel()` only while its allocating Scope is still open. Do not save it in a `Ref` for a later
-invocation after `Effect.scoped` has closed. Logical generation cancellation is the recommended
-workflow for later invocations; it requires no host cancellation handle.
+An invocation handle is a live scoped host resource, not schema-serializable state. Do not save it
+in a `Ref` for a later invocation after `Effect.scoped` has closed. To also withdraw the pending
+tick, store its ID text (`InvocationId.format(scheduled.id)`) in state, and in `cancel` rebuild the
+handle with `InvocationId.get(id, TickerDefinition.methods.tick)` and yield its `cancel`. It
+succeeds with `true` when it withdrew the tick and `false` when the tick already finished, and
+fails with `RpcCannotCancelRunning` for a running invocation. Keep the generation check as well: a
+tick whose ID was not stored, for example one scheduled from the CLI, still exits without doing
+work. Logical generation cancellation alone needs no stored ID.
 
 ## Exponential Backoff
 

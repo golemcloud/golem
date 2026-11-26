@@ -20,7 +20,7 @@ export const Checkout = defineAgent({
       // it waits here for days if needed, using no CPU or memory:
       const payload = yield* paid.await //@
       const event = yield* payload.decode(PaymentEvent)
-      yield* reminder.cancel()
+      yield* Effect.ignore(reminder.cancel)
       if (event.status !== "succeeded") return
       // sleep for a week; its deadline survives restarts:
       yield* Effect.sleep("7 days") //@

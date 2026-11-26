@@ -1018,8 +1018,8 @@ impl GoBridgeGenerator {
         // on a trigger or a schedule.
         writer.doc(
             "WithScopeCard returns a copy of the client whose awaited calls — the\n\
-             call, Must and Async forms — carry card as their scope card, lending\n\
-             the callee its grants for that invocation. The Trigger and Schedule\n\
+             call and Must forms — carry card as their scope card, lending the\n\
+             callee its grants for that invocation. The Trigger and Schedule\n\
              forms never carry one. The card is lent, not moved.\n\
              \n\
              A scope card is valid only during the invocation that derived it. Use\n\
@@ -1182,41 +1182,30 @@ impl GoBridgeGenerator {
                 format!("return {descriptor}.MustCall(c.client, {input})")
             }],
         );
-        let call_async = &names.call_async[idx];
-        func(
-            format!(
-                "{call_async} starts {} and returns at once with a future, so several\n\
-                 calls can be in flight.",
-                method.name
-            ),
-            call_async,
-            &signature,
-            &format!("*golem.Future[{output}]"),
-            vec![format!("return {descriptor}.CallAsync(c.client, {input})")],
-        );
-
         // A trigger or a schedule cannot hand a stream back, so a method that
         // takes or returns one only has the forms that wait for it.
         if streams {
             return Ok(());
         }
+        let handle = format!("*golem.Invocation[{output}]");
         let trigger = &names.trigger[idx];
         let must_trigger = &names.must_trigger[idx];
         func(
             format!(
-                "{trigger} enqueues {} without waiting for it to run.",
+                "{trigger} starts {} without waiting for it to run, and returns the\n\
+                 handle of the invocation once the target has accepted it.",
                 method.name
             ),
             trigger,
             &signature,
-            "(golem.InvocationMetadata, error)",
+            &format!("({handle}, error)"),
             vec![format!("return {descriptor}.Trigger(c.client, {input})")],
         );
         func(
             format!("{must_trigger} is {trigger} that panics on a failed call."),
             must_trigger,
             &signature,
-            "golem.InvocationMetadata",
+            &handle,
             vec![format!(
                 "return {descriptor}.MustTrigger(c.client, {input})"
             )],
@@ -1229,10 +1218,14 @@ impl GoBridgeGenerator {
         let schedule = &names.schedule[idx];
         let must_schedule = &names.must_schedule[idx];
         func(
-            format!("{schedule} enqueues {} to run at at.", method.name),
+            format!(
+                "{schedule} enqueues {} to run at at, and returns the handle of the\n\
+                 invocation, which can cancel it until it starts.",
+                method.name
+            ),
             schedule,
             &schedule_signature,
-            "(*golem.ScheduledInvocation, error)",
+            &format!("({handle}, error)"),
             vec![format!(
                 "return {descriptor}.Schedule(c.client, at, {input})"
             )],
@@ -1241,10 +1234,22 @@ impl GoBridgeGenerator {
             format!("{must_schedule} is {schedule} that panics on a failed call."),
             must_schedule,
             &schedule_signature,
-            "*golem.ScheduledInvocation",
+            &handle,
             vec![format!(
                 "return {descriptor}.MustSchedule(c.client, at, {input})"
             )],
+        );
+        let invocation = &names.invocation[idx];
+        func(
+            format!(
+                "{invocation} rebuilds the handle of an invocation of {} from the ID\n\
+                 that {trigger} or {schedule} returned. It makes no remote call.",
+                method.name
+            ),
+            invocation,
+            "id golem.InvocationID",
+            &handle,
+            vec![format!("return {descriptor}.Invocation(id)")],
         );
         Ok(())
     }
@@ -1274,11 +1279,11 @@ fn write_must_constructor(
 struct GuestMethodNames {
     call: Vec<String>,
     must_call: Vec<String>,
-    call_async: Vec<String>,
     trigger: Vec<String>,
     must_trigger: Vec<String>,
     schedule: Vec<String>,
     must_schedule: Vec<String>,
+    invocation: Vec<String>,
 }
 
 impl GuestMethodNames {
@@ -1287,11 +1292,11 @@ impl GuestMethodNames {
         let forms: [fn(&str) -> String; 7] = [
             |m| m.to_string(),
             |m| format!("Must{m}"),
-            |m| format!("{m}Async"),
             |m| format!("Trigger{m}"),
             |m| format!("MustTrigger{m}"),
             |m| format!("Schedule{m}"),
             |m| format!("MustSchedule{m}"),
+            |m| format!("{m}Invocation"),
         ];
         let all = forms
             .iter()
@@ -1303,11 +1308,11 @@ impl GuestMethodNames {
         Self {
             call: next(),
             must_call: next(),
-            call_async: next(),
             trigger: next(),
             must_trigger: next(),
             schedule: next(),
             must_schedule: next(),
+            invocation: next(),
         }
     }
 }
@@ -1363,7 +1368,7 @@ mod tests {
         let names = GuestMethodNames::new(&["Poll".to_string(), "MustPoll".to_string()]);
         assert_eq!(names.call, ["Poll", "MustPoll"]);
         assert_eq!(names.must_call, ["MustPoll2", "MustMustPoll"]);
-        assert_eq!(names.call_async, ["PollAsync", "MustPollAsync"]);
+        assert_eq!(names.invocation, ["PollInvocation", "MustPollInvocation"]);
         assert_eq!(
             names.must_trigger,
             ["MustTriggerPoll", "MustTriggerMustPoll"]

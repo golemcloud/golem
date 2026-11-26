@@ -157,6 +157,7 @@ async fn a_lookup_created_worker_expires_and_its_stranded_oplog_is_swept(
 
     executor
         .invoke_agent_session(InvocationStart {
+            requires_own_record: false,
             target: Some(AgentTarget {
                 target: Some(agent_target::Target::Id(agent_id.into())),
             }),

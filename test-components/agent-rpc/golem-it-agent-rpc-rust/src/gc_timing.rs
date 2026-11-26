@@ -5,7 +5,7 @@
 //! a garbage-collected guest whose restored heap collects handles at different points.
 
 use crate::encode_single_parameter;
-use golem_rust::bindings::golem::agent::host::{FutureInvokeResult, WasmRpc};
+use golem_rust::bindings::golem::agent::host::{Invocation, WasmRpc};
 use golem_rust::bindings::wasi::keyvalue::{cache, types::OutgoingValue};
 use golem_rust::{
     FromSchema, FromWire, IntoSchema, IntoWire, PromiseId, SchemaValue, WireSchema,
@@ -81,8 +81,8 @@ pub struct ReleaseSchedule {
     pub release_in_save: bool,
 }
 
-/// When `abandon` drops the future of its un-awaited call: `0` before the next call, `1` after
-/// the next call, `2` never (the future is retained in the agent state).
+/// When `abandon` drops the handle of its triggered invocation: `0` before the next call, `1`
+/// after the next call, `2` never (the handle is retained in the agent state).
 #[derive(
     Debug,
     Clone,
@@ -117,7 +117,7 @@ pub trait GcTimingCaller {
     fn create_promise(&self) -> PromiseId;
     /// Creates one client per iteration, increments the target through it and checks that the
     /// target saw exactly the increments of this caller.
-    fn run(&mut self, count: u32) -> u64;
+    async fn run(&mut self, count: u32) -> u64;
     fn release_retained(&mut self) -> u32;
     /// Releases the retained clients in a read-only invocation.
     #[read_only(cache = "no_cache")]
@@ -126,7 +126,7 @@ pub trait GcTimingCaller {
     /// (`run_two_targets` when `two_targets` is set), awaits `promise_id`, then runs one more
     /// iteration. An executor restart while it awaits replays the first part with the heap
     /// restored from the last snapshot.
-    fn run_then_await(
+    async fn run_then_await(
         &mut self,
         release_first: bool,
         count: u32,
@@ -136,19 +136,20 @@ pub trait GcTimingCaller {
     /// Increments the target once and awaits `promise_id`. When the agent was restored from a
     /// snapshot it makes a different call instead: `extra` makes one more call first,
     /// `function` triggers instead of awaiting, `owner` calls another target.
-    fn misbehave_then_await(&mut self, kind: String, promise_id: PromiseId) -> u64;
-    /// Starts `inc_after_promise(gate)` on the blocking counter without awaiting it, records a
-    /// positional `RemoveRetryPolicy` entry, increments the target, drops the un-awaited future at
-    /// the scheduled point, then awaits `promise_id`.
-    /// `cancel` cancels the future explicitly before the increment.
-    fn abandon_then_await(
+    async fn misbehave_then_await(&mut self, kind: String, promise_id: PromiseId) -> u64;
+    /// Triggers `inc_after_promise(gate)` on the blocking counter, records a positional
+    /// `RemoveRetryPolicy` entry, increments the target, drops the invocation handle at the
+    /// scheduled point, then awaits `promise_id`.
+    /// `cancel` also polls an awaited `inc_after_promise(gate)` call once and drops it before
+    /// the increment.
+    async fn abandon_then_await(
         &mut self,
         blocking_counter: String,
         gate: PromiseId,
         cancel: bool,
         promise_id: PromiseId,
     ) -> u64;
-    /// Drops the futures `abandon_then_await` kept, then awaits `promise_id`.
+    /// Drops the invocation handles `abandon_then_await` kept, then awaits `promise_id`.
     fn drop_retained_futures_then_await(&mut self, promise_id: PromiseId) -> u64;
     async fn abandon_cache_then_await(&mut self, promise_id: PromiseId);
     fn drop_retained_cache_then_await(&mut self, promise_id: PromiseId);
@@ -180,7 +181,7 @@ struct GcTimingCallerImpl {
     abandon: AbandonSchedule,
     abandon_after_restore: AbandonSchedule,
     retained: RefCell<Vec<WasmRpc>>,
-    retained_futures: Vec<(WasmRpc, FutureInvokeResult)>,
+    retained_futures: Vec<(WasmRpc, Invocation)>,
     retained_fills: Vec<OutgoingValue>,
     retained_cache: Vec<(
         cache::FutureGetResult,
@@ -205,9 +206,10 @@ fn target(name: &str) -> WasmRpc {
         .expect("failed to create the RPC client")
 }
 
-fn increment(rpc: &WasmRpc) -> u64 {
+async fn increment(rpc: &WasmRpc) -> u64 {
     decode_u64(
-        rpc.invoke_and_await("increment", no_input(), None)
+        rpc.invoke_and_await("increment".to_string(), no_input(), None)
+            .await
             .unwrap()
             .result
             .unwrap(),
@@ -240,10 +242,10 @@ impl GcTimingCallerImpl {
         released
     }
 
-    fn iterate(&mut self, count: u32) {
+    async fn iterate(&mut self, count: u32) {
         for _ in 0..count {
             let client = target(&self.name);
-            let observed = increment(&client);
+            let observed = increment(&client).await;
             self.completed += 1;
             assert_eq!(
                 observed, self.completed,
@@ -254,13 +256,13 @@ impl GcTimingCallerImpl {
         }
     }
 
-    fn iterate_two_targets(&mut self, count: u32) {
+    async fn iterate_two_targets(&mut self, count: u32) {
         let other = format!("{}-b", self.name);
         for _ in 0..count {
             let a = target(&self.name);
             let b = target(&other);
-            let observed_b = increment(&b);
-            let observed_a = increment(&a);
+            let observed_b = increment(&b).await;
+            let observed_a = increment(&a).await;
             self.completed += 1;
             self.completed_b += 1;
             assert_eq!(observed_a, self.completed);
@@ -313,8 +315,8 @@ impl GcTimingCaller for GcTimingCallerImpl {
         golem_rust::create_promise()
     }
 
-    fn run(&mut self, count: u32) -> u64 {
-        self.iterate(count);
+    async fn run(&mut self, count: u32) -> u64 {
+        self.iterate(count).await;
         self.completed
     }
 
@@ -326,7 +328,7 @@ impl GcTimingCaller for GcTimingCallerImpl {
         self.release_all()
     }
 
-    fn run_then_await(
+    async fn run_then_await(
         &mut self,
         release_first: bool,
         count: u32,
@@ -337,42 +339,43 @@ impl GcTimingCaller for GcTimingCallerImpl {
             self.release_all();
         }
         if two_targets {
-            self.iterate_two_targets(count);
+            self.iterate_two_targets(count).await;
         } else {
-            self.iterate(count);
+            self.iterate(count).await;
         }
-        golem_rust::blocking_await_promise(&promise_id);
-        self.iterate(1);
+        golem_rust::await_promise(&promise_id).await;
+        self.iterate(1).await;
         self.completed
     }
 
-    fn misbehave_then_await(&mut self, kind: String, promise_id: PromiseId) -> u64 {
+    async fn misbehave_then_await(&mut self, kind: String, promise_id: PromiseId) -> u64 {
         if self.restored {
             match kind.as_str() {
                 "extra" => {
                     let client = target(&self.name);
-                    increment(&client);
-                    increment(&client);
+                    increment(&client).await;
+                    increment(&client).await;
                 }
                 "function" => {
                     target(&self.name)
-                        .invoke("increment", no_input(), None)
+                        .trigger("increment".to_string(), no_input())
+                        .await
                         .unwrap();
                 }
                 "owner" => {
-                    increment(&target(&format!("{}-other", self.name)));
+                    increment(&target(&format!("{}-other", self.name))).await;
                 }
                 _ => panic!("unknown divergence: {kind}"),
             }
         } else {
-            increment(&target(&self.name));
+            increment(&target(&self.name)).await;
         }
-        golem_rust::blocking_await_promise(&promise_id);
+        golem_rust::await_promise(&promise_id).await;
         self.completed += 1;
         self.completed
     }
 
-    fn abandon_then_await(
+    async fn abandon_then_await(
         &mut self,
         blocking_counter: String,
         gate: PromiseId,
@@ -384,32 +387,45 @@ impl GcTimingCaller for GcTimingCallerImpl {
             encode_single_parameter(blocking_counter),
         )
         .expect("failed to create the RPC client");
-        let future = blocking
-            .async_invoke_and_await("inc_after_promise", encode_single_parameter(gate), None)
-            .future;
+        let invocation = blocking
+            .trigger(
+                "inc_after_promise".to_string(),
+                encode_single_parameter(gate.clone()),
+            )
+            .await
+            .expect("failed to trigger the blocking invocation");
         if cancel {
-            future.cancel();
+            let mut call = Box::pin(blocking.invoke_and_await(
+                "inc_after_promise".to_string(),
+                encode_single_parameter(gate),
+                None,
+            ));
+            std::future::poll_fn(|cx| {
+                assert!(call.as_mut().poll(cx).is_pending());
+                std::task::Poll::Ready(())
+            })
+            .await;
         }
-        let mut future = Some(future);
+        let mut invocation = Some(invocation);
         if self.abandon.drop_at == 0 {
-            drop(future.take());
+            drop(invocation.take());
         }
         golem_rust::retry::remove_retry_policy("gc-timing-unused");
-        let observed = increment(&target(&self.name));
+        let observed = increment(&target(&self.name)).await;
         self.completed += 1;
         assert_eq!(observed, self.completed);
         self.checksum += observed;
-        match (self.abandon.drop_at, future) {
-            (2, Some(future)) => self.retained_futures.push((blocking, future)),
-            (_, future) => drop(future),
+        match (self.abandon.drop_at, invocation) {
+            (2, Some(invocation)) => self.retained_futures.push((blocking, invocation)),
+            (_, invocation) => drop(invocation),
         }
-        golem_rust::blocking_await_promise(&promise_id);
+        golem_rust::await_promise(&promise_id).await;
         self.completed
     }
 
     fn drop_retained_futures_then_await(&mut self, promise_id: PromiseId) -> u64 {
-        for (rpc, future) in self.retained_futures.drain(..) {
-            drop(future);
+        for (rpc, invocation) in self.retained_futures.drain(..) {
+            drop(invocation);
             drop(rpc);
         }
         golem_rust::blocking_await_promise(&promise_id);

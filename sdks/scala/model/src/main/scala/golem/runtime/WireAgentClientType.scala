@@ -25,6 +25,7 @@ trait WireClientMethod[Trait] {
   def name: String
   def input: ConcreteCodec[Input]
   def inputContainsStream: Boolean
+  def outputContainsStream: Boolean
   def output: Option[ConcreteCodec[Output]]
 }
 
@@ -33,7 +34,8 @@ object WireClientMethod {
     methodName: String,
     inputCodec: ConcreteCodec[In],
     containsStream: Boolean,
-    outputCodec: Option[ConcreteCodec[Out]]
+    outputCodec: Option[ConcreteCodec[Out]],
+    outputStream: Boolean
   ): WireClientMethod[Trait] { type Input = In; type Output = Out } =
     new WireClientMethod[Trait] {
       type Input  = In
@@ -41,6 +43,7 @@ object WireClientMethod {
       val name                               = methodName
       val input: ConcreteCodec[Input]        = inputCodec
       val inputContainsStream: Boolean       = containsStream
+      val outputContainsStream: Boolean      = outputStream
       val output: Option[ConcreteCodec[Out]] = outputCodec
     }
 }

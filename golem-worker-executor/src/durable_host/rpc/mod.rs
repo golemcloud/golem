@@ -12,11 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::durable_host::concurrent::Cancellable;
-use crate::durable_host::concurrent::DurableCallSession;
 use crate::durable_host::durable_session::StreamSession;
-use crate::preview2::golem::agent::host::InvocationMetadata;
-use crate::preview2::golem::agent::host::RpcError;
 use crate::services::environment_state::EnvironmentStateService;
 use crate::services::rpc::RpcDemand;
 use crate::services::rpc::RpcError as InternalRpcError;
@@ -34,14 +30,11 @@ use golem_common::model::card::owner::AgentOwnerPattern;
 use golem_common::model::component::ComponentId;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::SpanId;
-use golem_common::model::oplog::HostRequestGolemRpcInvoke;
-use golem_common::model::oplog::host_functions::GolemRpcWasmRpcInvokeAndAwaitResult;
 use golem_common::model::type_id::TypeId;
 use golem_common::schema::agent::AgentTypeSchema;
 use golem_common::schema::schema_value::SchemaValue;
 use golem_schema::schema::SchemaGraph;
 use golem_schema::schema::SchemaType;
-use golem_service_base::model::auth::AuthCtx;
 use std::collections::BTreeMap;
 use std::fmt::Debug;
 use std::fmt::Formatter;
@@ -54,32 +47,10 @@ pub struct WasmRpcEntry {
     pub payload: Box<dyn std::any::Any + Send + Sync>,
 }
 
-/// Type-erased payload of a [`FutureInvokeResultEntry`] that can be polled for readiness.
-#[async_trait::async_trait]
-pub trait SubscribeAny: std::any::Any {
-    async fn ready(&mut self);
-    fn as_any(&self) -> &dyn std::any::Any;
-    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
-}
-
-/// Host-side resource table entry backing the `golem:agent/host.future-invoke-result` resource.
-pub struct FutureInvokeResultEntry {
-    pub payload: Box<dyn SubscribeAny + Send + Sync>,
-    /// Tracks child Pollable rep indices created by `subscribe()`.
-    /// Used to defer parent deletion until all children are dropped,
-    /// because JS GC does not guarantee LIFO drop order.
-    pub child_pollables: Vec<u32>,
-    /// Set to `true` when the guest drops the parent while children still exist.
-    /// The parent entry stays alive until the last child pollable is dropped.
-    pub drop_pending: bool,
-}
-
-/// Host-side resource table entry backing the `golem:agent/host.cancellation-token` resource.
-pub struct CancellationTokenEntry {
-    pub schedule_id: Vec<u8>, // ScheduleId is defined locally in the worker-executor, so store a serialized version here
-    pub metadata: InvocationMetadata,
-    pub owner: OwnedAgentId,
-    pub recipient: OwnedAgentId,
+/// Host-side resource table entry backing the `golem:agent/host.invocation` resource: the
+/// handle of an accepted invocation, addressed by its ID only.
+pub struct InvocationEntry {
+    pub id: OwnedInvocationId,
 }
 
 /// The agent type that a client of an ephemeral agent type invokes. Each invocation runs on a
@@ -107,15 +78,11 @@ struct PreparedRpcInvocation {
 }
 
 type FutureInvokeTaskResult = Result<Result<SchemaValue, InternalRpcError>, Error>;
-type FutureInvokeTaskHandle = Arc<tokio::sync::Mutex<RpcTask>>;
 
 struct RpcTask {
     task: AbortOnDropJoinHandle<FutureInvokeTaskResult>,
     revoker: Option<crate::worker::suspension::RpcActivityRevoker>,
 }
-
-type FutureInvokeGetResult = Result<Result<SchemaValue, RpcError>, Error>;
-type FutureInvokeCallHandle = DurableCallSession<GolemRpcWasmRpcInvokeAndAwaitResult, Cancellable>;
 
 struct TaskRetryParams<Ctx: WorkerCtx> {
     environment_state_service: Arc<dyn EnvironmentStateService>,
@@ -206,80 +173,18 @@ impl Debug for WasmRpcEntryPayload {
     }
 }
 
-#[allow(clippy::large_enum_variant)]
-enum FutureInvokeResultState {
-    /// The eager host-call `Start` has been written (live) or claimed from the oplog (replay). The
-    /// single [`FutureInvokeCallHandle`] owns both halves of the durable call: `get` finishes it
-    /// with an `End`, `cancel` / `drop` with a `Cancelled`. It is always `take`n out of the state
-    /// before a terminal runs, so a live handle is never dropped while still owned here (which would
-    /// spuriously enqueue a `Cancelled`).
-    ///
-    /// `task` is `Some` only on the live path — the background RPC task whose result feeds the `End`.
-    /// On the replay path it is `None`: `get` replays the recorded `End`. If replay instead finds an
-    /// incomplete `Start` (the worker crashed after the eager `Start` but before its terminal), `get`
-    /// re-dispatches the read-only RPC — using `remote_target`, `request`, and `env` — and
-    /// completes the existing `Start`.
-    ///
-    /// `cancel_token` is the side-channel for cancelling an *in-flight* `get`: `get` takes the
-    /// handle (and task) out of this state before awaiting, so a concurrent `cancel` finds
-    /// `handle: None` and cannot record the `Cancelled` itself. Instead it triggers this token;
-    /// the in-flight `get` races its await against it, and on cancellation aborts the RPC task,
-    /// best-effort cancels the remote invocation, and records the `Cancelled` (with a partial
-    /// "Invocation cancelled" response so replay deterministically delivers the same result).
-    Active {
-        handle: Option<FutureInvokeCallHandle>,
-        task: Option<FutureInvokeTaskHandle>,
-        streaming: Option<DurableStreamingTaskParams>,
-        request: HostRequestGolemRpcInvoke,
-        invocation_id: OwnedInvocationId,
-        /// The agent the call dispatches to, with the owner a client of an ephemeral agent type
-        /// creates.
-        remote_target: crate::worker::target::ResolvedTarget,
-        env: Vec<(String, String)>,
-        config: Vec<AgentConfigEntryDto>,
-        deferred_activation: Option<RpcTargetActivation>,
-        /// The incarnation each scalar dispatch of the call is pinned to. `None` for an ephemeral
-        /// target, and for a streaming call, which carries the fingerprint in `streaming`.
-        expected_callee_fingerprint: Option<AgentFingerprint>,
-        /// The retry properties of a scalar dispatch of the call, before enrichment.
-        retry_properties: golem_common::model::retry_policy::RetryProperties,
-        span_id: SpanId,
-        cancel_token: tokio_util::sync::CancellationToken,
-        /// The agent authority of a live scalar call, for a dispatch after a retry backoff.
-        retry_auth_ctx: Option<AuthCtx>,
-    },
-    /// A deterministic validation failure or an already recorded local denial.
-    /// `span_id` retains an opening only when its owner has not already closed it.
-    Baked { result: FutureInvokeTaskResult },
-    /// The future was cancelled: its host call recorded a `Cancelled` and its span was finished.
-    /// `get` returns a cancellation error without touching the oplog.
-    Cancelled,
-    /// `get` already produced the result and finished the span; a second `get` traps.
-    Consumed,
-}
-
-impl Debug for FutureInvokeResultState {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Active { .. } => write!(f, "Active"),
-            Self::Baked { .. } => write!(f, "Baked"),
-            Self::Cancelled => write!(f, "Cancelled"),
-            Self::Consumed => write!(f, "Consumed"),
-        }
-    }
-}
-
 mod create;
 mod denial;
 mod execution;
-mod future;
 mod host;
+mod invocation;
+mod invoke_and_await;
 mod schedule;
 mod spans;
 mod target;
+mod trigger;
 mod values;
 
-use denial::*;
 use execution::*;
 use spans::*;
 use target::*;

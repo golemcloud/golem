@@ -167,6 +167,49 @@ export function schemaGraphsEquivalent(left: SchemaGraph, right: SchemaGraph): b
   return equivalentSchemaTypes(left, left.root, right, right.root, new Map());
 }
 
+/** Whether `root`, or any type it reaches in `graph`, is a stream. */
+export function schemaContainsStream(graph: SchemaGraph, root: SchemaType = graph.root): boolean {
+  const seen = new Set<SchemaType>();
+  const visit = (type: SchemaType): boolean => {
+    if (seen.has(type)) return false;
+    seen.add(type);
+    const body = type.body;
+    switch (body.tag) {
+      case 'stream':
+        return true;
+      case 'ref': {
+        const definition = graph.defs.get(body.id);
+        return definition !== undefined && visit(definition.body);
+      }
+      case 'record':
+        return body.fields.some((field) => visit(field.body));
+      case 'variant':
+        return body.cases.some((entry) => entry.payload !== undefined && visit(entry.payload));
+      case 'tuple':
+        return body.elements.some(visit);
+      case 'list':
+      case 'fixed-list':
+      case 'option':
+        return visit(body.element);
+      case 'map':
+        return visit(body.key) || visit(body.value);
+      case 'result':
+        return (
+          (body.ok !== undefined && visit(body.ok)) || (body.err !== undefined && visit(body.err))
+        );
+      case 'union':
+        return body.branches.some((branch) => visit(branch.body));
+      case 'secret':
+        return visit(body.inner);
+      case 'future':
+        return body.element !== undefined && visit(body.element);
+      default:
+        return false;
+    }
+  };
+  return visit(root);
+}
+
 function equivalentSchemaTypes(
   leftGraph: SchemaGraph,
   leftType: SchemaType,

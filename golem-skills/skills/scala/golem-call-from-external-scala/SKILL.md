@@ -87,7 +87,7 @@ Generated Scala bridge clients follow the same conventions as agent-to-agent RPC
 - Every durable client has `agentId(): Future[AgentId]`; on a client of `upsert` the first call creates a missing agent.
 - For durable targets, awaited methods return `Future[T]`; stream-free trigger and schedule methods return `Future[Unit]`.
 - For ephemeral targets, awaited methods return `Future[golem.bridge.runtime.InvocationResult[T]]`; stream-free trigger and schedule methods return `Future[golem.bridge.runtime.InvocationReceipt]`.
-- External JVM `create` and `getById` return futures, as in guest code; `upsert` returns the client at once. External REST bridge types live under `golem.bridge.runtime`, not `golem.runtime.rpc`. CLI-generated internal guest clients use `golem.runtime.rpc.InvocationResult`, `InvocationReceipt`, `CancelableAsyncInvocation`, and `CancelableInvocationReceipt` for ephemeral operations.
+- External JVM `create` and `getById` return futures, as in guest code; `upsert` returns the client at once. External REST bridge types live under `golem.bridge.runtime`, not `golem.runtime.rpc`. CLI-generated internal guest clients instead return `golem.runtime.rpc.InvocationResult` from ephemeral awaited calls and `golem.runtime.rpc.Invocation[T]` handles from `trigger` and `scheduleAt` in both modes; see the `golem-fire-and-forget-scala` skill.
 - Bridge clients omit trigger and schedule helpers for recursively stream-bearing methods; use awaited streaming calls.
 - A bare `text` schema, also a refined one with languages, a length or a regex, maps to `golem.bridge.runtime.Text(text, language)` in external bridges and to the SDK's `golem.schema.Text(text, language)` in internal clients. The client does not check the restrictions; the server does.
 

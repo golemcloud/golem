@@ -27,7 +27,6 @@ async fn actual_grow_memory_predecessors_allow_unfinished_rpc(
         fixture,
         Resource::Compute,
         AgentMode::Durable,
-        true,
         Scenario::CheckpointOnly,
     )
     .await
@@ -47,7 +46,6 @@ async fn prepaid_target_refund_restores_caller_capacity_then_rpc_recovers(
         fixture,
         Resource::Compute,
         AgentMode::Durable,
-        true,
         Scenario::RefundBeforeCaller,
     )
     .await

@@ -212,7 +212,7 @@ control; a final clean run must print `ALL_OK`.
 | triage_agent | `#derive.golem_schema` → `#derive.golem_scheme` | moonc: `Email does not implement trait WireSchema` (generated dispatch) |
 | draft_agent | `fn DraftAgent::new(` → `fn DraftAgent::create(` | golem_sdk_tools: `AgentParseError` (agents need `new`) |
 | planner_agent | `.trigger_post(` → `.post.trigger(` | moonc: `SlackAgentClient has no field post` |
-| checkout_agent | `schedule_cancelable_remind(` → `schedule_remind(` | moonc: `Unit has no method cancel` |
+| checkout_agent | `.schedule_remind(in_days(1))` → `.trigger_remind(in_days(1))` | moonc: `requires 1 arguments, but is given 2 arguments` (`trigger_remind` takes no `scheduled_at`) |
 | writer_agent | `out.write_one(reply)` → `out.write_all(reply)` | moonc: type mismatch |
 | stock_agent | `#derive.agent` → `#derive.agent("ephemeral")` | golem_sdk_tools: `AgentParseError` (read-only methods need a durable agent, `lib/agents.mbt:1839`; the same file with `#derive.read_only` also removed passes) |
 | analyst_agent | `expose_files("/*", "/out/$1")` → `expose_files("/*", "/out")` | golem_sdk_tools: `AgentParseError` (a `/*` subtree needs a `/$1` target) |
@@ -242,14 +242,14 @@ message, so those six controls are identified by the failing
   `Map[String, Label]` result; `#derive.mount("/checkout/{order_id}")`;
   `@webhook.create`, `WebhookHandler::url`, `wait`,
   `WebhookRequestPayload::text`; generated same-component client
-  `MailerAgentClient::upsert(id).schedule_cancelable_remind(at)` →
-  `@agentHost.CancellationToken::cancel`; `@monotonicClock.wait_for(ns)`
+  `MailerAgentClient::upsert(id).schedule_remind(at)` →
+  `@rpc.Invocation::cancel` and `drop`; `@monotonicClock.wait_for(ns)`
   (WASI P3 clock, made durable by the worker executor,
   `golem-worker-executor/src/durable_host/p3/clocks.rs`);
   `@reflection.get_all_agent_types` / `AgentType::name` / `methods` /
   `AgentMethod::name`, `@reflection.get_all_tool_types` /
   `ToolType::lookup_name`; guest-client shapes `get`, awaited call,
-  `trigger_<m>`; `#derive.read_only` on a plain method (generated
+  `trigger_<m>` (its `@rpc.Invocation` handle dropped); `#derive.read_only` on a plain method (generated
   `read_only: Some({ cache_policy: UntilWrite })`).
 - Tools: `#derive.tool("summarize")` with an `async fn` returning a plain
   `String` (no error enum), generated `SummarizeClient::new().summarize(url)`
@@ -398,7 +398,7 @@ module names, package and type names:
 
 | Module (alias) | Source | Behaviour |
 |---|---|---|
-| `research-agent-guest-client/client` (`@research`) | Output of the in-tree `golem_sdk_tools agents` for an agent `ResearchAgent(topic)` with `gather() -> Facts` and `refresh()`, plus the generated `golem_derive` impls for `Facts { summary, sources }` (type id `research.Facts`) | Real Golem RPC through `@rpc.AgentClient` (`get`, `drop`, `gather`, `trigger_*`, `schedule_*`, `schedule_cancelable_*`). The real bridge for a Rust agent comes from `cli/golem-cli/src/bridge_gen/moonbit` with the same signatures. |
+| `research-agent-guest-client/client` (`@research`) | Output of the in-tree `golem_sdk_tools agents` for an agent `ResearchAgent(topic)` with `gather() -> Facts` and `refresh()`, plus the generated `golem_derive` impls for `Facts { summary, sources }` (type id `research.Facts`) | Real Golem RPC through `@rpc.AgentClient` (`get`, `drop`, `gather`, `trigger_*`, `schedule_*`, `get_*_invocation`). The real bridge for a Rust agent comes from `cli/golem-cli/src/bridge_gen/moonbit` with the same signatures. |
 | `slack-agent-guest-client/client` (`@slack`) | Same generator, agent `SlackAgent(channel)` with `post(text)` | Real RPC, as above. |
 | `bash-tool-guest-client/client` (`@bash`) | Hand-written after `bridge_gen/moonbit/tool.rs` and the bash 0.2.x schema (`cli/golem-cli/src/command_handler/ssh/bash-0.2.0.json`): `BashClient::new()`, `new_for`, `drop`, `async run(script, cwd, timeout : UInt) -> Result[BashResult, @tool.ToolError[BashError]]`, `BashResult { stdout, stderr, exit_code : Byte, cwd }` | `run` aborts at runtime. |
 | `crm-find-customer-tool-guest-client/client` (`@crm`) | **Stand-in, labelled as such in the file.** Hand-written after `bridge_gen/moonbit/tool.rs` for the MCP import `{ name: crm, prefix: crm }` whose tool `find_customer` has input `{ email: string }` (`additionalProperties: false`, so no extra-properties map parameter) and output schema `{ name: string, plan: string }`: `pub(all) struct CrmFindCustomerClient { client : @tool.ToolClient, inherited }`, `new()`, `drop()`, `crm_find_customer(email) -> Result[@tool.TypedToolInvocation[CrmFindCustomerResult, CrmFindCustomerError], @tool.ToolError[CrmFindCustomerError]]`, `CrmFindCustomerResult { structured : CrmFindCustomerStructured { name, plan }, content }`, `CrmFindCustomerError::McpToolError(String)`. The record type names and the `content` type are placeholders (the snippet names neither); `collect()` and `TypedToolInvocation` are the real SDK types. | `crm_find_customer` aborts at runtime. |
@@ -536,7 +536,8 @@ parameter.
   the generated `trigger_post(...)`. Method names come from
   `AgentType::methods()` / `AgentMethod::name()`.
 - `agents/waits`: TS `setTimeout` sleep → `@monotonicClock.wait_for` in
-  nanoseconds; the cancelable schedule is `schedule_cancelable_remind`.
+  nanoseconds; `schedule_remind` returns an `@rpc.Invocation` handle,
+  which the snippet cancels and then drops.
 - `agents/readonly`: TS `init: () => ({ units: 0 })` is `units: 0` in the
   constructor; `z.int()` is `Int`.
 - `tools/overview`: TS `fetch(url)` + `.text()` is `@http.send(get(url))`

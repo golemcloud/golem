@@ -216,12 +216,20 @@ impl InvocationContextProbe for InvocationContextProbeImpl {
         .expect("failed to create the RPC client");
         let input = golem_rust::encode_schema_value(&SchemaValue::Record { fields: vec![] })
             .expect("input should encode");
-        let triggered = golem_rust::InvocationMetadata::from(
-            rpc.invoke("report", input, None)
-                .expect("triggering report should succeed"),
-        )
-        .invocation_id
-        .to_string();
+        let triggered = rpc
+            .trigger("report".to_string(), input)
+            .await
+            .expect("triggering report should succeed")
+            .id();
+        let golem_rust::schema::wit::wire::InvocationOwner::Agent(agent_id) = triggered.owner
+        else {
+            panic!("the triggered invocation must have an agent owner");
+        };
+        let triggered = format!(
+            "{}.{}",
+            golem_rust::Uuid::from(agent_id.uuid),
+            golem_rust::Uuid::from(triggered.id)
+        );
         serde_json::json!({ "report": report, "triggered": triggered }).to_string()
     }
 

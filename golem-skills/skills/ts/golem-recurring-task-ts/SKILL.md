@@ -31,23 +31,23 @@ export const PollerAgent = defineAgent({
 });
 
 // Self-scheduling helper: enqueue this agent's own `poll` to run after a delay.
-function scheduleNext(delaySecs: bigint): void {
+async function scheduleNext(delaySecs: bigint): Promise<void> {
     const nowSecs = BigInt(Math.floor(Date.now() / 1000));
-    PollerAgent.client.bindSelf().poll.schedule({ seconds: nowSecs + delaySecs, nanoseconds: 0 });
+    await PollerAgent.client.bindSelf().poll.schedule({ seconds: nowSecs + delaySecs, nanoseconds: 0 });
 }
 
 export const PollerAgentImpl = PollerAgent.implement({
     init: ({ id }) => ({ name: id.name }),
     methods: {
-        start() {
+        async start() {
             // Kick off the loop by enqueueing the first poll.
-            scheduleNext(0n);
+            await scheduleNext(0n);
         },
-        poll() {
+        async poll() {
             // 1. Do the recurring work.
             doWork();
             // 2. Schedule the next run (60 seconds from now).
-            scheduleNext(60n);
+            await scheduleNext(60n);
         },
     },
 });
@@ -66,10 +66,10 @@ export const PollerAgentImpl = PollerAgent.implement({
         maxIntervalSecs: 3600n,
     }),
     methods: {
-        start() {
-            scheduleNext(0n);
+        async start() {
+            await scheduleNext(0n);
         },
-        poll() {
+        async poll() {
             const success = tryWork();
 
             let delay: bigint;
@@ -83,7 +83,7 @@ export const PollerAgentImpl = PollerAgent.implement({
                 if (delay > this.maxIntervalSecs) delay = this.maxIntervalSecs;
             }
 
-            scheduleNext(delay);
+            await scheduleNext(delay);
         },
     },
 });
@@ -118,9 +118,9 @@ export const PollerAgent = defineAgent({
     },
 });
 
-function scheduleNext(generation: number, delaySecs: bigint): void {
+async function scheduleNext(generation: number, delaySecs: bigint): Promise<void> {
     const nowSecs = BigInt(Math.floor(Date.now() / 1000));
-    PollerAgent.client.bindSelf().poll.schedule({
+    await PollerAgent.client.bindSelf().poll.schedule({
         seconds: nowSecs + delaySecs, nanoseconds: 0,
     }, { generation });
 }
@@ -132,16 +132,16 @@ export const PollerAgentImpl = PollerAgent.implement<z.infer<typeof PollerState>
         generation: 0,
     }),
     methods: {
-        start() {
+        async start() {
             if (this.running) return;
             this.running = true;
             this.generation++;
-            scheduleNext(this.generation, 0n);
+            await scheduleNext(this.generation, 0n);
         },
-        poll({ generation }) {
+        async poll({ generation }) {
             if (!this.running || this.generation !== generation) return;
             console.log('Polling', this.name); // Replace with recurring work.
-            scheduleNext(generation, 60n);
+            await scheduleNext(generation, 60n);
         },
         cancel() {
             this.running = false;
@@ -154,11 +154,15 @@ export const PollerAgentImpl = PollerAgent.implement<z.infer<typeof PollerState>
 Restore the running flag and generation together. Do not reset the generation or
 enqueue a replacement during restoration: an existing scheduled tick may still arrive.
 
-For best-effort removal before a pending invocation starts, `.schedule()` returns
-a `CancellationToken` with `.cancel()`. That live host resource is not snapshot
-state. Keep the generation check even when using a token; cancellation cannot
-stop work that has already started. The logical variant above needs no token or
-custom snapshot hooks.
+To also withdraw the pending tick, keep the handle that `.schedule()` resolves
+to: store `invocation.id.toString()` in state (a string, so the snapshot schema
+can hold it as `z.string().optional()`), and in `cancel` rebuild the handle with
+`Invocation.get(InvocationId.parse(stored), PollerAgent.methods.poll)` and
+`await` its `.cancel()`. It resolves to `true` when it withdrew the tick and
+`false` when the tick already finished; it rejects with `cannot-cancel-running`
+for a running invocation. Keep the generation check as well: a tick whose ID was
+not stored, for example one scheduled from the CLI, still exits without doing
+work. The logical variant above needs no stored ID or custom snapshot hooks.
 
 ### Cancellation from the CLI
 
@@ -180,12 +184,12 @@ golem invocation cancel --agent 'PollerAgent("my-poller")' --idempotency-key 'po
 Check an external API or queue for new work at regular intervals:
 
 ```typescript
-poll() {
+async poll() {
     const items = fetchPendingItems();
     for (const item of items) {
         process(item);
     }
-    scheduleNext(60n);
+    await scheduleNext(60n);
 }
 ```
 
@@ -195,9 +199,9 @@ Replace the basic pattern's `poll` handler with cleanup work (and initialize
 `entries` in state):
 
 ```typescript
-poll() {
+async poll() {
     this.entries = this.entries.filter((e) => !e.isExpired());
-    scheduleNext(3600n); // run hourly
+    await scheduleNext(3600n); // run hourly
 }
 ```
 
@@ -207,9 +211,9 @@ Replace the basic pattern's `poll` handler with heartbeat work (and initialize
 `serviceUrl` in state):
 
 ```typescript
-poll() {
+async poll() {
     sendHeartbeat(this.serviceUrl);
-    scheduleNext(30n); // every 30s
+    await scheduleNext(30n); // every 30s
 }
 ```
 
@@ -218,9 +222,9 @@ poll() {
 Keep the scheduling logic in one module-level helper so every method stays clean. `PollerAgent.client` is the typed RPC factory for this same agent type; its `bindSelf()` targets this instance:
 
 ```typescript
-function scheduleNext(delaySecs: bigint): void {
+async function scheduleNext(delaySecs: bigint): Promise<void> {
     const nowSecs = BigInt(Math.floor(Date.now() / 1000));
-    PollerAgent.client.bindSelf().poll.schedule({ seconds: nowSecs + delaySecs, nanoseconds: 0 });
+    await PollerAgent.client.bindSelf().poll.schedule({ seconds: nowSecs + delaySecs, nanoseconds: 0 });
 }
 ```
 
@@ -228,7 +232,7 @@ function scheduleNext(delaySecs: bigint): void {
 
 - The agent is durable — if it crashes, the pending scheduled invocation still fires and the agent recovers
 - Invocations are sequential — no concurrent executions of `poll` on the same agent
-- Each `.schedule()` call is a fire-and-forget enqueue; the current invocation completes immediately
+- Each `.schedule()` call resolves once the target accepted the invocation; it does not wait for the tick to run. Await it, so a failed enqueue fails the current invocation instead of silently ending the chain
 - Use a state flag or generation counter to stop the loop gracefully
 - Keep the scheduled method idempotent — it may be retried on recovery
 

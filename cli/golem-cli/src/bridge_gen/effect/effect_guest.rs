@@ -91,7 +91,7 @@ impl EffectGuestBridgeGenerator {
         }
         writer.write_line(format!(
             r#"
-/** A client for the same agent whose awaited calls borrow `scopeCard` by default; `undefined` sends none. Triggers and schedules never send a scope card. A scope card is valid only during the invocation that derived it. */
+/** A client for the same agent whose awaited calls borrow `scopeCard` by default; `undefined` sends none. Triggers and schedules never send a scope card. A scope card is valid only during the invocation that derived it. Triggers and schedules succeed with a scoped invocation handle once the target has durably accepted the invocation; its ID only locates the invocation and is not authority, closing its scope or interrupting its await only detaches, and cancelling a running invocation fails with `RpcCannotCancelRunning`. */
 withScopeCard(scopeCard: base.ScopeCard | undefined): {class} {{ return new {class}(this.resolved, scopeCard); }}
 "#
         ));
@@ -124,16 +124,6 @@ withScopeCard(scopeCard: base.ScopeCard | undefined): {class} {{ return new {cla
             } else {
                 "invokeAndAwaitWithMetadata"
             };
-            let trigger = if durable {
-                "invoke"
-            } else {
-                "invokeWithMetadata"
-            };
-            let schedule = if durable {
-                "scheduleCancelable"
-            } else {
-                "scheduleCancelableWithMetadata"
-            };
             writer.write_line(format!(
                 r#"
 readonly {member} = (() => {{
@@ -149,18 +139,19 @@ readonly {member} = (() => {{
                 writer.write_line("return Object.assign(__call, { withScopeCard }); })();");
                 continue;
             }
-            writer.write_line(format!(r#"
-  const schedule = (at: Parameters<base.RemoteAgentHandle['scheduleCancelable']>[0], ...args: [{args}]) =>
-    base.attempt(() => __encode(args)).pipe(Effect.flatMap(input => this.resolved.{schedule}(at, {name}, input)));
+            writer.write_line(format!(
+                r#"
   return Object.assign(__call, {{
     withScopeCard,
     trigger: (...args: [{args}]) => base.attempt(() => __encode(args)).pipe(
-      Effect.flatMap(input => this.resolved.{trigger}({name}, input))),
-    schedule,
-    scheduleCancelable: schedule,
+      Effect.flatMap(input => this.resolved.trigger({name}, input, __decode))),
+    schedule: (at: Parameters<base.RemoteAgentHandle['schedule']>[0], ...args: [{args}]) =>
+      base.attempt(() => __encode(args)).pipe(
+        Effect.flatMap(input => this.resolved.schedule(at, {name}, input, __decode))),
   }});
 }})();
-"#));
+"#
+            ));
         }
         writer.end_export_class();
         Ok(())

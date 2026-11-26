@@ -548,12 +548,13 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 // A pinned incarnation that is being deleted refuses the request before its
                 // scope is bound, as a deletion can already have stopped its state actor.
                 if let Some((worker, _)) = &pinned {
-                    worker
+                    let checked = worker
                         .deleted_incarnation_as_not_found(
                             expected_fingerprint,
                             worker.try_get_latest_worker_metadata().await,
                         )
-                        .await?;
+                        .await;
+                    worker.failed_deletion_as_retryable(checked).await?;
                 }
                 let (worker, _response_lease) = match pinned {
                     Some(pinned) => pinned,
@@ -596,9 +597,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
                 match schedule_at {
                     Some(scheduled_time) => {
-                        worker
-                            .schedule_invocation(invocation, scheduled_time)
-                            .await?;
+                        let scheduled =
+                            worker.schedule_invocation(invocation, scheduled_time).await;
+                        worker.failed_deletion_as_retryable(scheduled).await?;
                         let metadata = worker.get_initial_worker_metadata();
                         publish_acceptance(
                             acceptance_committed,
@@ -620,8 +621,14 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         })
                     }
                     None => {
-                        let result = worker.invoke_and_start(invocation).await?;
-                        if let crate::worker::ResultOrSubscription::Finished(Err(err)) = &result {
+                        let result = worker
+                            .invoke_and_start(invocation, request.requires_own_record)
+                            .await?;
+                        // A caller that keeps a handle gets the acceptance of an invocation that
+                        // already ended with an error; the handle reports the error.
+                        if let crate::worker::ResultOrSubscription::Finished(Err(err)) = &result
+                            && !request.requires_own_record
+                        {
                             return Err(err.clone());
                         }
                         publish_acceptance(
@@ -631,15 +638,6 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             &ik,
                             None,
                         )?;
-                        match result {
-                            crate::worker::ResultOrSubscription::Finished(Err(err)) => {
-                                unreachable!(
-                                    "finished errors are handled before acceptance: {err}"
-                                );
-                            }
-                            crate::worker::ResultOrSubscription::Finished(Ok(_)) => {}
-                            crate::worker::ResultOrSubscription::Pending(_) => {}
-                        }
                         Ok(AgentInvocationOutput {
                             result: AgentInvocationResult::AgentInitialization,
                             consumed_fuel: None,

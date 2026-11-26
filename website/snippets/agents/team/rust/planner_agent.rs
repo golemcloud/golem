@@ -13,7 +13,7 @@ impl PlannerAgent for PlannerAgentImpl {
       .gather().await?; //@
     // send now, without waiting for a result:
     SlackAgent::upsert("ops".into())? //@
-      .trigger_post(facts.summary.clone())?; //@
+      .trigger_post(facts.summary.clone()).await?; //@
     // discover agents, their methods, and available tools:
     let agents = reflection::get_all_agent_types()?.iter() //@
       .map(|a| format!("{}: {}", a.name(), a.methods().iter() //@

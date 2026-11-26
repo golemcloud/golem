@@ -45,6 +45,7 @@ import (
 //	if !found { ... }
 //	client, err := agentType.Get(map[string]any{"name": "ada"})
 //	result, metadata, err := client.Call("greet", map[string]any{"greeting": "hi"})
+//	invocation, err := client.Trigger("greet", map[string]any{"greeting": "hi"})
 //
 // Arguments and results are canonical JSON — ordinary Go values read against
 // the snapshot's schema — because the caller has none of the target's types.
@@ -82,15 +83,20 @@ func newAgentType(wit common.AgentType) AgentType {
 		if err != nil {
 			panic(fmt.Errorf("golem: agent type %q method %q: %w", wit.TypeName, m.Name, err))
 		}
+		streaming := false
+		for _, f := range m.InputSchema.Parameters() {
+			streaming = streaming || engine.GraphCarriesStream(wit.Schema, f.Schema)
+		}
 		output := golem.None[core.Ref]()
 		if m.OutputSchema.Tag() == common.OutputSchemaSingle {
+			streaming = streaming || engine.GraphCarriesStream(wit.Schema, m.OutputSchema.Single())
 			ref, err := conv.Ref(m.OutputSchema.Single())
 			if err != nil {
 				panic(fmt.Errorf("golem: agent type %q method %q result: %w", wit.TypeName, m.Name, err))
 			}
 			output = golem.Some(ref)
 		}
-		methods = append(methods, Method{wit: m, input: input, output: output})
+		methods = append(methods, Method{wit: m, input: input, output: output, streaming: streaming})
 	}
 	return AgentType{
 		wit:         wit,
@@ -163,9 +169,10 @@ func (c Constructor) Input() core.Ref { return c.input }
 
 // Method is a snapshot of one agent method.
 type Method struct {
-	wit    common.AgentMethod
-	input  core.Ref
-	output golem.Option[core.Ref]
+	wit       common.AgentMethod
+	input     core.Ref
+	output    golem.Option[core.Ref]
+	streaming bool
 }
 
 // Name returns the method's name.
@@ -291,10 +298,10 @@ type agentIDCell struct {
 
 func knownAgentID(id golem.AgentID) *agentIDCell { return &agentIDCell{id: id, known: true} }
 
-// WithScopeCard returns a copy of the client whose awaited calls — Call and
-// CallAsync — carry card as their scope card, unless the call passes its own
-// with [CallScopeCard], as [golem.Client.WithScopeCard] does for a typed
-// client. Trigger and Schedule never carry one. The card is lent, not moved,
+// WithScopeCard returns a copy of the client whose awaited calls carry card as
+// their scope card, unless the call passes its own with [CallScopeCard], as
+// [golem.Client.WithScopeCard] does for a typed client. Trigger and Schedule
+// never carry one. The card is lent, not moved,
 // and is valid only in the invocation that derived it. It panics on the zero
 // ScopeCard.
 func (c *AgentClient) WithScopeCard(card golem.ScopeCard) *AgentClient {
@@ -307,81 +314,14 @@ func (c *AgentClient) WithScopeCard(card golem.ScopeCard) *AgentClient {
 // through. The interface keeps packing, validation and decoding testable
 // without a host.
 type agentRPC interface {
-	start(method string, input types.SchemaValueTree, scopeCard witTypes.Option[*types.PermissionCard]) (pendingRPC, error)
-	trigger(method string, input types.SchemaValueTree) (golem.InvocationMetadata, error)
-	schedule(at time.Time, method string, input types.SchemaValueTree) (*golem.ScheduledInvocation, error)
+	// call makes an awaited call, and returns its result with the
+	// invocation's identity.
+	call(method string, input types.SchemaValueTree, scopeCard witTypes.Option[*types.PermissionCard]) (witTypes.Option[types.SchemaValueTree], golem.InvocationMetadata, error)
+	trigger(method string, input types.SchemaValueTree) (link.InvocationOps, error)
+	schedule(at time.Time, method string, input types.SchemaValueTree) (link.InvocationOps, error)
 	// agentID asks the host for the ID of the agent, which creates an agent
 	// that an upsert addresses when it is missing.
 	agentID() (golem.AgentID, error)
-}
-
-// pendingRPC is an invocation in flight: its identity, its outcome, and a way
-// to cancel it.
-type pendingRPC struct {
-	metadata *golem.InvocationMetadata
-	wait     func() (witTypes.Option[types.SchemaValueTree], error)
-	cancel   func()
-}
-
-// await waits for the invocation's outcome. Only a call the host rejected has
-// no identity, and its wait reports the rejection, so a successful outcome
-// without an identity is a protocol error.
-func (p pendingRPC) await(target, method string) (witTypes.Option[types.SchemaValueTree], error) {
-	res, err := p.wait()
-	if err == nil && p.metadata == nil {
-		if res.IsSome() {
-			engine.ReleaseCardsIn(res.Some().ValueNodes, link.ReleaseCard)
-		}
-		return witTypes.None[types.SchemaValueTree](), &golem.RemoteCallError{
-			Target: target, Method: method, Kind: golem.RemoteProtocolError,
-			Message: "the host completed a call that has no invocation identity",
-		}
-	}
-	return res, err
-}
-
-// PendingCall is a reflected or dynamic invocation in flight.
-type PendingCall[T any] struct {
-	// Metadata identifies the invocation, available before the result is. It
-	// is nil when the call was rejected before it started; Get returns the
-	// rejection.
-	Metadata *golem.InvocationMetadata
-	wait     func() (T, error)
-	cancel   func()
-	done     bool
-	out      T
-	err      error
-}
-
-// Get waits for the invocation to finish and returns its result, as
-// [golem.Future.Get] does: the result is kept, so a later Get returns it again,
-// and after [PendingCall.Cancel] Get returns [golem.ErrCallCancelled].
-func (p *PendingCall[T]) Get() (T, error) {
-	if !p.done {
-		p.done = true
-		p.out, p.err = p.wait()
-	}
-	return p.out, p.err
-}
-
-// MustGet is [PendingCall.Get] that panics on a failure.
-func (p *PendingCall[T]) MustGet() T {
-	out, err := p.Get()
-	if err != nil {
-		panic(err)
-	}
-	return out
-}
-
-// Cancel makes a best-effort attempt to cancel the invocation; a later Get
-// reports [golem.ErrCallCancelled]. It does nothing once the result was taken.
-func (p *PendingCall[T]) Cancel() {
-	if p.done {
-		return
-	}
-	p.done = true
-	p.cancel()
-	p.err = golem.ErrCallCancelled
 }
 
 // AgentType returns the snapshot this client was built from.
@@ -424,38 +364,39 @@ func (c *AgentClient) pack(method string, args map[string]any) (Method, types.Sc
 	return m, types.SchemaValueTree{}, fmt.Errorf("golem: %s.%s: %w", c.agentType.Name(), method, err)
 }
 
-// Call invokes a method with named arguments and waits for its result, as
-// canonical JSON (nil when the method returns nothing), together with the
-// invocation's identity, which is nil when the call was rejected before it
-// started.
-func (c *AgentClient) Call(method string, args map[string]any, opts ...CallOpt) (any, *golem.InvocationMetadata, error) {
-	p, err := c.CallAsync(method, args, opts...)
-	if err != nil {
-		return nil, nil, err
+// packNotAwaited packs the arguments of a Trigger or a Schedule, which return
+// before the call completes and so cannot hand the caller a stream endpoint.
+func (c *AgentClient) packNotAwaited(form, method string, args map[string]any) (Method, types.SchemaValueTree, error) {
+	m, input, err := c.pack(method, args)
+	if err == nil && m.streaming {
+		err = fmt.Errorf("golem: %s.%s: %s cannot carry a stream; await the call with Call instead", c.agentType.Name(), method, form)
 	}
-	out, err := p.Get()
-	return out, p.Metadata, err
+	return m, input, err
 }
 
-// CallAsync invokes a method with named arguments and returns at once; the
-// result is read, as for Call, with the pending call's Wait.
-func (c *AgentClient) CallAsync(method string, args map[string]any, opts ...CallOpt) (*PendingCall[any], error) {
+// Call invokes a method with named arguments and waits for its result, as
+// canonical JSON (nil when the method returns nothing), together with the
+// invocation's identity. A call that the target withdrew before it started
+// fails with a [golem.RemoteCallError] of kind [golem.RemoteCancelled].
+//
+// An awaited call cannot be withdrawn by abandoning it: the goroutine that
+// makes it waits for its result. Use Trigger and [golem.Invocation.Cancel] for
+// work that may need to be withdrawn before it starts.
+func (c *AgentClient) Call(method string, args map[string]any, opts ...CallOpt) (any, golem.InvocationMetadata, error) {
 	scope := scopeCardOf(c.scopeCard, opts)
 	m, input, err := c.pack(method, args)
 	if err != nil {
-		return nil, err
+		return nil, golem.InvocationMetadata{}, err
 	}
-	p, err := c.rpc.start(method, input, scope)
+	res, metadata, err := c.rpc.call(method, input, scope)
 	if err != nil {
-		return nil, err
+		return nil, golem.InvocationMetadata{}, err
 	}
-	return &PendingCall[any]{Metadata: p.metadata, cancel: p.cancel, wait: func() (any, error) {
-		res, err := p.await(c.target(), method)
-		if err != nil {
-			return nil, err
-		}
-		return c.decodeResult(m, method, res)
-	}}, nil
+	out, err := c.decodeResult(m, method, res)
+	if err != nil {
+		return nil, golem.InvocationMetadata{}, err
+	}
+	return out, metadata, nil
 }
 
 // decodeResult reads a method's result against the snapshot.
@@ -489,22 +430,45 @@ func (c *AgentClient) protocolError(method, message string) error {
 	return &golem.RemoteCallError{Target: c.target(), Method: method, Kind: golem.RemoteProtocolError, Message: message}
 }
 
-// Trigger invokes a method without waiting for its result.
-func (c *AgentClient) Trigger(method string, args map[string]any) (golem.InvocationMetadata, error) {
-	_, input, err := c.pack(method, args)
-	if err != nil {
-		return golem.InvocationMetadata{}, err
-	}
-	return c.rpc.trigger(method, input)
-}
-
-// Schedule arranges for a method to be invoked at the given time.
-func (c *AgentClient) Schedule(at time.Time, method string, args map[string]any) (*golem.ScheduledInvocation, error) {
-	_, input, err := c.pack(method, args)
+// Trigger starts a method with named arguments without waiting for its result,
+// and returns the handle of the invocation once the target has durably accepted
+// it. The handle's AwaitResult reads the result as canonical JSON, as Call
+// does. A Trigger never carries a scope card, and refuses a method that takes
+// or returns a stream.
+func (c *AgentClient) Trigger(method string, args map[string]any) (*golem.Invocation[any], error) {
+	m, input, err := c.packNotAwaited("Trigger", method, args)
 	if err != nil {
 		return nil, err
 	}
-	return c.rpc.schedule(at, method, input)
+	ops, err := c.rpc.trigger(method, input)
+	if err != nil {
+		return nil, err
+	}
+	return c.invocation(m, method, ops), nil
+}
+
+// Schedule arranges for a method to be invoked at the given time, and returns
+// the handle of the invocation once the target has durably accepted it. The
+// handle's Cancel withdraws the invocation until it starts. A Schedule never
+// carries a scope card, and refuses a method that takes or returns a stream.
+func (c *AgentClient) Schedule(at time.Time, method string, args map[string]any) (*golem.Invocation[any], error) {
+	m, input, err := c.packNotAwaited("Schedule", method, args)
+	if err != nil {
+		return nil, err
+	}
+	ops, err := c.rpc.schedule(at, method, input)
+	if err != nil {
+		return nil, err
+	}
+	return c.invocation(m, method, ops), nil
+}
+
+// invocation is the handle of an invocation of m, whose result is read
+// against the snapshot.
+func (c *AgentClient) invocation(m Method, method string, ops link.InvocationOps) *golem.Invocation[any] {
+	return link.AnyInvocation(ops, method, func(res witTypes.Option[types.SchemaValueTree]) (any, error) {
+		return c.decodeResult(m, method, res)
+	}).(*golem.Invocation[any])
 }
 
 func optionFromWit[T any](o witTypes.Option[T]) golem.Option[T] {

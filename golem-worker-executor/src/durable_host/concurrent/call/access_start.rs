@@ -25,12 +25,20 @@ impl<Req, T: 'static, D: HasData + ?Sized + 'static, Ctx: WorkerCtx, E>
         self,
         context: AccessStartContext,
         access: InitiationRequestContext<'_, T, D, Ctx>,
-    ) -> Result<Req, E> {
+    ) -> Result<StartRequest<Req>, E> {
         match self {
-            Self::Ready(request) => Ok(request),
-            Self::Built(build) => build(context, access).await,
+            Self::Ready(request) => Ok(StartRequest::Ready(request)),
+            Self::Built(build) => build(context, access).await.map(StartRequest::Ready),
+            Self::Indexed(build) => Ok(StartRequest::Indexed(build)),
         }
     }
+}
+
+/// The capture of a call that holds the agent's authority but needs no other admitted view.
+fn authority_capture<Ctx: WorkerCtx>(
+    requires_agent_authority: bool,
+) -> Option<fn(&mut DurableWorkerCtx<Ctx>)> {
+    requires_agent_authority.then_some(|_| ())
 }
 
 impl AccessCallIdentity {
@@ -81,6 +89,7 @@ where
         let Self {
             stage,
             get_ctx,
+            requires_agent_authority,
             request,
             build_span,
             span_observer,
@@ -102,7 +111,7 @@ where
                         build_request,
                         build_span,
                         span_observer,
-                        None::<fn(&mut DurableWorkerCtx<Ctx>)>,
+                        authority_capture(requires_agent_authority),
                     )
                     .await
                 }
@@ -117,11 +126,11 @@ where
                         identity,
                         function_type,
                         *claim_options,
-                        false,
+                        requires_agent_authority,
                         build_request,
                         build_span,
                         span_observer,
-                        None::<fn(&mut DurableWorkerCtx<Ctx>)>,
+                        authority_capture(requires_agent_authority),
                     )
                     .await
                 }
@@ -443,6 +452,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             )),
             None,
             None,
+            false,
         )
         .await?;
         handle
@@ -484,6 +494,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             AccessRequest::<_, T, D, Ctx, wasmtime::Error>::Ready(request),
             None,
             None,
+            false,
         )
         .await?;
         handle
@@ -518,6 +529,80 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ok((call, decision))
     }
 
+    /// [`Self::start_access_with_options`] for a call that acts with the agent's authority. The
+    /// session holds the authority captured at admission, or when an incomplete call is repaired.
+    pub(crate) async fn start_access_with_agent_authority<T, D, Ctx>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        request: Pair::Req,
+    ) -> wasmtime::Result<Self>
+    where
+        T: 'static,
+        D: HasData + ?Sized + 'static,
+        Ctx: WorkerCtx,
+    {
+        let mut handle = Self::start_access_request(
+            store,
+            get_ctx,
+            function_type,
+            AccessClaimOptions::default(),
+            AccessRequest::<_, T, D, Ctx, wasmtime::Error>::Ready(request),
+            None,
+            None,
+            true,
+        )
+        .await?;
+        handle
+            .supersede_prior_completion_delivery(store, get_ctx)
+            .await?;
+        Ok(handle)
+    }
+
+    /// Starts an authority-bearing accessor call whose request and opening span derive from the
+    /// call's own `Start` index, such as a call whose idempotency key is derived from it. `build`
+    /// runs inside the serialized oplog step that appends the immutable `Start`, after admission
+    /// captured the agent's authority and evaluated any `permission_check` of `claim_options`; its
+    /// flag tells whether the `Start` records a denial. A replaying call claims its recorded
+    /// `Start` by its execution identity and never runs `build`; it reads the recorded request
+    /// and span metadata instead.
+    pub(crate) async fn start_access_with_agent_authority_and_indexed_request<T, D, Ctx, B>(
+        store: &Accessor<T, D>,
+        get_ctx: fn(&mut T) -> &mut DurableWorkerCtx<Ctx>,
+        function_type: DurableFunctionType,
+        claim_options: AccessClaimOptions,
+        build: B,
+    ) -> wasmtime::Result<Self>
+    where
+        T: 'static,
+        D: HasData + ?Sized + 'static,
+        Ctx: WorkerCtx,
+        B: FnOnce(
+                OplogIndex,
+                bool,
+            ) -> Result<
+                (Pair::Req, Option<golem_common::model::oplog::SpanStarted>),
+                WorkerExecutorError,
+            > + Send
+            + 'static,
+    {
+        let mut handle = Self::start_access_request(
+            store,
+            get_ctx,
+            function_type,
+            claim_options,
+            AccessRequest::<_, T, D, Ctx, wasmtime::Error>::Indexed(Box::new(build)),
+            None,
+            None,
+            true,
+        )
+        .await?;
+        handle
+            .supersede_prior_completion_delivery(store, get_ctx)
+            .await?;
+        Ok(handle)
+    }
+
     /// Starts an accessor call with metadata prepared before its immutable `Start` is appended.
     pub(crate) async fn start_access_with_options_and_span<T, D, Ctx>(
         store: &Accessor<T, D>,
@@ -540,6 +625,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             AccessRequest::<_, T, D, Ctx, wasmtime::Error>::Ready(request),
             Some(Box::new(move |_| Ok(span_started))),
             None,
+            false,
         )
         .await?;
         handle
@@ -586,6 +672,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             AccessRequest::Built(Box::new(build_request)),
             Some(Box::new(build_span)),
             Some(span_observer.clone()),
+            false,
         )
         .await?;
         // This entry point's caller registers its own early terminal observer after checking
@@ -604,6 +691,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         request: AccessRequest<Pair::Req, T, D, Ctx, E>,
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
+        requires_agent_authority: bool,
     ) -> Result<Self, E>
     where
         T: 'static,
@@ -634,6 +722,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 },
                 build_span,
                 span_observer,
+                requires_agent_authority,
             )
             .await;
         }
@@ -644,7 +733,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 identity,
                 function_type,
                 claim_options,
-                false,
+                requires_agent_authority,
                 async move |context, _| {
                     request
                         .build(context, InitiationRequestContext::Inline(store, get_ctx))
@@ -652,7 +741,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 },
                 build_span,
                 span_observer,
-                None::<fn(&mut DurableWorkerCtx<Ctx>)>,
+                authority_capture(requires_agent_authority),
             )
             .await;
         }
@@ -666,7 +755,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         function_type,
                         claim_options,
                         identity.custom_invocation_scope,
-                        false,
+                        requires_agent_authority,
                         identity.invocation_id,
                     )
                     .map(|prepared| Box::new(PreparedContextStart { prepared }))
@@ -684,6 +773,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let task = OwnedAccessStart {
             stage,
             get_ctx,
+            requires_agent_authority,
             request,
             build_span,
             span_observer,
@@ -711,6 +801,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         build_request: F,
         build_span: Option<BuildSpanCallback>,
         span_observer: Option<Arc<dyn CallSpanObserver>>,
+        requires_agent_authority: bool,
     ) -> Result<Self, E>
     where
         T: 'static,
@@ -720,7 +811,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         F: FnOnce(
                 AccessStartContext,
                 OwnedInitiationAccess<Ctx>,
-            ) -> BoxFuture<'static, Result<Pair::Req, E>>
+            ) -> BoxFuture<'static, Result<StartRequest<Pair::Req>, E>>
             + Send
             + 'static,
     {
@@ -734,7 +825,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                         function_type,
                         claim_options,
                         identity.custom_invocation_scope,
-                        false,
+                        requires_agent_authority,
                         identity.invocation_id,
                     )?,
                 }))
@@ -765,7 +856,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     OwnedStartStage::Identified { identity, function_type, claim_options } => {
                         crate::durable_host::call_coordinator::process_pending_replay_events_initiation(&mut access).await?;
                         access.window(move |ctx| {
-                            Self::prepare_access_start(ctx, function_type, *claim_options, identity.custom_invocation_scope, false, identity.invocation_id)
+                            Self::prepare_access_start(ctx, function_type, *claim_options, identity.custom_invocation_scope, requires_agent_authority, identity.invocation_id)
                         }).await??
                     }
                 };
@@ -778,7 +869,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                     async move |context, _| build_request(context, builder_access).await,
                     build_span,
                     span_observer,
-                    None::<fn(&mut DurableWorkerCtx<Ctx>)>,
+                    authority_capture(requires_agent_authority),
                 ).await?;
                 access.window(move |ctx| {
                     let mut session = Self::finish_access_start(ctx, executed);
@@ -957,7 +1048,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             function_type,
             claim_options,
             requires_agent_authority,
-            async move |context, captured| Ok(build_request(context, captured).await?),
+            async move |context, captured| {
+                Ok(StartRequest::Ready(build_request(context, captured).await?))
+            },
             build_span,
             span_observer,
             capture,
@@ -984,7 +1077,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         Ctx: WorkerCtx,
         C: FnMut(&mut DurableWorkerCtx<Ctx>) -> R + Send + 'static,
         R: Send + 'static,
-        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<Pair::Req, E>,
+        F: AsyncFnOnce(AccessStartContext, Option<R>) -> Result<StartRequest<Pair::Req>, E>,
         E: DurableCallTrapError,
     {
         let is_live =

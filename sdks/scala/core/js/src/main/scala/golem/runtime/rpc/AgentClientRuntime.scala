@@ -21,9 +21,8 @@ import golem.host.js.schema.JsSchemaValueTree
 import golem.host.SchemaWireInterop
 import golem.runtime.{AgentMethod, AgentType, OutputCodec, OutputMetadata}
 import golem.runtime.{WireAgentClientType, WireClientMethod}
-import golem.runtime.rpc.host.WasmRpcApi
 import golem.schema.wire.{ConcreteCodec, WitSchemaValueTree}
-import golem.{AgentId, Datetime, FutureInterop}
+import golem.{AgentId, Datetime}
 
 import scala.concurrent.Future
 import scala.scalajs.js
@@ -253,6 +252,12 @@ object AgentClientRuntime {
         case NonFatal(err)               => Left(err.getMessage)
       }
 
+  private def outputContainsStream(outputCodec: OutputCodec[?]): Boolean =
+    outputCodec.metadata match {
+      case OutputMetadata.Unit          => false
+      case OutputMetadata.Single(graph) => graph.containsStream
+    }
+
   private def decodeOutput[Out](
     outputCodec: OutputCodec[Out],
     result: Option[JsSchemaValueTree]
@@ -282,17 +287,6 @@ object AgentClientRuntime {
         )
     }
 
-  /**
-   * Pairs a completed result with its invocation metadata. The host omits the
-   * metadata only for a rejected call, whose result future already failed.
-   */
-  private def completedInvocation[A](metadata: Option[InvocationMetadata], value: A): Future[InvocationResult[A]] =
-    FutureInterop.fromEither(
-      metadata
-        .map(InvocationResult(_, value))
-        .toRight(WasmRpcApi.RpcError("protocol-error", Some("completed invocation has no metadata")).toString)
-    )
-
   private def upsertRemote(
     agentTypeName: String,
     payload: JsSchemaValueTree
@@ -303,9 +297,9 @@ object AgentClientRuntime {
     }
 
   /**
-   * `scopeCard` is attached to the awaited invocations (`await`,
-   * `cancelableAwait` and their metadata variants) and borrowed for each call.
-   * Fire-and-forget and scheduled invocations never carry a scope card.
+   * `scopeCard` is attached to the awaited invocations (`await` and
+   * `awaitWithMetadata`) and borrowed for each call. Triggered and scheduled
+   * invocations never carry a scope card.
    */
   final case class ResolvedAgent[Trait](
     agentType: AgentType[Trait, Any],
@@ -339,145 +333,55 @@ object AgentClientRuntime {
      * This enables "await/trigger/schedule for any method" APIs (TS/Rust
      * parity).
      */
-    def await[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[Out] =
-      runAwaitable(method, input)
-
-    def cancelableAwait[In, Out](method: AgentMethod[Trait, In, Out], input: In): (Future[Out], CancellationToken) =
-      runCancelableAwaitable(method, input)
-
-    def trigger[In](method: AgentMethod[Trait, In, _], input: In): Future[Unit] =
-      runFireAndForget(method, input)
-
-    def schedule[In](method: AgentMethod[Trait, In, _], datetime: Datetime, input: In): Future[Unit] =
-      runScheduled(method, datetime, input)
-
-    def scheduleCancelable[In](
-      method: AgentMethod[Trait, In, _],
-      datetime: Datetime,
-      input: In
-    ): Future[CancellationToken] =
-      runScheduledCancelable(method, datetime, input)
+    def await[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[Out] = {
+      implicit val ec = golem.concurrent.GolemExecutionContext.global
+      awaitWithMetadata(method, input).map(_.value)
+    }
 
     def awaitWithMetadata[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[InvocationResult[Out]] = {
       implicit val ec = golem.concurrent.GolemExecutionContext.global
-      encodeInputAsync(method.inputCodec, input, scopeCard).flatMap { params =>
-        FutureInterop
-          .fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.functionName, _, scopeCard)))
-          .flatMap { raw =>
-            raw.result.flatMap(decodeOutputAsync(method.outputCodec, _)).flatMap(completedInvocation(raw.metadata, _))
-          }
-      }
-    }
-
-    def cancelableAwaitWithMetadata[In, Out](
-      method: AgentMethod[Trait, In, Out],
-      input: In
-    ): Future[CancelableAsyncInvocation[Out]] = {
-      implicit val ec = golem.concurrent.GolemExecutionContext.global
-      encodeInputAsync(method.inputCodec, input, scopeCard).flatMap { params =>
-        FutureInterop
-          .fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.functionName, _, scopeCard)))
-          .map { raw =>
-            CancelableAsyncInvocation(
-              raw.metadata,
-              raw.result.flatMap(decodeOutputAsync(method.outputCodec, _)),
-              raw.cancellationToken
-            )
-          }
-      }
-    }
-
-    def triggerWithMetadata[In](method: AgentMethod[Trait, In, _], input: In): Future[InvocationReceipt] =
-      FutureInterop.fromEither(for {
-        params   <- encodeInput(method.inputCodec, input)
-        metadata <- client.rpc.invokeWithMetadata(method.functionName, params)
-      } yield InvocationReceipt(metadata))
-
-    def scheduleWithMetadata[In](
-      method: AgentMethod[Trait, In, _],
-      datetime: Datetime,
-      input: In
-    ): Future[InvocationReceipt] =
-      FutureInterop.fromEither(for {
-        params  <- encodeInput(method.inputCodec, input)
-        receipt <- client.rpc.scheduleInvocationWithMetadata(datetime, method.functionName, params)
-      } yield receipt)
-
-    def scheduleCancelableWithMetadata[In](
-      method: AgentMethod[Trait, In, _],
-      datetime: Datetime,
-      input: In
-    ): Future[CancelableInvocationReceipt] =
-      FutureInterop.fromEither(for {
-        params  <- encodeInput(method.inputCodec, input)
-        receipt <- client.rpc.scheduleCancelableInvocationWithMetadata(datetime, method.functionName, params)
-      } yield receipt)
-
-    private def runAwaitable[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[Out] = {
-      implicit val ec = golem.concurrent.GolemExecutionContext.global
       encodeInputAsync(method.inputCodec, input, scopeCard)
-        .flatMap(params => params.call(client.rpc.asyncInvokeAndAwait(method.functionName, _, scopeCard)))
-        .flatMap(decodeOutputAsync(method.outputCodec, _))
+        .flatMap(params => params.call(client.rpc.invokeAndAwait(method.functionName, _, scopeCard)))
+        .flatMap(raw => decodeOutputAsync(method.outputCodec, raw.value).map(InvocationResult(raw.metadata, _)))
     }
 
-    private def runCancelableAwaitable[In, Out](
-      method: AgentMethod[Trait, In, Out],
-      input: In
-    ): (Future[Out], CancellationToken) = {
+    /**
+     * Triggers the method, and returns its [[Invocation]] handle once the
+     * target has durably accepted it. Never lends the scope card.
+     */
+    def trigger[In, Out](method: AgentMethod[Trait, In, Out], input: In): Future[Invocation[Out]] =
+      start(method, input)(client.rpc.trigger(method.functionName, _))
+
+    /**
+     * Schedules the method for `datetime`, and returns its [[Invocation]]
+     * handle once the target has durably accepted it. Never lends the scope
+     * card.
+     */
+    def schedule[In, Out](method: AgentMethod[Trait, In, Out], datetime: Datetime, input: In): Future[Invocation[Out]] =
+      start(method, input)(client.rpc.schedule(datetime, method.functionName, _))
+
+    private def start[In, Out](method: AgentMethod[Trait, In, Out], input: In)(
+      call: JsSchemaValueTree => Future[Invocation[Option[JsSchemaValueTree]]]
+    ): Future[Invocation[Out]] = {
       implicit val ec = golem.concurrent.GolemExecutionContext.global
-      var underlying  = Option.empty[CancellationToken]
-      var cancelled   = false
-      val token       = CancellationToken.fromFunction { () =>
-        cancelled = true
-        underlying.foreach(_.cancel())
+      val params      =
+        if (outputContainsStream(method.outputCodec))
+          Left("live streams cannot cross fire-and-forget or scheduled agent invocation boundaries")
+        else encodeInput(method.inputCodec, input)
+      params match {
+        case Left(error)   => Future.failed(new IllegalArgumentException(error))
+        case Right(params) =>
+          attempt(call(params)).map(_.mapResult { result =>
+            decodeOutput(method.outputCodec, result).fold(error => throw new IllegalArgumentException(error), identity)
+          })
       }
-      val result = encodeInputAsync(method.inputCodec, input, scopeCard).flatMap { params =>
-        val (rawFuture, rawToken) =
-          params.call(client.rpc.cancelableAsyncInvokeAndAwait(method.functionName, _, scopeCard))
-        underlying = Some(rawToken)
-        if (cancelled) rawToken.cancel()
-        rawFuture.flatMap(decodeOutputAsync(method.outputCodec, _))
-      }
-      (result, token)
-    }
-
-    private def runFireAndForget[In, Out0](method: AgentMethod[Trait, In, Out0], input: In): Future[Unit] = {
-      val result: Either[String, Unit] = for {
-        params <- encodeInput(method.inputCodec, input)
-        _      <- client.rpc.invoke(method.functionName, params)
-      } yield ()
-      FutureInterop.fromEither(result)
-    }
-
-    private def runScheduled[In, Out0](
-      method: AgentMethod[Trait, In, Out0],
-      datetime: Datetime,
-      input: In
-    ): Future[Unit] = {
-      val result: Either[String, Unit] = for {
-        params <- encodeInput(method.inputCodec, input)
-        _      <- client.rpc.scheduleInvocation(datetime, method.functionName, params)
-      } yield ()
-      FutureInterop.fromEither(result)
-    }
-
-    private def runScheduledCancelable[In, Out0](
-      method: AgentMethod[Trait, In, Out0],
-      datetime: Datetime,
-      input: In
-    ): Future[CancellationToken] = {
-      val result: Either[String, CancellationToken] = for {
-        params <- encodeInput(method.inputCodec, input)
-        token  <- client.rpc.scheduleCancelableInvocation(datetime, method.functionName, params)
-      } yield token
-      FutureInterop.fromEither(result)
     }
   }
 
   /**
-   * `scopeCard` is attached to the awaited invocations (`await`,
-   * `cancelableAwait` and their metadata variants) and borrowed for each call.
-   * Fire-and-forget and scheduled invocations never carry a scope card.
+   * `scopeCard` is attached to the awaited invocations (`await` and
+   * `awaitWithMetadata`) and borrowed for each call. Triggered and scheduled
+   * invocations never carry a scope card.
    */
   final case class WireResolvedAgent[Trait](
     agentType: WireAgentClientType[Trait, ?],
@@ -511,43 +415,8 @@ object AgentClientRuntime {
       input: In
     ): Future[Out] = {
       implicit val ec = golem.concurrent.GolemExecutionContext.global
-      encodeWireAsync(method.input, input, scopeCard)
-        .flatMap(params => params.call(client.rpc.asyncInvokeAndAwait(method.name, _, scopeCard)))
-        .map(r => decodeWire(method.output, r))
+      awaitWithMetadata(method, input).map(_.value)
     }
-
-    def cancelableAwait[In, Out](
-      method: WireClientMethod[Trait] { type Input = In; type Output = Out },
-      input: In
-    ): (Future[Out], CancellationToken) = {
-      implicit val ec = golem.concurrent.GolemExecutionContext.global
-      var underlying  = Option.empty[CancellationToken]
-      var cancelled   = false
-      val token       = CancellationToken.fromFunction { () => cancelled = true; underlying.foreach(_.cancel()) }
-      val result      = encodeWireAsync(method.input, input, scopeCard).flatMap { params =>
-        val (future, raw) = params.call(client.rpc.cancelableAsyncInvokeAndAwait(method.name, _, scopeCard))
-        underlying = Some(raw)
-        if (cancelled) raw.cancel()
-        future.map(r => decodeWire(method.output, r))
-      }
-      (result, token)
-    }
-
-    private def immediate[In, A](method: WireClientMethod[Trait] { type Input = In }, input: In)(
-      invoke: JsSchemaValueTree => Either[String, A]
-    ): Future[A] =
-      FutureInterop.fromEither(encodeWireSync(method.input, method.inputContainsStream, input).flatMap(invoke))
-
-    def trigger[In](method: WireClientMethod[Trait] { type Input = In }, input: In): Future[Unit] =
-      immediate(method, input)(client.rpc.invoke(method.name, _))
-    def schedule[In](method: WireClientMethod[Trait] { type Input = In }, when: Datetime, input: In): Future[Unit] =
-      immediate(method, input)(client.rpc.scheduleInvocation(when, method.name, _))
-    def scheduleCancelable[In](
-      method: WireClientMethod[Trait] { type Input = In },
-      when: Datetime,
-      input: In
-    ): Future[CancellationToken] =
-      immediate(method, input)(client.rpc.scheduleCancelableInvocation(when, method.name, _))
 
     def awaitWithMetadata[In, Out](
       method: WireClientMethod[Trait] { type Input = In; type Output = Out },
@@ -555,46 +424,45 @@ object AgentClientRuntime {
     ): Future[InvocationResult[Out]] = {
       implicit val ec = golem.concurrent.GolemExecutionContext.global
       encodeWireAsync(method.input, input, scopeCard)
-        .flatMap(params =>
-          FutureInterop.fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.name, _, scopeCard)))
-        )
-        .flatMap(raw => raw.result.map(r => decodeWire(method.output, r)).flatMap(completedInvocation(raw.metadata, _)))
+        .flatMap(params => params.call(client.rpc.invokeAndAwait(method.name, _, scopeCard)))
+        .map(raw => InvocationResult(raw.metadata, decodeWire(method.output, raw.value)))
     }
-    def cancelableAwaitWithMetadata[In, Out](
+
+    private def start[In, Out](method: WireClientMethod[Trait] { type Input = In; type Output = Out }, input: In)(
+      call: JsSchemaValueTree => Future[Invocation[Option[JsSchemaValueTree]]]
+    ): Future[Invocation[Out]] = {
+      implicit val ec = golem.concurrent.GolemExecutionContext.global
+      encodeWireSync(method.input, method.inputContainsStream || method.outputContainsStream, input) match {
+        case Left(error)   => Future.failed(new IllegalArgumentException(error))
+        case Right(params) => attempt(call(params)).map(_.mapResult(decodeWire(method.output, _)))
+      }
+    }
+
+    /**
+     * Triggers the method, and returns its [[Invocation]] handle once the
+     * target has durably accepted it. Never lends the scope card.
+     */
+    def trigger[In, Out](
       method: WireClientMethod[Trait] { type Input = In; type Output = Out },
       input: In
-    ): Future[CancelableAsyncInvocation[Out]] = {
-      implicit val ec = golem.concurrent.GolemExecutionContext.global
-      encodeWireAsync(method.input, input, scopeCard)
-        .flatMap(params =>
-          FutureInterop.fromEither(params.call(client.rpc.asyncInvokeAndAwaitWithMetadata(method.name, _, scopeCard)))
-        )
-        .map { raw =>
-          CancelableAsyncInvocation(
-            raw.metadata,
-            raw.result.map(r => decodeWire(method.output, r)),
-            raw.cancellationToken
-          )
-        }
-    }
-    def triggerWithMetadata[In](
-      method: WireClientMethod[Trait] { type Input = In },
-      input: In
-    ): Future[InvocationReceipt] =
-      immediate(method, input)(p => client.rpc.invokeWithMetadata(method.name, p).map(InvocationReceipt(_)))
-    def scheduleWithMetadata[In](
-      method: WireClientMethod[Trait] { type Input = In },
+    ): Future[Invocation[Out]] =
+      start(method, input)(client.rpc.trigger(method.name, _))
+
+    /**
+     * Schedules the method for `when`, and returns its [[Invocation]] handle
+     * once the target has durably accepted it. Never lends the scope card.
+     */
+    def schedule[In, Out](
+      method: WireClientMethod[Trait] { type Input = In; type Output = Out },
       when: Datetime,
       input: In
-    ): Future[InvocationReceipt] =
-      immediate(method, input)(client.rpc.scheduleInvocationWithMetadata(when, method.name, _))
-    def scheduleCancelableWithMetadata[In](
-      method: WireClientMethod[Trait] { type Input = In },
-      when: Datetime,
-      input: In
-    ): Future[CancelableInvocationReceipt] =
-      immediate(method, input)(client.rpc.scheduleCancelableInvocationWithMetadata(when, method.name, _))
+    ): Future[Invocation[Out]] =
+      start(method, input)(client.rpc.schedule(when, method.name, _))
   }
+
+  private def attempt[A](future: => Future[A]): Future[A] =
+    try future
+    catch { case NonFatal(error) => Future.failed(error) }
 
   private[rpc] object TestHooks {
     def encodeImmediate[A](

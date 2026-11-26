@@ -4,6 +4,7 @@ package "golemcloud/golem_sdk/reflection"
 import {
   "golemcloud/golem_sdk/async-core",
   "golemcloud/golem_sdk/interface/golem/core/types",
+  "golemcloud/golem_sdk/interface/golem/tool/host",
   "golemcloud/golem_sdk/interface/wasi/clocks/system-clock",
   "golemcloud/golem_sdk/permissions",
   "golemcloud/golem_sdk/rpc",
@@ -64,6 +65,8 @@ pub(all) enum AgentRpcError {
   InvalidAgentId(String)
   Custom(@schema_model.TypedSchemaValue)
   Conflict(String)
+  Cancelled(String)
+  CannotCancelRunning(String)
 } derive(Eq, @debug.Debug)
 
 pub struct AgentType {
@@ -100,10 +103,10 @@ pub async fn DynamicAgentClient::agent_id(Self) -> @schema.AgentId
 pub async fn DynamicAgentClient::create(String, @schema_model.SchemaValue, keyed? : Bool, config? : Array[@golemcloud/golem_sdk/interface/golem/agent/common.TypedAgentConfigValue], env? : Array[(String, String)]) -> Self
 pub fn DynamicAgentClient::drop(Self) -> Unit
 pub fn DynamicAgentClient::get_by_id(String, @schema.AgentId) -> Self raise ReflectError
-pub async fn DynamicAgentClient::invoke_value(Self, String, @schema_model.SchemaValue, scope_card? : @permissions.ScopeCard) -> Invocation[@schema_model.SchemaValue?]
-pub fn DynamicAgentClient::schedule_value(Self, @system-clock.Instant, String, @schema_model.SchemaValue) -> ScheduledInvocation raise ReflectError
+pub async fn DynamicAgentClient::invoke_value(Self, String, @schema_model.SchemaValue, scope_card? : @permissions.ScopeCard) -> InvocationOutput[@schema_model.SchemaValue?]
+pub async fn DynamicAgentClient::schedule_value(Self, @system-clock.Instant, String, @schema_model.SchemaValue) -> @rpc.Invocation[@schema_model.SchemaValue?]
 pub fn DynamicAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
-pub fn DynamicAgentClient::trigger_value(Self, String, @schema_model.SchemaValue) -> InvocationMetadata raise ReflectError
+pub async fn DynamicAgentClient::trigger_value(Self, String, @schema_model.SchemaValue) -> @rpc.Invocation[@schema_model.SchemaValue?]
 pub fn DynamicAgentClient::upsert(String, @schema_model.SchemaValue) -> Self raise ReflectError
 
 pub(all) struct DynamicToolClient {
@@ -122,21 +125,21 @@ pub async fn[C : @schema.IntoSchema] FullAgentClient::create(String, C, keyed? :
 pub fn FullAgentClient::drop(Self) -> Unit
 pub fn[C : @schema.IntoSchema] FullAgentClient::ephemeral(String, C) -> Self raise ReflectError
 pub fn FullAgentClient::get_by_id(String, @schema.AgentId) -> Self raise ReflectError
-pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] FullAgentClient::invoke(Self, String, I, scope_card? : @permissions.ScopeCard) -> Invocation[O]
-pub async fn[I : @schema.IntoSchema] FullAgentClient::invoke_unit(Self, String, I, scope_card? : @permissions.ScopeCard) -> Invocation[Unit]
-pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] FullAgentClient::schedule(Self, @system-clock.Instant, String, I, @schema.TypeTag[O]) -> ScheduledInvocation raise ReflectError
+pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] FullAgentClient::invoke(Self, String, I, scope_card? : @permissions.ScopeCard) -> InvocationOutput[O]
+pub async fn[I : @schema.IntoSchema] FullAgentClient::invoke_unit(Self, String, I, scope_card? : @permissions.ScopeCard) -> InvocationOutput[Unit]
+pub async fn[I : @schema.IntoSchema, O : @schema.IntoSchema + @schema.FromSchema] FullAgentClient::schedule(Self, @system-clock.Instant, String, I, @schema.TypeTag[O]) -> @rpc.Invocation[O]
 pub fn FullAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
-pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] FullAgentClient::trigger(Self, String, I, @schema.TypeTag[O]) -> InvocationMetadata raise ReflectError
+pub async fn[I : @schema.IntoSchema, O : @schema.IntoSchema + @schema.FromSchema] FullAgentClient::trigger(Self, String, I, @schema.TypeTag[O]) -> @rpc.Invocation[O]
 pub fn[C : @schema.IntoSchema] FullAgentClient::upsert(String, C) -> Self raise ReflectError
-
-pub(all) struct Invocation[T] {
-  metadata : InvocationMetadata
-  value : T
-} derive(Eq, @debug.Debug)
 
 pub(all) struct InvocationMetadata {
   agent_id : @schema.AgentId
   invocation_id : @rpc.InvocationId
+} derive(Eq, @debug.Debug)
+
+pub(all) struct InvocationOutput[T] {
+  metadata : InvocationMetadata
+  value : T
 } derive(Eq, @debug.Debug)
 
 pub(all) struct MethodOnlyAgentClient {
@@ -145,24 +148,24 @@ pub(all) struct MethodOnlyAgentClient {
 pub async fn MethodOnlyAgentClient::agent_id(Self) -> @schema.AgentId
 pub fn MethodOnlyAgentClient::bind(@schema.AgentId) -> Self raise ReflectError
 pub fn MethodOnlyAgentClient::drop(Self) -> Unit
-pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] MethodOnlyAgentClient::invoke(Self, String, I, scope_card? : @permissions.ScopeCard) -> Invocation[O]
-pub async fn[I : @schema.IntoSchema] MethodOnlyAgentClient::invoke_unit(Self, String, I, scope_card? : @permissions.ScopeCard) -> Invocation[Unit]
-pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] MethodOnlyAgentClient::schedule(Self, @system-clock.Instant, String, I, @schema.TypeTag[O]) -> ScheduledInvocation raise ReflectError
+pub async fn[I : @schema.IntoSchema, O : @schema.FromSchema] MethodOnlyAgentClient::invoke(Self, String, I, scope_card? : @permissions.ScopeCard) -> InvocationOutput[O]
+pub async fn[I : @schema.IntoSchema] MethodOnlyAgentClient::invoke_unit(Self, String, I, scope_card? : @permissions.ScopeCard) -> InvocationOutput[Unit]
+pub async fn[I : @schema.IntoSchema, O : @schema.IntoSchema + @schema.FromSchema] MethodOnlyAgentClient::schedule(Self, @system-clock.Instant, String, I, @schema.TypeTag[O]) -> @rpc.Invocation[O]
 pub fn MethodOnlyAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
-pub fn[I : @schema.IntoSchema, O : @schema.IntoSchema] MethodOnlyAgentClient::trigger(Self, String, I, @schema.TypeTag[O]) -> InvocationMetadata raise ReflectError
+pub async fn[I : @schema.IntoSchema, O : @schema.IntoSchema + @schema.FromSchema] MethodOnlyAgentClient::trigger(Self, String, I, @schema.TypeTag[O]) -> @rpc.Invocation[O]
 
 pub(all) struct ReflectedAgentClient {
   // private fields
 }
 pub async fn ReflectedAgentClient::agent_id(Self) -> @schema.AgentId
 pub fn ReflectedAgentClient::drop(Self) -> Unit
-pub async fn ReflectedAgentClient::invoke_json(Self, String, Json, scope_card? : @permissions.ScopeCard) -> Invocation[Json?]
-pub async fn ReflectedAgentClient::invoke_value(Self, String, @schema_model.SchemaValue, scope_card? : @permissions.ScopeCard) -> Invocation[@schema_model.SchemaValue?]
-pub fn ReflectedAgentClient::schedule_json(Self, @system-clock.Instant, String, Json) -> ScheduledInvocation raise ReflectError
-pub fn ReflectedAgentClient::schedule_value(Self, @system-clock.Instant, String, @schema_model.SchemaValue) -> ScheduledInvocation raise ReflectError
+pub async fn ReflectedAgentClient::invoke_json(Self, String, Json, scope_card? : @permissions.ScopeCard) -> InvocationOutput[Json?]
+pub async fn ReflectedAgentClient::invoke_value(Self, String, @schema_model.SchemaValue, scope_card? : @permissions.ScopeCard) -> InvocationOutput[@schema_model.SchemaValue?]
+pub async fn ReflectedAgentClient::schedule_json(Self, @system-clock.Instant, String, Json) -> @rpc.Invocation[Json?]
+pub async fn ReflectedAgentClient::schedule_value(Self, @system-clock.Instant, String, @schema_model.SchemaValue) -> @rpc.Invocation[@schema_model.SchemaValue?]
 pub fn ReflectedAgentClient::set_default_scope_card(Self, @permissions.ScopeCard?) -> Unit
-pub fn ReflectedAgentClient::trigger_json(Self, String, Json) -> InvocationMetadata raise ReflectError
-pub fn ReflectedAgentClient::trigger_value(Self, String, @schema_model.SchemaValue) -> InvocationMetadata raise ReflectError
+pub async fn ReflectedAgentClient::trigger_json(Self, String, Json) -> @rpc.Invocation[Json?]
+pub async fn ReflectedAgentClient::trigger_value(Self, String, @schema_model.SchemaValue) -> @rpc.Invocation[@schema_model.SchemaValue?]
 
 pub struct ReflectedConfigDeclaration {
   path : Array[String]
@@ -203,13 +206,6 @@ pub fn ReflectedToolInvocation::drop(Self) -> Unit
 pub async fn ReflectedToolInvocation::get(Self) -> Result[@schema_model.SchemaValue?, @tool.ToolError[ReflectedToolCustomError]]
 pub fn ReflectedToolInvocation::stderr(Self) -> @async-core.Stream[Byte]?
 pub fn ReflectedToolInvocation::stdout(Self) -> @async-core.Stream[Byte]?
-
-pub(all) struct ScheduledInvocation {
-  metadata : InvocationMetadata
-  cancellation_token : @golemcloud/golem_sdk/interface/golem/agent/host.CancellationToken
-}
-pub fn ScheduledInvocation::cancel(Self) -> Unit
-pub fn ScheduledInvocation::drop(Self) -> Unit
 
 pub struct SchemaRef {
   graph : @schema_model.SchemaGraph
@@ -285,7 +281,7 @@ pub struct ToolType {
 } derive(Eq, @debug.Debug)
 pub fn ToolType::client(Self) -> ReflectedToolClient
 pub fn ToolType::command(Self, Array[String]) -> ToolCommand raise ReflectError
-pub fn ToolType::from_registered(@golemcloud/golem_sdk/interface/golem/tool/host.RegisteredTool) -> Self raise ReflectError
+pub fn ToolType::from_registered(@host.RegisteredTool) -> Self raise ReflectError
 pub fn ToolType::implemented_by(Self) -> @types.ComponentId
 pub fn ToolType::lookup_name(Self) -> String
 pub fn ToolType::version(Self) -> String

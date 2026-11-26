@@ -45,7 +45,7 @@ use golem_worker_executor::storage::scheduler::{
 use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, callers, start_with_overrides,
+    WorkerExecutorTestDependencies, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::sync::{Arc, Mutex};
@@ -301,6 +301,21 @@ pub(crate) struct HoldFirstSchedule {
 
 #[async_trait]
 impl Rpc for HoldFirstSchedule {
+    async fn invocation_handle(
+        &self,
+        invocation_id: &golem_common::model::OwnedInvocationId,
+        caller: &golem_common::model::caller::Principal,
+        operation: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation,
+        auth: &AuthCtx,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner
+            .invocation_handle(invocation_id, caller, operation, auth)
+            .await
+    }
+
     async fn create_and_initialize(
         &self,
         target: ResolvedTarget,
@@ -331,19 +346,6 @@ impl Rpc for HoldFirstSchedule {
             .await
     }
 
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
-        self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
-            .await
-    }
-
     async fn schedule_invocation(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -353,7 +355,7 @@ impl Rpc for HoldFirstSchedule {
         scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<ScheduleId, RpcError> {
+    ) -> Result<(), RpcError> {
         let first = {
             let mut schedules = self.schedules.lock().unwrap();
             schedules.push((
@@ -712,7 +714,7 @@ async fn scheduled_ephemeral_target_runs_once_at_its_deadline_across_a_restart(
     Ok(())
 }
 
-/// Token cancellation across an executor restart withdraws the scheduled work and the
+/// Handle cancellation across an executor restart withdraws the scheduled work and the
 /// constructor reservation of the never-started target. An inspection of the withdrawn target is
 /// answered, and the due wake runs nothing.
 #[test]
@@ -817,7 +819,7 @@ async fn scheduled_ephemeral_cancellation_behind_its_start_cancels_nothing(
         .component_dep(&context.default_environment_id, agent_rpc_rust)
         .store()
         .await?;
-    let owner = executor
+    executor
         .start_agent(
             &component.id,
             agent_key!("ScheduledInvocationClient", CLIENT),
@@ -829,10 +831,6 @@ async fn scheduled_ephemeral_cancellation_behind_its_start_cancels_nothing(
     let target = ephemeral_target(&executor, &component).await?;
     let key = scheduled_key(&executor.get_oplog(&target, OplogIndex::INITIAL).await?)
         .expect("the schedule must commit in the target oplog");
-    let receipt = ScheduleId::for_invocation(
-        executor.get_worker_metadata(&target).await?.fingerprint,
-        &key,
-    );
     let mut restart = executor
         .gate_after_next_append(&target.agent_id, |entry| {
             matches!(entry, OplogEntry::Restart { .. })
@@ -848,19 +846,12 @@ async fn scheduled_ephemeral_cancellation_behind_its_start_cancels_nothing(
         .await
         .expect("the starting target must be active")
         .primary();
-    // The client that scheduled the call, as the target recorded it.
-    let canceller = callers::agent_in(
-        owner.agent_id,
-        golem_common::model::agent::AgentTypeName("ScheduledInvocationClient".to_string()),
-        executor.get_worker_metadata(&owner).await?.fingerprint,
-        component.environment_id,
-    )
-    .immediate;
-    let mut cancellation = Box::pin(worker.cancel_scheduled_invocation(key, receipt, &canceller));
+    let mut cancellation = Box::pin(worker.cancel_invocation(key));
     assert!(futures::poll!(&mut cancellation).is_pending());
     drop(restart);
-    assert!(
-        !tokio::time::timeout(Duration::from_secs(30), cancellation).await??,
+    assert_ne!(
+        tokio::time::timeout(Duration::from_secs(30), cancellation).await??,
+        golem_worker_executor::worker::CancelInvocationOutcome::Withdrawn,
         "a cancellation behind the begun start must cancel nothing"
     );
 
@@ -874,8 +865,8 @@ async fn scheduled_ephemeral_cancellation_behind_its_start_cancels_nothing(
 }
 
 /// The scheduling call commits on the target, but its response is lost and the caller restarts.
-/// The repair finds the target the first attempt created, schedules the same key again and gets
-/// the original receipt: one target, one scheduled invocation, one execution.
+/// The repair finds the target the first attempt created and schedules the same key again: one
+/// target, one scheduled invocation, one execution.
 #[test]
 #[timeout("3m")]
 async fn ambiguous_ephemeral_schedule_retry_reuses_the_created_target(

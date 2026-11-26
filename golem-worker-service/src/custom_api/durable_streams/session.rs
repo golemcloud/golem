@@ -99,6 +99,7 @@ impl DurableStreamsHandler {
         .map_err(|e| anyhow::anyhow!("invalid durable stream input: {e}"))?;
         let caller = caller_from_request(request)?;
         let mut start = InvocationStart {
+            requires_own_record: false,
             target: None,
             constructor: None,
             component_id: None,

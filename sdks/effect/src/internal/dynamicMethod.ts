@@ -1,12 +1,7 @@
 import { Effect } from "effect"
 import type { DynamicMethod } from "../DynamicClient.js"
 import type { RpcConnection } from "../host/RpcClient.js"
-import {
-  awaitInvocation,
-  invocationMetadataFromHost,
-  scheduleCancelableInvocation,
-  wrapHostThrow,
-} from "./rpc.js"
+import { awaitInvocation, scheduleInvocation, triggerInvocation } from "./rpc.js"
 
 export const dynamicMethod = (rpc: RpcConnection, name: string): DynamicMethod => ({
   name,
@@ -14,10 +9,6 @@ export const dynamicMethod = (rpc: RpcConnection, name: string): DynamicMethod =
     awaitInvocation(rpc, name, Effect.succeed(input), options?.scopeCard, false).pipe(
       Effect.map(({ metadata, result }) => ({ metadata, value: result })),
     ),
-  trigger: (input) =>
-    Effect.try({
-      try: () => invocationMetadataFromHost(rpc.invoke(name, input)),
-      catch: wrapHostThrow,
-    }),
-  schedule: (at, input) => scheduleCancelableInvocation(rpc, at, name, input),
+  trigger: (input) => triggerInvocation(rpc, name, input, Effect.succeed),
+  schedule: (at, input) => scheduleInvocation(rpc, at, name, input, Effect.succeed),
 })

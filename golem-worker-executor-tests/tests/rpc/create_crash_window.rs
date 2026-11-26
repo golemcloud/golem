@@ -31,6 +31,21 @@ struct CreateThenHangRpc {
 
 #[async_trait]
 impl Rpc for CreateThenHangRpc {
+    async fn invocation_handle(
+        &self,
+        invocation_id: &golem_common::model::OwnedInvocationId,
+        caller: &golem_common::model::caller::Principal,
+        operation: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation,
+        auth: &AuthCtx,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        self.inner
+            .invocation_handle(invocation_id, caller, operation, auth)
+            .await
+    }
+
     async fn create_and_initialize(
         &self,
         target: ResolvedTarget,
@@ -69,19 +84,6 @@ impl Rpc for CreateThenHangRpc {
         result
     }
 
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
-        self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
-            .await
-    }
-
     async fn schedule_invocation(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -91,7 +93,7 @@ impl Rpc for CreateThenHangRpc {
         scheduled_at: jiff::Timestamp,
         self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+    ) -> Result<(), RpcError> {
         self.inner
             .schedule_invocation(
                 owned_agent_id,

@@ -211,6 +211,10 @@ Do: run several concurrent host calls whose completion order is a non-identity p
 their initiation order, record the delivery order, restart, and assert the guest observes the
 same delivery order on replay. Use permutations, not a single reversed case.
 
+Calls in flight together can append their `Start`s in either order, so identify each one by its
+recorded request (for an RPC, the `remote_agent_id` of its `HostRequestGolemRpcInvoke`) or its
+invocation ID, never by its `Start` position.
+
 Copy: `tests/concurrent_delivery_order.rs::delivery_order_matches_completion_order_for_permutations`,
 `concurrent_host_call_initiation_order_is_stable_across_reexecution`.
 

@@ -8,13 +8,12 @@ import { RpcHostError, type RpcConnection } from "../src/host/RpcClient.js"
 import {
   agentIdFor,
   hostAgentIdFor,
-  hostInvocationMetadata,
+  fakeRpcInvocation,
   sdkInvocationMetadata,
 } from "./invocation-metadata.js"
 import { rpcLayer } from "./rpc-fake.js"
 
 const tree: CoreTypes.SchemaValueTree = { root: 0, valueNodes: [] }
-const metadata = hostInvocationMetadata("agent")
 
 const hostLayer = (mode: AgentCommon.AgentMode | "missing" = "durable") =>
   Layer.succeed(AgentHostClient, {
@@ -76,24 +75,16 @@ describe("DynamicClient", () => {
     }),
   )
 
-  it.effect("makes throwing scheduled cancellation best-effort and idempotent, then drops", () =>
+  it.effect("returns scoped handles from trigger and schedule and maps cancel failures", () =>
     Effect.gen(function* () {
-      let cancels = 0
-      let drops = 0
+      const events: string[] = []
+      const scheduledHandle = {
+        ...fakeRpcInvocation("agent", undefined, events),
+        cancel: () => Promise.reject({ tag: "cannot-cancel-running", val: "running" }),
+      }
       const connection = {
-        invoke: () => metadata,
-        scheduleCancelableInvocation: () => ({
-          metadata,
-          token: {
-            cancel: () => {
-              cancels++
-              throw new Error("host cancel failed")
-            },
-            drop: () => {
-              drops++
-            },
-          },
-        }),
+        trigger: async () => fakeRpcInvocation("agent", tree, events),
+        schedule: async () => scheduledHandle,
         drop: () => undefined,
       } as unknown as RpcConnection
       const rpc = rpcLayer({ getById: () => Effect.succeed(connection) })
@@ -102,22 +93,23 @@ describe("DynamicClient", () => {
         Effect.gen(function* () {
           const client = yield* bind(agentIdFor("agent"))
           const triggered = yield* client.method("run").trigger(tree)
-          expect(triggered).toEqual(sdkInvocationMetadata("agent"))
-          expect(triggered).not.toBe(metadata)
+          expect(triggered.id).toEqual(sdkInvocationMetadata("agent").invocationId)
           expect(Object.isFrozen(triggered)).toBe(true)
+          expect(yield* triggered.awaitResult).toBe(tree)
+          expect(yield* triggered.cancel).toBe(true)
           const scheduled = yield* client
             .method("run")
             .schedule({ seconds: 1n, nanoseconds: 0 }, tree)
-          expect(scheduled.metadata).toEqual(sdkInvocationMetadata("agent"))
-          expect(scheduled.metadata).not.toBe(metadata)
-          expect(Object.isFrozen(scheduled.metadata)).toBe(true)
-          yield* scheduled.cancel
-          yield* scheduled.cancel
+          expect(scheduled.id).toEqual(sdkInvocationMetadata("agent").invocationId)
+          expect(yield* Effect.flip(scheduled.cancel)).toEqual({
+            _tag: "RpcCannotCancelRunning",
+            reason: "running",
+          })
+          expect(events).toEqual(["handle-cancel"])
         }),
       ).pipe(Effect.provide(Layer.merge(hostLayer(), rpc)))
 
-      expect(cancels).toBe(1)
-      expect(drops).toBe(1)
+      expect(events).toEqual(["handle-cancel", "handle-drop", "handle-drop"])
     }),
   )
 })

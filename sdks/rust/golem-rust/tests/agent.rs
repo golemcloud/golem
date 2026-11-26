@@ -795,8 +795,8 @@ mod tests {
             input: UnstructuredText<MyLang>,
         ) -> UnstructuredText<MyLang>;
         async fn rpc_call(&self, string: String) -> String;
-        fn rpc_call_trigger(&self, string: String);
-        fn rpc_call_schedule(&self, string: String);
+        async fn rpc_call_trigger(&self, string: String) -> String;
+        async fn rpc_call_schedule(&self, string: String) -> String;
     }
 
     struct EchoAsyncImpl {
@@ -864,14 +864,18 @@ mod tests {
             client.echo(string).await
         }
 
-        fn rpc_call_trigger(&self, string: String) {
+        async fn rpc_call_trigger(&self, string: String) -> String {
             let client = EchoClient::upsert(self.id.clone(), self.llm_config.clone());
-            client.trigger_echo(string);
+            let invocation: golem_rust::Invocation<String> = client
+                .trigger_echo(string)
+                .await
+                .expect("trigger accepts a stream-free input");
+            invocation.id().to_string()
         }
 
-        fn rpc_call_schedule(&self, string: String) {
+        async fn rpc_call_schedule(&self, string: String) -> String {
             let client = EchoClient::upsert(self.id.clone(), self.llm_config.clone());
-            client
+            let invocation: golem_rust::Invocation<String> = client
                 .schedule_echo(
                     string,
                     ScheduledTime {
@@ -879,7 +883,9 @@ mod tests {
                         nanoseconds: 1,
                     },
                 )
+                .await
                 .expect("schedule accepts a stream-free input");
+            invocation.id().to_string()
         }
     }
 

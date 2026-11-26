@@ -65,9 +65,16 @@ object AgentClientMacro {
             val inCodec                                  = wireInputCodecExpr[i](access, ps)
             val outCodec: Expr[Option[ConcreteCodec[o]]] =
               if TypeRepr.of[o] =:= TypeRepr.of[Unit] then '{ None } else '{ Some(ConcreteCodec.derived[o]) }
-            val inputContainsStream = ps.exists { case (_, tpe) => containsStream(tpe, Set.empty) }
+            val inputContainsStream  = ps.exists { case (_, tpe) => containsStream(tpe, Set.empty) }
+            val outputContainsStream = containsStream(out, Set.empty)
             '{
-              WireClientMethod[Trait, i, o](${ Expr(method.name) }, $inCodec, ${ Expr(inputContainsStream) }, $outCodec)
+              WireClientMethod[Trait, i, o](
+                ${ Expr(method.name) },
+                $inCodec,
+                ${ Expr(inputContainsStream) },
+                $outCodec,
+                ${ Expr(outputContainsStream) }
+              )
             }
         }
     }

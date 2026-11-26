@@ -48,13 +48,11 @@ function typeCheckSnippet(history: string, snippet: string, customConfig = confi
 }
 
 const remoteMethodHistory = [
-  'type CancellationToken = string;',
   'type RemoteMethod<Args extends unknown[], R> = {',
   '  (...args: Args): Promise<R>;',
   '  abortable: (signal: AbortSignal, ...args: Args) => Promise<R>;',
   '  trigger: (...args: Args) => void;',
   '  schedule: (ts: string, ...args: Args) => void;',
-  '  scheduleCancelable: (ts: string, ...args: Args) => CancellationToken;',
   '};',
   'declare const MyAgent: { get: RemoteMethod<[string], string> };',
   'declare function plain(value: string): void;',
@@ -150,10 +148,6 @@ describe('LanguageService remote method diagnostic hints', () => {
       'schedule: (scheduleAt: string, authorization: string) => void;',
     ],
     [
-      'MyAgent.get.scheduleCancelable("2026-01-01T00:00:00Z")',
-      'scheduleCancelable: (scheduleAt: string, authorization: string) => string;',
-    ],
-    [
       'MyAgent.get.abortable(new AbortController().signal)',
       'abortable: (signal: AbortSignal, authorization: string) => Promise<string>;',
     ],
@@ -190,10 +184,6 @@ describe('LanguageService remote method diagnostic hints', () => {
     [
       'MyAgent.get.schedule("2026-01-01T00:00:00Z",',
       'schedule: (scheduleAt: string, authorization: string) => void;',
-    ],
-    [
-      'MyAgent.get.scheduleCancelable(',
-      'scheduleCancelable: (scheduleAt: string, authorization: string) => string;',
     ],
     [
       'MyAgent.get.abortable(',

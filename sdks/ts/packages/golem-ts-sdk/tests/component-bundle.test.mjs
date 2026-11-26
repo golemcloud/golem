@@ -168,6 +168,7 @@ function instantiate(code, overrides = {}, format = 'cjs') {
       const hex = uuid.replace(/-/g, '');
       return { highBits: BigInt(`0x${hex.slice(0, 16)}`), lowBits: BigInt(`0x${hex.slice(16)}`) };
     },
+    withSignal: (_signal, fn) => fn(),
     uuidToString: ({ highBits, lowBits }) => {
       const hex = [highBits, lowBits]
         .map((bits) => BigInt.asUintN(64, bits).toString(16).padStart(16, '0'))
@@ -853,14 +854,11 @@ describe('component exports', () => {
           calls.push({ upsert: agentTypeName, input });
           return new this();
         }
-        asyncInvokeAndAwait(method, input) {
+        async invokeAndAwait(method, input) {
           calls.push({ method, input });
           return {
             metadata: hostInvocationMetadata(COUNTER_AGENT_ID),
-            future: {
-              get: async () => ({ valueNodes: [{ tag: 'u32-value', val: 41 }], root: 0 }),
-              cancel() {},
-            },
+            result: { valueNodes: [{ tag: 'u32-value', val: 41 }], root: 0 },
           };
         }
       },

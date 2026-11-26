@@ -110,12 +110,12 @@ fn guest_rust_streaming_matrix_compiles_native_producers_and_consumers() {
         "pairs",
         "tree_items",
     ] {
-        assert!(!source.contains(&format!("pub fn trigger_{method}(")));
-        assert!(!source.contains(&format!("pub fn schedule_{method}(")));
-        assert!(!source.contains(&format!("pub fn schedule_cancelable_{method}(")));
+        assert!(!source.contains(&format!("fn trigger_{method}(")));
+        assert!(!source.contains(&format!("fn schedule_{method}(")));
     }
-    assert!(source.contains("pub fn trigger_status("));
-    assert!(source.contains("pub fn schedule_status("));
+    assert!(source.contains("pub async fn trigger_status("));
+    assert!(source.contains("pub async fn schedule_status("));
+    assert!(!source.contains("schedule_cancelable"));
     let parsed = syn::parse_file(&source).unwrap();
     let mut factory_count = 0;
     let mut codec_count = 0;
@@ -479,21 +479,32 @@ fn guest_generation_uses_logical_ephemeral_proxies_and_invocation_metadata() {
 
     let lib_rs = std::fs::read_to_string(target_path.join("src/lib.rs")).unwrap();
     for ephemeral_shape in [
-        "pub use golem_rust::agentic::EphemeralInvocationResult",
+        "golem_rust::InvocationOutput<",
         "pub fn upsert(",
         "golem_rust::agentic::__upsert_agent(\n                \"AlphaAgent\",\n                constructor_value,\n            )",
-        "async_invoke_and_await",
-        ".invoke(",
-        "schedule_invocation",
-        "schedule_cancelable_invocation",
+        "golem_rust::permissions::__invoke_and_await(",
+        ".trigger(\"run\"",
+        ".schedule(__golem_bridge_scheduled_time",
     ] {
         assert!(
-            lib_rs.contains(ephemeral_shape),
+            without_whitespace(&lib_rs).contains(&without_whitespace(ephemeral_shape)),
             "missing ephemeral guest wasm-rpc API shape {ephemeral_shape}:\n{lib_rs}"
         );
     }
     assert!(!lib_rs.contains("pub struct AlphaAgentInvocationResult"));
     assert!(!lib_rs.contains("_with_metadata"));
+    for removed in [
+        "EphemeralInvocationResult",
+        "async_invoke_and_await",
+        "schedule_invocation",
+        "schedule_cancelable",
+        "CancellationToken",
+    ] {
+        assert!(
+            !lib_rs.contains(removed),
+            "removed guest wasm-rpc API shape {removed}:\n{lib_rs}"
+        );
+    }
     for absent in [
         "pub async fn create(",
         "pub fn get_by_id(",
@@ -644,12 +655,12 @@ fn guest_generation_compiles_host_managed_capability_methods() {
     }
     assert_eq!(
         lib_rs
-            .matches("golem_rust::permissions::__async_invoke_and_await")
+            .matches("golem_rust::permissions::__invoke_and_await")
             .count(),
         7,
         "every awaited call, and only awaited calls, must go through the scope-card helper:\n{lib_rs}"
     );
-    assert!(!lib_rs.contains("wasm_rpc.async_invoke_and_await"));
+    assert!(!lib_rs.contains("wasm_rpc.invoke_and_await"));
     // Every awaited implementation resolves the scope card before it encodes
     // the input, so a dropped default fails before any argument card moves.
     let impls = lib_rs
@@ -1549,23 +1560,23 @@ fn guest_generation_emits_wasm_rpc_cargo_dependencies_and_api_shape() {
         "golem_rust::agentic::__create_agent(",
         "golem_rust::agentic::__get_agent_by_id(\"AlphaAgent\", agent_id)",
         "pub async fn run(\n        &self,\n        value: i32,",
-        "pub fn trigger_run(\n        &self,\n        value: i32,",
-        "pub fn schedule_run(\n        &self,\n        value: i32,\n        golem_bridge_scheduled_time: golem_rust::ScheduledTime,",
-        "pub fn schedule_cancelable_run(\n        &self,\n        value: i32,\n        golem_bridge_scheduled_time: golem_rust::ScheduledTime,",
-        "async_invoke_and_await",
+        "pub async fn trigger_run(\n        &self,\n        value: i32,\n    ) -> Result<golem_rust::Invocation<",
+        "pub async fn schedule_run(\n        &self,\n        value: i32,\n        golem_bridge_scheduled_time: golem_rust::ScheduledTime,\n    ) -> Result<golem_rust::Invocation<",
+        "golem_rust::permissions::__invoke_and_await(",
         "WireReader::new",
-        ".invoke(",
-        "schedule_invocation",
-        "schedule_cancelable_invocation",
+        ".trigger(\"run\"",
+        ".schedule(golem_bridge_scheduled_time",
         "MissingResult",
+        "CannotCancelRunning { message: String }",
     ] {
         assert!(
-            lib_rs.contains(guest_shape),
+            without_whitespace(&lib_rs).contains(&without_whitespace(guest_shape)),
             "missing guest wasm-rpc API shape {guest_shape}:\n{lib_rs}"
         );
     }
-    assert!(!lib_rs.contains("pub fn __golem_bridge_trigger_run"));
-    assert!(!lib_rs.contains("pub fn __golem_bridge_schedule_run"));
+    assert!(!lib_rs.contains("fn __golem_bridge_trigger_run"));
+    assert!(!lib_rs.contains("fn __golem_bridge_schedule_run"));
+    assert!(!lib_rs.contains("schedule_cancelable"));
     assert!(!lib_rs.contains("golem_client"));
     assert!(!lib_rs.contains("reqwest"));
     assert!(!lib_rs.contains("constructor_parameters"));
@@ -3638,4 +3649,10 @@ fn cargo_test_lib_with_args(target_path: &Utf8Path, args: &[&str]) {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+/// The source text without whitespace, so that a shape check does not depend on how the
+/// formatter wraps the generated code.
+fn without_whitespace(text: &str) -> String {
+    text.split_whitespace().collect()
 }

@@ -19,8 +19,8 @@ import (
 //     encoding, result decoding, error mapping, and the small value projections.
 //     None of these functions reference a `//go:wasmimport` symbol, so they link
 //     and run on the host. We push as much logic as possible into this layer.
-//   - The wasi-touching wrappers — Call, Trigger, Schedule, CallAsync,
-//     Future.Get/Cancel, ClientFor — cannot run natively: calling one references
+//   - The wasi-touching wrappers — Call, Trigger, Schedule,
+//     MethodDef.Invocation, ClientFor — cannot run natively: calling one references
 //     a wasmimport symbol the host linker can't resolve (`empty.s` lets the
 //     generated package compile, but not link a referenced import). These are
 //     covered by the CLI-driven and runtime (worker-executor) integration layers
@@ -206,6 +206,8 @@ func TestRpcErrorsMapToDistinguishableKinds(t *testing.T) {
 		{"not found", host.MakeRpcErrorNotFound("no such agent"), RemoteNotFound},
 		{"internal", host.MakeRpcErrorRemoteInternalError("boom"), RemoteInternalError},
 		{"conflict", host.MakeRpcErrorConflict("the key is current"), RemoteConflict},
+		{"cancelled", host.MakeRpcErrorCancelled("withdrawn"), RemoteCancelled},
+		{"cannot cancel running", host.MakeRpcErrorCannotCancelRunning("running"), RemoteCannotCancelRunning},
 	} {
 		err := rpcErrorToGo("agent-1", "charge", tc.in)
 		var rce *RemoteCallError
@@ -250,19 +252,6 @@ func TestInvocationMetadataFromProjects(t *testing.T) {
 	got := invocationMetadataFrom(testHostInvocationMetadata)
 	if got != testInvocationMetadata {
 		t.Fatalf("invocationMetadataFrom = %+v, want %+v", got, testInvocationMetadata)
-	}
-}
-
-// TestAsyncInvocationMetadataIsAbsentForARejectedCall — the host reports no
-// metadata for a call it rejected before it started; the future then has no
-// identity rather than a zero one.
-func TestAsyncInvocationMetadataIsAbsentForARejectedCall(t *testing.T) {
-	if m := asyncInvocationMetadata(witTypes.None[host.InvocationMetadata]()); m != nil {
-		t.Fatalf("asyncInvocationMetadata(none) = %+v, want nil", *m)
-	}
-	m := asyncInvocationMetadata(witTypes.Some(testHostInvocationMetadata))
-	if m == nil || *m != testInvocationMetadata {
-		t.Fatalf("asyncInvocationMetadata(some) = %v, want %+v", m, testInvocationMetadata)
 	}
 }
 
@@ -356,7 +345,7 @@ func TestInstantFromConvertsTime(t *testing.T) {
 	}
 }
 
-// Note: the zero-Client guards on Call/Trigger/CallAsync and the consumed-handle
-// guard on Future.Get are straight-line nil checks, but they cannot be exercised
+// Note: the zero-Client guards on Call/Trigger/Schedule are straight-line nil
+// checks, but they cannot be exercised
 // natively — referencing the wrapper pulls in its wasmimport symbols. They are
 // covered by the integration layers.

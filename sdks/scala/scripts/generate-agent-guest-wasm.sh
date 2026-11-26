@@ -33,7 +33,7 @@ set -euo pipefail
 sdk_root="$(cd "$(dirname "$0")/.." && pwd)"
 
 if ! command -v wasm-rquickjs &>/dev/null; then
-  echo "[agent-guest] ERROR: wasm-rquickjs not found. Install it with: cargo install wasm-rquickjs-cli" >&2
+  echo "[agent-guest] ERROR: wasm-rquickjs not found. Install the wasm-rquickjs-version from .github/actions/setup-main-validation/action.yml (see sdks/ts/AGENTS.md)" >&2
   exit 1
 fi
 

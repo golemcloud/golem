@@ -12,7 +12,7 @@ package golem.reflection
 
 import golem.config.ConfigOverride
 import golem.runtime.{InputRecordCodec, OutputCodec, OutputMetadata}
-import golem.runtime.rpc.CreateOptions
+import golem.runtime.rpc.{CreateOptions, Invocation}
 import golem.schema.SchemaValue
 import golem.{AgentId, Datetime}
 
@@ -237,13 +237,32 @@ final class CallerCodecBoundMethod[Input, Output] private[reflection] (
           })
     }
 
-  def trigger(input: Input): Either[GolemReflectError, InvocationMetadata] =
-    rejectNonAwaitedStreams("trigger").flatMap(_ => encodeInput(input)).flatMap(transport.trigger(definition.name, _))
+  /**
+   * Triggers the method, and returns the invocation's handle once the target
+   * has durably accepted it. Never lends a scope card, and rejects streaming
+   * methods. See [[golem.runtime.rpc.Invocation]].
+   */
+  def trigger(input: Input): Future[Either[GolemReflectError, Invocation[Output]]] =
+    started("trigger", input)(transport.trigger(definition.name, _))
 
-  def schedule(at: Datetime, input: Input): Either[GolemReflectError, ScheduledInvocation] =
-    rejectNonAwaitedStreams("schedule")
-      .flatMap(_ => encodeInput(input))
-      .flatMap(transport.schedule(at, definition.name, _))
+  /**
+   * Schedules the method for `at`, and returns the invocation's handle once the
+   * target has durably accepted it. Never lends a scope card, and rejects
+   * streaming methods. See [[golem.runtime.rpc.Invocation]].
+   */
+  def schedule(at: Datetime, input: Input): Future[Either[GolemReflectError, Invocation[Output]]] =
+    started("schedule", input)(transport.schedule(at, definition.name, _))
+
+  private def started(operation: String, input: Input)(
+    start: SchemaValue => Future[Either[GolemReflectError, Invocation[Option[SchemaValue]]]]
+  ): Future[Either[GolemReflectError, Invocation[Output]]] =
+    rejectNonAwaitedStreams(operation).flatMap(_ => encodeInput(input)) match {
+      case Left(error)  => Future.successful(Left(error))
+      case Right(value) =>
+        start(value).map(_.map(_.mapResult { output =>
+          decodeOutput(output).fold(error => throw new IllegalArgumentException(error.message), identity)
+        }))
+    }
 
   private def encodeInput(input: Input): Either[GolemReflectError, SchemaValue] =
     try Right(definition.input.toValue(input))
@@ -281,4 +300,7 @@ final class CallerCodecBoundMethod[Input, Output] private[reflection] (
   }
 }
 
+/**
+ * The result of an awaited typed invocation together with its final identity.
+ */
 final case class TypedInvocation[+A](metadata: InvocationMetadata, value: A)

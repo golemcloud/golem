@@ -14,6 +14,7 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import {
+  Invocation as HostInvocation,
   WasmRpc,
   getAgentType as hostGetAgentType,
   getAgentTypeByAgentId as hostGetAgentTypeByAgentId,
@@ -22,6 +23,7 @@ import {
 import { SchemaRef } from '../src/schema/ref';
 import {
   field,
+  SchemaEncodeError,
   schemaGraphToWit,
   schemaValueToWit,
   t,
@@ -32,7 +34,11 @@ import { getAgentType, getAgentTypeByAgentId } from '../src/reflection';
 import { RemoteCallError, RemoteOutputError } from '../src/client';
 import { AgentId } from '../src/agentId';
 import { DynamicAgentClient } from '../src/dynamicClient';
-import { hostInvocationMetadata, sdkInvocationMetadata } from './invocationMetadataTestSupport';
+import {
+  fakeHostInvocation,
+  hostInvocationResult,
+  sdkInvocationMetadata,
+} from './invocationMetadataTestSupport';
 import { MOCK_REMOTE_AGENT_ID } from './testSetup';
 
 const ECHO_AGENT_ID = AgentId.parse('00000007-0000-8000-8000-000000000011');
@@ -79,6 +85,40 @@ function registeredType(mode: 'durable' | 'ephemeral' = 'durable'): RegisteredAg
       mode,
       snapshotting: { tag: 'disabled' },
       config: [],
+    },
+  };
+}
+
+function streamingOutputType(): RegisteredAgentType {
+  const base = registeredType().agentType;
+  const schema = schemaGraphToWit({
+    defs: new Map(),
+    root: t.tuple([t.string(), t.option(t.stream(t.string()))]),
+  });
+  const string = schema.typeNodes.findIndex((node) => node.body.tag === 'string-type');
+  const streaming = schema.typeNodes.findIndex((node) => node.body.tag === 'option-type');
+  const metadata = { aliases: [], examples: [] };
+  const parameter = (name: string) => ({
+    name,
+    source: { tag: 'user-supplied' as const },
+    schema: string,
+    metadata,
+  });
+  return {
+    agentType: {
+      ...base,
+      schema,
+      constructor: {
+        ...base.constructor,
+        inputSchema: { tag: 'parameters', val: [parameter('id')] },
+      },
+      methods: [
+        {
+          ...base.methods[0],
+          inputSchema: { tag: 'parameters', val: [parameter('message')] },
+          outputSchema: { tag: 'single', val: streaming },
+        },
+      ],
     },
   };
 }
@@ -176,13 +216,7 @@ describe('agent reflection', () => {
     const reflected = getAgentType('ReflectedEcho')!;
     const client = reflected.client.upsert({ id: 'one' });
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata(),
-      future: {
-        get: vi.fn().mockResolvedValue(schemaValueToWit(v.string('hello'))),
-        cancel: vi.fn(),
-      },
-    });
+    rpc.invokeAndAwait.mockResolvedValue(hostInvocationResult(schemaValueToWit(v.string('hello'))));
 
     await expect(client.method('echo').invokeJson({ message: 'hello' })).resolves.toEqual({
       metadata: sdkInvocationMetadata(),
@@ -219,34 +253,106 @@ describe('agent reflection', () => {
     const client = reflected.client.upsert({ id: 'one' });
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
 
-    rpc.asyncInvokeAndAwait.mockReturnValueOnce({
-      metadata: hostInvocationMetadata(),
-      future: { get: vi.fn().mockResolvedValue(undefined), cancel: vi.fn() },
-    });
+    rpc.invokeAndAwait.mockResolvedValueOnce(hostInvocationResult());
     await expect(
       client.method('echo').invokeValue(v.record([v.string('input')])),
     ).rejects.toBeInstanceOf(RemoteOutputError);
 
-    rpc.asyncInvokeAndAwait.mockReturnValueOnce({
-      metadata: hostInvocationMetadata(),
-      future: { get: vi.fn().mockResolvedValue(schemaValueToWit(v.u32(1))), cancel: vi.fn() },
-    });
+    rpc.invokeAndAwait.mockResolvedValueOnce(hostInvocationResult(schemaValueToWit(v.u32(1))));
     await expect(
       client.method('echo').invokeValue(v.record([v.string('input')])),
     ).rejects.toBeInstanceOf(RemoteOutputError);
   });
 
-  it('rejects malformed schema-native inputs before opening an RPC call', () => {
+  it('rejects malformed schema-native inputs before opening an RPC call', async () => {
     vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType());
     const client = getAgentType('ReflectedEcho')!.client.upsert({ id: 'one' });
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
     const method = client.method('echo');
-    expect(() => method.triggerValue(v.record([]))).toThrow(/Invalid input/);
-    expect(() => method.scheduleValue({ seconds: 1n, nanoseconds: 0 }, v.record([]))).toThrow(
-      /Invalid input/,
-    );
-    expect(rpc.invoke).not.toHaveBeenCalled();
-    expect(rpc.scheduleCancelableInvocation).not.toHaveBeenCalled();
+    await expect(method.triggerValue(v.record([]))).rejects.toThrow(/Invalid input/);
+    await expect(
+      method.scheduleValue({ seconds: 1n, nanoseconds: 0 }, v.record([])),
+    ).rejects.toThrow(/Invalid input/);
+    expect(rpc.trigger).not.toHaveBeenCalled();
+    expect(rpc.schedule).not.toHaveBeenCalled();
+  });
+
+  it('rejects trigger and schedule of a reflected method with a stream output before the host call', async () => {
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(streamingOutputType());
+    const client = getAgentType('ReflectedEcho')!.client.upsert({ id: 'one' });
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
+    const method = client.method('echo');
+    const at = { seconds: 1n, nanoseconds: 0 };
+    for (const pending of [
+      method.trigger({ message: 'hi' }),
+      method.schedule(at, { message: 'hi' }),
+      method.triggerValue(v.record([v.string('hi')])),
+      method.scheduleValue(at, v.record([v.string('hi')])),
+    ]) {
+      await expect(pending).rejects.toBeInstanceOf(SchemaEncodeError);
+      await expect(pending).rejects.toThrow(
+        'Remote agent ReflectedEcho.echo: live streams require invoke-and-await',
+      );
+    }
+    expect(rpc.trigger).not.toHaveBeenCalled();
+    expect(rpc.schedule).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds a reflected handle from its ID with the deployed output schema', async () => {
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType());
+    const client = getAgentType('ReflectedEcho')!.client.upsert({ id: 'one' });
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
+    const raw = fakeHostInvocation();
+    raw.await_.mockResolvedValue(schemaValueToWit(v.string('hello')));
+    vi.mocked(HostInvocation.get).mockReturnValue(raw as never);
+    vi.mocked(HostInvocation.get).mockClear();
+    const id = sdkInvocationMetadata().invocationId;
+    const method = client.method('echo');
+
+    const invocation = method.invocation(id);
+    const valueInvocation = method.invocationValue(id);
+    expect(HostInvocation.get).toHaveBeenCalledTimes(2);
+    expect(HostInvocation.get).toHaveBeenLastCalledWith({
+      owner: { tag: 'agent', val: AgentId.toWit(id.agentId) },
+      id: id.uuid,
+    });
+    expect(invocation.id).toBe(id);
+    expect(valueInvocation.id).toBe(id);
+    expect(raw.id).not.toHaveBeenCalled();
+    expect(raw.status).not.toHaveBeenCalled();
+    expect(raw.await_).not.toHaveBeenCalled();
+    expect(rpc.invokeAndAwait).not.toHaveBeenCalled();
+    expect(rpc.trigger).not.toHaveBeenCalled();
+    expect(rpc.schedule).not.toHaveBeenCalled();
+
+    await expect(invocation.awaitResult()).resolves.toBe('hello');
+    await expect(valueInvocation.awaitResult()).resolves.toEqual(v.string('hello'));
+    raw.await_.mockResolvedValue(schemaValueToWit(v.u32(1)));
+    await expect(invocation.awaitResult()).rejects.toBeInstanceOf(RemoteOutputError);
+    await expect(valueInvocation.awaitResult()).rejects.toBeInstanceOf(RemoteOutputError);
+    raw.await_.mockResolvedValue(undefined);
+    await expect(invocation.awaitResult()).rejects.toBeInstanceOf(RemoteOutputError);
+  });
+
+  it('checks the result of a reflected handle against the deployed output schema', async () => {
+    vi.mocked(hostGetAgentType).mockReturnValueOnce(registeredType());
+    const client = getAgentType('ReflectedEcho')!.client.upsert({ id: 'one' });
+    const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
+    const raw = fakeHostInvocation();
+    raw.await_.mockResolvedValue(schemaValueToWit(v.string('hello')));
+    rpc.trigger.mockResolvedValue(raw);
+    rpc.schedule.mockResolvedValue(raw);
+
+    const triggered = await client.method('echo').trigger({ message: 'hi' });
+    expect(rpc.trigger.mock.calls.at(-1)).toHaveLength(2);
+    expect(triggered.id).toEqual(sdkInvocationMetadata().invocationId);
+    await expect(triggered.awaitResult()).resolves.toBe('hello');
+    const scheduled = await client
+      .method('echo')
+      .scheduleValue({ seconds: 1n, nanoseconds: 0 }, v.record([v.string('hi')]));
+    await expect(scheduled.awaitResult()).resolves.toEqual(v.string('hello'));
+    raw.await_.mockResolvedValue(schemaValueToWit(v.u32(1)));
+    await expect(scheduled.awaitResult()).rejects.toBeInstanceOf(RemoteOutputError);
   });
 
   it('rejects an unexpected value for a reflected unit output', async () => {
@@ -255,13 +361,9 @@ describe('agent reflection', () => {
     vi.mocked(hostGetAgentType).mockReturnValueOnce(registered);
     const client = getAgentType('ReflectedEcho')!.client.upsert({ id: 'one' });
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
-    rpc.asyncInvokeAndAwait.mockReturnValueOnce({
-      metadata: hostInvocationMetadata(),
-      future: {
-        get: vi.fn().mockResolvedValue(schemaValueToWit(v.string('unexpected'))),
-        cancel: vi.fn(),
-      },
-    });
+    rpc.invokeAndAwait.mockResolvedValueOnce(
+      hostInvocationResult(schemaValueToWit(v.string('unexpected'))),
+    );
     await expect(
       client.method('echo').invokeValue(v.record([v.string('input')])),
     ).rejects.toBeInstanceOf(RemoteOutputError);
@@ -289,13 +391,7 @@ describe('agent reflection', () => {
       AgentId.toWit(ECHO_AGENT_ID),
     ]);
     const rpc = vi.mocked(WasmRpc.getById).mock.results.at(-1)!.value;
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata(),
-      future: {
-        get: vi.fn().mockResolvedValue(schemaValueToWit(v.u32(7))),
-        cancel: vi.fn(),
-      },
-    });
+    rpc.invokeAndAwait.mockResolvedValue(hostInvocationResult(schemaValueToWit(v.u32(7))));
 
     const result = await client.method(method.name).invokeValue(discoveredInput);
     expect(result).toMatchObject({
@@ -304,7 +400,7 @@ describe('agent reflection', () => {
     expect(method.output!.validateValue(result.value!).success).toBe(false);
 
     await expect(client.method(method.name).invokeValue(v.record([]))).resolves.toBeDefined();
-    expect(rpc.asyncInvokeAndAwait).toHaveBeenCalledTimes(2);
+    expect(rpc.invokeAndAwait).toHaveBeenCalledTimes(2);
     expect(hostGetAgentType).toHaveBeenCalledTimes(before);
   });
 
@@ -508,13 +604,7 @@ describe('agent reflection', () => {
     const reflected = getAgentType('ReflectedEcho')!;
     const client = reflected.client.upsert({ id: 'one' });
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
-    rpc.asyncInvokeAndAwait.mockReturnValue({
-      metadata: hostInvocationMetadata(),
-      future: {
-        get: vi.fn().mockResolvedValue(schemaValueToWit(v.string('hello'))),
-        cancel: vi.fn(),
-      },
-    });
+    rpc.invokeAndAwait.mockResolvedValue(hostInvocationResult(schemaValueToWit(v.string('hello'))));
 
     expect(() => client.agentId()).toThrow('agentId is not available for ephemeral agent types');
     expect(rpc.agentId).not.toHaveBeenCalled();

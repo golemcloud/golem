@@ -138,8 +138,8 @@ async fn kept_rpc_handle_never_reaches_a_deleted_or_recreated_remote_child(
             .into_typed::<Result<Vec<u64>, String>>()?;
         assert_eq!(stream, Ok(vec![2]));
         for (method, expected) in [
-            ("kept_agent_rpc_async_invoke_and_await_result", 3),
-            ("kept_agent_rpc_invoke_result", 4),
+            ("kept_agent_rpc_invoke_and_await_result", 3),
+            ("kept_agent_rpc_trigger_result", 4),
         ] {
             assert_remote(deps, &caller_id, &child_id).await?;
             let result = user
@@ -206,8 +206,7 @@ async fn kept_rpc_handle_never_reaches_a_deleted_or_recreated_remote_child(
 
         for method in [
             "kept_agent_rpc_invoke_and_await_result",
-            "kept_agent_rpc_async_invoke_and_await_result",
-            "kept_agent_rpc_invoke_result",
+            "kept_agent_rpc_trigger_result",
             "kept_agent_rpc_invoke_and_await_u64_stream_result",
         ] {
             assert_remote(deps, &caller_id, &child_id).await?;

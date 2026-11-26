@@ -112,6 +112,7 @@ was clean.
 ```
 .amp/in/snippets/scala/
   build.sbt                 Scala.js + GolemPlugin project; -experimental -deprecation -Werror;
+                            -Wconf:src=.*/src_managed/.*:s;
                             ES modules; golemBasePackage = "check"
   project/build.properties  sbt.version=1.12.8
   project/plugins.sbt       golem-scala-sbt 0.0.0-SNAPSHOT, sbt-scalajs 1.22.0
@@ -170,7 +171,11 @@ was clean.
    `MailerAgentClient`, tool clients `OutlineClient`, `RefundToolClient`,
    auto-registration of every agent/router/tool implementation), compilation
    with the Golem macros under `-Werror`, and Scala.js linking of the ES
-   module. It prints the exit code and, per display file, PASS or the number
+   module. The Golem-generated RPC clients under `src_managed` warn
+   "Implicit parameters should be provided with a `using` clause" (from
+   `RpcCodegen.scala`'s `.map(bindRemote)($JsQueue)`), so the harness
+   silences warnings from `src_managed` only; `-Werror` still applies to
+   the snippets. It prints the exit code and, per display file, PASS or the number
    of compiler errors/warnings located in its spliced file. `ALL_OK` only if
    every step passed. Takes about 20–30 s warm.
 
@@ -260,8 +265,8 @@ Scala 3 `enum ... derives Schema` and `Map[String, Label]` results,
 `golem.schema.AgentStream.fromPull` (synchronous `AgentStream[String]`
 returns), `HostApi.createWebhook()` with `.url` and
 `.await().map(_.json[A]())`, generated clients `XClient.upsert(...)`, awaited
-calls, `.trigger(...)`, `.scheduleCancelableAt(when)`
-(→ `CancellationToken.cancel()`), `golem.Datetime.afterSeconds`,
+calls, `.trigger(...)`, `.scheduleAt(when)` (→ the
+`golem.runtime.rpc.Invocation` handle's `cancel()`), `golem.Datetime.afterSeconds`,
 `golem.reflection.Reflection.getAllAgentTypes()` (`name`, `methods.map(_.name)`)
 and `getAllToolTypes()` (`name`), `@toolDefinition(name, version,
 requiresFilesystem)` (`sdks/scala/model/src/main/scala/golem/runtime/annotations/ToolAnnotations.scala:25-29`;
@@ -360,11 +365,14 @@ New in the 7 + 7 + 7 round:
 - agents/waits: the wait chain is a `for` over `Future`s; the
   "not succeeded" early return becomes `if ... then Future.unit else`.
   `sleep` is the `node:timers/promises` facade (prelude), not an import.
-  Both lines of the reminder statement are marked, as in TS.
+  Both lines of the reminder statement are marked, as in TS. `scheduleAt`
+  returns a `golem.runtime.rpc.Invocation` handle; the chain awaits its
+  `cancel()` future.
 - agents/team: `Reflection.getAll*Types()` return `Either`, unwrapped with
-  `orThrow`; the awaited call is `.map: facts =>` on the client future
-  (marked), and `trigger` returns a discarded `Future`, as TS discards its
-  result. The comment keeps "a Rust ResearchAgent".
+  `orThrow`; the method is a `for` over the client futures. The awaited call
+  binds `facts`, and `_ <-` awaits the `trigger` future (both lines marked),
+  so the plan waits for durable acceptance of the post, as TS awaits
+  `trigger`. The comment keeps "a Rust ResearchAgent".
 - agents/readonly: the three comments precede `@readOnly` on `level()`
   (TS: inside `method({...})` before `readOnly: true`). Scala has no `init`;
   `units` is a `private var`.
@@ -507,7 +515,7 @@ generated auto-registration or RPC client for that snippet's package), which
 | agents/models | `DraftAgentImpl(topic: String)` → `(topic: Int)` | Golem macro: constructor parameter type differs from the Id class (generated auto-registration) |
 | agents/overview | `class Id(val inbox: String)` → `(val inbox: Int)` | Golem macro: Id/constructor parameter type mismatch (generated auto-registration) |
 | agents/team | `a.methods.map(_.name)` → `_.title` | E008 not a member of `golem.reflection.AgentMethod` (spliced file) |
-| agents/waits | `.remind.scheduleCancelableAt(...)` → `.remind.scheduleAt(...)` | `scheduleAt` returns no cancellation token, so `reminder.cancel()` fails (spliced file) |
+| agents/waits | `.remind.scheduleAt(inDays(1))` → `.remind.trigger(inDays(1))` | `too many arguments for method trigger in class RemindRemoteMethod: (): scala.concurrent.Future[golem.runtime.rpc.Invocation[Unit]]` (spliced file) |
 | agents/readonly | `@readOnly` → `@readOnly(true)` | E007: `cache` is a `String` policy (spliced file) |
 | agents/stream | `AgentStream.fromPull:` → `AgentStream.of:` | E008 not a member of `golem.schema.AgentStream` (spliced file) |
 | artifacts/files | `fromInline(png, "image/png")` → `"image/jpeg"` | E007: the MIME allow-list `"image/png"` is part of the type (spliced file) |

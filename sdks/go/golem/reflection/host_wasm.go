@@ -74,42 +74,31 @@ func (w witRPC) agentID() (golem.AgentID, error) {
 	return golem.AgentIDFromUUID(engine.UUIDFromWit(id.Uuid)), nil
 }
 
-// start invokes through the asynchronous import, for the same reason
+// call invokes through the asynchronous import, for the same reason
 // [golem.MethodDef.Call] does: it is the form a suspended caller is resumed into.
-func (w witRPC) start(method string, input types.SchemaValueTree, scopeCard witTypes.Option[*types.PermissionCard]) (pendingRPC, error) {
-	inv := w.conn.RPC.AsyncInvokeAndAwait(method, input, scopeCard)
-	return pendingRPC{
-		metadata: asyncInvocationMetadata(inv.Metadata),
-		wait: func() (witTypes.Option[types.SchemaValueTree], error) {
-			res := inv.Future.Get()
-			inv.Future.Drop()
-			if res.Tag() == witTypes.ResultErr {
-				return witTypes.None[types.SchemaValueTree](), link.RemoteCallError(w.target, method, res.Err())
-			}
-			return res.Ok(), nil
-		},
-		cancel: func() {
-			inv.Future.Cancel()
-			inv.Future.Drop()
-		},
-	}, nil
+func (w witRPC) call(method string, input types.SchemaValueTree, scopeCard witTypes.Option[*types.PermissionCard]) (witTypes.Option[types.SchemaValueTree], golem.InvocationMetadata, error) {
+	res := w.conn.RPC.InvokeAndAwait(method, input, scopeCard)
+	if res.IsErr() {
+		return witTypes.None[types.SchemaValueTree](), golem.InvocationMetadata{}, link.RemoteCallError(w.target, method, res.Err())
+	}
+	completed := res.Ok()
+	return completed.Result, link.InvocationMetadata(completed.Metadata).(golem.InvocationMetadata), nil
 }
 
-func (w witRPC) trigger(method string, input types.SchemaValueTree) (golem.InvocationMetadata, error) {
-	res := w.conn.RPC.Invoke(method, input, noScopeCard())
+func (w witRPC) trigger(method string, input types.SchemaValueTree) (link.InvocationOps, error) {
+	res := w.conn.RPC.Trigger(method, input)
 	if res.IsErr() {
-		return golem.InvocationMetadata{}, link.RemoteCallError(w.target, method, res.Err())
+		return link.InvocationOps{}, link.RemoteCallError(w.target, method, res.Err())
 	}
-	return invocationMetadataFrom(res.Ok()), nil
+	return link.HostInvocationOps(res.Ok()), nil
 }
 
-func (w witRPC) schedule(at time.Time, method string, input types.SchemaValueTree) (*golem.ScheduledInvocation, error) {
-	res := w.conn.RPC.ScheduleCancelableInvocation(instantFrom(at), method, input, noScopeCard())
+func (w witRPC) schedule(at time.Time, method string, input types.SchemaValueTree) (link.InvocationOps, error) {
+	res := w.conn.RPC.Schedule(instantFrom(at), method, input)
 	if res.IsErr() {
-		return nil, link.RemoteCallError(w.target, method, res.Err())
+		return link.InvocationOps{}, link.RemoteCallError(w.target, method, res.Err())
 	}
-	receipt := res.Ok()
-	return link.ScheduledInvocation(receipt.Metadata, receipt.CancellationToken).(*golem.ScheduledInvocation), nil
+	return link.HostInvocationOps(res.Ok()), nil
 }
 
 // newAgentClient is a reflected client of a connection.
@@ -184,27 +173,6 @@ func hostGetDynamicByID(id golem.AgentID) (*DynamicAgentClient, error) {
 		return nil, link.RemoteCallError(id.String(), "<get-by-id>", failure.RPCError)
 	}
 	return &DynamicAgentClient{agentID: id, typeName: conn.TypeName, rpc: witRPC{conn: conn, target: id.String()}}, nil
-}
-
-// noScopeCard is the scope card of the invocations that do not wait for their
-// result: the host accepts a scope card only on an awaited call.
-func noScopeCard() witTypes.Option[*types.PermissionCard] {
-	return witTypes.None[*types.PermissionCard]()
-}
-
-func invocationMetadataFrom(m host.InvocationMetadata) golem.InvocationMetadata {
-	return link.InvocationMetadata(m).(golem.InvocationMetadata)
-}
-
-// asyncInvocationMetadata is the identity of an asynchronous invocation, or nil
-// when the host rejected the call before it started; its future reports the
-// rejection.
-func asyncInvocationMetadata(m witTypes.Option[host.InvocationMetadata]) *golem.InvocationMetadata {
-	if m.IsNone() {
-		return nil
-	}
-	metadata := invocationMetadataFrom(m.Some())
-	return &metadata
 }
 
 func instantFrom(t time.Time) clock.Instant {

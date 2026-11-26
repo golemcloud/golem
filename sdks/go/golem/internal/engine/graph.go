@@ -159,7 +159,12 @@ func (g *GraphBuilder) Build() types.SchemaGraph {
 func (d *Engine) CarriesStream(t reflect.Type) bool {
 	g := GraphBuilder{E: d}
 	root := g.Node(d.Compile(t))
-	graph := g.Build()
+	return GraphCarriesStream(g.Build(), root)
+}
+
+// GraphCarriesStream reports whether a stream is reachable from the node at
+// root in graph, through named definitions and recursive types alike.
+func GraphCarriesStream(graph types.SchemaGraph, root int32) bool {
 	seen := map[int32]bool{}
 	var walk func(idx int32) bool
 	walk = func(idx int32) bool {

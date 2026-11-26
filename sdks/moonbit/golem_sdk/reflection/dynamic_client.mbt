@@ -76,27 +76,33 @@ pub async fn DynamicAgentClient::invoke_value(
   method_name : String,
   input : @model.SchemaValue,
   scope_card? : @permissions.ScopeCard,
-) -> Invocation[@model.SchemaValue?] {
+) -> InvocationOutput[@model.SchemaValue?] {
   self.transport.invoke_value(method_name, input, scope_card)
 }
 
 ///|
-pub fn DynamicAgentClient::trigger_value(
+/// Starts a method without waiting for its result, and returns the handle of
+/// the invocation once the target has durably accepted it. A trigger never
+/// attaches a scope card. The handle's methods raise `@agentHost.RpcError`.
+pub async fn DynamicAgentClient::trigger_value(
   self : DynamicAgentClient,
   method_name : String,
   input : @model.SchemaValue,
-) -> InvocationMetadata raise ReflectError {
-  self.transport.trigger_value(method_name, input)
+) -> @rpc.Invocation[@model.SchemaValue?] {
+  self.transport.trigger_value(method_name, input, value => value)
 }
 
 ///|
-pub fn DynamicAgentClient::schedule_value(
+/// Schedules a method for `scheduled_at`, and returns the handle of the
+/// invocation once the target has durably accepted it; the handle can cancel
+/// it until it starts. A schedule never attaches a scope card.
+pub async fn DynamicAgentClient::schedule_value(
   self : DynamicAgentClient,
   scheduled_at : @systemClock.Instant,
   method_name : String,
   input : @model.SchemaValue,
-) -> ScheduledInvocation raise ReflectError {
-  self.transport.schedule_value(scheduled_at, method_name, input)
+) -> @rpc.Invocation[@model.SchemaValue?] {
+  self.transport.schedule_value(scheduled_at, method_name, input, value => value)
 }
 
 ///|

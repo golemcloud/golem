@@ -6,7 +6,7 @@ A Golem agent can act as its own scheduler by calling `schedule_` on its own cli
 
 ## Basic Pattern
 
-The agent schedules its own method to run again after a delay. Import `"golemcloud/golem_sdk/interface/wasi/clocks/system-clock" @systemClock` in `moon.pkg`. Scoped helpers and all their callers are async; the actual schedule enqueue methods are synchronous. The work helpers in these fragments must also be async if they perform async I/O:
+The agent schedules its own method to run again after a delay. Import `"golemcloud/golem_sdk/interface/wasi/clocks/system-clock" @systemClock` in `moon.pkg`. Scoped helpers, `schedule_` methods and all their callers are async. `schedule_<method>` returns an `@rpc.Invocation` handle once the target accepted the invocation; drop it when you do not need it (dropping does not cancel the invocation). The work helpers in these fragments must also be async if they perform async I/O:
 
 ```moonbit
 #derive.agent
@@ -35,7 +35,7 @@ pub async fn PollerAgent::poll(self : Self) -> Unit {
       seconds: now.seconds + 60,
       nanoseconds: 0,
     }
-    client.schedule_poll(scheduled_at)
+    client.schedule_poll(scheduled_at).drop()
   })
 }
 ```
@@ -78,27 +78,27 @@ pub async fn PollerAgent::poll(self : Self) -> Unit {
     client.schedule_poll(@systemClock.Instant::{
       seconds: now.seconds + delay.to_int64(),
       nanoseconds: 0,
-    })
+    }).drop()
   })
 }
 ```
 
 ## Cancellation
 
-### Cancellation with CancellationToken
+### Cancellation with the Invocation Handle
 
-Durable generated clients have `schedule_cancelable_{method}` variants for methods with recursively stream-free inputs and outputs. They return a `CancellationToken`; ephemeral clients return a receipt containing the token and metadata. Call `.cancel()` on the token to prevent the scheduled invocation from firing:
+`schedule_<method>` returns an `@rpc.Invocation` handle whose `cancel()` withdraws the scheduled invocation before it starts. The handle is a host resource and is not snapshot-serializable, so store the text of its ID in state and rebuild the handle with the generated static `get_<method>_invocation` when cancelling:
 
 ```moonbit
 #derive.agent
 struct PollerAgent {
   name : String
   mut cancelled : Bool
-  mut pending_token : @agentHost.CancellationToken?
+  mut pending_tick : String?
 }
 
 fn PollerAgent::new(name : String) -> PollerAgent {
-  { name, cancelled: false, pending_token: None }
+  { name, cancelled: false, pending_tick: None }
 }
 
 pub async fn PollerAgent::poll(self : Self) -> Unit {
@@ -108,34 +108,32 @@ pub async fn PollerAgent::poll(self : Self) -> Unit {
   do_work()
   PollerAgentClient::scoped_upsert(self.name, async fn(client) {
     let now = @systemClock.now()
-    let token = client.schedule_cancelable_poll(@systemClock.Instant::{
+    let next = client.schedule_poll(@systemClock.Instant::{
       seconds: now.seconds + 60,
       nanoseconds: 0,
     })
-    match self.pending_token {
-      Some(previous) => previous.drop()
-      None => ()
-    }
-    self.pending_token = Some(token)
+    self.pending_tick = Some(next.id().to_string())
+    next.drop()
   })
 }
 
-pub fn PollerAgent::cancel(self : Self) -> Unit {
+pub async fn PollerAgent::cancel(self : Self) -> Unit {
   self.cancelled = true
-  match self.pending_token {
-    Some(token) => {
-      token.cancel()
-      token.drop()
-      self.pending_token = None
+  match self.pending_tick {
+    Some(text) => {
+      let tick = PollerAgentClient::get_poll_invocation(
+        @rpc.InvocationId::parse(text),
+      )
+      defer tick.drop()
+      let _ = tick.cancel()
+      self.pending_tick = None
     }
     None => ()
   }
 }
 ```
 
-`cancel()` borrows the token; always drop it afterward. Drop a previous handle
-before replacing it even if its invocation has already fired. This resource-bearing
-state is not snapshot-serializable; do not include the token in a snapshot.
+`cancel()` returns `true` when it withdrew the tick and `false` when the tick already finished or was already cancelled. It raises `RpcError::CannotCancelRunning` for a running invocation; the agent runs one invocation at a time, so its own pending tick is not running while `cancel` runs. The agent that scheduled the tick may cancel it; other callers need management permission. Keep the `cancelled` flag as well: a tick whose ID was not stored, for example one scheduled from the CLI, still exits without doing work.
 
 ### Cancellation via State Flag
 
@@ -216,7 +214,7 @@ async fn PollerAgent::schedule_next(self : Self, delay_secs : Int64) -> Unit {
     client.schedule_poll(@systemClock.Instant::{
       seconds: now.seconds + delay_secs,
       nanoseconds: 0,
-    })
+    }).drop()
   })
 }
 ```
@@ -225,7 +223,7 @@ async fn PollerAgent::schedule_next(self : Self, delay_secs : Int64) -> Unit {
 
 - The agent is durable — if it crashes, the pending scheduled invocation still fires and the agent recovers
 - Invocations are sequential — no concurrent executions of `poll` on the same agent
-- Each `schedule_` call is a synchronous fire-and-forget enqueue; the current invocation continues and completes when its method returns
+- Each `schedule_` call waits only until the target accepted the invocation; the current invocation continues and completes when its method returns
 - Use a state flag to stop the loop gracefully
 - Keep the scheduled method idempotent — it may be retried on recovery
 
@@ -235,8 +233,8 @@ Each scheduled tick (heartbeat, poll, cleanup) appends entries to the agent's op
 
 **You cannot opt out of oplog writes for a durable agent.** The fix is **snapshot-based recovery**: enable periodic snapshotting so recovery starts from the latest snapshot instead of replaying every prior tick. See [`golem-custom-snapshot-moonbit`](/next/how-to-guides/moonbit/golem-custom-snapshot-moonbit) for the `#derive.agent(snapshotting="every_n(N)")` attribute and the `Snapshottable` trait.
 
-For snapshots, use the state-flag recipe with serializable state, not the
-`pending_token` field. The cleanup and heartbeat snippets are alternative `poll`
+For snapshots, keep only serializable state: store a pending tick as the text of
+its invocation ID, never as an `@rpc.Invocation` handle. The cleanup and heartbeat snippets are alternative `poll`
 bodies and therefore use the same `schedule_next` helper. For restart support,
 store a serializable generation counter and pass it to every scheduled tick;
 reject ticks from an older generation before doing work or scheduling again.

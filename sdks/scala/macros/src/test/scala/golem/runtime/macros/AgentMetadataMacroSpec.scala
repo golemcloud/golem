@@ -140,6 +140,7 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
     class Id(owner: ConcreteOnly, streams: StreamEnvelope)
     def roundTrip(value: ConcreteOnly): Future[ConcreteOnly]
     def consume(value: StreamEnvelope): Unit
+    def produce(): Future[StreamEnvelope]
   }
 
   @agentDefinition()
@@ -571,7 +572,9 @@ object AgentMetadataMacroSpec extends ZIOSpecDefault {
           client.metadata.name == "ConcreteOnlyClientAgent",
           client.ctorContainsStream,
           client.methods.find(_.name == "roundTrip").exists(!_.inputContainsStream),
-          client.methods.find(_.name == "consume").exists(_.inputContainsStream)
+          client.methods.find(_.name == "roundTrip").exists(!_.outputContainsStream),
+          client.methods.find(_.name == "consume").exists(_.inputContainsStream),
+          client.methods.find(_.name == "produce").exists(m => !m.inputContainsStream && m.outputContainsStream)
         )
       },
       test("AgentImplementationMacro preserves method invocation kinds") {

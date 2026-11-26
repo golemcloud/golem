@@ -159,7 +159,7 @@ func init() {
 		note("scope-parent-is-source", slices.Equal(scope.Parents(), []golem.CardID{source.ID()}))
 		note("receiver-with-scope", cards.Observe.WithScopeCard(scope).MustCall(recv, golem.Unit{}))
 		note("receiver-wallet-with-scope", strings.Join(cards.WalletKinds.WithScopeCard(scope).MustCall(recv, golem.Unit{}), ","))
-		note("receiver-with-default-scope", cards.Observe.CallAsync(recv.WithScopeCard(scope), golem.Unit{}).MustGet())
+		note("receiver-with-default-scope", cards.Observe.MustCall(recv.WithScopeCard(scope), golem.Unit{}))
 		note("receiver-call-scope-over-default", cards.Observe.WithScopeCard(empty).MustCall(recv.WithScopeCard(scope), golem.Unit{}))
 		note("receiver-call-scope-over-empty-default", cards.Observe.WithScopeCard(scope).MustCall(recv.WithScopeCard(empty), golem.Unit{}))
 

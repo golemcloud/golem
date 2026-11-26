@@ -33,7 +33,8 @@ import golem.concurrent.Implicits.global
 /**
  * The `golem:agent/host@2.0.0` RPC-boundary codec: encodes the parameter-list
  * value tree and decodes the optional result tree that the v2 `wasm-rpc` host
- * exchanges (`invoke`/`invoke-and-await` take a `schema-value-tree` and return
+ * exchanges (`invoke-and-await`, `trigger` and `schedule` take a
+ * `schema-value-tree`, and an awaited result is an
  * `option<schema-value-tree>`), plus the `typed-schema-value` carrier used for
  * agent-config values and custom errors.
  *

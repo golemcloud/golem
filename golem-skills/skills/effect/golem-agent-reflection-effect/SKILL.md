@@ -113,7 +113,7 @@ Capabilities, futures, and streams cannot be packed or unpacked as reflected JSO
 
 ## Cancellation, streams, and cleanup
 
-Agent calls are Effects: fiber interruption cancels result observation, while remote side effects may already have happened. A scheduled call returns a scoped cancel Effect. Keep the scope open until the cancellation token is no longer needed:
+Agent calls are Effects: interrupting an awaited call withdraws the invocation on a best-effort basis while it has not started, and only stops waiting after it started, so remote side effects may already have happened. `trigger` and `schedule` (and `triggerValue` / `scheduleValue`) succeed with an `Invocation` handle once the target accepted the invocation. The current scope owns the handle; closing the scope only detaches. Use its `status`, `awaitResult` and `cancel` Effects while the scope is open:
 
 ```ts
 import { Effect } from "effect"
@@ -124,8 +124,8 @@ const scheduled = Effect.scoped(Effect.gen(function* () {
   if (!type || type.mode !== "durable") return yield* Effect.fail("CounterAgent unavailable")
   const client = yield* type.client.upsert({ name: "main" })
   const add = yield* client.method("add")
-  const pending = yield* add.schedule({ seconds: 1n, nanoseconds: 0 }, { by: 2 })
-  yield* pending.cancel
+  const scheduled = yield* add.schedule({ seconds: 1n, nanoseconds: 0 }, { by: 2 })
+  const withdrawn = yield* scheduled.cancel // false once it finished; fails while it runs
 }))
 ```
 

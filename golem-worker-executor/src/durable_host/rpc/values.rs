@@ -33,7 +33,6 @@ use golem_schema::schema::NamedFieldType;
 use golem_schema::schema::SchemaType;
 use golem_schema::schema::wit::EncodeError;
 use golem_schema::schema::wit::PermissionCardHandleDropper;
-use golem_schema::schema::wit::PermissionCardHandleRep;
 use golem_schema::schema::wit::QuotaTokenHandleDropper;
 use golem_schema::schema::wit::SecretHandleDropper;
 use golem_schema::schema::wit::decode_typed_rejecting_quota_with;
@@ -59,23 +58,6 @@ pub(super) fn discard_owned_rpc_config<D>(
 {
     for entry in config {
         let _ = decode_typed_rejecting_quota_with(entry.value, dropper);
-    }
-}
-
-pub(super) fn reject_non_await_scope_card<D>(
-    scope_card: &Option<Resource<PermissionCardHandleRep>>,
-    input: core_wire::SchemaValueTree,
-    operation: &'static str,
-    dropper: &mut D,
-) -> Result<core_wire::SchemaValueTree, String>
-where
-    D: QuotaTokenHandleDropper + SecretHandleDropper + PermissionCardHandleDropper,
-{
-    if scope_card.is_some() {
-        discard_owned_rpc_input(input, dropper);
-        Err(format!("{operation} does not accept scope cards"))
-    } else {
-        Ok(input)
     }
 }
 
@@ -258,9 +240,8 @@ pub(super) fn remote_method_uses_streams(
 }
 
 /// Look up an [`AgentMethodSchema`] by name from the cached remote agent type.
-/// Used on the schedule path where the result is surfaced as a
-/// `wasmtime::Error` trap, since `schedule_cancelable_invocation` has no
-/// way to return `Err(RpcError)` to the guest.
+/// Used on the schedule path, where a lookup failure is a guest bug that
+/// traps before the durable record of the schedule opens.
 pub(super) fn find_agent_method<'a>(
     agent_type: &'a AgentTypeSchema,
     method_name: &str,
@@ -302,9 +283,8 @@ pub(super) fn resolve_method_and_lift_input<Ctx: WorkerCtx>(
     // Lift (and thereby consume) the guest input *before* the method-existence
     // check. The owned `quota-token` handles the input may carry were already
     // transferred into the host resource table at the WIT boundary, and the
-    // unknown-method branch returns a non-trapping `RpcError` (or, for
-    // `async-invoke-and-await`, a baked future) that leaves the instance — and
-    // its resource table — alive. Decoding first guarantees those handles are
+    // unknown-method branch returns a non-trapping `RpcError` that leaves the
+    // instance — and its resource table — alive. Decoding first guarantees those handles are
     // consumed/dropped even when the method is unknown.
     let input_value =
         decode_value_with(input, resolver).map_err(|err| InternalRpcError::ProtocolError {
@@ -332,7 +312,7 @@ pub(super) fn resolve_method_and_lift_input<Ctx: WorkerCtx>(
 
 /// Project an RPC output [`SchemaValue`] into the WIT
 /// `option<schema-value-tree>` result shape used by `invoke-and-await` and
-/// `future-invoke-result.get`.
+/// `invocation.await`.
 ///
 /// Per the `golem:agent@2.0.0` contract a declared `unit` output (the
 /// canonical empty tuple) maps to `none`, while a `single` output maps to

@@ -380,6 +380,9 @@ pub(super) fn error_response(
             WorkerExecutorError::AgentNotFound { .. }
             | WorkerExecutorError::ComponentNotFound { .. },
         )) => StatusCode::NOT_FOUND,
+        RequestHandlerError::AgentInvocationFailed(WorkerServiceError::GolemError(
+            WorkerExecutorError::CannotCancelRunningInvocation,
+        )) => StatusCode::CONFLICT,
         RequestHandlerError::AgentInvocationFailed(WorkerServiceError::InternalCallError(
             CallWorkerExecutorError::FailedToGetRoutingTable(_)
             | CallWorkerExecutorError::FailedToConnectToPod(_),
@@ -1054,6 +1057,11 @@ mod tests {
             assert_eq!(response.status, expected, "{details}");
             assert!(!response.headers.contains_key(http::header::RETRY_AFTER));
         }
+        let running = error_response(RequestHandlerError::AgentInvocationFailed(
+            WorkerServiceError::GolemError(WorkerExecutorError::CannotCancelRunningInvocation),
+        ))
+        .unwrap();
+        assert_eq!(running.status, StatusCode::CONFLICT);
     }
 
     #[test]

@@ -19,7 +19,7 @@ import {
   type Datetime,
   type RegisteredAgentType,
 } from 'golem:agent/host@2.0.0';
-import type { CancelableScheduledInvocationReceipt, InvocationMetadata } from './invocationId';
+import type { InvocationId, InvocationMetadata } from './invocationId';
 export {
   DynamicToolClient,
   ToolCommand,
@@ -38,16 +38,21 @@ import type {
 } from 'golem:agent/common@2.0.0';
 import type { SchemaGraph as WitSchemaGraph } from 'golem:core/types@2.0.0';
 import {
+  invocationValueById,
+  mapInvocation,
   RemoteOutputError,
+  streamingMethodNotAwaitedError,
   upsertRemoteAgent,
   createRemoteAgent,
   getRemoteAgentById,
   type AgentConfigEntry,
+  type Invocation,
   type RemoteAgentHandle,
 } from './bridge/agent';
 import {
   field,
   freezeSchemaGraph,
+  schemaContainsStream,
   schemaShapesMatch,
   schemaGraphRootsFromWit,
   t,
@@ -356,56 +361,123 @@ export class ReflectedAgentMethod {
     signal?: AbortSignal,
     scopeCard?: ScopeCard | null,
   ): Promise<ReflectedInvocation<SchemaValue>> {
-    if (!this.definition.input.validateValue(input).success) {
-      throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
-    }
+    this.checkInput(input);
     const result = await this.remote.invokeAndAwaitWithMetadata(
       this.definition.name,
       input,
       signal,
       scopeCard === null ? undefined : (scopeCard ?? this.defaultScopeCard),
     );
-    if (this.definition.output !== undefined && result.value === undefined) {
+    this.checkOutput(result.value);
+    return result;
+  }
+
+  /**
+   * Triggers the method without awaiting its result, and resolves to the invocation's handle once
+   * the target has durably accepted it. Never sends a scope card, and rejects when the method's
+   * input or output contains streams.
+   */
+  async trigger(input: JsonValue): Promise<Invocation<JsonValue | undefined>> {
+    return this.jsonInvocation(await this.triggerValue(this.definition.input.packJson(input)));
+  }
+
+  async triggerValue(input: SchemaValue): Promise<Invocation<SchemaValue | undefined>> {
+    this.rejectStreaming();
+    this.checkInput(input);
+    return this.checkedInvocation(await this.remote.trigger(this.definition.name, input));
+  }
+
+  /**
+   * Schedules the method for `at`, and resolves to the invocation's handle once the target has
+   * durably accepted it. Never sends a scope card, and rejects when the method's input or output
+   * contains streams.
+   */
+  async schedule(at: Datetime, input: JsonValue): Promise<Invocation<JsonValue | undefined>> {
+    return this.jsonInvocation(await this.scheduleValue(at, this.definition.input.packJson(input)));
+  }
+
+  async scheduleValue(
+    at: Datetime,
+    input: SchemaValue,
+  ): Promise<Invocation<SchemaValue | undefined>> {
+    this.rejectStreaming();
+    this.checkInput(input);
+    return this.checkedInvocation(await this.remote.schedule(at, this.definition.name, input));
+  }
+
+  /**
+   * Rebuilds the handle of an invocation of this method from its ID. Makes no remote call. The
+   * result is checked against the method's output schema and decoded as canonical JSON.
+   */
+  invocation(id: InvocationId): Invocation<JsonValue | undefined> {
+    return this.jsonInvocation(this.invocationValue(id));
+  }
+
+  invocationValue(id: InvocationId): Invocation<SchemaValue | undefined> {
+    return this.checkedInvocation(invocationValueById(id));
+  }
+
+  private rejectStreaming(): void {
+    const { input, output } = this.definition;
+    if (
+      schemaContainsStream(input.graph, input.root) ||
+      (output !== undefined && schemaContainsStream(output.graph, output.root))
+    ) {
+      throw streamingMethodNotAwaitedError(
+        `Remote agent ${this.remote.target}.${this.definition.name}`,
+      );
+    }
+  }
+
+  private checkInput(input: SchemaValue): void {
+    if (!this.definition.input.validateValue(input).success) {
+      throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
+    }
+  }
+
+  private checkOutput(value: SchemaValue | undefined): void {
+    if (this.definition.output !== undefined && value === undefined) {
       throw new RemoteOutputError(
         `Remote agent ${this.remote.target}.${this.definition.name} returned no value for a non-unit output`,
       );
     }
-    if (this.definition.output === undefined && result.value !== undefined) {
+    if (this.definition.output === undefined && value !== undefined) {
       throw new RemoteOutputError(
         `Remote agent ${this.remote.target}.${this.definition.name} returned a value for a unit output`,
       );
     }
-    if (this.definition.output !== undefined && result.value !== undefined) {
-      const validation = this.definition.output.validateValue(result.value);
+    if (this.definition.output !== undefined && value !== undefined) {
+      const validation = this.definition.output.validateValue(value);
       if (!validation.success) {
         throw new RemoteOutputError(
           `Remote agent ${this.remote.target}.${this.definition.name} returned an invalid output: ${validation.issues.map((issue) => issue.message).join('; ')}`,
         );
       }
     }
-    return result;
   }
 
-  trigger(input: JsonValue): InvocationMetadata {
-    return this.triggerValue(this.definition.input.packJson(input));
+  private checkedInvocation(
+    invocation: Invocation<SchemaValue | undefined>,
+  ): Invocation<SchemaValue | undefined> {
+    return mapInvocation(invocation, (value) => {
+      this.checkOutput(value);
+      return value;
+    });
   }
 
-  triggerValue(input: SchemaValue): InvocationMetadata {
-    if (!this.definition.input.validateValue(input).success) {
-      throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
-    }
-    return this.remote.invokeWithMetadata(this.definition.name, input);
-  }
-
-  schedule(at: Datetime, input: JsonValue): CancelableScheduledInvocationReceipt {
-    return this.scheduleValue(at, this.definition.input.packJson(input));
-  }
-
-  scheduleValue(at: Datetime, input: SchemaValue): CancelableScheduledInvocationReceipt {
-    if (!this.definition.input.validateValue(input).success) {
-      throw new TypeError(`Invalid input for reflected method '${this.definition.name}'`);
-    }
-    return this.remote.scheduleCancelableWithMetadata(at, this.definition.name, input);
+  private jsonInvocation(
+    invocation: Invocation<SchemaValue | undefined>,
+  ): Invocation<JsonValue | undefined> {
+    return mapInvocation(invocation, (value) => {
+      try {
+        return value === undefined ? undefined : this.definition.output?.unpackJson(value);
+      } catch (error) {
+        throw new RemoteOutputError(
+          `Remote agent ${this.remote.target}.${this.definition.name} returned invalid canonical JSON`,
+          { cause: error },
+        );
+      }
+    });
   }
 }
 

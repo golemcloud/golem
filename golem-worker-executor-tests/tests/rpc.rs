@@ -71,6 +71,7 @@ use tracing::Instrument;
 
 mod create_crash_window;
 mod gc_timed_cleanup;
+mod guest_invocation_handles;
 mod held_response_restart;
 mod hint_before_rpc_start;
 mod input_gc;
@@ -262,220 +263,29 @@ async fn unobserved_async_rpc_suspends_with_timer_and_resumes(
 
 #[test]
 #[timeout("2 minutes")]
-async fn raw_sync_rpc_vetoes_pending_timer_suspension_temporarily(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let attempts = Arc::new(Mutex::new(Vec::new()));
-    let recorded_attempts = attempts.clone();
-    let executor = start_with_overrides(
-        deps,
-        &context,
-        TestExecutorOverrides {
-            configure: Some(Arc::new(|config| {
-                config.suspend.rpc_suspend_after = Duration::from_secs(1);
-                config.suspend.rpc_resume_after = Duration::from_secs(3);
-                config.suspend.wait_suspend_check_interval = Duration::from_millis(100);
-            })),
-            wrap_rpc: Some(Arc::new(move |rpc| {
-                Arc::new(RecordingRpc::new(
-                    rpc,
-                    "inc_after_promise",
-                    recorded_attempts.clone(),
-                ))
-            })),
-            ..Default::default()
-        },
-    )
-    .await?;
-    let component = executor
-        .component_dep(&context.default_environment_id, fixture)
-        .store()
-        .await?;
-    let target_name = "sync-timer-target";
-    let target_id = agent_key!("RpcBlockingCounter", target_name);
-    let target = executor
-        .start_agent(&component.id, target_id.clone())
-        .await?;
-    let promise = executor
-        .invoke_and_await_agent(&component, &target_id, "create_promise", data_value!())
-        .await?
-        .into_typed::<PromiseId>()?;
-    let caller_id = agent_key!("CancelTester", "sync-timer-caller");
-    let caller = executor
-        .start_agent(&component.id, caller_id.clone())
-        .await?;
-    let invocation = executor.invoke_and_await_agent(
-        &component,
-        &caller_id,
-        "sync_counter_with_pending_timer",
-        data_value!(target_name, promise.clone()),
-    );
-    tokio::pin!(invocation);
-    // Dispatch is the deterministic marker: the guest has already polled its timer.
-    tokio::select! {
-        result = &mut invocation => panic!("caller returned before dispatch: {result:?}"),
-        dispatched = tokio::time::timeout(Duration::from_secs(10), async {
-            while attempts.lock().unwrap().is_empty() {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        }) => { dispatched?; }
-    }
-    let loads = executor.instance_load_count(&caller.agent_id);
-    let owned_caller = OwnedAgentId::new(context.default_environment_id, &caller.agent_id);
-    tokio::select! {
-        result = &mut invocation => panic!("caller returned before promise release: {result:?}"),
-        resident = async {
-            let deadline = tokio::time::Instant::now() + Duration::from_secs(4);
-            while tokio::time::Instant::now() < deadline {
-                assert!(executor.worker_is_loaded(&owned_caller).await);
-                assert_eq!(executor.get_worker_metadata(&caller).await?.status, AgentStatus::Running);
-                assert_eq!(executor.instance_load_count(&caller.agent_id), loads);
-                assert!(!executor.get_oplog(&caller, OplogIndex::INITIAL).await?.iter()
-                    .any(|entry| matches!(&entry.entry, PublicOplogEntry::Suspend(_))));
-                tokio::time::sleep(Duration::from_millis(100)).await;
-            }
-            Ok::<(), anyhow::Error>(())
-        } => { resident?; }
-    }
-    assert_eq!(attempts.lock().unwrap().len(), 1);
-    executor
-        .complete_promise(&executor.context.default_environment_id, &promise, vec![])
-        .await?;
-    // Once the borrowed call returns, the same long timer may release the Store.
-    tokio::select! {
-        result = &mut invocation => panic!("timer finished before suspension: {result:?}"),
-        unloaded = tokio::time::timeout(Duration::from_secs(10), async {
-            executor.wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(8)).await?;
-            while executor.worker_is_loaded(&owned_caller).await {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-            Ok::<(), anyhow::Error>(())
-        }) => { unloaded??; }
-    }
-    let value = tokio::time::timeout(Duration::from_secs(45), invocation)
-        .await??
-        .into_typed::<u64>()?;
-    assert_eq!(value, 7);
-    assert!(executor.instance_load_count(&caller.agent_id) > loads);
-    let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
-    assert_eq!(
-        target_oplog
-            .iter()
-            .filter(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
-            if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
-                if method.method_name == "inc_after_promise"))
-            })
-            .count(),
-        1
-    );
-    {
-        let attempts = attempts.lock().unwrap();
-        assert_eq!(
-            attempts.len(),
-            1,
-            "completed borrowed RPC must not redispatch on timer replay"
-        );
-        assert!(attempts[0].is_some());
-    }
-    assert_eq!(
-        executor
-            .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
-            .await?
-            .into_typed::<u64>()?,
-        7
-    );
-    assert_eq!(
-        executor
-            .invoke_and_await_agent(&component, &caller_id, "name", data_value!())
-            .await?
-            .into_typed::<String>()?,
-        "sync-timer-caller"
-    );
-    assert_eq!(
-        executor
-            .invoke_and_await_agent(
-                &component,
-                &caller_id,
-                "await_counter",
-                data_value!(target_name, promise, false)
-            )
-            .await?
-            .into_typed::<u64>()?,
-        14
-    );
-    assert_eq!(
-        executor
-            .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
-            .await?
-            .into_typed::<u64>()?,
-        14
-    );
-    Ok(())
-}
-
-#[test]
-#[timeout("2 minutes")]
-async fn raw_sync_rpc_stays_resident_beyond_suspension_grace(
+async fn raw_rpc_resumes_after_suspension(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    raw_rpc_suspension_case(last_unique_id, deps, component, false, true, false).await
+    raw_rpc_suspension_case(last_unique_id, deps, component, true, false).await
 }
 
 #[test]
 #[timeout("2 minutes")]
-async fn raw_async_rpc_resumes_after_suspension(
+async fn raw_rpc_completed_history_replays(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    raw_rpc_suspension_case(last_unique_id, deps, component, true, true, false).await
-}
-
-#[test]
-#[timeout("2 minutes")]
-async fn raw_sync_rpc_completes_before_suspension(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    raw_rpc_suspension_case(last_unique_id, deps, component, false, false, false).await
-}
-
-#[test]
-#[timeout("2 minutes")]
-async fn raw_sync_rpc_completed_history_replays(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    raw_rpc_suspension_case(last_unique_id, deps, component, false, false, true).await
-}
-
-#[test]
-#[timeout("2 minutes")]
-async fn raw_async_rpc_completed_history_replays(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_rpc_rust")] component: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    raw_rpc_suspension_case(last_unique_id, deps, component, true, false, true).await
+    raw_rpc_suspension_case(last_unique_id, deps, component, false, true).await
 }
 
 #[test]
 #[timeout("2m")]
-async fn raw_sync_rpc_local_denial_replays_without_span_or_dispatch(
+async fn raw_rpc_local_denial_replays_without_dispatch(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
@@ -531,9 +341,12 @@ async fn raw_sync_rpc_local_denial_replays_without_span_or_dispatch(
     Ok(())
 }
 
+/// An awaited call of a method that the target type does not have is rejected from the recorded
+/// target type before it starts: it dispatches nothing, records no RPC `Start` and opens no
+/// invocation span, and a reconstruction of the caller gives the same rejection.
 #[test]
 #[timeout("2m")]
-async fn invalid_async_rpc_closes_span_before_unused_future_is_dropped(
+async fn invalid_awaited_rpc_is_rejected_before_it_starts(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
@@ -559,97 +372,87 @@ async fn invalid_async_rpc_closes_span_before_unused_future_is_dropped(
         .component_dep(&context.default_environment_id, fixture)
         .store()
         .await?;
-    let caller_id = agent_key!("RpcAuthTester", "invalid-async-unused");
+    let caller_id = agent_key!("RpcAuthTester", "invalid-awaited-dropped");
     let caller = executor
         .start_agent(&component.id, caller_id.clone())
         .await?;
-    let key = executor
+    let first = executor
         .invoke_and_await_agent(
             &component,
             &caller_id,
-            "invalid_async_call_without_get",
+            "invalid_awaited_call_dropped_after_poll",
             data_value!(),
         )
-        .await?
-        .into_typed::<Option<String>>()?;
-    assert_eq!(key, None, "a rejected call has no invocation identity");
+        .await?;
+    // `Some(RpcCallOutcome::RemoteInternalError)`: the first poll completes the rejected call.
+    assert!(
+        matches!(first.value(), Some(SchemaValue::Option { inner: Some(outcome) })
+            if matches!(outcome.as_ref(), SchemaValue::Variant(value) if value.case == 4)),
+        "{first:?}"
+    );
     assert!(attempts.lock().unwrap().is_empty());
 
     let oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
-    let rejection = oplog
-        .iter()
-        .find(|entry| {
-            matches!(&entry.entry, PublicOplogEntry::Start(start)
-            if start.function_name == "golem::rpc::wasm-rpc::async-invoke-rejection")
-        })
-        .expect("missing durable validation rejection");
-    let span_id = match &rejection.entry {
-        PublicOplogEntry::Start(start) => start.span_started.as_ref().unwrap().span_id.clone(),
-        _ => unreachable!(),
-    };
-    assert!(oplog.iter().any(|entry| matches!(&entry.entry,
-        PublicOplogEntry::End(end)
-            if end.start_index == rejection.oplog_index
-                && end.span_finished.as_ref().is_some_and(|span|
-                    span.span_id == span_id
-                        && span.outcome == golem_common::model::oplog::PublicSpanOutcome::Failed)
-    )));
+    assert_invalid_call_recorded_no_rpc_start(&oplog);
 
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides).await?;
-    let second_key = executor
+    let second = executor
         .invoke_and_await_agent(
             &component,
             &caller_id,
-            "invalid_async_call_without_get",
+            "invalid_awaited_call_dropped_after_poll",
             data_value!(),
         )
-        .await?
-        .into_typed::<Option<String>>()?;
-    assert_eq!(
-        second_key, None,
-        "a rejected call has no invocation identity"
-    );
+        .await?;
+    assert_eq!(second.value(), first.value());
     assert!(attempts.lock().unwrap().is_empty());
     let recovered = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
-    assert_eq!(
-        recovered
-            .iter()
-            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end)
-                if end.start_index == rejection.oplog_index))
-            .count(),
-        1
-    );
+    assert_invalid_call_recorded_no_rpc_start(&recovered);
     Ok(())
 }
 
-#[test]
-#[timeout("2m")]
-async fn raw_sync_rpc_local_denial_recovers_from_committed_start(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    rpc_local_denial_prefix_case(last_unique_id, deps, fixture, "try_ephemeral_call", false).await
+fn assert_invalid_call_recorded_no_rpc_start(oplog: &[PublicOplogEntryWithIndex]) {
+    assert!(
+        !oplog.iter().any(
+            |entry| matches!(&entry.entry, PublicOplogEntry::Start(start)
+            if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await")
+        ),
+        "a rejected call must not record an RPC Start: {oplog:#?}"
+    );
+    for entry in oplog {
+        let PublicOplogEntry::Start(start) = &entry.entry else {
+            continue;
+        };
+        if start.function_name != "golem::rpc::wasm-rpc::upsert" {
+            continue;
+        }
+        let span_id = &start
+            .span_started
+            .as_ref()
+            .expect("connection creation must embed its span")
+            .span_id;
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|closing| matches!(&closing.entry,
+                    PublicOplogEntry::SpanClosed(closed) if &closed.span_finished.span_id == span_id))
+                .count(),
+            1,
+            "the dropped connection must close its span once"
+        );
+    }
 }
 
 #[test]
 #[timeout("2m")]
-async fn raw_async_rpc_local_denial_recovers_from_committed_start(
+async fn raw_rpc_local_denial_recovers_from_committed_start(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    rpc_local_denial_prefix_case(
-        last_unique_id,
-        deps,
-        fixture,
-        "try_ephemeral_call_async",
-        true,
-    )
-    .await
+    rpc_local_denial_prefix_case(last_unique_id, deps, fixture, "try_ephemeral_call").await
 }
 
 async fn rpc_local_denial_prefix_case(
@@ -657,7 +460,6 @@ async fn rpc_local_denial_prefix_case(
     deps: &WorkerExecutorTestDependencies,
     fixture: &PrecompiledComponent,
     method: &'static str,
-    has_span: bool,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let attempts = Arc::new(Mutex::new(Vec::new()));
@@ -716,7 +518,10 @@ async fn rpc_local_denial_prefix_case(
         .span_started
         .as_ref()
         .map(|span| span.span_id.clone());
-    assert_eq!(span_id.is_some(), has_span);
+    assert!(
+        span_id.is_some(),
+        "the RPC Start must embed its invocation span"
+    );
     assert!(!prefix.iter().any(
         |entry| matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == start.oplog_index)
     ));
@@ -800,7 +605,7 @@ async fn rpc_local_denial_prefix_case(
 
 #[test]
 #[timeout("3m")]
-async fn raw_sync_rpc_recovers_from_committed_crash_prefixes(
+async fn raw_rpc_recovers_from_committed_crash_prefixes(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
@@ -868,7 +673,7 @@ async fn raw_sync_rpc_recovers_from_committed_crash_prefixes(
                 }
                 _ => None,
             })
-            .expect("sync RPC Start must embed its invocation span");
+            .expect("the RPC Start must embed its invocation span");
         assert_eq!(
             prefix
                 .iter()
@@ -943,7 +748,6 @@ async fn raw_rpc_suspension_case(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     fixture: &PrecompiledComponent,
-    asynchronous: bool,
     suspend: bool,
     restart: bool,
 ) -> anyhow::Result<()> {
@@ -999,30 +803,18 @@ async fn raw_rpc_suspension_case(
                     &component,
                     &caller_id,
                     "await_counter",
-                    data_value!(target_name, promise, asynchronous),
+                    data_value!(target_name, promise),
                 )
                 .await
         })
     };
 
     if suspend {
-        if asynchronous {
-            executor
-                .wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(30))
-                .await?;
-        } else {
-            executor
-                .wait_for_status(&target, AgentStatus::Suspended, Duration::from_secs(30))
-                .await?;
-            tokio::time::sleep(Duration::from_secs(4)).await;
-            assert!(!invocation.is_finished());
-            assert_eq!(
-                executor.get_worker_metadata(&caller).await?.status,
-                AgentStatus::Running
-            );
-        }
+        executor
+            .wait_for_status(&caller, AgentStatus::Suspended, Duration::from_secs(30))
+            .await?;
         let prefix = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
-        eprintln!("Pending caller (async={asynchronous}):");
+        eprintln!("Pending caller:");
         print_rpc_memory_oplog(&prefix);
         let starts: Vec<_> = prefix
             .iter()
@@ -1032,15 +824,10 @@ async fn raw_rpc_suspension_case(
                 .then_some(entry.oplog_index)
             })
             .collect();
-        if asynchronous {
-            assert_eq!(starts.len(), 1);
-            assert!(!prefix.iter().any(|entry| {
-                matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == starts[0])
-            }));
-        } else {
-            // The resident caller need not have flushed its buffered RPC Start yet.
-            assert_eq!(attempts.lock().unwrap().len(), 1);
-        }
+        assert_eq!(starts.len(), 1);
+        assert!(!prefix.iter().any(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::End(end) if end.start_index == starts[0])
+        }));
         executor
             .complete_promise(&executor.context.default_environment_id, &promise, vec![])
             .await?;
@@ -1049,7 +836,7 @@ async fn raw_rpc_suspension_case(
     let result = tokio::time::timeout(Duration::from_secs(45), &mut invocation).await;
     let caller_oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
     let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
-    eprintln!("Caller after wait (async={asynchronous}, suspend={suspend}):");
+    eprintln!("Caller after wait (suspend={suspend}):");
     print_rpc_memory_oplog(&caller_oplog);
     eprintln!("Target after wait:");
     print_rpc_memory_oplog(&target_oplog);
@@ -1083,23 +870,19 @@ async fn raw_rpc_suspension_case(
         assert!(attempts.iter().all(|key| key == &attempts[0]));
     }
     let value = result
-        .map_err(|_| {
-            anyhow::anyhow!("caller did not return (async={asynchronous}, suspend={suspend})")
-        })???
+        .map_err(|_| anyhow::anyhow!("caller did not return (suspend={suspend})"))???
         .into_typed::<u64>()?;
     assert_eq!(value, 7);
     assert_eq!(
         caller_oplog
             .iter()
             .any(|entry| matches!(&entry.entry, PublicOplogEntry::Suspend(_))),
-        suspend && asynchronous,
+        suspend,
     );
-    if asynchronous {
-        assert_converted_rpc_span_lifecycle(&caller_oplog, 1);
-    }
+    assert_converted_rpc_span_lifecycle(&caller_oplog, 1);
 
     if restart {
-        let recorded_span_ids = asynchronous.then(|| converted_rpc_span_ids(&caller_oplog));
+        let recorded_span_ids = converted_rpc_span_ids(&caller_oplog);
         let attempts_before = attempts.lock().unwrap().len();
         drop(executor);
         let executor = start_with_overrides(deps, &context, overrides).await?;
@@ -1111,7 +894,7 @@ async fn raw_rpc_suspension_case(
                 &component,
                 &caller_id,
                 "await_counter",
-                data_value!(target_name, promise, asynchronous),
+                data_value!(target_name, promise),
             ),
         )
         .await;
@@ -1120,9 +903,7 @@ async fn raw_rpc_suspension_case(
         print_rpc_memory_oplog(&oplog);
         eprintln!("RPC attempts after restart: {:?}", attempts.lock().unwrap());
         let value = result
-            .map_err(|_| {
-                anyhow::anyhow!("completed caller history did not replay (async={asynchronous})")
-            })??
+            .map_err(|_| anyhow::anyhow!("completed caller history did not replay"))??
             .into_typed::<u64>()?;
         assert_eq!(value, 14);
         assert_eq!(attempts.lock().unwrap().len(), attempts_before + 1);
@@ -1134,17 +915,15 @@ async fn raw_rpc_suspension_case(
             count, 14,
             "replaying the completed call must not repeat its effect"
         );
-        if let Some(recorded_span_ids) = recorded_span_ids {
-            assert_converted_rpc_span_lifecycle(&oplog, 2);
-            assert_eq!(
-                converted_rpc_span_ids(&oplog)
-                    .into_iter()
-                    .take(recorded_span_ids.len())
-                    .collect::<Vec<_>>(),
-                recorded_span_ids,
-                "Store loss must reconstruct the recorded RPC span identities"
-            );
-        }
+        assert_converted_rpc_span_lifecycle(&oplog, 2);
+        assert_eq!(
+            converted_rpc_span_ids(&oplog)
+                .into_iter()
+                .take(recorded_span_ids.len())
+                .collect::<Vec<_>>(),
+            recorded_span_ids,
+            "Store loss must reconstruct the recorded RPC span identities"
+        );
     }
     Ok(())
 }
@@ -1160,7 +939,7 @@ fn converted_rpc_span_ids(
                     start.function_name.as_str(),
                     "golem::rpc::wasm-rpc::upsert"
                         | "golem::rpc::wasm-rpc::invoke_and_await"
-                        | "golem::rpc::wasm-rpc::invoke"
+                        | "golem::rpc::wasm-rpc::trigger"
                 ) =>
             {
                 Some(
@@ -1175,6 +954,52 @@ fn converted_rpc_span_ids(
             _ => None,
         })
         .collect()
+}
+
+/// Waits until the last finished invocation in `worker_id`'s oplog settled, and returns the
+/// oplog. The result of an invocation is published at the export's return, before its
+/// background work drained and before `AgentInvocationSettled`.
+async fn oplog_after_last_invocation_settled(
+    executor: &impl TestDsl,
+    worker_id: &OwnedAgentId,
+) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>> {
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+    loop {
+        let oplog = executor.get_oplog(worker_id, OplogIndex::INITIAL).await?;
+        let finished = oplog
+            .iter()
+            .rev()
+            .find(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+            .map(|entry| entry.oplog_index);
+        let settled = oplog.iter().any(|entry| {
+            Some(entry.oplog_index) > finished
+                && matches!(&entry.entry, PublicOplogEntry::AgentInvocationSettled(_))
+        });
+        if finished.is_some() && settled {
+            return Ok(oplog);
+        }
+        if tokio::time::Instant::now() >= deadline {
+            anyhow::bail!("the last invocation did not settle: {oplog:#?}");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
+/// The `Cancelled` of `start_index` lies before the `AgentInvocationSettled` that follows it.
+fn assert_cancelled_before_settled(oplog: &[PublicOplogEntryWithIndex], start_index: OplogIndex) {
+    let cancelled = oplog
+        .iter()
+        .find(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled)
+                if cancelled.start_index == start_index)
+        })
+        .map(|entry| entry.oplog_index)
+        .unwrap_or_else(|| panic!("the Start at {start_index} has no Cancelled: {oplog:#?}"));
+    assert!(
+        oplog.iter().any(|entry| entry.oplog_index > cancelled
+            && matches!(&entry.entry, PublicOplogEntry::AgentInvocationSettled(_))),
+        "the dropped call's Cancelled must precede the invocation's settlement: {oplog:#?}"
+    );
 }
 
 fn assert_converted_rpc_span_lifecycle(
@@ -1203,7 +1028,10 @@ fn assert_converted_rpc_span_lifecycle(
             })
             .filter(|finished| &finished.span_id == span_id)
             .count();
-        assert_eq!(finishes, 1, "span {span_id} must close exactly once");
+        assert_eq!(
+            finishes, 1,
+            "span {span_id} must close exactly once: {oplog:#?}"
+        );
     }
 
     for entry in oplog {
@@ -1541,8 +1369,8 @@ async fn durable_operations_after_rpc_delivery_recover_at_live_tail(
     for operation in [
         "kv-get",
         "config-get",
-        "fire-and-forget-rpc",
-        "async-rpc",
+        "trigger-rpc",
+        "awaited-rpc",
         "span",
         "commit",
         "retry-policy",
@@ -1606,7 +1434,7 @@ async fn durable_operation_after_rpc_delivery(
         )
         .await?
         .into_typed::<u64>()?;
-    let expected = if matches!(operation, "fire-and-forget-rpc" | "async-rpc") {
+    let expected = if matches!(operation, "trigger-rpc" | "awaited-rpc") {
         8
     } else {
         1
@@ -1634,7 +1462,7 @@ fn assert_live_tail_operation(oplog: &[PublicOplogEntryWithIndex], operation: &s
             ("config-get", PublicOplogEntry::Start(start)) => {
                 start.function_name.contains("config")
             }
-            ("fire-and-forget-rpc" | "async-rpc", PublicOplogEntry::Start(start)) => {
+            ("trigger-rpc" | "awaited-rpc", PublicOplogEntry::Start(start)) => {
                 start.function_name.contains("rpc")
             }
             ("span", PublicOplogEntry::Start(start)) => start.span_started.is_some(),
@@ -5729,6 +5557,134 @@ async fn queued_stream_sessions_accept_before_preparation_and_deliver_selected_o
     Ok(())
 }
 
+/// A streaming invocation queued behind another one has no prepared session when a handle
+/// starts awaiting it. Its result still reaches the handle with its stream handles once it runs.
+#[test]
+#[timeout("2 minutes")]
+async fn handle_await_of_a_queued_streaming_invocation_keeps_its_stream_handles(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        InvocationHandleOperation, invocation_handle_response, invocation_handle_success,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let target = executor
+        .start_agent(
+            &component.id,
+            agent_key!("StreamingRpcTarget", "queued-handle-await"),
+        )
+        .await?;
+    let caller = crate::agent::keyed_agent_id(
+        component.environment_id,
+        &agent_key!("StreamingRpcCaller", "queued-handle-await"),
+    );
+    let fingerprint = executor.get_worker_metadata(&target).await?.fingerprint.0;
+    let start_request = |method| {
+        origin_observer_start(
+            &executor,
+            &component,
+            &target,
+            &caller,
+            fingerprint,
+            &IdempotencyKey::fresh(),
+            method,
+        )
+    };
+    // `consume` keeps the agent busy until its input ends.
+    let (gate_tx, mut gate_rx, gate) =
+        open_raw_session(&executor, start_request("consume")).await?;
+    let request = InvocationRequest {
+        request: Some(invocation_request::Request::Start(start_request(
+            "transform",
+        ))),
+    };
+    let mut state = InvocationSessionState::default();
+    state
+        .validate_trusted_request(&request)
+        .map_err(anyhow::Error::msg)?;
+    let (queued_frames, receiver) = mpsc::channel(8);
+    queued_frames.send(request).await?;
+    let mut queued_responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    let response = tokio::time::timeout(Duration::from_secs(10), queued_responses.message())
+        .await??
+        .expect("queued acceptance before the gate releases");
+    state
+        .validate_response(&response)
+        .map_err(anyhow::Error::msg)?;
+    let Some(invocation_response::Response::Accepted(accepted)) = response.response else {
+        anyhow::bail!("expected queued acceptance: {response:?}");
+    };
+    assert!(accepted.component_revision.is_none(), "transform is queued");
+    let queued_key = accepted.idempotency_key.unwrap().into();
+
+    let observing = crate::invocation_reads::handle_operation(
+        &executor,
+        &target,
+        &caller.agent_id,
+        queued_key,
+        InvocationHandleOperation::Await,
+    );
+    tokio::pin!(observing);
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), &mut observing)
+            .await
+            .is_err(),
+        "the queued invocation has no result yet"
+    );
+    gate_tx
+        .send(InvocationRequest {
+            request: Some(invocation_request::Request::StreamEnd(StreamEnd {
+                transport_stream_id: 1,
+                producer_sequence: 0,
+                direction: StreamDirection::Input as i32,
+                authored_by: StreamTerminalAuthor::Guest as i32,
+                outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
+                durable_stream_id: gate.stream_mappings[0].handle.as_ref().unwrap().stream_id,
+                epoch: gate.epoch,
+                ..Default::default()
+            })),
+        })
+        .await?;
+    while let Some(response) = gate_rx.message().await? {
+        if matches!(
+            response.response,
+            Some(invocation_response::Response::Finished(_))
+        ) {
+            break;
+        }
+    }
+    let observed = tokio::time::timeout(Duration::from_secs(20), observing).await??;
+    let invocation_handle_response::Result::Success(observed) = observed else {
+        anyhow::bail!("handle observation failed: {observed:?}");
+    };
+    let Some(invocation_handle_success::Result::Output(handle_result)) = observed.result else {
+        anyhow::bail!("handle missed the committed result: {observed:?}");
+    };
+    assert!(
+        !handle_result.new_stream_mappings.is_empty(),
+        "the queued invocation's output stream must keep its handle: {handle_result:?}"
+    );
+    assert_eq!(
+        handle_result.component_revision,
+        Some(component.revision.get())
+    );
+    Ok(())
+}
+
 #[test]
 #[timeout("2 minutes")]
 async fn joined_origin_observer_receives_result_before_original_protocol_failure(
@@ -5737,6 +5693,10 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        InvocationHandleOperation, invocation_handle_response, invocation_handle_success,
+    };
+
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
     let component = executor
@@ -5784,6 +5744,35 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
         }
     })
     .await??;
+    let handle_key = original_accepted.idempotency_key.unwrap().into();
+    // A handle observes the published result while the input stream is still open.
+    let observed = tokio::time::timeout(
+        Duration::from_secs(5),
+        crate::invocation_reads::handle_operation(
+            &executor,
+            &target,
+            &caller.agent_id,
+            handle_key,
+            InvocationHandleOperation::Await,
+        ),
+    )
+    .await??;
+    let invocation_handle_response::Result::Success(observed) = observed else {
+        anyhow::bail!("handle observation failed: {observed:?}");
+    };
+    let Some(invocation_handle_success::Result::Output(handle_result)) = observed.result else {
+        anyhow::bail!("handle missed the committed result: {observed:?}");
+    };
+    assert!(!handle_result.new_stream_mappings.is_empty());
+    let Some(invocation_response::Response::Result(original_value)) = &original_result.response
+    else {
+        unreachable!();
+    };
+    assert_eq!(handle_result.result, original_value.result);
+    assert_eq!(
+        handle_result.component_revision,
+        original_value.component_revision
+    );
     let mut observer = start.clone();
     observer.attempt_id = Some(uuid::Uuid::new_v4().into());
     observer.durable_input_mappings = original_accepted.stream_mappings.clone();
@@ -5810,6 +5799,17 @@ async fn joined_origin_observer_receives_result_before_original_protocol_failure
     .await??;
     // Both records must already exist when the observer joins: scheduling must not
     // let the failed terminal hide the result's durable stream handles.
+    let after_failure = crate::invocation_reads::handle_operation(
+        &executor,
+        &target,
+        &caller.agent_id,
+        handle_key,
+        InvocationHandleOperation::Await,
+    )
+    .await?;
+    assert!(matches!(after_failure,
+        invocation_handle_response::Result::Success(value)
+            if value.result == Some(invocation_handle_success::Result::Output(handle_result))));
     let mut fresh = observer.clone();
     let fresh_key = IdempotencyKey::fresh();
     fresh.request_key = Some(
@@ -9534,6 +9534,7 @@ async fn open_invocation_session_with_key(
     let (frames, receiver) = mpsc::channel(8);
     let request = InvocationRequest {
         request: Some(invocation_request::Request::Start(InvocationStart {
+            requires_own_record: false,
             allow_streams: true,
             captured_method_input: None,
             target: Some(target),
@@ -11700,7 +11701,7 @@ async fn completed_fire_and_forget_rpc_replays_span_before_result(
         .invoke_and_await_agent(
             &caller_component,
             &caller,
-            "outbound_agent_rpc_invoke_result",
+            "outbound_agent_rpc_trigger_result",
             data_value!("Counter", "fire-and-forget-replay-target", "increment"),
         )
         .await?
@@ -11734,10 +11735,9 @@ async fn completed_fire_and_forget_rpc_replays_span_before_result(
     Ok(())
 }
 
-const KEPT_RPC_CALLS: [&str; 3] = [
+const KEPT_RPC_CALLS: [&str; 2] = [
     "kept_agent_rpc_invoke_and_await_result",
-    "kept_agent_rpc_async_invoke_and_await_result",
-    "kept_agent_rpc_invoke_result",
+    "kept_agent_rpc_trigger_result",
 ];
 
 async fn assert_kept_rpc_call_is_not_found(
@@ -12177,7 +12177,7 @@ async fn fire_and_forget_rpc_recovers_from_committed_crash_prefixes(
                         &caller_component,
                         &caller_id,
                         &invocation_key,
-                        "outbound_agent_rpc_invoke_result",
+                        "outbound_agent_rpc_trigger_result",
                         data_value!("Counter", counter_name, "increment"),
                     )
                     .await
@@ -12192,7 +12192,7 @@ async fn fire_and_forget_rpc_recovers_from_committed_crash_prefixes(
             .iter()
             .find_map(|entry| match &entry.entry {
                 PublicOplogEntry::Start(start)
-                    if start.function_name == "golem::rpc::wasm-rpc::invoke" =>
+                    if start.function_name == "golem::rpc::wasm-rpc::trigger" =>
                 {
                     start.span_started.as_ref().map(|span| span.span_id.clone())
                 }
@@ -12220,7 +12220,7 @@ async fn fire_and_forget_rpc_recovers_from_committed_crash_prefixes(
                 &caller_component,
                 &caller_id,
                 &invocation_key,
-                "outbound_agent_rpc_invoke_result",
+                "outbound_agent_rpc_trigger_result",
                 data_value!("Counter", counter_name, "increment"),
             )
             .await?
@@ -12269,7 +12269,7 @@ fn rpc_start_indices(
             matches!(
                 &entry.entry,
                 PublicOplogEntry::Start(start)
-                    if start.function_name == "golem::rpc::wasm-rpc::invoke"
+                    if start.function_name == "golem::rpc::wasm-rpc::trigger"
             )
             .then_some(entry.oplog_index)
         })
@@ -12805,9 +12805,82 @@ async fn failed_ephemeral_invocation_retry_does_not_reexecute(
     Ok(())
 }
 
+/// A triggered invocation queued behind a promise-blocked invocation of the same target is still
+/// pending: its handle withdraws it, and awaiting the handle then fails as cancelled. The
+/// withdrawn invocation never runs, so the target counter has only the blocked increment.
 #[test]
+#[timeout("2 minutes")]
 #[tracing::instrument]
-async fn cancel_pending_async_rpc_returns_error(
+async fn cancel_pending_triggered_rpc_withdraws_it(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let target_name = "cancel-pending-trigger-target";
+    let target_id = agent_key!("RpcBlockingCounter", target_name);
+    let target = executor
+        .start_agent(&component.id, target_id.clone())
+        .await?;
+    let promise = executor
+        .invoke_and_await_agent(&component, &target_id, "create_promise", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    let caller_id = agent_key!("CancelTester", "cancel-pending-trigger-caller");
+    let caller = executor
+        .start_agent(&component.id, caller_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller_id,
+            "cancel_pending_trigger",
+            data_value!(target_name, promise.clone()),
+        )
+        .await?;
+    // `(true, RpcCallOutcome::Cancelled { .. })`
+    assert!(
+        matches!(result.value(), Some(SchemaValue::Tuple { elements })
+            if matches!(elements.as_slice(), [SchemaValue::Bool(true), SchemaValue::Variant(outcome)]
+                if outcome.case == 6)),
+        "{result:?}"
+    );
+
+    executor
+        .complete_promise(&executor.context.default_environment_id, &promise, vec![])
+        .await?;
+    let count = executor
+        .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(count, 7, "the cancelled increment must not run");
+    let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    assert!(
+        !target_oplog.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(started)
+                if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                    if method.method_name == "inc_by"))),
+        "the withdrawn invocation must never start: {target_oplog:#?}"
+    );
+    executor.check_oplog_is_queryable(&caller).await?;
+    Ok(())
+}
+
+/// Dropping an awaited call after its first poll cancels the durable call: its `Start` gets a
+/// `Cancelled` terminal that closes the embedded invocation span. Whether the target runs is
+/// best-effort.
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn dropping_awaited_rpc_before_completion_cancels_the_call(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
@@ -12826,30 +12899,177 @@ async fn cancel_pending_async_rpc_returns_error(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    // Call test_cancel_before_await - initiates async RPC to inc_by, then cancels
-    executor
+    let pending = executor
         .invoke_and_await_agent(
             &component,
             &agent_id,
-            "test_cancel_before_await",
+            "drop_awaited_call_before_completion",
             data_value!("cancel_pending_counter"),
         )
-        .await?;
+        .await?
+        .into_typed::<bool>()?;
+    assert!(
+        pending,
+        "the first poll must leave the awaited call pending"
+    );
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let oplog = oplog_after_last_invocation_settled(&executor, &worker_id).await?;
     assert_converted_rpc_span_lifecycle(&oplog, 1);
+    let invoke_start = oplog
+        .iter()
+        .find(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start)
+            if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await")
+        })
+        .expect("missing awaited RPC Start");
+    assert_cancelled_before_settled(&oplog, invoke_start.oplog_index);
     assert!(
         oplog.iter().any(|entry| matches!(&entry.entry,
             PublicOplogEntry::Cancelled(cancelled) if cancelled.span_finished.as_ref().is_some_and(
                 |span| span.outcome == golem_common::model::oplog::PublicSpanOutcome::Cancelled
             )
         )),
-        "explicit cancellation must close the RPC span on its Cancelled terminal"
+        "dropping the awaited call must close the RPC span on its Cancelled terminal"
     );
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    // Cancel is "best-effort" — the remote invocation may or may not have already
-    // executed by the time cancel is processed.
+    Ok(())
+}
+
+/// Dropping a pending trigger records a `Cancelled` for its `Start` that closes the span the
+/// `Start` opened, before the invocation settles.
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn dropping_a_pending_trigger_closes_its_span(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let agent_id = agent_key!("CancelTester", "drop-pending-trigger");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let pending = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "drop_trigger_before_acceptance",
+            data_value!("drop-pending-trigger-counter"),
+        )
+        .await?
+        .into_typed::<bool>()?;
+    assert!(pending, "the first poll must leave the trigger pending");
+
+    let oplog = oplog_after_last_invocation_settled(&executor, &worker_id).await?;
+    let trigger_start = oplog
+        .iter()
+        .find(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start)
+            if start.function_name == "golem::rpc::wasm-rpc::trigger")
+        })
+        .unwrap_or_else(|| panic!("missing trigger Start: {oplog:#?}"));
+    let PublicOplogEntry::Start(start) = &trigger_start.entry else {
+        unreachable!()
+    };
+    let trigger_span = start.span_started.as_ref().unwrap().span_id.clone();
+    assert!(
+        oplog.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::Cancelled(cancelled)
+                if cancelled.start_index == trigger_start.oplog_index
+                    && cancelled.span_finished.as_ref().is_some_and(|span| span.span_id == trigger_span))),
+        "the dropped trigger must record a Cancelled that closes its span: {oplog:#?}"
+    );
+    assert_cancelled_before_settled(&oplog, trigger_start.oplog_index);
+    executor.check_oplog_is_queryable(&worker_id).await?;
+    Ok(())
+}
+
+/// A method that records its result after its background work drained, here because it takes a
+/// stream input, records the `Cancelled` of an awaited call it dropped before its
+/// `AgentInvocationFinished`, and the `Cancelled` closes the call's span.
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn dropped_awaited_rpc_is_cancelled_before_a_drained_method_result(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let target = executor
+        .start_agent(
+            &component.id,
+            agent_key!("StreamingRpcTarget", "drop-then-fail"),
+        )
+        .await?;
+    let caller_id = agent_key!("StreamingRpcCaller", "drop-then-fail");
+    executor
+        .start_agent(&component.id, caller_id.clone())
+        .await?;
+    let error = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller_id,
+            "call_drop_awaited_call_then_return_error",
+            data_value!("drop-then-fail-counter"),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(error, "dropped a pending awaited call: true");
+
+    let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    let invoke_start = oplog
+        .iter()
+        .find(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start)
+            if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await")
+        })
+        .unwrap_or_else(|| panic!("missing awaited RPC Start: {oplog:#?}"));
+    let invoke_span = match &invoke_start.entry {
+        PublicOplogEntry::Start(start) => start.span_started.as_ref().unwrap().span_id.clone(),
+        _ => unreachable!(),
+    };
+    let cancelled = oplog
+        .iter()
+        .find(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Cancelled(cancelled)
+            if cancelled.start_index == invoke_start.oplog_index
+                && cancelled.span_finished.as_ref().is_some_and(|span| span.span_id == invoke_span))
+        })
+        .unwrap_or_else(|| panic!("the dropped call has no span-closing Cancelled: {oplog:#?}"));
+    let started = oplog
+        .iter()
+        .rev()
+        .find(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+        .unwrap_or_else(|| panic!("the method invocation is not recorded: {oplog:#?}"));
+    let finished = oplog
+        .iter()
+        .find(|entry| {
+            entry.oplog_index > started.oplog_index
+                && matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_))
+        })
+        .unwrap_or_else(|| panic!("the method result is not recorded: {oplog:#?}"));
+    assert!(
+        cancelled.oplog_index < finished.oplog_index,
+        "the dropped call's Cancelled must precede the method result: {oplog:#?}"
+    );
+    executor.check_oplog_is_queryable(&target).await?;
 
     Ok(())
 }
@@ -12857,7 +13077,7 @@ async fn cancel_pending_async_rpc_returns_error(
 #[test]
 #[timeout("2 minutes")]
 #[tracing::instrument]
-async fn dropping_polled_pending_async_rpc_get_closes_embedded_span(
+async fn dropping_polled_pending_awaited_rpc_closes_embedded_span(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
@@ -12899,12 +13119,12 @@ async fn dropping_polled_pending_async_rpc_get_closes_embedded_span(
         .invoke_and_await_agent(
             &component,
             &caller_id,
-            "drop_pending_get",
+            "drop_awaited_call_after_poll",
             data_value!("drop-pending-get-target", promise.clone()),
         )
         .await?;
 
-    let oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+    let oplog = oplog_after_last_invocation_settled(&executor, &caller).await?;
     assert_converted_rpc_span_lifecycle(&oplog, 1);
     let invoke_start = oplog
         .iter()
@@ -12912,7 +13132,7 @@ async fn dropping_polled_pending_async_rpc_get_closes_embedded_span(
             matches!(&entry.entry, PublicOplogEntry::Start(start)
             if start.function_name == "golem::rpc::wasm-rpc::invoke_and_await")
         })
-        .expect("missing async RPC Start");
+        .expect("missing awaited RPC Start");
     let invoke_span = match &invoke_start.entry {
         PublicOplogEntry::Start(start) => start.span_started.as_ref().unwrap().span_id.clone(),
         _ => unreachable!(),
@@ -12921,7 +13141,8 @@ async fn dropping_polled_pending_async_rpc_get_closes_embedded_span(
         PublicOplogEntry::Cancelled(cancelled)
             if cancelled.start_index == invoke_start.oplog_index
                 && cancelled.span_finished.as_ref().is_some_and(|span| span.span_id == invoke_span)
-    )), "dropped pending get must record Cancelled with its embedded span close: {oplog:#?}");
+    )), "the dropped pending call must record Cancelled with its embedded span close: {oplog:#?}");
+    assert_cancelled_before_settled(&oplog, invoke_start.oplog_index);
     executor
         .complete_promise(
             &executor.context.default_environment_id,
@@ -12949,9 +13170,96 @@ async fn dropping_polled_pending_async_rpc_get_closes_embedded_span(
     Ok(())
 }
 
+/// Dropping a pending await of an invocation handle only detaches from the invocation: it keeps
+/// running, and a handle rebuilt from its ID in a later invocation receives its result, also
+/// after the caller is reconstructed. The target runs the invocation once.
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn dropping_a_handle_await_only_detaches(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+
+    let target_name = "detached-await-target";
+    let target_id = agent_key!("RpcBlockingCounter", target_name);
+    let target = executor
+        .start_agent(&component.id, target_id.clone())
+        .await?;
+    let promise = executor
+        .invoke_and_await_agent(&component, &target_id, "create_promise", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    let caller_id = agent_key!("CancelTester", "detached-await-caller");
+    let caller = executor
+        .start_agent(&component.id, caller_id.clone())
+        .await?;
+
+    let pending = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller_id,
+            "drop_handle_await",
+            data_value!(target_name, promise.clone()),
+        )
+        .await?
+        .into_typed::<bool>()?;
+    assert!(
+        pending,
+        "the await of the blocked invocation must be pending"
+    );
+
+    executor
+        .complete_promise(&executor.context.default_environment_id, &promise, vec![])
+        .await?;
+    let awaited = executor
+        .invoke_and_await_agent(&component, &caller_id, "await_detached", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(awaited, 7);
+
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    let awaited = executor
+        .invoke_and_await_agent(&component, &caller_id, "await_detached", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(
+        awaited, 7,
+        "the rebuilt handle must receive the recorded result"
+    );
+    let count = executor
+        .invoke_and_await_agent(&component, &target_id, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(count, 7);
+    let target_oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        target_oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry,
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.method_name == "inc_after_promise")))
+            .count(),
+        1,
+        "the detached invocation must run once"
+    );
+    executor.check_oplog_is_queryable(&caller).await?;
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
-async fn cancel_completed_async_rpc_is_noop(
+async fn cancel_completed_triggered_rpc_returns_false(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
@@ -12970,21 +13278,24 @@ async fn cancel_completed_async_rpc_is_noop(
         .start_agent(&component.id, agent_id.clone())
         .await?;
 
-    let result = executor
+    let (cancelled, value) = executor
         .invoke_and_await_agent(
             &component,
             &agent_id,
             "test_cancel_completed",
             data_value!("cancel_completed_counter"),
         )
-        .await?;
+        .await?
+        .into_typed::<(bool, u64)>()?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    let result_value = result.into_typed::<u64>()?;
-
+    assert!(
+        !cancelled,
+        "cancelling a finished invocation must return false"
+    );
     // The counter was incremented by 5, so get_value should return 5
-    assert_eq!(result_value, 5);
+    assert_eq!(value, 5);
 
     Ok(())
 }
@@ -13064,6 +13375,174 @@ async fn ts_abort_after_complete_is_noop(
 
     // The counter was incremented by 5, so getValue should return 5.0
     assert_eq!(result_value, 5.0);
+
+    Ok(())
+}
+
+/// The TypeScript SDK's invocation handles: a triggered invocation completes and can no longer be
+/// cancelled, a handle rebuilt from an ID awaits the result, and a scheduled invocation is
+/// cancelled before it starts, so awaiting it fails as cancelled and the counter keeps its value.
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn ts_invocation_handles(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+
+    let agent_id = agent_key!("TsCancelTester", "ts_invocation_handles");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "testInvocationHandles",
+            data_value!("ts_invocation_handles_counter"),
+        )
+        .await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let Some(SchemaValue::Record { fields }) = result.value() else {
+        panic!("expected the invocation handle report record: {result:?}");
+    };
+    assert_eq!(
+        fields.as_slice(),
+        [
+            SchemaValue::String("completed".to_string()),
+            SchemaValue::Bool(false),
+            SchemaValue::F64(3.0),
+            SchemaValue::String("scheduled".to_string()),
+            SchemaValue::Bool(true),
+            SchemaValue::String("cancelled".to_string()),
+            SchemaValue::String("cancelled".to_string()),
+            SchemaValue::F64(3.0),
+        ],
+        "triggeredStatus, cancelCompleted, rebuiltValue, scheduledStatus, cancelScheduled, \
+         cancelledStatus, awaitCancelled, value"
+    );
+
+    Ok(())
+}
+
+/// The TypeScript SDK reports a typed `cannot-cancel-running` error when a triggered invocation
+/// is cancelled after it started, and the invocation still completes.
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn ts_invocation_handle_cannot_cancel_running(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+
+    let agent_id = agent_key!("TsCancelTester", "ts_cannot_cancel_running");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "testCancelRunning",
+            data_value!("ts_cannot_cancel_running_blocker"),
+        )
+        .await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let Some(SchemaValue::Record { fields }) = result.value() else {
+        panic!("expected the cancel-running report record: {result:?}");
+    };
+    let [
+        SchemaValue::String(running_status),
+        SchemaValue::String(cancel_error),
+        SchemaValue::Bool(completed),
+        SchemaValue::F64(value),
+        SchemaValue::String(final_status),
+    ] = fields.as_slice()
+    else {
+        panic!("unexpected cancel-running report fields: {fields:?}");
+    };
+    assert!(
+        running_status == "running" || running_status == "waiting",
+        "runningStatus: {running_status}"
+    );
+    assert_eq!(cancel_error, "cannot-cancel-running");
+    assert!(*completed);
+    assert_eq!(*value, 1.0);
+    assert_eq!(final_status, "completed");
+
+    Ok(())
+}
+
+/// A TypeScript handle that only a garbage collection releases does not cancel its pending
+/// invocation: the invocation still runs and a handle rebuilt from its ID reads its result.
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn ts_collected_invocation_handle_does_not_cancel_its_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc")] agent_rpc: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc)
+        .store()
+        .await?;
+
+    let agent_id = agent_key!("TsCancelTester", "ts_collected_handle");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent_id,
+            "testCollectedHandle",
+            data_value!("ts_collected_handle_blocker"),
+        )
+        .await?;
+    executor.check_oplog_is_queryable(&worker_id).await?;
+
+    let Some(SchemaValue::Record { fields }) = result.value() else {
+        panic!("expected the collected-handle report record: {result:?}");
+    };
+    let [
+        SchemaValue::Bool(collected),
+        SchemaValue::F64(value),
+        SchemaValue::String(final_status),
+    ] = fields.as_slice()
+    else {
+        panic!("unexpected collected-handle report fields: {fields:?}");
+    };
+    assert!(*collected, "the abandoned handle was not collected");
+    assert_eq!(*value, 1.0);
+    assert_eq!(final_status, "completed");
 
     Ok(())
 }

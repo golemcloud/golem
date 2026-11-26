@@ -1,5 +1,5 @@
 // Package scheduler is the DEFINITION of the agent exercising scheduled
-// invocations (MethodDef.Schedule + ScheduledInvocation.Cancel). Behaviour lives
+// invocations (MethodDef.Schedule + Invocation.Cancel). Behaviour lives
 // in scheduler/impl.
 package scheduler
 
@@ -22,6 +22,7 @@ var (
 	// Bump schedules a counter increment and lets it run.
 	Bump = Agent.Method[ScheduleIn, golem.Unit]("bump", golem.Description("Schedule an increment on the target counter"))
 	// BumpCancelled schedules the same increment and immediately cancels it, so
-	// the counter must never move.
-	BumpCancelled = Agent.Method[ScheduleIn, golem.Unit]("bump-cancelled", golem.Description("Schedule an increment on the target counter, then cancel it"))
+	// the counter must never move. It returns what the cancellation reported,
+	// and then what a repeated cancellation reported.
+	BumpCancelled = Agent.Method[ScheduleIn, []bool]("bump-cancelled", golem.Description("Schedule an increment on the target counter, then cancel it twice"))
 )

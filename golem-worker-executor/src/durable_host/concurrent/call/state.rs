@@ -130,8 +130,9 @@ impl<P: DropPolicy> AcceptedAccessStart<P> {
         permit: LiveCallPermit,
     ) -> (OplogIndex, SessionState<P>) {
         let (index, request_upload) = self.result.take().expect("accepted Start result");
+        let call = self.call.take().expect("accepted Start cleanup");
         let context = CallDropContext {
-            call: self.call.take().expect("accepted Start cleanup"),
+            call,
             sink: self.sink.clone(),
             cleanup_sink: self.cleanup_sink.clone(),
             teardown: self.teardown.clone(),
@@ -144,6 +145,20 @@ impl<P: DropPolicy> AcceptedAccessStart<P> {
 }
 
 impl<P: DropPolicy> CallGuard<P> {
+    /// Replaces the drop context. A `Start` span that a span observer or a registered
+    /// cancellation span already owns stays theirs: the session learns of an observer only after
+    /// the owned start handed it over.
+    fn set_context(&mut self, mut context: CallDropContext) {
+        if self
+            .context
+            .as_ref()
+            .is_some_and(|current| !current.call.close_start_span)
+        {
+            context.call.close_start_span = false;
+        }
+        self.context = Some(context);
+    }
+
     fn new(cleanup: Cleanup, permit: Option<LiveCallPermit>) -> Self {
         Self {
             cleanup,
@@ -402,8 +417,10 @@ impl<P: DropPolicy> SessionState<P> {
 
 impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
     fn drop_context(&self) -> CallDropContext {
+        let mut call = self.dropped_call_snapshot(None);
+        call.close_start_span = self.cancellation_span_id.is_none() && self.span_observer.is_none();
         CallDropContext {
-            call: self.dropped_call_snapshot(None),
+            call,
             sink: self.drop_sink.clone(),
             cleanup_sink: self.cleanup_sink.clone(),
             teardown: self.teardown_probe(),
@@ -415,7 +432,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let context = self.drop_context();
         match self.state.take() {
             Phase::Executing(mut call) => {
-                call.guard.context = Some(context);
+                call.guard.set_context(context);
                 Ok(call)
             }
             phase => {
@@ -429,7 +446,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
         let context = self.drop_context();
         match self.state.take() {
             Phase::Replaying(mut call) => {
-                call.guard.context = Some(context);
+                call.guard.set_context(context);
                 Ok(call)
             }
             phase => {
@@ -458,7 +475,7 @@ impl<Pair: HostPayloadPair, P: DropPolicy> Drop for DurableCallSession<Pair, P> 
     fn drop(&mut self) {
         let context = self.drop_context();
         if let Some(guard) = self.state.guard_mut() {
-            guard.context = Some(context);
+            guard.set_context(context);
         }
     }
 }

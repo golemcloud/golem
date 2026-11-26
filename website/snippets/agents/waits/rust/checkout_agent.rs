@@ -15,10 +15,10 @@ impl CheckoutAgent for CheckoutAgentImpl {
     create_payment_link(&self.order_id, amount, paid.url()).await?;
     // schedule a call on another agent for tomorrow:
     let reminder = MailerAgentClient::upsert(self.order_id.clone()) //@
-      .schedule_cancelable_remind(in_days(1))?; //@
+      .schedule_remind(in_days(1)).await?; //@
     // it waits here for days if needed, using no CPU or memory:
     let event: PaymentEvent = paid.await.json()?; //@
-    reminder.cancel();
+    let _ = reminder.cancel().await;
     if event.status != "succeeded" { return Ok(()); }
     // sleep for a week; its deadline survives restarts:
     sleep(7 * 24 * 60 * 60 * 1_000_000_000).await; //@

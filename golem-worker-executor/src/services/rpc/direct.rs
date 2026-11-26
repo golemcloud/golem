@@ -378,35 +378,240 @@ impl<Ctx: WorkerCtx> DirectWorkerInvocationRpc<Ctx> {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
-    async fn cancel_scheduled_invocation(
+    async fn invocation_handle(
         &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::ScheduleId,
-        canceller: &Principal,
+        invocation_id: &golem_common::model::OwnedInvocationId,
+        caller: &Principal,
+        operation: InvocationHandleOperation,
         auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<InvocationHandleSuccess, WorkerExecutorError> {
+        use crate::worker::CancelInvocationOutcome;
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            InvocationLifecycleState, invocation_handle_success,
+        };
+        use golem_common::model::card::AgentInvocationIdPattern;
+
         if !matches!(auth, AuthCtx::System | AuthCtx::Agent(_)) {
             return Err(WorkerExecutorError::invalid_request(
-                "schedule cancellation requires an authenticated internal caller",
-            )
-            .into());
+                "invocation handles require an authenticated internal caller",
+            ));
         }
+        if operation == InvocationHandleOperation::Unspecified {
+            return Err(WorkerExecutorError::invalid_request(
+                "missing handle operation",
+            ));
+        }
+        let target = OwnedAgentId::new(
+            super::invocation_handle_environment(caller)?,
+            super::invocation_handle_owner(invocation_id)?,
+        );
         if self.shard_service().check_worker(&target.agent_id).is_err() {
             return self
                 .remote_rpc
-                .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
+                .invocation_handle(invocation_id, caller, operation, auth)
                 .await;
         }
-        let worker = match Worker::get_exact_existing_suspended(self, target).await {
-            Ok(worker) => worker,
-            Err(WorkerExecutorError::AgentNotFound { .. }) => return Ok(false),
-            Err(error) => return Err(error.into()),
+        let key = invocation_id.id();
+        let resolved_target = ResolvedTarget::existing(target.clone());
+        let management_authorization = self.authorize(
+            auth.actor_account_id(),
+            &resolved_target,
+            if operation == InvocationHandleOperation::Cancel {
+                AgentVerb::CancelInvocation
+            } else {
+                AgentVerb::View
+            },
+            AgentResourcePattern::InvocationId(AgentInvocationIdPattern::Uuid(key.0)),
+            auth,
+        );
+        // Authority is established before anything about the owner or invocation is answered.
+        // When reading the owner or checking authority fails for an operational reason, only a
+        // manager sees the failure. Another caller learns only that authority could not be
+        // established yet, so an outage neither discloses its cause nor denies the starter for
+        // good.
+        let unestablished = || {
+            WorkerExecutorError::runtime(
+                "authority over the invocation could not be established; try again",
+            )
         };
-        worker
-            .cancel_scheduled_invocation(key, receipt, canceller)
-            .await
-            .map_err(Into::into)
+        let authorization_error = |error| match error {
+            RpcError::Denied { details } => WorkerExecutorError::permission_denied(details),
+            _ => unestablished(),
+        };
+        let worker = match Worker::get_exact_existing_suspended(self, &target).await {
+            Ok(worker) => worker,
+            Err(WorkerExecutorError::AgentNotFound { .. }) => {
+                match management_authorization.await {
+                    Ok(_) | Err(RpcError::NotFound { .. }) => {
+                        return Ok(InvocationHandleSuccess {
+                            result: Some(invocation_handle_success::Result::NotFound(
+                                golem_schema::proto::golem::common::Empty {},
+                            )),
+                        });
+                    }
+                    Err(error) => return Err(authorization_error(error)),
+                }
+            }
+            Err(error) => {
+                return Err(match management_authorization.await {
+                    Ok(_) | Err(RpcError::NotFound { .. }) => error,
+                    Err(_) => unestablished(),
+                });
+            }
+        };
+        let fingerprint = worker.get_initial_worker_metadata().fingerprint;
+        // A starter check that fails falls back to management authorization, which a manager
+        // passes whatever the check answered. Without it, the caller is denied when the owner has
+        // no starter evidence for the caller, or a deletion has removed it; a check that failed on
+        // a live owner is not yet a denial.
+        match worker.invocation_was_started_by(&key, caller).await {
+            Ok(true) => {}
+            proof => match management_authorization.await {
+                Ok(_) | Err(RpcError::NotFound { .. }) => {}
+                Err(RpcError::Denied { details }) => {
+                    return Err(match proof {
+                        Err(_) if !worker.answers_as_deleted().await => unestablished(),
+                        _ => WorkerExecutorError::permission_denied(details),
+                    });
+                }
+                Err(_) => return Err(unestablished()),
+            },
+        }
+        // A tool or oplog-processor owner has an agent-shaped address, so only the loaded owner
+        // shows that the ID does not name an agent invocation. The refusal waits for authority,
+        // as not-found does.
+        if worker.get_initial_worker_metadata().owner_kind
+            != golem_common::model::agent::OwnerKind::ComponentAgent
+        {
+            return Err(WorkerExecutorError::invalid_request(
+                "invocation handles address agent invocations",
+            ));
+        }
+        let result = async {
+            let Some(entry) = worker.get_invocation(&key).await? else {
+                return Ok(InvocationHandleSuccess {
+                    result: Some(invocation_handle_success::Result::NotFound(
+                        golem_schema::proto::golem::common::Empty {},
+                    )),
+                });
+            };
+            let result = match operation {
+                InvocationHandleOperation::Status => invocation_handle_success::Result::Status(
+                    InvocationLifecycleState::from(entry.state) as i32,
+                ),
+                InvocationHandleOperation::Await => {
+                    use crate::worker::invocations::ObservedInvocationResult;
+                    let output = match worker.observe_invocation_result(&key).await? {
+                        Ok(output) => output,
+                        Err(error) => {
+                            return Ok(InvocationHandleSuccess {
+                                result: Some(invocation_handle_success::Result::InvocationFailure(
+                                    error.into(),
+                                )),
+                            });
+                        }
+                    };
+                    let mut result =
+                        golem_api_grpc::proto::golem::worker::InvocationSessionResult {
+                            agent_id: Some(target.agent_id.into()),
+                            idempotency_key: Some(key.into()),
+                            agent_fingerprint: Some(fingerprint.0.into()),
+                            ..Default::default()
+                        };
+                    match output {
+                        ObservedInvocationResult::NotFound => {
+                            return Ok(InvocationHandleSuccess {
+                                result: Some(invocation_handle_success::Result::NotFound(
+                                    golem_schema::proto::golem::common::Empty {},
+                                )),
+                            });
+                        }
+                        ObservedInvocationResult::Invocation(output) => {
+                            let AgentInvocationResult::AgentMethod { output: value } =
+                                output.result
+                            else {
+                                return Err(WorkerExecutorError::invalid_request(
+                                    "invocation handle does not name an agent method",
+                                ));
+                            };
+                            result.result = Some(invocation_session_result::Result::MethodResult(
+                                value.try_into().map_err(WorkerExecutorError::runtime)?,
+                            ));
+                            result.component_revision =
+                                output.component_revision.map(|revision| revision.get());
+                            result.fuel_consumed = output.consumed_fuel;
+                            result.status = output.invocation_status.map(|status| {
+                                golem_api_grpc::proto::golem::worker::InvocationStatus::from(status)
+                                    as i32
+                            });
+                            result.oplog_index = output.oplog_index.map(u64::from);
+                            result.background_failure = output
+                                .background_failure
+                                .map(|failure| WorkerExecutorError::from(failure).into());
+                        }
+                        ObservedInvocationResult::Session {
+                            value,
+                            component_revision,
+                        } => {
+                            result.new_stream_mappings = value.proto_mappings();
+                            result.result =
+                                Some(invocation_session_result::Result::MethodResult(value.value));
+                            result.component_revision = Some(component_revision.get());
+                        }
+                    }
+                    invocation_handle_success::Result::Output(result)
+                }
+                InvocationHandleOperation::Cancel => {
+                    use crate::worker::invocations::InvocationState;
+                    let cancelled = if matches!(
+                        entry.state,
+                        InvocationState::Completed
+                            | InvocationState::Failed
+                            | InvocationState::Cancelled
+                            | InvocationState::BackgroundFailed
+                    ) {
+                        false
+                    } else {
+                        match worker.cancel_invocation(key).await? {
+                            CancelInvocationOutcome::Withdrawn => true,
+                            CancelInvocationOutcome::Running => {
+                                return Err(WorkerExecutorError::CannotCancelRunningInvocation);
+                            }
+                            CancelInvocationOutcome::NotPending => false,
+                        }
+                    };
+                    invocation_handle_success::Result::Cancelled(cancelled)
+                }
+                InvocationHandleOperation::Unspecified => unreachable!(),
+            };
+            Ok(InvocationHandleSuccess {
+                result: Some(result),
+            })
+        }
+        .await;
+        // The authorized caller's invocation ended with its owner's deletion, which an await
+        // that followed the owner to a later generation reports as the owner not being found.
+        if matches!(result, Err(WorkerExecutorError::AgentNotFound { .. }))
+            || worker.answers_as_deleted().await
+        {
+            return Ok(InvocationHandleSuccess {
+                result: Some(invocation_handle_success::Result::NotFound(
+                    golem_schema::proto::golem::common::Empty {},
+                )),
+            });
+        }
+        match result {
+            // A failed deletion keeps the agent until a retry or an eviction replaces its
+            // generation, so its refusal is not the invocation's answer: the caller tries again.
+            Err(WorkerExecutorError::InvalidRequest { .. })
+                if worker.deletion_owns_retirement().await =>
+            {
+                Err(WorkerExecutorError::runtime(
+                    "the agent's failed deletion blocks the invocation handle; try again",
+                ))
+            }
+            result => result,
+        }
     }
 
     async fn schedule_invocation(
@@ -418,7 +623,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         scheduled_at: jiff::Timestamp,
         self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+    ) -> Result<(), RpcError> {
         if self
             .shard_service()
             .check_worker(&owned_agent_id.agent_id)
@@ -472,17 +677,19 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         }
         // This caller holds no task-scope bind, so a deletion may already have stopped the
         // cached generation's state actor.
-        worker
+        let status = worker
             .deleted_incarnation_as_not_found(
                 Some(expected_fingerprint),
                 worker.try_get_last_known_status().await,
             )
-            .await?;
+            .await;
+        worker.failed_deletion_as_retryable(status).await?;
         let scheduled = worker.schedule_invocation(invocation, scheduled_at).await;
-        worker
+        let scheduled = worker
             .deleted_incarnation_as_not_found(Some(expected_fingerprint), scheduled)
-            .await
-            .map_err(Into::into)
+            .await;
+        worker.failed_deletion_as_retryable(scheduled).await?;
+        Ok(())
     }
 
     async fn create_and_initialize(
@@ -853,6 +1060,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         worker.ensure_owns_key(target.new_owner.as_ref())?;
 
         let start = InvocationStart {
+            requires_own_record: false,
             target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
                 target: Some(
                     golem_api_grpc::proto::golem::worker::agent_target::Target::Id(
@@ -1234,13 +1442,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                 scope_card: None,
             };
 
-            let started = worker.clone().invoke_and_start(invocation).await;
+            let started = worker.clone().invoke_and_start(invocation, true).await;
             match worker
                 .deleted_incarnation_as_not_found(expected_callee_fingerprint, started)
                 .await?
             {
-                crate::worker::ResultOrSubscription::Finished(Err(err)) => Err(err.into()),
-                crate::worker::ResultOrSubscription::Finished(Ok(_)) => Ok(()),
+                // Only a committed invocation with this key and request finishes here: the target
+                // accepted it, and the handle reports how it ended.
+                crate::worker::ResultOrSubscription::Finished(_) => Ok(()),
                 crate::worker::ResultOrSubscription::Pending(_) => Ok(()),
             }
         } else {

@@ -96,9 +96,6 @@ func init() {
 		return scopeCardHandle(card.(ScopeCard))
 	}
 	link.InvocationMetadata = func(m host.InvocationMetadata) any { return invocationMetadataFrom(m) }
-	link.ScheduledInvocation = func(m host.InvocationMetadata, token *host.CancellationToken) any {
-		return &ScheduledInvocation{Metadata: invocationMetadataFrom(m), token: token}
-	}
 }
 
 // discover derives every agent type and collects every problem, purely: it reads

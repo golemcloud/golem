@@ -40,6 +40,10 @@ const golemAliases = [
     replacement: resolve(mockDir, "wasm-rquickjs-custom-invocation-context.ts"),
   },
   {
+    find: "wasm-rquickjs:import-abort",
+    replacement: resolve(mockDir, "wasm-rquickjs-import-abort.ts"),
+  },
+  {
     find: "golem:durability/durability@1.6.0",
     replacement: resolve(mockDir, "golem-durability.ts"),
   },

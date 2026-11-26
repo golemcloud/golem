@@ -246,7 +246,7 @@ defineAgent({
           yield* scheduled.cancel
           yield* Effect.sleep("2500 millis")
           const count = yield* (yield* client.method("scheduledCount")).invoke({})
-          return `${reflected.name}:${invoked.metadata.agentId}:${InvocationId.format(invoked.metadata.invocationId)}:${scheduled.metadata.agentId}:${String(count.value)}`
+          return `${reflected.name}:${invoked.metadata.agentId}:${InvocationId.format(invoked.metadata.invocationId)}:${scheduled.id.agentId}:${String(count.value)}`
         }),
       ),
     callTsTool: ({ payload }) =>

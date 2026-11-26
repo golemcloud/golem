@@ -43,7 +43,6 @@ use crate::model::component::ComponentRevision;
 use crate::model::environment::EnvironmentId;
 use crate::model::{AgentId, AgentStatus, RdbmsPoolKey};
 use crate::schema::TypedSchemaValue;
-use crate::schema::schema_value::SchemaValue;
 use crate::schema::tool::DiscoveredTool;
 
 #[derive(
@@ -1003,41 +1002,6 @@ pub enum SerializableP3SocketErrorCode {
     golem_schema_derive::FromSchema,
 )]
 #[desert(evolution())]
-pub enum SerializableInvokeResult {
-    Failed(String),
-    FailedClassified {
-        kind: SerializableHostFailureKind,
-        message: String,
-    },
-    Pending,
-    Completed(Result<SchemaValue, SerializableRpcError>),
-}
-
-#[derive(
-    Debug,
-    Clone,
-    Copy,
-    PartialEq,
-    Eq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(evolution())]
-pub enum SerializableHostFailureKind {
-    Transient,
-    Permanent,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(evolution())]
 pub enum SerializableRpcError {
     ProtocolError {
         details: String,
@@ -1057,6 +1021,39 @@ pub enum SerializableRpcError {
     Conflict {
         details: String,
     },
+    /// The awaited invocation was cancelled before it started.
+    Cancelled {
+        details: String,
+    },
+    /// A cancellation found the invocation already running.
+    CannotCancelRunning {
+        details: String,
+    },
+}
+
+/// The lifecycle state of an accepted invocation, as `invocation.status` observed it.
+#[derive(
+    Debug,
+    Clone,
+    Copy,
+    PartialEq,
+    Eq,
+    BinaryCodec,
+    golem_schema_derive::IntoSchema,
+    golem_schema_derive::FromSchema,
+)]
+#[desert(evolution())]
+pub enum SerializableInvocationStatus {
+    Pending,
+    Scheduled,
+    Running,
+    Waiting,
+    Retrying,
+    Interrupted,
+    Completed,
+    Failed,
+    Cancelled,
+    BackgroundFailed,
 }
 
 #[derive(
@@ -1242,19 +1239,6 @@ pub enum SerializableWebsocketError {
     Closed(Option<SerializableWebsocketCloseInfo>),
     Other(String),
     SessionLost,
-}
-
-#[derive(
-    Debug,
-    Clone,
-    PartialEq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-#[desert(evolution())]
-pub struct SerializableScheduleId {
-    pub id: Uuid,
 }
 
 #[derive(

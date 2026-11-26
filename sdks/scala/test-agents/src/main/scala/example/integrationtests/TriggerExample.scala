@@ -31,6 +31,9 @@ trait TriggerTarget extends BaseAgent {
 
   @description("No-arg method exercising trigger dispatch.")
   def ping(): Future[String]
+
+  @description("Waits for the given number of milliseconds, then returns the accumulated count.")
+  def slowCount(millis: Int): Future[Int]
 }
 
 @agentDefinition()
@@ -43,4 +46,9 @@ trait TriggerCaller extends BaseAgent {
 
   @description("Fires TriggerTarget.ping via trigger and returns confirmation.")
   def firePing(): Future[String]
+
+  @description(
+    "Exercises the invocation handles of trigger and scheduleAt: status, await, cancel, Invocation.get, and the typed cancel failures."
+  )
+  def inspectHandles(): Future[String]
 }

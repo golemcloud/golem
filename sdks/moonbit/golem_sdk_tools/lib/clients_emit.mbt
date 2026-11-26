@@ -213,7 +213,25 @@ pub fn generate_client_code(
     if agent.is_http_router() {
       continue
     }
+    let helper_owners : Map[String, String] = Map([])
     for meth in agent.methods {
+      if !method_contains_agent_stream(meth, value_types_by_name) {
+        for
+          helper in [
+            "trigger_\{meth.name}",
+            "schedule_\{meth.name}",
+            "get_\{meth.name}_invocation",
+          ] {
+          helper_owners[helper] = meth.name
+        }
+      }
+    }
+    for meth in agent.methods {
+      if helper_owners.get(meth.name) is Some(owner) {
+        raise AgentParseError(
+          "Cannot generate native client for agent '\{agent.name}': method name '\{meth.name}' is reserved for a generated invocation helper of method '\{owner}'",
+        )
+      }
       if meth.name == "bind_self" && agent.mode is Durable {
         raise AgentParseError(
           "Cannot generate native client for agent '\{agent.name}': method name 'bind_self' is reserved for the generated self-binding method",
@@ -481,8 +499,9 @@ fn emit_client_scoped(
 }
 
 ///|
-/// Emits the awaited client method and, for stream-free signatures, the three
-/// synchronous trigger and scheduling variants.
+/// Emits the awaited client method and, for stream-free signatures, the async
+/// trigger and schedule variants, which return an invocation handle, and the
+/// `get_*_invocation` that rebuilds a handle from its ID.
 fn emit_client_method(
   buf : StringBuilder,
   agent : AgentInfo,
@@ -552,35 +571,48 @@ fn emit_client_method(
   if contains_stream {
     return
   }
+  let handle = "@rpc.Invocation[\{value_ret}]"
+  let decode = match meth.return_type {
+    None => "output => @agents.discard_optional_wire_value(output)"
+    Some(_) =>
+      "output => match output {\n    Some(tree) => @agents.decode_wire_output(tree, \"\{ctx}\")\n    None => raise @common.AgentError::InvalidType(\"\{ctx}: expected a return value, got none\")\n  }"
+  }
+  let method_name_lit = escape_string_lit(meth.name)
   // trigger
   buf.write_string("///|\n")
   buf.write_string(
-    "pub fn \{client}::trigger_\{meth.name}(\n  \{self_args},\n) -> \{if durable { "Unit" } else { "@rpc.InvocationMetadata" }} raise @common.AgentError {\n",
+    "/// Starts `\{meth.name}` without waiting for it to run, and returns the handle of\n/// the invocation once the target has accepted it.\n",
+  )
+  buf.write_string(
+    "pub async fn \{client}::trigger_\{meth.name}(\n  \{self_args},\n) -> \{handle} {\n",
   )
   buf.write_string("  let input = \{input_expr}\n")
   buf.write_string(
-    "  \{if durable { "let _ = " } else { "" }}self.client.invoke(\"\{escape_string_lit(meth.name)}\", input)\n}\n\n",
+    "  self.client.trigger(\"\{method_name_lit}\", input, \{decode})\n}\n\n",
   )
   // schedule
   let sched_args = "self : \{client}, scheduled_at : @systemClock.Instant" +
     (if arg_sig.is_empty() { "" } else { ", " + arg_sig })
   buf.write_string("///|\n")
   buf.write_string(
-    "pub fn \{client}::schedule_\{meth.name}(\n  \{sched_args},\n) -> \{if durable { "Unit" } else { "@rpc.ScheduledInvocationReceipt" }} raise @common.AgentError {\n",
+    "/// Schedules `\{meth.name}` for `scheduled_at`, and returns the handle of the\n/// invocation, which can cancel it until it starts.\n",
+  )
+  buf.write_string(
+    "pub async fn \{client}::schedule_\{meth.name}(\n  \{sched_args},\n) -> \{handle} {\n",
   )
   buf.write_string("  let input = \{input_expr}\n")
   buf.write_string(
-    "  \{if durable { "let _ = " } else { "" }}self.client.schedule_invocation(scheduled_at, \"\{escape_string_lit(meth.name)}\", input)\n}\n\n",
+    "  self.client.schedule(scheduled_at, \"\{method_name_lit}\", input, \{decode})\n}\n\n",
   )
-  // schedule_cancelable
+  // rebuild a handle from its ID
   buf.write_string("///|\n")
   buf.write_string(
-    "pub fn \{client}::schedule_cancelable_\{meth.name}(\n  \{sched_args},\n) -> \{if durable { "@agentHost.CancellationToken" } else { "@rpc.CancelableScheduledInvocationReceipt" }} raise @common.AgentError {\n",
+    "/// Rebuilds the handle of an invocation of `\{meth.name}` from the ID that\n/// `trigger_\{meth.name}` or `schedule_\{meth.name}` returned. Makes no remote call.\n",
   )
-  buf.write_string("  let input = \{input_expr}\n")
   buf.write_string(
-    "  \{if durable { "self.client.schedule_cancelable_invocation(scheduled_at, \"" + escape_string_lit(meth.name) + "\", input).cancellation_token" } else { "self.client.schedule_cancelable_invocation(scheduled_at, \"" + escape_string_lit(meth.name) + "\", input)" }}\n}\n\n",
+    "pub fn \{client}::get_\{meth.name}_invocation(id : @rpc.InvocationId) -> \{handle} {\n",
   )
+  buf.write_string("  @rpc.Invocation::get(id, \{decode})\n}\n\n")
 }
 
 ///|

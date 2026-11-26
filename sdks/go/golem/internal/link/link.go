@@ -20,6 +20,8 @@ package link
 import (
 	"io"
 
+	"github.com/golemcloud/golem/sdks/go/core/schema"
+	"github.com/golemcloud/golem/sdks/go/core/values"
 	"github.com/golemcloud/golem/sdks/go/golem/internal/engine"
 	common "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_common"
 	host "github.com/golemcloud/golem/sdks/go/golem/internal/wit/golem_agent_host"
@@ -74,8 +76,16 @@ var (
 	// InvocationMetadata converts host invocation metadata into a
 	// golem.InvocationMetadata.
 	InvocationMetadata func(host.InvocationMetadata) any
-	// ScheduledInvocation builds a *golem.ScheduledInvocation.
-	ScheduledInvocation func(metadata host.InvocationMetadata, token *host.CancellationToken) any
+	// AnyInvocation builds the *golem.Invocation[any] of a reflected client,
+	// whose result decode reads.
+	AnyInvocation func(ops InvocationOps, method string, decode func(witTypes.Option[types.SchemaValueTree]) (any, error)) any
+	// ValueInvocation builds the
+	// *golem.Invocation[golem.Option[schema.SchemaValue]] of a dynamic client,
+	// whose result decode reads.
+	ValueInvocation func(
+		ops InvocationOps, method string,
+		decode func(witTypes.Option[types.SchemaValueTree]) (values.Option[schema.SchemaValue], error),
+	) any
 	// ScopeCardHandle borrows the handle of a golem.ScopeCard attached to an
 	// awaited call; nil and the zero ScopeCard are no scope card. It panics
 	// with golem.ErrPermissionCardMoved on a released card.
@@ -83,6 +93,21 @@ var (
 	// ReleaseCard gives a permission-card handle back to the host.
 	ReleaseCard func(*types.PermissionCard)
 )
+
+// InvocationOps are the operations of the handle of one accepted agent
+// invocation, as the host answers them. A handle calls through these functions
+// rather than the generated resource, so that it links and tests off the wasm
+// target; [HostInvocationOps] builds them for a host resource.
+type InvocationOps struct {
+	// ID is the ID of the invocation.
+	ID types.InvocationId
+	// Status reads the invocation's lifecycle state.
+	Status func() witTypes.Result[host.InvocationStatus, host.RpcError]
+	// Await waits for the invocation's result.
+	Await func() witTypes.Result[witTypes.Option[types.SchemaValueTree], host.RpcError]
+	// Cancel withdraws the invocation if it has not started.
+	Cancel func() witTypes.Result[bool, host.RpcError]
+}
 
 // Tools, set by the tool package when a component uses it.
 var (

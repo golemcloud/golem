@@ -2,7 +2,7 @@
 
 ## Overview
 
-`Method.Schedule(client, at, in)` enqueues a **one-off** invocation of a method to run at a specific future time. It returns a `*golem.ScheduledInvocation`, whose `Cancel()` prevents the invocation if it has not started yet, and an error if the host refuses to schedule it; `MustSchedule` panics instead.
+`Method.Schedule(client, at, in)` enqueues a **one-off** invocation of a method to run at a specific future time. It returns once the target has durably accepted the invocation, with a `*golem.Invocation[Out]` handle whose `Cancel()` withdraws the invocation if it has not started yet, or an error if the invocation was not accepted; `MustSchedule` panics instead.
 
 Like `Trigger`, `Schedule` does not wait for a result — so it is safe to target **another** agent or the **same** instance (a synchronous self-`Call` would deadlock). The scheduled time is recorded durably and survives restarts.
 
@@ -12,8 +12,8 @@ For a task that **reschedules itself** on an interval (a periodic / cron-like lo
 
 1. **Get a client** for the target instance: `counter.Agent.Upsert(counter.ID{Name: "my-counter"})`.
 2. **Schedule the method** at a `time.Time`: `counter.Increment.MustSchedule(c, when, in)`.
-3. **Keep the returned `*golem.ScheduledInvocation`** if you may need to cancel it.
-4. **Cancel** with `inv.Cancel()` before the scheduled time to prevent it.
+3. **Keep the returned handle's `ID()`** in state if you may need to cancel it.
+4. **Cancel** with `Method.Invocation(id).Cancel()` before the scheduled time to prevent it.
 
 ## Scheduling a future call on another agent
 
@@ -29,7 +29,7 @@ import (
 	"github.com/golemcloud/golem/sdks/go/golem"
 )
 
-type state struct{ pending *golem.ScheduledInvocation }
+type state struct{ pending golem.Option[golem.InvocationID] }
 
 var agent = scheduler.Agent.Implement(func(scheduler.ID) *state { return &state{} })
 
@@ -37,13 +37,14 @@ func init() {
 	agent.Handle(scheduler.Arm, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
 		c := counter.Agent.Upsert(counter.ID{Name: "my-counter"})
 		// Run counter.increment 60 seconds from now.
-		ctx.State.pending = counter.Increment.MustSchedule(c, time.Now().Add(60*time.Second), golem.Unit{})
+		inv := counter.Increment.MustSchedule(c, time.Now().Add(60*time.Second), golem.Unit{})
+		ctx.State.pending = golem.Some(inv.ID())
 		return golem.Unit{}
 	})
 }
 ```
 
-`Schedule` returns a `*golem.ScheduledInvocation` and an error; its `ID` field is the invocation's `InvocationID`.
+`Schedule` returns a `*golem.Invocation[Out]` and an error. `inv.ID()` is the invocation's `golem.InvocationID`; its `String()` is `<agent-id>.<uuid>` and `golem.ParseInvocationID` reads it back. Dropping the handle does not cancel the invocation.
 
 ### Scheduling a method that takes arguments
 
@@ -56,21 +57,24 @@ counter.Add.MustSchedule(c, time.Now().Add(24*time.Hour), counter.AddIn{By: 5})
 
 ## Canceling a scheduled call
 
-Keep the `*golem.ScheduledInvocation` (e.g. in state) and call `Cancel()`:
+Rebuild the handle from the stored ID with the method descriptor's `Invocation(id)` (no remote call) and call `Cancel()`:
 
 ```go
 func init() {
 	agent.Handle(scheduler.Cancel, func(ctx *golem.Context[state], _ golem.Unit) golem.Unit {
-		if ctx.State.pending != nil {
-			ctx.State.pending.Cancel() // no-op if it has already started
-			ctx.State.pending = nil
+		if id, ok := ctx.State.pending.Get(); ok {
+			// false when it already finished or was already canceled
+			if _, err := counter.Increment.Invocation(id).Cancel(); err != nil {
+				panic(err) // kind golem.RemoteCannotCancelRunning while it runs
+			}
+			ctx.State.pending = golem.None[golem.InvocationID]()
 		}
 		return golem.Unit{}
 	})
 }
 ```
 
-`Cancel()` is idempotent: it does nothing if already canceled, and cannot un-run an invocation that has already started.
+`Cancel()` returns `(bool, error)`: `true` when it withdrew the invocation, `false` when the invocation already finished or was already canceled, and a `*golem.RemoteCallError` of kind `golem.RemoteCannotCancelRunning` when it is running. `AwaitResult()` on a canceled invocation fails with kind `golem.RemoteCancelled`. The ID only locates the invocation: only the agent that scheduled it, or a caller with management permission, may observe or cancel it.
 
 ## Scheduling a future call to itself
 
@@ -83,15 +87,16 @@ counter.Increment.MustSchedule(self, time.Now().Add(time.Minute), golem.Unit{})
 
 ## Schedule vs Trigger
 
-- `Schedule(c, at, in) (*ScheduledInvocation, error)` — run once at a future `time.Time`; cancelable via `Cancel()`. `MustSchedule` panics on the error.
-- `Trigger(c, in) (InvocationID, error)` — enqueue immediately, no delay, not cancelable. Use it to advance to the next step now.
+- `Schedule(c, at, in) (*Invocation[Out], error)` — run once at a future `time.Time`; cancelable via `Cancel()` until it starts. `MustSchedule` panics on the error.
+- `Trigger(c, in) (*Invocation[Out], error)` — enqueue immediately, no delay. Its handle can also cancel the invocation while it waits in the queue. Use it to advance to the next step now.
 - Never self-`Call` — a synchronous call into the same instance deadlocks; self-messaging must use `Schedule` or `Trigger`.
 
 ## Key Constraints
 
 - `Schedule` / `Trigger` are called on the **method descriptor** (`counter.Increment.Schedule(c, ...)`), and the client comes from the callee's **definition** (`counter.Agent.Upsert(id)`).
 - Compute the time with `time.Now().Add(d)` (a `time.Time`); it is recorded durably.
-- To cancel later, you must retain the `*golem.ScheduledInvocation` — don't discard it if cancellation may be needed. Hold it in agent state, not across a bare `var` initializer.
+- To cancel later, retain the handle's `ID()` in agent state and rebuild the handle with `Method.Invocation(id)`. A handle cannot be sent to another agent; send its ID.
+- `Schedule` never carries a scope card, and it panics for a method that takes or returns a stream.
 - For a self-scheduling recurring loop, don't hand-roll it here — use [`golem-recurring-task-go`](/next/how-to-guides/go/golem-recurring-task-go).
 
 ### Related Guides
@@ -99,5 +104,5 @@ counter.Increment.MustSchedule(self, time.Now().Add(time.Minute), golem.Unit{})
 |-------|--------------|
 | [`golem-recurring-task-go`](/next/how-to-guides/go/golem-recurring-task-go) | A self-rescheduling / periodic (cron-like) task |
 | [`golem-fire-and-forget-go`](/next/how-to-guides/go/golem-fire-and-forget-go) | Enqueue an immediate invocation (`Trigger`) |
-| [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go) | Await a result from another agent (`Call` / `CallAsync`) |
+| [`golem-call-another-agent-go`](/next/how-to-guides/go/golem-call-another-agent-go) | Await a result from another agent (`Call`) |
 | [`golem-schedule-agent-go`](/next/how-to-guides/go/golem-schedule-agent-go) | Schedule a future invocation from the CLI |

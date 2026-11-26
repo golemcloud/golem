@@ -47,7 +47,6 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTarget;
 use golem_common::model::agent::AgentUpdateMode;
 use golem_common::model::agent::InvocationFreshnessDisposition;
-use golem_common::model::agent::ScheduleId;
 use golem_common::model::card::{CardId, StoredCard};
 use golem_common::model::component::{ComponentId, ComponentRevision};
 use golem_common::model::oplog::OplogIndex;
@@ -691,6 +690,48 @@ impl GrpcWorkerService for WorkerGrpcApi {
         }))
     }
 
+    async fn invocation_handle(
+        &self,
+        request: Request<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleRequest>,
+    ) -> Result<
+        Response<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleResponse>,
+        Status,
+    > {
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            InvocationHandleResponse, invocation_handle_response,
+        };
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "invocation_handle",
+            agent_id = proto_agent_id_string(&request.agent_id),
+        );
+        let result = self
+            .worker_service
+            .invocation_handle(request)
+            .instrument(record.span.clone())
+            .await;
+        match result {
+            Ok(success) => record.succeed(Ok(Response::new(InvocationHandleResponse {
+                result: Some(invocation_handle_response::Result::Success(success)),
+            }))),
+            Err(WorkerServiceError::GolemError(mut error)) => record.fail(
+                Ok(Response::new(InvocationHandleResponse {
+                    result: Some(invocation_handle_response::Result::Failure(
+                        error.clone().into(),
+                    )),
+                })),
+                &mut error,
+            ),
+            Err(error) => {
+                let error: GrpcAgentError = error.into();
+                record.fail(
+                    Err(Status::unavailable("Invocation handle routing failed")),
+                    &mut WorkerTraceErrorKind(&error),
+                )
+            }
+        }
+    }
+
     async fn control_durable_stream_attachment(
         &self,
         request: Request<DurableStreamAttachmentControlRequest>,
@@ -1130,6 +1171,7 @@ impl WorkerGrpcApi {
                     request
                         .expected_callee_fingerprint
                         .map(|fingerprint| AgentFingerprint(fingerprint.into())),
+                    request.requires_own_record,
                 )
                 .await?
         };
@@ -1287,38 +1329,6 @@ impl WorkerGrpcApi {
             .idempotency_key
             .ok_or_else(|| bad_request_error("Missing idempotency_key"))?
             .into();
-
-        if let Some(scheduled) = request.scheduled {
-            let canceller: golem_common::model::caller::Principal = scheduled
-                .canceller
-                .ok_or_else(|| bad_request_error("Missing canceller"))?
-                .try_into()
-                .map_err(|error| bad_request_error(format!("invalid canceller: {error}")))?;
-            let receipt = ScheduleId {
-                id: scheduled
-                    .schedule_id
-                    .ok_or_else(|| bad_request_error("Missing schedule_id"))?
-                    .into(),
-            };
-            let environment = scheduled
-                .target_environment_id
-                .ok_or_else(|| bad_request_error("Missing target_environment_id"))?
-                .try_into()
-                .map_err(|error| {
-                    bad_request_error(format!("invalid target_environment_id: {error}"))
-                })?;
-            return self
-                .worker_service
-                .cancel_scheduled_invocation(
-                    &OwnedAgentId::new(environment, &agent_id),
-                    &idempotency_key,
-                    receipt,
-                    &canceller,
-                    auth,
-                )
-                .await
-                .map_err(Into::into);
-        }
 
         let environment_id = validate_protobuf_environment_id(request.environment_id)?;
         let canceled = self

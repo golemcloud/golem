@@ -14,8 +14,10 @@ A call can be made in three ways:
 | Call | What the caller does |
 |---|---|
 | Await | Waits for the result |
-| Trigger | Sends the call and continues without waiting |
-| Schedule | Sends the call to run at a given time, and gets a token to cancel it |
+| Trigger | Sends the call and continues once the target has accepted it, without waiting for the result |
+| Schedule | Sends the call to run at a given time, and continues once the target has accepted it |
+
+Trigger and schedule return a handle of the invocation. The handle reads its status, awaits its result later, or cancels it before it starts; its ID rebuilds the handle in a later call of the same agent. The ID only locates the invocation: only the agent that started it, or a caller with management permission, can use it. Dropping a handle does not cancel the invocation.
 
 <Tabs items={["TypeScript", "Effect TypeScript", "Rust", "Scala", "MoonBit", "Go"]} storageKey="nextra-tabs-language-sdk">
   <Tabs.Tab>
@@ -26,13 +28,13 @@ const reviewer = ReviewerAgent.client.upsert({ team: "finance" });
 // Await the result
 const review = await reviewer.review({ draft: this.draftText });
 
-// Trigger without waiting
-reviewer.review.trigger({ draft: this.draftText });
+// Trigger without waiting for the result
+const triggered = await reviewer.review.trigger({ draft: this.draftText });
 
 // Schedule for one hour from now, then cancel
 const inOneHour = { seconds: BigInt(Math.floor(Date.now() / 1000) + 3600), nanoseconds: 0 };
-const token = reviewer.review.schedule(inOneHour, { draft: this.draftText });
-token.cancel();
+const scheduled = await reviewer.review.schedule(inOneHour, { draft: this.draftText });
+await scheduled.cancel();
 ```
   </Tabs.Tab>
   <Tabs.Tab>
@@ -43,13 +45,13 @@ const reviewer = yield* ReviewerAgent.client.upsert({ team: "finance" });
 // Await the result
 const review = yield* reviewer.review({ draft: draftText });
 
-// Trigger without waiting
-yield* reviewer.review.trigger({ draft: draftText });
+// Trigger without waiting for the result
+const triggered = yield* reviewer.review.trigger({ draft: draftText });
 
 // Schedule for one hour from now, then cancel
 const inOneHour = new Date(Date.now() + 60 * 60 * 1000);
 const scheduled = yield* reviewer.review.schedule(inOneHour, { draft: draftText });
-yield* scheduled.cancel();
+yield* scheduled.cancel;
 ```
   </Tabs.Tab>
   <Tabs.Tab>
@@ -60,16 +62,16 @@ let reviewer = ReviewerAgentClient::upsert("finance".to_string());
 // Await the result
 let review = reviewer.review(self.draft_text.clone()).await;
 
-// Trigger without waiting
-reviewer.trigger_review(self.draft_text.clone());
+// Trigger without waiting for the result
+let triggered = reviewer.trigger_review(self.draft_text.clone()).await?;
 
 // Schedule for one hour from now, then cancel
 let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
 let in_one_hour = ScheduledTime { seconds: now.as_secs() as i64 + 3600, nanoseconds: 0 };
-let token = reviewer
-    .schedule_cancelable_review(self.draft_text.clone(), in_one_hour)
-    .unwrap();
-token.cancel();
+let scheduled = reviewer
+    .schedule_review(self.draft_text.clone(), in_one_hour)
+    .await?;
+scheduled.cancel().await?;
 ```
   </Tabs.Tab>
   <Tabs.Tab>
@@ -80,13 +82,13 @@ val reviewer = ReviewerAgentClient.upsert("finance")
 // Await the result
 val review: Future[String] = reviewer.review(draftText)
 
-// Trigger without waiting
+// Trigger without waiting for the result
 reviewer.review.trigger(draftText)
 
 // Schedule for one hour from now, then cancel
 reviewer.review
-  .scheduleCancelableAt(draftText, Datetime.afterSeconds(3600))
-  .foreach(token => token.cancel())
+  .scheduleAt(draftText, Datetime.afterSeconds(3600))
+  .flatMap(scheduled => scheduled.cancel())
 ```
   </Tabs.Tab>
   <Tabs.Tab>
@@ -98,14 +100,15 @@ defer reviewer.drop()
 // Await the result
 let review = reviewer.review(self.draft_text)
 
-// Trigger without waiting
-reviewer.trigger_review(self.draft_text)
+// Trigger without waiting for the result
+reviewer.trigger_review(self.draft_text).drop()
 
 // Schedule for one hour from now, then cancel
 let now = @systemClock.now()
 let in_one_hour = @systemClock.Instant::{ seconds: now.seconds + 3600, nanoseconds: 0 }
-let token = reviewer.schedule_cancelable_review(in_one_hour, self.draft_text)
-token.cancel()
+let scheduled = reviewer.schedule_review(in_one_hour, self.draft_text)
+defer scheduled.drop()
+let _ = scheduled.cancel()
 ```
   </Tabs.Tab>
   <Tabs.Tab>
@@ -117,17 +120,17 @@ in := reviewer.ReviewIn{Draft: ctx.State.draftText}
 // Await the result
 review := reviewer.Review.MustCall(r, in)
 
-// Trigger without waiting
-reviewer.Review.MustTrigger(r, in)
+// Trigger without waiting for the result
+triggered := reviewer.Review.MustTrigger(r, in)
 
 // Schedule for one hour from now, then cancel
 scheduled := reviewer.Review.MustSchedule(r, time.Now().Add(time.Hour), in)
-scheduled.Cancel()
+_, err := scheduled.Cancel()
 ```
   </Tabs.Tab>
 </Tabs>
 
-Agent-to-agent calls execute exactly once. Golem records each call in the caller's oplog and attaches a key derived from it, so retries and recovery after a failure never make the target run the call twice. Scheduled calls are stored durably until they run or are cancelled. A recurring job is a method that schedules its own next run.
+Agent-to-agent calls execute exactly once. Golem records each call in the caller's oplog and attaches a key derived from it, so retries and recovery after a failure never make the target run the call twice. Triggered and scheduled calls are stored durably until they run or are cancelled. A recurring job is a method that schedules its own next run.
 
 Each agent processes one call at a time. A call that arrives while the agent is busy waits in its queue, so a long-running method delays later calls to the same agent; read-only methods can be answered from a cache without waiting. Two agents that await each other at the same moment would wait forever, so use trigger for one direction in such cases.
 

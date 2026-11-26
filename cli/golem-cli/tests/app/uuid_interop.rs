@@ -217,7 +217,7 @@ fn write_rust_caller(ctx: &TestContext) {
                     assert_eq!(configured.label().await.unwrap(), "rust");
                     let unkeyed = RustUuidTarget::create(key, Default::default()).await.unwrap();
                     let unkeyed_id = unkeyed.agent_id().await.unwrap();
-                    RustUuidTarget::get_by_id(&unkeyed_id).unwrap().trigger_touch().unwrap();
+                    RustUuidTarget::get_by_id(&unkeyed_id).unwrap().trigger_touch().await.unwrap();
                     assert_eq!(RustUuidTarget::get_by_id(&unkeyed_id).unwrap().touch().await.unwrap(), 2);
                     assert_eq!(RustUuidTarget::create(key, Default::default()).await.unwrap().touch().await.unwrap(), 1);
                     "probed".to_string()
@@ -326,7 +326,7 @@ fn write_ts(ctx: &TestContext) {
                   );
                   check(await configured.label() === 'ts', 'config override');
                   const unkeyedId = await (await RustUuidTarget.create(id)).agentId();
-                  RustUuidTarget.getById(unkeyedId).touch.trigger();
+                  await RustUuidTarget.getById(unkeyedId).touch.trigger();
                   check(await RustUuidTarget.getById(unkeyedId).touch() === 2, 'trigger by agent ID');
                   return `ok:${await target.touch()}`;
                 },
@@ -685,7 +685,8 @@ fn write_moonbit(ctx: &TestContext) {
                 _ => abort("get_by_id")
               }
               defer pinned.drop()
-              pinned.trigger_touch()
+              let touched = pinned.trigger_touch()
+              defer touched.drop()
               assert_eq(pinned.touch(), 2)
               @rust.RustUuidTargetClient::scoped(id, async fn(remote) {
                 for value in [id, nil, max] {

@@ -270,16 +270,18 @@ struct HoldReportAnswerRpc {
 
 #[async_trait]
 impl Rpc for HoldReportAnswerRpc {
-    async fn cancel_scheduled_invocation(
+    async fn invocation_handle(
         &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::ScheduleId,
-        canceller: &Principal,
+        invocation_id: &golem_common::model::OwnedInvocationId,
+        caller: &golem_common::model::caller::Principal,
+        operation: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation,
         auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
+            .invocation_handle(invocation_id, caller, operation, auth)
             .await
     }
 
@@ -292,7 +294,7 @@ impl Rpc for HoldReportAnswerRpc {
         scheduled_at: jiff::Timestamp,
         self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, RpcError> {
+    ) -> Result<(), RpcError> {
         self.inner
             .schedule_invocation(
                 owned_agent_id,

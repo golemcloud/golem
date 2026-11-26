@@ -4,6 +4,8 @@
 
 The `#derive.agent` code generation tool auto-generates a `<AgentName>Client` struct for each agent, enabling agent-to-agent communication via RPC. An awaited call blocks the calling agent until the target agent returns a result.
 
+Cancelling the task that makes an awaited call withdraws the invocation on a best-effort basis while it has not started; once it runs, it keeps running. To withdraw work later, start it with `trigger_<m>` and call the handle's `cancel()`, which raises `RpcError::CannotCancelRunning` while the invocation runs.
+
 ## Getting a Client (Scoped)
 
 Use `<AgentName>Client::scoped_upsert(...)` with the target agent's constructor parameters and an async
@@ -148,4 +150,4 @@ This client is generated from the built provider's discovered schema before the 
 
 ## Avoiding Deadlocks
 
-**Never create RPC cycles** where A awaits B and B awaits A — this deadlocks both agents. Use `trigger_` (fire-and-forget) to break cycles. See the [`golem-fire-and-forget-moonbit`](/next/how-to-guides/moonbit/golem-fire-and-forget-moonbit) guide.
+**Never create RPC cycles** where A awaits B and B awaits A — this deadlocks both agents. Use `trigger_` (fire-and-forget), which waits only until the target accepts the invocation, to break cycles. See the [`golem-fire-and-forget-moonbit`](/next/how-to-guides/moonbit/golem-fire-and-forget-moonbit) guide.

@@ -2,17 +2,19 @@
 
 ## Overview
 
-A **fire-and-forget** call enqueues a method invocation on the target agent and returns immediately without waiting for the result. The target agent processes the invocation asynchronously. This is for **agent-to-agent calls from code**, not from the CLI.
+A **fire-and-forget** call enqueues a method invocation on the target agent and continues without waiting for the result. It returns once the target has durably accepted the invocation. The target agent processes the invocation asynchronously. This is for **agent-to-agent calls from code**, not from the CLI.
 
 For CLI fire-and-forget, see the [`golem-trigger-agent-moonbit`](/next/how-to-guides/moonbit/golem-trigger-agent-moonbit) guide.
 
 ## Usage
 
-Methods with recursively stream-free inputs and outputs have an auto-generated `trigger_` variant. Run these fragments inside an async function: `AgentClient::scoped_upsert` and its callback are async, while the `trigger_` enqueue itself is synchronous. Propagate async to helpers and callers:
+Methods with recursively stream-free inputs and outputs have an auto-generated async `trigger_` variant. It returns an `@rpc.Invocation[T]` handle, where `T` is the method's return type, and raises when the invocation was not accepted. Run these fragments inside an async function; `AgentClient::scoped_upsert` and its callback are async too. Propagate async to helpers and callers.
+
+The handle owns a host resource: always `drop()` it. Dropping only releases the handle; the invocation keeps running.
 
 ```moonbit
 AgentClient::scoped_upsert("my-counter", async fn(client) {
-  client.trigger_increment()
+  client.trigger_increment().drop()
 })
 ```
 
@@ -20,9 +22,33 @@ With arguments:
 
 ```moonbit
 DataProcessorClient::scoped_upsert("pipeline-1", async fn(client) {
-  client.trigger_process_batch(batch_data)
+  client.trigger_process_batch(batch_data).drop()
 })
 ```
+
+## The Invocation Handle
+
+Keep the handle when you need the outcome later:
+
+```moonbit
+CounterAgentClient::scoped_upsert("my-counter", async fn(client) {
+  let invocation = client.trigger_increment()
+  defer invocation.drop()
+  let id : @rpc.InvocationId = invocation.id() // to_string() is `<agent-id>.<uuid>`
+  let status = invocation.status() // Pending, Running, Completed, ...
+  let count = invocation.await_result()
+  // ...
+})
+
+// In a later invocation of this agent, rebuild the handle from the ID (no remote call):
+let again = CounterAgentClient::get_increment_invocation(@rpc.InvocationId::parse(stored))
+defer again.drop()
+```
+
+- `await_result()` waits without starting or resubmitting the invocation. It raises `RpcError::Cancelled` when the invocation was cancelled.
+- `cancel()` returns `true` when it withdrew an invocation that had not started, `false` when it already finished or was already cancelled, and raises `RpcError::CannotCancelRunning` while it runs.
+- The ID only locates the invocation. Only the agent that triggered it, or a caller with management permission, can read its status, await it or cancel it; others get `RpcError::Denied`.
+- `trigger_` never lends a scope card.
 
 ## When to Use
 
@@ -40,9 +66,9 @@ AgentBClient::scoped_upsert("b1", async fn(client) {
   // ...
 })
 
-// In AgentB — notifies AgentA without waiting (would deadlock if awaited)
+// In AgentB — notifies AgentA without waiting for its result (would deadlock if awaited)
 AgentAClient::scoped_upsert("a1", async fn(client) {
-  client.trigger_on_work_done(result) // OK: fire-and-forget
+  client.trigger_on_work_done(result).drop() // OK: waits only for acceptance
 })
 ```
 
@@ -52,7 +78,7 @@ AgentAClient::scoped_upsert("a1", async fn(client) {
 let regions : Array[String] = ["us-east", "us-west", "eu-central"]
 for region in regions {
   RegionProcessorClient::scoped_upsert(region, async fn(client) {
-    client.trigger_run_report(report_id)
+    client.trigger_run_report(report_id).drop()
   })
 }
 ```

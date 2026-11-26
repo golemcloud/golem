@@ -7,11 +7,11 @@ description: "Scheduling a future agent invocation in a Scala Golem project. Use
 
 ## Overview
 
-A **scheduled invocation** enqueues a method call on the target agent to be executed at a specific future time. The call returns immediately; the target agent processes it when the scheduled time arrives.
+A **scheduled invocation** enqueues a method call on the target agent to be executed at a specific future time. The call returns the invocation's handle once the target has durably accepted it; the target agent processes it when the scheduled time arrives.
 
 ## Usage
 
-For stream-free methods, `.scheduleAt(when)` enqueues the call for the given time. Durable guest clients return `Future[Unit]`; ephemeral guest clients return `Future[InvocationReceipt]` with invocation metadata. Return or compose the future to observe enqueue errors; it does not await execution of the scheduled method.
+For stream-free methods, `.scheduleAt(when)` enqueues the call for the given time. In both durable and ephemeral clients it returns `Future[golem.runtime.rpc.Invocation[Out]]`: the invocation's handle, once the target has durably accepted it. Return or compose the future to observe acceptance errors (`golem.runtime.rpc.AgentRpcException`); it does not await execution of the scheduled method. `scheduleAt` never lends a scope card and is not available for streaming methods.
 
 ```scala
 import golem.Datetime
@@ -40,28 +40,34 @@ Datetime.afterSeconds(60)     // 60 seconds from now
 Datetime.afterSeconds(3600)   // 1 hour from now
 ```
 
-## Cancelable Variant
+## Cancelling a Scheduled Invocation
 
-For a durable, stream-free target, `scheduleCancelableAt` returns `Future[CancellationToken]`. Ephemeral guest clients instead return `Future[CancelableInvocationReceipt]` (`golem.runtime.rpc`), which carries metadata and a cancellation token. Use asynchronous composition in Scala.js, never `Await.result`:
+The handle's `cancel(): Future[Boolean]` withdraws the invocation if it has not started yet and returns `true`. It returns `false` when the invocation already finished or was already cancelled, and fails with `AgentRpcError.CannotCancelRunning` when it is running: a running invocation cannot be cancelled. Use asynchronous composition in Scala.js, never `Await.result`. To cancel from a later invocation, keep the `InvocationId`, not a `Future`, and rebuild the handle with `Invocation.get`, which makes no remote call:
 
 ```scala
-import golem.runtime.rpc.CancellationToken
-import scala.concurrent.{ExecutionContext, Future}
+import golem.InvocationId
+import golem.concurrent.Implicits.global
+import golem.runtime.rpc.Invocation
+import scala.concurrent.Future
 
-given ExecutionContext = ExecutionContext.parasitic
-var pending: Option[CancellationToken] = None
+private var pending: Option[InvocationId] = None
 
-val scheduled: Future[Unit] =
-  counter.increment.scheduleCancelableAt(Datetime.afterSeconds(60)).map { token =>
-    pending = Some(token)
+def schedule(): Future[Unit] =
+  counter.increment.scheduleAt(Datetime.afterSeconds(60)).map { invocation =>
+    pending = Some(invocation.id)
   }
 
-// From a later invocation, after scheduled has completed:
-def cancelPending(): Unit = {
-  pending.foreach(_.cancel())
-  pending = None
-}
+// From a later invocation of the same agent:
+def cancelPending(): Future[Boolean] =
+  pending match {
+    case Some(id) =>
+      pending = None
+      Invocation.get[Unit](id).cancel()
+    case None => Future.successful(false)
+  }
 ```
+
+The ID only locates the invocation; it is not authority. Only the agent that scheduled the invocation, or a caller with the applicable management permission, can observe or cancel it. Dropping the handle only detaches: the scheduled invocation still runs. The handle also has `status()` and `awaitResult()`; see the `golem-fire-and-forget-scala` skill.
 
 ## Use Cases
 

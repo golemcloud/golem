@@ -82,54 +82,56 @@ declare module 'golem:agent/host@2.0.0' {
      * Invokes a remote method with the given parameters, and awaits the result.
      * `input` encodes the method's parameter list. The returned result is
      * `none` for a `unit` output and `some(value)` for a `single` output.
+     * Calls run concurrently with other calls of the same agent. Dropping an unfinished
+     * call withdraws the invocation on a best-effort basis while it has not started.
      * @throws RpcError
      */
-    invokeAndAwait(methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): InvocationResultWithMetadata;
+    invokeAndAwait(methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): Promise<InvocationResultWithMetadata>;
     /**
-     * Triggers the invocation of a remote method with the given parameters,
-     * and returns its final identity immediately.
-     * Scope lending is not supported: `scope-card` must be `none`.
+     * Triggers the invocation of a remote method with the given parameters, and returns
+     * its handle once the target has durably accepted it, without waiting for its result.
      * @throws RpcError
      */
-    invoke(methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): InvocationMetadata;
+    trigger(methodName: string, input: SchemaValueTree): Promise<Invocation>;
     /**
-     * Invokes a remote method with the given parameters, and returns a `future-invoke-result` value which can
-     * be polled for the result together with the final invocation identity.
-     * With this function it is possible to call multiple (different) agents simultaneously.
-     */
-    asyncInvokeAndAwait(methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): AsyncInvocationWithMetadata;
-    /**
-     * Schedules an invocation for later and returns its final identity.
-     * Scope lending is not supported: `scope-card` must be `none`.
+     * Schedules an invocation of a remote method for the given time, and returns its
+     * handle once the target has durably accepted it. The returned handle can cancel the
+     * invocation until it starts.
      * @throws RpcError
      */
-    scheduleInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): ScheduledInvocationReceipt;
-    /**
-     * Schedules an invocation for later and returns its final identity and
-     * cancellation capability. Call cancel on the returned resource to
-     * cancel the invocation before the scheduled time.
-     * Scope lending is not supported: `scope-card` must be `none`.
-     * @throws RpcError
-     */
-    scheduleCancelableInvocation(scheduledTime: Datetime, methodName: string, input: SchemaValueTree, scopeCard: PermissionCard | undefined): CancelableScheduledInvocationReceipt;
+    schedule(scheduledTime: Datetime, methodName: string, input: SchemaValueTree): Promise<Invocation>;
   }
-  export class FutureInvokeResult {
+  export class Invocation {
     /**
-     * Awaits the result of the invocation.
+     * Rebuilds the handle of the invocation with the given ID. Makes no remote call.
+     */
+    static get(id: InvocationId): Invocation;
+    /**
+     * The ID of the invocation
+     */
+    id(): InvocationId;
+    /**
+     * The current lifecycle state of the invocation. Fails with `not-found` when its
+     * agent or the invocation no longer exists.
      * @throws RpcError
      */
-    get(): Promise<SchemaValueTree | undefined>;
+    status(): Promise<InvocationStatus>;
     /**
-     * Best-effort attempt to cancel the remote invocation by idempotency key.
-     * If the invocation has already started or completed, this is a no-op.
+     * Awaits the result of the invocation, without starting, resuming or resubmitting it.
+     * The result is `none` for a `unit` output and `some(value)` for a `single` output.
+     * Fails with `cancelled` when the invocation was cancelled before it started.
+     * @throws RpcError
      */
-    cancel(): void;
-  }
-  export class CancellationToken {
+    await_(): Promise<SchemaValueTree | undefined>;
     /**
-     * Cancel the scheduled invocation
+     * Withdraws the invocation if it has not started yet, and returns `true`.
+     * Returns `false` when the invocation already finished or was already cancelled,
+     * and fails with `cannot-cancel-running` when it is running. A cancel that the
+     * caller repeats after a crash, before its first answer was recorded, returns
+     * `false` when that first attempt withdrew the invocation.
+     * @throws RpcError
      */
-    cancel(): void;
+    cancel(): Promise<boolean>;
   }
   export type AgentId = golemCore200Types.AgentId;
   export type PromiseId = golemCore200Types.PromiseId;
@@ -195,6 +197,16 @@ declare module 'golem:agent/host@2.0.0' {
   {
     tag: 'conflict'
     val: string
+  } |
+  /** The awaited invocation was cancelled before it started */
+  {
+    tag: 'cancelled'
+    val: string
+  } |
+  /** A cancellation found the invocation already running */
+  {
+    tag: 'cannot-cancel-running'
+    val: string
   };
   /**
    * Options of `wasm-rpc.create`
@@ -226,32 +238,15 @@ declare module 'golem:agent/host@2.0.0' {
     result?: SchemaValueTree;
   };
   /**
-   * Receipt returned when an invocation has been scheduled.
+   * The lifecycle state of an accepted invocation
    */
-  export type ScheduledInvocationReceipt = {
-    metadata: InvocationMetadata;
-  };
+  export type InvocationStatus = "pending" | "scheduled" | "running" | "waiting" | "retrying" | "interrupted" | "completed" | "failed" | "cancelled" | "background-failed";
   /**
    * An agent created by `wasm-rpc.create`
    */
   export type Created = {
     client: WasmRpc;
     agentId: AgentId;
-  };
-  /**
-   * Asynchronous invocation handle together with its final identity, when
-   * preparation succeeded. Rejected calls report their error through the future.
-   */
-  export type AsyncInvocationWithMetadata = {
-    metadata?: InvocationMetadata;
-    future: FutureInvokeResult;
-  };
-  /**
-   * Receipt for a scheduled invocation that can still be cancelled.
-   */
-  export type CancelableScheduledInvocationReceipt = {
-    metadata: InvocationMetadata;
-    cancellationToken: CancellationToken;
   };
   /**
    * Get the current value of the config key.

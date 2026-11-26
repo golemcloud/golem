@@ -21,10 +21,7 @@ use crate::durable_host::{
 use crate::metrics::wasm::record_allocated_memory;
 use crate::model::{AgentConfig, ExecutionStatus, HydratedUpdate, LastError, TrapType};
 use crate::preview2::golem::agent::host::{
-    AsyncInvocationWithMetadata, CancelableScheduledInvocationReceipt, CancellationToken,
-    FutureInvokeResult, Host as AgentHost, HostCancellationToken, HostFutureInvokeResult,
-    HostWasmRpc, InvocationMetadata, InvocationResultWithMetadata, RpcError,
-    ScheduledInvocationReceipt, WasmRpc,
+    Host as AgentHost, HostInvocation, HostWasmRpc, Invocation, RpcError, WasmRpc,
 };
 use crate::services::active_agents::ActiveAgents;
 use crate::services::agent_types::AgentTypesService;
@@ -941,86 +938,28 @@ impl HostWasmRpc for Context {
         self.durable_ctx.bind_self().await
     }
 
-    async fn invoke_and_await(
-        &mut self,
-        self_: Resource<WasmRpc>,
-        method_name: String,
-        input: golem_schema::schema::wit::wire::SchemaValueTree,
-        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<Result<InvocationResultWithMetadata, RpcError>> {
-        self.durable_ctx
-            .invoke_and_await(self_, method_name, input, scope_card)
-            .await
-    }
-
-    async fn invoke(
-        &mut self,
-        self_: Resource<WasmRpc>,
-        method_name: String,
-        input: golem_schema::schema::wit::wire::SchemaValueTree,
-        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<Result<InvocationMetadata, RpcError>> {
-        self.durable_ctx
-            .invoke(self_, method_name, input, scope_card)
-            .await
-    }
-
-    async fn async_invoke_and_await(
-        &mut self,
-        self_: Resource<WasmRpc>,
-        method_name: String,
-        input: golem_schema::schema::wit::wire::SchemaValueTree,
-        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<AsyncInvocationWithMetadata> {
-        self.durable_ctx
-            .async_invoke_and_await(self_, method_name, input, scope_card)
-            .await
-    }
-
-    async fn schedule_invocation(
-        &mut self,
-        self_: Resource<WasmRpc>,
-        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
-        method_name: String,
-        input: golem_schema::schema::wit::wire::SchemaValueTree,
-        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<Result<ScheduledInvocationReceipt, RpcError>> {
-        self.durable_ctx
-            .schedule_invocation(self_, scheduled_time, method_name, input, scope_card)
-            .await
-    }
-
-    async fn schedule_cancelable_invocation(
-        &mut self,
-        self_: Resource<WasmRpc>,
-        scheduled_time: wasmtime_wasi::p3::bindings::clocks::system_clock::Instant,
-        method_name: String,
-        input: golem_schema::schema::wit::wire::SchemaValueTree,
-        scope_card: Option<Resource<golem_schema::schema::wit::PermissionCardHandleRep>>,
-    ) -> anyhow::Result<Result<CancelableScheduledInvocationReceipt, RpcError>> {
-        self.durable_ctx
-            .schedule_cancelable_invocation(self_, scheduled_time, method_name, input, scope_card)
-            .await
-    }
-
     async fn drop(&mut self, rep: Resource<WasmRpc>) -> anyhow::Result<()> {
         HostWasmRpc::drop(&mut self.durable_ctx, rep).await
     }
 }
 
-impl HostFutureInvokeResult for Context {
-    async fn cancel(&mut self, this: Resource<FutureInvokeResult>) -> anyhow::Result<()> {
-        HostFutureInvokeResult::cancel(&mut self.durable_ctx, this).await
-    }
-}
-
-impl HostCancellationToken for Context {
-    async fn cancel(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
-        HostCancellationToken::cancel(&mut self.durable_ctx, this).await
+impl HostInvocation for Context {
+    async fn get(
+        &mut self,
+        id: golem_schema::schema::wit::wire::InvocationId,
+    ) -> anyhow::Result<Resource<Invocation>> {
+        HostInvocation::get(&mut self.durable_ctx, id).await
     }
 
-    async fn drop(&mut self, this: Resource<CancellationToken>) -> anyhow::Result<()> {
-        HostCancellationToken::drop(&mut self.durable_ctx, this).await
+    async fn id(
+        &mut self,
+        self_: Resource<Invocation>,
+    ) -> anyhow::Result<golem_schema::schema::wit::wire::InvocationId> {
+        HostInvocation::id(&mut self.durable_ctx, self_).await
+    }
+
+    async fn drop(&mut self, rep: Resource<Invocation>) -> anyhow::Result<()> {
+        HostInvocation::drop(&mut self.durable_ctx, rep).await
     }
 }
 

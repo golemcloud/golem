@@ -8,7 +8,7 @@ import { DynamicAgentClient } from '../src/dynamicClient';
 import { defineAgent } from '../src/defineAgent';
 import { method } from '../src/method';
 import { z } from 'zod';
-import { hostInvocationMetadata } from './invocationMetadataTestSupport';
+import { fakeHostInvocation } from './invocationMetadataTestSupport';
 import { getSelfAgentId } from '../src/host/hostapi';
 import { MOCK_REMOTE_AGENT_ID } from './testSetup';
 import {
@@ -26,10 +26,10 @@ const targetId = AgentId.parse('00000007-0000-8000-8000-000000000004');
 describe('identity boundaries', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('binds the recorded self identity without creating a connection and rejects a different client type', () => {
+  it('binds the recorded self identity without creating a connection and rejects a different client type', async () => {
     const drop = vi.fn();
-    const invoke = vi.fn(() => hostInvocationMetadata());
-    const rpc = { [Symbol.dispose]: drop, invoke } as unknown as WasmRpc;
+    const trigger = vi.fn(async () => fakeHostInvocation());
+    const rpc = { [Symbol.dispose]: drop, trigger } as unknown as WasmRpc;
     selectSelfAgent('Counter');
     vi.mocked(WasmRpc.bindSelf).mockReturnValue([AgentId.toWit(AgentId.parse(SELF_AGENT_ID)), rpc]);
     const counter = defineAgent({
@@ -37,8 +37,8 @@ describe('identity boundaries', () => {
       id: {},
       methods: { touch: method({ input: {}, returns: z.void() }) },
     });
-    counter.client.bindSelf().touch.trigger();
-    expect(invoke).toHaveBeenCalledWith('touch', schemaValueToWit(v.record([])), undefined);
+    await counter.client.bindSelf().touch.trigger();
+    expect(trigger).toHaveBeenCalledWith('touch', schemaValueToWit(v.record([])));
     expect(drop).not.toHaveBeenCalled();
     const other = defineAgent({ name: 'Other', id: {}, methods: {} });
     expect(() => other.client.bindSelf()).toThrow(RemoteCallError);

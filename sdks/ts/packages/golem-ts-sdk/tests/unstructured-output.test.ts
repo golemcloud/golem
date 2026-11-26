@@ -36,7 +36,7 @@ import {
   schemaValueToWit,
   v,
 } from '../src/internal/schema-model';
-import { hostInvocationMetadata } from './invocationMetadataTestSupport';
+import { hostInvocationResult } from './invocationMetadataTestSupport';
 import { selectSelfAgent } from './selfAgentTestSupport';
 import { anonymousContext } from './callerTestSupport';
 
@@ -176,10 +176,7 @@ describe('unstructured outputs under option and result', () => {
         const ref = new SchemaRef({ defs: decoded.defs, root: decoded.roots[0]! });
         expect(ref.validateValue(value)).toMatchObject({ success: true });
 
-        rpc.asyncInvokeAndAwait.mockReturnValue({
-          metadata: hostInvocationMetadata(),
-          future: { get: vi.fn().mockResolvedValue(tree), cancel: vi.fn() },
-        });
+        rpc.invokeAndAwait.mockResolvedValue(hostInvocationResult(tree));
         const remote = await (client as any)[name]({ id });
         expect(remote).toEqual(expected);
       }

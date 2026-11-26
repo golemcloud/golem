@@ -9,7 +9,7 @@ export const Planner = defineAgent({
       // wait for a typed result from a Rust ResearchAgent:
       const facts = await ResearchAgent.upsert(this.topic).gather() //@
       // send now, without waiting for a result:
-      SlackAgent.upsert('ops').post.trigger(facts.summary) //@
+      await SlackAgent.upsert('ops').post.trigger(facts.summary) //@
       // discover agents, their methods, and available tools:
       const agents = reflection.getAllAgentTypes().map((a) => //@
         `${a.name}: ${a.methods.map((m) => m.name).join(', ')}`) //@

@@ -186,7 +186,7 @@ client.set_default_scope_card(None)
 ```
 
 Only awaited calls accept a scope card, and only a `ScopeCard`: a `PermissionCard` does not
-type-check as a scope card. A dropped scope card aborts the call before the input is encoded. `trigger_*`, `schedule_*` and `schedule_cancelable_*`
+type-check as a scope card. A dropped scope card aborts the call before the input is encoded. `trigger_*` and `schedule_*`
 methods never attach one. The same `scope_card?` option and `set_default_scope_card` exist on
 `@rpc.AgentClient` and on the reflection clients (`ReflectedAgentClient`, `DynamicAgentClient`,
 `FullAgentClient`, `MethodOnlyAgentClient`). Tool clients do not take scope cards.

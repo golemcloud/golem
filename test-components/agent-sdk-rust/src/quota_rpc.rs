@@ -101,7 +101,10 @@ impl QuotaRpcSender for QuotaRpcSenderImpl {
 
         let receiver_name = format!("{}-receiver", self.name);
         let receiver = QuotaRpcReceiverClient::upsert(receiver_name);
-        receiver.trigger_reserve_and_call_in_loop(child_token, host.clone(), port, max_iterations);
+        receiver
+            .trigger_reserve_and_call_in_loop(child_token, host.clone(), port, max_iterations)
+            .await
+            .expect("failed to trigger reserve_and_call_in_loop");
 
         for _ in 0..max_iterations {
             match token.reserve(1) {

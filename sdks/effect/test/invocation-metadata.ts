@@ -3,6 +3,7 @@ import type * as CoreTypes from "golem:core/types@2.0.0"
 import { uuidToString } from "golem:core/types@2.0.0"
 import type { AgentId } from "../src/AgentId.js"
 import type { InvocationMetadata } from "../src/Client.js"
+import type { RpcInvocation } from "../src/host/RpcClient.js"
 import type { Uuid } from "../src/Ids.js"
 
 /** A stable agent ID for a test label: the label's hash goes into the low bits. */
@@ -34,5 +35,23 @@ export const sdkInvocationMetadata = (label: string): InvocationMetadata => ({
   invocationId: {
     agentId: agentIdFor(label),
     uuid: "00000000-0000-0001-0000-000000000002" as Uuid,
+  },
+})
+
+/** A host invocation handle of the agent of `label` whose await resolves to `result`. */
+export const fakeRpcInvocation = (
+  label: string,
+  result?: CoreTypes.SchemaValueTree,
+  events: string[] = [],
+): RpcInvocation => ({
+  id: hostInvocationMetadata(label).invocationId,
+  status: async () => "pending",
+  await: async () => result,
+  cancel: async () => {
+    events.push("handle-cancel")
+    return true
+  },
+  drop: () => {
+    events.push("handle-drop")
   },
 })

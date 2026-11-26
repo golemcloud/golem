@@ -783,19 +783,31 @@ impl std::fmt::Debug for __DefaultScopeCard {
     }
 }
 
-/// Starts an awaited agent invocation, lending `scope_card` to the callee for
-/// the invocation. Resolve the scope card with [`__DefaultScopeCard::resolve`]
-/// before encoding `input`; this call then cannot fail before the host takes
-/// ownership of `input`.
+/// Invokes an agent method and awaits its result, lending `scope_card` to the
+/// callee for the invocation. Resolve the scope card with
+/// [`__DefaultScopeCard::resolve`] before encoding `input`, so a dropped
+/// default scope card fails before any argument card moves into `input`.
+///
+/// The host takes ownership of `input` when the returned future is first
+/// polled. Dropping the future before its first poll drops `input`, and the
+/// argument cards in it, and starts no invocation.
 #[doc(hidden)]
 #[cfg(feature = "export_golem_agentic")]
-pub fn __async_invoke_and_await(
+pub async fn __invoke_and_await(
     rpc: &crate::golem_agentic::golem::agent::host::WasmRpc,
     method_name: &str,
     input: wire::SchemaValueTree,
     scope_card: Option<&ScopeCard>,
-) -> crate::golem_agentic::golem::agent::host::AsyncInvocationWithMetadata {
-    rpc.async_invoke_and_await(method_name, input, scope_card.map(ScopeCard::raw))
+) -> Result<
+    crate::golem_agentic::golem::agent::host::InvocationResultWithMetadata,
+    crate::golem_agentic::golem::agent::host::RpcError,
+> {
+    rpc.invoke_and_await(
+        method_name.to_string(),
+        input,
+        scope_card.map(ScopeCard::raw),
+    )
+    .await
 }
 
 /// Borrows the host handles of all `parents` at the same time.

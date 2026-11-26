@@ -418,7 +418,6 @@ impl WorkerService {
                 &invocation_id.id(),
                 environment_id,
                 auth_ctx.clone(),
-                None,
                 Some(agent.metadata.fingerprint),
             )
             .await?;

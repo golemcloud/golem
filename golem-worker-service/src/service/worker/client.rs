@@ -30,7 +30,7 @@ use golem_api_grpc::proto::golem::worker::invocation_session_result;
 use golem_api_grpc::proto::golem::worker::{
     InvocationAccepted, InvocationContext, InvocationFailure, InvocationFailureKind,
     InvocationRejected, InvocationRejectionReason, InvocationRequest, InvocationResponse,
-    InvocationSessionResult, InvocationStart, LogEvent, ScheduledInvocationCancellation,
+    InvocationSessionResult, InvocationStart, LogEvent,
 };
 use golem_api_grpc::proto::golem::workerexecutor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
@@ -572,6 +572,11 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::AgentMetadata> for ExistingAg
 
 #[async_trait]
 pub trait WorkerClient: Send + Sync {
+    async fn invocation_handle(
+        &self,
+        request: workerexecutor::v1::InvocationHandleRequest,
+    ) -> WorkerResult<workerexecutor::v1::InvocationHandleSuccess>;
+
     async fn prepare(
         &self,
         target: &RoutedTarget,
@@ -800,7 +805,6 @@ pub trait WorkerClient: Send + Sync {
         idempotency_key: &golem_common::model::InvocationId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-        scheduled: Option<ScheduledInvocationCancellation>,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<bool>;
 
@@ -849,6 +853,7 @@ pub trait WorkerClient: Send + Sync {
         caller: golem_api_grpc::proto::golem::component::Caller,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
+        requires_own_record: bool,
     ) -> WorkerResult<AgentInvocationOutput>;
 
     async fn invoke_agent_session(
@@ -1144,6 +1149,46 @@ impl HasWorkerExecutorClients for WorkerExecutorWorkerClient {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl WorkerClient for WorkerExecutorWorkerClient {
+    async fn invocation_handle(
+        &self,
+        request: workerexecutor::v1::InvocationHandleRequest,
+    ) -> WorkerResult<workerexecutor::v1::InvocationHandleSuccess> {
+        use crate::service::worker::{AgentCall, ResponseMapResult};
+        let agent_id = request
+            .agent_id
+            .ok_or_else(|| WorkerExecutorError::invalid_request("agent_id not found"))?
+            .try_into()
+            .map_err(WorkerExecutorError::invalid_request)?;
+        self.call_worker_executor(
+            AgentCall {
+                agent_id,
+                replayable: false,
+            },
+            "invocation_handle",
+            move |client| Box::pin(client.invocation_handle(request.clone())),
+            |response: tonic::Response<workerexecutor::v1::InvocationHandleResponse>| match response
+                .into_inner()
+                .result
+            {
+                Some(workerexecutor::v1::invocation_handle_response::Result::Success(success)) => {
+                    Ok(success)
+                }
+                Some(workerexecutor::v1::invocation_handle_response::Result::Failure(error)) => {
+                    // A routing failure may follow target acquisition. Do not resolve a new
+                    // incarnation transparently after an observer has pinned its owner.
+                    Err(ResponseMapResult::Other(WorkerServiceError::GolemError(
+                        error
+                            .try_into()
+                            .unwrap_or_else(WorkerExecutorError::unknown),
+                    )))
+                }
+                None => Err("Empty invocation handle response".into()),
+            },
+            WorkerServiceError::InternalCallError,
+        )
+        .await
+    }
+
     async fn prepare(
         &self,
         target: &RoutedTarget,
@@ -2252,7 +2297,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         idempotency_key: &golem_common::model::InvocationId,
         environment_id: EnvironmentId,
         auth_ctx: AuthCtx,
-        scheduled: Option<ScheduledInvocationCancellation>,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<bool> {
         let agent_id = *agent_id;
@@ -2269,7 +2313,6 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     expected_fingerprint: expected_fingerprint.map(|fingerprint| fingerprint.0.into()),
                     auth_ctx: Some(auth_ctx.clone().into()),
                     caller: Some(Caller::anonymous().into()),
-                    scheduled: scheduled.clone(),
                 }))
             },
             |response| match response.into_inner() {
@@ -2569,6 +2612,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
         caller: golem_api_grpc::proto::golem::component::Caller,
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
+        requires_own_record: bool,
     ) -> WorkerResult<AgentInvocationOutput> {
         let agent_id = target.agent_id;
         let target = target.clone();
@@ -2596,6 +2640,7 @@ impl WorkerClient for WorkerExecutorWorkerClient {
                     let freshness_disposition =
                         freshness_disposition_for_dispatch(freshness_disposition, &first_dispatch);
                     let mut start = InvocationStart {
+                        requires_own_record,
                         target: None,
                         constructor: None,
                         component_id: None,
@@ -4099,6 +4144,10 @@ mod rejection_mapping_tests {
         delete_requests: Arc<std::sync::Mutex<Vec<DeleteWorkerRequest>>>,
         delete_sharding_error: bool,
         cancel_requests: Arc<std::sync::Mutex<Vec<CancelInvocationRequest>>>,
+        handle_requests: Arc<std::sync::Mutex<Vec<InvocationHandleRequest>>>,
+        handle_responses: Arc<
+            std::sync::Mutex<std::collections::VecDeque<Result<InvocationHandleResponse, Status>>>,
+        >,
         accept: bool,
         calls: Arc<AtomicUsize>,
         one_shot_responses: Option<Arc<std::sync::Mutex<OneShotResponses>>>,
@@ -4248,6 +4297,21 @@ mod rejection_mapping_tests {
             GetAgentMetadataResponse
         );
         unimplemented_unary!(lookup_agent, LookupAgentRequest, LookupAgentResponse);
+        async fn invocation_handle(
+            &self,
+            request: Request<InvocationHandleRequest>,
+        ) -> Result<Response<InvocationHandleResponse>, Status> {
+            self.handle_requests
+                .lock()
+                .unwrap()
+                .push(request.into_inner());
+            self.handle_responses
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| Err(Status::unimplemented("no scripted handle response")))
+                .map(Response::new)
+        }
         unimplemented_unary!(resume_worker, ResumeWorkerRequest, ResumeWorkerResponse);
         unimplemented_unary!(
             get_running_workers_metadata,
@@ -4641,6 +4705,7 @@ mod rejection_mapping_tests {
                 Caller::anonymous().into(),
                 None,
                 None,
+                false,
             )
             .await
     }
@@ -4815,6 +4880,89 @@ mod rejection_mapping_tests {
         }
     }
 
+    async fn assert_handle_failure_is_not_replayed(routing_error: bool) {
+        use crate::service::worker::CallWorkerExecutorError;
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            InvocationHandleOperation, invocation_handle_response,
+        };
+
+        let executor = RejectingExecutor::default();
+        let requests = executor.handle_requests.clone();
+        let responses = executor.handle_responses.clone();
+        let (client, agent_id) = client_against(executor, 32 * 1024 * 1024).await;
+        for operation in [
+            InvocationHandleOperation::Status,
+            InvocationHandleOperation::Await,
+            InvocationHandleOperation::Cancel,
+        ] {
+            requests.lock().unwrap().clear();
+            let failure = if routing_error {
+                Ok(InvocationHandleResponse {
+                    result: Some(invocation_handle_response::Result::Failure(
+                        WorkerExecutorError::ShardingNotReady.into(),
+                    )),
+                })
+            } else {
+                Err(Status::unavailable("handle response lost after dispatch"))
+            };
+            *responses.lock().unwrap() = [
+                failure,
+                Ok(InvocationHandleResponse {
+                    result: Some(invocation_handle_response::Result::Success(
+                        Default::default(),
+                    )),
+                }),
+            ]
+            .into();
+            let request = InvocationHandleRequest {
+                agent_id: Some(agent_id.into()),
+                environment_id: Some(EnvironmentId::new().into()),
+                invocation_id: Some(uuid::Uuid::new_v4().into()),
+                caller: None,
+                auth_ctx: Some(AuthCtx::System.into()),
+                operation: operation as i32,
+            };
+            let error = client.invocation_handle(request.clone()).await.unwrap_err();
+            if routing_error {
+                assert!(
+                    matches!(
+                        error,
+                        WorkerServiceError::GolemError(WorkerExecutorError::ShardingNotReady)
+                    ),
+                    "{error:?}"
+                );
+            } else {
+                let WorkerServiceError::InternalCallError(
+                    CallWorkerExecutorError::FailedToConnectToPod(status),
+                ) = error
+                else {
+                    panic!("expected original transport failure, got {error:?}");
+                };
+                assert_eq!(status.code(), tonic::Code::FailedPrecondition);
+                assert_eq!(
+                    status.message(),
+                    format!(
+                        "a call that cannot be replayed failed after it was sent ({}): handle response lost after dispatch",
+                        tonic::Code::Unavailable
+                    )
+                );
+            }
+            assert_eq!(*requests.lock().unwrap(), vec![request]);
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn invocation_handle_does_not_replay_target_routing_failure() {
+        assert_handle_failure_is_not_replayed(true).await;
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn invocation_handle_does_not_replay_ambiguous_transport_failure() {
+        assert_handle_failure_is_not_replayed(false).await;
+    }
+
     #[test]
     #[test_r::timeout("30s")]
     async fn delete_retries_keep_the_authorized_fingerprint() {
@@ -4884,7 +5032,6 @@ mod rejection_mapping_tests {
                 &golem_common::model::InvocationId(uuid::Uuid::new_v4()),
                 EnvironmentId::new(),
                 AuthCtx::system(),
-                None,
                 Some(golem_common::model::AgentFingerprint(uuid::Uuid::new_v4())),
             )
             .await

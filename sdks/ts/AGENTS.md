@@ -8,8 +8,10 @@ This directory contains the TypeScript SDK for building Golem components. It's a
 
 - Node.js
 - pnpm (managed via packageManager field)
-- wasm-rquickjs-cli: install the version in `wasm-rquickjs-version` from
-  `.github/actions/setup-main-validation/action.yml` with `cargo install --locked wasm-rquickjs-cli@<VERSION>`
+- wasm-rquickjs-cli: install the value of `wasm-rquickjs-version` from
+  `.github/actions/setup-main-validation/action.yml`. For a version, use
+  `cargo install --locked wasm-rquickjs-cli@<VERSION>`; for a 40-hex revision, use
+  `cargo install --locked --git https://github.com/golemcloud/wasm-rquickjs --rev <REVISION> wasm-rquickjs-cli`
 
 ## Building
 

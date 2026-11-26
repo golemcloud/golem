@@ -116,9 +116,9 @@ for await (const value of output) {
 For cross-component calls, declare `dependencies.agents` and follow the
 `golem-call-another-agent-ts` guide. Generated guest clients preserve nested stream locations.
 Stream-bearing methods only support awaited calls. Generated guest clients omit
-`.trigger`, `.schedule`, and `.scheduleCancelable` for those methods. Definition
-clients still expose `.trigger` and `.schedule`, but the host does not support
-these operations with streams; surface availability is not a capability guarantee.
+`.trigger` and `.schedule` for those methods. Definition clients still expose
+`.trigger` and `.schedule`, but they reject methods with streams; surface
+availability is not a capability guarantee.
 Stream-bearing constructors are not supported.
 
 For external Node.js clients, declare `bridge.ts.external` as described by

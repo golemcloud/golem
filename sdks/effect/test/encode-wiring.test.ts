@@ -68,9 +68,9 @@ const layers = (calls: Array<string>) => {
     inspect: () => ({ lowerPositive: [], lowerNegative: [], upperPositive: [], upperNegative: [] }),
   }
   const connection = {
-    asyncInvokeAndAwait: (name: string) => {
+    invokeAndAwait: (name: string) => {
       calls.push(name)
-      return { metadata, get: () => Promise.resolve(undefined), cancel: () => {}, drop: () => {} }
+      return Promise.resolve({ metadata, result: undefined })
     },
     drop: () => {},
   } as unknown as RpcConnection

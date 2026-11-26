@@ -90,10 +90,8 @@ fn typed_worker_failure_preserves_rpc_error_category() {
 }
 #[test]
 fn cancelled_callee_is_the_same_permanent_error_before_and_after_acceptance() {
-    let expected = RpcError::RemoteAgentError {
-        error: Box::new(ModelAgentError::InvalidInput(
-            "invocation-cancelled: Invocation was cancelled before execution".to_string(),
-        )),
+    let expected = RpcError::Cancelled {
+        details: "Invocation was cancelled before execution".to_string(),
     };
     let finished = rpc_error_from_failure(InvocationFailure {
         kind: InvocationFailureKind::Execution as i32,

@@ -310,11 +310,14 @@ Logs are visible via `golem agent stream`.
 
 ## Agent-to-Agent Communication (RPC)
 
-The `agents` code generation tool auto-generates a `<AgentName>Client` struct for calling agents remotely. Each method gets three variants:
+The `agents` code generation tool auto-generates a `<AgentName>Client` struct for calling agents remotely. Each method gets these variants:
 
 - `method(args)` — async call that awaits the result
-- `trigger_method(args)` — fire-and-forget (returns immediately)
-- `schedule_method(scheduled_at, args)` — scheduled invocation at a future time
+- `trigger_method(args)` — async; returns an `@rpc.Invocation[T]` handle once the target has accepted the invocation, without waiting for it to run
+- `schedule_method(scheduled_at, args)` — async; schedules the invocation and returns its handle, which can `cancel()` it until it starts
+- `get_method_invocation(id)` — rebuilds the handle from the ID that `trigger_method` or `schedule_method` returned
+
+The handle's ID only locates the invocation: only the caller that started it, or a manager, may observe or cancel it. Dropping a handle only detaches; a running invocation cannot be cancelled.
 
 ```moonbit
 // Awaited call — use an async method and scoped_upsert for automatic cleanup
@@ -326,10 +329,12 @@ pub async fn call_counter() -> UInt64 {
   })
 }
 
-// Fire-and-forget
-let counter = CounterClient::upsert("my-counter")
-counter.trigger_increment()
-counter.drop()
+// Fire-and-forget: drop the handle without waiting
+pub async fn bump_counter() -> Unit {
+  let counter = CounterClient::upsert("my-counter")
+  defer counter.drop()
+  counter.trigger_increment().drop()
+}
 
 // Manual lifecycle management in an async function
 pub async fn read_counter() -> UInt64 {

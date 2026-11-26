@@ -152,5 +152,5 @@ golem agent invoke --trigger --schedule-at 2026-03-15T10:30:00Z \
 
 This skill covers scheduling from a shell. The Effect SDK separately exposes
 `remote.method.schedule(scheduledAt, input)` for calls made from inside Effect agent code. That API
-uses an SDK datetime value and a named input object and returns a cancellation handle; it is not a
+uses an SDK datetime value and a named input object and returns an invocation handle; it is not a
 replacement syntax for `golem agent invoke --trigger --schedule-at`.

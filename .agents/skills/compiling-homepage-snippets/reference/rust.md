@@ -305,8 +305,9 @@ runtime:
   `golem build` generates for the built-in `bash@0.2.1` release.
 - `research_agent_guest_client::{ResearchAgent, Facts}` and
   `slack_agent_guest_client::SlackAgent`: guest clients for agents in other
-  components (`get(..) -> Result<Self, ClientError>`, awaited methods,
-  `trigger_*`, `schedule_*`, `schedule_cancelable_*`), shaped after
+  components (`get(..) -> Result<Self, ClientError>`, awaited methods, and
+  the async `trigger_*` and `schedule_*`, which return
+  `Result<golem_rust::Invocation<R>, ClientError>`), shaped after
   `cli/golem-cli/src/bridge_gen/rust/mod.rs` (guest mode). The comment calls
   ResearchAgent a TypeScript agent, so the call stays cross-language.
 - `crm_find_customer_tool_guest_client::{CrmFindCustomerClient,
@@ -495,7 +496,7 @@ display file has no case, then restores the positive build and deletes
 | agents/sqlite | add a `std::time::Instant` method parameter (trait and impl) | E0599 `AgentArgument<Instant>` bounds |
 | agents/stream | `AgentStream::channel()` | E0599 |
 | agents/team | `.gather()?` without `.await` | E0277 `?` on a future |
-| agents/waits | `schedule_remind_cancelable` | E0599 on `MailerAgentClient` |
+| agents/waits | `.schedule_remind(` → `.schedule_remind_cancelable(` | E0599: no method named `schedule_remind_cancelable` found for struct `MailerAgentClient` |
 | artifacts/files | `Png::from_inline(data, "image/png")` | E0308 expected `PngType`, found `&str` |
 | artifacts/login | owner check `made.asked_by != caller` (the raw `Principal`) | E0277 can't compare `String` with `Principal` |
 | artifacts/overview | mount `/chats/{name}` | macro: filesystem mount capture `{name}` must bind one constructor parameter |

@@ -108,7 +108,7 @@ for v, err := range out.All() {
 }
 ```
 
-`CallAsync` works too. `Trigger` and `Schedule` panic for a method that carries a stream anywhere in its input or output: both return before the call completes, so no stream could be handed over.
+A `Call` in its own goroutine runs alongside other calls, as for any method. `Trigger` and `Schedule` panic for a method that carries a stream anywhere in its input or output: both return before the call completes, so no stream could be handed over.
 
 Guest clients that `golem build` generates for `dependencies.agents` (see `golem-call-another-agent-go`) include stream-bearing methods, spelling each stream as `golem.AgentStream[T]`, including nested ones:
 

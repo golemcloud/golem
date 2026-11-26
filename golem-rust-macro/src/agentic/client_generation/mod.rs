@@ -14,9 +14,9 @@
 
 use crate::agentic::{generic_type_in_agent_method_error, generic_type_in_agent_return_type_error};
 use crate::rpc_client_common::{
-    FunctionOutputInfo, collect_kept_args, collect_typed_params, decode_result_value,
-    encode_value_only_carrier, find_generic_param_in_inputs, find_generic_param_in_return,
-    is_invocation_context_param, is_static_method, positional_record_schema_value,
+    FunctionOutputInfo, collect_kept_args, collect_typed_params, find_generic_param_in_inputs,
+    find_generic_param_in_return, is_invocation_context_param, is_static_method,
+    positional_record_schema_value,
 };
 use quote::{format_ident, quote};
 use std::collections::{HashMap, HashSet};
@@ -398,16 +398,11 @@ fn get_remote_agent_methods_info(
 
             let method_name = &method.sig.ident;
             let trigger_name = agent_method_names.fresh_ident(format!("trigger_{method_name}"));
-            let pending_name = agent_method_names.fresh_ident(format!("pending_{method_name}"));
             let schedule_name = agent_method_names.fresh_ident(format!("schedule_{method_name}"));
-            let schedule_cancelable_name =
-                agent_method_names.fresh_ident(format!("schedule_cancelable_{method_name}"));
             let awaited = AwaitedMethod {
                 method_name,
                 impl_name: agent_method_names
                     .fresh_ident(format!("__golem_{method_name}_with_scope_card")),
-                pending_impl_name: agent_method_names
-                    .fresh_ident(format!("__golem_pending_{method_name}_with_scope_card")),
                 input_defs: &input_defs,
                 input_idents: &input_idents,
                 scope_card_param: fresh_param_ident(&input_idents, "__golem_scope_card"),
@@ -416,9 +411,7 @@ fn get_remote_agent_methods_info(
             Some(generate_method_code(
                 &awaited,
                 &trigger_name,
-                &pending_name,
                 &schedule_name,
-                &schedule_cancelable_name,
                 &input_defs,
                 &input_idents,
                 &method.sig,
@@ -446,22 +439,18 @@ fn extract_method(item: &syn::TraitItem) -> Option<&syn::TraitItemFn> {
 fn generate_method_code(
     awaited: &AwaitedMethod,
     trigger_name: &syn::Ident,
-    pending_name: &syn::Ident,
     schedule_name: &syn::Ident,
-    schedule_cancelable_name: &syn::Ident,
     input_defs: &[&syn::FnArg],
     input_idents: &[syn::Ident],
     sig: &syn::Signature,
     agent_is_durable: bool,
     fallible: bool,
 ) -> GeneratedMethod {
-    let method_name = awaited.method_name;
     if !fallible {
         return generate_direct_method_code(
             awaited,
             trigger_name,
             schedule_name,
-            schedule_cancelable_name,
             input_defs,
             input_idents,
             sig,
@@ -469,6 +458,7 @@ fn generate_method_code(
         );
     }
 
+    let method_name = awaited.method_name;
     let remote_method_name = method_name.to_string();
     let remote_token = quote! { #remote_method_name };
     let fn_output_info = FunctionOutputInfo::from_signature(sig);
@@ -491,344 +481,114 @@ fn generate_method_code(
     let reject_non_awaited_stream_invocation = quote! {
         if false #(|| <#stream_types as golem_rust::agentic::Schema>::contains_stream())* {
             let _ = (#(&#input_idents),*);
-            panic!("live streams cannot cross remote or scheduled agent invocation boundaries")
+            return Err(golem_rust::GolemReflectError::InvalidType(
+                "live streams cannot cross trigger or scheduled agent invocation boundaries".to_string(),
+            ));
         }
     };
-    let process_invoke_result = match &sig.output {
-        syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => decode_result_value(
-            ty,
-            quote! { rpc_result_ok.expect("remote method returned no value") },
-        ),
-        _ => quote! {},
-    };
-
     let input_record = positional_record_schema_value(input_idents, "Failed to encode parameter");
-    let encoded_input = encode_value_only_carrier(input_record.clone());
-    let encode_input = quote! { let input = #encoded_input; };
     let encode_input_async = quote! {
         let input_value = #input_record;
         let input = golem_rust::encode_schema_value_async(&input_value)
             .await
-            .expect("Failed to encode parameters");
+            .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
     };
-    let scheduled_time_param = fresh_param_ident(input_idents, "scheduled_time");
-    if fallible {
-        let reject_non_awaited_stream_invocation = quote! {
-            if false #(|| <#stream_types as golem_rust::agentic::Schema>::contains_stream())* {
-                let _ = (#(&#input_idents),*);
-                return Err(golem_rust::GolemReflectError::InvalidType(
-                    "live streams cannot cross trigger or scheduled agent invocation boundaries".to_string(),
+    let encode_input = quote! {
+        let input = golem_rust::encode_schema_value(&#input_record)
+            .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
+    };
+    // Decodes `rpc_result_ok: Option<SchemaValue>` into the declared return type, returning a
+    // `GolemReflectError` for a malformed output.
+    let decode_value = match &sig.output {
+        syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => quote! {
+            let __golem_value = rpc_result_ok.ok_or_else(||
+                golem_rust::GolemReflectError::MalformedRemoteOutput(
+                    format!("method `{}` returned unit instead of a value", #remote_token),
+                )
+            )?;
+            static __GOLEM_RPC_GRAPH_CACHE: ::std::sync::OnceLock<golem_rust::SchemaGraph> =
+                ::std::sync::OnceLock::new();
+            let __golem_graph = __GOLEM_RPC_GRAPH_CACHE.get_or_init(|| {
+                <#ty as golem_rust::agentic::Schema>::get_type()
+                    .get_schema_graph()
+                    .expect("rpc result type must have a concrete schema graph")
+            });
+            <#ty as golem_rust::agentic::Schema>::from_schema_value(
+                __golem_value,
+                golem_rust::agentic::StructuredSchema::Default(__golem_graph.clone()),
+            )
+            .map_err(golem_rust::GolemReflectError::MalformedRemoteOutput)?
+        },
+        _ => quote! {
+            if rpc_result_ok.is_some() {
+                return Err(golem_rust::GolemReflectError::MalformedRemoteOutput(
+                    format!("method `{}` returned a value instead of unit", #remote_token),
                 ));
             }
-        };
-        let decode_value = match &sig.output {
-            syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => quote! {
-                let __golem_value = rpc_result_ok.ok_or_else(||
-                    golem_rust::GolemReflectError::MalformedRemoteOutput(
-                        format!("method `{}` returned unit instead of a value", #remote_token),
-                    )
-                )?;
-                static __GOLEM_RPC_GRAPH_CACHE: ::std::sync::OnceLock<golem_rust::SchemaGraph> =
-                    ::std::sync::OnceLock::new();
-                let __golem_graph = __GOLEM_RPC_GRAPH_CACHE.get_or_init(|| {
-                    <#ty as golem_rust::agentic::Schema>::get_type()
-                        .get_schema_graph()
-                        .expect("rpc result type must have a concrete schema graph")
-                });
-                <#ty as golem_rust::agentic::Schema>::from_schema_value(
-                    __golem_value,
-                    golem_rust::agentic::StructuredSchema::Default(__golem_graph.clone()),
-                )
-                .map_err(golem_rust::GolemReflectError::MalformedRemoteOutput)?
-            },
-            _ => quote! {
-                if rpc_result_ok.is_some() {
-                    return Err(golem_rust::GolemReflectError::MalformedRemoteOutput(
-                        format!("method `{}` returned a value instead of unit", #remote_token),
-                    ));
-                }
-                ()
-            },
-        };
-        let pending_decode = match &sig.output {
-            syn::ReturnType::Type(_, ty) if !fn_output_info.is_unit => quote! {
-                |rpc_result_ok| {
-                    let __golem_value = rpc_result_ok.ok_or_else(||
-                        golem_rust::GolemReflectError::MalformedRemoteOutput(
-                            format!("method `{}` returned unit instead of a value", #remote_token),
-                        )
-                    )?;
-                    static __GOLEM_RPC_GRAPH_CACHE: ::std::sync::OnceLock<golem_rust::SchemaGraph> =
-                        ::std::sync::OnceLock::new();
-                    let __golem_graph = __GOLEM_RPC_GRAPH_CACHE.get_or_init(|| {
-                        <#ty as golem_rust::agentic::Schema>::get_type()
-                            .get_schema_graph()
-                            .expect("rpc result type must have a concrete schema graph")
-                    });
-                    <#ty as golem_rust::agentic::Schema>::from_schema_value(
-                        __golem_value,
-                        golem_rust::agentic::StructuredSchema::Default(__golem_graph.clone()),
-                    )
-                    .map_err(golem_rust::GolemReflectError::MalformedRemoteOutput)
-                }
-            },
-            _ => quote! {
-                |rpc_result_ok| {
-                    if rpc_result_ok.is_some() {
-                        return Err(golem_rust::GolemReflectError::MalformedRemoteOutput(
-                            format!("method `{}` returned a value instead of unit", #remote_token),
-                        ));
-                    }
-                    Ok(())
-                }
-            },
-        };
-        let encode_input_async = quote! {
-            let input_value = #input_record;
-            let input = golem_rust::encode_schema_value_async(&input_value)
-                .await
-                .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
-        };
-        let encode_input = quote! {
-            let input_value = #input_record;
-            let input = golem_rust::encode_schema_value(&input_value)
-                .map_err(|error| golem_rust::GolemReflectError::SchemaEncode(error.to_string()))?;
-        };
-        let invoke = awaited.invoke(&remote_token);
-        let scope_card_param = &awaited.scope_card_param;
-        let GeneratedMethod {
-            client: pending_client,
-            scoped: pending_scoped,
-        } = awaited.generate_pending(
-            pending_name,
-            quote! { Result<golem_rust::CallerPendingInvocation<#return_type>, golem_rust::GolemReflectError> },
-            quote! {
-                #reject_non_awaited_stream_invocation
-                let input_value = #input_record;
-                golem_rust::agentic::reflection::start_caller_pending(
-                    &self.wasm_rpc,
-                    #remote_token,
-                    input_value,
-                    #scope_card_param.as_ref(),
-                    #pending_decode,
-                )
-            },
-        );
-        if agent_is_durable {
-            return awaited.generate(
-                quote! { Result<#return_type, golem_rust::GolemReflectError> },
-                quote! {
-                    #encode_input_async
-                    let rpc_result_future = #invoke.future;
-                    let rpc_result_ok = golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future)
-                        .await
-                        .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
-                    Ok({ #decode_value })
-                },
-                quote! {
-                pub fn #trigger_name(#(#input_defs),*)
-                    -> Result<(), golem_rust::GolemReflectError>
-                {
-                    #reject_non_awaited_stream_invocation
-                    #encode_input
-                    self.wasm_rpc.invoke(#remote_token, input, None)
-                        .map(|_| ())
-                        .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
-                }
-
-                #pending_client
-
-                pub fn #schedule_name(
-                    #(#input_defs,)*
-                    #scheduled_time_param: golem_rust::ScheduledTime,
-                ) -> Result<(), golem_rust::GolemReflectError> {
-                    #reject_non_awaited_stream_invocation
-                    #encode_input
-                    self.wasm_rpc.schedule_invocation(
-                        #scheduled_time_param,
-                        #remote_token,
-                        input,
-                        None,
-                    )
-                    .map(|_| ())
-                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
-                }
-
-                pub fn #schedule_cancelable_name(
-                    #(#input_defs,)*
-                    #scheduled_time_param: golem_rust::ScheduledTime,
-                ) -> Result<golem_rust::CancellationToken, golem_rust::GolemReflectError> {
-                    #reject_non_awaited_stream_invocation
-                    #encode_input
-                    self.wasm_rpc.schedule_cancelable_invocation(
-                        #scheduled_time_param,
-                        #remote_token,
-                        input,
-                        None,
-                    )
-                    .map(|receipt| golem_rust::CancellationToken::from(receipt.cancellation_token))
-                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
-                }
-                },
-            )
-            .with_scoped(pending_scoped);
-        }
-
-        return awaited.generate(
-            quote! { Result<golem_rust::agentic::EphemeralInvocationResult<#return_type>, golem_rust::GolemReflectError> },
+        },
+    };
+    let decode_wire = quote! {
+        let rpc_result_ok = rpc_result
+            .map(golem_rust::decode_schema_value)
+            .transpose()
+            .map_err(|error| golem_rust::GolemReflectError::SchemaDecode(error.to_string()))?;
+    };
+    let invoke = awaited.invoke(&remote_token);
+    let (awaited_return_type, awaited_body) = if agent_is_durable {
+        (
+            quote! { Result<#return_type, golem_rust::GolemReflectError> },
             quote! {
                 #encode_input_async
-                let invocation = #invoke;
-                let rpc_result_ok = golem_rust::agentic::await_invoke_schema_value_result(invocation.future)
+                let completed = #invoke
                     .await
                     .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
-                let metadata = invocation.metadata.map(golem_rust::InvocationMetadata::from).ok_or_else(|| {
-                    golem_rust::GolemReflectError::ProtocolError(
-                        "the host completed an RPC call it did not accept".to_string(),
-                    )
-                })?;
-                let value = { #decode_value };
-                Ok(golem_rust::agentic::EphemeralInvocationResult { metadata, value })
-            },
-            quote! {
-
-            pub fn #trigger_name(#(#input_defs),*)
-                -> Result<golem_rust::InvocationMetadata, golem_rust::GolemReflectError>
-            {
-                #reject_non_awaited_stream_invocation
-                #encode_input
-                self.wasm_rpc.invoke(#remote_token, input, None)
-                    .map(golem_rust::InvocationMetadata::from)
-                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
-            }
-
-            #pending_client
-
-            pub fn #schedule_name(
-                #(#input_defs,)*
-                #scheduled_time_param: golem_rust::ScheduledTime,
-            ) -> Result<golem_rust::InvocationMetadata, golem_rust::GolemReflectError> {
-                #reject_non_awaited_stream_invocation
-                #encode_input
-                self.wasm_rpc.schedule_invocation(#scheduled_time_param, #remote_token, input, None)
-                    .map(|receipt| receipt.metadata.into())
-                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
-            }
-
-            pub fn #schedule_cancelable_name(
-                #(#input_defs,)*
-                #scheduled_time_param: golem_rust::ScheduledTime,
-            ) -> Result<golem_rust::ScheduledInvocation, golem_rust::GolemReflectError> {
-                #reject_non_awaited_stream_invocation
-                #encode_input
-                self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #remote_token, input, None)
-                    .map(golem_rust::ScheduledInvocation::from)
-                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)
-            }
+                let rpc_result = completed.result;
+                #decode_wire
+                Ok({ #decode_value })
             },
         )
-        .with_scoped(pending_scoped);
-    }
-    let invoke = awaited.invoke(&remote_token);
-    if agent_is_durable {
-        return awaited.generate(
-            quote! { #return_type },
+    } else {
+        (
+            quote! { Result<golem_rust::InvocationOutput<#return_type>, golem_rust::GolemReflectError> },
             quote! {
-            #encode_input_async
-
-            let rpc_result_future = #invoke.future;
-
-            let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
-                golem_rust::agentic::await_invoke_schema_value_result(rpc_result_future).await;
-
-            let rpc_result_ok =
-                rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
-
-            #process_invoke_result
+                #encode_input_async
+                let completed = #invoke
+                    .await
+                    .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
+                let metadata = golem_rust::InvocationMetadata::from(completed.metadata);
+                let rpc_result = completed.result;
+                #decode_wire
+                let value = { #decode_value };
+                Ok(golem_rust::InvocationOutput { metadata, value })
             },
-            quote! {
-
-        pub fn #trigger_name(#(#input_defs),*) {
-            #reject_non_awaited_stream_invocation
-            #encode_input
-
-            let rpc_result: Result<(), golem_rust::golem_agentic::golem::agent::host::RpcError> =
-                self.wasm_rpc.invoke(#remote_token, input, None).map(|_| ());
-
-            rpc_result.unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e));
+        )
+    };
+    let handle_decoder = quote! {
+        |rpc_result: Option<golem_rust::schema::wit::wire::SchemaValueTree>|
+            -> Result<#return_type, golem_rust::GolemReflectError>
+        {
+            #decode_wire
+            Ok({ #decode_value })
         }
-
-        pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<(), golem_rust::golem_agentic::golem::agent::host::RpcError> {
-            #reject_non_awaited_stream_invocation
-            #encode_input
-
-            self.wasm_rpc.schedule_invocation(
-                #scheduled_time_param,
-                #remote_token,
-                input,
-                None
-            ).map(|_| ())
-        }
-
-        pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::CancellationToken, golem_rust::golem_agentic::golem::agent::host::RpcError> {
-            #reject_non_awaited_stream_invocation
-            #encode_input
-
-            self.wasm_rpc.schedule_cancelable_invocation(
-                #scheduled_time_param,
-                #remote_token,
-                input,
-                None
-            ).map(|receipt| golem_rust::CancellationToken::from(receipt.cancellation_token))
-        }
-            },
-        );
-    }
-
-    awaited.generate(
-        quote! { golem_rust::agentic::EphemeralInvocationResult<#return_type> },
-        quote! {
-            #encode_input_async
-            let invocation = #invoke;
-            let rpc_result: Result<Option<golem_rust::SchemaValue>, golem_rust::golem_agentic::golem::agent::host::RpcError> =
-                golem_rust::agentic::await_invoke_schema_value_result(invocation.future).await;
-            let rpc_result_ok = rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
-            let metadata = invocation.metadata.map(golem_rust::InvocationMetadata::from).unwrap_or_else(|| panic!("the host completed the RPC call to {} without accepting it", #remote_token));
-            let value = { #process_invoke_result };
-            golem_rust::agentic::EphemeralInvocationResult { metadata, value }
-        },
-        quote! {
-
-        pub fn #trigger_name(#(#input_defs),*) -> golem_rust::InvocationMetadata {
-            #reject_non_awaited_stream_invocation
-            #encode_input
-            self.wasm_rpc.invoke(#remote_token, input, None)
-                .map(golem_rust::InvocationMetadata::from)
-                .unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e))
-        }
-
-        pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::InvocationMetadata, golem_rust::golem_agentic::golem::agent::host::RpcError> {
-            #reject_non_awaited_stream_invocation
-            #encode_input
-            self.wasm_rpc.schedule_invocation(#scheduled_time_param, #remote_token, input, None)
-                .map(|receipt| receipt.metadata.into())
-        }
-
-        pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::ScheduledInvocation, golem_rust::golem_agentic::golem::agent::host::RpcError> {
-            #reject_non_awaited_stream_invocation
-            #encode_input
-            self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #remote_token, input, None)
-                .map(golem_rust::ScheduledInvocation::from)
-        }
-        },
-    )
+    };
+    let rest = handle_methods(
+        trigger_name,
+        schedule_name,
+        input_defs,
+        input_idents,
+        &remote_token,
+        &return_type,
+        &reject_non_awaited_stream_invocation,
+        &encode_input,
+        &handle_decoder,
+    );
+    awaited.generate(awaited_return_type, awaited_body, rest)
 }
 
 fn generate_direct_method_code(
     awaited: &AwaitedMethod,
     trigger_name: &syn::Ident,
     schedule_name: &syn::Ident,
-    schedule_cancelable_name: &syn::Ident,
     input_defs: &[&syn::FnArg],
     input_idents: &[syn::Ident],
     sig: &syn::Signature,
@@ -868,98 +628,93 @@ fn generate_direct_method_code(
     let encode_input = quote! { let input = #encoded_input; };
     let encoded_input_async = encode_parameters(input_idents, true, false);
     let encode_input_async = quote! { let input = #encoded_input_async; };
-    let scheduled_time_param = fresh_param_ident(input_idents, "scheduled_time");
     let invoke = awaited.invoke(&remote_token);
-    if agent_is_durable {
-        return awaited.generate(
+    let completed = quote! {
+        #encode_input_async
+        let completed = #invoke
+            .await
+            .unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
+    };
+    let (awaited_return_type, awaited_body) = if agent_is_durable {
+        (
             quote! { #return_type },
             quote! {
-            #encode_input_async
-
-            let rpc_result_future = #invoke.future;
-
-            let rpc_result = rpc_result_future.get().await;
-
-            let rpc_result_ok =
-                rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
-
-            #process_invoke_result
+                #completed
+                let rpc_result_ok = completed.result;
+                #process_invoke_result
             },
+        )
+    } else {
+        (
+            quote! { golem_rust::InvocationOutput<#return_type> },
             quote! {
-
-        pub fn #trigger_name(#(#input_defs),*) {
-            #reject_non_awaited_stream_invocation
-            #encode_input
-
-            let rpc_result: Result<(), golem_rust::golem_agentic::golem::agent::host::RpcError> =
-                self.wasm_rpc.invoke(#remote_token, input, None).map(|_| ());
-
-            rpc_result.unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e));
-        }
-
-        pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<(), golem_rust::golem_agentic::golem::agent::host::RpcError> {
-            #reject_non_awaited_stream_invocation
-            #encode_input
-
-            self.wasm_rpc.schedule_invocation(
-                #scheduled_time_param,
-                #remote_token,
-                input,
-                None
-            ).map(|_| ())
-        }
-
-        pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::CancellationToken, golem_rust::golem_agentic::golem::agent::host::RpcError> {
-            #reject_non_awaited_stream_invocation
-            #encode_input
-
-            self.wasm_rpc.schedule_cancelable_invocation(
-                #scheduled_time_param,
-                #remote_token,
-                input,
-                None
-            ).map(|receipt| golem_rust::CancellationToken::from(receipt.cancellation_token))
-        }
+                #completed
+                let metadata = golem_rust::InvocationMetadata::from(completed.metadata);
+                let rpc_result_ok = completed.result;
+                let value = { #process_invoke_result };
+                golem_rust::InvocationOutput { metadata, value }
             },
-        );
+        )
+    };
+    let handle_decoder = quote! {
+        |rpc_result: Option<golem_rust::schema::wit::wire::SchemaValueTree>| {
+            golem_rust::schema::wit::direct::decode_result_payload::<#return_type>(rpc_result)
+                .map_err(|error| golem_rust::GolemReflectError::SchemaDecode(error.to_string()))
+        }
+    };
+    let rest = handle_methods(
+        trigger_name,
+        schedule_name,
+        input_defs,
+        input_idents,
+        &remote_token,
+        &return_type,
+        &reject_non_awaited_stream_invocation,
+        &encode_input,
+        &handle_decoder,
+    );
+    awaited.generate(awaited_return_type, awaited_body, rest)
+}
+
+/// The `trigger_*` and `schedule_*` methods of a client method. Both return the handle of the
+/// accepted invocation, which `handle_decoder` decodes the result of.
+#[allow(clippy::too_many_arguments)]
+fn handle_methods(
+    trigger_name: &syn::Ident,
+    schedule_name: &syn::Ident,
+    input_defs: &[&syn::FnArg],
+    input_idents: &[syn::Ident],
+    remote_token: &proc_macro2::TokenStream,
+    return_type: &proc_macro2::TokenStream,
+    reject_non_awaited_stream_invocation: &proc_macro2::TokenStream,
+    encode_input: &proc_macro2::TokenStream,
+    handle_decoder: &proc_macro2::TokenStream,
+) -> proc_macro2::TokenStream {
+    let scheduled_time_param = fresh_param_ident(input_idents, "scheduled_time");
+    quote! {
+        pub async fn #trigger_name(#(#input_defs),*)
+            -> Result<golem_rust::Invocation<#return_type>, golem_rust::GolemReflectError>
+        {
+            #reject_non_awaited_stream_invocation
+            #encode_input
+            let raw = self.wasm_rpc.trigger(#remote_token.to_string(), input)
+                .await
+                .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
+            golem_rust::Invocation::__from_agentic(raw, #handle_decoder)
+        }
+
+        pub async fn #schedule_name(
+            #(#input_defs,)*
+            #scheduled_time_param: golem_rust::ScheduledTime,
+        ) -> Result<golem_rust::Invocation<#return_type>, golem_rust::GolemReflectError> {
+            #reject_non_awaited_stream_invocation
+            #encode_input
+            let raw = self.wasm_rpc.schedule(#scheduled_time_param, #remote_token.to_string(), input)
+                .await
+                .map_err(golem_rust::agentic::reflection::agentic_rpc_error_to_reflect)?;
+            golem_rust::Invocation::__from_agentic(raw, #handle_decoder)
+        }
     }
-
-    awaited.generate(
-        quote! { golem_rust::agentic::EphemeralInvocationResult<#return_type> },
-        quote! {
-            #encode_input_async
-            let invocation = #invoke;
-            let rpc_result = invocation.future.get().await;
-            let rpc_result_ok = rpc_result.unwrap_or_else(|e| panic!("rpc call to {} failed: {:?}", #remote_token, e));
-            let metadata = invocation.metadata.map(golem_rust::InvocationMetadata::from).unwrap_or_else(|| panic!("the host completed the RPC call to {} without accepting it", #remote_token));
-            let value = { #process_invoke_result };
-            golem_rust::agentic::EphemeralInvocationResult { metadata, value }
-        },
-        quote! {
-
-        pub fn #trigger_name(#(#input_defs),*) -> golem_rust::InvocationMetadata {
-            #reject_non_awaited_stream_invocation
-            #encode_input
-            self.wasm_rpc.invoke(#remote_token, input, None)
-                .map(golem_rust::InvocationMetadata::from)
-                .unwrap_or_else(|e| panic!("rpc call to trigger {} failed: {:?}", #remote_token, e))
-        }
-
-        pub fn #schedule_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::InvocationMetadata, golem_rust::golem_agentic::golem::agent::host::RpcError> {
-            #reject_non_awaited_stream_invocation
-            #encode_input
-            self.wasm_rpc.schedule_invocation(#scheduled_time_param, #remote_token, input, None)
-                .map(|receipt| receipt.metadata.into())
-        }
-
-        pub fn #schedule_cancelable_name(#(#input_defs,)* #scheduled_time_param: golem_rust::ScheduledTime) -> Result<golem_rust::ScheduledInvocation, golem_rust::golem_agentic::golem::agent::host::RpcError> {
-            #reject_non_awaited_stream_invocation
-            #encode_input
-            self.wasm_rpc.schedule_cancelable_invocation(#scheduled_time_param, #remote_token, input, None)
-                .map(golem_rust::ScheduledInvocation::from)
-        }
-        },
-    )
 }
 
 fn fresh_param_ident(occupied: &[syn::Ident], preferred_name: &str) -> syn::Ident {
@@ -1015,11 +770,6 @@ impl GeneratedMethod {
             scoped: quote! {},
         }
     }
-
-    fn with_scoped(mut self, scoped: proc_macro2::TokenStream) -> Self {
-        self.scoped.extend(scoped);
-        self
-    }
 }
 
 /// The awaited invocation of an agent method. It is the only invocation that
@@ -1028,61 +778,16 @@ impl GeneratedMethod {
 struct AwaitedMethod<'a> {
     method_name: &'a syn::Ident,
     impl_name: syn::Ident,
-    pending_impl_name: syn::Ident,
     input_defs: &'a [&'a syn::FnArg],
     input_idents: &'a [syn::Ident],
     scope_card_param: syn::Ident,
 }
 
 impl AwaitedMethod<'_> {
-    /// The `pending_*` form of the awaited invocation, which also accepts a
-    /// scope card.
-    fn generate_pending(
-        &self,
-        pending_name: &syn::Ident,
-        return_type: proc_macro2::TokenStream,
-        body: proc_macro2::TokenStream,
-    ) -> GeneratedMethod {
-        let Self {
-            pending_impl_name,
-            input_defs,
-            input_idents,
-            scope_card_param,
-            ..
-        } = self;
-        let typed_input_defs = input_defs
-            .iter()
-            .filter(|arg| matches!(arg, syn::FnArg::Typed(_)))
-            .collect::<Vec<_>>();
-        GeneratedMethod {
-            client: quote! {
-                fn #pending_impl_name(
-                    &self,
-                    #(#typed_input_defs,)*
-                    #scope_card_param: Option<&golem_rust::permissions::ScopeCard>,
-                ) -> #return_type {
-                    // Resolved before the input is encoded, so that a dropped
-                    // default scope card fails before any argument card moves.
-                    let #scope_card_param = self.__golem_default_scope_card.resolve(#scope_card_param);
-                    #body
-                }
-
-                pub fn #pending_name(#(#input_defs),*) -> #return_type {
-                    self.#pending_impl_name(#(#input_idents,)* None)
-                }
-            },
-            scoped: quote! {
-                pub fn #pending_name(&self, #(#typed_input_defs),*) -> #return_type {
-                    self.client.#pending_impl_name(#(#input_idents,)* Some(self.scope_card))
-                }
-            },
-        }
-    }
-
     fn invoke(&self, remote_token: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
         let scope_card_param = &self.scope_card_param;
         quote! {
-            golem_rust::permissions::__async_invoke_and_await(
+            golem_rust::permissions::__invoke_and_await(
                 &self.wasm_rpc,
                 #remote_token,
                 input,
@@ -1100,7 +805,6 @@ impl AwaitedMethod<'_> {
         let Self {
             method_name,
             impl_name,
-            pending_impl_name: _,
             input_defs,
             input_idents,
             scope_card_param,

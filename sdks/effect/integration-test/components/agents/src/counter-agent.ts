@@ -137,8 +137,8 @@ const CounterSpec = defineAgent({
      * Sleeps for `seconds` then returns the current value. Driver for
      * the abort-in-flight integration test: the caller forks a remote
      * `slowValue` invocation and interrupts it before the sleep
-     * completes; the SDK must propagate the fiber-interrupt to
-     * `future-invoke-result.cancel()` on the host.
+     * completes; the SDK must drop the awaited `invoke-and-await`
+     * import when the fiber is interrupted.
      */
     slowValue: method({
       input: { seconds: Schema.Number },

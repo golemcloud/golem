@@ -46,7 +46,7 @@ class PollerAgentImpl(name: String) extends PollerAgent {
 
     // 2. Schedule the next run (60 seconds from now)
     val self = PollerAgentClient.upsert(name)
-    self.poll.scheduleAt(Datetime.afterSeconds(60))
+    self.poll.scheduleAt(Datetime.afterSeconds(60)).map(_ => ())
   }
 }
 ```
@@ -78,7 +78,7 @@ class PollerAgentImpl(name: String) extends PollerAgent {
     }
 
     val self = PollerAgentClient.upsert(name)
-    self.poll.scheduleAt(Datetime.afterSeconds(delay))
+    self.poll.scheduleAt(Datetime.afterSeconds(delay)).map(_ => ())
   }
 }
 ```
@@ -91,17 +91,18 @@ cannot restart the loop. Use a new identity for a new loop. The flag makes an
 already queued poll exit without work or rescheduling; it does not undo work
 that has already completed.
 
-### Cancellation with CancellationToken
+### Cancellation with the Invocation Handle
 
-For a durable target with stream-free methods, `scheduleCancelableAt` returns `Future[CancellationToken]`. Compose that future to store the token; do not block with `Await.result` in Scala.js. Add `def cancel(): Future[Unit]` to the trait for this variant:
+For a target with stream-free methods, `scheduleAt` returns `Future[golem.runtime.rpc.Invocation[Unit]]`, the handle of the scheduled invocation. Keep its `InvocationId` in the agent state, not the `Future`, and rebuild the handle in a later invocation with `Invocation.get`, which makes no remote call. Do not block with `Await.result` in Scala.js. Add `def cancel(): Future[Unit]` to the trait for this variant:
 
 ```scala
-import golem.runtime.rpc.CancellationToken
+import golem.InvocationId
+import golem.runtime.rpc.{AgentRpcError, AgentRpcException, Invocation}
 
 @agentImplementation()
 class PollerAgentImpl(name: String) extends PollerAgent {
   private var cancelled: Boolean = false
-  private var pendingToken: Option[CancellationToken] = None
+  private var pending: Option[InvocationId] = None
 
   def start(): Future[Unit] = poll()
 
@@ -110,17 +111,21 @@ class PollerAgentImpl(name: String) extends PollerAgent {
     else {
       println(s"Polling $name")
       PollerAgentClient.upsert(name).poll
-        .scheduleCancelableAt(Datetime.afterSeconds(60))
-        .map { token => pendingToken = Some(token) }
+        .scheduleAt(Datetime.afterSeconds(60))
+        .map { invocation => pending = Some(invocation.id) }
     }
 
-  def cancel(): Future[Unit] = Future.successful {
+  def cancel(): Future[Unit] = {
     cancelled = true
-    pendingToken.foreach(_.cancel())
-    pendingToken = None
+    val withdrawn = pending.fold(Future.successful(false))(id => Invocation.get[Unit](id).cancel())
+    pending = None
+    // A poll that already started cannot be cancelled; the flag stops it.
+    withdrawn.map(_ => ()).recover { case AgentRpcException(AgentRpcError.CannotCancelRunning(_)) => () }
   }
 }
 ```
+
+`cancel()` on the handle returns `true` when it withdrew the pending poll and `false` when that poll already finished or was already cancelled. The ID only locates the invocation; only the agent that scheduled it, or a caller with the applicable management permission, can cancel it. Dropping a handle only detaches.
 
 ### Cancellation via State Flag
 
@@ -201,7 +206,7 @@ Extract the scheduling logic into a helper to keep methods clean:
 ```scala
 private def scheduleNext(delaySecs: Int): Future[Unit] = {
   val self = PollerAgentClient.upsert(name)
-  self.poll.scheduleAt(Datetime.afterSeconds(delaySecs))
+  self.poll.scheduleAt(Datetime.afterSeconds(delaySecs)).map(_ => ())
 }
 ```
 
@@ -209,7 +214,7 @@ private def scheduleNext(delaySecs: Int): Future[Unit] = {
 
 - The agent is durable — if it crashes, the pending scheduled invocation still fires and the agent recovers
 - Invocations are sequential — no concurrent executions of `poll` on the same agent
-- Return or compose each `.scheduleAt` future so the current invocation waits for enqueue acknowledgement, not for the future tick's result
+- Return or compose each `.scheduleAt` future so the current invocation waits for the target's acceptance, not for the future tick's result
 - Use a state flag to stop the loop gracefully
 - Keep the scheduled method idempotent — it may be retried on recovery
 

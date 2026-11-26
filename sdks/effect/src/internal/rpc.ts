@@ -1,10 +1,11 @@
-import { Effect, Exit } from "effect"
+import { Effect, Exit, Scope } from "effect"
 import type * as AgentHost from "golem:agent/host@2.0.0"
 import type * as CoreTypes from "golem:core/types@2.0.0"
 import { uuidToString } from "golem:core/types@2.0.0"
 import type { InvocationMetadata, RemoteCallError } from "../Client.js"
-import type { RpcCancellationToken, RpcConnection } from "../host/RpcClient.js"
+import type { RpcConnection, RpcInvocation } from "../host/RpcClient.js"
 import type { Uuid } from "../Ids.js"
+import type { Invocation, InvocationId } from "../InvocationId.js"
 import { agentIdFromWit } from "./agentId.js"
 import { makeInvocationId } from "./invocationId.js"
 import { type GuestScopeCard, isScopeCard, peekScopeCard } from "./scopeCard.js"
@@ -32,6 +33,8 @@ const RPC_TAGS: ReadonlySet<string> = new Set(
     "remote-internal-error": true,
     "remote-agent-error": true,
     conflict: true,
+    cancelled: true,
+    "cannot-cancel-running": true,
   } satisfies Record<AgentHost.RpcError["tag"], true>),
 )
 
@@ -45,13 +48,20 @@ const extractRpcError = (error: unknown): AgentHost.RpcError | undefined => {
   })
 }
 
-export const wrapHostThrow = (error: unknown): RemoteCallError => ({
-  _tag: "RpcCallError",
-  cause: extractRpcError(error) ?? {
+export const wrapHostThrow = (error: unknown): RemoteCallError => {
+  const cause = extractRpcError(error) ?? {
     tag: "protocol-error",
     val: error instanceof Error ? error.message : String(error),
-  },
-})
+  }
+  switch (cause.tag) {
+    case "cancelled":
+      return { _tag: "RpcCancelled", reason: cause.val }
+    case "cannot-cancel-running":
+      return { _tag: "RpcCannotCancelRunning", reason: cause.val }
+    default:
+      return { _tag: "RpcCallError", cause }
+  }
+}
 
 const bestEffort = (operation: () => void): void => {
   try {
@@ -87,9 +97,9 @@ const borrowScopeCard = (
  * `restoreEncodedCapabilities`). Set `restoreUnsent` to `false` for a tree that the caller built:
  * it then stays as the caller supplied it.
  *
- * Once `asyncInvokeAndAwait` is called, nothing is restored, even when it throws: the host may
- * already own the input. A handle without metadata is a rejected call: its future fails with the
- * rejection error.
+ * Once `invokeAndAwait` is called, nothing is restored, even when it fails: the host may already
+ * own the input. Interrupting the call aborts the signal of the host call, which drops it: the
+ * host withdraws the invocation on a best-effort basis while it has not started.
  */
 export const awaitInvocation = <R>(
   rpc: RpcConnection,
@@ -111,43 +121,22 @@ export const awaitInvocation = <R>(
         ),
       ),
       Effect.flatMap((tree) =>
-        Effect.acquireUseRelease(
-          borrowScopeCard(scopeCard).pipe(
-            Effect.flatMap((raw) =>
-              Effect.try({
-                try: () => {
-                  unsent = undefined
-                  return rpc.asyncInvokeAndAwait(method, tree, raw)
-                },
-                catch: wrapHostThrow,
-              }),
-            ),
-            Effect.map((invocation) => ({
-              invocation,
-              metadata: invocation.metadata && invocationMetadataFromHost(invocation.metadata),
-            })),
-          ),
-          ({ invocation, metadata }) =>
-            Effect.tryPromise({ try: () => invocation.get(), catch: wrapHostThrow }).pipe(
-              Effect.flatMap((result) =>
-                metadata === undefined
-                  ? Effect.fail<RemoteCallError>({
-                      _tag: "RpcCallError",
-                      cause: {
-                        tag: "protocol-error",
-                        val: `${method}: host completed a rejected invocation`,
-                      },
-                    })
-                  : Effect.succeed({ metadata, result }),
-              ),
-            ),
-          ({ invocation }) =>
-            Effect.sync(() => {
-              bestEffort(() => invocation.cancel())
-              bestEffort(() => invocation.drop())
+        borrowScopeCard(scopeCard).pipe(
+          Effect.flatMap((raw) =>
+            Effect.tryPromise({
+              try: (signal) => {
+                unsent = undefined
+                return rpc.invokeAndAwait(method, tree, raw, signal)
+              },
+              catch: wrapHostThrow,
             }),
+          ),
         ),
       ),
+      Effect.map((completed) => ({
+        metadata: invocationMetadataFromHost(completed.metadata),
+        result: completed.result,
+      })),
       Effect.onExit((exit) =>
         restoreUnsent && Exit.isFailure(exit) && unsent !== undefined
           ? Effect.sync(() => restoreEncodedCapabilities(unsent!))
@@ -156,30 +145,74 @@ export const awaitInvocation = <R>(
     )
   })
 
-export const cancelOnce = (token: RpcCancellationToken): Effect.Effect<void> => {
-  let consumed = false
-  return Effect.sync(() => {
-    if (consumed) return
-    consumed = true
-    bestEffort(() => token.cancel())
-  })
-}
+/** The SDK form of the ID of a host invocation handle. */
+const invocationIdFromHost = (
+  id: CoreTypes.InvocationId,
+): Effect.Effect<InvocationId, RemoteCallError> =>
+  id.owner.tag === "agent"
+    ? Effect.succeed(makeInvocationId(agentIdFromWit(id.owner.val), uuidToString(id.id) as Uuid))
+    : Effect.fail({
+        _tag: "RpcCallError",
+        cause: { tag: "protocol-error", val: `invocation ${id.owner.tag} owner is not an agent` },
+      })
 
-export const scheduleCancelableInvocation = (
+/**
+ * Wrap a host invocation handle. `decode` turns the awaited result into the value of the
+ * invocation. Interrupting `awaitResult` drops the host await, which only detaches.
+ */
+export const makeInvocation = <A, E>(
+  raw: RpcInvocation,
+  decode: (tree: CoreTypes.SchemaValueTree | undefined) => Effect.Effect<A, RemoteCallError | E>,
+): Effect.Effect<Invocation<A, E>, RemoteCallError> =>
+  Effect.map(invocationIdFromHost(raw.id), (id) =>
+    Object.freeze({
+      id,
+      status: Effect.tryPromise({ try: () => raw.status(), catch: wrapHostThrow }),
+      awaitResult: Effect.tryPromise({
+        try: (signal) => raw.await(signal),
+        catch: wrapHostThrow,
+      }).pipe(Effect.flatMap(decode)),
+      cancel: Effect.tryPromise({ try: () => raw.cancel(), catch: wrapHostThrow }),
+    }),
+  )
+
+/** The handle of the same invocation, with `f` applied to its awaited result. */
+export const mapInvocation = <A, E, B, E2>(
+  invocation: Invocation<A, E>,
+  f: (value: A) => Effect.Effect<B, E2>,
+): Invocation<B, E | E2> =>
+  Object.freeze({ ...invocation, awaitResult: Effect.flatMap(invocation.awaitResult, f) })
+
+/** Own a host invocation handle in the current scope; closing the scope only detaches. */
+export const scopedInvocation = <A, E>(
+  acquire: Effect.Effect<RpcInvocation, RemoteCallError>,
+  decode: (tree: CoreTypes.SchemaValueTree | undefined) => Effect.Effect<A, RemoteCallError | E>,
+): Effect.Effect<Invocation<A, E>, RemoteCallError, Scope.Scope> =>
+  Effect.acquireRelease(acquire, (raw) => Effect.sync(() => bestEffort(() => raw.drop()))).pipe(
+    Effect.flatMap((raw) => makeInvocation(raw, decode)),
+  )
+
+/** Trigger `method` and own the handle of the accepted invocation in the current scope. */
+export const triggerInvocation = <A, E>(
+  rpc: RpcConnection,
+  method: string,
+  input: CoreTypes.SchemaValueTree,
+  decode: (tree: CoreTypes.SchemaValueTree | undefined) => Effect.Effect<A, RemoteCallError | E>,
+) =>
+  scopedInvocation(
+    Effect.tryPromise({ try: () => rpc.trigger(method, input), catch: wrapHostThrow }),
+    decode,
+  )
+
+/** Schedule `method` at `at` and own the handle of the accepted invocation in the current scope. */
+export const scheduleInvocation = <A, E>(
   rpc: RpcConnection,
   at: AgentHost.Datetime,
   method: string,
   input: CoreTypes.SchemaValueTree,
+  decode: (tree: CoreTypes.SchemaValueTree | undefined) => Effect.Effect<A, RemoteCallError | E>,
 ) =>
-  Effect.acquireRelease(
-    Effect.try({
-      try: () => rpc.scheduleCancelableInvocation(at, method, input),
-      catch: wrapHostThrow,
-    }),
-    ({ token }) => Effect.sync(() => bestEffort(() => token.drop())),
-  ).pipe(
-    Effect.map(({ metadata, token }) => ({
-      metadata: invocationMetadataFromHost(metadata),
-      cancel: cancelOnce(token),
-    })),
+  scopedInvocation(
+    Effect.tryPromise({ try: () => rpc.schedule(at, method, input), catch: wrapHostThrow }),
+    decode,
   )

@@ -43,30 +43,26 @@ val result: Future[Int] = counter.increment()
 val count: Future[Int] = counter.getCount()
 ```
 
-The call uses `async-invoke-and-await` under the hood — the calling agent **suspends** (yields the WASM event loop) until the target agent returns. The returned `Future` is genuinely async, enabling concurrent RPC calls to multiple agents.
+The call uses the asynchronous `invoke-and-await` host function under the hood — the calling agent **suspends** (yields the WASM event loop) until the target agent returns. The returned `Future` is genuinely async, enabling concurrent RPC calls to multiple agents.
 
-## Cancelable Call
+## Ephemeral Targets
 
-The signatures here describe native SDK durable targets with stream-free methods. Ephemeral clients, native and CLI-generated, expose only `upsert`. Their awaited calls return `Future[InvocationResult[T]]`, cancelable calls return `Future[CancelableAsyncInvocation[T]]`, trigger/schedule return `Future[InvocationReceipt]`, and cancelable scheduling returns `Future[CancelableInvocationReceipt]` (types in `golem.runtime.rpc`).
+The signatures above describe durable targets with stream-free methods. Ephemeral clients, native and CLI-generated, expose only `upsert`. Their awaited calls return `Future[golem.runtime.rpc.InvocationResult[T]]`, which pairs the result with the invocation metadata of the one-shot instance that ran it.
 
-Get a `(Future[Out], CancellationToken)` pair to cancel a pending call:
+An awaited call cannot be cancelled from Scala: a `Future` has no cancel. To cancel work before it starts, trigger or schedule it and cancel its handle.
 
-```scala
-val (result, token) = counter.increment.cancelable()
-// Later: token.cancel() — best-effort cancellation
-```
+Failures arrive as a failed `Future` with `golem.runtime.rpc.AgentRpcException`, whose `error: AgentRpcError` tells the cases apart: `Denied`, `NotFound`, `Cancelled`, `CannotCancelRunning`, `RemoteInternal`, `Conflict`, and the agent-domain errors.
 
 ## Other Call Modes
 
-Each method also supports fire-and-forget and scheduling:
+Each stream-free method also supports trigger and scheduling. Both return `Future[golem.runtime.rpc.Invocation[Out]]`, the handle of the accepted invocation, and never lend a scope card:
 
 ```scala
-counter.increment.trigger()                          // fire-and-forget
+counter.increment.trigger()                             // returns once the target accepted it
 counter.increment.scheduleAt(Datetime.afterSeconds(60)) // scheduled
-counter.increment.scheduleCancelableAt(Datetime.afterSeconds(60)) // cancelable scheduled
 ```
 
-See the [`golem-fire-and-forget-scala`](/next/how-to-guides/scala/golem-fire-and-forget-scala) and [`golem-schedule-future-call-scala`](/next/how-to-guides/scala/golem-schedule-future-call-scala) skills.
+The handle has `id`, `status()`, `awaitResult()` and `cancel()`. The ID is a locator, not authority: only the starter or a caller with the applicable management permission can observe or cancel the invocation. Dropping the handle only detaches, and a running invocation cannot be cancelled (`AgentRpcError.CannotCancelRunning`). See the [`golem-fire-and-forget-scala`](/next/how-to-guides/scala/golem-fire-and-forget-scala) and [`golem-schedule-future-call-scala`](/next/how-to-guides/scala/golem-schedule-future-call-scala) skills.
 
 ## Agents Without a Key
 

@@ -23,12 +23,14 @@ enum Hold {
     Activation,
     /// The `inc_by` dispatch at this position, after the target ran its effect.
     Response(usize),
+    /// The first schedule, after the target committed its pending invocation.
+    Schedule,
 }
 
 /// Records the idempotency key of every target activation and every `inc_by` dispatch, and the
 /// caller that each of them gives the target, and holds the call selected by `hold`. With
-/// `hold_first_cancel`, the first scheduled invocation cancellation is held the same way after
-/// the target commits it.
+/// `hold_first_cancel`, the first invocation handle cancellation is held the same way after the
+/// target commits it.
 struct HoldResponseRpc {
     inner: Arc<dyn Rpc>,
     hold: Hold,
@@ -39,10 +41,52 @@ struct HoldResponseRpc {
     effect_applied: Arc<tokio::sync::Notify>,
     hold_first_cancel: bool,
     cancel_results: Arc<Mutex<Vec<bool>>>,
+    /// The request key of every schedule.
+    schedules: Arc<Mutex<Vec<golem_common::model::InvocationRequestKey>>>,
 }
 
 #[async_trait]
 impl Rpc for HoldResponseRpc {
+    async fn invocation_handle(
+        &self,
+        invocation_id: &golem_common::model::OwnedInvocationId,
+        caller: &golem_common::model::caller::Principal,
+        operation: golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation,
+        auth: &AuthCtx,
+    ) -> Result<
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess,
+        golem_service_base::error::worker_executor::WorkerExecutorError,
+    > {
+        let result = self
+            .inner
+            .invocation_handle(invocation_id, caller, operation, auth)
+            .await;
+        if operation
+            == golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleOperation::Cancel
+        {
+            let hold = {
+                let mut results = self.cancel_results.lock().unwrap();
+                if let Ok(golem_api_grpc::proto::golem::workerexecutor::v1::InvocationHandleSuccess {
+                    result:
+                        Some(
+                            golem_api_grpc::proto::golem::workerexecutor::v1::invocation_handle_success::Result::Cancelled(
+                                cancelled,
+                            ),
+                        ),
+                }) = &result
+                {
+                    results.push(*cancelled);
+                }
+                self.hold_first_cancel && results.len() == 1
+            };
+            if hold {
+                self.effect_applied.notify_one();
+                std::future::pending::<()>().await;
+            }
+        }
+        result
+    }
+
     async fn create_and_initialize(
         &self,
         target: ResolvedTarget,
@@ -88,32 +132,6 @@ impl Rpc for HoldResponseRpc {
         demand
     }
 
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, RpcError> {
-        let result = self
-            .inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
-            .await;
-        let hold = {
-            let mut results = self.cancel_results.lock().unwrap();
-            if let Ok(cancelled) = &result {
-                results.push(*cancelled);
-            }
-            self.hold_first_cancel && results.len() == 1
-        };
-        if hold {
-            self.effect_applied.notify_one();
-            std::future::pending::<()>().await;
-        }
-        result
-    }
-
     async fn schedule_invocation(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -123,8 +141,14 @@ impl Rpc for HoldResponseRpc {
         scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
-    ) -> Result<golem_common::model::ScheduleId, RpcError> {
-        self.inner
+    ) -> Result<(), RpcError> {
+        let hold = {
+            let mut schedules = self.schedules.lock().unwrap();
+            schedules.push(request_key.clone());
+            matches!(self.hold, Hold::Schedule) && schedules.len() == 1
+        };
+        let result = self
+            .inner
             .schedule_invocation(
                 owned_agent_id,
                 expected_fingerprint,
@@ -134,7 +158,12 @@ impl Rpc for HoldResponseRpc {
                 self_agent_id,
                 auth_ctx,
             )
-            .await
+            .await;
+        if hold {
+            self.effect_applied.notify_one();
+            std::future::pending::<()>().await;
+        }
+        result
     }
 
     async fn create_demand(
@@ -348,7 +377,7 @@ async fn durable_rpc_of_an_anonymous_root_redispatches_with_the_same_key_after_r
     .await
 }
 
-/// `durable_operation_after_rpc_result("async-rpc")` calls `inc_by(1)`, grows memory, then calls
+/// `durable_operation_after_rpc_result("awaited-rpc")` calls `inc_by(1)`, grows memory, then calls
 /// `inc_by(7)` on the same activated target. The uncommitted `GrowMemory` hint is the oplog tip when
 /// the second RPC begins; its Start barrier must preserve both the hint and the call before dispatch.
 #[test]
@@ -365,7 +394,7 @@ async fn durable_rpc_after_uncommitted_hint_redispatches_with_the_same_key_after
         fixture,
         agent_key!("CancelTester", "held-response-caller"),
         "durable_operation_after_rpc_result",
-        data_value!("held-response-target", "async-rpc"),
+        data_value!("held-response-target", "awaited-rpc"),
         1,
         8,
         false,
@@ -403,6 +432,7 @@ async fn held_response_restart_case(
                     effect_applied: effect_applied.clone(),
                     hold_first_cancel: false,
                     cancel_results: Arc::default(),
+                    schedules: Arc::default(),
                 })
             }
         })),
@@ -537,7 +567,7 @@ async fn held_response_restart_case(
 }
 
 /// The target removes the pending entry of a scheduled invocation, but the caller crashes before
-/// the token cancellation records its `End`. Recovery repairs the incomplete cancellation in
+/// the handle's cancellation records its `End`. Recovery repairs the incomplete cancellation in
 /// place: the target reports nothing left to cancel and the scheduled invocation never runs.
 #[test]
 #[timeout("3m")]
@@ -563,6 +593,7 @@ async fn committed_scheduled_cancellation_completes_after_caller_restart(
                     effect_applied: effect_applied.clone(),
                     hold_first_cancel: true,
                     cancel_results: cancel_results.clone(),
+                    schedules: Arc::default(),
                 })
             }
         })),
@@ -645,7 +676,7 @@ async fn committed_scheduled_cancellation_completes_after_caller_restart(
         .iter()
         .filter(|entry| {
             matches!(&entry.entry, PublicOplogEntry::Start(start)
-            if start.function_name == "golem::rpc::cancellation-token::cancel")
+            if start.function_name == "golem::rpc::invocation::cancel")
         })
         .map(|entry| entry.oplog_index)
         .collect::<Vec<_>>();
@@ -681,6 +712,177 @@ async fn committed_scheduled_cancellation_completes_after_caller_restart(
     Ok(())
 }
 
+/// The target commits the pending invocation of a schedule, but the caller crashes before the
+/// schedule records its `End`. Recovery repeats the schedule with its recorded request key: the
+/// target keeps its one pending invocation, the guest receives that invocation's ID, and the
+/// schedule's `Start` gets one `End`.
+#[test]
+#[timeout("3m")]
+async fn committed_schedule_completes_after_caller_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    const HOLD_TIMEOUT: Duration = Duration::from_secs(30);
+    let context = TestContext::new(last_unique_id);
+    let effect_applied = Arc::new(tokio::sync::Notify::new());
+    let schedules = Arc::new(Mutex::new(Vec::new()));
+    let overrides = TestExecutorOverrides {
+        wrap_rpc: Some(Arc::new({
+            let effect_applied = effect_applied.clone();
+            let schedules = schedules.clone();
+            move |rpc| {
+                Arc::new(HoldResponseRpc {
+                    inner: rpc,
+                    hold: Hold::Schedule,
+                    activations: Arc::default(),
+                    attempts: Arc::default(),
+                    callee_callers: Arc::default(),
+                    effect_applied: effect_applied.clone(),
+                    hold_first_cancel: false,
+                    cancel_results: Arc::default(),
+                    schedules: schedules.clone(),
+                })
+            }
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, fixture)
+        .store()
+        .await?;
+    let server_name = "held-schedule-target";
+    let server = agent_key!("ScheduledInvocationServer", server_name);
+    let caller_id = agent_key!("ScheduledInvocationClient", "held-schedule-owner");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    let caller = executor
+        .start_agent(&component.id, caller_id.clone())
+        .await?;
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
+    let input = data_value!(server_name.to_string(), due.as_second() as u64, 0u32);
+    let scheduled_keys = async |executor: &TestWorkerExecutor| -> anyhow::Result<_> {
+        Ok(executor
+            .attached_agent_status(&target.agent_id)
+            .await?
+            .pending_invocations
+            .iter()
+            .filter(|pending| pending.not_before.is_some())
+            .filter_map(|pending| pending.idempotency_key().cloned())
+            .collect::<Vec<_>>())
+    };
+
+    let key = IdempotencyKey::fresh();
+    let invocation = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let caller_id = caller_id.clone();
+        let key = key.clone();
+        let input = input.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent_with_key(&component, &caller_id, &key, "schedule_at", input)
+                .await
+        })
+    };
+    tokio::time::timeout(HOLD_TIMEOUT, effect_applied.notified()).await?;
+    let committed = scheduled_keys(&executor).await?;
+    assert_eq!(
+        committed.len(),
+        1,
+        "the target commits the schedule before the caller crashes"
+    );
+    let stored = executor.stored_oplog(&caller.agent_id).await;
+    let stored_start = stored
+        .iter()
+        .position(|entry| {
+            matches!(entry,
+            golem_common::model::oplog::OplogEntry::Start { function_name, .. }
+                if function_name.to_string() == "golem::rpc::wasm-rpc::schedule")
+        })
+        .map(|position| OplogIndex::from_u64(OplogIndex::INITIAL.as_u64() + position as u64))
+        .expect("the schedule's Start is durable before the target is contacted");
+    assert!(
+        !stored.iter().any(|entry| matches!(entry,
+            golem_common::model::oplog::OplogEntry::End { start_index, .. }
+                if *start_index == stored_start)),
+        "the crash loses the schedule's End"
+    );
+    invocation.abort();
+    let _ = invocation.await;
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    tokio::time::timeout(
+        HOLD_TIMEOUT,
+        executor.invoke_and_await_agent_with_key(
+            &component,
+            &caller_id,
+            &key,
+            "schedule_at",
+            input,
+        ),
+    )
+    .await??;
+
+    let schedules = schedules.lock().unwrap().clone();
+    assert_eq!(
+        schedules.len(),
+        2,
+        "recovery repeats the lost schedule once"
+    );
+    assert_eq!(
+        schedules[1], schedules[0],
+        "the repeated schedule reuses the recorded request key"
+    );
+    assert_eq!(
+        scheduled_keys(&executor).await?,
+        committed,
+        "the target keeps its one pending invocation"
+    );
+    let id = executor
+        .invoke_and_await_agent(
+            &component,
+            &caller_id,
+            "scheduled_invocation_id",
+            data_value!(),
+        )
+        .await?
+        .into_typed::<Option<String>>()?
+        .expect("the caller keeps the scheduled invocation's ID")
+        .parse::<golem_common::model::OwnedInvocationId>()
+        .map_err(anyhow::Error::msg)?;
+    assert_eq!(
+        id.id(),
+        committed[0],
+        "the guest receives the ID of the committed invocation"
+    );
+    let oplog = executor.get_oplog(&caller, OplogIndex::INITIAL).await?;
+    let schedule_starts = oplog
+        .iter()
+        .filter(|entry| {
+            matches!(&entry.entry, PublicOplogEntry::Start(start)
+                if start.function_name == "golem::rpc::wasm-rpc::schedule")
+        })
+        .map(|entry| entry.oplog_index)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        schedule_starts,
+        vec![stored_start],
+        "the repair completes the original Start"
+    );
+    assert_eq!(
+        oplog
+            .iter()
+            .filter(|entry| matches!(&entry.entry, PublicOplogEntry::End(end)
+                if end.start_index == schedule_starts[0]))
+            .count(),
+        1
+    );
+    golem_test_framework::dsl::oplog_shape::assert_settled_oplog(&oplog, &[], &[]);
+    Ok(())
+}
+
 /// `try_call_counter` activates a durable `RpcCounter` target and calls it. The activation creates
 /// the target, but the executor stops before the caller receives the activation result, so the
 /// caller's activation has no committed `End`. After a restart the caller repeats the activation with
@@ -713,6 +915,7 @@ async fn durable_rpc_activation_repeats_its_key_after_restart(
                     effect_applied: created.clone(),
                     hold_first_cancel: false,
                     cancel_results: Arc::default(),
+                    schedules: Arc::default(),
                 })
             }
         })),

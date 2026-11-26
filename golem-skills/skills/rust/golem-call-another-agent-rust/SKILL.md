@@ -35,7 +35,11 @@ let result = counter.increment().await;
 let count = counter.get_count().await;
 ```
 
-The calling agent **blocks** until the target agent processes the request and returns. This is the standard RPC pattern.
+The calling agent **blocks** until the target agent processes the request and returns. This is the standard RPC pattern. An awaited call is a single async call: to run several at once, join their futures (see the `golem-parallel-workers-rust` skill). Dropping an unfinished awaited call withdraws the invocation on a best-effort basis while it has not started.
+
+For an **ephemeral** target, the awaited call returns `golem_rust::InvocationOutput<R>`: the result is in `value`, and `metadata` names the one-shot instance and the invocation that ran.
+
+To start an invocation without waiting for it, use the async `trigger_<method>` or `schedule_<method>`. Both return a `golem_rust::Invocation<R>` handle once the target has accepted the invocation; see the `golem-fire-and-forget-rust` and `golem-schedule-future-call-rust` skills.
 
 ## Multiple Agents With the Same Parameters
 
@@ -47,4 +51,4 @@ When calling agents defined in a **different component**, the generated client t
 
 ## Avoiding Deadlocks
 
-**Never create RPC cycles** where A awaits B and B awaits A — this deadlocks both agents. Use `trigger_` (fire-and-forget) to break cycles. See the `golem-fire-and-forget-rust` skill.
+**Never create RPC cycles** where A awaits B and B awaits A — this deadlocks both agents. Use `trigger_` (fire-and-forget), which waits only until the target accepts the invocation, to break cycles. See the `golem-fire-and-forget-rust` skill.

@@ -48,18 +48,18 @@ use crate::model::oplog::payload::types::{
 };
 use crate::model::oplog::types::{
     AgentMetadataForGuests, SerializableDbColumn, SerializableDbResult, SerializableDbValue,
-    SerializableHttpErrorCode, SerializableInvokeResult, SerializableIpAddresses,
+    SerializableHttpErrorCode, SerializableInvocationStatus, SerializableIpAddresses,
     SerializableP3HttpBodyChunk, SerializableP3HttpClientSend, SerializableP3HttpClientSendResult,
     SerializableP3HttpConsumeBodyResult, SerializableP3HttpRequestBodyFrame,
     SerializableP3IpNameLookupError, SerializableP3TcpChunk, SerializableRdbmsError,
-    SerializableRdbmsRequest, SerializableRpcError, SerializableScheduleId,
-    SerializableStreamError, SerializableToolInvocationResult, SerializableToolRpcError,
+    SerializableRdbmsRequest, SerializableRpcError, SerializableStreamError,
+    SerializableToolInvocationResult, SerializableToolRpcError,
 };
 use crate::model::oplog::{CardInstallFailure, PayloadId};
 use crate::model::retry_policy::{NamedRetryPolicy, PredicateValue, RetryPolicy};
 use crate::model::{
-    AgentFingerprint, AgentId, ComponentId, ForkResult, IdempotencyKey, InvocationId,
-    InvocationRequestKey, OplogIndex, OwnedInvocationId, PromiseId, ScanCursor,
+    AgentFingerprint, AgentId, ComponentId, ForkResult, InvocationId, InvocationRequestKey,
+    OplogIndex, OwnedInvocationId, PromiseId, ScanCursor,
 };
 use crate::oplog_payload;
 use crate::schema::schema_value::SecretValuePayload;
@@ -200,8 +200,8 @@ oplog_payload! {
             #[transient(None::<TypedSchemaValue>)]
             remote_agent_parameters: Option<TypedSchemaValue>, // enriched field, only filled when exposed as public oplog entry
         },
-        GolemRpcScheduledInvocationCancellation {
-            schedule_id: SerializableScheduleId
+        GolemRpcInvocationHandle {
+            invocation_id: OwnedInvocationId
         },
         KVBucket {
             bucket: String
@@ -321,12 +321,6 @@ oplog_payload! {
             remote_agent_id: AgentId,
             target_environment_id: EnvironmentId,
             fingerprint: AgentFingerprint
-        },
-        GolemRpcAsyncInvokeRejection {
-            remote_agent_id: AgentId,
-            idempotency_key: IdempotencyKey,
-            method_name: String,
-            error: SerializableRpcError
         },
         GolemContextSpanResource {
             creation_index: Option<OplogIndex>
@@ -597,14 +591,15 @@ oplog_payload! {
         GolemRpcInvokeAndAwait {
             result: Result<SchemaValue, SerializableRpcError>
         },
-        GolemRpcInvokeGet {
-            result: SerializableInvokeResult
+        GolemRpcInvocationAccepted {
+            result: Result<OwnedInvocationId, SerializableRpcError>
         },
-        GolemRpcScheduledInvocation {
-            schedule_id: SerializableScheduleId,
-            invocation_id: OwnedInvocationId,
+        GolemRpcInvocationStatus {
+            result: Result<SerializableInvocationStatus, SerializableRpcError>
         },
-        GolemRpcUnitOrFailure { result: Result<(), SerializableRpcError> },
+        GolemRpcInvocationCancel {
+            result: Result<bool, SerializableRpcError>
+        },
         GolemRpcUnit {},
         KVGet {
             result: Result<Option<Vec<u8>>, String>
@@ -895,9 +890,6 @@ oplog_payload! {
         P3FileSystemWriteAdmission {
             result: Result<(), SerializableP3FileSystemError>,
         },
-        GolemRpcScheduledInvocationError {
-            error: SerializableRpcError
-        },
         GolemToolInvokeResult {
             result: Result<SerializableToolInvocationResult, SerializableToolRpcError>
         },
@@ -940,49 +932,6 @@ oplog_payload! {
         GolemRpcPrepareInvocation {
             result: Result<AgentFingerprint, SerializableRpcError>,
         },
-    }
-}
-
-#[derive(
-    Clone,
-    Debug,
-    PartialEq,
-    BinaryCodec,
-    golem_schema_derive::IntoSchema,
-    golem_schema_derive::FromSchema,
-)]
-pub struct HostResponseGolemRpcScheduledInvocationCompat {
-    pub result: Result<(SerializableScheduleId, OwnedInvocationId), SerializableRpcError>,
-}
-
-impl From<HostResponseGolemRpcScheduledInvocationCompat> for HostResponse {
-    fn from(value: HostResponseGolemRpcScheduledInvocationCompat) -> Self {
-        match value.result {
-            Ok((schedule_id, invocation_id)) => HostResponseGolemRpcScheduledInvocation {
-                schedule_id,
-                invocation_id,
-            }
-            .into(),
-            Err(error) => HostResponseGolemRpcScheduledInvocationError { error }.into(),
-        }
-    }
-}
-
-impl TryFrom<HostResponse> for HostResponseGolemRpcScheduledInvocationCompat {
-    type Error = String;
-
-    fn try_from(value: HostResponse) -> Result<Self, Self::Error> {
-        match value {
-            HostResponse::GolemRpcScheduledInvocation(value) => Ok(Self {
-                result: Ok((value.schedule_id, value.invocation_id)),
-            }),
-            HostResponse::GolemRpcScheduledInvocationError(value) => Ok(Self {
-                result: Err(value.error),
-            }),
-            other => Err(format!(
-                "Expected GolemRpcScheduledInvocation or GolemRpcScheduledInvocationError, got {other:?}"
-            )),
-        }
     }
 }
 
@@ -1062,12 +1011,12 @@ pub mod host_functions {
         (RandomInsecureGetInsecureRandomU64 => "random::insecure", "get_insecure_random_u64", NoInput, RandomU64),
         (RandomGetRandomBytes => "random", "get_random_bytes", RandomBytes, RandomBytes),
         (RandomGetRandomU64 => "random", "get_random_u64", NoInput, RandomU64),
-        (GolemRpcFutureInvokeResultGet => "golem::rpc::future-invoke-result", "get", GolemRpcInvoke, GolemRpcInvokeGet, denied = denied::rpc::future_invoke_result_get),
         (GolemRpcWasmRpcInvokeAndAwaitResult => "golem::rpc::wasm-rpc", "invoke_and_await", GolemRpcInvoke, GolemRpcInvokeAndAwait, denied = denied::rpc::invoke_and_await),
-        (GolemRpcWasmRpcInvoke => "golem::rpc::wasm-rpc", "invoke", GolemRpcInvoke, GolemRpcUnitOrFailure, denied = denied::rpc::invoke),
-        (GolemRpcWasmRpcScheduleInvocation => "golem::rpc::wasm-rpc", "schedule_invocation", GolemRpcScheduledInvocation, GolemRpcScheduledInvocationCompat, denied = denied::rpc::schedule_invocation),
-        (GolemRpcCancellationTokenCancel => "golem::rpc::cancellation-token", "cancel", GolemRpcScheduledInvocationCancellation, GolemRpcUnit),
-        (GolemRpcFutureInvokeResultCancel => "golem::rpc::future-invoke-result", "cancel", GolemRpcInvoke, GolemRpcUnit),
+        (GolemRpcWasmRpcTrigger => "golem::rpc::wasm-rpc", "trigger", GolemRpcInvoke, GolemRpcInvocationAccepted, denied = denied::rpc::invocation_accepted),
+        (GolemRpcWasmRpcSchedule => "golem::rpc::wasm-rpc", "schedule", GolemRpcScheduledInvocation, GolemRpcInvocationAccepted, denied = denied::rpc::invocation_accepted),
+        (GolemRpcInvocationStatus => "golem::rpc::invocation", "status", GolemRpcInvocationHandle, GolemRpcInvocationStatus),
+        (GolemRpcInvocationAwait => "golem::rpc::invocation", "await", GolemRpcInvocationHandle, GolemRpcInvokeAndAwait),
+        (GolemRpcInvocationCancel => "golem::rpc::invocation", "cancel", GolemRpcInvocationHandle, GolemRpcInvocationCancel),
         (IoPollReady => "io::poll::pollable", "ready", NoInput, PollReady),
         (IoPollPoll => "io::poll", "poll", PollCount, PollResult),
         (WallClockNow => "wall_clock", "now", NoInput, WallClock),
@@ -1130,7 +1079,6 @@ pub mod host_functions {
         (GolemRpcWasmRpcGetById => "golem::rpc::wasm-rpc", "get-by-id", GolemRpcGetById, GolemRpcCreated),
         (GolemRpcWasmRpcCreate => "golem::rpc::wasm-rpc", "create", GolemRpcCreateAgent, GolemRpcCreated),
         (GolemRpcWasmRpcBindSelf => "golem::rpc::wasm-rpc", "bind-self", GolemRpcBindSelf, GolemRpcUnit),
-        (GolemRpcWasmRpcAsyncInvokeRejection => "golem::rpc::wasm-rpc", "async-invoke-rejection", GolemRpcAsyncInvokeRejection, GolemRpcInvokeAndAwait),
         (GolemContextStartSpan => "golem::api::context", "start-span", NoInput, GolemApiUnit),
         (GolemContextSpanFinish => "golem::api::context::span", "finish", GolemContextSpanResource, GolemApiUnit),
         (GolemContextSpanSetAttributes => "golem::api::context::span", "set-attributes", GolemContextSpanAttributes, GolemApiUnit),

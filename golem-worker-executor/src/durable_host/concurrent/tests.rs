@@ -210,6 +210,7 @@ async fn cleanup_after_terminal_keeps_live_permit_until_event_is_consumed() {
             DroppedCall {
                 start_idx: idx(5),
                 entity_admission: false,
+                close_start_span: false,
                 function_type: DurableFunctionType::ReadRemote,
                 request_upload: PendingUpload::already_durable(),
                 span_finished: None,
@@ -763,6 +764,7 @@ async fn terminal_guard_torn_during_teardown_keeps_cleanup_but_no_marker() {
             DroppedCall {
                 start_idx: idx(1),
                 entity_admission: false,
+                close_start_span: false,
                 function_type: DurableFunctionType::ReadLocal,
                 request_upload: PendingUpload::already_durable(),
                 span_finished: None,
@@ -1746,6 +1748,7 @@ async fn access_terminal_end_is_appended_before_cleanup_and_permit_release() {
         DroppedCall {
             start_idx,
             entity_admission: false,
+            close_start_span: false,
             function_type: DurableFunctionType::ReadRemote,
             request_upload: PendingUpload::already_durable(),
             span_finished: None,
@@ -2358,6 +2361,7 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
     let dropped_a = DroppedCall {
         start_idx: idx(5),
         entity_admission: false,
+        close_start_span: false,
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
         span_finished: None,
@@ -2368,6 +2372,7 @@ fn seam2_dropped_call_drain_failure_uses_dropped_call_trap_context() {
     let dropped_b = DroppedCall {
         start_idx: idx(8),
         entity_admission: false,
+        close_start_span: false,
         function_type: DurableFunctionType::ReadRemote,
         request_upload: PendingUpload::already_durable(),
         span_finished: None,

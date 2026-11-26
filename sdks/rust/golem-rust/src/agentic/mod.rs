@@ -28,7 +28,6 @@ pub use agent_initiator::*;
 pub use agent_registry::*;
 pub use agent_stream::*;
 pub use ambient_tool_rpc::*;
-pub use async_utils::*;
 pub use errors::*;
 #[doc(hidden)]
 pub use exports::Component;
@@ -62,12 +61,6 @@ pub use unstructured_text::*;
 pub use webhook::*;
 pub use wit_bindgen::spawn_local;
 
-#[derive(Debug)]
-pub struct EphemeralInvocationResult<T> {
-    pub metadata: reflection::InvocationMetadata,
-    pub value: T,
-}
-
 mod agent;
 mod agent_config;
 #[cfg(feature = "export_golem_agentic")]
@@ -76,7 +69,6 @@ mod agent_initiator;
 mod agent_registry;
 mod agent_stream;
 pub mod ambient_tool_rpc;
-mod async_utils;
 mod errors;
 pub(crate) mod exports;
 mod extended_agent_type;

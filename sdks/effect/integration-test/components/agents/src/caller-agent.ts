@@ -6,7 +6,7 @@
  */
 import { Cause, Effect, Exit, Fiber, Schema } from "effect"
 import { Counter } from "./counter-agent.js"
-import { defineAgent, method } from "@golemcloud/effect-golem"
+import { defineAgent, InvocationId, method } from "@golemcloud/effect-golem"
 
 export const Caller = defineAgent({
   name: "Caller",
@@ -29,14 +29,19 @@ export const Caller = defineAgent({
     /**
      * Forks a long-running remote `slowValue` invocation, sleeps
      * briefly, then `Fiber.interrupt`s the forked fiber. Returns
-     * `true` when the fiber's exit cause carries an interrupt — which
-     * proves the SDK's `Effect.acquireUseRelease(asyncInvokeAndAwait,
-     * pollable.abortablePromise, fut.cancel)` chain propagated the
-     * fiber-interrupt to the host. Inspect the oplog with
-     * `golem -L agent oplog 'Caller("...")'` to see the
-     * `future-invoke-result.cancel()` entry.
+     * `true` when the fiber's exit cause carries an interrupt. The
+     * interrupt aborts the signal of the awaited `invoke-and-await`
+     * import, so the runtime drops the import and the host withdraws
+     * the invocation when it has not started yet.
      */
     abortInFlight: method({ input: { seconds: Schema.Number }, success: Schema.Boolean }),
+    /**
+     * Exercises the invocation handles of `trigger` and `schedule` on the
+     * remote Counter: status, await, cancel, rebuilding a handle from its ID,
+     * withdrawing a scheduled invocation, and the typed failure of cancelling
+     * a running one. Returns the observations joined with `:`.
+     */
+    invocationHandles: method({ input: {}, success: Schema.String }),
   },
 }).implement({
   init: ({ counterName }) => Effect.succeed(counterName),
@@ -71,8 +76,8 @@ export const Caller = defineAgent({
     abortInFlight: ({ seconds }) =>
       Effect.gen(function* () {
         const counter = yield* Counter.client.upsert({ name: counterName })
-        // Fork the remote invoke; let it park inside the SDK's
-        // pollable.abortablePromise; then interrupt.
+        // Fork the remote invoke; let it wait for the awaited
+        // import; then interrupt.
         const fiber = yield* Effect.forkChild(counter.slowValue({ seconds }))
         yield* Effect.sleep("100 millis")
         yield* Fiber.interrupt(fiber)
@@ -86,5 +91,59 @@ export const Caller = defineAgent({
         Effect.catch(() => Effect.succeed(false)),
         Effect.scoped,
       ),
+    invocationHandles: () =>
+      Effect.gen(function* () {
+        const counter = yield* Counter.client.upsert({ name: counterName })
+
+        const triggered = yield* counter.increment.trigger({})
+        const incremented = yield* triggered.awaitResult
+        const triggeredStatus = yield* triggered.status
+        const cancelCompleted = yield* triggered.cancel
+
+        const read = yield* counter.value.trigger({})
+        const rebuilt = yield* InvocationId.get(read.id, Counter.methods.value)
+        const rebuiltValue = yield* rebuilt.awaitResult
+
+        const scheduled = yield* counter.increment.schedule(Date.now() + 3_600_000, {})
+        const scheduledStatus = yield* scheduled.status
+        const cancelScheduled = yield* scheduled.cancel
+        const cancelledStatus = yield* scheduled.status
+        const awaitCancelled = yield* scheduled.awaitResult.pipe(
+          Effect.match({ onFailure: errorTag, onSuccess: () => "unexpected:completed" }),
+        )
+
+        const slow = yield* counter.slowValue.trigger({ seconds: 5 })
+        let runningStatus = yield* slow.status
+        for (let i = 0; i < 100 && runningStatus === "pending"; i++) {
+          yield* Effect.sleep("100 millis")
+          runningStatus = yield* slow.status
+        }
+        const cancelRunning = yield* slow.cancel.pipe(
+          Effect.match({ onFailure: errorTag, onSuccess: (b) => `unexpected:${String(b)}` }),
+        )
+        const slowValue = yield* slow.awaitResult
+
+        return [
+          triggeredStatus,
+          cancelCompleted,
+          incremented,
+          rebuiltValue,
+          scheduledStatus,
+          cancelScheduled,
+          cancelledStatus,
+          awaitCancelled,
+          runningStatus,
+          cancelRunning,
+          slowValue,
+        ].join(":")
+      }).pipe(
+        Effect.catch((e) => Effect.succeed(`error: ${errorTag(e)}`)),
+        Effect.scoped,
+      ),
   }),
 })
+
+const errorTag = (error: unknown): string =>
+  typeof error === "object" && error !== null && "_tag" in error
+    ? String(error._tag)
+    : String(error)

@@ -90,8 +90,10 @@ impl Coordinator for CoordinatorImpl {
 
         // Fire-and-forget: trigger each child with its promise ID
         for (region, pid) in regions.iter().zip(&promise_ids) {
-            let mut child = RegionWorkerClient::upsert(region.clone());
-            child.trigger_run_report(pid.clone());
+            let child = RegionWorkerClient::upsert(region.clone());
+            // Waits until the child accepted the invocation, not until it finished.
+            child.trigger_run_report(pid.clone()).await
+                .expect("failed to trigger the report");
         }
 
         // Await all promises concurrently
@@ -124,6 +126,12 @@ impl RegionWorker for RegionWorkerImpl {
     }
 }
 ```
+
+`trigger_<method>` returns a `golem_rust::Invocation<R>` handle. When the coordinator only needs
+each child's return value, it can keep the handles instead of promises and join their
+`await_result()` futures. Store `invocation.id()` and rebuild the handle with
+`golem_rust::Invocation::<R>::get(&id)` to collect the result in a later invocation of the
+coordinator. Dropping a handle, or an unfinished `await_result`, does not stop the child.
 
 ### Error Handling with `TryJoin`
 

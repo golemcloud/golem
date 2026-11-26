@@ -133,14 +133,13 @@ client.clear_default_scope_card();
 The default only borrows the scope card. Keep the scope card alive while the client uses it as its
 default; an awaited call after the scope card was dropped panics.
 
-Only awaited calls carry a scope card, including the `pending_*` calls of `#[agent_client]`
-clients. `trigger_*` and `schedule_*` calls never do.
+Only awaited calls carry a scope card. `trigger_*` and `schedule_*` calls never do.
 The scope-card methods accept only a `ScopeCard`, never a `PermissionCard` or a
 `PolymorphicPermissionCard`. When the invocation ends,
 the host retires the scope card: the handle stays valid until it is dropped, but lending it (directly
 or as a client's default) fails with a `denied` RPC error and using it as a `derive_scope` parent
 fails with `PermissionError::NotPermitted`. The dynamic clients have `invoke_value_with_scope_card`,
-`invoke_with_scope_card`, `pending_value_with_scope_card` and `pending_with_scope_card`.
+`invoke_json_with_scope_card` and `invoke_with_scope_card`.
 
 A `ScopeCard` supports `id`, `parents` (its root cards), `expires_at` and `inspect`. `expires_at` is
 the earliest expiry of its root cards, or `None` when no root card expires; the scope card stops

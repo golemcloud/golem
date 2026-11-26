@@ -502,6 +502,47 @@ function schemaTypesMatch(
   }
 }
 
+/** Whether `root` (by default the graph's root) reaches a live stream, following refs once. */
+export function graphUsesStreams(graph: SchemaGraph, root: SchemaType = graph.root): boolean {
+  const visited = new Set<string>()
+  const visit = (type: SchemaType): boolean => {
+    const body = type.body
+    switch (body.tag) {
+      case "stream":
+        return true
+      case "ref": {
+        if (visited.has(body.id)) return false
+        visited.add(body.id)
+        const definition = graph.defs.get(body.id)
+        return definition !== undefined && visit(definition.body)
+      }
+      case "record":
+        return body.fields.some((field) => visit(field.body))
+      case "variant":
+        return body.cases.some((item) => item.payload !== undefined && visit(item.payload))
+      case "tuple":
+        return body.elements.some(visit)
+      case "list":
+      case "fixed-list":
+      case "option":
+        return visit(body.element)
+      case "map":
+        return visit(body.key) || visit(body.value)
+      case "result":
+        return (
+          (body.ok !== undefined && visit(body.ok)) || (body.err !== undefined && visit(body.err))
+        )
+      case "union":
+        return body.branches.some((branch) => visit(branch.body))
+      case "secret":
+        return visit(body.inner)
+      default:
+        return false
+    }
+  }
+  return visit(root)
+}
+
 export function resolveShapeType(graph: SchemaGraph, type: SchemaType): SchemaTypeBody | undefined {
   let current = type
   const seen = new Set<TypeId>()

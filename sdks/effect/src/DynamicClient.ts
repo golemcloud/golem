@@ -11,6 +11,7 @@ import {
   type RemoteCallError,
 } from "./Client.js"
 import type { AgentHostClient } from "./host/AgentHostClient.js"
+import type { Invocation } from "./InvocationId.js"
 import type { RpcClient } from "./host/RpcClient.js"
 import { dynamicMethod } from "./internal/dynamicMethod.js"
 import type { GuestScopeCard } from "./internal/scopeCard.js"
@@ -45,14 +46,26 @@ export interface DynamicMethod {
     input: CoreTypes.SchemaValueTree,
     options?: InvokeOptions,
   ) => Effect.Effect<DynamicInvocation, RemoteCallError>
+  /**
+   * Start the invocation without awaiting its result, and succeed with its handle once the
+   * target has durably accepted it. The current scope owns the handle. Never sends a scope card.
+   */
   readonly trigger: (
     input: CoreTypes.SchemaValueTree,
-  ) => Effect.Effect<InvocationMetadata, RemoteCallError>
+  ) => Effect.Effect<
+    Invocation<CoreTypes.SchemaValueTree | undefined>,
+    RemoteCallError,
+    Scope.Scope
+  >
+  /**
+   * Enqueue the invocation for `at`, and succeed with its handle once the target has durably
+   * accepted it. The current scope owns the handle. Never sends a scope card.
+   */
   readonly schedule: (
     at: AgentHost.Datetime,
     input: CoreTypes.SchemaValueTree,
   ) => Effect.Effect<
-    { readonly metadata: InvocationMetadata; readonly cancel: Effect.Effect<void> },
+    Invocation<CoreTypes.SchemaValueTree | undefined>,
     RemoteCallError,
     Scope.Scope
   >

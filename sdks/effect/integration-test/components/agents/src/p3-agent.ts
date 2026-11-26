@@ -197,7 +197,7 @@ defineAgent({
       Effect.gen(function* () {
         const target = yield* StreamTarget.client.upsert({ name })
         const scheduled = yield* target.markScheduled.schedule(Date.now() + 1_000, {})
-        yield* scheduled.cancel()
+        yield* scheduled.cancel
         yield* Effect.sleep("1500 millis")
         return yield* target.scheduledCount({})
       }).pipe(Effect.orDie, Effect.scoped),

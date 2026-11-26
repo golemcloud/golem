@@ -272,7 +272,7 @@ recoverable error terminal. For recoverable application errors, stream `Result` 
 `@schema.AgentStream[Result[Reading, SensorError]]` and keep producing subsequent items as needed.
 
 Generated native RPC clients expose awaited methods for direct or recursively stream-bearing
-signatures. They do not generate `trigger_*`, `schedule_*`, or `schedule_cancelable_*` variants for
+signatures. They do not generate `trigger_*`, `schedule_*`, or `get_*_invocation` variants for
 those methods, and reject stream-bearing agent constructors because native client construction is
 synchronous.
 

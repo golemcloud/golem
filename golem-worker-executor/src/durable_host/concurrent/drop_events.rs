@@ -122,6 +122,10 @@ pub struct DroppedCall {
     pub(super) function_type: DurableFunctionType,
     pub(super) request_upload: PendingUpload,
     pub(super) entity_admission: bool,
+    /// The guest dropped the call before its host function registered the span it closes on
+    /// cancellation, and no span observer owns the span that its `Start` opened. The
+    /// `Cancelled` closes that span.
+    pub(super) close_start_span: bool,
     pub(super) span_finished: Option<golem_common::model::oplog::SpanFinished>,
     pub(super) span_observer: Option<Arc<dyn CallSpanObserver>>,
     /// The dropped call's own trap classification, captured from its execution scope at drop time.
@@ -197,25 +201,28 @@ impl DroppedCall {
         } else {
             partial
         };
-        let span_finished = if self.entity_admission && self.span_finished.is_none() {
-            let entry = oplog.read(self.start_idx).await?;
-            let OplogEntry::Start {
-                span_started: Some(span),
-                ..
-            } = entry
-            else {
-                return Err(WorkerExecutorError::runtime(
-                    "accepted entity admission has no opening span",
-                ));
+        let span_finished =
+            if (self.entity_admission || self.close_start_span) && self.span_finished.is_none() {
+                let span = match oplog.read(self.start_idx).await? {
+                    OplogEntry::Start { span_started, .. } => span_started,
+                    _ => None,
+                };
+                match span {
+                    Some(span) => Some(golem_common::model::oplog::SpanFinished {
+                        span_id: span.span_id,
+                        finished_at: Timestamp::now_utc(),
+                        outcome: golem_common::model::oplog::SpanOutcome::Cancelled,
+                    }),
+                    None if self.entity_admission => {
+                        return Err(WorkerExecutorError::runtime(
+                            "accepted entity admission has no opening span",
+                        ));
+                    }
+                    None => None,
+                }
+            } else {
+                self.span_finished.clone()
             };
-            Some(golem_common::model::oplog::SpanFinished {
-                span_id: span.span_id,
-                finished_at: Timestamp::now_utc(),
-                outcome: golem_common::model::oplog::SpanOutcome::Cancelled,
-            })
-        } else {
-            self.span_finished.clone()
-        };
         let cancelled = OplogEntry::Cancelled {
             timestamp: Timestamp::now_utc(),
             start_index: self.start_idx,

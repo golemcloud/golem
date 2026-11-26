@@ -150,6 +150,7 @@ impl ProviderInvoker for WorkerProviderInvoker {
                 Caller::anonymous().into(),
                 None,
                 None,
+                false,
             )
             .await
             .map_err(|_| OpenApiError::new("provider-invocation"))?;
