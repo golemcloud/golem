@@ -97,8 +97,9 @@ impl DurableStreamStore {
                 "cut separates a Revert entry from its stream fork marker".into(),
             ));
         }
-        let lineage =
-            StreamForkLineage::load_at_horizon(oplog, source.0, source.1, horizon).await?;
+        let lineage = StreamForkLineage::load_at_horizon(oplog, source.0, source.1, horizon)
+            .await
+            .map_err(StreamStoreError::CorruptHistory)?;
         if revert && lineage.deleted_regions().is_in_deleted_region(cut_index) {
             return Err(StreamStoreError::InvalidOffset(
                 "revert must retain a visible prefix of the same agent".into(),
@@ -160,7 +161,9 @@ impl DurableStreamStore {
         };
         let retained_items = index.resolve_fork_prefix(&record)?;
         index.apply_fork_cut(&record, retained_items)?;
-        StreamForkLineage::validate_fork_cut(oplog, source.0, record.clone()).await?;
+        StreamForkLineage::validate_fork_cut(oplog, record.clone())
+            .await
+            .map_err(StreamStoreError::CorruptHistory)?;
         Ok(record)
     }
 

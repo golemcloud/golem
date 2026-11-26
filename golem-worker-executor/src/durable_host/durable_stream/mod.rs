@@ -59,7 +59,7 @@ use crate::services::oplog::{
 };
 use crate::services::rpc::{DurableStreamRemoteError, Rpc};
 use crate::services::worker::WorkerService;
-use crate::services::worker_fork::lineage::{LineageError, StreamForkLineage};
+use crate::services::worker_fork::lineage::StreamForkLineage;
 use async_trait::async_trait;
 use futures::FutureExt;
 use golem_common::base_model::component::ComponentRevision;
@@ -510,24 +510,6 @@ impl SessionError {
                 anyhow::Error::from(WorkerExecutorError::recovery_required(error.to_string()))
             }
             Self::Failed(text) => anyhow::Error::msg(text),
-        }
-    }
-}
-
-impl From<LineageError> for StreamStoreError {
-    fn from(error: LineageError) -> Self {
-        match error {
-            LineageError::Unreadable(unreadable) => Self::Unreadable(unreadable),
-            LineageError::Invalid(text) => Self::CorruptHistory(text),
-        }
-    }
-}
-
-impl From<LineageError> for SessionError {
-    fn from(error: LineageError) -> Self {
-        match error {
-            LineageError::Unreadable(unreadable) => Self::Unreadable(unreadable),
-            LineageError::Invalid(text) => Self::Failed(text),
         }
     }
 }
@@ -991,7 +973,8 @@ impl DurableStreamStore {
         let owner = OwnedAgentId::new(environment_id, producer);
         let lineage =
             StreamForkLineage::load_at_horizon(oplog, &owner, producer_fingerprint, current_index)
-                .await?;
+                .await
+                .map_err(StreamStoreError::CorruptHistory)?;
         let retention = oplog.retention();
         let mut index = ProducerStreamIndex::retained_by(*producer, retention);
         let mut pending_nested_registrations = Vec::new();
