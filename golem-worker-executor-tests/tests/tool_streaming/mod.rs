@@ -23421,12 +23421,62 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
         ),
         ..Default::default()
     };
-    let (first, second) = tokio::join!(
-        executor.invoke_agent_session(request.clone()),
-        executor.invoke_agent_session(request.clone())
-    );
-    let first = first?;
-    let second = second?;
+    use golem_api_grpc::proto::golem::worker::{
+        InvocationRequest, invocation_request, invocation_response,
+    };
+    effect_gate.hold_next.store(true, Ordering::SeqCst);
+    let attach = || async {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let mut attempt = request.clone();
+        attempt.attempt_id = Some(uuid::Uuid::new_v4().into());
+        sender
+            .send(InvocationRequest {
+                request: Some(invocation_request::Request::Start(attempt)),
+            })
+            .await?;
+        let mut responses = executor
+            .client
+            .clone()
+            .invoke_agent_session(ReceiverStream::new(receiver))
+            .await?
+            .into_inner();
+        let accepted = responses.message().await?.expect("same-key acceptance");
+        assert!(
+            matches!(
+                accepted.response,
+                Some(invocation_response::Response::Accepted(_))
+            ),
+            "{accepted:?}"
+        );
+        anyhow::Ok((sender, responses))
+    };
+    let (first_session, second_session) = tokio::join!(attach(), attach());
+    let sessions = [first_session?, second_session?];
+    tokio::time::timeout(Duration::from_secs(30), effect_gate.arrived.notified()).await?;
+    effect_gate.release.notify_one();
+    let mut results = Vec::new();
+    // Observe responses in reverse caller order while both sessions remain attached.
+    for (_sender, mut responses) in sessions.into_iter().rev() {
+        let mut result = None;
+        let mut finished = 0;
+        while let Some(response) = responses.message().await? {
+            match response.response {
+                Some(invocation_response::Response::Result(value)) => {
+                    assert!(result.replace(value).is_none());
+                }
+                Some(invocation_response::Response::Finished(value)) => {
+                    assert!(matches!(value.outcome, Some(golem_api_grpc::proto::golem::worker::invocation_session_completion::Outcome::Success(_))));
+                    finished += 1;
+                }
+                Some(invocation_response::Response::Ready(_)) => {}
+                other => anyhow::bail!("unexpected same-key response: {other:?}"),
+            }
+        }
+        assert_eq!(finished, 1);
+        results.push(result.expect("same-key result"));
+    }
+    let second = results.remove(0);
+    let first = results.remove(0);
     assert_eq!(first, second);
     assert_eq!(effects.load(Ordering::SeqCst), 1);
     let metadata = executor.get_worker_metadata(&owned).await?;
@@ -23555,7 +23605,13 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
         });
         (owned, id, start)
     };
-    let (scheduled_owner, _, scheduled) = scheduled_request("scheduled-survives-restart");
+    let (scheduled_owner, _, mut scheduled) = scheduled_request("scheduled-survives-restart");
+    let due_after_restart = chrono::Utc::now() + chrono::Duration::seconds(10);
+    scheduled.schedule_at = Some(prost_types::Timestamp {
+        seconds: due_after_restart.timestamp(),
+        nanos: due_after_restart.timestamp_subsec_nanos() as i32,
+    });
+    let (pending_owner, pending_id, pending) = scheduled_request("cancelled-due-pending");
     let (cancelled_owner, cancelled_id, mut cancelled) =
         scheduled_request("cancelled-across-restart");
     let future = chrono::Utc::now() + chrono::Duration::hours(1);
@@ -23564,8 +23620,9 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
         nanos: 0,
     });
     executor.invoke_agent_session(scheduled.clone()).await?;
+    executor.invoke_agent_session(pending.clone()).await?;
     executor.invoke_agent_session(cancelled.clone()).await?;
-    for owner in [&scheduled_owner, &cancelled_owner] {
+    for owner in [&scheduled_owner, &pending_owner, &cancelled_owner] {
         let oplog = executor.get_oplog(owner, OplogIndex::INITIAL).await?;
         assert_eq!(
             oplog
@@ -23584,6 +23641,15 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
     drop(executor);
     let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     assert!(
+        chrono::Utc::now() < due_after_restart,
+        "restart must precede the scheduled deadline"
+    );
+    assert!(
+        executor
+            .cancel_invocation(&pending_owner, &pending_id)
+            .await?
+    );
+    assert!(
         executor
             .cancel_invocation(&cancelled_owner, &cancelled_id)
             .await?
@@ -23593,8 +23659,43 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
     await_scheduled.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32;
     await_scheduled.schedule_at = None;
     executor.invoke_agent_session(await_scheduled).await?;
+    assert!(
+        chrono::Utc::now() >= due_after_restart,
+        "the scheduled invocation completed before its deadline"
+    );
+    executor.invoke_agent_session(pending).await?;
     executor.invoke_agent_session(cancelled).await?;
     assert_eq!(effects.load(Ordering::SeqCst), 2);
+    for (owner, id) in [
+        (&pending_owner, pending_id),
+        (&cancelled_owner, cancelled_id),
+    ] {
+        let summary = executor
+            .get_invocation(&owner.agent_id, owner.environment_id, id)
+            .await?
+            .expect("invocation lookup")
+            .expect("cancelled invocation remains readable");
+        assert_eq!(
+            summary.state,
+            golem_api_grpc::proto::golem::workerexecutor::v1::InvocationLifecycleState::Cancelled
+                as i32
+        );
+    }
+    let pending_oplog = executor
+        .get_oplog(&pending_owner, OplogIndex::INITIAL)
+        .await?;
+    assert!(
+        !pending_oplog
+            .iter()
+            .any(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+    );
+    assert_eq!(
+        pending_oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::CancelPendingInvocation(_)))
+            .count(),
+        1
+    );
     let cancelled_oplog = executor
         .get_oplog(&cancelled_owner, OplogIndex::INITIAL)
         .await?;
@@ -23852,6 +23953,17 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
 
     use golem_common::model::{ScheduleId, ScheduledAction, ShardAssignment, ShardId};
     let storage = storage.lock().unwrap().clone().unwrap();
+    let (suspended_owner, mut suspended) = make_start("retention-suspended")?;
+    suspended.external_tool.as_mut().unwrap().input = make_start("standalone-promise")?
+        .1
+        .external_tool
+        .unwrap()
+        .input;
+    suspended.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32;
+    executor.invoke_agent_session(suspended).await?;
+    let suspended_promise = next_promise_checkpoint(&mut promises, "standalone-promise").await?;
+    wait_for_promise_checkpoint_to_await(&executor, &suspended_owner.agent_id, &suspended_promise)
+        .await?;
     let (timer_crash_owner, timer_crash) = make_start("standalone-retention-crash")?;
     retention_insert.hold_next.store(true, Ordering::SeqCst);
     let mut trigger = timer_crash.clone();
@@ -23916,6 +24028,13 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
     .await
     .expect("reconstructed finished owner was not retained for deletion");
     assert!(executor.stored_oplog(&owned.agent_id).await.is_empty());
+    assert!(executor.get_worker_metadata(&suspended_owner).await.is_ok());
+    assert!(
+        storage
+            .get_action(&ScheduleId::for_finished_invocation(&suspended_owner))
+            .await?
+            .is_none()
+    );
     let archive_id = ScheduleId::fresh();
     storage
         .insert(
@@ -23949,20 +24068,51 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
 
     // A retry after retention creates a new incarnation at the same T3 address.
     // Deliver an old timer after that Create; the replacement must remain intact.
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
-    let mut recreated = request.clone();
-    recreated.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32;
-    recreated.schedule_at = Some(prost_types::Timestamp {
-        seconds: future.timestamp(),
-        nanos: 0,
-    });
-    executor.invoke_agent_session(recreated).await?;
+    let mut expired_replacement = overrides.clone();
+    expired_replacement.configure = Some(Arc::new(|config| {
+        config.standalone_tool_invocation_retention = Duration::ZERO;
+    }));
+    let release_replacement_deletion = tokio_util::sync::CancellationToken::new();
+    expired_replacement.wrap_scheduler_storage = Some(Arc::new({
+        let release = release_replacement_deletion.clone();
+        move |inner| {
+            Arc::new(crate::scheduled_ephemeral::PausedScheduler {
+                inner,
+                release: release.clone(),
+                invocation_wake: Default::default(),
+                acknowledged: Default::default(),
+            })
+        }
+    }));
+    let executor = start_with_overrides(deps, &context, expired_replacement).await?;
+    let mut replacement_request = request.clone();
+    replacement_request.external_tool.as_mut().unwrap().input =
+        make_start("retention-replacement")?
+            .1
+            .external_tool
+            .unwrap()
+            .input;
+    executor.invoke_agent_session(replacement_request).await?;
     let replacement = executor.get_worker_metadata(&owned).await?;
     assert_ne!(metadata.fingerprint, replacement.fingerprint);
+    assert_eq!(replacement.status, AgentStatus::Idle);
+    assert!(
+        executor
+            .stored_oplog(&owned.agent_id)
+            .await
+            .iter()
+            .any(|entry| matches!(
+                entry,
+                golem_common::model::oplog::OplogEntry::AgentInvocationFinished { .. }
+            ))
+    );
     let action = ScheduledAction::DeleteFinishedInvocation {
         owned_agent_id: owned.clone(),
         fingerprint: metadata.fingerprint,
     };
+    storage
+        .cancel(&ScheduleId::for_finished_invocation(&owned))
+        .await?;
     let now = chrono::Utc::now();
     let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
     storage
@@ -23973,6 +24123,7 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
             &golem_common::serialization::serialize(&action).map_err(anyhow::Error::msg)?,
         )
         .await?;
+    release_replacement_deletion.cancel();
     tokio::time::timeout(Duration::from_secs(30), async {
         while storage.count_due(now, &assignment).await.unwrap() != 0 {
             tokio::task::yield_now().await;
@@ -24036,7 +24187,7 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
         }
     }));
     let executor = start_with_overrides(deps, &context, short_retention.clone()).await?;
-    executor.invoke_agent_session(failed_start).await?;
+    executor.invoke_agent_session(failed_start.clone()).await?;
     executor
         .wait_for_status(&failed_owner, AgentStatus::Failed, Duration::from_secs(30))
         .await?;
@@ -24072,6 +24223,25 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
     assert_eq!(
         executor.stored_oplog(&failed_owner.agent_id).await,
         failed_history
+    );
+    failed_start.mode = golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32;
+    let failure = tokio::time::timeout(
+        Duration::from_secs(10),
+        executor.invoke_agent_session(failed_start),
+    )
+    .await
+    .expect("a retained primary startup failure must answer a same-key caller");
+    let failure = failure.expect_err("a terminal startup failure became a success");
+    let failure = failure.to_string();
+    assert!(failure.contains("FailedToResumeAgent"), "{failure}");
+    assert!(
+        failure.contains("primary instantiation refused"),
+        "{failure}"
+    );
+    assert_eq!(
+        executor.stored_oplog(&failed_owner.agent_id).await,
+        failed_history,
+        "reading the retained failure must not execute the owner again"
     );
     hold_deletion.cancel();
     tokio::time::timeout(

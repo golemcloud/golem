@@ -13,6 +13,7 @@
 // limitations under the License.
 
 use super::*;
+use golem_worker_executor::services::oplog::OplogOps;
 use test_r::test;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -137,6 +138,8 @@ async fn standalone_middleware_waits_survive_restarts_before_and_after_leaf(
     for binding in bindings.values_mut() {
         binding.owner = baseline.clone();
     }
+    bindings.get_mut(&tool_name).unwrap().parameters =
+        NormalizedJsonValue::new(serde_json::json!({"marker": "accepted-before-redeploy"}));
     deployment.tool_bindings.insert(baseline.clone(), bindings);
     let mut chains = deployment
         .tool_middleware_chains
@@ -145,13 +148,15 @@ async fn standalone_middleware_waits_survive_restarts_before_and_after_leaf(
     for chain in chains.values_mut() {
         chain.owner = baseline.clone();
     }
-    deployment.tool_middleware_chains.insert(baseline, chains);
+    deployment
+        .tool_middleware_chains
+        .insert(baseline.clone(), chains);
     let type_id = deployment.registered_tools[&tool_name].type_id;
     environment.set_tool_deployment(
         context.default_environment_id,
         component.id,
         component.revision,
-        Some(deployment),
+        Some(deployment.clone()),
     );
     let key = IdempotencyKey::fresh();
     let invocation_id = golem_common::model::StandaloneToolInvocation::unique_part(
@@ -206,6 +211,38 @@ async fn standalone_middleware_waits_survive_restarts_before_and_after_leaf(
         ),
         ..Default::default()
     };
+    let accepted_activation =
+        async |executor: &TestWorkerExecutor,
+               owner: &OwnedAgentId|
+               -> anyhow::Result<golem_common::model::tool::ToolActivationSnapshot> {
+            let oplog = executor
+                .active_agent(owner)
+                .await
+                .expect("active owner")
+                .execution()
+                .oplog();
+            for entry in executor.stored_oplog(&owner.agent_id).await {
+                if let golem_common::model::oplog::OplogEntry::PendingAgentInvocation {
+                    operation,
+                    payload,
+                    ..
+                } = entry
+                {
+                    let golem_common::model::agent::AgentInvocationPayload::ExternalTool {
+                        activation,
+                        ..
+                    } = oplog
+                        .download_request(operation.as_ref().clone(), payload)
+                        .await
+                        .map_err(anyhow::Error::msg)?
+                    else {
+                        anyhow::bail!("expected external-tool acceptance");
+                    };
+                    return Ok(*activation);
+                }
+            }
+            anyhow::bail!("missing accepted invocation");
+        };
     executor.invoke_agent_session(start.clone()).await?;
     for checkpoint_name in ["lifecycle-before-leaf", "lifecycle-after-leaf"] {
         let checkpoint = next_promise_checkpoint(&mut promises, checkpoint_name).await?;
@@ -213,16 +250,75 @@ async fn standalone_middleware_waits_survive_restarts_before_and_after_leaf(
             .wait_for_status(&owner, AgentStatus::Suspended, Duration::from_secs(30))
             .await?;
         let fingerprint = executor.get_worker_metadata(&owner).await?.fingerprint;
+        assert_eq!(
+            accepted_activation(&executor, &owner)
+                .await?
+                .binding
+                .parameters
+                .0,
+            serde_json::json!({"marker": "accepted-before-redeploy"})
+        );
+        drop(executor);
+        executor = start_with_overrides(deps, &context, overrides.clone()).await?;
         if checkpoint_name == "lifecycle-before-leaf" {
             assert!(effects.try_recv().is_err());
+            deployment
+                .tool_bindings
+                .get_mut(&baseline)
+                .unwrap()
+                .get_mut(&tool_name)
+                .unwrap()
+                .parameters =
+                NormalizedJsonValue::new(serde_json::json!({"marker": "fresh-after-redeploy"}));
+            let parameterized = middleware_metadata
+                .tool_middlewares
+                .iter()
+                .find(|definition| definition.name == "streaming-parameterized")
+                .unwrap();
+            let occurrence = &mut deployment
+                .tool_middleware_chains
+                .get_mut(&baseline)
+                .unwrap()
+                .get_mut(&tool_name)
+                .unwrap()
+                .occurrences[0];
+            occurrence.middleware = deployment.registered_tool_middlewares
+                [&ToolMiddlewareName::try_from("streaming-parameterized").unwrap()]
+                .clone();
+            occurrence.parameters = parameterized_middleware_parameters(parameterized);
+            deployment.deployment_revision = deployment.deployment_revision.next()?;
+            let revision = deployment.deployment_revision;
+            for registered in deployment.registered_tools.values_mut() {
+                registered.registration.deployment_revision = revision;
+            }
+            for bindings in deployment.tool_bindings.values_mut() {
+                for binding in bindings.values_mut() {
+                    binding.deployment_revision = revision;
+                }
+            }
+            for middleware in deployment.registered_tool_middlewares.values_mut() {
+                middleware.deployment_revision = revision;
+            }
+            for chains in deployment.tool_middleware_chains.values_mut() {
+                for chain in chains.values_mut() {
+                    chain.deployment_revision = revision;
+                    for occurrence in &mut chain.occurrences {
+                        occurrence.middleware.deployment_revision = revision;
+                    }
+                }
+            }
+            environment.set_tool_deployment(
+                context.default_environment_id,
+                component.id,
+                component.revision,
+                Some(deployment.clone()),
+            );
         } else {
             assert_eq!(
                 effects.try_recv()?.as_str(),
                 "lifecycle-effect(suspend(standalone-73))"
             );
         }
-        drop(executor);
-        executor = start_with_overrides(deps, &context, overrides.clone()).await?;
         executor
             .complete_promise(
                 &context.default_environment_id,
@@ -236,7 +332,21 @@ async fn standalone_middleware_waits_survive_restarts_before_and_after_leaf(
             .await?;
     }
     start.mode = AgentInvocationMode::Await as i32;
-    executor.invoke_agent_session(start).await?;
+    let completed = executor.invoke_agent_session(start.clone()).await?;
+    let value = |result: golem_api_grpc::proto::golem::worker::InvocationSessionResult| -> anyhow::Result<SchemaValue> {
+        let Some(golem_api_grpc::proto::golem::worker::invocation_session_result::Result::ToolResult(result)) = result.result else {
+            anyhow::bail!("expected a tool result");
+        };
+        let result: golem_common::model::oplog::PublicExternalToolResult = result.try_into().map_err(anyhow::Error::msg)?;
+        let golem_common::model::oplog::PublicExternalToolResult::Success(result) = result else {
+            anyhow::bail!("expected a successful tool result: {result:?}");
+        };
+        Ok(result.result.expect("tool value").value().clone())
+    };
+    assert_eq!(
+        value(completed)?,
+        SchemaValue::String("lifecycle(leaf(lifecycle-effect(suspend(standalone-73))))".into())
+    );
     assert!(
         effects.try_recv().is_err(),
         "replay must not repeat the leaf effect"
@@ -257,6 +367,56 @@ async fn standalone_middleware_waits_survive_restarts_before_and_after_leaf(
         1
     );
     assert!(incomplete_starts_before(&oplog, OplogIndex::from_u64(u64::MAX)).is_empty());
+    assert_eq!(
+        accepted_activation(&executor, &owner)
+            .await?
+            .binding
+            .parameters
+            .0,
+        serde_json::json!({"marker": "accepted-before-redeploy"})
+    );
+    let new_key = IdempotencyKey::new("after-baseline-redeploy".into());
+    let new_id = golem_common::model::StandaloneToolInvocation::unique_part(
+        context.default_environment_id,
+        &tool_name,
+        executor.auth_ctx().idempotency_scope(),
+        "apply",
+        Some(&new_key),
+    );
+    let new_owner = OwnedAgentId::new(
+        context.default_environment_id,
+        &golem_common::model::AgentId::standalone_tool_invocation(
+            context.default_environment_id,
+            type_id,
+            new_id,
+        ),
+    );
+    start.target = Some(crate::agent::id_target(&new_owner));
+    start.idempotency_key = Some(IdempotencyKey::new(new_id.to_string()).into());
+    start.request_key = Some(
+        golem_common::model::InvocationRequestKey::external(
+            executor.auth_ctx().idempotency_scope(),
+            Some(&new_key),
+        )
+        .into(),
+    );
+    let fresh = executor.invoke_agent_session(start).await?;
+    assert_eq!(
+        value(fresh)?,
+        SchemaValue::String("leaf(typed-prefix[first,second](suspend(standalone-73)))".into())
+    );
+    assert_eq!(
+        accepted_activation(&executor, &new_owner)
+            .await?
+            .binding
+            .parameters
+            .0,
+        serde_json::json!({"marker": "fresh-after-redeploy"})
+    );
+    assert!(
+        effects.try_recv().is_err(),
+        "the new configuration does not execute the lifecycle effect"
+    );
     effect_server.abort();
     Ok(())
 }

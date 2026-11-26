@@ -274,7 +274,8 @@ async fn standalone_tool_invocations_survive_service_restart_and_keep_caller_sco
             .invocations
             .iter()
             .any(|item| item.invocation_id == hosted_id
-                && item.operation.as_deref() == Some("tool:streaming/no-stream"))
+                && item.operation.as_deref() == Some("tool:streaming/no-stream")
+                && item.state == InvocationState::Completed)
     );
     let agents: Value = http
         .get(format!("{base}/agent-types/ToolStreamingCaller/agents"))

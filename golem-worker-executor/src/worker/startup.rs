@@ -40,6 +40,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if this.owner_retirement_requested.is_cancelled() {
             return Err(this.retirement_error());
         }
+        // Terminal standalone owners retain results, not executable pending work. A failed
+        // primary startup can leave its accepted entry pending in scheduler and recovery indexes.
+        if let Some(invocation_id) = this.standalone_invocation_id()
+            && retention::deadline(
+                Some(invocation_id),
+                this.state_actor.try_status().await?.as_ref(),
+                this.config().standalone_tool_invocation_retention,
+            )
+            .is_some()
+        {
+            return Ok(None);
+        }
         match instance_guard.transition() {
             LifecycleTransition::Inactive(error) => {
                 crate::metrics::ephemeral::record_inactive_invocation_failure();
