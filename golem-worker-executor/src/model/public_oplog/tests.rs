@@ -4519,18 +4519,19 @@ async fn a_paged_read_resumes_a_cursor_within_its_range_and_refuses_a_cursor_out
     });
 }
 
-/// An oplog of 12 entries from index 1. It has a component update at index 2, and the matches of
-/// "needle" at the indices 4, 10 and 12. It gives the oplog and the indices of its entries.
+/// An oplog of 14 entries from index 1. It has component updates to revision 3 at index 1 and to
+/// revision 4 at index 2, in the same storage batch. It has the matches of "needle" at the indices
+/// 4, 10 and 12. It gives the oplog and the indices of its entries.
 async fn open_search_scan_oplog(
     name: &str,
 ) -> (Arc<PrimaryOplogService>, OwnedAgentId, Vec<OplogIndex>) {
     let (oplog_service, owned_agent_id, oplog) = open_test_oplog(name).await;
     let oplog_ref = &oplog;
     let indices = futures::StreamExt::collect::<Vec<_>>(futures::StreamExt::then(
-        futures::stream::iter((1..=12u64).map(|index| match index {
-            2 => OplogEntry::SuccessfulUpdate {
+        futures::stream::iter((1..=14u64).map(|index| match index {
+            1 | 2 => OplogEntry::SuccessfulUpdate {
                 timestamp: Timestamp::now_utc(),
-                target_revision: ComponentRevision::new(4).unwrap(),
+                target_revision: ComponentRevision::new(index + 2).unwrap(),
                 new_component_size: 100,
                 new_total_linear_memory_size: None,
                 new_active_plugins: HashSet::new(),
@@ -4618,23 +4619,31 @@ async fn a_remote_search_with_a_start_charges_its_revision_scan_and_continues_it
     // The budget of 2 entries ends the first search in the revision scan, before `from`.
     let first = pages[0].next.clone().expect("the scan goes on");
     assert!(pages[0].entries.is_empty());
-    assert_eq!(
-        (first.next_oplog_index, first.scan_to),
-        (indices[2].as_u64(), Some(from.as_u64()))
-    );
-    assert_eq!(
-        first.current_component_revision, 4,
-        "the cursor carries the revision of the update at index 2"
-    );
     assert_eq!(pages.last().unwrap().next, None, "the search ends");
-    let nexts = pages
+    // Each call reads 2 entries. The first four calls give scan cursors before `from`. The fifth
+    // call ends the scan at 9 and searches 10. The later calls give read cursors. Each cursor
+    // carries revision 4, the revision of the last update in the batch of the indices 1 and 2.
+    let cursors = pages
         .iter()
         .filter_map(|page| page.next.as_ref())
-        .map(|next| next.next_oplog_index)
+        .map(|next| {
+            (
+                next.next_oplog_index,
+                next.current_component_revision,
+                next.scan_to,
+            )
+        })
         .collect::<Vec<_>>();
-    assert!(
-        nexts.windows(2).all(|pair| pair[0] < pair[1]),
-        "each cursor is after the cursor before it: {nexts:?}"
+    assert_eq!(
+        cursors,
+        vec![
+            (3, 4, Some(from.as_u64())),
+            (5, 4, Some(from.as_u64())),
+            (7, 4, Some(from.as_u64())),
+            (9, 4, Some(from.as_u64())),
+            (11, 4, None),
+            (13, 4, None),
+        ]
     );
     // A cursor sent without `from`, as `--page --cursor` sends it, gives only the matches from
     // `from`, and not the match at index 4.
