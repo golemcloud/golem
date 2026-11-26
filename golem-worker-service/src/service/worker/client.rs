@@ -4090,15 +4090,18 @@ mod rejection_mapping_tests {
         ));
     }
 
-    /// A shard manager whose routing table changes only when a test sets it, and which counts how
-    /// often it is asked for it.
+    /// A shard manager whose routing table, or failure to read it, changes only when a test sets
+    /// it, and which counts how often it is asked for it.
     #[derive(Clone)]
-    struct StaticShardManager(Arc<std::sync::Mutex<RoutingTable>>, Arc<AtomicUsize>);
+    struct StaticShardManager(
+        Arc<std::sync::Mutex<Result<RoutingTable, ShardManagerError>>>,
+        Arc<AtomicUsize>,
+    );
 
     impl StaticShardManager {
         fn new(routing_table: RoutingTable) -> Self {
             Self(
-                Arc::new(std::sync::Mutex::new(routing_table)),
+                Arc::new(std::sync::Mutex::new(Ok(routing_table))),
                 Arc::default(),
             )
         }
@@ -4109,7 +4112,7 @@ mod rejection_mapping_tests {
     impl ShardManager for StaticShardManager {
         async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
             self.1.fetch_add(1, Ordering::SeqCst);
-            Ok(self.0.lock().unwrap().clone())
+            self.0.lock().unwrap().clone()
         }
 
         async fn register(
@@ -4736,7 +4739,7 @@ mod rejection_mapping_tests {
                 "{cause}"
             );
 
-            *shard_manager.0.lock().unwrap() = listing_table.clone();
+            *shard_manager.0.lock().unwrap() = Ok(listing_table.clone());
             let found = find_agents(&client, Some(golem_common::model::PageScanRequest::FIRST))
                 .await
                 .unwrap_or_else(|error| panic!("after {cause}: {error:?}"));
@@ -4773,6 +4776,55 @@ mod rejection_mapping_tests {
         }
         assert_eq!(calls.load(Ordering::SeqCst), 2);
         assert_eq!(shard_manager.1.load(Ordering::SeqCst), 1);
+    }
+
+    /// A page call whose routing table read failed has no routing table to invalidate, so it does
+    /// not spend the one invalidation that the routing table service allows per
+    /// `invalidation_min_delay`: the next page call that finds a stale routing table invalidates it.
+    #[test]
+    async fn a_page_call_whose_routing_table_read_failed_keeps_the_next_invalidation() {
+        let executor = RejectingExecutor::default();
+        let calls = executor.calls.clone();
+        let listing_table = serve(executor, 32 * 1024 * 1024).await;
+        let shard_manager = StaticShardManager::new(routing_table_without_executors());
+        *shard_manager.0.lock().unwrap() = Err(ShardManagerError::InternalServerError(
+            "shard manager unavailable".to_string(),
+        ));
+        let client = client_routed_with(
+            shard_manager.clone(),
+            RoutingTableConfig {
+                invalidation_min_delay: Duration::from_secs(3600),
+            },
+        );
+
+        let error = find_agents(&client, Some(golem_common::model::PageScanRequest::FIRST))
+            .await
+            .expect_err("the routing table read fails");
+        assert!(
+            matches!(
+                &error,
+                WorkerServiceError::InternalCallError(
+                    super::CallWorkerExecutorError::FailedToGetRoutingTable(_)
+                )
+            ),
+            "{error:?}"
+        );
+
+        *shard_manager.0.lock().unwrap() = Ok(routing_table_without_executors());
+        let error = find_agents(&client, Some(golem_common::model::PageScanRequest::FIRST))
+            .await
+            .expect_err("the routing table has no executor");
+        assert!(
+            matches!(&error, WorkerServiceError::Internal(message) if message.contains("NoActiveShards")),
+            "{error:?}"
+        );
+
+        *shard_manager.0.lock().unwrap() = Ok(listing_table);
+        find_agents(&client, Some(golem_common::model::PageScanRequest::FIRST))
+            .await
+            .expect("the page call reads the new routing table");
+        assert_eq!(shard_manager.1.load(Ordering::SeqCst), 3);
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
     }
 
     /// A worker service client whose only executor is `executor`, and an agent to invoke through
@@ -4821,8 +4873,15 @@ mod rejection_mapping_tests {
     }
 
     fn client_routed_by(shard_manager: StaticShardManager) -> WorkerExecutorWorkerClient {
+        client_routed_with(shard_manager, RoutingTableConfig::default())
+    }
+
+    fn client_routed_with(
+        shard_manager: StaticShardManager,
+        routing_config: RoutingTableConfig,
+    ) -> WorkerExecutorWorkerClient {
         let routing = Arc::new(RoutingTableService::new(
-            RoutingTableConfig::default(),
+            routing_config,
             Arc::new(shard_manager),
         ));
         let clients = MultiTargetGrpcClient::new(
