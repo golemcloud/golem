@@ -419,14 +419,14 @@ fn update_status_with_precomputed_regions(
     let owned_resources =
         collect_resources(last_known.owned_resources, skipped_regions, &new_entries);
 
+    let revoked_cards = calculate_revoked_cards(last_known.revoked_cards, &new_entries);
+
     let (active_plugins, oplog_processor_checkpoints) = calculate_plugin_status(
         last_known.active_plugins,
         last_known.oplog_processor_checkpoints,
         deleted_regions,
         &new_entries,
     );
-
-    let revoked_cards = calculate_revoked_cards(last_known.revoked_cards, &new_entries);
 
     Ok(AgentStatusRecord {
         oplog_idx: new_entries
