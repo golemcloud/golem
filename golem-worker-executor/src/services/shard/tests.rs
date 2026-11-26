@@ -316,7 +316,7 @@ fn a_revoke_older_than_the_last_delivery_is_ignored() {
 }
 
 /// `AssignShards` says "your shards are exactly these". Anything
-/// absent is dropped, and the sweep in `assign_shards_internal` restarts
+/// absent is dropped, and the sweep in `assign_shards_internal` retires
 /// exactly the agents the new set rejects.
 #[test]
 fn a_full_replace_push_drops_unlisted_shards_and_their_agents() {
@@ -342,7 +342,7 @@ fn a_full_replace_push_drops_unlisted_shards_and_their_agents() {
     );
     assert!(
         service.check_worker(&on_dropped).is_err(),
-        "an agent on a dropped shard is what the restart sweep picks up"
+        "an agent on a dropped shard is what the retirement sweep picks up"
     );
     assert!(service.check_worker(&on_kept).is_ok());
 }
@@ -392,7 +392,7 @@ fn routing_checks_are_not_fenced_by_a_lapsed_lease() {
     );
 }
 
-/// `None` means "never expires": the single binary must not fence itself at boot.
+/// `None` means "never expires": the single-shard adapter has no lease to renew.
 #[test]
 fn a_lease_without_an_expiry_never_fences() {
     let agent = agent_on_shard(0);

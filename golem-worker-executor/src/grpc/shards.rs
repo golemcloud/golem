@@ -157,7 +157,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
     /// no longer owns. The recovery runs only under a live lease: a fenced
     /// executor starts nothing, so a push that lands after the local lease
     /// lapsed - the first one after a manager outage does - reports the
-    /// recovery deferred, and the grant that revives the lease runs it.
+    /// recovery deferred. A later accepted grant runs it; a stale grant can
+    /// revive the lease without running the owed recovery.
     ///
     /// The owed-recovery ticket is taken here, before anything runs, and handed
     /// back only after a recovery ran, so the startup registration and the push

@@ -197,7 +197,7 @@ pub(crate) struct TestWorkerExecutors {
     local_assignments: Arc<Mutex<HashMap<Pod, BTreeSet<ShardId>>>>,
     failed_assignments: Arc<Mutex<HashMap<Pod, usize>>>,
     failed_revocations: Arc<Mutex<HashMap<Pod, usize>>>,
-    /// Every full-replace push, in order, with the epochs and expiry it carried. `commands`
+    /// Every full-replace push, in order, with its epochs, revision and executor count. `commands`
     /// records only the shard ids, so this is where a test looks at what else travelled.
     pushes: Arc<Mutex<Vec<(Pod, ShardAssignmentPush)>>>,
     /// Every revoke, in order, with the revision and executor count it carried.

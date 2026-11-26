@@ -139,7 +139,7 @@ fn add_executor_at_reused_address_replaces_lease_and_transfers_shards() {
     let mut later = t0() + jiff::SignedDuration::from_secs(10);
 
     // bump shard 1 once so we can tell "advanced" from "reset": moving it to executor 2 and
-    // back advances its epoch to 1
+    // back advances its epoch to 2
     shard_state.assign_shard(executor(2), shard(1));
     shard_state.assign_shard(executor(1), shard(1));
     assert_eq!(shard_state.epoch_for_shard(shard(1)), Some(ShardEpoch(2)));

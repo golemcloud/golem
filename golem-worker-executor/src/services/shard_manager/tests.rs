@@ -118,12 +118,12 @@ struct MockShardManager {
     renew_gate: StdMutex<Option<Arc<tokio::sync::Notify>>>,
     /// The same for a deregistration.
     deregister_gate: StdMutex<Option<Arc<tokio::sync::Notify>>>,
-    /// Each registration's executor id and the previous epochs it carried.
+    /// Each registration's executor id.
     register_calls: StdMutex<Vec<Uuid>>,
     /// The endpoint each registration named, in the order of `register_calls`.
     register_endpoints: StdMutex<Vec<ExecutorEndpoint>>,
     renew_calls: StdMutex<Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)>>,
-    /// The fenced epochs each renewal reported, in the order of `renew_calls`.
+    /// The fenced epochs each deregistration reported, in the order of `deregister_calls`.
     deregister_calls: StdMutex<Vec<(Uuid, BTreeMap<ShardId, ShardEpoch>)>>,
     /// How many of the next registrations never answer.
     hanging_registrations: std::sync::atomic::AtomicUsize,

@@ -54,7 +54,7 @@ pub enum RecoveryOutcome {
     /// Agents on lost shards were swept, and agents were recovered for the set.
     Recovered,
     /// Swept, but not recovered: the local lease had lapsed, and a fenced executor starts
-    /// nothing. The grant that revives the lease runs the recovery.
+    /// nothing. A later accepted grant runs the recovery.
     DeferredUntilLeaseIsLive,
 }
 
@@ -106,8 +106,8 @@ pub trait ShardManagerService: Send + Sync {
     /// Registers that a recovery of the agents for the current set is owed, and returns the
     /// ticket the attempt started now hands back if it completes. Called by the receipt path
     /// before anything runs: a push that lands on a lapsed lease, a recovery that fails, and a
-    /// recovery that is still running all leave it owed, and the next grant runs it. No-op by
-    /// default.
+    /// recovery that is still running all leave it owed. A later accepted grant runs it.
+    /// No-op by default.
     fn recovery_deferred(&self) -> RecoveryTicket {
         RecoveryTicket(0)
     }
@@ -260,8 +260,8 @@ pub struct GrpcShardManagerService {
     /// Shortest per-attempt deadline this executor will use; see [`Self::rpc_deadline`].
     /// A field rather than the constant so a test does not have to wait out the production floor.
     rpc_deadline_floor: Duration,
-    /// The newest recovery attempt still owed, as its ticket; `0` is none. The next grant runs a
-    /// recovery while it is non-zero, even if the set is unchanged: a push that fails is retried
+    /// The newest recovery attempt still owed, as its ticket; `0` is none. A later accepted grant
+    /// runs recovery while it is non-zero, even if the set is unchanged: a push that fails is retried
     /// by the shard manager, but a renewal has nobody to retry it, and an unchanged grant would
     /// otherwise never run it again. A ticket rather than a flag because two attempts can
     /// overlap: a renewal's recovery can outlast the lease, a push can then land and defer its

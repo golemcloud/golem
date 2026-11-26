@@ -41,7 +41,11 @@ where
             .then(|_| scrape())
             .filter_map(|reported| {
                 let result = match reported {
-                    Err(error) if error.downcast_ref::<reqwest::Error>().is_some() => {
+                    Err(error)
+                        if error
+                            .downcast_ref::<reqwest::Error>()
+                            .is_some_and(|error| !error.is_status()) =>
+                    {
                         *last_scrape_error.lock().unwrap() = Some(error);
                         None
                     }
@@ -82,6 +86,18 @@ fn batch_matches(expected: usize, metrics: &[String]) -> anyhow::Result<Option<(
             .context("missing required metric executor_count")?
             .parse::<usize>()
             .context("invalid metric executor_count")?;
+        let missing_leases = metrics
+            .lines()
+            .find_map(|line| {
+                line.strip_prefix("shard_lease_renewals_total{outcome=\"lease_not_found\"} ")
+            })
+            .context("missing required metric for lease_not_found renewals")?
+            .parse::<u64>()
+            .context("invalid metric for lease_not_found renewals")?;
+        ensure!(
+            missing_leases == 0,
+            "the fixture requires no lease loss, including setup; re-registration could supply the count"
+        );
         anyhow::Ok(ready && count == expected)
     })?;
     Ok(ready.then_some(()))
@@ -92,7 +108,11 @@ fn batch_matches(expected: usize, metrics: &[String]) -> anyhow::Result<Option<(
 /// Startup and metrics polling run together.
 #[test]
 #[timeout("600s")]
-async fn a_third_executor_refreshes_both_existing_counts_within_one_lease() {
+async fn a_third_executor_refreshes_both_existing_counts_within_one_lease(_tracing: &Tracing) {
+    assert!(
+        std::env::var("GOLEM_TEST_BIN_PROFILE").is_ok_and(|profile| !profile.is_empty()),
+        "set GOLEM_TEST_BIN_PROFILE so all three executors use the same binary profile"
+    );
     if golem_common::config::env_config_provider()
         .iter()
         .any(|(key, _)| key == "rebalance_threshold")
@@ -107,7 +127,6 @@ async fn a_third_executor_refreshes_both_existing_counts_within_one_lease() {
     {
         panic!("{variable} is not supported by this fixture; use GOLEM_TEST_PORT_OFFSET");
     }
-    Tracing::init();
     let config = EnvBasedTestDependenciesConfig {
         worker_executor_cluster_size: 1,
         number_of_shards_override: Some(1),
@@ -226,7 +245,8 @@ async fn a_third_executor_refreshes_both_existing_counts_within_one_lease() {
     assert_eq!(before.shards_per_pod().len(), 1);
     let (_, initial_count) =
         observe_executor_count(2, Duration::from_secs(60), std::future::ready(()), &scrape).await;
-    initial_count.expect("both earlier executors must first report two");
+    initial_count
+        .expect("invalid setup: both earlier executors must first report two without lease loss");
     let (third, count_result) = observe_executor_count(
         3,
         lease_duration,
@@ -236,24 +256,8 @@ async fn a_third_executor_refreshes_both_existing_counts_within_one_lease() {
     .await;
     // Scrape again after the count observation, so re-registration cannot supply three
     // while an earlier metrics snapshot still reports no missing lease.
-    let no_re_registration = async {
-        scrape().await?.iter().try_for_each(|metrics| {
-            let missing_leases = metrics
-                .lines()
-                .find_map(|line| {
-                    line.strip_prefix("shard_lease_renewals_total{outcome=\"lease_not_found\"} ")
-                })
-                .context("missing required metric for lease_not_found renewals")?
-                .parse::<u64>()
-                .context("invalid metric for lease_not_found renewals")?;
-            ensure!(
-                missing_leases == 0,
-                "an earlier executor lost its lease and could refresh the count by re-registration"
-            );
-            anyhow::Ok(())
-        })
-    }
-    .await;
+    let (_, no_re_registration) =
+        observe_executor_count(3, Duration::from_secs(5), std::future::ready(()), &scrape).await;
     let after = tokio::time::timeout(
         Duration::from_secs(30),
         deps.shard_manager().get_routing_table(),
@@ -1782,7 +1786,6 @@ async fn oplog_processor_locality_recovery(
     let batches = wait_for_invocations(&received, 7, Duration::from_secs(120)).await;
     let fn_names = extract_function_names(&batches);
     // Exactly-once: exactly 1 init + 6 adds, no duplicates after locality recovery.
-    // Current bug: no checkpoint, so shard reassignment causes re-delivery.
     assert_eq!(
         fn_names
             .iter()
@@ -1904,7 +1907,6 @@ async fn oplog_processor_stress_with_crashes(
     }
 
     // Exactly-once: exactly 1 init + 20 adds, no duplicates despite crash + executor restart.
-    // Current bug: no checkpoint, crash and executor stop/start cause re-delivery.
     let batches = wait_for_invocations(&received, 21, Duration::from_secs(120)).await;
     let fn_names = extract_function_names(&batches);
     assert_eq!(
