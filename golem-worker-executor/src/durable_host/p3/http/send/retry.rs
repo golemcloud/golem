@@ -126,14 +126,7 @@ where
         "http-status",
         serialized_method,
     );
-    status_retry_policy(retry_ctx, &properties).await
-}
-
-pub(super) async fn status_retry_policy(
-    retry_ctx: &mut (impl InFunctionRetryHost + Sync),
-    properties: &RetryProperties,
-) -> Option<NamedRetryPolicy> {
-    let status_policies: Box<[NamedRetryPolicy]> = retry_ctx
+    let status_policies: Vec<NamedRetryPolicy> = retry_ctx
         .named_retry_policies()
         .await
         .into_iter()
@@ -144,7 +137,7 @@ pub(super) async fn status_retry_policy(
         .collect();
     match NamedRetryPolicy::resolve_applicable_treating_missing_properties_as_no_match(
         &status_policies,
-        properties,
+        &properties,
     ) {
         Ok(policy) => policy.cloned(),
         Err(error) => {

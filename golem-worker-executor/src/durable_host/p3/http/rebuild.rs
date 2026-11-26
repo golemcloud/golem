@@ -17,7 +17,6 @@ use super::request_body::{
     DurableRequestBody, DurableRequestBodyDrainOutcome, RecordedRequestBodyTerminal,
     RequestBodyRecovery, recorded_request_body_replay, scan_recorded_request_body_frames,
 };
-use crate::durable_host::http::policy::InjectedHttpHeaders;
 use crate::durable_host::p3::{DurableP3, durable_worker_ctx, wasi_http_view};
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
@@ -37,7 +36,7 @@ use wasmtime_wasi_http::p3::bindings::http::types::ErrorCode;
 
 pub(crate) struct P3HttpSendRebuild {
     pub(super) request: SerializableP3HttpClientSend,
-    pub(super) injected_headers: InjectedHttpHeaders,
+    pub(super) injected_headers: Vec<(String, String)>,
     /// The recorded response status, used only to log divergence of the fresh
     /// response's status; the recorded head stays authoritative for the guest.
     pub(super) recorded_status: u16,
@@ -212,19 +211,10 @@ pub(super) fn build_rebuilt_request(
             headers.append(name.clone(), value);
         }
     }
-    for (name, value) in rebuild
-        .injected_headers
-        .iter()
-        .map(|(name, value)| (name.as_ref(), value.as_ref()))
-        .chain(
-            extra_headers
-                .iter()
-                .map(|(name, value)| (name.as_str(), value.as_str())),
-        )
-    {
-        let name = HeaderName::try_from(name)
+    for (name, value) in rebuild.injected_headers.iter().chain(extra_headers) {
+        let name = HeaderName::try_from(name.as_str())
             .map_err(|err| format!("invalid injected header name {name}: {err}"))?;
-        let value = HeaderValue::try_from(value)
+        let value = HeaderValue::try_from(value.as_str())
             .map_err(|err| format!("invalid injected header value for {name}: {err}"))?;
         headers.remove(&name);
         headers.append(name, value);
@@ -527,10 +517,10 @@ mod tests {
         });
         let rebuild = P3HttpSendRebuild {
             request: head,
-            injected_headers: Box::new([
-                (Box::from("idempotency-key"), Box::from("derived-key")),
-                (Box::from("traceparent"), Box::from("00-abc-def-01")),
-            ]),
+            injected_headers: vec![
+                ("idempotency-key".to_string(), "derived-key".to_string()),
+                ("traceparent".to_string(), "00-abc-def-01".to_string()),
+            ],
             recorded_status: 200,
             recorded_request_body: OplogIndex::INITIAL,
             durable_body: None,

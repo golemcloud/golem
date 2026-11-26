@@ -15,8 +15,8 @@
 //! Policy for durable outgoing HTTP: transparent retries,
 //! Golem-managed headers and Range-based response-body resumption.
 
+use crate::durable_host::IdempotencyKeyPosition;
 use crate::durable_host::durability::{DurableExecutionState, HostFailureKind};
-use golem_common::model::IdempotencyKey;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::types::SerializableHttpErrorCode;
 use http::{HeaderName, HeaderValue};
@@ -169,47 +169,19 @@ pub(crate) fn classify_resume_response(
     }
 }
 
-pub(crate) type InjectedHttpHeaders = Box<[(Box<str>, Box<str>)]>;
-
-/// Holds trace headers and defers key derivation until trace lookup has succeeded.
-pub(crate) struct ManagedHttpHeaders {
-    headers: Vec<(String, String)>,
-    idempotency_key_start: Option<OplogIndex>,
-}
-
-/// Selects the managed headers and whether the send needs a derived key.
-/// A guest key or disabled injection suppresses derivation.
-pub(crate) fn golem_managed_http_headers<'a>(
-    trace_headers: Vec<(String, String)>,
+/// Adds a key from the reserved position unless the guest supplied one or injection is disabled.
+pub(crate) fn golem_managed_http_headers(
+    mut headers: Vec<(String, String)>,
     set_outgoing_http_idempotency_key: bool,
-    mut guest_header_names: impl Iterator<Item = &'a str>,
+    guest_has_idempotency_key: bool,
     start_index: OplogIndex,
-) -> ManagedHttpHeaders {
-    ManagedHttpHeaders {
-        headers: trace_headers,
-        idempotency_key_start: (set_outgoing_http_idempotency_key
-            && !guest_header_names.any(|name| name == "idempotency-key"))
-        .then_some(start_index),
+    key_position: &IdempotencyKeyPosition,
+) -> Vec<(String, String)> {
+    if set_outgoing_http_idempotency_key && !guest_has_idempotency_key {
+        let idempotency_key = key_position.derive(start_index);
+        headers.push(("idempotency-key".to_string(), idempotency_key.to_string()));
     }
-}
-
-impl ManagedHttpHeaders {
-    pub(crate) fn resolve(
-        self,
-        derive: impl FnOnce(OplogIndex) -> IdempotencyKey,
-    ) -> InjectedHttpHeaders {
-        let Self {
-            mut headers,
-            idempotency_key_start,
-        } = self;
-        if let Some(start) = idempotency_key_start {
-            headers.push(("idempotency-key".to_string(), derive(start).to_string()));
-        }
-        headers
-            .into_iter()
-            .map(|(name, value)| (name.into_boxed_str(), value.into_boxed_str()))
-            .collect()
-    }
+    headers
 }
 
 /// Applies the Golem-managed headers to a request's header map, replacing any
@@ -220,7 +192,7 @@ pub(crate) fn apply_managed_http_headers(
     headers: &mut FieldMap,
     hooks: &mut dyn wasmtime_wasi_http::WasiHttpHooks,
     field_size_limit: usize,
-    managed: &[(Box<str>, Box<str>)],
+    managed: &[(String, String)],
 ) -> Result<(), String> {
     if managed.is_empty() {
         return Ok(());
@@ -228,14 +200,14 @@ pub(crate) fn apply_managed_http_headers(
     headers.set_mutable(field_size_limit);
     let mut result = Ok(());
     for (name, value) in managed {
-        let header_name = match HeaderName::try_from(name.as_ref()) {
+        let header_name = match HeaderName::try_from(name.as_str()) {
             Ok(name) => name,
             Err(err) => {
                 result = Err(format!("invalid injected header name {name}: {err}"));
                 break;
             }
         };
-        let header_value = match HeaderValue::try_from(value.as_ref()) {
+        let header_value = match HeaderValue::try_from(value.as_str()) {
             Ok(value) => value,
             Err(err) => {
                 result = Err(format!("invalid injected header value for {name}: {err}"));
@@ -261,7 +233,6 @@ pub(crate) fn apply_managed_http_headers(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use http::HeaderMap;
     use test_r::test;
 
     fn live_exec_state() -> DurableExecutionState {
@@ -271,62 +242,6 @@ mod tests {
             max_in_function_retry_delay: std::time::Duration::from_secs(1),
             durable_wait: false,
         }
-    }
-
-    #[test]
-    fn guest_idempotency_key_is_preserved_without_derivation() {
-        let mut hooks: [(); 0] = [];
-        let mut request = HeaderMap::new();
-        request.insert("idempotency-key", HeaderValue::from_static("guest-key"));
-        let mut request = FieldMap::new_immutable(&mut hooks, request);
-        let managed = golem_managed_http_headers(
-            vec![("traceparent".to_string(), "trace-value".to_string())],
-            true,
-            request.keys().map(|name| name.as_str()),
-            OplogIndex::from_u64(41),
-        )
-        .resolve(|_| panic!("a guest key must not consume a logical key position"));
-
-        apply_managed_http_headers(&mut request, &mut hooks, 4096, &managed).unwrap();
-
-        assert_eq!(request["idempotency-key"], "guest-key");
-        assert_eq!(request.get_all("idempotency-key").iter().count(), 1);
-        assert_eq!(request["traceparent"], "trace-value");
-        assert!(
-            golem_managed_http_headers(
-                Vec::new(),
-                false,
-                std::iter::empty(),
-                OplogIndex::from_u64(41)
-            )
-            .resolve(|_| panic!("disabled injection must not derive a key"))
-            .is_empty()
-        );
-    }
-
-    #[test]
-    fn missing_guest_key_derives_from_the_selected_position() {
-        let mut derived = false;
-        let headers = golem_managed_http_headers(
-            vec![("traceparent".to_string(), "trace-value".to_string())],
-            true,
-            std::iter::empty(),
-            OplogIndex::from_u64(41),
-        )
-        .resolve(|index| {
-            assert_eq!(index, OplogIndex::from_u64(41));
-            derived = true;
-            IdempotencyKey::from("operation-key")
-        });
-
-        assert!(derived);
-        assert_eq!(
-            headers.as_ref(),
-            &[
-                (Box::from("traceparent"), Box::from("trace-value")),
-                (Box::from("idempotency-key"), Box::from("operation-key")),
-            ]
-        );
     }
 
     #[test]

@@ -24,19 +24,20 @@ use crate::durable_host::concurrent::{
     finish_span_in_memory,
 };
 use crate::durable_host::durability::{
-    ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost, TaskRetryContext,
-    semantic_trap_retry_override_error, try_trigger_host_trap_retry, wait_retry_backoff,
+    AsyncRetryDecision, ClassifiedHostError, DurabilityHost, HostFailureKind, InFunctionRetryHost,
+    InFunctionRetryState, TaskRetryContext, semantic_trap_retry_override_error,
+    try_trigger_host_trap_retry, wait_retry_backoff,
 };
 use crate::durable_host::http::policy::{
     apply_managed_http_headers, classify_serializable_http_error_code, golem_managed_http_headers,
     http_worker_state_allows_retry,
 };
-use crate::durable_host::http::transport::WasiHttpTransport;
 use crate::durable_host::p3::{DurableP3, DurableP3View, durable_worker_ctx, wasi_http_view};
 use crate::services::HasWorker;
 use crate::workerctx::WorkerCtx;
 use anyhow::Context as _;
 use bytes::Bytes;
+use futures::future::{Either, select};
 use golem_common::model::invocation_context::{AttributeValue, InvocationContextSpan, SpanId};
 use golem_common::model::oplog::host_functions::P3HttpClientSend;
 use golem_common::model::oplog::payload::types::{
@@ -65,11 +66,11 @@ use tracing::debug;
 use uuid::Uuid;
 use wasmtime::AsContextMut;
 use wasmtime::component::{Accessor, Resource, TerminalConsumption};
+use wasmtime_wasi_http::PooledConnection;
 use wasmtime_wasi_http::WasiHttp;
 use wasmtime_wasi_http::p3::bindings::http::client;
 use wasmtime_wasi_http::p3::bindings::http::types::{ErrorCode, Request, Response};
 
-mod driver;
 mod headers;
 mod observation;
 mod retry;
@@ -89,18 +90,6 @@ impl<U: Send + 'static, Ctx: WorkerCtx> client::HostWithStore<U> for DurableP3<C
     ) -> HttpResult<Resource<Response>> {
         send_with_durability::<Ctx, U, Cancellable>(store, req, DurableFunctionType::WriteRemote)
             .await
-    }
-}
-
-fn reserve_http_key_position(
-    enabled: bool,
-    guest_key: bool,
-    reserve: impl FnOnce() -> Option<OplogIndex>,
-) -> Option<OplogIndex> {
-    if enabled && !guest_key {
-        reserve()
-    } else {
-        None
     }
 }
 
@@ -174,11 +163,13 @@ where
                         ))
                     })?;
             }
-            let logical = reserve_http_key_position(
-                ctx.state.set_outgoing_http_idempotency_key,
-                serialized_request.headers.contains_key("idempotency-key"),
-                || ctx.state.take_logical_key_position(),
-            );
+            let logical = if ctx.state.set_outgoing_http_idempotency_key
+                && !serialized_request.headers.contains_key("idempotency-key")
+            {
+                ctx.state.take_logical_key_position()
+            } else {
+                None
+            };
             Ok::<_, WorkerExecutorError>(ctx.idempotency_key_position(logical))
         })
         .map_err(HttpError::trap)?;
@@ -538,7 +529,7 @@ where
                     .and_then(|drain| drain.progress.take_continuation());
                 let mut rebuild = P3HttpSendRebuild {
                     request: serialized_request.clone(),
-                    injected_headers: Box::new([]),
+                    injected_headers: Vec::new(),
                     recorded_status: 0,
                     recorded_request_body: send_start_index,
                     durable_body: None,
@@ -701,10 +692,13 @@ where
     // Fresh sends and incomplete-call repair use the same prepared headers.
     let (retry_method, retry_uri) = {
         let request_head = serialize_request::<Ctx, U>(store, borrow_resource(&req))?;
-        let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
-        http_store
+        store
             .with(|mut access| {
-                apply_headers_to_request_resource(access.get(), &req, &injected_headers)
+                apply_headers_to_request_resource(
+                    wasi_http_view::<Ctx, U>(access.data_mut()),
+                    &req,
+                    &injected_headers,
+                )
             })
             .map_err(HttpError::trap)?;
         (
@@ -812,6 +806,7 @@ where
     if let Some(pending) = pending_transmission.as_mut() {
         pending.recovery = physical.body.recovery.clone();
     }
+    let mut retry_state = InFunctionRetryState::new();
     let mut retry_task_ctx = make_p3_http_retry_task_context::<Ctx, U>(
         store,
         handle.trap_context().retry_from,
@@ -819,121 +814,264 @@ where
         RetryContext::http(&retry_method, &retry_uri),
     )
     .await;
-    let transport = WasiHttpTransport::new(physical.pool.clone());
-    let exit = driver::drive_send(
-        &physical,
-        &transport,
-        &mut retry_task_ctx,
-        inline_retry_eligible,
-        (&retry_method, &retry_uri),
-        || {
-            store.with(|mut access| {
-                durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
-            })
-        },
-        |delay| wait_retry_backoff(store, durable_worker_ctx::<Ctx, U>, delay),
-    )
-    .await;
+    // A backoff waits durably only while the request body can become resendable
+    // (`may_replay_after_send_failure`); a body that is still streaming is drained to its terminal
+    // before the wait. Otherwise a delay above the threshold keeps the trap fallback, whose
+    // reconstruction rebuilds the body from its recording.
+    let send_waits_durably = retry_task_ctx.durable_wait;
+
     let mut send_semantic_override = None;
-    let send_result = match exit {
-        driver::DriverExit::Interrupted(kind) => {
-            // An interrupt leaves the Start incomplete, not cancelled.
-            handle.abandon_for_trap();
-            let error: anyhow::Error = kind.into();
-            return Err(HttpError::trap(wasmtime::Error::from_anyhow(error)));
-        }
-        driver::DriverExit::RecoveryError(error) => {
+    let send_result = loop {
+        let interrupt = store.with(|mut access| {
+            durable_worker_ctx::<Ctx, U>(access.data_mut()).create_interrupt_signal()
+        });
+        let send = physical.attempt();
+        let attempt_result = match select(Box::pin(send), interrupt).await {
+            Either::Left((result, _)) => result,
+            Either::Right((interrupt_kind, _)) => {
+                // An interrupt is not a cancellation: abandon the send call so its `Start` stays
+                // incomplete on disk (re-executed on resume) instead of letting the handle drop
+                // enqueue a spurious `Cancelled` terminal, and propagate the kind directly so it
+                // classifies as `TrapType::Interrupt`.
+                handle.abandon_for_trap();
+                let error: anyhow::Error = interrupt_kind.into();
+                return Err(HttpError::trap(wasmtime::Error::from_anyhow(error)));
+            }
+        };
+
+        if let Some(error) = physical.body.recovery.error() {
             return Err(HttpError::trap(wasmtime::Error::from_anyhow(
                 handle.trap(error),
             )));
         }
-        driver::DriverExit::HttpError(failure) => {
-            send_semantic_override = failure.semantic_override;
-            Err(failure.error)
-        }
-        driver::DriverExit::StatusFallback(fallback) => {
-            let driver::StatusFallback {
-                response,
-                semantic_override,
-            } = *fallback;
-            let status = response.response.status().as_u16();
-            let properties = http_retry_properties(
-                store,
-                &retry_method,
-                &retry_uri,
-                Some(status),
-                "http-status",
-                &serialized_request.method,
-            );
-            let failure = anyhow::Error::new(ClassifiedHostError {
-                kind: HostFailureKind::Transient,
-                message: format!(
-                    "HTTP status {status} matched retry policy but exceeded the in-function retry delay threshold"
-                ),
-            });
-            let trap = if let Some(payload) = semantic_override {
-                Some(anyhow::Error::new(
-                    crate::durable_host::durability::SemanticTrapRetryOverrideMarker {
-                        payload,
-                        inner: failure,
-                    },
-                ))
-            } else {
-                try_trigger_host_trap_retry(&mut retry_task_ctx, failure, properties)
+        match attempt_result {
+            Ok((response, io, pooled_connection)) => {
+                // Observational calls cannot retry inline, but must still honour a matching
+                // status-code policy through the worker's trap-based retry path.
+                if handle.is_observational()
+                    && store.with(|mut access| {
+                        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+                        ctx.state.is_live() && !ctx.state.snapshotting_mode
+                    })
+                    && matching_status_retry_policy(
+                        store,
+                        &mut retry_task_ctx,
+                        &retry_method,
+                        &retry_uri,
+                        response.status().as_u16(),
+                        &serialized_request.method,
+                    )
                     .await
-                    .err()
-            };
-            if let Some(error) = trap {
-                (response.invalidate)();
-                return Err(HttpError::trap(wasmtime::Error::from_anyhow(
-                    handle.trap(error),
-                )));
+                    .is_some()
+                {
+                    let status = response.status().as_u16();
+                    // The rejected response's connection may hold undrained bytes; keep the
+                    // pool from reusing it (same as the inline-retry and p2 status paths).
+                    poison_p3_pooled_connection(&pooled_connection);
+                    let properties = http_retry_properties(
+                        store,
+                        &retry_method,
+                        &retry_uri,
+                        Some(status),
+                        "http-status",
+                        &serialized_request.method,
+                    );
+                    let for_retry: Result<(), String> = Err(format!(
+                        "HTTP status {status} matched a status-code retry policy in an observational call"
+                    ));
+                    handle
+                        .try_trigger_retry_access(
+                            store,
+                            durable_worker_ctx::<Ctx, U>,
+                            &for_retry,
+                            |_| HostFailureKind::Transient,
+                            properties,
+                        )
+                        .await
+                        .map_err(|err| HttpError::trap(wasmtime::Error::from_anyhow(err)))?;
+                    // The policy gave up (retry budget exhausted): expose the rejected
+                    // response to the guest as-is.
+                    break Ok((response, io));
+                }
+                if inline_retry_eligible
+                    && let Some(policy) = matching_status_retry_policy(
+                        store,
+                        &mut retry_task_ctx,
+                        &retry_method,
+                        &retry_uri,
+                        response.status().as_u16(),
+                        &serialized_request.method,
+                    )
+                    .await
+                {
+                    let properties = http_retry_properties(
+                        store,
+                        &retry_method,
+                        &retry_uri,
+                        Some(response.status().as_u16()),
+                        "http-status",
+                        &serialized_request.method,
+                    );
+                    retry_task_ctx.retry_properties = properties.clone();
+                    retry_task_ctx.durable_wait =
+                        send_waits_durably && physical.body.may_replay_after_send_failure();
+                    match retry_state
+                        .decide_retry_for_named_policy(
+                            &mut retry_task_ctx,
+                            "http-status-retry",
+                            &properties,
+                            &policy,
+                        )
+                        .await
+                    {
+                        AsyncRetryDecision::RetryAfterDelay(delay) => {
+                            poison_p3_pooled_connection(&pooled_connection);
+                            drop(response);
+                            drop(io);
+                            physical.body.abandon_active_live_view();
+                            match physical.body.drain_to_terminal().await {
+                                DurableRequestBodyDrainOutcome::Replayable => {
+                                    if let Err(interrupt_kind) = wait_retry_backoff(
+                                        store,
+                                        durable_worker_ctx::<Ctx, U>,
+                                        delay,
+                                    )
+                                    .await
+                                    {
+                                        handle.abandon_for_trap();
+                                        let error: anyhow::Error = interrupt_kind.into();
+                                        return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                                            error,
+                                        )));
+                                    }
+                                    continue;
+                                }
+                                // The body cannot be resent (guest body error
+                                // or a frame-recording failure): the inline
+                                // retry is refused and the failure surfaces
+                                // through the common post-loop handling.
+                                DurableRequestBodyDrainOutcome::NotReplayable => {
+                                    break Err(ErrorCode::InternalError(Some(
+                                        "request body could not be replayed in-function"
+                                            .to_string(),
+                                    )));
+                                }
+                            }
+                        }
+                        AsyncRetryDecision::FallBackToTrap(semantic_override) => {
+                            let status = response.status().as_u16();
+                            let properties = http_retry_properties(
+                                store,
+                                &retry_method,
+                                &retry_uri,
+                                Some(status),
+                                "http-status",
+                                &serialized_request.method,
+                            );
+                            let failure = anyhow::Error::new(ClassifiedHostError {
+                                kind: HostFailureKind::Transient,
+                                message: format!(
+                                    "HTTP status {status} matched retry policy but exceeded the in-function retry delay threshold"
+                                ),
+                            });
+                            let trap = if let Some(payload) = semantic_override {
+                                Some(anyhow::Error::new(
+                                    crate::durable_host::durability::SemanticTrapRetryOverrideMarker {
+                                        payload,
+                                        inner: failure,
+                                    },
+                                ))
+                            } else {
+                                try_trigger_host_trap_retry(
+                                    &mut retry_task_ctx,
+                                    failure,
+                                    properties,
+                                )
+                                .await
+                                .err()
+                            };
+                            if let Some(err) = trap {
+                                poison_p3_pooled_connection(&pooled_connection);
+                                return Err(HttpError::trap(wasmtime::Error::from_anyhow(
+                                    handle.trap(err),
+                                )));
+                            }
+                            break Ok((response, io));
+                        }
+                        AsyncRetryDecision::Exhausted => {
+                            break Ok((response, io));
+                        }
+                    }
+                } else {
+                    break Ok((response, io));
+                }
             }
-            Ok((response.response, response.io))
-        }
-        driver::DriverExit::Response(response) => {
-            // Observational calls use the durable handle's fresh retry context.
-            if handle.is_observational()
-                && store.with(|mut access| {
-                    let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-                    ctx.state.is_live() && !ctx.state.snapshotting_mode
-                })
-                && matching_status_retry_policy(
-                    store,
-                    &mut retry_task_ctx,
-                    &retry_method,
-                    &retry_uri,
-                    response.response.status().as_u16(),
-                    &serialized_request.method,
-                )
-                .await
-                .is_some()
+            Err(error_code)
+                if inline_retry_eligible
+                    && classify_serializable_http_error_code(&serialize_error_code(
+                        &error_code,
+                    )) == HostFailureKind::Transient =>
             {
-                let status = response.response.status().as_u16();
-                (response.invalidate)();
                 let properties = http_retry_properties(
                     store,
                     &retry_method,
                     &retry_uri,
-                    Some(status),
-                    "http-status",
+                    None,
+                    "transient",
                     &serialized_request.method,
                 );
-                let for_retry: Result<(), String> = Err(format!(
-                    "HTTP status {status} matched a status-code retry policy in an observational call"
-                ));
-                handle
-                    .try_trigger_retry_access(
-                        store,
-                        durable_worker_ctx::<Ctx, U>,
-                        &for_retry,
-                        |_| HostFailureKind::Transient,
-                        properties,
-                    )
+                retry_task_ctx.retry_properties = properties.clone();
+                retry_task_ctx.durable_wait =
+                    send_waits_durably && physical.body.may_replay_after_send_failure();
+                // A transient failure after request-body frames were already
+                // pulled (i.e. the attempt was writing the body to the
+                // network) is charged as a distinct request-body-write retry
+                // phase; a failure before any body frame was consumed keeps
+                // the plain in-task label.
+                let retry_label = if physical.body.frames_consumed() {
+                    "request-body-write"
+                } else {
+                    "in-task"
+                };
+                match retry_state
+                    .decide_retry_with_properties(&mut retry_task_ctx, retry_label, &properties)
                     .await
-                    .map_err(|error| HttpError::trap(wasmtime::Error::from_anyhow(error)))?;
+                {
+                    AsyncRetryDecision::RetryAfterDelay(delay) => {
+                        // A durable wait was allowed for a body that can still become
+                        // replayable: when the attempt failed while the body was streaming,
+                        // drain it to its terminal, as a status-code retry does, instead of
+                        // failing a send that the trap fallback would have repaired.
+                        let replayable = physical.body.can_replay_after_send_failure()
+                            || (retry_task_ctx.durable_wait && {
+                                physical.body.abandon_active_live_view();
+                                matches!(
+                                    physical.body.drain_to_terminal().await,
+                                    DurableRequestBodyDrainOutcome::Replayable
+                                )
+                            });
+                        if !replayable {
+                            break Err(error_code);
+                        }
+                        if let Err(interrupt_kind) =
+                            wait_retry_backoff(store, durable_worker_ctx::<Ctx, U>, delay).await
+                        {
+                            handle.abandon_for_trap();
+                            let error: anyhow::Error = interrupt_kind.into();
+                            return Err(HttpError::trap(wasmtime::Error::from_anyhow(error)));
+                        }
+                        continue;
+                    }
+                    AsyncRetryDecision::FallBackToTrap(semantic_override) => {
+                        send_semantic_override = semantic_override;
+                        break Err(error_code);
+                    }
+                    AsyncRetryDecision::Exhausted => {
+                        break Err(error_code);
+                    }
+                }
             }
-            Ok((response.response, response.io))
+            Err(error_code) => break Err(error_code),
         }
     };
 

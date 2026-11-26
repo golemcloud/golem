@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::*;
-use crate::durable_host::http::policy::InjectedHttpHeaders;
 
 /// Reconstructs the outgoing URI from the recorded request head.
 pub(in crate::durable_host::p3::http) fn outgoing_http_request_uri(
@@ -62,14 +61,14 @@ pub(in crate::durable_host::p3::http) fn golem_outgoing_http_headers(
     set_outgoing_http_idempotency_key: bool,
     start_index: OplogIndex,
     key_position: &crate::durable_host::IdempotencyKeyPosition,
-) -> InjectedHttpHeaders {
+) -> Vec<(String, String)> {
     golem_managed_http_headers(
         trace_headers,
         set_outgoing_http_idempotency_key,
-        request.headers.keys().map(|name| name.as_str()),
+        request.headers.contains_key("idempotency-key"),
         start_index,
+        key_position,
     )
-    .resolve(|index| key_position.derive(index))
 }
 
 /// Applies the injected headers to the actual request resource (replacing any
@@ -79,7 +78,7 @@ pub(in crate::durable_host::p3::http) fn golem_outgoing_http_headers(
 pub(in crate::durable_host::p3::http) fn apply_headers_to_request_resource(
     view: wasmtime_wasi_http::WasiHttpCtxView<'_>,
     req: &Resource<Request>,
-    headers: &[(Box<str>, Box<str>)],
+    headers: &[(String, String)],
 ) -> Result<(), WorkerExecutorError> {
     if headers.is_empty() {
         return Ok(());

@@ -13,20 +13,26 @@
 // limitations under the License.
 
 use super::*;
-use crate::durable_host::http::transport::{HttpTransport, TransportInvalidation};
 
 #[cfg(test)]
 mod tests;
 
+pub(in crate::durable_host::p3::http) fn poison_p3_pooled_connection(
+    connection: &Option<PooledConnection>,
+) {
+    if let Some(connection) = connection {
+        connection.poison();
+    }
+}
+
 impl<Ctx: WorkerCtx> PhysicalSendRequest<Ctx> {
     pub(super) async fn attempt(
         &self,
-        transport: &(impl HttpTransport + ?Sized),
     ) -> Result<
         (
             http::Response<UnsyncBoxBody<Bytes, ErrorCode>>,
             Box<dyn Future<Output = Result<(), ErrorCode>> + Send>,
-            TransportInvalidation,
+            Option<PooledConnection>,
         ),
         ErrorCode,
     > {
@@ -43,10 +49,23 @@ impl<Ctx: WorkerCtx> PhysicalSendRequest<Ctx> {
             .map_err(|err| ErrorCode::InternalError(Some(err.to_string())))?;
         *request.headers_mut() = self.headers.clone();
 
-        let (response, io, invalidate) = transport
-            .send(request, self.options)
-            .await
-            .map_err(|error| self.hooks.clone().transport_error_to_p3(&error))?;
+        let sent = match &self.pool {
+            Some(pool) => pool
+                .send_request(request, self.options)
+                .await
+                .map(|(response, io, connection)| (response, io, Some(connection))),
+            None => match wasmtime_wasi_http::default_send_request(request, self.options).await {
+                Ok((response, io)) => Ok((
+                    response.map(http_body_util::BodyExt::boxed_unsync),
+                    Box::new(io)
+                        as Box<dyn Future<Output = Result<(), wasmtime_wasi_http::Error>> + Send>,
+                    None,
+                )),
+                Err(error) => Err(error),
+            },
+        };
+        let (response, io, connection) =
+            sent.map_err(|error| self.hooks.clone().transport_error_to_p3(&error))?;
         let mut body_hooks = self.hooks.clone();
         let response = response.map(|body| {
             body.map_err(move |error| body_hooks.transport_error_to_p3(&error))
@@ -58,7 +77,7 @@ impl<Ctx: WorkerCtx> PhysicalSendRequest<Ctx> {
                 .await
                 .map_err(|error| io_hooks.transport_error_to_p3(&error))
         });
-        Ok((response, io, invalidate))
+        Ok((response, io, connection))
     }
 }
 
