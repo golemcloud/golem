@@ -73,14 +73,7 @@ impl ComponentCommandHandler {
             let local =
                 self.local_component_properties(app_ctx, name, metadata.clone(), &agents, false)?;
             let wasm = package::add_blob(&mut stage.blobs, package::WASM, wasm).digest;
-            let config_schema = local.config_schema;
             let defaults = component.config().clone().unwrap_or_else(|| json!({}));
-            package::reject_secret_defaults(
-                &defaults,
-                &config_schema.schema,
-                &config_schema.declarations,
-            )
-            .with_context(|| format!("Invalid default in component {name}"))?;
             let mut provision = PackageProvision {
                 config: defaults,
                 env: local.component_env,
@@ -89,14 +82,6 @@ impl ComponentCommandHandler {
                 files: None,
                 file_defaults: Vec::new(),
             };
-            stage
-                .file_defaults(
-                    &mut provision,
-                    &config_schema.schema,
-                    &config_schema.declarations,
-                    |path| component.layer_properties().config.source_at(path),
-                )
-                .await?;
             stage
                 .provision(&mut provision, &local.component_files)
                 .await
@@ -234,7 +219,6 @@ impl ComponentCommandHandler {
                 PackageComponent {
                     wasm,
                     metadata,
-                    config_schema,
                     provision,
                     agents: agent_provisions,
                     tools,

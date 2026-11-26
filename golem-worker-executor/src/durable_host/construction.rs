@@ -240,19 +240,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .as_ref()
                             .map(|c| c.config.clone())
                             .unwrap_or_default(),
-                        &agent_type.config,
+                        agent_type.config.as_slice(),
                     )
                 }
                 ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
-                    let schema = component_metadata.metadata.config_schema();
-                    (
-                        component_metadata
-                            .metadata
-                            .component_provision_config()
-                            .config
-                            .clone(),
-                        &schema.declarations,
-                    )
+                    (Vec::new(), &[][..])
                 }
             };
             effective_agent_config(

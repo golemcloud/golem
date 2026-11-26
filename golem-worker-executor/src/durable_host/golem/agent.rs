@@ -220,13 +220,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         entry.path == path && entry.source == AgentConfigSource::Secret
                     })
                 }),
-            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => self
-                .owner_component_metadata()
-                .metadata
-                .config_schema()
-                .declarations
-                .iter()
-                .any(|entry| entry.path == path && entry.source == AgentConfigSource::Secret),
+            ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => false,
         }
     }
 
@@ -403,11 +397,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 (agent_type.config, agent_type.schema)
             }
             ResolvedOwnerContext::ComponentBaseline | ResolvedOwnerContext::OplogProcessor => {
-                let config_schema = self.owner_component_metadata().metadata.config_schema();
-                (
-                    config_schema.declarations.clone(),
-                    config_schema.schema.clone(),
-                )
+                (Vec::new(), SchemaGraph::empty())
             }
         };
         let result = match declarations.iter().find(|entry| entry.path == path) {

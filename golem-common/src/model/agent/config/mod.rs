@@ -72,19 +72,17 @@ impl UntypedAgentConfigEntry {
         owner_kind: OwnerKind,
         agent_type_name: Option<&AgentTypeName>,
     ) -> Result<TypedAgentConfigEntry, String> {
-        let (declarations, schema) = if owner_kind == OwnerKind::ComponentAgent {
-            let agent_type_name = agent_type_name
-                .ok_or_else(|| "Real agent config requires an agent type".to_string())?;
-            let agent_type = component_metadata
-                .find_agent_type_by_name_ref(agent_type_name)
-                .ok_or_else(|| {
-                    format!("did not find expected agent type {agent_type_name} in the metadata")
-                })?;
-            (&agent_type.config, &agent_type.schema)
-        } else {
-            let config_schema = component_metadata.config_schema();
-            (&config_schema.declarations, &config_schema.schema)
-        };
+        if owner_kind != OwnerKind::ComponentAgent {
+            return Err("Typed config requires an agent owner".to_string());
+        }
+        let agent_type_name = agent_type_name
+            .ok_or_else(|| "Real agent config requires an agent type".to_string())?;
+        let agent_type = component_metadata
+            .find_agent_type_by_name_ref(agent_type_name)
+            .ok_or_else(|| {
+                format!("did not find expected agent type {agent_type_name} in the metadata")
+            })?;
+        let (declarations, schema) = (&agent_type.config, &agent_type.schema);
 
         let declaration = declarations
             .iter()

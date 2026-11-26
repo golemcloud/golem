@@ -106,23 +106,16 @@ impl DeploymentContext {
     pub fn validate_static_config(&self, errors: &mut Vec<DeployValidationError>) {
         for component in self.components.values() {
             let metadata = &component.metadata;
-            let component_schema = metadata.config_schema();
-            let owners = std::iter::once((
-                None,
-                &component_schema.schema,
-                component_schema.declarations.as_slice(),
-                metadata.component_provision_config().config.clone(),
-            ))
-            .chain(metadata.agent_types().iter().map(|agent| {
+            let owners = metadata.agent_types().iter().map(|agent| {
                 (
-                    Some(&agent.type_name),
+                    &agent.type_name,
                     &agent.schema,
                     agent.config.as_slice(),
                     metadata
                         .agent_type_config(&agent.type_name)
                         .unwrap_or_default(),
                 )
-            }));
+            });
             for (agent_type, graph, declarations, bindings) in owners {
                 let origin = ConfigOrigin {
                     file: component.component_name.to_string().into(),
@@ -181,7 +174,7 @@ impl DeploymentContext {
                 if let Err(message) = result {
                     errors.push(DeployValidationError::InvalidStaticConfig {
                         component_name: component.component_name.clone(),
-                        agent_type_name: agent_type.cloned(),
+                        agent_type_name: agent_type.clone(),
                         message,
                     });
                 }
@@ -1381,13 +1374,6 @@ impl DeploymentContext {
         let mut replacements = Vec::new();
         let mut seen_secrets = HashMap::new();
 
-        let component_declarations = self.components.values().flat_map(|component| {
-            let schema = component.metadata.config_schema();
-            schema
-                .declarations
-                .iter()
-                .map(move |declaration| (&schema.schema, declaration))
-        });
         let agent_declarations = self.registered_agent_types.values().flat_map(|agent_type| {
             agent_type
                 .agent_type
@@ -1396,7 +1382,7 @@ impl DeploymentContext {
                 .map(move |declaration| (&agent_type.agent_type.schema, declaration))
         });
 
-        for (declaration_graph, config) in component_declarations.chain(agent_declarations) {
+        for (declaration_graph, config) in agent_declarations {
             if config.source != AgentConfigSource::Secret {
                 continue;
             }

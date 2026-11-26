@@ -6115,10 +6115,7 @@ impl ComponentService for FlakyComponentService {
                     metadata.agent_types().to_vec(),
                     metadata.agent_type_provision_configs().clone(),
                 )
-                .with_component_config(
-                    metadata.config_schema().clone(),
-                    metadata.component_provision_config().clone(),
-                );
+                .with_component_provision_config(metadata.component_provision_config().clone());
         }
         Ok(component)
     }

@@ -77,12 +77,14 @@ fn sample() -> (PackageConfig, BTreeMap<String, Vec<u8>>) {
                     }],
                     tool_middlewares: vec![],
                 },
-                config_schema: Default::default(),
                 provision: PackageProvision {
                     config: json!({"setting": name}),
                     ..Default::default()
                 },
-                agents: Default::default(),
+                agents: BTreeMap::from([(
+                    AgentTypeName(format!("{name}Agent")),
+                    PackageProvision::default(),
+                )]),
                 tools: Default::default(),
                 tool_middlewares: Default::default(),
             },
@@ -214,11 +216,9 @@ fn package_rejects_blank_calls_and_provisions_for_unexported_agents() {
 #[test]
 async fn expansion_rejects_duplicate_exported_agent_types_with_both_packages_named() {
     let (mut spec, blobs) = sample();
-    assert!(
-        spec.components
-            .values()
-            .all(|component| component.agents.is_empty())
-    );
+    for component in spec.components.values_mut() {
+        component.agents.clear();
+    }
     let mut effects = MemoryEffects::default();
     let mut pins = Pins::new();
     for name in ["first-package", "second-package"] {
@@ -376,7 +376,7 @@ fn refuses_secret_paths_in_typed_defaults() {
     use golem_common::schema::schema_type::SecretSpec;
     let (mut config, layers) = sample();
     let component = config.components.values_mut().next().unwrap();
-    component.config_schema.declarations.extend([
+    component.metadata.agent_types[0].config.extend([
         AgentConfigDeclarationSchema {
             source: AgentConfigSource::Secret,
             path: vec!["nested".into(), "credential".into()],
@@ -397,13 +397,16 @@ fn refuses_secret_paths_in_typed_defaults() {
         json!({"nested":{"credential":"private-key"}}),
         json!({"nested":{"records":[{"credential":"private-key"}]}}),
     ] {
-        config
-            .components
-            .values_mut()
-            .next()
-            .unwrap()
-            .provision
-            .config = value;
+        let component = config.components.values_mut().next().unwrap();
+        component.provision.config = value.clone();
+        component.agents.values_mut().next().unwrap().config = json!({});
+        let error = format!("{:#}", pack(&config, &layers).unwrap_err());
+        assert!(error.contains("secret"), "{error}");
+        assert!(!error.contains("private-key"), "{error}");
+
+        let component = config.components.values_mut().next().unwrap();
+        component.provision.config = json!({});
+        component.agents.values_mut().next().unwrap().config = value;
         let error = format!("{:#}", pack(&config, &layers).unwrap_err());
         assert!(error.contains("secret"), "{error}");
         assert!(!error.contains("private-key"), "{error}");
@@ -413,7 +416,10 @@ fn refuses_secret_paths_in_typed_defaults() {
         .values_mut()
         .next()
         .unwrap()
-        .provision
+        .agents
+        .values_mut()
+        .next()
+        .unwrap()
         .config = json!({"nested":{"records":[]}});
     assert!(pack(&config, &layers).is_ok());
 }
@@ -475,9 +481,8 @@ fn rejects_secret_defaults_only_in_the_selected_union_branch() {
 
     let (mut config, layers) = sample();
     let component = config.components.values_mut().next().unwrap();
-    component
-        .config_schema
-        .declarations
+    component.metadata.agent_types[0]
+        .config
         .push(AgentConfigDeclarationSchema {
             source: AgentConfigSource::Local,
             path: vec!["input".into()],
@@ -509,7 +514,10 @@ fn rejects_secret_defaults_only_in_the_selected_union_branch() {
             .values_mut()
             .next()
             .unwrap()
-            .provision
+            .agents
+            .values_mut()
+            .next()
+            .unwrap()
             .config = json!({"input": {"kind": kind, "value": "ordinary text"}});
         match pack(&config, &layers) {
             Ok(_) => assert!(accepted, "accepted a secret default"),

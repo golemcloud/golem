@@ -29,7 +29,6 @@ use golem_common::model::quota::{EnforcementAction, ResourceLimit, ResourceName}
 use golem_common::model::security_scheme::SecuritySchemeName;
 use golem_common::model::tool::{ToolFilesystemAccess, ToolName};
 use golem_common::model::tool_middleware::{ToolMiddlewareMergeMode, ToolMiddlewareName};
-use golem_common::schema::ComponentConfigSchema;
 use golem_common::schema::config::ConfigCatalog;
 pub use golem_package::{ManifestInitialCard, ManifestInitialCardBound, PluginInstallation};
 use indexmap::IndexMap;
@@ -963,8 +962,6 @@ pub struct ComponentTemplate {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_schema: Option<ComponentConfigSchema>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_card: Option<ManifestInitialCard>,
@@ -999,7 +996,6 @@ impl ComponentTemplate {
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
             clean: self.clean.clone(),
-            config_schema: self.config_schema.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
                 initial_card: self.initial_card.clone(),
@@ -1042,8 +1038,6 @@ pub struct Component {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_schema: Option<ComponentConfigSchema>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_card: Option<ManifestInitialCard>,
@@ -1078,7 +1072,6 @@ impl Component {
             build: self.build.clone(),
             custom_commands: self.custom_commands.clone(),
             clean: self.clean.clone(),
-            config_schema: self.config_schema.clone(),
             agent_properties: AgentLayerProperties {
                 config: self.config.clone(),
                 initial_card: self.initial_card.clone(),
@@ -1119,8 +1112,6 @@ pub struct ComponentPreset {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub clean: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub config_schema: Option<ComponentConfigSchema>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub initial_card: Option<ManifestInitialCard>,
@@ -1153,7 +1144,6 @@ impl ComponentPreset {
             build: self.build,
             custom_commands: self.custom_commands,
             clean: self.clean,
-            config_schema: self.config_schema,
             agent_properties: AgentLayerProperties {
                 config: self.config,
                 initial_card: self.initial_card,
@@ -1800,7 +1790,6 @@ pub struct ComponentLayerProperties {
     pub build: Vec<BuildCommand>,
     pub custom_commands: IndexMap<String, Vec<ExternalCommand>>,
     pub clean: Vec<String>,
-    pub config_schema: Option<ComponentConfigSchema>,
     pub agent_properties: AgentLayerProperties,
 }
 
