@@ -385,10 +385,7 @@ impl ComponentCommandHandler {
             } else {
                 None
             };
-            let resolved_config = if resolved {
-                let metadata = metadata
-                    .as_ref()
-                    .expect("resolved mode extracts component metadata");
+            let resolved_config = if let Some(metadata) = &metadata {
                 Some(prepare_static_config(
                     app_ctx.application(),
                     &component_name,
