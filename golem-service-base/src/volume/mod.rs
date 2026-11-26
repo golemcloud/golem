@@ -65,7 +65,8 @@ pub(super) trait FileReader: Debug + Send + Sync {
     async fn read(&self, state: &FileState, range: Range<u64>) -> Result<ReadStream, VolumeError>;
 }
 
-/// An open file's metadata and read adapter. It holds no connection.
+/// An open file's metadata and read adapter. It holds no dedicated connection.
+/// The adapter can hold a shared client with a connection pool.
 #[derive(Debug)]
 pub struct VolumeFile {
     size: u64,

@@ -32,7 +32,7 @@ use aws_smithy_runtime_api::client::http::{SharedHttpConnector, http_client_fn};
 use aws_smithy_types::{retry::RetryConfig, timeout::TimeoutConfig};
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt::{Debug, Formatter};
 use std::ops::{Range, RangeInclusive};
@@ -71,6 +71,7 @@ struct ListCursor {
     directory: Box<str>,
     continuation: Box<str>,
     last_child: Option<VolumePath>,
+    files_before_directory: Box<[VolumePath]>,
 }
 
 /// Builds both handles without sending a request.
@@ -131,7 +132,7 @@ fn check_reference(
     actual: &FileState,
 ) -> Result<(), VolumeError> {
     let (etag, version) = actual.reference();
-    if requested_version.is_some_and(|id| version != (id != "null").then_some(id))
+    if requested_version.is_some_and(|id| version != Some(id))
         || requested_etag.is_some_and(|requested| requested != etag)
     {
         Err(VolumeError::InvalidResponse)
@@ -501,6 +502,7 @@ impl S3Volume {
         if etag.is_some_and(|etag| !strong_etag(etag)) || version == Some("") {
             return Err(VolumeError::InvalidRequest);
         }
+        let version = version.filter(|version| *version != "null");
         let result = self
             .client
             .head_object()
@@ -528,7 +530,7 @@ impl S3Volume {
             .ok_or(VolumeError::InvalidResponse)?;
         check_range(None, result.content_range(), size, size)?;
         let state = state(result.e_tag(), result.version_id())?;
-        check_reference(recorded.map(|_| version.unwrap_or("null")), etag, &state)?;
+        check_reference(version, etag, &state)?;
         if result.delete_marker() == Some(true) {
             return Err(if recorded.is_some() {
                 VolumeError::Changed
@@ -536,6 +538,10 @@ impl S3Volume {
                 VolumeError::NotFound
             });
         }
+        // A conditional response can name a new version without selecting it for this file.
+        let state = etag.map_or(state, |etag| {
+            FileState::from_reference(etag.into(), version.map(Into::into))
+        });
         Ok((size, state))
     }
 }
@@ -615,12 +621,13 @@ impl VolumeClient for S3Volume {
             (Some(false), None) => None,
             _ => return Err(VolumeError::InvalidResponse),
         };
-        let previous_child = cursor
-            .as_ref()
-            .and_then(|cursor| cursor.last_child.as_ref());
-        let (entries, last_child) = result.contents().iter().try_fold(
-            (BTreeMap::new(), previous_child.cloned()),
-            |(mut entries, last_child), object| {
+        let last_child = cursor.as_ref().and_then(|cursor| cursor.last_child.clone());
+        let files = cursor.as_ref().map_or_else(BTreeSet::new, |cursor| {
+            cursor.files_before_directory.iter().cloned().collect()
+        });
+        let (entries, last_child, files) = result.contents().iter().try_fold(
+            (BTreeMap::new(), last_child, files),
+            |(mut entries, last_child, mut files), object| {
                 let key = object.key().ok_or(VolumeError::InvalidResponse)?;
                 let relative = key
                     .strip_prefix(prefix.as_ref())
@@ -634,7 +641,7 @@ impl VolumeClient for S3Volume {
                     || relative.is_empty()
                     || VolumePath::new(relative).is_err()
                 {
-                    return Ok((entries, last_child));
+                    return Ok((entries, last_child, files));
                 }
                 let (child, node) = relative
                     .split_once('/')
@@ -646,10 +653,26 @@ impl VolumeClient for S3Volume {
                 } else {
                     format!("{}/{child}", directory.as_str())
                 })?;
-                if previous_child != Some(&child) {
+                let shadowed = files.contains(&child);
+                let volume_relative = key
+                    .strip_prefix(self.prefix.as_ref())
+                    .ok_or(VolumeError::InvalidResponse)?;
+                // Names such as `a-` sort between file `a` and its `a/` descendants.
+                // Keep file precedence until that descendant range starts. The rolling
+                // last child then suppresses the rest of its contiguous range.
+                files.retain(|file| {
+                    volume_relative
+                        .bytes()
+                        .cmp(file.as_str().bytes().chain(std::iter::once(b'/')))
+                        .is_lt()
+                });
+                if matches!(node, Node::File { .. }) {
+                    files.insert(child.clone());
+                }
+                if last_child.as_ref() != Some(&child) && !shadowed {
                     entries.entry(child.clone()).or_insert(node);
                 }
-                Ok::<_, VolumeError>((entries, Some(child)))
+                Ok::<_, VolumeError>((entries, Some(child), files))
             },
         )?;
         let after = next
@@ -658,6 +681,7 @@ impl VolumeClient for S3Volume {
                     directory: prefix,
                     continuation: next.into(),
                     last_child,
+                    files_before_directory: files.into_iter().collect(),
                 })
                 .map(Cursor::new)
                 .map_err(|_| VolumeError::InvalidResponse)
@@ -740,7 +764,7 @@ impl S3FileReader {
             .and_then(|n| u64::try_from(n).ok())
             .ok_or(VolumeError::InvalidResponse)?;
         let actual = state(result.e_tag(), result.version_id())?;
-        check_reference(Some(version.unwrap_or("null")), Some(etag), &actual)?;
+        check_reference(version, Some(etag), &actual)?;
         check_range(range.as_ref(), result.content_range(), length, self.size)?;
         Ok(Box::pin(futures::stream::try_unfold(
             (result.body, length),

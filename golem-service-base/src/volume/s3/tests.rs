@@ -219,6 +219,109 @@ async fn listing_projects_visible_direct_children_from_exactly_one_recursive_pag
 
 #[test]
 #[timeout("30s")]
+async fn listing_keeps_file_precedence_across_intervening_siblings_and_descendant_pages() {
+    futures::stream::iter(["", "nested"])
+        .flat_map(|directory| {
+            futures::stream::iter([vec![14], vec![2, 2, 3, 2, 3, 2]])
+                .map(move |counts| (directory, counts))
+        })
+        .for_each(|(directory, counts)| async move {
+            let directory_prefix = if directory.is_empty() {
+                String::new()
+            } else {
+                format!("{directory}/")
+            };
+            let objects = [
+                ("a", 11),
+                ("a-", 12),
+                ("a-/01", 13),
+                ("a-/02", 14),
+                ("a-/03", 15),
+                ("a-999", 17),
+                ("a/", 0),
+                ("a/01", 18),
+                ("a/02", 19),
+                ("a/03", 20),
+                ("dir-/marker/", 0),
+                ("dir/one", 3),
+                ("dir/two", 4),
+                ("z", 23),
+            ]
+            .map(|(name, size)| (format!("corpus/{directory_prefix}{name}"), size));
+            let responses = counts
+                .iter()
+                .scan(0, |start, count| {
+                    let end = *start + count;
+                    let page = objects[*start..end]
+                        .iter()
+                        .map(|(key, size)| (key.as_str(), *size))
+                        .collect::<Vec<_>>();
+                    let next = (end < objects.len()).then(|| format!("next-{end}"));
+                    *start = end;
+                    Some(listing(&page, next.as_deref()))
+                })
+                .collect();
+            let (endpoint, requests, server) = server(responses).await;
+            let (client, _) = connect(config(&endpoint), credentials(), allowed()).unwrap();
+            let entries = futures::stream::iter(counts.iter())
+                .fold(
+                    (None, Vec::new(), requests),
+                    |(after, mut entries, mut requests), _| {
+                        let client = &client;
+                        async move {
+                            let page = client.list(&path(directory), after.as_ref()).await.unwrap();
+                            let request = requests.try_recv().unwrap();
+                            assert_eq!(request.method(), "GET");
+                            assert!(request.uri().query().unwrap().contains("list-type=2"));
+                            assert!(
+                                requests.try_recv().is_err(),
+                                "one LIST, without per-object HEAD"
+                            );
+                            entries.extend(page.entries);
+                            let restored = page.after.map(|cursor| {
+                                let encoded = serde_json::to_string(&cursor).unwrap();
+                                let restored = serde_json::from_str::<Cursor>(&encoded).unwrap();
+                                assert_eq!(restored, cursor);
+                                restored
+                            });
+                            (restored, entries, requests)
+                        }
+                    },
+                )
+                .await;
+            assert!(entries.0.is_none());
+            assert_eq!(
+                entries.1,
+                [
+                    Entry {
+                        path: path(&format!("{directory_prefix}a")),
+                        node: Node::File { size: 11 }
+                    },
+                    Entry {
+                        path: path(&format!("{directory_prefix}a-")),
+                        node: Node::File { size: 12 }
+                    },
+                    Entry {
+                        path: path(&format!("{directory_prefix}a-999")),
+                        node: Node::File { size: 17 }
+                    },
+                    Entry {
+                        path: path(&format!("{directory_prefix}dir")),
+                        node: Node::Directory
+                    },
+                    Entry {
+                        path: path(&format!("{directory_prefix}z")),
+                        node: Node::File { size: 23 }
+                    },
+                ]
+            );
+            server.abort();
+        })
+        .await;
+}
+
+#[test]
+#[timeout("30s")]
 async fn stat_requires_a_visible_descendant_and_treats_root_as_a_directory() {
     let (endpoint, mut requests, server) = server(vec![
         metadata(41, "\"file\"", "version-7"),
@@ -353,6 +456,54 @@ async fn recorded_open_and_each_read_select_the_recorded_version_and_clamp_range
     });
     assert_eq!(seen[1].headers()["range"], "bytes=2-6");
     assert_eq!(seen[2].headers()["range"], "bytes=0-0");
+    server.abort();
+}
+
+#[test]
+#[timeout("30s")]
+async fn etag_only_reads_and_recovery_accept_new_versions_without_selecting_them() {
+    let (endpoint, mut requests, server) = server(vec![
+        metadata(4, "\"same\"", "null"),
+        data("bc", "\"same\"", "v2", Some("bytes 1-2/4")),
+        metadata(4, "\"same\"", "v3"),
+        data("d", "\"same\"", "v4", Some("bytes 3-3/4")),
+        metadata(4, "\"same\"", "v5"),
+        data("d", "\"same\"", "v6", Some("bytes 3-3/4")),
+    ])
+    .await;
+    let (client, recovery) = connect(config(&endpoint), credentials(), allowed()).unwrap();
+    let file = client.open(&path("book")).await.unwrap();
+    let selected = FileState::from_reference("\"same\"".into(), None);
+    assert_eq!(file.state(), &selected);
+    assert!(!file.replayable());
+    assert_eq!(bytes(file.read(1..3).await.unwrap()).await, "bc");
+    let restored_null: FileState = serde_json::from_value(serde_json::json!({
+        "etag": "\"same\"", "version": "null"
+    }))
+    .unwrap();
+    futures::stream::iter([selected.clone(), restored_null])
+        .for_each(|recorded| {
+            let recovery = &recovery;
+            let selected = &selected;
+            async move {
+                let recovered = recovery
+                    .open_recorded(&path("book"), &recorded)
+                    .await
+                    .unwrap();
+                assert_eq!(recovered.state(), selected);
+                assert!(!recovered.replayable());
+                assert_eq!(bytes(recovered.read(3..4).await.unwrap()).await, "d");
+            }
+        })
+        .await;
+    let seen = std::iter::from_fn(|| requests.try_recv().ok()).collect::<Vec<_>>();
+    assert_eq!(seen.len(), 6);
+    seen.iter().for_each(|request| {
+        assert!(!request.uri().query().unwrap_or("").contains("versionId"));
+    });
+    seen.iter().skip(1).for_each(|request| {
+        assert_eq!(request.headers()["if-match"], "\"same\"");
+    });
     server.abort();
 }
 
@@ -587,6 +738,7 @@ async fn sdk_diagnostics_and_public_errors_do_not_disclose_reflected_credentials
     let (endpoint, mut requests, server) = server(vec![
         metadata(7, "\"old\"", "old-7"),
         response(403, "<Error><Code>AccessDenied</Code><Message>volume-secret volume-token</Message><RequestId>volume-token</RequestId></Error>"),
+        response(503, "<Error><Code>ServiceUnavailable</Code><Message>volume-secret volume-token</Message></Error>"),
     ]).await;
     async {
         let (client, _) = connect(config(&endpoint), credentials(), allowed()).unwrap();
@@ -601,13 +753,20 @@ async fn sdk_diagnostics_and_public_errors_do_not_disclose_reflected_credentials
         assert_opaque_debug(&error);
         assert!(!error.to_string().contains("volume-secret"));
         assert!(!error.to_string().contains("volume-token"));
+        let error = client.open(&path("book")).await.unwrap_err();
+        assert_eq!(error, VolumeError::Unanswered);
+        assert_eq!(
+            error.to_string(),
+            "the volume request failed without a usable answer"
+        );
+        assert_eq!(serde_json::to_value(&error).unwrap(), "Unanswered");
     }
     .with_subscriber(subscriber)
     .await;
     let logs = String::from_utf8(captured.lock().unwrap().clone()).unwrap();
     assert!(!logs.contains("volume-secret"));
     assert!(!logs.contains("volume-token"));
-    assert_eq!(std::iter::from_fn(|| requests.try_recv().ok()).count(), 2);
+    assert_eq!(std::iter::from_fn(|| requests.try_recv().ok()).count(), 3);
     server.abort();
 }
 

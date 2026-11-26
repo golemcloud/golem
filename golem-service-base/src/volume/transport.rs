@@ -86,6 +86,7 @@ impl Service<Uri> for CheckedConnector {
         let resolver = self.resolver.clone();
         let dial = self.dial.clone();
         Box::pin(async move {
+            // This deadline covers DNS and TCP. The HTTPS connector establishes TLS after it.
             let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
             tokio::time::timeout_at(deadline, async {
                 let (host, port) = destination(&uri)?;
@@ -129,7 +130,14 @@ impl Service<Uri> for CheckedConnector {
                         "volume connection timed out",
                     ));
                 }
-                dial.dial(addresses).await.map(TokioIo::new)
+                let stream = dial.dial(addresses).await?;
+                if tokio::time::Instant::now() >= deadline {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "volume connection timed out",
+                    ));
+                }
+                Ok(TokioIo::new(stream))
             })
             .await
             .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "volume connection timed out"))?
@@ -641,6 +649,66 @@ mod tests {
         }
     }
 
+    #[derive(Debug)]
+    struct ControlledDial(Mutex<Option<oneshot::Receiver<TcpStream>>>);
+
+    impl Dial for ControlledDial {
+        fn dial(&self, _: Box<[SocketAddr]>) -> BoxFuture<'static, io::Result<TcpStream>> {
+            let result = self.0.lock().unwrap().take().unwrap();
+            Box::pin(async move { Ok(result.await.unwrap()) })
+        }
+    }
+
+    #[test]
+    fn a_ready_dial_succeeds_only_before_the_absolute_deadline() {
+        [9_999, 10_000, 10_001].into_iter().for_each(|millis| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async move {
+                    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                    let address = listener.local_addr().unwrap();
+                    let (stream, peer) =
+                        tokio::join!(TcpStream::connect(address), listener.accept());
+                    let stream = stream.unwrap();
+                    let (mut peer, _) = peer.unwrap();
+                    let (ready, result) = oneshot::channel();
+                    let mut connector = CheckedConnector {
+                        policy: Arc::new(ConnectionPolicy {
+                            allow_loopback: true,
+                            ..ConnectionPolicy::new(Box::new([]))
+                        }),
+                        resolver: Arc::new(FixedDns([address].into())),
+                        dial: Arc::new(ControlledDial(Mutex::new(Some(result)))),
+                    };
+                    tokio::time::pause();
+                    let mut connection =
+                        connector.call(format!("http://{address}/key").parse().unwrap());
+                    assert!(futures::poll!(connection.as_mut()).is_pending());
+                    tokio::time::advance(Duration::from_millis(millis)).await;
+                    ready.send(stream).unwrap();
+                    match connection.await {
+                        Ok(stream) => {
+                            assert!(millis < 10_000, "accepted a late ready dial at {millis} ms");
+                            drop(stream);
+                        }
+                        Err(error) => {
+                            assert!(millis >= 10_000);
+                            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+                        }
+                    }
+                    assert_eq!(
+                        tokio::time::timeout(Duration::from_secs(1), peer.read(&mut [0]))
+                            .await
+                            .unwrap()
+                            .unwrap(),
+                        0
+                    );
+                });
+        });
+    }
+
     #[test]
     fn protected_dns_destination_dns_and_dial_share_the_deadline() {
         tokio::runtime::Builder::new_current_thread()
@@ -766,9 +834,9 @@ mod tests {
     #[test]
     #[timeout("30s")]
     async fn a_failed_dial_is_not_an_address_refusal() {
-        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
+        let reservation = tokio::net::TcpSocket::new_v4().unwrap();
+        reservation.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+        let address = reservation.local_addr().unwrap();
         let transport = Transport::new(
             ConnectionPolicy {
                 allow_loopback: true,

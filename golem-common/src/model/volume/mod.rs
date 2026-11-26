@@ -137,7 +137,8 @@ pub enum VolumeError {
     Denied { action: Box<str> },
     #[error("the volume requires {requirement}")]
     Requirement { requirement: Box<str> },
-    #[error("the volume request got no answer")]
+    /// The request failed without a usable answer, including a complete backend failure response.
+    #[error("the volume request failed without a usable answer")]
     Unanswered,
     #[error("the volume connection was refused; nothing was sent")]
     ConnectionRefused,
