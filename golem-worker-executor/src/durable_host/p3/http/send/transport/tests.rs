@@ -114,10 +114,10 @@ async fn physical_attempt_preserves_prepared_guest_key() {
         true,
     );
     let transport = InMemoryHttpTransport::new([response(201, RequestBodyTiming::BeforeResponse)]);
-    let (response, io, connection) = physical.attempt(&transport).await.unwrap();
+    let (response, io, _invalidate) = physical.attempt(&transport).await.unwrap();
     assert_eq!(response.status(), 201);
     Box::into_pin(io).await.unwrap();
-    assert!(connection.is_none());
+    assert_eq!(transport.invalidation_count(), 0);
     let captures = transport.take_requests();
     assert_eq!(captures.len(), 1);
     let request = &captures[0].request;
@@ -167,7 +167,10 @@ async fn retry_driver_status_retries_preserve_key_and_body() {
         true,
         ("POST", "http://example.com/charge/93"),
         || Box::pin(futures::future::pending::<InterruptKind>()),
-        |_| async { Ok(()) },
+        |_| async {
+            assert_eq!(transport.invalidation_count(), 1);
+            Ok(())
+        },
     )
     .await;
     let DriverExit::Response(result) = exit else {
@@ -175,6 +178,7 @@ async fn retry_driver_status_retries_preserve_key_and_body() {
     };
     assert_eq!(result.response.status(), 201);
     assert_eq!(host.recorded, 1);
+    assert_eq!(transport.invalidation_count(), 1);
     let captures = transport.take_requests();
     assert_eq!(captures.len(), 2);
     captures.iter().for_each(|capture| {
@@ -257,6 +261,7 @@ async fn retry_driver_status_exhaustion_returns_latest_response() {
     );
     assert_eq!(host.recorded, 1);
     assert_eq!(transport.take_requests().len(), 2);
+    assert_eq!(transport.invalidation_count(), 1);
 }
 
 #[test]
@@ -297,6 +302,7 @@ async fn retry_driver_returns_early_response_with_pending_transmission() {
     };
     assert_eq!(body.bytes, b"late charge upload".as_slice());
     assert_eq!(host.recorded, 0);
+    assert_eq!(transport.invalidation_count(), 0);
 }
 
 #[test]
@@ -679,6 +685,7 @@ async fn retry_driver_drains_early_rejection_before_backoff() {
         ("POST", "http://example.com/charge/93"),
         || Box::pin(futures::future::pending::<InterruptKind>()),
         |_| async {
+            assert_eq!(transport.invalidation_count(), 1);
             assert!(physical.body.frames_consumed());
             assert!(physical.body.can_replay_after_send_failure());
             Ok(())
@@ -689,6 +696,7 @@ async fn retry_driver_drains_early_rejection_before_backoff() {
         panic!("the drained body was not resent")
     };
     assert_eq!(result.response.status(), 201);
+    assert_eq!(transport.invalidation_count(), 1);
     let captures = transport.take_requests();
     assert_eq!(captures.len(), 2);
     assert!(matches!(
@@ -771,6 +779,7 @@ async fn retry_driver_retains_status_fallback_response_and_semantic_override() {
     );
     assert_eq!(host.recorded, 0);
     assert_eq!(transport.take_requests().len(), 1);
+    assert_eq!(transport.invalidation_count(), 0);
 }
 
 #[test]
