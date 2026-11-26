@@ -35,6 +35,7 @@ test-components/csharp-1/bin/
 test-components/csharp-1/obj/
 test-components/python-1/__pycache__/
 integration-tests/benchmark_suites/__pycache__/
+sdks/python/**/__pycache__/
 test-components/tinygo-wasi*/tinygo_wasi/
 golem-client/openapi/
 logs
