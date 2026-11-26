@@ -1338,7 +1338,7 @@ impl WorkerService {
     /// `ignore_already_existing` is set. `access` is what the request decides: a creation, or a
     /// methodless upsert.
     #[allow(clippy::too_many_arguments)]
-    pub async fn create(
+    pub(crate) async fn create(
         &self,
         target: &RoutedTarget,
         component: &Component,
@@ -11313,7 +11313,8 @@ mod tests {
             EffectiveSurface::default(),
         );
         let entry = |operation| auth.entry_request("golem", operation);
-        let accesses: [(CatalogOperation, fn(Option<Caller>) -> super::AgentAccess); 2] = [
+        type AccessFor = fn(Option<Caller>) -> super::AgentAccess;
+        let accesses: [(CatalogOperation, AccessFor); 2] = [
             (CatalogOperation::ForkAgent, super::AgentAccess::fork),
             (
                 CatalogOperation::UpdateAgentRevision,
