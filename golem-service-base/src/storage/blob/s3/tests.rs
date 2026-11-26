@@ -636,6 +636,31 @@ fn startup_retries_transport_failures_but_not_received_responses() {
         });
     });
 
+    with_startup_constructor(
+        |_, earlier| Answer {
+            pending: earlier == 0,
+            ..Answer::new(403, "")
+        },
+        |mut config, loader, requests| async move {
+            config.retries.max_attempts = 3;
+            config.retries.max_jitter_factor = None;
+            config.retries.min_delay = Duration::from_secs(2);
+            config.retries.max_delay = config.retries.min_delay;
+            let loader = loader.timeout_config(
+                TimeoutConfig::builder()
+                    .operation_timeout(Duration::from_secs(1))
+                    .build(),
+            );
+            let started = tokio::time::Instant::now();
+            ConfiguredS3BlobStorageFactory { loader }
+                .create(config, &[S3StartupNamespace::CompilationCache])
+                .await
+                .expect("a response after an SDK operation timeout establishes reachability");
+            assert_eq!(started.elapsed(), Duration::from_secs(3));
+            assert_eq!(sent(&requests).len(), 2);
+        },
+    );
+
     ["other", "server", "local"].into_iter().for_each(|kind| {
         with_startup_constructor(
             move |_, _| {

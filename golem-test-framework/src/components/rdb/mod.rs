@@ -387,22 +387,4 @@ impl RdbConnection for MysqlInfo {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{DbInfo, MysqlInfo};
-    use test_r::test;
-
-    #[test]
-    #[should_panic(expected = "MySQL-backed service state is not supported")]
-    fn service_environment_refuses_mysql_state() {
-        DbInfo::Mysql(MysqlInfo {
-            private_host: "mysql.internal".to_string(),
-            private_port: 3306,
-            public_host: "localhost".to_string(),
-            public_port: 13306,
-            database_name: "unused".to_string(),
-            username: "unused".to_string(),
-            password: "unused".to_string(),
-        })
-        .env("golem_worker_executor", false);
-    }
-}
+mod tests;
