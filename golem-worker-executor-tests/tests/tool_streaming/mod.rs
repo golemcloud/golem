@@ -23396,20 +23396,20 @@ impl golem_worker_executor::services::component::ComponentService
                 .unwrap()
                 .initial_permissions
                 .clone();
-            component.metadata = component.metadata.with_component_config(
-                Default::default(),
-                ComponentProvisionConfig {
-                    initial_permissions: permissions,
-                    env: BTreeMap::from([
-                        (
-                            "NATIVE_ORDER_HTTP_PORT".to_string(),
-                            self.http_port.to_string(),
-                        ),
-                        ("FORBID_AGENT_CONSTRUCTION".to_string(), "true".to_string()),
-                    ]),
-                    ..Default::default()
-                },
-            );
+            component.metadata =
+                component
+                    .metadata
+                    .with_component_provision_config(ComponentProvisionConfig {
+                        initial_permissions: permissions,
+                        env: BTreeMap::from([
+                            (
+                                "NATIVE_ORDER_HTTP_PORT".to_string(),
+                                self.http_port.to_string(),
+                            ),
+                            ("FORBID_AGENT_CONSTRUCTION".to_string(), "true".to_string()),
+                        ]),
+                        ..Default::default()
+                    });
         }
         Ok(component)
     }

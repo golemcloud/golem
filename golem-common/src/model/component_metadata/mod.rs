@@ -26,9 +26,7 @@ use crate::model::component::InstalledPlugin;
 use crate::model::tool::{ToolDeploymentMetadata, ToolName};
 use crate::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
 use crate::model::type_id::TypeId;
-use crate::schema::agent::{
-    AgentTypeSchema, ComponentConfigSchema, FieldSource, contains_stream_in_graph,
-};
+use crate::schema::agent::{AgentTypeSchema, FieldSource, contains_stream_in_graph};
 use std::collections::BTreeMap;
 use std::fmt::{self, Debug, Display, Formatter};
 use std::sync::Arc;
@@ -111,7 +109,6 @@ impl ComponentMetadata {
                 known_exports,
                 producers: vec![],
                 memories,
-                config_schema: ComponentConfigSchema::default(),
                 component_provision_config: ComponentProvisionConfig::default(),
                 agent_method_streams: Self::derive_agent_method_streams(&agent_types),
                 agent_types,
@@ -137,7 +134,6 @@ impl ComponentMetadata {
                 known_exports: data.known_exports.clone(),
                 producers: data.producers.clone(),
                 memories: data.memories.clone(),
-                config_schema: data.config_schema.clone(),
                 component_provision_config: data.component_provision_config.clone(),
                 agent_types: data.agent_types.clone(),
                 agent_type_ids: data.agent_type_ids.clone(),
@@ -152,12 +148,8 @@ impl ComponentMetadata {
 
     pub fn redact_host_managed_values_for_external(&mut self) {
         let data = Arc::make_mut(&mut self.data);
-        for config in std::iter::once(&mut data.component_provision_config.config).chain(
-            data.agent_type_provision_configs
-                .values_mut()
-                .map(|provision| &mut provision.config),
-        ) {
-            for entry in config {
+        for provision in data.agent_type_provision_configs.values_mut() {
+            for entry in &mut provision.config {
                 let ConfigBindingSource::Static(value) = &mut entry.value_source;
                 *value = crate::schema::redact_host_managed_typed_value(value.clone());
             }
@@ -173,7 +165,6 @@ impl ComponentMetadata {
                 known_exports: data.known_exports.clone(),
                 producers: data.producers.clone(),
                 memories: data.memories.clone(),
-                config_schema: data.config_schema.clone(),
                 component_provision_config: data.component_provision_config.clone(),
                 agent_types: data.agent_types.clone(),
                 agent_type_ids: data.agent_type_ids.clone(),
@@ -247,21 +238,15 @@ impl ComponentMetadata {
         }
     }
 
-    pub fn config_schema(&self) -> &ComponentConfigSchema {
-        &self.data.config_schema
-    }
-
     pub fn component_provision_config(&self) -> &ComponentProvisionConfig {
         &self.data.component_provision_config
     }
 
-    pub fn with_component_config(
+    pub fn with_component_provision_config(
         &self,
-        config_schema: ComponentConfigSchema,
         component_provision_config: ComponentProvisionConfig,
     ) -> Self {
         let mut data = self.data.as_ref().clone();
-        data.config_schema = config_schema;
         data.component_provision_config = component_provision_config;
         Self {
             data: Arc::new(data),

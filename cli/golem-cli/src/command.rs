@@ -2724,10 +2724,10 @@ pub mod config {
             #[arg(long)]
             component: Option<ComponentName>,
         },
-        /// Inspect an exact AgentType.field path, or a component-owned field
+        /// Inspect an exact AgentType.field path
         Get {
             field: String,
-            /// Select component-owned config instead of an agent type
+            /// Limit inspection to one component
             #[arg(long)]
             component: Option<ComponentName>,
         },

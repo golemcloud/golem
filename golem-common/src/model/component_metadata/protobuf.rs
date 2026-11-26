@@ -154,11 +154,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentMetadata>
                 .into_iter()
                 .map(|(name, id)| Ok((ToolName::try_from(name)?, id.try_into()?)))
                 .collect::<Result<_, String>>()?,
-            config_schema: value
-                .config_schema
-                .map(TryInto::try_into)
-                .transpose()?
-                .unwrap_or_default(),
             component_provision_config: value
                 .component_provision_config
                 .map(TryInto::try_into)
@@ -274,7 +269,6 @@ impl TryFrom<ComponentMetadataInnerData>
                 .into_iter()
                 .map(|(name, id)| (name.into_inner(), id.get()))
                 .collect(),
-            config_schema: Some(value.config_schema.into()),
             component_provision_config: Some(value.component_provision_config.try_into()?),
             agent_types: value.agent_types.into_iter().map(|at| at.into()).collect(),
             agent_method_streams: value
@@ -806,11 +800,6 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentProvisionConfig>
         Ok(Self {
             initial_permissions: crate::serialization::deserialize(&proto.initial_permissions)?,
             env: proto.env.into_iter().collect(),
-            config: proto
-                .config
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
             plugins: proto
                 .plugins
                 .into_iter()
@@ -834,11 +823,6 @@ impl TryFrom<ComponentProvisionConfig>
             initial_permissions: crate::serialization::serialize(&config.initial_permissions)
                 .expect("failed to serialize component initial permission card"),
             env: config.env.into_iter().collect(),
-            config: config
-                .config
-                .into_iter()
-                .map(TryInto::try_into)
-                .collect::<Result<_, _>>()?,
             plugins: config.plugins.into_iter().map(Into::into).collect(),
             files: config.files.into_iter().map(Into::into).collect(),
         })

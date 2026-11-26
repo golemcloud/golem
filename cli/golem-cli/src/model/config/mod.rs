@@ -30,7 +30,6 @@ use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
 pub(crate) const CONFIG_FIELD: &str = "config";
-pub(crate) const CONFIG_SCHEMA_FIELD: &str = "configSchema";
 pub(crate) const PRESETS_FIELD: &str = "presets";
 
 pub(crate) fn manifest_property_origin(
@@ -63,7 +62,7 @@ pub struct StaticConfigSource {
 #[serde(rename_all = "camelCase")]
 pub struct StaticConfigFieldView {
     pub component: ComponentName,
-    pub agent_type: Option<AgentTypeName>,
+    pub agent_type: AgentTypeName,
     pub path: Vec<String>,
     pub schema: SchemaGraph,
     pub fill: NormalizedJsonValue,
@@ -127,12 +126,12 @@ impl StaticConfigFieldView {
 
 impl TextOutput for StaticConfigFieldView {
     fn log(&self) {
-        let owner = self
-            .agent_type
-            .as_ref()
-            .map(ToString::to_string)
-            .unwrap_or_else(|| format!("component {}", self.component));
-        logln(format!("{owner}.{} = {}", self.path.join("."), self.fill.0));
+        logln(format!(
+            "{}.{} = {}",
+            self.agent_type,
+            self.path.join("."),
+            self.fill.0
+        ));
         logln(format!(
             "  Type: {}",
             golem_common::schema::render::cli_text::type_to_cli_text(

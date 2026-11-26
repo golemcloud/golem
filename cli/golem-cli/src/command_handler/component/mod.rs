@@ -45,7 +45,7 @@ use crate::model::component::{
     unreadable_agent_identity_env_vars,
 };
 use crate::model::component::{ComponentGetView, ComponentListView, ComponentManifestTraceView};
-use crate::model::config::{collect_unused_leaf_paths, value_at_path};
+use crate::model::config::collect_unused_leaf_paths;
 use crate::model::deploy::{
     DeployConfig, TryUpdateAllWorkersView, UpdateStagedComponentError, UpdateStagedComponentResult,
 };
@@ -375,13 +375,7 @@ impl ComponentCommandHandler {
             .cloned()
             .collect::<Vec<_>>();
         for component_name in component_names {
-            let metadata = if resolved
-                || app_ctx
-                    .application()
-                    .component(&component_name)
-                    .wasm()
-                    .exists()
-            {
+            let metadata = if resolved {
                 Some(extract_and_store_component_metadata(
                     &BuildContext::new(app_ctx, &BuildConfig::new()),
                     &component_name,
@@ -425,7 +419,7 @@ impl ComponentCommandHandler {
                 log_warn_action(
                     "Skipping",
                     format!(
-                        "the agent traces of {}, because the component is not built; build it or pass --build to see them",
+                        "the agent traces of {} in manifest-only mode; pass --build to include them",
                         component_name.as_str().log_color_highlight()
                     ),
                 );
@@ -434,6 +428,7 @@ impl ComponentCommandHandler {
 
             let view = ComponentManifestTraceView {
                 component_name: component_name.clone(),
+                manifest_only: !resolved,
                 properties: app_ctx
                     .application()
                     .component(&component_name)
@@ -445,7 +440,8 @@ impl ComponentCommandHandler {
             log_action(
                 "Showing",
                 format!(
-                    "manifest trace for {}",
+                    "{}manifest trace for {}",
+                    if resolved { "" } else { "manifest-only " },
                     view.component_name.as_str().log_color_highlight()
                 ),
             );
@@ -2048,11 +2044,7 @@ impl ComponentCommandHandler {
         let installed = app_ctx.installed_components.get(component_name);
         let wasm_path =
             installed.map_or_else(|| component.wasm(), |installed| installed.wasm_path.clone());
-        validate_component_config_root(
-            &component.config_schema().declarations,
-            &agent_types,
-            component.config().as_ref(),
-        )?;
+        validate_component_config_root(&agent_types, component.config().as_ref())?;
         let static_config = if deploy {
             prepare_static_config(app_ctx.application(), component_name, &agent_types, |_| {
                 true
@@ -2096,7 +2088,7 @@ impl ComponentCommandHandler {
                     env: env(resolved_agent.env())?,
                     config: static_config
                         .iter()
-                        .filter(|field| field.agent_type.as_ref() == Some(&agent_type.type_name))
+                        .filter(|field| field.agent_type == agent_type.type_name)
                         .map(|field| {
                             field.config_binding(
                                 app_ctx.application().app_root_dir(),
@@ -2147,14 +2139,6 @@ impl ComponentCommandHandler {
         Ok(ComponentDeployProperties {
             wasm_path,
             package_metadata: installed.map(|installed| installed.package_metadata.clone()),
-            config_schema: component.config_schema().clone(),
-            component_config: static_config
-                .iter()
-                .filter(|field| field.agent_type.is_none())
-                .map(|field| {
-                    field.config_binding(app_ctx.application().app_root_dir(), &component.wasm())
-                })
-                .collect::<anyhow::Result<Vec<_>>>()?,
             static_config,
             component_initial_card: component
                 .initial_card()
@@ -2581,7 +2565,6 @@ impl ComponentCommandHandler {
                 .map(|agent_type| (agent_type.type_name.0.clone(), agent_type.clone().into()))
                 .collect(),
             component_config: diff::ComponentConfig {
-                schema: properties.config_schema.clone(),
                 initial_permissions: {
                     let context =
                         component_initial_permission_recipient_context(environment, component_name);
@@ -2597,11 +2580,6 @@ impl ComponentCommandHandler {
                         upper_negative: permissions.upper_bound.negative,
                     }
                 },
-                config: properties
-                    .component_config
-                    .iter()
-                    .map(|entry| (entry.path.join("."), entry.value.clone()))
-                    .collect(),
                 env: properties.component_env.clone(),
                 files_by_path: component_files_by_path,
                 plugins_by_grant_id: component_plugins_by_grant_id,
@@ -2651,7 +2629,6 @@ impl ComponentCommandHandler {
                 &ComponentCreation {
                     component_name: component_name.clone(),
                     package_metadata: component_deploy_properties.package_metadata.clone(),
-                    config_schema: component_deploy_properties.config_schema.clone(),
                     component_provision_config: component_stager
                         .component_provision_config(None, environment, component_name)
                         .await?,
@@ -2771,9 +2748,6 @@ impl ComponentCommandHandler {
                     package_metadata: wasm
                         .as_ref()
                         .and(component_deploy_properties.package_metadata.clone()),
-                    config_schema: component_stager
-                        .component_config_changed()
-                        .then(|| component_deploy_properties.config_schema.clone()),
                     component_provision_config: if component_stager.component_config_changed() {
                         Some(
                             component_stager
@@ -3625,7 +3599,6 @@ fn resolve_plugin_parameters(
 }
 
 fn validate_component_config_root(
-    declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
     agent_types: &[AgentTypeSchema],
     config_root: Option<&serde_json::Value>,
 ) -> anyhow::Result<()> {
@@ -3639,24 +3612,20 @@ fn validate_component_config_root(
         .filter(|declaration| declaration.source == AgentConfigSource::Local)
         .map(|declaration| &declaration.path)
         .collect::<Vec<_>>();
-    validate_component_config(config_root, declarations, &agent_local_paths)
+    validate_component_config(config_root, &agent_local_paths)
 }
 
 fn validate_component_config(
     config_root: &serde_json::Value,
-    declarations: &[golem_common::schema::agent::AgentConfigDeclarationSchema],
     agent_local_paths: &[&Vec<String>],
 ) -> anyhow::Result<()> {
     if !config_root.is_object() {
         bail!("Component config must be an object");
     }
     let undeclared = collect_unused_leaf_paths(config_root, |path| {
-        declarations
+        agent_local_paths
             .iter()
-            .any(|declaration| config_path_matches_declaration(path, &declaration.path))
-            || agent_local_paths
-                .iter()
-                .any(|declaration| config_path_matches_declaration(path, declaration))
+            .any(|declaration| config_path_matches_declaration(path, declaration))
     });
     if !undeclared.is_empty() {
         bail!(
@@ -3665,19 +3634,6 @@ fn validate_component_config(
         );
     };
 
-    let locally_supplied_secrets = declarations
-        .iter()
-        .filter(|declaration| declaration.source == AgentConfigSource::Secret)
-        .filter(|declaration| value_at_path(config_root, &declaration.path).is_some())
-        .filter(|declaration| !agent_local_paths.contains(&&declaration.path))
-        .map(|declaration| declaration.path.join("."))
-        .collect::<Vec<_>>();
-    if !locally_supplied_secrets.is_empty() {
-        bail!(
-            "Component config supplies values for secret declarations: {}",
-            locally_supplied_secrets.join(", ")
-        );
-    }
     Ok(())
 }
 
@@ -3768,25 +3724,13 @@ fn identity_read_warning(unreadable: &[&str]) -> String {
 #[cfg(test)]
 mod component_config_tests {
     use super::{validate_component_config, validate_component_config_root};
-    use golem_common::model::agent::AgentConfigSource;
-    use golem_common::schema::SchemaType;
-    use golem_common::schema::agent::AgentConfigDeclarationSchema;
     use serde_json::json;
     use test_r::test;
 
-    fn declaration(source: AgentConfigSource, path: &[&str]) -> AgentConfigDeclarationSchema {
-        AgentConfigDeclarationSchema {
-            source,
-            default_value: None,
-            path: path.iter().map(|segment| segment.to_string()).collect(),
-            value_type: SchemaType::string(),
-        }
-    }
-
     #[test]
     fn zero_agent_component_rejects_undeclared_config() {
-        let error = validate_component_config_root(&[], &[], Some(&json!({ "unknown": "value" })))
-            .unwrap_err();
+        let error =
+            validate_component_config_root(&[], Some(&json!({ "unknown": "value" }))).unwrap_err();
         assert!(error.to_string().contains("no local declaration"));
         assert!(error.to_string().contains("unknown"));
     }
@@ -3794,36 +3738,19 @@ mod component_config_tests {
     #[test]
     fn component_config_requires_object_root() {
         for root in [json!("invalid"), json!(["invalid"]), json!(null)] {
-            assert!(validate_component_config_root(&[], &[], Some(&root)).is_err());
+            assert!(validate_component_config_root(&[], Some(&root)).is_err());
         }
-        validate_component_config_root(&[], &[], None).unwrap();
-        validate_component_config_root(&[], &[], Some(&json!({}))).unwrap();
-    }
-
-    #[test]
-    fn zero_agent_component_rejects_locally_supplied_secret() {
-        let declarations = vec![declaration(AgentConfigSource::Secret, &["token"])];
-        let error = validate_component_config_root(
-            &declarations,
-            &[],
-            Some(&json!({ "token": "not-a-secret-reference" })),
-        )
-        .unwrap_err();
-        assert!(error.to_string().contains("secret declarations"));
-        assert!(error.to_string().contains("token"));
+        validate_component_config_root(&[], None).unwrap();
+        validate_component_config_root(&[], Some(&json!({}))).unwrap();
     }
 
     #[test]
     fn agent_only_default_is_valid_component_config() {
         let agent_path = vec!["agent".to_string(), "prompt".to_string()];
         let root = json!({ "agent": { "prompt": "helpful" } });
-        validate_component_config(&root, &[], &[&agent_path]).unwrap();
-        validate_component_config(
-            &json!({"agent": {"$config": "prompts"}}),
-            &[],
-            &[&agent_path],
-        )
-        .unwrap();
+        validate_component_config(&root, &[&agent_path]).unwrap();
+        validate_component_config(&json!({"agent": {"$config": "prompts"}}), &[&agent_path])
+            .unwrap();
     }
 }
 

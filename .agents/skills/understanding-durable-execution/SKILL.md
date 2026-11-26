@@ -4347,8 +4347,9 @@ Processor batches use the ordinary committed invocation queue, durable results, 
 index and outer-loop reconstruction. Scheduler activation reconstructs only an existing
 incarnation; it cannot recreate a deleted processor through agent admission. Processor owners
 accept `ProcessOplogEntries`, not agent initialization, methods or external-tool invocations.
-They retain component-level config, environment defaults, files and permissions, and have no
-attached forwarding plugins. With both snapshot exports they use `oplog_processor_snapshotting`;
+They retain component-level environment defaults, files and permissions, and have no
+typed config declarations or bindings and no attached forwarding plugins. Plugin installation
+parameters remain inputs to the processor invocation. With both snapshot exports they use `oplog_processor_snapshotting`;
 otherwise they use `default_snapshotting`. Snapshot lowering branches on the resolved owner:
 a processor passes an empty constructor record to load-snapshot, while an agent passes its
 recorded constructor parameters. A component agent missing those parameters fails owner

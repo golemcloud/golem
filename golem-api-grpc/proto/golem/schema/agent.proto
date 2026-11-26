@@ -92,8 +92,3 @@ message AgentConfigDeclarationSchema {
   // Static data in the declared value type. Absence differs from an option-none value.
   SchemaValue default_value = 4;
 }
-
-message ComponentConfigSchema {
-  SchemaGraph schema = 1;
-  repeated AgentConfigDeclarationSchema declarations = 2;
-}

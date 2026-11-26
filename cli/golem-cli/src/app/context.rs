@@ -1405,7 +1405,6 @@ mod tests {
                     tools: vec![],
                     tool_middlewares: vec![],
                 },
-                config_schema: Default::default(),
                 provision: PackageProvision {
                     env: BTreeMap::from([("FROM_COMPONENT".into(), "default".into())]),
                     files: Some(PackageInitialFiles {

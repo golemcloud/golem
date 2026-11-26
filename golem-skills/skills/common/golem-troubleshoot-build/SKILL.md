@@ -129,12 +129,12 @@ Use `manifest-trace` to inspect manifest layers without requiring built componen
 golem component manifest-trace
 ```
 
-This command outputs a detailed trace for each component, and for each agent type of a built component, showing:
+This command outputs a manifest-only trace for each component. Pass `--build` to incrementally build components and include their agent types. The trace shows:
 
 - **Applied Layers** — the ordered list of configuration layers that contributed to the final values (e.g., component template, component definition, agent template, agent common, environment presets, custom presets)
 - **Property Values and Origins** — for `env`, `plugins`, `files`, `initialCard`, `build`, and `componentWasm`, the merged value and the layers that supplied it
-- **Config Inputs** — ordered `properties.configInputs` with file/path/layer origins, not a schema-free claim about effective config
-- **Agents** — under `agents`, the resolved layers of each agent type: its `config`, `env`, `plugins`, `files`, `initialCard` and tool bindings. The agent types come from the built component, so build it first or pass `--build`; for a component that is not built, the command prints a hint and shows no agents
+- **Config** — `properties.config` with its layer history, not a schema-free claim about effective config
+- **Agents** — with `--build`, `agents` contains the resolved layers of each agent type: its `config`, `env`, `plugins`, `files`, `initialCard` and tool bindings. Without `--build`, `manifestOnly` is `true` and no agent metadata is read, even if a Wasm file already exists
 - **Merge Operations** — whether values were merged (showing inserted/updated entries) or entirely replaced, and from which layer
 
 ### Example Usage
@@ -157,7 +157,7 @@ Config payloads are masked by default. Use `--show-secrets` only in a trusted te
 ### What to Look For
 
 1. **Missing environment variables**: Check the `env` property trace to see if the variable was defined in a layer that was overridden or replaced by a later layer
-2. **Wrong config values**: Inspect `properties.configInputs` in order, then use `--build` to check schema-validated values and provenance. Catalog selectors and changed union cases can replace inherited values; do not infer the final value by merging JSON objects yourself
+2. **Wrong config values**: Inspect the layer history in `properties.config`, then use `--build` to check schema-validated values and provenance. Catalog selectors and changed union cases can replace inherited values; do not infer the final value by merging JSON objects yourself
 3. **Plugin not applied**: Check the `plugins` property trace to see if the plugin was defined in a layer that is not in the `appliedLayers` list (e.g., an environment that is not active)
 4. **Unexpected merge behavior**: Check `envMergeMode`, `pluginsMergeMode`, or `filesMergeMode` — these control whether later layers merge with or replace earlier values
 5. **Wrong permissions**: Check the `initialCard` trace of the agent type under `agents`. The most specific layer that sets a card replaces the inherited card completely, and an agent with no card in any layer gets the default card
