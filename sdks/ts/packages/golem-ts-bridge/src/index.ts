@@ -4233,15 +4233,11 @@ class StreamingSession {
           throw new StreamingProtocolError('protocol-error', 'duplicate invocation acceptance');
         if (ready && (!this.accepted || this.executionReady))
           throw new StreamingProtocolError('protocol-error', 'unexpected invocation readiness');
-        object(message, [
-          'version',
-          'type',
-          'attemptId',
-          'agentId',
-          'idempotencyKey',
-          'mappings',
-          'sessionToken',
-        ]);
+        object(
+          message,
+          ['version', 'type', 'attemptId', 'agentId', 'idempotencyKey', 'mappings', 'sessionToken'],
+          ['invocationId'],
+        );
         if (message.attemptId !== this.attemptId)
           throw new StreamingProtocolError('protocol-error', 'unexpected attempt acceptance');
         if (

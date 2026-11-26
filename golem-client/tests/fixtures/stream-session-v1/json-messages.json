@@ -44,6 +44,12 @@
       "type": "invocationAccepted"
     },
     {
+      "canonical": "{\"agentId\":\"00000007-0000-8000-8000-000000000004\",\"attemptId\":\"ca7e5a82-2064-4c18-8359-806145c1562f\",\"idempotencyKey\":\"01234567-89ab-cdef-fedc-ba9876543210\",\"invocationId\":\"weather.01234567-89ab-cdef-fedc-ba9876543210\",\"mappings\":[],\"sessionToken\":\"session\",\"type\":\"invocationAccepted\",\"version\":1}",
+      "direction": "server",
+      "name": "invocation-accepted-standalone-tool",
+      "type": "invocationAccepted"
+    },
+    {
       "canonical": "{\"attemptId\":\"ca7e5a82-2064-4c18-8359-806145c1562f\",\"code\":\"validation-error\",\"message\":\"method parameters do not match the selected method\",\"retryable\":false,\"type\":\"invocationRejected\",\"version\":1}",
       "direction": "server",
       "name": "invocation-rejected",

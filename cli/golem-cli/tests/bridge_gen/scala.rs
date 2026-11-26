@@ -738,6 +738,7 @@ class StreamRuntimeTest extends munit.FunSuite {
     def acceptance(attempt: String = "attempt", agent: Json = Json.string(agentId), acceptedKey: String = key): Json =
       Json.parse(StreamSessionProtocol.message("invocationAccepted", Vector(
         "attemptId" -> Json.string(attempt),
+        "invocationId" -> Json.string(s"weather.$acceptedKey"),
         "agentId" -> agent,
         "idempotencyKey" -> Json.string(acceptedKey), "sessionToken" -> Json.string("session"), "mappings" -> Json.arr(Vector.empty)))).toOption.get
     val message = acceptance()

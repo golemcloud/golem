@@ -860,7 +860,7 @@ fn validate_message_fields(
   kind : String,
 ) -> Unit raise {
   let required = match kind {
-    "invocationAccepted" =>
+    "invocationAccepted" | "invocationReady" =>
       [
         "version", "type", "attemptId", "agentId", "idempotencyKey", "mappings",
         "sessionToken",
@@ -891,7 +891,8 @@ fn validate_message_fields(
         kind == "invocationRejected" &&
         (field == "attemptId" || field == "stderr")
       ) ||
-      (kind == "stream-end" && field == "cursorToken")
+      (kind == "stream-end" && field == "cursorToken") ||
+      ((kind == "invocationAccepted" || kind == "invocationReady") && field == "invocationId")
     if !required.contains(field) && !optional {
       raise BridgeError("malformed-message: unknown field \{field}")
     }

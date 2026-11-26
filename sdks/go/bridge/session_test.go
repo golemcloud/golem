@@ -258,8 +258,9 @@ func acceptAs(c *fakeConn, op received, key any, session string, mappings ...map
 	}
 	c.send("invocationAccepted", map[string]any{
 		"attemptId": op.m["attemptId"], "idempotencyKey": key,
-		"agentId":  testAgentID,
-		"mappings": mappings, "sessionToken": session,
+		"invocationId": testAgentID + "." + key.(string),
+		"agentId":      testAgentID,
+		"mappings":     mappings, "sessionToken": session,
 	})
 }
 
@@ -394,7 +395,8 @@ func TestStreamsFlowBothWays(t *testing.T) {
 		accept(c, start, "queued")
 		c.send("invocationReady", map[string]any{
 			"attemptId": start.m["attemptId"], "idempotencyKey": start.m["idempotencyKey"],
-			"agentId": testAgentID, "sessionToken": "sess",
+			"invocationId": testAgentID + "." + start.m["idempotencyKey"].(string),
+			"agentId":      testAgentID, "sessionToken": "sess",
 			"mappings": []map[string]any{inputMapping(1, refs[0], "in", 0, false)},
 		})
 		got = consumeInput(c, 1)

@@ -25,7 +25,11 @@ test "accepted invocation identity is final and stable across resume" {
       ),
     ),
   )
+  message["invocationId"] = Json::string("weather.00000000-0000-0000-0000-000000000123")
   validate_message_fields(message, "invocationAccepted")
+  message["type"] = Json::string("invocationReady")
+  validate_message_fields(message, "invocationReady")
+  message["type"] = Json::string("invocationAccepted")
   let identity = validate_acceptance_identity(message, "attempt", None)
   assert_eq(identity.0.to_string(), "0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d")
   assert_eq(identity.1, "00000000-0000-0000-0000-000000000123")
