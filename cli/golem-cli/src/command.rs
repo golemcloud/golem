@@ -1993,7 +1993,8 @@ pub mod worker {
             /// with the same `--query` and `--to`. The cursor is opaque; use `--from` to start at
             /// an oplog index. The server refuses a cursor of another query, or one past the end of
             /// the oplog, as stale (`STALE_CURSOR`). It refuses a cursor after `--to` as an invalid
-            /// request.
+            /// request. A read without --query refuses the cursor of a search that scans before
+            /// --from as an invalid request (`VALIDATION_ERROR`).
             #[arg(long, requires = "page")]
             cursor: Option<OplogCursor>,
             #[command(flatten)]
