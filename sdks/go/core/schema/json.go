@@ -452,6 +452,14 @@ func (r Ref) PackJSON(value any) (SchemaValue, error) {
 	return (&packer{ref: r.At(r.typ), defaults: r.rootFieldDefaults()}).build(r.typ, value, "")
 }
 
+// PackJSONUnrestricted is [Ref.PackJSON] without the checks of restrictions,
+// at any depth; [Ref.Validate] makes them later. A command-line reader decodes
+// every argument this way before it validates the whole input, as golem-schema
+// does. An empty path or URL is still refused, because it is malformed.
+func (r Ref) PackJSONUnrestricted(value any) (SchemaValue, error) {
+	return (&packer{ref: r.At(r.typ), defaults: r.rootFieldDefaults(), unrestricted: true}).build(r.typ, value, "")
+}
+
 // PackJSONBytes is [Ref.PackJSON] over serialised JSON.
 func (r Ref) PackJSONBytes(data []byte) (SchemaValue, error) {
 	var value any
@@ -481,6 +489,17 @@ type packer struct {
 	// defaults are the root record's field defaults. The first build call,
 	// which is the root's, takes them, so no nested record sees them.
 	defaults map[string]SchemaValue
+	// unrestricted skips the checks of restrictions; see PackJSONUnrestricted.
+	unrestricted bool
+}
+
+// restricted returns the error of a restriction check, or nil when the
+// packer skips restrictions.
+func (p *packer) restricted(err error) error {
+	if p.unrestricted {
+		return nil
+	}
+	return err
 }
 
 func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error) {
@@ -502,19 +521,19 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 	case S8Type:
 		n, err := jsonInt(value, path, math.MinInt8, math.MaxInt8)
 		if err == nil {
-			err = checkNumeric(b.Restrictions, signedBound(n), path)
+			err = p.restricted(checkNumeric(b.Restrictions, signedBound(n), path))
 		}
 		return S8Value{Value: int8(n)}, err
 	case S16Type:
 		n, err := jsonInt(value, path, math.MinInt16, math.MaxInt16)
 		if err == nil {
-			err = checkNumeric(b.Restrictions, signedBound(n), path)
+			err = p.restricted(checkNumeric(b.Restrictions, signedBound(n), path))
 		}
 		return S16Value{Value: int16(n)}, err
 	case S32Type:
 		n, err := jsonInt(value, path, math.MinInt32, math.MaxInt32)
 		if err == nil {
-			err = checkNumeric(b.Restrictions, signedBound(n), path)
+			err = p.restricted(checkNumeric(b.Restrictions, signedBound(n), path))
 		}
 		return S32Value{Value: int32(n)}, err
 	case S64Type:
@@ -524,26 +543,26 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		}
 		n, err := checkedIntegerString(raw, pathOrRoot(path))
 		if err == nil {
-			err = checkNumeric(b.Restrictions, signedBound(n), path)
+			err = p.restricted(checkNumeric(b.Restrictions, signedBound(n), path))
 		}
 		return S64Value{Value: n}, err
 
 	case U8Type:
 		n, err := jsonUint(value, path, math.MaxUint8)
 		if err == nil {
-			err = checkNumeric(b.Restrictions, unsignedBound(n), path)
+			err = p.restricted(checkNumeric(b.Restrictions, unsignedBound(n), path))
 		}
 		return U8Value{Value: uint8(n)}, err
 	case U16Type:
 		n, err := jsonUint(value, path, math.MaxUint16)
 		if err == nil {
-			err = checkNumeric(b.Restrictions, unsignedBound(n), path)
+			err = p.restricted(checkNumeric(b.Restrictions, unsignedBound(n), path))
 		}
 		return U16Value{Value: uint16(n)}, err
 	case U32Type:
 		n, err := jsonUint(value, path, math.MaxUint32)
 		if err == nil {
-			err = checkNumeric(b.Restrictions, unsignedBound(n), path)
+			err = p.restricted(checkNumeric(b.Restrictions, unsignedBound(n), path))
 		}
 		return U32Value{Value: uint32(n)}, err
 	case U64Type:
@@ -553,7 +572,7 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		}
 		n, err := checkedUnsignedString(raw, pathOrRoot(path))
 		if err == nil {
-			err = checkNumeric(b.Restrictions, unsignedBound(n), path)
+			err = p.restricted(checkNumeric(b.Restrictions, unsignedBound(n), path))
 		}
 		return U64Value{Value: n}, err
 
@@ -563,13 +582,13 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 			err = fmt.Errorf("%s: %v is outside the f32 range", pathOrRoot(path), f)
 		}
 		if err == nil {
-			err = checkNumeric(b.Restrictions, floatBound(float64(float32(f))), path)
+			err = p.restricted(checkNumeric(b.Restrictions, floatBound(float64(float32(f))), path))
 		}
 		return F32Value{Value: float32(f)}, err
 	case F64Type:
 		f, err := jsonFloat(value, path)
 		if err == nil {
-			err = checkNumeric(b.Restrictions, floatBound(f), path)
+			err = p.restricted(checkNumeric(b.Restrictions, floatBound(f), path))
 		}
 		return F64Value{Value: f}, err
 
@@ -594,13 +613,23 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 		if !ok {
 			return nil, typeErr(path, "string", value)
 		}
-		return PathValue{Value: raw}, checkPath(b.Spec, raw, path)
+		// An empty path is malformed, not a restricted value.
+		err := checkPath(b.Spec, raw, path)
+		if raw != "" {
+			err = p.restricted(err)
+		}
+		return PathValue{Value: raw}, err
 	case UrlType:
 		raw, ok := value.(string)
 		if !ok {
 			return nil, typeErr(path, "string", value)
 		}
-		return UrlValue{Value: raw}, checkURL(b.Restrictions, raw, path)
+		// An empty URL is malformed, not a restricted value.
+		err := checkURL(b.Restrictions, raw, path)
+		if raw != "" {
+			err = p.restricted(err)
+		}
+		return UrlValue{Value: raw}, err
 
 	case DatetimeType:
 		raw, ok := value.(string)
@@ -664,7 +693,7 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 			return nil, typeErr(child(path, "unit"), "string", obj["unit"])
 		}
 		q := QuantityValue{Mantissa: mantissa, Scale: int32(scale), Unit: unit}
-		return QuantityValueNode{Value: q}, checkQuantity(b.Spec, q, path)
+		return QuantityValueNode{Value: q}, p.restricted(checkQuantity(b.Spec, q, path))
 
 	case TextType:
 		obj, ok := value.(map[string]any)
@@ -686,7 +715,7 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 			}
 			out.Language = &s
 		}
-		return out, checkText(b.Restrictions, out, path)
+		return out, p.restricted(checkText(b.Restrictions, out, path))
 
 	case BinaryType:
 		obj, ok := value.(map[string]any)
@@ -715,7 +744,7 @@ func (p *packer) build(t SchemaType, value any, path string) (SchemaValue, error
 			}
 			out.MimeType = &s
 		}
-		return out, checkBinary(b.Restrictions, out, path)
+		return out, p.restricted(checkBinary(b.Restrictions, out, path))
 
 	case RecordType:
 		obj, ok := value.(map[string]any)

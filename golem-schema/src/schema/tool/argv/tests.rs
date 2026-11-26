@@ -13,7 +13,9 @@
 // limitations under the License.
 
 use super::{ParsedToolArguments, parse, parse_with_variables};
-use crate::schema::schema_type::{NumericBound, NumericRestrictions};
+use crate::schema::schema_type::{
+    NumericBound, NumericRestrictions, PathDirection, PathKind, PathSpec,
+};
 use crate::schema::tool::process::{ParsedProcessCommand, parse_command};
 use crate::schema::tool::*;
 use crate::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
@@ -1973,12 +1975,31 @@ fn conformance_tool(fixture: &str) -> Tool {
                 true,
                 "Size",
             )];
-            b.options = vec![conformance_option(
-                "count",
-                None,
-                OptionShape::Scalar(SchemaType::u32()),
-                "Count",
-            )];
+            b.options = vec![
+                conformance_option(
+                    "count",
+                    None,
+                    OptionShape::Scalar(SchemaType::u32()),
+                    "Count",
+                ),
+                conformance_option(
+                    "file",
+                    None,
+                    OptionShape::Scalar(SchemaType::path(PathSpec {
+                        direction: PathDirection::InOut,
+                        kind: PathKind::Any,
+                        allowed_mime_types: None,
+                        allowed_extensions: None,
+                    })),
+                    "File",
+                ),
+                conformance_option(
+                    "site",
+                    None,
+                    OptionShape::Scalar(SchemaType::url(Default::default())),
+                    "Site",
+                ),
+            ];
             vec![conformance_node("bounded", "Read a bounded size", Some(b))]
         }
         other => panic!("unknown argv conformance fixture {other}"),

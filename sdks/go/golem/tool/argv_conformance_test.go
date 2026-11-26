@@ -115,6 +115,8 @@ type ArgvNumbersArgs struct {
 type ArgvBoundedArgs struct {
 	Size  uint8
 	Count golem.Option[uint32]
+	File  golem.Option[golem.Path]
+	Site  golem.Option[golem.URL]
 }
 
 type ArgvFixture struct{}
@@ -222,6 +224,8 @@ func argvFixture(t *testing.T, name string) reflection.Tool {
 			d.Body[ArgvBoundedArgs, golem.Unit](func(a *ArgvBoundedArgs, s *tool.CommandSpec) {
 				s.Positional(&a.Size).Range(1, 10).Doc("Size")
 				s.Option(&a.Count).Doc("Count")
+				s.Option(&a.File).Doc("File")
+				s.Option(&a.Site).Doc("Site")
 			}).Handle(handle[ArgvBoundedArgs])
 		})
 	default:

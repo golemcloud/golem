@@ -885,13 +885,9 @@ func decodeArg(t core.Ref, raw string) (core.SchemaValue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid value %q: %w", raw, err)
 	}
-	v, err := t.PackJSON(value)
-	// A value that decodes but breaks a restriction is refused by the
-	// validation of the whole input, after every value decodes.
-	var violation *core.ConstraintViolationError
-	if errors.As(err, &violation) && v != nil {
-		return v, nil
-	}
+	// Restrictions are checked by the validation of the whole input, after
+	// every value decodes.
+	v, err := t.PackJSONUnrestricted(value)
 	if err != nil {
 		return nil, fmt.Errorf("invalid value %q: %w", raw, err)
 	}
