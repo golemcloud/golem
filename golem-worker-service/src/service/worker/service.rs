@@ -4331,7 +4331,7 @@ impl WorkerService {
                     StandaloneToolInvocation::unique_part(
                         component.environment_id,
                         &name,
-                        Some(*scope),
+                        Some(scope.clone()),
                         &command_path.join(" "),
                         Some(key),
                     )

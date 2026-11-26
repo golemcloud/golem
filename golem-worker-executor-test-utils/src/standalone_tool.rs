@@ -56,7 +56,7 @@ impl TestWorkerExecutor {
         let invocation_id = StandaloneToolInvocation::unique_part(
             environment_id,
             &tool_name,
-            scope,
+            scope.clone(),
             command,
             Some(key),
         );
