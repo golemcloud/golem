@@ -556,16 +556,35 @@ async fn dynamic_worker_creation(
     Ok(())
 }
 
-#[test]
 #[tracing::instrument]
-#[timeout("4m")]
-async fn counter_resource_test_1(
+pub(crate) async fn counter_resource_test_1(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use futures::{StreamExt, TryStreamExt};
-    use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
-    use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
+    use golem_service_base::storage::blob::BlobStorageNamespace;
+
+    if std::env::var("GOLEM_TEST_GATEWAY_SESSION_STORAGE").as_deref() == Ok("sqlite") {
+        let data_dir = match deps.rdb().info() {
+            golem_test_framework::components::rdb::DbInfo::Sqlite(path) => path,
+            _ => deps.temp_directory().join("worker-service"),
+        };
+        let database = data_dir.join("gateway-sessions.db");
+        let sessions = sqlx::SqlitePool::connect_with(
+            sqlx::sqlite::SqliteConnectOptions::new()
+                .filename(&database)
+                .create_if_missing(false)
+                .read_only(true),
+        )
+        .await?;
+        let tables: Vec<String> = sqlx::query_scalar(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ('oidc_session', 'mcp_session') ORDER BY name",
+        )
+        .fetch_all(&sessions)
+        .await?;
+        assert_eq!(tables, vec!["mcp_session", "oidc_session"]);
+        sessions.close().await;
+    }
 
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
@@ -577,9 +596,7 @@ async fn counter_resource_test_1(
         .await?;
 
     // Observe the compiler's write before an executor can compile the component itself.
-    let blobs = FileSystemBlobStorage::attach_existing(
-        &std::env::temp_dir().join("ittest-local-object-store/golem"),
-    )?;
+    let blobs = deps.blob_storage();
     let namespace = BlobStorageNamespace::CompilationCache {
         environment_id: env.id,
     };
@@ -623,6 +640,78 @@ async fn counter_resource_test_1(
     assert_eq!(result_value, SchemaValue::U64(5));
 
     user.check_oplog_is_queryable(&agent_id).await?;
+
+    // A malformed read emits an ERROR with the native filter and does not change agent state.
+    futures::future::try_join_all(deps.worker_executor_cluster().to_vec().into_iter().map(
+        |executor| async move {
+            use golem_api_grpc::proto::golem::workerexecutor::v1::{
+                GetAgentMetadataRequest, get_agent_metadata_response,
+                worker_executor_client::WorkerExecutorClient,
+            };
+            let mut client = WorkerExecutorClient::connect(format!(
+                "http://{}:{}",
+                executor.grpc_host(),
+                executor.grpc_port()
+            ))
+            .await?;
+            let response = client
+                .get_agent_metadata(GetAgentMetadataRequest::default())
+                .await?
+                .into_inner();
+            assert!(matches!(
+                response.result,
+                Some(get_agent_metadata_response::Result::Failure(_))
+            ));
+            Ok::<(), anyhow::Error>(())
+        },
+    ))
+    .await?;
+
+    let log_paths = std::fs::read_dir(deps.temp_directory().join("executor-logs"))?
+        .map(|entry| entry.map(|entry| entry.path()))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(log_paths.len(), deps.worker_executor_cluster().size());
+    log_paths
+        .into_iter()
+        .try_for_each(|path| -> anyhow::Result<()> {
+            let contents = std::fs::read_to_string(&path)?;
+            let record = contents
+                .lines()
+                .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
+                .find(|record| {
+                    record
+                        .pointer("/fields/message")
+                        .and_then(serde_json::Value::as_str)
+                        .is_some_and(|message| message == "API request failed")
+                        && record
+                            .pointer("/fields/error")
+                            .and_then(serde_json::Value::as_str)
+                            .is_some_and(|error| error.contains("agent_id not found"))
+                })
+                .ok_or_else(|| anyhow!("executor did not write nested JSON fields at {path:?}"))?;
+            assert!(
+                record.get("message").is_none(),
+                "executor flattened event fields"
+            );
+            assert!(
+                record
+                    .get("filename")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|file| {
+                        std::path::Path::new(file)
+                            .ends_with(std::path::Path::new("src").join("metrics.rs"))
+                    }),
+                "executor omitted the source filename"
+            );
+            assert!(
+                record
+                    .get("line_number")
+                    .and_then(serde_json::Value::as_u64)
+                    .is_some_and(|line| line > 0),
+                "executor omitted the source line"
+            );
+            Ok(())
+        })?;
     Ok(())
 }
 

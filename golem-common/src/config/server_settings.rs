@@ -44,6 +44,13 @@ pub fn project(service: &str, input: &Figment) -> Figment {
 pub fn all_in_one(input: &Figment) -> figment::Result<Figment> {
     let root: Value = input.extract()?;
     validate_settings(input, &root, None)?;
+    if root.pointer("/advanced/server/data_dir").is_some() {
+        return Err(invalid_setting(
+            input,
+            "advanced.server.data_dir",
+            "use supported data_dir instead of advanced.server.data_dir",
+        ));
+    }
     SERVICES
         .into_iter()
         .chain(["router", "golem_issuer", "ports_file"])
@@ -364,6 +371,70 @@ fn raw_values(input: &Figment, value: RawValue) -> Figment {
     })
 }
 
+/// Drops replaced variant fields and restores matching defaults before merging.
+pub(super) fn merge_variants(lower: Figment, upper: Figment, defaults: &Figment) -> Figment {
+    fn reset_configs(lower: &mut RawValue, upper: &RawValue, defaults: Option<&RawValue>) {
+        let (RawValue::Dict(_, lower), RawValue::Dict(_, upper)) = (lower, upper) else {
+            return;
+        };
+        let lower_type = lower.get("type").and_then(RawValue::as_str);
+        let upper_type = upper.get("type").and_then(RawValue::as_str);
+        let selected_type = upper_type.or(lower_type);
+        let defaults = defaults
+            .and_then(RawValue::as_dict)
+            .filter(|defaults| defaults.get("type").and_then(RawValue::as_str) == selected_type);
+        if lower_type.is_some() && upper_type.is_some() && lower_type != upper_type {
+            lower.remove("config");
+            if let Some(config) = defaults.and_then(|defaults| defaults.get("config")) {
+                lower.insert("config".into(), config.clone());
+            }
+        }
+        upper.iter().for_each(|(key, value)| {
+            if let Some(lower) = lower.get_mut(key) {
+                reset_configs(
+                    lower,
+                    value,
+                    defaults.and_then(|defaults| defaults.get(key)),
+                );
+            }
+        });
+    }
+
+    let (Ok(mut value), Ok(upper_value)) =
+        (lower.extract::<RawValue>(), upper.extract::<RawValue>())
+    else {
+        return lower.merge(upper);
+    };
+    let defaults = defaults.extract::<RawValue>().ok();
+    reset_configs(&mut value, &upper_value, defaults.as_ref());
+    raw_values(&lower, value).merge(upper)
+}
+
+/// Supplies a missing variant config as an empty table when deserialization requires it.
+pub(super) fn complete_variant_configs<T: super::ConfigLoaderConfig>(input: Figment) -> Figment {
+    let missing = input.extract::<T>().err().and_then(|error| {
+        error.into_iter().find_map(|error| {
+            if !matches!(error.kind, figment::error::Kind::MissingField(ref field) if &**field == "config") {
+                return None;
+            }
+            let path = |field| {
+                error.path.iter().map(String::as_str).chain([field]).collect::<Vec<_>>().join(".")
+            };
+            let config = path("config");
+            let tag = path("type");
+            (input.find_value(&config).is_err() && input.extract_inner::<String>(&tag).is_ok())
+                .then_some((tag, config))
+        })
+    });
+    match missing {
+        Some((tag, config)) => {
+            let empty = generated(&input, &tag, &config, json!({}));
+            complete_variant_configs::<T>(input.merge(empty))
+        }
+        None => input,
+    }
+}
+
 fn relocate(input: &Figment, from: &str, to: &str) -> Figment {
     let value = if from.is_empty() {
         input.extract::<RawValue>().ok()
@@ -646,17 +717,19 @@ fn service_settings(service: &str, input: &Figment) -> figment::Result<Figment> 
         ));
         match value.get("filesystem_snapshots") {
             Some(snapshots) => {
-                let enabled = snapshots.get("enabled").and_then(Value::as_bool) == Some(true);
-                let settings = generated(
-                    input,
-                    "filesystem_snapshots",
-                    "filesystem_snapshots",
-                    json!({
-                        "type": if enabled { "Enabled" } else { "Disabled" },
-                        "config": {},
-                    }),
-                );
-                let settings = if enabled {
+                let enabled = snapshots.get("enabled").and_then(Value::as_bool);
+                let settings = enabled.map_or_else(Figment::new, |enabled| {
+                    generated(
+                        input,
+                        "filesystem_snapshots",
+                        "filesystem_snapshots",
+                        json!({
+                            "type": if enabled { "Enabled" } else { "Disabled" },
+                            "config": {},
+                        }),
+                    )
+                });
+                let settings = if enabled != Some(false) {
                     let mut fields: RawValue = input.find_value("filesystem_snapshots")?;
                     if let RawValue::Dict(_, fields) = &mut fields {
                         fields.remove("enabled");
@@ -678,6 +751,7 @@ fn service_settings(service: &str, input: &Figment) -> figment::Result<Figment> 
         projected
     };
     let advanced = relocate(input, &format!("advanced.{service}"), "");
+    let projected = merge_variants(projected, advanced.clone(), &Figment::new());
     let projected = transport(service, input, &value, projected);
     let projected = if service == "worker_executor"
         && (value.get("retained_update_snapshots").is_some()
@@ -697,7 +771,7 @@ fn service_settings(service: &str, input: &Figment) -> figment::Result<Figment> 
     } else {
         projected
     };
-    Ok(projected.merge(advanced))
+    Ok(merge_variants(projected, advanced, &Figment::new()))
 }
 
 fn transport(service: &str, input: &Figment, value: &Value, projected: Figment) -> Figment {
@@ -1055,6 +1129,115 @@ mod tests {
                 .unwrap(),
             "S3"
         );
+    }
+
+    #[test]
+    fn advanced_server_data_dir_is_rejected() {
+        [false, true].into_iter().for_each(|from_env| {
+            figment::Jail::expect_with(|jail| {
+                jail.clear_env();
+                jail.create_file("settings.toml", "data_dir = '/supported-file'\n")?;
+                if from_env {
+                    jail.set_env("GOLEM__DATA_DIR", "/supported-env");
+                }
+                let input = || {
+                    Figment::from(Toml::file_exact("settings.toml"))
+                        .merge(super::super::env_config_provider())
+                };
+                assert_eq!(
+                    all_in_one(&input())?.extract_inner::<String>("data_dir")?,
+                    if from_env {
+                        "/supported-env"
+                    } else {
+                        "/supported-file"
+                    }
+                );
+                if from_env {
+                    jail.set_env("GOLEM_ADVANCED__SERVER__DATA_DIR", "/split-root");
+                } else {
+                    jail.create_file(
+                        "settings.toml",
+                        "data_dir = '/supported-file'\nadvanced.server.data_dir = '/split-root'\n",
+                    )?;
+                }
+                let diagnostic = all_in_one(&input())
+                    .unwrap_err()
+                    .to_string()
+                    .to_ascii_lowercase();
+                assert!(
+                    diagnostic.contains("advanced.server.data_dir"),
+                    "{diagnostic}"
+                );
+                assert!(diagnostic.contains("supported data_dir"), "{diagnostic}");
+                assert!(
+                    diagnostic.contains(if from_env {
+                        "environment variable"
+                    } else {
+                        "settings.toml"
+                    }),
+                    "{diagnostic}"
+                );
+                Ok(())
+            });
+        });
+    }
+
+    #[test]
+    fn advanced_variant_selection_discards_replaced_storage_fields() {
+        [
+            ("Sqlite", false),
+            ("Sqlite", true),
+            ("Postgres", false),
+            ("Postgres", true),
+        ]
+        .into_iter()
+        .for_each(|(variant, explicit_database)| {
+            let mut advanced = json!({"type": variant});
+            if explicit_database {
+                advanced["config"] = json!({"database": "selected.db"});
+            }
+            let input = Figment::from(Serialized::defaults(json!({
+                "state_store": "postgres",
+                "postgres": {
+                    "host": "state.internal", "database": "tenant_state",
+                    "max_connections": 43,
+                },
+                "advanced": {"shard_manager": {"persistence": advanced}},
+            })));
+            [
+                project("shard_manager", &input)
+                    .extract_inner::<Value>("persistence")
+                    .unwrap(),
+                all_in_one(&input)
+                    .unwrap()
+                    .extract_inner::<Value>("shard_manager.persistence")
+                    .unwrap(),
+            ]
+            .into_iter()
+            .for_each(|store| {
+                assert_eq!(store["type"], variant);
+                assert_eq!(
+                    store.pointer("/config/database").and_then(Value::as_str),
+                    if explicit_database {
+                        Some("selected.db")
+                    } else if variant == "Postgres" {
+                        Some("tenant_state")
+                    } else {
+                        None
+                    }
+                );
+                assert_eq!(
+                    store.pointer("/config/host").and_then(Value::as_str),
+                    (variant == "Postgres").then_some("state.internal")
+                );
+                assert_eq!(
+                    store
+                        .pointer("/config/max_connections")
+                        .and_then(Value::as_u64),
+                    (variant == "Postgres").then_some(43)
+                );
+            });
+        });
     }
 
     #[test]
@@ -1417,6 +1600,69 @@ mod tests {
                     .unwrap(),
                 enabled
             );
+        });
+    }
+
+    #[test]
+    fn field_only_snapshots_preserve_unspecified_enablement() {
+        [
+            ("Enabled", false),
+            ("Disabled", false),
+            ("Enabled", true),
+            ("Disabled", true),
+        ]
+        .into_iter()
+        .for_each(|(baseline, disabled)| {
+            let mut snapshots = json!({"storage_call_deadline": "83s"});
+            if disabled {
+                snapshots["enabled"] = json!(false);
+            }
+            let input = Figment::from(Serialized::default("filesystem_snapshots", snapshots));
+            [
+                project("worker_executor", &input)
+                    .extract_inner::<Value>("filesystem_snapshots")
+                    .unwrap(),
+                all_in_one(&input)
+                    .unwrap()
+                    .extract_inner::<Value>("worker_executor.filesystem_snapshots")
+                    .unwrap(),
+            ]
+            .into_iter()
+            .for_each(|projected| {
+                assert_eq!(
+                    projected.get("type").and_then(Value::as_str),
+                    disabled.then_some("Disabled")
+                );
+                assert_eq!(
+                    projected
+                        .pointer("/config/storage_call_deadline")
+                        .and_then(Value::as_str),
+                    (!disabled).then_some("83s")
+                );
+                let effective = Figment::from(Serialized::default(
+                    "filesystem_snapshots",
+                    json!({
+                        "type": baseline, "config": {"storage_call_deadline": "60s"},
+                    }),
+                ))
+                .merge(Serialized::default("filesystem_snapshots", projected));
+                assert_eq!(
+                    effective
+                        .extract_inner::<String>("filesystem_snapshots.type")
+                        .unwrap(),
+                    if disabled { "Disabled" } else { baseline }
+                );
+                if !disabled {
+                    assert_eq!(
+                        effective
+                            .extract_inner::<String>(
+                                "filesystem_snapshots.config.storage_call_deadline"
+                            )
+                            .unwrap(),
+                        "83s"
+                    );
+                }
+            });
         });
     }
 

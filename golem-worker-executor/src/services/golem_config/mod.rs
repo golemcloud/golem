@@ -12,8 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use figment::Figment;
-use figment::providers::{Format, Toml};
 use golem_common::SafeDisplay;
 use golem_common::config::{ConfigExample, ConfigLoader, HasConfigExamples, RedisConfig};
 use golem_common::model::RetryConfig;
@@ -522,13 +520,6 @@ impl GolemConfig {
 }
 
 impl GolemConfig {
-    pub fn from_file(path: &str) -> Self {
-        Figment::new()
-            .merge(Toml::file(path))
-            .extract()
-            .expect("Failed to parse config")
-    }
-
     pub fn http_addr(&self) -> SocketAddr {
         SocketAddr::new(self.bind_address, self.http_port)
     }

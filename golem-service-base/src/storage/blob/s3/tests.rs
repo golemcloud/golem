@@ -40,6 +40,7 @@ use aws_smithy_runtime_api::client::http::{
     HttpConnector, HttpConnectorFuture, SharedHttpConnector, http_client_fn,
 };
 use aws_smithy_runtime_api::client::result::ConnectorError;
+use aws_smithy_runtime_api::client::retries::ErrorKind;
 use aws_smithy_runtime_api::http::StatusCode;
 use axum::Router;
 use axum::body::Body;
@@ -74,6 +75,7 @@ use uuid::Uuid;
 struct SentRequest {
     method: String,
     uri: String,
+    authorization: Option<Box<str>>,
     range: Option<String>,
     copy_source: Option<String>,
     if_none_match: Option<String>,
@@ -85,6 +87,7 @@ impl SentRequest {
         Self {
             method: request.method().to_string(),
             uri: request.uri().to_string(),
+            authorization: request.headers().get("authorization").map(Box::from),
             range: request.headers().get("range").map(str::to_string),
             copy_source: request
                 .headers()
@@ -498,10 +501,48 @@ fn startup_treats_any_response_as_reachable() {
                         .expect(
                             "received headers establish reachability regardless of status or body",
                         );
-                    assert_eq!(sent(&requests).len(), 1);
+                    let requests = sent(&requests);
+                    assert_eq!(requests.len(), 1);
+                    assert_eq!(requests[0].authorization, None);
                 },
             );
         });
+    });
+
+    [false, true].into_iter().for_each(|reachable| {
+        with_startup_constructor(
+            move |_, _| {
+                if reachable {
+                    Answer::new(403, "<Error><Code>AccessDenied</Code></Error>")
+                } else {
+                    Answer::transport_error(ConnectorError::io(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionRefused,
+                        "unreachable without credentials",
+                    ))))
+                }
+            },
+            |mut config, loader, requests| async move {
+                config.aws_credentials = None;
+                config.retries.max_attempts = 1;
+                let result = ConfiguredS3BlobStorageFactory { loader }
+                    .create(config, &[S3StartupNamespace::CompilationCache])
+                    .await;
+                if reachable {
+                    result.expect("a received 403 needs no signing credentials");
+                } else {
+                    let error = result.expect_err("a connection failure must refuse startup");
+                    let cause = error
+                        .chain()
+                        .find_map(|cause| cause.downcast_ref::<std::io::Error>())
+                        .expect("the connection failure must remain in the chain");
+                    assert_eq!(cause.kind(), std::io::ErrorKind::ConnectionRefused);
+                    assert_eq!(cause.to_string(), "unreachable without credentials");
+                }
+                let requests = sent(&requests);
+                assert_eq!(requests.len(), 1);
+                assert_eq!(requests[0].authorization, None);
+            },
+        );
     });
 }
 
@@ -543,45 +584,85 @@ fn startup_recognizes_only_received_header_conversion_failures() {
 
 #[test]
 fn startup_retries_transport_failures_but_not_received_responses() {
-    [false, true].into_iter().for_each(|deadline_in_backoff| {
-        with_startup_constructor(
-            |_, earlier| {
-                if earlier == 0 {
-                    Answer::transport_error(ConnectorError::io(Box::new(std::io::Error::new(
-                        std::io::ErrorKind::ConnectionRefused,
-                        "transient refusal",
-                    ))))
-                } else {
-                    Answer {
-                        pending_body: true,
-                        ..Answer::new(403, "")
+    ["io", "transient-other"].into_iter().for_each(|kind| {
+        [false, true].into_iter().for_each(|deadline_in_backoff| {
+            with_startup_constructor(
+                move |_, earlier| {
+                    if earlier == 0 {
+                        Answer::transport_error(match kind {
+                            "io" => ConnectorError::io(Box::new(std::io::Error::new(
+                                std::io::ErrorKind::ConnectionRefused,
+                                "transient refusal",
+                            ))),
+                            "transient-other" => ConnectorError::other(
+                                "incomplete message before response headers".into(),
+                                Some(ErrorKind::TransientError),
+                            ),
+                            _ => unreachable!(),
+                        })
+                    } else {
+                        Answer {
+                            pending_body: true,
+                            ..Answer::new(403, "")
+                        }
                     }
-                }
+                },
+                |mut config, loader, requests| async move {
+                    config.retries.max_attempts = 3;
+                    config.retries.max_jitter_factor = None;
+                    config.retries.min_delay =
+                        Duration::from_secs(if deadline_in_backoff { 11 } else { 2 });
+                    config.retries.max_delay = config.retries.min_delay;
+                    let started = tokio::time::Instant::now();
+                    let result = ConfiguredS3BlobStorageFactory { loader }
+                        .create(config, &[S3StartupNamespace::CompilationCache])
+                        .await;
+                    if deadline_in_backoff {
+                        let error = result.unwrap_err();
+                        assert!(
+                            error
+                                .downcast_ref::<tokio::time::error::Elapsed>()
+                                .is_some()
+                        );
+                        assert_eq!(started.elapsed(), Duration::from_secs(10));
+                        assert_eq!(sent(&requests).len(), 1);
+                    } else {
+                        result.unwrap();
+                        assert_eq!(started.elapsed(), Duration::from_secs(2));
+                        assert_eq!(sent(&requests).len(), 2);
+                    }
+                },
+            );
+        });
+    });
+
+    ["other", "server", "local"].into_iter().for_each(|kind| {
+        with_startup_constructor(
+            move |_, _| {
+                let source = Box::new(std::io::Error::other("nontransient startup failure"));
+                Answer::transport_error(match kind {
+                    "other" => ConnectorError::other(source, None),
+                    "server" => ConnectorError::other(source, Some(ErrorKind::ServerError)),
+                    "local" => ConnectorError::user(source),
+                    _ => unreachable!(),
+                })
             },
             |mut config, loader, requests| async move {
                 config.retries.max_attempts = 3;
                 config.retries.max_jitter_factor = None;
-                config.retries.min_delay =
-                    Duration::from_secs(if deadline_in_backoff { 11 } else { 2 });
+                config.retries.min_delay = Duration::from_secs(2);
                 config.retries.max_delay = config.retries.min_delay;
                 let started = tokio::time::Instant::now();
-                let result = ConfiguredS3BlobStorageFactory { loader }
+                let error = ConfiguredS3BlobStorageFactory { loader }
                     .create(config, &[S3StartupNamespace::CompilationCache])
-                    .await;
-                if deadline_in_backoff {
-                    let error = result.unwrap_err();
-                    assert!(
-                        error
-                            .downcast_ref::<tokio::time::error::Elapsed>()
-                            .is_some()
-                    );
-                    assert_eq!(started.elapsed(), Duration::from_secs(10));
-                    assert_eq!(sent(&requests).len(), 1);
-                } else {
-                    result.unwrap();
-                    assert_eq!(started.elapsed(), Duration::from_secs(2));
-                    assert_eq!(sent(&requests).len(), 2);
-                }
+                    .await
+                    .expect_err("a nontransient failure must refuse startup");
+                assert_eq!(
+                    error.root_cause().to_string(),
+                    "nontransient startup failure"
+                );
+                assert_eq!(started.elapsed(), Duration::ZERO);
+                assert_eq!(sent(&requests).len(), 1);
             },
         );
     });
@@ -909,7 +990,12 @@ fn construction_returns_usable_storage() {
                 "startup-probe-only",
                 "objects-not-the-startup-bucket/",
             );
+            assert_eq!(requests[0].authorization, None);
             assert_eq!(requests[1].method, "GET");
+            assert!(requests[1].authorization.as_deref().is_some_and(|value| {
+                value.starts_with("AWS4-HMAC-SHA256 Credential=constructor-fixture/")
+                    && value.contains("/us-east-1/s3/aws4_request")
+            }));
         },
     );
 }

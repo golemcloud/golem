@@ -1,5 +1,6 @@
 use super::{test_binary_path, test_binary_profile};
 use futures_util::StreamExt;
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use std::path::Path;
 use std::process::{Output, Stdio};
 use std::time::Duration;
@@ -394,15 +395,25 @@ async fn unreachable_s3_fails_startup_without_local_blob_storage() {
         ),
     ])
     .for_each(|(binary, args)| async move {
-        let cwd = TempDir::new().unwrap();
-        let data = cwd.path().join("data");
+        let fixture = TempDir::new().unwrap();
+        let cwd = fixture.path().join("cwd").into_boxed_path();
+        std::fs::create_dir(&cwd).unwrap();
+        let adapter_default =
+            golem_cli::fs::normalize_path_lexically(&cwd.join("../data/blob_storage"))
+                .into_boxed_path();
+        assert!(
+            adapter_default.starts_with(fixture.path()),
+            "adapter default escaped the fixture: {}",
+            adapter_default.display()
+        );
+        let data = cwd.join("data").into_boxed_path();
         std::fs::create_dir(&data).unwrap();
-        let blobs = cwd.path().join("local-blobs");
+        let blobs = cwd.join("local-blobs").into_boxed_path();
         let output = run(
             binary,
             args,
             &[
-                ("HOME", cwd.path().to_str().unwrap()),
+                ("HOME", cwd.to_str().unwrap()),
                 ("GOLEM__STATE_STORE", "sqlite"),
                 ("GOLEM__CACHE__ENABLED", "false"),
                 ("GOLEM__DATA_DIR", data.to_str().unwrap()),
@@ -411,6 +422,9 @@ async fn unreachable_s3_fails_startup_without_local_blob_storage() {
                 ("GOLEM__OBJECT_STORAGE__ENDPOINT_URL", "http://127.0.0.1:1"),
                 ("GOLEM__OBJECT_STORAGE__PATH_STYLE", "true"),
                 ("GOLEM__FILESYSTEM_SNAPSHOTS__ENABLED", "false"),
+                ("GOLEM__LOGGING__FILE__ENABLED", "true"),
+                ("GOLEM__LOGGING__FILE_DIR", data.to_str().unwrap()),
+                ("GOLEM__LOGGING__FILE_NAME", "startup-refusal.log"),
                 (
                     "GOLEM_ADVANCED__WORKER_SERVICE__REGISTRY_SERVICE__HOST",
                     "127.0.0.1",
@@ -433,7 +447,7 @@ async fn unreachable_s3_fails_startup_without_local_blob_storage() {
                 ("AWS_SECRET_ACCESS_KEY", "test-secret-key"),
                 ("AWS_EC2_METADATA_DISABLED", "true"),
             ],
-            cwd.path(),
+            &cwd,
         )
         .await;
         assert_eq!(
@@ -454,29 +468,83 @@ async fn unreachable_s3_fails_startup_without_local_blob_storage() {
         );
         assert!(
             !data.join("blobs").exists(),
-            "{} created the default local blob root",
+            "{} created the settings-derived local blob root",
             describe(binary, &output)
         );
+        assert!(
+            !adapter_default.exists(),
+            "{} created the adapter default local blob root at {}",
+            describe(binary, &output),
+            adapter_default.display()
+        );
+        let state_databases: &[&str] = match binary {
+            "golem-component-compilation-service" => &[],
+            "golem-registry-service" => &["registry.db"],
+            "golem-worker-service" => &["gateway-sessions.db"],
+            "worker-executor" => &["scheduler.db"],
+            "golem" => &[
+                "registry.db",
+                "shard_manager.db",
+                "gateway-sessions.db",
+                "scheduler.db",
+            ],
+            other => panic!("unknown S3 consumer {other}"),
+        };
+        let allowed_files = state_databases
+            .iter()
+            .flat_map(|db| ["", "-wal", "-shm"].map(|suffix| data.join(format!("{db}{suffix}"))))
+            .chain([
+                data.join("filesystem-snapshots.repository-key"),
+                data.join("startup-refusal.log"),
+            ])
+            .map(|path| path.into_boxed_path())
+            .collect::<Box<[_]>>();
         walkdir::WalkDir::new(&data).into_iter().for_each(|entry| {
             let entry = entry.unwrap();
             if entry.file_type().is_file() {
-                let name = entry.file_name().to_str().unwrap();
                 assert!(
-                    [
-                        "registry.db",
-                        "shard_manager.db",
-                        "gateway-sessions.db",
-                        "scheduler.db",
-                    ]
-                    .into_iter()
-                    .any(|db| name == db
-                        || name == format!("{db}-wal")
-                        || name == format!("{db}-shm")),
+                    allowed_files.iter().any(|path| path.as_ref() == entry.path()),
                     "unexpected file after {binary} refused S3: {}",
                     entry.path().display()
                 );
             }
         });
+        futures_util::stream::iter(
+            state_databases
+                .iter()
+                .map(|db| data.join(db).into_boxed_path()),
+        )
+            .filter(|database| std::future::ready(database.is_file()))
+            .for_each(|database| async move {
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(1)
+                    .connect_with(
+                        SqliteConnectOptions::new()
+                            .filename(&database)
+                            .read_only(true)
+                            .create_if_missing(false),
+                    )
+                    .await
+                    .unwrap_or_else(|error| {
+                        panic!("cannot inspect {binary} state at {}: {error}", database.display())
+                    });
+                let blob_tables: i64 = sqlx::query_scalar(
+                    "SELECT COUNT(*) FROM sqlite_schema WHERE type = 'table' AND name = 'blob_storage' COLLATE NOCASE",
+                )
+                .fetch_one(&pool)
+                .await
+                .unwrap_or_else(|error| {
+                    panic!("cannot inspect {binary} schema at {}: {error}", database.display())
+                });
+                pool.close().await;
+                assert_eq!(
+                    blob_tables,
+                    0,
+                    "{binary} initialized SQLite blob storage at {} before refusing S3",
+                    database.display()
+                );
+            })
+            .await;
     })
     .await;
     registry_process.kill().await.unwrap();

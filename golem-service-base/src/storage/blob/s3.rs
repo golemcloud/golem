@@ -39,6 +39,8 @@ use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error;
 use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
+use aws_smithy_runtime_api::client::auth::AuthSchemeId;
+use aws_smithy_runtime_api::client::retries::ErrorKind;
 use aws_smithy_runtime_api::http::HttpError;
 use bytes::{Buf, Bytes};
 use futures::stream::BoxStream;
@@ -590,6 +592,10 @@ async fn check_startup_access(
                     .prefix(*prefix)
                     .max_keys(1)
                     .customize()
+                    .config_override(
+                        aws_sdk_s3::config::Builder::new()
+                            .auth_scheme_preference([AuthSchemeId::new("noAuth")]),
+                    )
                     .interceptor(status.clone())
                     .send()
                     .await;
@@ -604,7 +610,11 @@ async fn check_startup_access(
         },
         |error| match error {
             SdkError::TimeoutError(_) => true,
-            SdkError::DispatchFailure(error) => error.is_io() || error.is_timeout(),
+            SdkError::DispatchFailure(error) => {
+                error.is_io()
+                    || error.is_timeout()
+                    || error.as_other() == Some(ErrorKind::TransientError)
+            }
             _ => false,
         },
         |_| None,

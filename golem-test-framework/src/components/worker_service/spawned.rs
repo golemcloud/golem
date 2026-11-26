@@ -12,13 +12,13 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::ChildProcessLogger;
 use crate::components::new_reqwest_client_with_tracing;
 use crate::components::rdb::Rdb;
 use crate::components::redis::Redis;
 use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_service::{WorkerService, wait_for_startup};
+use crate::components::{ChildProcessLogger, SupportedServiceLaunch};
 use async_trait::async_trait;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
@@ -63,7 +63,8 @@ impl SpawnedWorkerService {
             panic!("Expected to have precompiled golem-worker-service at {executable:?}");
         }
 
-        let mut child = Command::new(executable)
+        let mut command = Command::new(executable);
+        command
             .current_dir(working_directory)
             .envs(
                 super::env_vars(
@@ -81,7 +82,50 @@ impl SpawnedWorkerService {
                 )
                 .await,
             )
-            .envs(extra_env_vars.iter().cloned())
+            .envs(extra_env_vars.iter().cloned());
+        Self::start(
+            command,
+            http_port,
+            grpc_port,
+            custom_request_port,
+            mcp_port,
+            out_level,
+            err_level,
+        )
+        .await
+    }
+
+    pub(crate) async fn new_supported(
+        launch: SupportedServiceLaunch,
+        http_port: u16,
+        grpc_port: u16,
+        custom_request_port: u16,
+        mcp_port: u16,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        Self::start(
+            launch.command(&[]),
+            http_port,
+            grpc_port,
+            custom_request_port,
+            mcp_port,
+            out_level,
+            err_level,
+        )
+        .await
+    }
+
+    async fn start(
+        mut command: Command,
+        http_port: u16,
+        grpc_port: u16,
+        custom_request_port: u16,
+        mcp_port: u16,
+        out_level: Level,
+        err_level: Level,
+    ) -> Self {
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

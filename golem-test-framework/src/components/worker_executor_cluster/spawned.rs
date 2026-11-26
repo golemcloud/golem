@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::SupportedServiceLaunch;
 use crate::components::rdb::Rdb;
 use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
@@ -50,9 +51,10 @@ impl SpawnedWorkerExecutorCluster {
         oplog_archive_interval: Option<Duration>,
         enable_fs_cache: bool,
         otlp: bool,
+        launch: Option<SupportedServiceLaunch>,
     ) -> Arc<dyn WorkerExecutor> {
         Arc::new(
-            SpawnedWorkerExecutor::new(
+            SpawnedWorkerExecutor::new_with_launch(
                 &executable,
                 &working_directory,
                 http_port,
@@ -68,6 +70,7 @@ impl SpawnedWorkerExecutorCluster {
                 oplog_archive_interval,
                 enable_fs_cache,
                 otlp,
+                launch,
             )
             .await,
         )
@@ -91,8 +94,55 @@ impl SpawnedWorkerExecutorCluster {
         enable_fs_cache: bool,
         otlp: bool,
     ) -> Self {
+        Self::new_with_launches(
+            size,
+            base_http_port,
+            base_grpc_port,
+            executable,
+            working_directory,
+            rdb,
+            shard_manager,
+            worker_service,
+            verbosity,
+            out_level,
+            err_level,
+            registry_service,
+            environment_state_cache_capacity,
+            oplog_archive_interval,
+            enable_fs_cache,
+            otlp,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn new_with_launches(
+        size: usize,
+        base_http_port: u16,
+        base_grpc_port: u16,
+        executable: &Path,
+        working_directory: &Path,
+        rdb: Arc<dyn Rdb>,
+        shard_manager: Arc<dyn ShardManager>,
+        worker_service: Arc<dyn WorkerService>,
+        verbosity: Level,
+        out_level: Level,
+        err_level: Level,
+        registry_service: Arc<dyn RegistryService>,
+        environment_state_cache_capacity: Option<usize>,
+        oplog_archive_interval: Option<Duration>,
+        enable_fs_cache: bool,
+        otlp: bool,
+        launches: Option<Vec<SupportedServiceLaunch>>,
+    ) -> Self {
+        assert!(
+            launches
+                .as_ref()
+                .is_none_or(|launches| launches.len() == size)
+        );
         info!("Starting a cluster of golem-worker-executors of size {size}");
         let mut worker_executors = Vec::new();
+        let mut launches = launches.into_iter().flatten();
 
         for i in 0..size {
             let http_port = base_http_port + i as u16;
@@ -115,6 +165,7 @@ impl SpawnedWorkerExecutorCluster {
                     oplog_archive_interval,
                     enable_fs_cache,
                     otlp,
+                    launches.next(),
                 )
                 .in_current_span()
                 .await,

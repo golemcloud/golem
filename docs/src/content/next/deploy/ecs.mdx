@@ -39,7 +39,7 @@ The deployment settings make ECS stop the old task before it starts the new one,
 
 Run `generate-env.sh` with the bucket and the database inputs, such as `GOLEM_S3_BUCKET`, `GOLEM_S3_REGION`, `GOLEM_POSTGRES_HOST`, `GOLEM_POSTGRES_USER` and `GOLEM_POSTGRES_PASSWORD`. These are inputs of the script, not of the image. The task definition needs all settings that the script prints, including the advanced secrets. The script selects `GOLEM__STATE_STORE=postgres` and emits one shared connection under `GOLEM__POSTGRES__*`, such as `GOLEM__POSTGRES__HOST`. It also emits `GOLEM__BLOB_STORE=s3` and the shared `GOLEM__OBJECT_STORAGE__*` settings. See [Managed Postgres](/next/deploy/server#managed-postgres) for the stores that use the connection. Keep the secrets and the passwords in AWS Secrets Manager, and give them to the container as `secrets` of the task definition.
 
-The task has no volume, so every start of a task downloads the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools) again: in a deploy, when ECS replaces a failed task, and at a restart. A download takes about a minute, so give the service a health check grace period, and let the task open HTTPS connections to GitHub, for example through a NAT gateway. If it cannot, the task does not start. To download only once, mount an Amazon EFS file system at `/var/lib/golem` through an access point whose POSIX user and root directory owner are uid and gid 65534, the user of the image. To move to a fixed cluster later, follow [Moving from the all-in-one server](/next/deploy/cluster#moving-from-the-all-in-one-server).
+The task has no volume, so each replacement starts with an empty artifact cache. The documented local build embeds the [built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools) and needs no GitHub download for them. URL-backed artifacts, including source overrides, must be fetched again. Give the service a health check grace period for inspection and provisioning, and for any required downloads. GitHub sources need outgoing HTTPS connections to GitHub, for example through a NAT gateway. A required fetch that fails stops startup. To keep the cache, mount an Amazon EFS file system at `/var/lib/golem` through an access point whose POSIX user and root directory owner are uid and gid 65534, the user of the image. Preserve local state and the snapshot repository key if you enable settings that need them; see [Managed Postgres](/next/deploy/server#managed-postgres). To move to a fixed cluster later, follow [Moving from the all-in-one server](/next/deploy/cluster#moving-from-the-all-in-one-server).
 
 ## Fixed cluster
 
@@ -81,11 +81,11 @@ Read [Fixed cluster](/next/deploy/cluster) for the settings of each service. Thi
 
 Point each service at its peers with their DNS names. For example, set `GOLEM_ADVANCED__WORKER_EXECUTOR__REGISTRY_SERVICE__HOST=registry-service.golem.internal` for an executor. Use `WORKER_SERVICE` or `SHARD_MANAGER` instead of `WORKER_EXECUTOR` for the other registry clients. The Compose file uses the same settings with its service names.
 
-Give the registry service a health check grace period long enough to download and inspect the built-in plugins and tools before it opens its listeners, for example 600 seconds. With no persistent cache at `/app/builtin-artifacts`, every replacement repeats this startup work and needs HTTPS access to GitHub. Size the grace period for a start with an empty cache, not only for a warm restart.
+Give the registry service a health check grace period long enough to inspect and provision the built-in plugins and tools before it opens its listeners, for example 600 seconds. URL-backed artifacts also need fetching when the cache has no valid copy. The documented local build embeds the artifacts instead, so those artifacts need no GitHub access. Size the grace period for a start with an empty cache, not only for a warm restart.
 
 #### Persistent artifact cache
 
-Mount Amazon EFS at `/app/builtin-artifacts` in the registry container to keep downloaded built-in plugins and tools across task replacements:
+Mount Amazon EFS at `/app/builtin-artifacts` in the registry container to keep fetched built-in artifacts and extracted metadata across task replacements:
 
 1. Create an encrypted EFS file system in the VPC, with a mount target in each Availability Zone where registry tasks can run. Allow TCP port 2049 on the mount targets from the registry tasks' security group only.
 2. Create an access point with POSIX user uid and gid **65534**. Set its root directory to `/builtin-artifacts`, with owner uid and gid **65534** and permissions `0750`. EFS creates this directory on the first mount.
@@ -118,7 +118,7 @@ Mount Amazon EFS at `/app/builtin-artifacts` in the registry container to keep d
 
 The task volume's `rootDirectory` must be `/` or omitted when it uses an access point; the access point selects the directory inside EFS. This configuration uses network and POSIX permissions, not task-role IAM authorization, for EFS access. Keep the mount targets private and restrict their security group as described above.
 
-The cache holds both downloaded artifacts and their extracted metadata. Replacement tasks verify the artifacts' checksums and reuse valid cached metadata instead of repeating the expensive extraction. The registry still validates the descriptors and provisions the built-in plugins and tools before it opens its listeners. Keep the health check grace period for an empty cache or a release with new artifacts, and retain HTTPS access to GitHub for downloads.
+The cache holds fetched artifacts and extracted metadata. Replacement tasks verify fetched artifacts' checksums and reuse valid cached metadata instead of repeating the expensive extraction. Embedded artifacts also reuse cached metadata, but need no download. The registry still validates the descriptors and provisions the built-in plugins and tools before it opens its listeners. Keep the health check grace period for an empty cache or a release with new artifacts. Allow access to configured URL sources, including HTTPS access to GitHub when it is the source.
 
 #### Shard manager
 

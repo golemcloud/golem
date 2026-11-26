@@ -15,7 +15,7 @@
 use crate::components::rdb::Rdb;
 use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
-use crate::components::{ChildProcessLogger, is_serving_grpc};
+use crate::components::{ChildProcessLogger, SupportedServiceLaunch, is_serving_grpc};
 use async_trait::async_trait;
 use futures::FutureExt;
 use std::path::{Path, PathBuf};
@@ -40,6 +40,7 @@ pub struct SpawnedShardManager {
     out_level: Level,
     err_level: Level,
     otlp: bool,
+    launch: Option<Arc<SupportedServiceLaunch>>,
 }
 
 struct ProcessState {
@@ -108,6 +109,41 @@ impl SpawnedShardManager {
         err_level: Level,
         otlp: bool,
     ) -> Self {
+        Self::new_with_launch(
+            executable,
+            working_directory,
+            number_of_shards_override,
+            state_write_timeout_override,
+            automatic_restart,
+            http_port,
+            grpc_port,
+            rdb,
+            registry_service,
+            verbosity,
+            out_level,
+            err_level,
+            otlp,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn new_with_launch(
+        executable: &Path,
+        working_directory: &Path,
+        number_of_shards_override: Option<usize>,
+        state_write_timeout_override: Option<Duration>,
+        automatic_restart: bool,
+        http_port: u16,
+        grpc_port: u16,
+        rdb: Arc<dyn Rdb>,
+        registry_service: Arc<dyn RegistryService>,
+        verbosity: Level,
+        out_level: Level,
+        err_level: Level,
+        otlp: bool,
+        launch: Option<SupportedServiceLaunch>,
+    ) -> Self {
         info!("Starting golem-shard-manager process");
 
         if !executable.exists() {
@@ -127,6 +163,7 @@ impl SpawnedShardManager {
             out_level,
             err_level,
             otlp,
+            launch.as_ref(),
             None,
         )
         .await
@@ -152,6 +189,7 @@ impl SpawnedShardManager {
             out_level,
             err_level,
             otlp,
+            launch: launch.map(Arc::new),
         };
 
         if automatic_restart {
@@ -174,12 +212,20 @@ impl SpawnedShardManager {
         out_level: Level,
         err_level: Level,
         otlp: bool,
+        launch: Option<&SupportedServiceLaunch>,
         mut interrupt: Option<tokio::sync::watch::Receiver<bool>>,
     ) -> anyhow::Result<(Child, ChildProcessLogger)> {
-        let mut child = StartingChild(Some(
-            Command::new(executable)
-                .current_dir(working_directory)
-                .envs(
+        let mut command = match launch {
+            Some(launch) => {
+                assert!(
+                    number_of_shards_override.is_none() && state_write_timeout_override.is_none(),
+                    "supported-settings shard manager cannot override policy"
+                );
+                launch.command(&[])
+            }
+            None => {
+                let mut command = Command::new(executable);
+                command.current_dir(working_directory).envs(
                     super::env_vars(
                         number_of_shards_override,
                         state_write_timeout_override,
@@ -192,7 +238,12 @@ impl SpawnedShardManager {
                         otlp,
                     )
                     .await,
-                )
+                );
+                command
+            }
+        };
+        let mut child = StartingChild(Some(
+            command
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -284,6 +335,7 @@ impl SpawnedShardManager {
         let out_level = self.out_level;
         let err_level = self.err_level;
         let otlp = self.otlp;
+        let launch = self.launch.clone();
 
         tokio::spawn(async move {
             loop {
@@ -336,6 +388,7 @@ impl SpawnedShardManager {
                         out_level,
                         err_level,
                         otlp,
+                        launch.as_deref(),
                         Some(interrupt.clone()),
                     ))
                     .catch_unwind()
@@ -407,6 +460,13 @@ impl ShardManager for SpawnedShardManager {
 
     async fn restart(&self, number_of_shards_override: Option<usize>) {
         let _lifecycle = self.lifecycle.lock().await;
+        if let Some(launch) = &self.launch {
+            assert!(
+                number_of_shards_override.is_none(),
+                "supported-settings shard manager cannot override policy"
+            );
+            let _ = launch.command(&[]);
+        }
         info!("Restarting golem-shard-manager");
 
         if let Some(number_of_shards) = number_of_shards_override {
@@ -428,6 +488,7 @@ impl ShardManager for SpawnedShardManager {
             self.out_level,
             self.err_level,
             self.otlp,
+            self.launch.as_deref(),
             None,
         )
         .await

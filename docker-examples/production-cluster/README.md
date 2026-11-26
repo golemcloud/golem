@@ -19,5 +19,7 @@ docker compose up -d
 - `WORKER_EXECUTOR_REPLICAS` sets the number of worker executors.
 - All services share one bucket with `namespace_prefixes = true`. Do not change it after the first
   start.
-- The registry service keeps its built-in artifact cache in the `builtin_artifacts` volume, so
-  replacing its container does not download the artifacts again.
+- The local build embeds the built-in artifacts, so they need no GitHub download. The registry
+  service keeps extracted metadata and fetched URL-backed artifacts in the `builtin_artifacts`
+  volume. It reuses valid cached entries after container replacement. Source overrides can select
+  URLs even in a binary with embedded artifacts.

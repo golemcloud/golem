@@ -33,7 +33,7 @@ Each store has its own schema in the same database. These are the schema names t
 | Executor scheduler | `golem_worker_executor_scheduler` |
 | Worker service sessions | `golem_worker_service_session_store` |
 
-Set `GOLEM__STATE_STORE=postgres` and the common `GOLEM__POSTGRES__HOST`, `PORT`, `DATABASE`, `USERNAME`, `PASSWORD` and `MAX_CONNECTIONS` fields on each service. The module assigns these schemas. With sessions in PostgreSQL, the cluster needs no Redis. To use a Redis cache, set `GOLEM__CACHE__ENABLED=true` and its connection under `GOLEM__CACHE__*`, for example `GOLEM__CACHE__HOST`. This also selects Redis for gateway and MCP sessions. Agent state remains in PostgreSQL. Sessions stored in PostgreSQL are not read through the Redis store, and clearing Redis ends the sessions it holds.
+Set `GOLEM__STATE_STORE=postgres` and the common `GOLEM__POSTGRES__HOST`, `PORT`, `DATABASE`, `USERNAME`, `PASSWORD` and `MAX_CONNECTIONS` fields on each service. The module assigns these schemas. With sessions in PostgreSQL, the cluster needs no Redis. To use a Redis cache, set `GOLEM__CACHE__ENABLED=true` and its connection under `GOLEM__CACHE__*`, for example `GOLEM__CACHE__HOST`. This also selects Redis for gateway sessions. The MCP session store inherits it unless `advanced.worker_service.mcp.session_storage` overrides it. To override the gateway session store, use `advanced.worker_service.gateway_session_storage`. Agent state remains in PostgreSQL. The server does not copy sessions between stores. Cache loss or switching session stores can require users to authenticate again.
 
 ### S3
 
@@ -68,12 +68,14 @@ The registry service's default login is GitHub OAuth2 with placeholder credentia
 The registry service creates the `default` plan from `initial_plans.default` at every start, and updates the plan when the values change. The defaults of the image limit applications, components, storage and uploads; set `GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__<LIMIT>` to change them.
 
 <Callout type="warning">
-  With the default `Temporary` agent filesystem storage, an agent whose plan has a finite `max_disk_space_per_worker` does not start: the invocation fails with `failed to install limits without quota authority`. Set `GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MAX_DISK_SPACE_PER_WORKER=1000000000000000000`, the unlimited value, unless the executors use [`ManagedXfs` storage](/next/operate/filesystem_snapshots/xfs#prepare-storage-with-project-quotas). Executors cache the limits they have read, so restart them after you change the plan.
+  The default `Temporary` agent filesystem storage cannot enforce a storage quota. Keep `GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MAX_STORAGE_PER_AGENT_ENABLED=false`, the current default, unless the executors use [`ManagedXfs` storage](/next/operate/filesystem_snapshots/xfs#prepare-storage-with-project-quotas). To enforce a limit there, set it to `true` and set `GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MAX_STORAGE_PER_AGENT` to the number of bytes. Executors cache the limits they have read, so restart them after you change the plan.
 </Callout>
 
 ## Built-in plugins and tools
 
-At every start, the registry service provisions Golem's built-in plugins and tools from its cache, and downloads from the [golem-builtins releases](https://github.com/golemcloud/golem-builtins/releases) on GitHub each one that the cache does not have or that does not match its checksum. If a download fails, the registry service does not start. In the image, the cache is `/app/builtin-artifacts`, inside the container, so every new registry container downloads them again, which takes about a minute and needs outgoing HTTPS connections to GitHub. To keep the cache, mount a persistent volume at `/app/builtin-artifacts`. The volume must be writable by uid 65534, the user of the image; see [User and Permissions](/next/deploy#user-and-permissions).
+At every start, the registry service inspects and provisions Golem's built-in plugins and tools. The [local image build](https://github.com/golemcloud/golem/blob/main/docker-examples/README.md) embeds the artifacts, so a new container needs no GitHub download for them. URL-backed artifacts, including source overrides, are fetched when the cache has no valid copy. Only artifacts sourced from GitHub need outgoing HTTPS connections to GitHub. A required fetch that fails stops startup. See [Built-in plugins and tools](/next/deploy/server#built-in-plugins-and-tools).
+
+In the registry image, the cache is `/app/builtin-artifacts`. Mount a persistent volume there to reuse fetched artifacts and extracted metadata across container replacements. The volume must be writable by uid 65534, the user of the image; see [User and Permissions](/next/deploy#user-and-permissions).
 
 ## Shard manager
 

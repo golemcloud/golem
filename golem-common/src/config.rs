@@ -129,15 +129,25 @@ impl<T: ConfigLoaderConfig> ConfigLoader<T> {
     }
 
     pub fn figment(&self) -> Figment {
-        let input = self
-            .settings_defaults()
-            .merge(Toml::file_exact(self.config_file_name.clone()))
-            .merge(env_config_provider());
+        let defaults = self.settings_defaults();
+        let input = [
+            Figment::from(Toml::file_exact(self.config_file_name.clone())),
+            Figment::from(env_config_provider()),
+        ]
+        .into_iter()
+        .fold(defaults.clone(), |lower, upper| {
+            server_settings::merge_variants(lower, upper, &defaults)
+        });
         let settings = match self.service {
             Some(service) => server_settings::project(service, &input),
             None => input,
         };
-        Figment::from(Serialized::defaults(T::default())).merge(settings)
+        let defaults = self.default_figment();
+        server_settings::complete_variant_configs::<T>(server_settings::merge_variants(
+            defaults.clone(),
+            settings,
+            &defaults,
+        ))
     }
 
     pub fn load(&self) -> figment::Result<T> {
@@ -827,6 +837,166 @@ mod tests {
                     .loader_test_port,
                 0
             );
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn variant_layers_preserve_required_and_fieldless_config_contracts() {
+        #[derive(Debug, Serialize, Deserialize)]
+        #[serde(tag = "type", content = "config")]
+        enum Persistence {
+            Sqlite(super::DbSqliteConfig),
+            Postgres(super::DbPostgresConfig),
+            Empty(golem_schema::Empty),
+            Disabled,
+        }
+
+        #[derive(Debug, Serialize, Deserialize)]
+        struct Settings {
+            persistence: Persistence,
+        }
+
+        impl Default for Settings {
+            fn default() -> Self {
+                Self {
+                    persistence: Persistence::Sqlite(super::DbSqliteConfig {
+                        database: "native-state.db".into(),
+                        max_connections: 11,
+                        foreign_keys: true,
+                    }),
+                }
+            }
+        }
+
+        impl SafeDisplay for Settings {
+            fn to_safe_string(&self) -> String {
+                String::new()
+            }
+        }
+
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            let loader = || ConfigLoader::<Settings>::new(std::path::Path::new("settings.toml"));
+            jail.create_file("settings.toml", "")?;
+            let Persistence::Sqlite(native) = loader().load()?.persistence else {
+                panic!("expected native SQLite defaults")
+            };
+            assert_eq!(native.database, "native-state.db");
+            assert_eq!(native.max_connections, 11);
+
+            let postgres = "host = 'state.internal'\nport = 25432\ndatabase = 'tenant_state'\nusername = 'owner'\npassword = ''\nmax_connections = 43\n";
+            let native_postgres =
+                format!("persistence.type = 'Postgres'\n[persistence.config]\n{postgres}");
+            jail.create_file("settings.toml", &native_postgres)?;
+            jail.set_env("GOLEM__PERSISTENCE__CONFIG__DATABASE", "selected_postgres");
+            let same_variant = loader().figment();
+            assert!(
+                same_variant
+                    .find_value("persistence.config.foreign_keys")
+                    .is_err()
+            );
+            let Persistence::Postgres(same) = same_variant.extract::<Settings>()?.persistence
+            else {
+                panic!("expected PostgreSQL with an upper database override")
+            };
+            assert_eq!(same.database, "selected_postgres");
+            assert_eq!(same.host, "state.internal");
+            assert_eq!(same.max_connections, 43);
+
+            [(false, false), (false, true), (true, false), (true, true)]
+                .into_iter()
+                .try_for_each(
+                    |(supported_postgres, explicit_database)| -> figment::Result<()> {
+                        jail.clear_env();
+                        jail.create_file(
+                            "settings.toml",
+                            &if supported_postgres {
+                                format!("state_store = 'postgres'\n[postgres]\n{postgres}")
+                            } else {
+                                native_postgres.clone()
+                            },
+                        )?;
+                        let prefix = if supported_postgres {
+                            "GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE"
+                        } else {
+                            "GOLEM__PERSISTENCE"
+                        };
+                        jail.set_env(format!("{prefix}__TYPE"), "Sqlite");
+                        if explicit_database {
+                            jail.set_env(format!("{prefix}__CONFIG__DATABASE"), "selected.db");
+                        }
+                        let loader = if supported_postgres {
+                            loader().for_service("shard_manager")
+                        } else {
+                            loader()
+                        };
+                        let figment = loader.figment();
+                        assert!(figment.find_value("persistence.config.host").is_err());
+                        let Persistence::Sqlite(sqlite) =
+                            figment.extract::<Settings>()?.persistence
+                        else {
+                            panic!("expected restored SQLite defaults")
+                        };
+                        assert_eq!(
+                            sqlite.database,
+                            if explicit_database {
+                                "selected.db"
+                            } else {
+                                "native-state.db"
+                            }
+                        );
+                        assert_eq!(sqlite.max_connections, 11);
+                        assert!(sqlite.foreign_keys);
+                        Ok(())
+                    },
+                )?;
+
+            [
+                (false, "Empty"),
+                (true, "Empty"),
+                (false, "Disabled"),
+                (true, "Disabled"),
+            ]
+            .into_iter()
+            .try_for_each(|(from_env, variant)| -> figment::Result<()> {
+                jail.clear_env();
+                if from_env {
+                    jail.create_file("settings.toml", &native_postgres)?;
+                    jail.set_env("GOLEM__PERSISTENCE__TYPE", variant);
+                } else {
+                    jail.create_file("settings.toml", &format!("persistence.type = '{variant}'"))?;
+                }
+                let figment = loader().figment();
+                let selected = figment.extract::<Settings>()?;
+                assert!(matches!(
+                    (variant, selected.persistence),
+                    ("Empty", Persistence::Empty(_)) | ("Disabled", Persistence::Disabled)
+                ));
+                assert_eq!(
+                    figment.find_value("persistence.config").is_ok(),
+                    variant == "Empty"
+                );
+                Ok(())
+            })?;
+
+            [
+                ("persistence.type = 'Postgres'", "host"),
+                (
+                    "persistence.type = 'Postgres'\npersistence.config.host = 'state.internal'",
+                    "database",
+                ),
+            ]
+            .into_iter()
+            .try_for_each(|(contents, missing)| -> figment::Result<()> {
+                jail.clear_env();
+                jail.create_file("settings.toml", contents)?;
+                let diagnostic = loader().load().unwrap_err().to_string();
+                assert!(diagnostic.contains(missing), "{diagnostic}");
+                assert!(diagnostic.contains("persistence"), "{diagnostic}");
+                assert!(diagnostic.contains("settings.toml"), "{diagnostic}");
+                Ok(())
+            })?;
             Ok(())
         });
     }

@@ -1537,6 +1537,145 @@ mod tests {
     }
 
     #[test]
+    fn standalone_variant_switches_discard_replaced_storage_fields() {
+        [
+            (true, false, false),
+            (true, true, false),
+            (false, true, false),
+            (true, false, true),
+            (true, true, true),
+            (false, true, true),
+        ]
+        .into_iter()
+        .for_each(|(supported_postgres, selection_in_env, explicit_database)| {
+            Jail::expect_with(|jail| {
+                jail.clear_env();
+                jail.create_dir("config")?;
+                let lower = if supported_postgres {
+                    "[postgres]"
+                } else {
+                    "[advanced.shard_manager.persistence]\ntype = 'Postgres'\n[advanced.shard_manager.persistence.config]"
+                };
+                let mut settings = format!(
+                    "{}\n{lower}\nhost = 'localhost'\nport = 5432\nusername = 'golem'\npassword = ''\ndatabase = 'tenant_state'\nmax_connections = 43\n",
+                    if supported_postgres { "state_store = 'postgres'" } else { "" }
+                );
+                if selection_in_env {
+                    jail.set_env("GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__TYPE", "Sqlite");
+                    if explicit_database {
+                        jail.set_env(
+                            "GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__CONFIG__DATABASE",
+                            "selected.db",
+                        );
+                    }
+                } else {
+                    settings.push_str("\n[advanced.shard_manager.persistence]\ntype = 'Sqlite'\n");
+                    if explicit_database {
+                        settings.push_str("[advanced.shard_manager.persistence.config]\ndatabase = 'selected.db'\n");
+                    }
+                }
+                jail.create_file("config/shard-manager.toml", &settings)?;
+                let loader = golem_shard_manager::config::make_config_loader();
+                let PersistenceConfig::Sqlite(native) = loader
+                    .default_figment()
+                    .extract_inner::<PersistenceConfig>("persistence")?
+                else {
+                    panic!("expected native SQLite persistence")
+                };
+                assert_eq!(native.database, "../data/golem_shard_manager.db");
+                assert_eq!(native.max_connections, 10);
+                let loaded = loader.load()?;
+                let PersistenceConfig::Sqlite(sqlite) = loaded.persistence else {
+                    panic!("expected selected SQLite persistence")
+                };
+                assert_eq!(
+                    sqlite.database,
+                    if explicit_database {
+                        "selected.db"
+                    } else if supported_postgres {
+                        "../data/golem_shard_manager.db"
+                    } else {
+                        "/var/lib/golem/shard_manager.db"
+                    }
+                );
+                assert_eq!(sqlite.max_connections, if supported_postgres { 10 } else { 4 });
+                assert_eq!(sqlite.foreign_keys, !supported_postgres);
+                if supported_postgres {
+                    let input = Figment::from(Toml::file_exact("config/shard-manager.toml"))
+                        .merge(env_config_provider());
+                    let projected = server_settings::project("shard_manager", &input);
+                    assert!(projected.find_value("persistence.config.host").is_err());
+                    assert!(projected.find_value("persistence.config.max_connections").is_err());
+                    assert_eq!(
+                        projected.extract_inner::<String>("persistence.config.database").ok().as_deref(),
+                        explicit_database.then_some("selected.db")
+                    );
+                }
+                assert!(!Path::new("tenant_state").exists());
+                assert!(!Path::new("selected.db").exists());
+                Ok(())
+            });
+        });
+    }
+
+    #[test]
+    fn standalone_variant_switch_requires_fields_without_matching_defaults() {
+        Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.create_dir("config")?;
+            jail.create_file(
+                "config/shard-manager.toml",
+                r#"
+                    [advanced.shard_manager.persistence]
+                    type = "Postgres"
+                    [advanced.shard_manager.persistence.config]
+                    host = "localhost"
+                    port = 5432
+                    username = "golem"
+                    password = ""
+                    max_connections = 43
+                "#,
+            )?;
+            let error = golem_shard_manager::config::make_config_loader()
+                .load()
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("database"), "{error}");
+            assert!(error.contains("persistence"), "{error}");
+            assert!(error.contains("shard-manager.toml"), "{error}");
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn standalone_variant_switches_keep_fieldless_variants() {
+        Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.create_dir("config")?;
+            jail.create_file(
+                "config/worker-executor.toml",
+                r#"
+                    [advanced.worker_executor.http_client]
+                    type = "Disabled"
+                    [advanced.worker_executor.oplog.oplog_processor_snapshotting]
+                    type = "Disabled"
+                "#,
+            )?;
+            let loaded =
+                golem_worker_executor::services::golem_config::make_config_loader().load()?;
+            assert!(matches!(
+                loaded.http_client,
+                golem_worker_executor::services::golem_config::HttpClientConfig::Disabled(_)
+            ));
+            assert!(matches!(
+                loaded.oplog.oplog_processor_snapshotting,
+                golem_worker_executor::services::golem_config::SnapshotPolicy::Disabled
+            ));
+            Ok(())
+        });
+    }
+
+    #[test]
     fn etcd_tls_survives_advanced_variant_selection_in_both_loaders() {
         [false, true].into_iter().for_each(|selection_in_env| {
             Jail::expect_with(|jail| {
@@ -1785,6 +1924,7 @@ mod tests {
                 username = "service_user"
                 password = "test-postgres-password"
                 max_connections = 17
+                acquire_timeout = "53s"
                 [object_storage]
                 endpoint_url = "https://s3.internal"
                 region = "eu-west-2"
@@ -1799,16 +1939,25 @@ mod tests {
                 [logging]
                 file_dir = "/installation/logs"
                 file_name = "installation.log"
-                file_truncate = true
+                file_truncate = false
+                console = true
+                dtor_friendly = true
                 [logging.stdout]
                 json = true
+                json_flatten = false
+                json_flatten_span = true
                 json_source_location = true
+                ansi = false
                 [logging.stderr]
                 enabled = true
+                ansi = true
                 compact = true
                 without_time = true
+                span_events_active = true
                 [logging.file]
                 enabled = true
+                json_flatten = true
+                json_flatten_span = false
                 pretty = true
                 span_events_full = true
                 [otlp]
@@ -2015,6 +2164,7 @@ mod tests {
                 assert_eq!(store["config"]["username"], "service_user");
                 assert_eq!(store["config"]["password"], "test-postgres-password");
                 assert_eq!(store["config"]["max_connections"], 17);
+                assert_eq!(store["config"]["acquire_timeout"], "53s");
                 assert_eq!(store["config"]["schema"], schema);
             });
             [&embedded.worker_executor, &executor]
@@ -2033,6 +2183,7 @@ mod tests {
                     assert_eq!(postgres["username"], "service_user");
                     assert_eq!(postgres["password"], "test-postgres-password");
                     assert_eq!(postgres["max_connections"], 17);
+                    assert_eq!(postgres["acquire_timeout"], "53s");
                     assert_eq!(postgres["schema"], "golem_worker_executor");
                     assert_eq!(store["config"]["cache"]["config"]["host"], "cache.internal");
                     assert_eq!(store["config"]["cache"]["config"]["port"], 16379);
@@ -2143,16 +2294,28 @@ mod tests {
             .into_iter()
             .for_each(|config| {
                 assert!(config.stdout.json);
+                assert!(!config.stdout.json_flatten);
+                assert!(config.stdout.json_flatten_span);
                 assert!(config.stdout.json_source_location);
+                assert!(!config.stdout.ansi);
                 assert!(config.stderr.enabled);
+                assert!(config.stderr.ansi);
                 assert!(config.stderr.compact);
                 assert!(config.stderr.without_time);
+                assert!(config.stderr.span_events_active);
+                assert!(!config.stderr.span_events_full);
                 assert!(config.file.enabled);
+                assert!(config.file.json_flatten);
+                assert!(!config.file.json_flatten_span);
                 assert!(config.file.pretty);
+                assert!(!config.file.ansi);
+                assert!(!config.file.span_events_active);
                 assert!(config.file.span_events_full);
                 assert_eq!(config.file_dir.as_deref(), Some("/installation/logs"));
                 assert_eq!(config.file_name.as_deref(), Some("installation.log"));
-                assert!(config.file_truncate);
+                assert!(!config.file_truncate);
+                assert!(config.console);
+                assert!(config.dtor_friendly);
                 assert!(config.otlp.enabled);
                 assert_eq!(config.otlp.service_name, "installation-traces");
                 assert_eq!(config.otlp.host, "collector.internal");
@@ -2174,10 +2337,17 @@ mod tests {
             [&uncached.worker_executor, &executor]
                 .into_iter()
                 .for_each(|executor| {
-                    assert_eq!(
-                        serde_json::to_value(&executor.key_value_storage).unwrap()["type"],
-                        "Postgres"
-                    );
+                    let store = serde_json::to_value(&executor.key_value_storage).unwrap();
+                    assert_eq!(store["type"], "Postgres");
+                    let postgres = &store["config"];
+                    assert_eq!(postgres["host"], "db.internal");
+                    assert_eq!(postgres["port"], 25432);
+                    assert_eq!(postgres["database"], "installation_db");
+                    assert_eq!(postgres["username"], "service_user");
+                    assert_eq!(postgres["password"], "test-postgres-password");
+                    assert_eq!(postgres["max_connections"], 17);
+                    assert_eq!(postgres["acquire_timeout"], "53s");
+                    assert_eq!(postgres["schema"], "golem_worker_executor");
                     assert!(matches!(
                         executor.filesystem_snapshots,
                         FilesystemSnapshotsConfig::Disabled(_)
@@ -2200,6 +2370,7 @@ mod tests {
                     assert_eq!(postgres["username"], "service_user");
                     assert_eq!(postgres["password"], "test-postgres-password");
                     assert_eq!(postgres["max_connections"], 17);
+                    assert_eq!(postgres["acquire_timeout"], "53s");
                     assert_eq!(postgres["schema"], "golem_worker_service_session_store");
                 });
             jail.set_env("GOLEM_ADVANCED__SHARD_MANAGER__PERSISTENCE__TYPE", "Etcd");
@@ -2227,6 +2398,133 @@ mod tests {
                 tls.client_key_file.as_deref(),
                 Some(Path::new("/certs/etcd.key"))
             );
+            Ok(())
+        });
+        Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.create_dir("config")?;
+            let settings = r#"
+                state_store = "sqlite"
+                blob_store = "data_disk"
+                data_dir = "/srv/installation-state"
+                [data_disk]
+                blob_root = "/mnt/installation-blobs"
+                [cache]
+                enabled = false
+                [filesystem_snapshots]
+                enabled = false
+            "#;
+            [
+                "registry-service",
+                "shard-manager",
+                "worker-service",
+                "worker-executor",
+                "component-compilation-service",
+            ]
+            .into_iter()
+            .try_for_each(|service| {
+                jail.create_file(format!("config/{service}.toml"), settings)
+                    .map(|_| ())
+            })?;
+            jail.create_file("settings.toml", settings)?;
+            let args = RunArgs {
+                config: Some("settings.toml".into()),
+                ..RunArgs::default()
+            };
+            let embedded = load(None, &args).unwrap();
+            let registry = golem_registry_service::config::make_config_loader().load()?;
+            let shard = golem_shard_manager::config::make_config_loader().load()?;
+            let worker =
+                golem_worker_service::config::make_worker_service_config_loader().load()?;
+            let executor =
+                golem_worker_executor::services::golem_config::make_config_loader().load()?;
+            let compilation =
+                golem_component_compilation_service::config::make_config_loader().load()?;
+            [
+                (
+                    [
+                        serde_json::to_value(&embedded.registry_service.db).unwrap(),
+                        serde_json::to_value(&registry.db).unwrap(),
+                    ],
+                    "/srv/installation-state/registry.db",
+                ),
+                (
+                    [
+                        serde_json::to_value(&embedded.shard_manager.persistence).unwrap(),
+                        serde_json::to_value(&shard.persistence).unwrap(),
+                    ],
+                    "/srv/installation-state/shard_manager.db",
+                ),
+                (
+                    [
+                        serde_json::to_value(&embedded.worker_service.gateway_session_storage)
+                            .unwrap(),
+                        serde_json::to_value(&worker.gateway_session_storage).unwrap(),
+                    ],
+                    "/srv/installation-state/gateway-sessions.db",
+                ),
+                (
+                    [
+                        serde_json::to_value(&embedded.worker_executor.scheduler_storage).unwrap(),
+                        serde_json::to_value(&executor.scheduler_storage).unwrap(),
+                    ],
+                    "/srv/installation-state/scheduler.db",
+                ),
+            ]
+            .into_iter()
+            .for_each(|(stores, database)| {
+                stores.into_iter().for_each(|store| {
+                    assert_eq!(store["type"], "Sqlite");
+                    assert_eq!(store["config"]["database"], database);
+                });
+            });
+            [&embedded.worker_executor, &executor]
+                .into_iter()
+                .for_each(|executor| {
+                    let kv = serde_json::to_value(&executor.key_value_storage).unwrap();
+                    assert_eq!(kv["type"], "MultiSqlite");
+                    assert_eq!(kv["config"]["root_dir"], "/srv/installation-state/kv-store");
+                    assert!(matches!(
+                        executor.indexed_storage,
+                        IndexedStorageConfig::KVStoreMultiSqlite(_)
+                    ));
+                });
+            [
+                &embedded.registry_service.blob_storage,
+                &registry.blob_storage,
+                &embedded.worker_service.blob_storage,
+                &worker.blob_storage,
+                &embedded.worker_executor.blob_storage,
+                &executor.blob_storage,
+                &embedded.component_compilation_service.blob_storage,
+                &compilation.blob_storage,
+            ]
+            .into_iter()
+            .for_each(|storage| {
+                assert_eq!(blob_root(storage), Path::new("/mnt/installation-blobs"));
+            });
+            jail.set_env("GOLEM__CACHE__ENABLED", "true");
+            let cached = load(None, &args).unwrap();
+            let executor =
+                golem_worker_executor::services::golem_config::make_config_loader().load()?;
+            [&cached.worker_executor, &executor]
+                .into_iter()
+                .for_each(|executor| {
+                    let kv = serde_json::to_value(&executor.key_value_storage).unwrap();
+                    assert_eq!(kv["type"], "NamespaceRouted");
+                    let persistent = &kv["config"]["persistent"];
+                    assert_eq!(persistent["type"], "MultiSqlite");
+                    assert_eq!(
+                        persistent["config"]["root_dir"],
+                        "/srv/installation-state/kv-store"
+                    );
+                    let indexed = serde_json::to_value(&executor.indexed_storage).unwrap();
+                    assert_eq!(indexed["type"], "MultiSqlite");
+                    assert_eq!(
+                        indexed["config"]["root_dir"],
+                        "/srv/installation-state/kv-store"
+                    );
+                });
             Ok(())
         });
     }
@@ -2415,7 +2713,7 @@ mod tests {
             jail.clear_env();
             let data = jail.directory().join("uncreated-state");
             let pg = GolemServerConfig::postgres_s3_example(&data).unwrap();
-            let pg = serde_json::to_value(pg).unwrap();
+            let pg = serde_json::to_value(toml::Value::try_from(pg).unwrap()).unwrap();
             let mut cases: Vec<(&str, serde_json::Value)> = [
                 "registry_service.db",
                 "shard_manager.persistence",
@@ -2540,21 +2838,50 @@ mod tests {
                 jail.clear_env();
                 let data = jail.directory().join("absent-state");
                 let pg = GolemServerConfig::postgres_s3_example(&data).unwrap();
-                let settings: toml::Value = Figment::from(Serialized::defaults(serde_json::json!({
-                    "state_store": "sqlite",
-                    "advanced": {"worker_executor": {"indexed_storage": pg.worker_executor.indexed_storage}}
-                }))).extract().unwrap();
+                let indexed_storage =
+                    toml::Value::try_from(pg.worker_executor.indexed_storage).unwrap();
+                let settings: toml::Value =
+                    Figment::from(Serialized::defaults(serde_json::json!({
+                        "state_store": "sqlite",
+                        "advanced": {"worker_executor": {"indexed_storage": indexed_storage}}
+                    })))
+                    .extract()
+                    .unwrap();
                 jail.create_file("litestream.toml", &toml::to_string(&settings).unwrap())?;
                 jail.set_env("GOLEM__STATE_STORE", "sqlite");
                 if replace_with_sqlite {
-                    jail.set_env("GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__TYPE", "Sqlite");
-                    jail.set_env("GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__DATABASE", "uncreated/indexed.db");
-                    jail.set_env("GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__MAX_CONNECTIONS", "2");
-                    jail.set_env("GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__FOREIGN_KEYS", "false");
+                    jail.set_env(
+                        "GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__TYPE",
+                        "Sqlite",
+                    );
+                    jail.set_env(
+                        "GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__DATABASE",
+                        "uncreated/indexed.db",
+                    );
+                    jail.set_env(
+                        "GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__MAX_CONNECTIONS",
+                        "2",
+                    );
+                    jail.set_env(
+                        "GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__FOREIGN_KEYS",
+                        "false",
+                    );
                 }
-                let args = RunArgs { config: Some("litestream.toml".into()), data_dir: Some(data.clone()), ..Default::default() };
-                let loaded = load_server_config(None, &args, SnapshotRepositoryKeySource::ValidationOnly).unwrap();
-                assert_eq!(matches!(loaded.worker_executor.indexed_storage, IndexedStorageConfig::Sqlite(_)), replace_with_sqlite);
+                let args = RunArgs {
+                    config: Some("litestream.toml".into()),
+                    data_dir: Some(data.clone()),
+                    ..Default::default()
+                };
+                let loaded =
+                    load_server_config(None, &args, SnapshotRepositoryKeySource::ValidationOnly)
+                        .unwrap();
+                assert_eq!(
+                    matches!(
+                        loaded.worker_executor.indexed_storage,
+                        IndexedStorageConfig::Sqlite(_)
+                    ),
+                    replace_with_sqlite
+                );
                 assert_eq!(check_litestream_config(&args).is_ok(), replace_with_sqlite);
                 assert!(!data.exists());
                 assert!(!Path::new("uncreated").exists());
@@ -2578,6 +2905,32 @@ mod tests {
             "server_key",
             "client_key",
         ];
+        fn url_has_secret(value: &str) -> bool {
+            let Some((_, address)) = value.split_once("://") else {
+                return false;
+            };
+            address
+                .split(['/', '?', '#'])
+                .next()
+                .and_then(|authority| authority.rsplit_once('@'))
+                .is_some_and(|(userinfo, _)| !userinfo.is_empty())
+                || address.split_once('?').is_some_and(|(_, query)| {
+                    query.split('#').next().unwrap().split('&').any(|field| {
+                        field.split_once('=').is_some_and(|(key, value)| {
+                            let key = key.to_ascii_lowercase();
+                            !value.is_empty()
+                                && (SECRETS.contains(&key.as_str())
+                                    || [
+                                        "access_token",
+                                        "api_key",
+                                        "x-amz-credential",
+                                        "x-amz-signature",
+                                    ]
+                                    .contains(&key.as_str()))
+                        })
+                    })
+                })
+        }
         fn secret_fields(value: &serde_json::Value, path: &str, found: Vec<String>) -> Vec<String> {
             match value {
                 serde_json::Value::Object(fields) => {
@@ -2601,31 +2954,94 @@ mod tests {
                             secret_fields(value, &format!("{path}[{index}]"), found)
                         })
                 }
+                serde_json::Value::String(value) if url_has_secret(value) => {
+                    let mut found = found;
+                    found.push(path.to_string());
+                    found
+                }
                 _ => found,
             }
         }
         let contains_raw_secret = |text: &str| {
             text.contains("-----BEGIN PRIVATE KEY-----")
                 || text.lines().any(|line| {
-                    let line = line.trim_start_matches([' ', '\t', '#']);
-                    line.split_once('=').is_some_and(|(key, value)| {
-                        SECRETS.contains(&key.trim().rsplit('.').next().unwrap())
-                            && !value.trim().trim_matches(['\'', '"']).is_empty()
+                    line.split('#').any(|part| {
+                        part.split_once('=').is_some_and(|(key, value)| {
+                            let key = key
+                                .split_whitespace()
+                                .next_back()
+                                .unwrap_or("")
+                                .rsplit('.')
+                                .next()
+                                .unwrap()
+                                .rsplit("__")
+                                .next()
+                                .unwrap()
+                                .trim_matches(['\'', '"'])
+                                .to_ascii_lowercase();
+                            SECRETS.contains(&key.as_str())
+                                && !value.trim().trim_matches(['\'', '"']).is_empty()
+                        })
                     })
                 })
         };
         ["server_key", "client_key", "password", "secret_access_key"]
             .into_iter()
             .for_each(|key| {
-                ["", "# "].into_iter().for_each(|comment| {
-                    assert!(contains_raw_secret(&format!(
-                        "{comment}{key} = 'synthetic-secret'"
-                    )));
-                });
+                ["", "# ", "host = 'postgres.internal' # "]
+                    .into_iter()
+                    .for_each(|prefix| {
+                        assert!(contains_raw_secret(&format!(
+                            "{prefix}{key} = 'synthetic-secret'"
+                        )));
+                        assert!(contains_raw_secret(&format!(
+                            "{prefix}\"{key}\" = 'synthetic-secret'"
+                        )));
+                    });
             });
-        assert!(!contains_raw_secret(
-            "server_key_file = '/certs/key.pem'\nclient_key_file = '/certs/client.pem'"
-        ));
+        ["# ", "host = 'postgres.internal' # "]
+            .into_iter()
+            .for_each(|prefix| {
+                assert!(contains_raw_secret(&format!(
+                    "{prefix}GOLEM__POSTGRES__PASSWORD=synthetic-secret"
+                )));
+            });
+        [
+            "# Supply the password through the environment.",
+            "host = 'postgres.internal' # Supply credentials separately.",
+            "server_key_file = '/certs/key.pem'\nclient_key_file = '/certs/client.pem'",
+            "host = 'postgres.internal' # GOLEM__POSTGRES__PASSWORD_FILE=/run/secrets/password",
+        ]
+        .into_iter()
+        .for_each(|control| assert!(!contains_raw_secret(control)));
+        [
+            (
+                "https://mirror.example/python.wasm?token=synthetic-bearer",
+                true,
+            ),
+            (
+                "https://synthetic-user:synthetic-password@mirror.example/python.wasm",
+                true,
+            ),
+            (
+                "https://mirror.example/python.wasm?access_token=synthetic-bearer",
+                true,
+            ),
+            (
+                "https://mirror.example/python.wasm?X-Amz-Signature=synthetic-signature",
+                true,
+            ),
+            ("https://mirror.example/python.wasm?version=2", false),
+            ("https://s3.internal:9443", false),
+            ("file:///certs/private-key.pem", false),
+        ]
+        .into_iter()
+        .for_each(|(url, expected)| {
+            assert_eq!(
+                !secret_fields(&serde_json::json!({"url": url}), "", Vec::new()).is_empty(),
+                expected
+            );
+        });
 
         [
             (include_str!("../config/self-host-single-node.toml"), "sqlite"),
@@ -2648,6 +3064,16 @@ mod tests {
                 })),
                 ("advanced.worker_service.registry_service.tls.config.client_key", serde_json::json!({
                     "advanced": {"worker_service": {"registry_service": {"tls": {"config": {"client_key": "synthetic-client-key"}}}}}
+                })),
+                ("advanced.registry_service.builtin_artifacts.source_overrides.python.url", serde_json::json!({
+                    "advanced": {"registry_service": {"builtin_artifacts": {"source_overrides": {"python": {
+                        "url": "https://private-mirror.example/python.wasm?token=synthetic-download-bearer"
+                    }}}}}
+                })),
+                ("advanced.registry_service.builtin_artifacts.source_overrides.python.url", serde_json::json!({
+                    "advanced": {"registry_service": {"builtin_artifacts": {"source_overrides": {"python": {
+                        "url": "https://synthetic-user:synthetic-password@private-mirror.example/python.wasm"
+                    }}}}}
                 })),
             ].into_iter().for_each(|(path, secret)| {
                 let with_secret: serde_json::Value = Figment::from(Serialized::defaults(&example))
@@ -2792,16 +3218,21 @@ mod tests {
                 [
                     golem_worker_executor::services::golem_config::make_config_loader()
                         .load()
-                        .map(|_| ()),
+                        .map(|_| ())
+                        .map_err(anyhow::Error::from),
                     golem_shard_manager::config::make_config_loader()
                         .load()
-                        .map(|_| ()),
+                        .map(|_| ())
+                        .map_err(anyhow::Error::from),
                     load(None, &args).map(|_| ()),
                 ]
                 .into_iter()
                 .for_each(|result| {
                     let error = result.expect_err("removed surface setting must not load");
-                    assert!(format!("{error:#}").contains(key), "{error:#}");
+                    assert!(
+                        format!("{error:#}").to_ascii_lowercase().contains(key),
+                        "{error:#}"
+                    );
                 });
                 Ok(())
             });
@@ -2886,6 +3317,92 @@ mod tests {
     }
 
     #[test]
+    fn advanced_server_data_dir_is_rejected_by_projection_and_loaders() {
+        [false, true].into_iter().for_each(|from_env| {
+            Jail::expect_with(|jail| {
+                jail.clear_env();
+                let settings = if from_env {
+                    jail.set_env("GOLEM_ADVANCED__SERVER__DATA_DIR", "split-root");
+                    "data_dir = 'supported-root'"
+                } else {
+                    "data_dir = 'supported-root'\nadvanced.server.data_dir = 'split-root'"
+                };
+                jail.create_file("settings.toml", settings)?;
+                let input =
+                    Figment::from(Toml::file_exact("settings.toml")).merge(env_config_provider());
+                let direct = server_settings::all_in_one(&input).unwrap_err().to_string();
+                let loaded = jail_error(load(
+                    None,
+                    &RunArgs {
+                        config: Some("settings.toml".into()),
+                        data_dir: Some("flag-root".into()),
+                        ..RunArgs::default()
+                    },
+                ));
+                [direct, loaded].into_iter().for_each(|diagnostic| {
+                    let diagnostic = diagnostic.to_ascii_lowercase();
+                    assert!(
+                        diagnostic.contains("advanced.server.data_dir"),
+                        "{diagnostic}"
+                    );
+                    assert!(diagnostic.contains("supported data_dir"), "{diagnostic}");
+                    assert!(
+                        diagnostic.contains(if from_env {
+                            "environment variable"
+                        } else {
+                            "settings.toml"
+                        }),
+                        "{diagnostic}"
+                    );
+                });
+                ["supported-root", "split-root", "flag-root"]
+                    .into_iter()
+                    .for_each(|path| assert!(!Path::new(path).exists()));
+                Ok(())
+            });
+        });
+    }
+
+    #[test]
+    fn supported_data_dir_precedence_keeps_storage_roots_together() {
+        [
+            (false, false, "file-root"),
+            (true, false, "env-root"),
+            (true, true, "flag-root"),
+        ]
+        .into_iter()
+        .for_each(|(from_env, from_flag, expected)| {
+            Jail::expect_with(|jail| {
+                jail.clear_env();
+                jail.create_file("settings.toml", "data_dir = 'file-root'")?;
+                if from_env {
+                    jail.set_env("GOLEM__DATA_DIR", "env-root");
+                }
+                let loaded = load(
+                    None,
+                    &RunArgs {
+                        config: Some("settings.toml".into()),
+                        data_dir: from_flag.then(|| "flag-root".into()),
+                        ..RunArgs::default()
+                    },
+                )
+                .unwrap();
+                assert_eq!(loaded.data_dir, Path::new(expected));
+                let DbConfig::Sqlite(db) = &loaded.registry_service.db else {
+                    panic!("expected SQLite registry")
+                };
+                assert_eq!(sqlite_path(db), Path::new(expected).join("registry.db"));
+                assert_eq!(
+                    blob_root(&loaded.registry_service.blob_storage),
+                    Path::new(expected).join("blobs")
+                );
+                assert!(!Path::new(expected).exists());
+                Ok(())
+            });
+        });
+    }
+
+    #[test]
     fn filesystem_settings_follow_the_platform_and_the_layers() {
         for platform in [LocalPlatform::MacOs, LocalPlatform::Other] {
             Jail::expect_with(|jail| {
@@ -2938,6 +3455,52 @@ mod tests {
                         ));
                     }
                 }
+
+                [(false, false), (false, true), (true, false), (true, true)]
+                    .into_iter()
+                    .try_for_each(|(from_env, disabled)| -> figment::Result<()> {
+                        jail.clear_env();
+                        let settings = if from_env {
+                            jail.set_env(
+                                "GOLEM__FILESYSTEM_SNAPSHOTS__STORAGE_CALL_DEADLINE",
+                                "83s",
+                            );
+                            if disabled {
+                                jail.set_env("GOLEM__FILESYSTEM_SNAPSHOTS__ENABLED", "false");
+                            }
+                            String::new()
+                        } else {
+                            format!(
+                                "[filesystem_snapshots]\nstorage_call_deadline = '83s'\n{}",
+                                if disabled { "enabled = false" } else { "" }
+                            )
+                        };
+                        jail.create_file("snapshots.toml", &settings)?;
+                        let loaded = load_on(
+                            platform,
+                            None,
+                            &RunArgs {
+                                config: Some("snapshots.toml".into()),
+                                data_dir: Some(data_dir.clone()),
+                                ..RunArgs::default()
+                            },
+                            SnapshotRepositoryKeySource::ValidationOnly,
+                        )
+                        .unwrap();
+                        if matches!(platform, LocalPlatform::MacOs) && !disabled {
+                            assert_eq!(
+                                snapshot_store(&loaded).storage_call_deadline(),
+                                Duration::from_secs(83)
+                            );
+                        } else {
+                            assert!(matches!(
+                                loaded.worker_executor.filesystem_snapshots,
+                                FilesystemSnapshotsConfig::Disabled(_)
+                            ));
+                        }
+                        Ok(())
+                    })?;
+                jail.clear_env();
 
                 let manifest = local_server(LocalServer {
                     agent_filesystem_root: Some(PathBuf::from("manifest-agents")),

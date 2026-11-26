@@ -197,3 +197,133 @@ pub async fn create_deps_sqlite() -> EnvBasedTestDependencies {
 pub fn tracing() -> Tracing {
     Tracing::init()
 }
+
+#[test_r::tag(group1)]
+mod supported_settings {
+    use super::Tracing;
+    use golem_test_framework::config::{
+        DbType, EnvBasedTestDependencies, EnvBasedTestDependenciesConfig, TestServiceInputs,
+    };
+    use test_r::{inherit_test_dep, tag, test, test_dep, timeout};
+
+    inherit_test_dep!(Tracing);
+
+    fn config(
+        db_type: DbType,
+        base: u16,
+        env: impl Fn(&str) -> Option<String>,
+    ) -> EnvBasedTestDependenciesConfig {
+        EnvBasedTestDependenciesConfig {
+            service_inputs: TestServiceInputs::SupportedSettings,
+            db_type,
+            worker_executor_cluster_size: 3,
+            redis_port: base,
+            registry_http_port: base + 1,
+            registry_grpc_port: base + 2,
+            compilation_http_port: base + 3,
+            compilation_grpc_port: base + 4,
+            shard_manager_http_port: base + 5,
+            shard_manager_grpc_port: base + 6,
+            worker_http_port: base + 7,
+            worker_grpc_port: base + 8,
+            worker_custom_request_port: base + 9,
+            worker_mcp_port: base + 10,
+            executor_base_http_port: base + 20,
+            executor_base_grpc_port: base + 30,
+            ..EnvBasedTestDependenciesConfig::default()
+        }
+        .with_env_overrides_from(|key| match key {
+            "GOLEM_TEST_PORT_OFFSET" | "QUIET" | "GOLEM_REPO_ROOT" | "GOLEM_TEST_BIN_PROFILE" => {
+                env(key)
+            }
+            _ => None,
+        })
+    }
+
+    #[test_dep(scope = Hosted, tagged_as = "supported_postgres")]
+    async fn postgres() -> EnvBasedTestDependencies {
+        Tracing::init();
+        EnvBasedTestDependencies::new(config(DbType::Postgres, 12000, |key| {
+            std::env::var(key).ok()
+        }))
+        .await
+        .expect("construct supported PostgreSQL dependencies")
+    }
+
+    #[test_dep(scope = Hosted, tagged_as = "supported_sqlite")]
+    async fn sqlite() -> EnvBasedTestDependencies {
+        Tracing::init();
+        EnvBasedTestDependencies::new(config(DbType::Sqlite, 13000, |key| std::env::var(key).ok()))
+            .await
+            .expect("construct supported SQLite dependencies")
+    }
+
+    #[test]
+    #[tag(db_postgres)]
+    #[timeout("4m")]
+    async fn counter_resource_test_1_postgres(
+        #[tagged_as("supported_postgres")] deps: &EnvBasedTestDependencies,
+        tracing: &Tracing,
+    ) -> anyhow::Result<()> {
+        super::worker::counter_resource_test_1(deps, tracing).await
+    }
+
+    #[test]
+    #[tag(db_sqlite)]
+    #[timeout("4m")]
+    async fn counter_resource_test_1_sqlite(
+        #[tagged_as("supported_sqlite")] deps: &EnvBasedTestDependencies,
+        tracing: &Tracing,
+    ) -> anyhow::Result<()> {
+        super::worker::counter_resource_test_1(deps, tracing).await
+    }
+
+    #[test]
+    fn tracer_resources_are_disjoint_and_offset_once() {
+        let ports = |config: &EnvBasedTestDependenciesConfig| {
+            [
+                config.redis_port,
+                config.registry_http_port,
+                config.registry_grpc_port,
+                config.compilation_http_port,
+                config.compilation_grpc_port,
+                config.shard_manager_http_port,
+                config.shard_manager_grpc_port,
+                config.worker_http_port,
+                config.worker_grpc_port,
+                config.worker_custom_request_port,
+                config.worker_mcp_port,
+            ]
+            .into_iter()
+            .chain(
+                (0..config.worker_executor_cluster_size as u16).flat_map(|index| {
+                    [
+                        config.executor_base_http_port + index,
+                        config.executor_base_grpc_port + index,
+                    ]
+                }),
+            )
+            .collect::<Vec<_>>()
+        };
+        let env = |key: &str| match key {
+            "GOLEM_TEST_PORT_OFFSET" => Some("10000".to_string()),
+            "REDIS_PORT" | "REGISTRY_HTTP_PORT" => Some("1".to_string()),
+            _ => None,
+        };
+        let postgres = config(DbType::Postgres, 12000, env);
+        let sqlite = config(DbType::Sqlite, 13000, env);
+        assert_eq!(postgres.redis_port, 22000);
+        assert_eq!(sqlite.redis_port, 23000);
+        let ordinary = EnvBasedTestDependenciesConfig::default().with_env_overrides_from(|key| {
+            (key == "GOLEM_TEST_PORT_OFFSET").then(|| "10000".to_string())
+        });
+        let all = [ordinary, postgres, sqlite]
+            .iter()
+            .flat_map(ports)
+            .collect::<Vec<_>>();
+        assert_eq!(
+            all.iter().collect::<std::collections::HashSet<_>>().len(),
+            all.len()
+        );
+    }
+}

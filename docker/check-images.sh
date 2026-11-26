@@ -5,7 +5,8 @@
 # - The image runs as uid and gid 65534, and that user can write the directories of the image
 #   where the default configuration keeps data.
 # - No file in the image has a setuid or setgid bit.
-# - The golem image starts with GOLEM_LITESTREAM=true on a new volume.
+# - With GOLEM_LITESTREAM=true, the golem entrypoint restores a new volume, and Litestream runs
+#   a controlled child and reports its failure. This does not check Golem server readiness.
 # - Envoy accepts the configuration that the router image writes, and the router sends each request
 #   to its service.
 # - The binary of xfs-quotad has the file capability cap_sys_admin+ep.
@@ -73,31 +74,72 @@ for service in "${services[@]}"; do
     [ -z "$privileged" ] || fail "$image has setuid or setgid files: $privileged"
 done
 
-# The entrypoint checks `server run`, restores from the empty replica and starts replication as
-# uid 65534. A real server stays running, so stop the container after the restore checks.
+# Use a controlled child even when the image has a real Golem binary. This checks packaging,
+# argument quoting and child exit handling, not server configuration or readiness.
 golem="$tag_prefix/cli/golem"
-echo "== $golem: startup with Litestream on a new volume"
-volume=$("$engine" volume create)
-container=$("$engine" create -v "$volume:/var/lib/golem" -e GOLEM_LITESTREAM=true \
-    -e GOLEM_LITESTREAM_REPLICA_URL=file:///var/lib/golem/replica "$golem" server run)
+child=$(cat <<'EOF'
+#!/usr/bin/env bash
+set -euo pipefail
+if [ "${1:-}" = --litestream-preflight ]; then
+    exit 0
+fi
+[ "$#" = 4 ] && [ "$1" = server ] && [ "$2" = run ] &&
+    [ "$3" = --config ] && [ "$4" = "$GOLEM_IMAGE_CHECK_CONFIG" ] || exit 90
+[ "$GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__TYPE" = Sqlite ] || exit 91
+[ "$GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__TYPE" = Sqlite ] || exit 92
+echo "litestream probe child exit=$GOLEM_IMAGE_CHECK_EXIT"
+exit "$GOLEM_IMAGE_CHECK_EXIT"
+EOF
+)
+volume=
+container=
 cleanup_litestream() {
-    "$engine" rm -f "$container" >/dev/null 2>&1 || true
-    "$engine" volume rm "$volume" >/dev/null 2>&1 || true
+    [ -z "$container" ] || "$engine" rm -f "$container" >/dev/null 2>&1 || true
+    [ -z "$volume" ] || "$engine" volume rm "$volume" >/dev/null 2>&1 || true
 }
 trap cleanup_litestream EXIT
-"$engine" start "$container" >/dev/null
 databases=$(grep -c '^  - path:' cli/golem/docker/litestream.yml)
-for _ in $(seq 1 180); do
+for child_exit in 0 23; do
+    echo "== $golem: Litestream packaging probe, child exit $child_exit"
+    volume=$("$engine" volume create)
+    container=$("$engine" create -v "$volume:/var/lib/golem" -e GOLEM_LITESTREAM=true \
+        -e GOLEM_LITESTREAM_REPLICA_URL=file:///var/lib/golem/replica \
+        -e "GOLEM_IMAGE_CHECK_CHILD=$child" -e "GOLEM_IMAGE_CHECK_EXIT=$child_exit" \
+        -e "GOLEM_IMAGE_CHECK_CONFIG=settings with 'quotes'.toml" \
+        --entrypoint /bin/bash "$golem" -euc '
+            mkdir -p /home/golem/probe-bin
+            printf "%s\n" "$GOLEM_IMAGE_CHECK_CHILD" > /home/golem/probe-bin/golem
+            chmod +x /home/golem/probe-bin/golem
+            export PATH="/home/golem/probe-bin:$PATH"
+            exec /usr/bin/tini -- /usr/local/bin/golem-entrypoint "$@"
+        ' sh server run --config "settings with 'quotes'.toml")
+    "$engine" start "$container" >/dev/null
+    for _ in $(seq 1 180); do
+        [ "$("$engine" inspect --format '{{.State.Running}}' "$container")" = true ] || break
+        sleep 1
+    done
     output=$("$engine" logs "$container" 2>&1)
     restores=$(grep -c "no matching backups found" <<<"$output" || true)
-    [ "$restores" = "$databases" ] && break
-    [ "$("$engine" inspect --format '{{.State.Running}}' "$container")" = true ] || break
-    sleep 1
+    [ "$restores" = "$databases" ] ||
+        fail "$golem with GOLEM_LITESTREAM=true restored $restores databases, not $databases: $output"
+    [ "$("$engine" inspect --format '{{.State.Running}}' "$container")" = false ] ||
+        fail "$golem: Litestream did not stop after its controlled child: $output"
+    grep -qx "litestream probe child exit=$child_exit" <<<"$output" ||
+        fail "$golem: Litestream did not execute its controlled child: $output"
+    expected_exit=0
+    if [ "$child_exit" != 0 ]; then
+        # Litestream 0.5.17 reports the child's status but exits with 1 itself.
+        expected_exit=1
+        grep -q "Error: exit status $child_exit" <<<"$output" ||
+            fail "$golem: Litestream did not report the child failure: $output"
+    fi
+    actual_exit=$("$engine" inspect --format '{{.State.ExitCode}}' "$container")
+    [ "$actual_exit" = "$expected_exit" ] ||
+        fail "$golem: Litestream exited with $actual_exit, not $expected_exit: $output"
+    cleanup_litestream
+    container=
+    volume=
 done
-restores=$(grep -c "no matching backups found" <<<"$output" || true)
-[ "$restores" = "$databases" ] ||
-    fail "$golem with GOLEM_LITESTREAM=true restored $restores databases, not $databases: $output"
-cleanup_litestream
 trap - EXIT
 
 # The entrypoint writes the Envoy configuration from the variables, and Envoy validates it.

@@ -21,7 +21,7 @@ use golem_cli::config::{DEFAULT_LOCAL_CUSTOM_REQUEST_PORT, DEFAULT_LOCAL_MCP_POR
 use golem_cli::context::Context;
 use golem_cli::error::NonSuccessfulExit;
 use golem_cli::fs;
-use golem_cli::log::{LogColorize, log_warn_action};
+use golem_cli::log::{LogColorize, Output as CliOutput, log_warn_action, set_log_output};
 use golem_cli::model::app::ResolvedLocalServer;
 use golem_common::tracing::{Output, TracingConfig, filter};
 use golem_registry_service::services::builtin_artifact::BuiltinArtifactShutdown;
@@ -50,6 +50,13 @@ impl ServerCommandHandler {
     ) -> anyhow::Result<()> {
         match subcommand {
             ServerSubcommand::Run { args } => {
+                set_log_output(if verbosity.tracing_level().is_none() {
+                    CliOutput::BufferedUntilErr
+                } else if ctx.format().is_structured() {
+                    CliOutput::Stderr
+                } else {
+                    CliOutput::Stdout
+                });
                 if !ctx.server_no_limit_change() {
                     let file_limit_increase_result = rlimit::increase_nofile_limit(1000000);
                     debug!(
@@ -83,13 +90,19 @@ impl ServerCommandHandler {
                     .filter(|entry| !entry.is_empty())
                     .any(|entry| entry.parse::<Directive>().is_ok())
                 {
-                    "rmcp=warn"
+                    ""
                 } else {
-                    "info,rmcp=warn"
+                    "info"
+                };
+                let rmcp_default = if verbosity.is_present() && verbosity.tracing_level().is_none()
+                {
+                    ""
+                } else {
+                    "rmcp=warn"
                 };
                 // Keep the original text so span-field matchers retain their types.
-                let mut ordinary_filter =
-                    EnvFilter::builder().parse_lossy(format!("{defaults},{rust_log}"));
+                let mut ordinary_filter = EnvFilter::builder()
+                    .parse_lossy(format!("{defaults},{rmcp_default},{rust_log}"));
                 if verbosity.is_present() {
                     ordinary_filter = ordinary_filter.add_directive(
                         verbosity
@@ -487,7 +500,9 @@ mod signals {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use golem_cli::log::{LogOutput, OutputCapture, discard_held_log, release_held_log};
     use golem_cli::model::app_raw::LocalServer;
+    use golem_cli::model::format::Format;
     use std::sync::atomic::{AtomicBool, Ordering};
     use test_r::test;
     use tracing_subscriber::{Layer, layer::SubscriberExt};
@@ -500,24 +515,166 @@ mod tests {
     struct TracingInitialized;
 
     #[test]
-    fn server_tracing_receives_loaded_settings_after_confirmed_cleanup() {
-        let off = [false; 4];
-        let info = [true, true, false, false];
-        let debug = [true; 4];
-        let targeted = [false, false, false, true];
+    fn server_run_routes_cli_port_warnings_without_a_subscriber() {
         [
-            (None, 0, 0, "off", info, off),
-            (Some("off"), 0, 0, "debug", off, debug),
-            (Some("debug"), 0, 0, "off", debug, off),
-            (Some("off"), 3, 0, "off", debug, off),
-            (Some("debug"), 0, 1, "debug", off, debug),
-            (Some("logger_probe=debug"), 0, 0, "off", targeted, off),
-            (Some("off,logger_probe=debug"), 0, 1, "debug", targeted, debug),
-            (Some("debug"), 1, 0, "off", [true, false, false, false], off),
-            (Some("debug"), 0, 1, "off", off, off),
+            (Format::Text, 0),
+            (Format::Json, 0),
+            (Format::Text, 1),
+            (Format::Json, 1),
         ]
         .into_iter()
-        .for_each(|(rust_log, verbose, quiet, otlp_filter, expected, expected_otlp)| {
+        .for_each(|(format, quiet)| {
+            figment::Jail::expect_with(|jail| {
+                jail.clear_env();
+                jail.set_env("HOME", jail.directory().display().to_string());
+                jail.set_env("NO_COLOR", "1");
+                jail.create_file(
+                    "settings.toml",
+                    "[filesystem_snapshots]\nenabled = false\n[logging.file]\nenabled = false",
+                )?;
+                let manifest = local_server(LocalServer {
+                    custom_request_port: Some(1),
+                    mcp_port: Some(2),
+                    ..LocalServer::default()
+                });
+                let ports = StartupPorts {
+                    router_port: 9881,
+                    custom_request_port: 41235,
+                    mcp_port: 41236,
+                };
+                let capture = OutputCapture::new();
+                let _restore_output = LogOutput::new(CliOutput::TracingDebug);
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap();
+                let stopped = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    tracing::dispatcher::with_default(&tracing::Dispatch::none(), || {
+                        runtime.block_on(async {
+                            let mut flags = golem_cli::command::GolemCliGlobalFlags::default();
+                            flags.local = true;
+                            flags.disable_app_manifest_discovery = true;
+                            flags.server_no_limit_change = true;
+                            flags.format = Some(format);
+                            let ctx = Arc::new(Context::new(flags, None).await.unwrap());
+                            discard_held_log();
+                            let _ = capture.take();
+                            let _pre_handler_output = LogOutput::new(CliOutput::TracingDebug);
+                            ServerCommandHandler
+                                .handle_with_tracing(
+                                    ctx,
+                                    ServerSubcommand::Run {
+                                        args: RunArgs {
+                                            config: Some("settings.toml".into()),
+                                            data_dir: Some(jail.directory().join("data")),
+                                            router_addr: Some("127.0.0.1".into()),
+                                            ..Default::default()
+                                        },
+                                    },
+                                    Verbosity::new(0, quiet),
+                                    |_, _| {
+                                        warn_on_subdomain_port_mismatches(Some(&manifest), &ports);
+                                        let (stdout, stderr) = capture.take();
+                                        release_held_log();
+                                        let (released_stdout, released_stderr) = capture.take();
+                                        let warning = if quiet > 0 {
+                                            assert!(stdout.is_empty());
+                                            assert!(stderr.is_empty());
+                                            assert!(released_stdout.is_empty());
+                                            released_stderr
+                                        } else {
+                                            assert!(released_stdout.is_empty());
+                                            assert!(released_stderr.is_empty());
+                                            if format.is_structured() {
+                                                assert!(stdout.is_empty());
+                                                stderr
+                                            } else {
+                                                assert!(stderr.is_empty());
+                                                stdout
+                                            }
+                                        };
+                                        let warning =
+                                            String::from_utf8(warning).unwrap().into_boxed_str();
+                                        [
+                                            "HTTP API port 41235 differs from port 1",
+                                            "MCP port 41236 differs from port 2",
+                                            "localServer.customRequestPort",
+                                            "localServer.mcpPort",
+                                        ]
+                                        .into_iter()
+                                        .for_each(
+                                            |expected| {
+                                                assert!(
+                                                    warning.contains(expected),
+                                                    "format={format}, -q={quiet}: {warning}"
+                                                );
+                                            },
+                                        );
+                                        std::panic::panic_any(TracingInitialized);
+                                    },
+                                )
+                                .await
+                                .unwrap();
+                        })
+                    })
+                }));
+                discard_held_log();
+                let panic = stopped.expect_err("stop before launching the server");
+                if !panic.is::<TracingInitialized>() {
+                    std::panic::resume_unwind(panic);
+                }
+                Ok(())
+            });
+        });
+    }
+
+    #[test]
+    fn server_tracing_receives_loaded_settings_after_confirmed_cleanup() {
+        let off = [false; 6];
+        let info = [true, true, false, false, true, true];
+        let debug = [true; 6];
+        let targeted = [false, false, false, true, false, false];
+        let rmcp = [false, false, false, false, true, true];
+        [
+            (None, None, 0, 0, "off", info, off),
+            (Some("off"), None, 0, 0, "debug", rmcp, debug),
+            (Some("debug"), None, 0, 0, "off", debug, off),
+            (Some("off"), None, 3, 0, "off", debug, off),
+            (Some("debug"), None, 0, 1, "debug", off, debug),
+            (
+                Some("logger_probe=debug"),
+                None,
+                0,
+                0,
+                "off",
+                [false, false, false, true, true, true],
+                off,
+            ),
+            (Some("off,logger_probe=debug"), None, 0, 1, "debug", targeted, debug),
+            (
+                Some("debug"),
+                None,
+                1,
+                0,
+                "off",
+                [true, false, false, false, true, true],
+                off,
+            ),
+            (Some("debug"), None, 0, 1, "off", off, off),
+            (None, None, 0, 1, "debug", off, debug),
+            (Some("off,rmcp=warn"), None, 0, 1, "off", rmcp, off),
+            (
+                None,
+                Some("rmcp=error"),
+                0,
+                1,
+                "off,rmcp=warn",
+                [false, false, false, false, false, true],
+                rmcp,
+            ),
+        ]
+        .into_iter()
+        .for_each(|(rust_log, extra, verbose, quiet, otlp_filter, expected, expected_otlp)| {
             figment::Jail::expect_with(|jail| {
                 jail.clear_env();
                 jail.set_env("HOME", jail.directory().display().to_string());
@@ -531,6 +688,9 @@ mod tests {
                 jail.set_env("GOLEM__LOGGING__FILE_DIR", log_dir.display().to_string());
                 if let Some(rust_log) = rust_log {
                     jail.set_env("RUST_LOG", rust_log);
+                }
+                if let Some(extra) = extra {
+                    jail.set_env(LOG_FILTER_ENV_VAR, extra);
                 }
                 jail.set_env("GOLEM_OTLP_FILTER", otlp_filter);
                 jail.create_file(
@@ -585,27 +745,40 @@ mod tests {
                                 assert_eq!(logging.otlp.port, 14318);
                                 [
                                     ("stdout", Output::Stdout, expected),
+                                    ("stderr", Output::Stderr, expected),
                                     ("file", Output::File, expected),
                                     ("otlp", Output::Otlp, expected_otlp),
                                 ]
                                 .into_iter()
                                 .for_each(|(output_name, output, expected)| {
+                                    let probe_log = jail.directory().join(output_name).into_boxed_path();
+                                    let writer = Arc::new(std::fs::File::create(&probe_log).unwrap());
                                     let subscriber = tracing_subscriber::registry().with(
                                         tracing_subscriber::fmt::layer()
-                                            .with_writer(std::io::sink)
+                                            .with_ansi(false)
+                                            .with_writer(writer)
                                             .with_filter(make_filter(output)),
                                     );
                                     let observed = tracing::subscriber::with_default(subscriber, || {
-                                        [
+                                        let observed = [
                                             tracing::enabled!(target: "unrelated_probe", tracing::Level::ERROR),
                                             tracing::enabled!(target: "unrelated_probe", tracing::Level::INFO),
                                             tracing::enabled!(target: "unrelated_probe", tracing::Level::DEBUG),
                                             tracing::enabled!(target: "logger_probe", tracing::Level::DEBUG),
-                                        ]
+                                        ];
+                                        tracing::warn!(target: "rmcp", "rmcp-warning-probe");
+                                        tracing::error!(target: "rmcp", "rmcp-error-probe");
+                                        observed
                                     });
+                                    let contents = std::fs::read_to_string(&probe_log).unwrap().into_boxed_str();
+                                    let observed = [
+                                        observed[0], observed[1], observed[2], observed[3],
+                                        contents.contains("rmcp-warning-probe"),
+                                        contents.contains("rmcp-error-probe"),
+                                    ];
                                     assert_eq!(
                                         observed, expected,
-                                        "{output_name}: RUST_LOG={rust_log:?}, -v={verbose}, -q={quiet}, GOLEM_OTLP_FILTER={otlp_filter}"
+                                        "{output_name}: RUST_LOG={rust_log:?}, GOLEM_LOG_FILTER={extra:?}, -v={verbose}, -q={quiet}, GOLEM_OTLP_FILTER={otlp_filter}"
                                     );
                                 });
                                 let destination = Path::new(logging.file_dir.as_deref().unwrap_or("."))

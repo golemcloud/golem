@@ -64,9 +64,9 @@ services:
       GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__ROOT__TOKEN: ${ADMIN_TOKEN}
       GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_ACCOUNTS__MARKETING__TOKEN: ${MARKETING_TOKEN}
       GOLEM_ADVANCED__REGISTRY_SERVICE__DOMAIN_REGISTRATION__RESERVED_DOMAINS: '["${GOLEM_MANAGEMENT_HOST}"]'
-      # An agent on the default Temporary filesystem storage does not start with a finite
-      # per-agent disk limit. Set a limit only with ManagedXfs storage on the executors.
-      GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MAX_DISK_SPACE_PER_WORKER: 1000000000000000000
+      # Temporary agent filesystems cannot enforce storage quotas. Keep enforcement disabled,
+      # as it is by default, unless the executors use ManagedXfs storage.
+      GOLEM_ADVANCED__REGISTRY_SERVICE__INITIAL_PLANS__DEFAULT__MAX_STORAGE_PER_AGENT_ENABLED: "false"
 
       GOLEM__STATE_STORE: postgres
       GOLEM__POSTGRES__HOST: ${POSTGRES_HOST}

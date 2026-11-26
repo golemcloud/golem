@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use crate::components::SupportedServiceLaunch;
 use crate::components::component_compilation_service::ComponentCompilationService;
 use crate::components::component_compilation_service::provided::ProvidedComponentCompilationService;
 use crate::components::component_compilation_service::spawned::SpawnedComponentCompilationService;
@@ -88,8 +89,20 @@ impl Debug for TestTempDir {
     }
 }
 
+/// Selects the explicit inputs sent to the fixture's spawned service processes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum TestServiceInputs {
+    /// Keep the suite's configuration files, inherited environment and policy overrides.
+    #[default]
+    Suite,
+    /// Use isolated supported settings and only advanced listener and peer addresses.
+    /// Native defaults supply the accounts and the single default plan, not quota test plans.
+    SupportedSettings,
+}
+
 #[derive(Clone)]
 pub struct EnvBasedTestDependenciesConfig {
+    pub service_inputs: TestServiceInputs,
     pub worker_executor_cluster_size: usize,
     pub environment_state_cache_capacity: Option<usize>,
     pub number_of_shards_override: Option<usize>,
@@ -341,6 +354,7 @@ fn locate_service_executable(
 impl Default for EnvBasedTestDependenciesConfig {
     fn default() -> Self {
         Self {
+            service_inputs: TestServiceInputs::Suite,
             worker_executor_cluster_size: 4,
             environment_state_cache_capacity: None,
             number_of_shards_override: None,
@@ -384,6 +398,7 @@ pub struct EnvBasedTestDependencies {
     temp_directory: Arc<TestTempDir>,
     registry_service: Arc<dyn RegistryService>,
     test_component_dir: PathBuf,
+    suite_plans: bool,
 }
 
 impl Debug for EnvBasedTestDependencies {
@@ -393,6 +408,212 @@ impl Debug for EnvBasedTestDependencies {
 }
 
 impl EnvBasedTestDependencies {
+    fn supported_launch(
+        config: &EnvBasedTestDependenciesConfig,
+        temp_dir: &Path,
+        service: &'static str,
+        rdb: &dyn Rdb,
+        executor_index: usize,
+    ) -> Option<SupportedServiceLaunch> {
+        if config.service_inputs == TestServiceInputs::Suite {
+            return None;
+        }
+        assert!(
+            config.environment_state_cache_capacity.is_none()
+                && config.number_of_shards_override.is_none()
+                && config.oplog_archive_interval.is_none(),
+            "supported-settings fixture cannot override service policy"
+        );
+        let slug = service.replace('_', "-");
+        let process_dir = temp_dir
+            .join("processes")
+            .join(format!("{slug}-{executor_index}"));
+        let home = process_dir.join("home");
+        let working = process_dir.join("work");
+        std::fs::create_dir_all(&home).expect("create isolated home");
+        std::fs::create_dir_all(working.join("config")).expect("create isolated config directory");
+        std::fs::write(working.join("config").join(format!("{slug}.toml")), "")
+            .expect("create required empty service config");
+        if service == "worker_executor" {
+            std::fs::create_dir_all(temp_dir.join("executor-logs"))
+                .expect("create executor log directory");
+        }
+        let env = Self::supported_service_env(
+            config,
+            temp_dir,
+            service,
+            rdb.info(),
+            executor_index,
+            &std::env::var("GOLEM_TEST_GATEWAY_SESSION_STORAGE")
+                .unwrap_or_else(|_| "redis".to_string()),
+        );
+        let executable = if service == "worker_executor" {
+            "worker-executor".to_string()
+        } else {
+            format!("golem-{slug}")
+        };
+        Some(SupportedServiceLaunch::new(
+            service,
+            &config.service_binaries_dir().join(executable),
+            working,
+            env,
+        ))
+    }
+
+    fn supported_service_env(
+        config: &EnvBasedTestDependenciesConfig,
+        temp_dir: &Path,
+        service: &'static str,
+        db: DbInfo,
+        executor_index: usize,
+        gateway_sessions: &str,
+    ) -> HashMap<String, String> {
+        let slug = service.replace('_', "-");
+        let home = temp_dir
+            .join("processes")
+            .join(format!("{slug}-{executor_index}"))
+            .join("home");
+        let data_dir = match &db {
+            DbInfo::Sqlite(path) => path.clone(),
+            _ => temp_dir.join(&slug),
+        };
+        let mut env = db.env("", false);
+        env.extend([
+            ("HOME".to_string(), home.to_string_lossy().into_owned()),
+            (
+                "USERPROFILE".to_string(),
+                home.to_string_lossy().into_owned(),
+            ),
+            (
+                "GOLEM__DATA_DIR".to_string(),
+                data_dir.to_string_lossy().into_owned(),
+            ),
+            ("GOLEM__BLOB_STORE".to_string(), "data_disk".to_string()),
+            (
+                "GOLEM__DATA_DISK__BLOB_ROOT".to_string(),
+                temp_dir.join("blob_storage").to_string_lossy().into_owned(),
+            ),
+            ("GOLEM__CACHE__ENABLED".to_string(), "false".to_string()),
+        ]);
+        if service == "worker_service" {
+            match gateway_sessions {
+                "sqlite" => {
+                    env.insert("GOLEM__STATE_STORE".to_string(), "sqlite".to_string());
+                }
+                "redis" => env.extend([
+                    ("GOLEM__CACHE__ENABLED".to_string(), "true".to_string()),
+                    ("GOLEM__CACHE__HOST".to_string(), config.redis_host.clone()),
+                    (
+                        "GOLEM__CACHE__PORT".to_string(),
+                        config.redis_port.to_string(),
+                    ),
+                    (
+                        "GOLEM__CACHE__KEY_PREFIX".to_string(),
+                        config.redis_key_prefix.clone(),
+                    ),
+                ]),
+                _ => panic!("GOLEM_TEST_GATEWAY_SESSION_STORAGE must be redis or sqlite"),
+            }
+        }
+        let index = u16::try_from(executor_index).expect("executor index fits u16");
+        let (http_key, http_port, grpc_port, peers): (&str, u16, u16, Vec<(&str, u16)>) =
+            match service {
+                "registry_service" => (
+                    "HTTP_PORT",
+                    config.registry_http_port,
+                    config.registry_grpc_port,
+                    vec![(
+                        "COMPONENT_COMPILATION__CONFIG",
+                        config.compilation_grpc_port,
+                    )],
+                ),
+                "component_compilation_service" => (
+                    "HTTP_PORT",
+                    config.compilation_http_port,
+                    config.compilation_grpc_port,
+                    vec![("REGISTRY_SERVICE__CONFIG", config.registry_grpc_port)],
+                ),
+                "shard_manager" => (
+                    "HTTP_PORT",
+                    config.shard_manager_http_port,
+                    config.shard_manager_grpc_port,
+                    vec![("REGISTRY_SERVICE", config.registry_grpc_port)],
+                ),
+                "worker_service" => (
+                    "PORT",
+                    config.worker_http_port,
+                    config.worker_grpc_port,
+                    vec![
+                        ("REGISTRY_SERVICE", config.registry_grpc_port),
+                        ("SHARD_MANAGER", config.shard_manager_grpc_port),
+                    ],
+                ),
+                "worker_executor" => (
+                    "HTTP_PORT",
+                    config.executor_base_http_port.checked_add(index).unwrap(),
+                    config.executor_base_grpc_port.checked_add(index).unwrap(),
+                    vec![
+                        ("REGISTRY_SERVICE", config.registry_grpc_port),
+                        ("SHARD_MANAGER", config.shard_manager_grpc_port),
+                        ("PUBLIC_WORKER_API", config.worker_grpc_port),
+                    ],
+                ),
+                _ => panic!("unknown supported-settings service {service}"),
+            };
+        let prefix = format!("GOLEM_ADVANCED__{}__", service.to_uppercase());
+        env.extend([
+            (format!("{prefix}{http_key}"), http_port.to_string()),
+            (format!("{prefix}GRPC__PORT"), grpc_port.to_string()),
+        ]);
+        peers.into_iter().for_each(|(peer, port)| {
+            env.insert(format!("{prefix}{peer}__HOST"), "localhost".to_string());
+            env.insert(format!("{prefix}{peer}__PORT"), port.to_string());
+        });
+        if service == "worker_service" {
+            env.extend([
+                (
+                    format!("{prefix}CUSTOM_REQUEST_PORT"),
+                    config.worker_custom_request_port.to_string(),
+                ),
+                (
+                    format!("{prefix}MCP_PORT"),
+                    config.worker_mcp_port.to_string(),
+                ),
+            ]);
+        }
+        if service == "worker_executor" {
+            let logs = temp_dir.join("executor-logs");
+            env.extend([
+                (
+                    "GOLEM__LOGGING__FILE__ENABLED".to_string(),
+                    "true".to_string(),
+                ),
+                ("GOLEM__LOGGING__FILE__JSON".to_string(), "true".to_string()),
+                (
+                    "GOLEM__LOGGING__FILE__JSON_FLATTEN".to_string(),
+                    "false".to_string(),
+                ),
+                (
+                    "GOLEM__LOGGING__FILE__JSON_FLATTEN_SPAN".to_string(),
+                    "false".to_string(),
+                ),
+                (
+                    "GOLEM__LOGGING__FILE__JSON_SOURCE_LOCATION".to_string(),
+                    "true".to_string(),
+                ),
+                (
+                    "GOLEM__LOGGING__FILE_DIR".to_string(),
+                    logs.to_string_lossy().into_owned(),
+                ),
+                (
+                    "GOLEM__LOGGING__FILE_NAME".to_string(),
+                    format!("executor-{executor_index}.jsonl"),
+                ),
+            ]);
+        }
+        env
+    }
+
     async fn make_rdb(config: &EnvBasedTestDependenciesConfig, temp_dir: &Path) -> Arc<dyn Rdb> {
         match config.db_type {
             DbType::Sqlite => {
@@ -410,7 +631,12 @@ impl EnvBasedTestDependencies {
         let host = config.redis_host.clone();
         let port = config.redis_port;
 
-        if crate::components::redis::check_if_running(&host, port) {
+        let running = crate::components::redis::check_if_running(&host, port);
+        assert!(
+            config.service_inputs != TestServiceInputs::SupportedSettings || !running,
+            "supported-settings fixture requires its own Redis endpoint"
+        );
+        if running {
             Arc::new(ProvidedRedis::new(host, port, prefix))
         } else {
             Arc::new(SpawnedRedis::new(
@@ -437,9 +663,10 @@ impl EnvBasedTestDependencies {
         config: &EnvBasedTestDependenciesConfig,
         rdb: &Arc<dyn Rdb>,
         component_compilation_service: &Arc<dyn ComponentCompilationService>,
+        temp_dir: &Path,
     ) -> Arc<dyn RegistryService> {
         Arc::new(
-            SpawnedRegistryService::new(
+            SpawnedRegistryService::new_with_launch(
                 &config.service_binaries_dir().join("golem-registry-service"),
                 &config.golem_repo_root.join("golem-registry-service"),
                 config.registry_http_port,
@@ -450,6 +677,7 @@ impl EnvBasedTestDependencies {
                 config.default_stdout_level(),
                 config.default_stderr_level(),
                 false,
+                Self::supported_launch(config, temp_dir, "registry_service", rdb.as_ref(), 0),
             )
             .await,
         )
@@ -459,9 +687,11 @@ impl EnvBasedTestDependencies {
         config: &EnvBasedTestDependenciesConfig,
         rdb: Arc<dyn Rdb>,
         registry_service: Arc<dyn RegistryService>,
+        temp_dir: &Path,
     ) -> Arc<dyn ShardManager> {
+        let launch = Self::supported_launch(config, temp_dir, "shard_manager", rdb.as_ref(), 0);
         Arc::new(
-            SpawnedShardManager::new(
+            SpawnedShardManager::new_with_launch(
                 &config.service_binaries_dir().join("golem-shard-manager"),
                 &config.golem_repo_root.join("golem-shard-manager"),
                 config.number_of_shards_override,
@@ -475,6 +705,7 @@ impl EnvBasedTestDependencies {
                 config.default_stdout_level(),
                 config.default_stderr_level(),
                 false,
+                launch,
             )
             .await,
         )
@@ -482,7 +713,26 @@ impl EnvBasedTestDependencies {
 
     async fn make_component_compilation_service(
         config: &EnvBasedTestDependenciesConfig,
+        rdb: &Arc<dyn Rdb>,
+        temp_dir: &Path,
     ) -> Arc<dyn ComponentCompilationService> {
+        if let Some(launch) = Self::supported_launch(
+            config,
+            temp_dir,
+            "component_compilation_service",
+            rdb.as_ref(),
+            0,
+        ) {
+            return Arc::new(
+                SpawnedComponentCompilationService::new_supported(
+                    launch,
+                    config.compilation_grpc_port,
+                    config.default_stdout_level(),
+                    config.default_stderr_level(),
+                )
+                .await,
+            );
+        }
         Arc::new(
             SpawnedComponentCompilationService::new(
                 &config
@@ -509,7 +759,28 @@ impl EnvBasedTestDependencies {
         rdb: &Arc<dyn Rdb>,
         redis: &Arc<dyn Redis>,
         registry_service: &Arc<dyn RegistryService>,
+        temp_dir: &Path,
     ) -> Arc<dyn WorkerService> {
+        if let Some(launch) =
+            Self::supported_launch(config, temp_dir, "worker_service", rdb.as_ref(), 0)
+        {
+            return Arc::new(
+                SpawnedWorkerService::new_supported(
+                    launch,
+                    config.worker_http_port,
+                    config.worker_grpc_port,
+                    config.worker_custom_request_port,
+                    config.worker_mcp_port,
+                    config.default_stdout_level(),
+                    config.default_stderr_level(),
+                )
+                .await,
+            );
+        }
+        let data_dir = match rdb.info() {
+            DbInfo::Sqlite(path) => path,
+            _ => temp_dir.join("worker-service"),
+        };
         Arc::new(
             SpawnedWorkerService::new(
                 &config.service_binaries_dir().join("golem-worker-service"),
@@ -527,7 +798,10 @@ impl EnvBasedTestDependencies {
                 registry_service,
                 true,
                 false,
-                &[],
+                &[(
+                    "GOLEM__DATA_DIR".to_string(),
+                    data_dir.to_string_lossy().into_owned(),
+                )],
             )
             .await,
         )
@@ -539,9 +813,18 @@ impl EnvBasedTestDependencies {
         worker_service: Arc<dyn WorkerService>,
         rdb: Arc<dyn Rdb>,
         registry_service: Arc<dyn RegistryService>,
+        temp_dir: &Path,
     ) -> Arc<dyn WorkerExecutorCluster> {
+        let launches = (config.service_inputs == TestServiceInputs::SupportedSettings).then(|| {
+            (0..config.worker_executor_cluster_size)
+                .map(|index| {
+                    Self::supported_launch(config, temp_dir, "worker_executor", rdb.as_ref(), index)
+                        .unwrap()
+                })
+                .collect()
+        });
         Arc::new(
-            SpawnedWorkerExecutorCluster::new(
+            SpawnedWorkerExecutorCluster::new_with_launches(
                 config.worker_executor_cluster_size,
                 config.executor_base_http_port,
                 config.executor_base_grpc_port,
@@ -558,6 +841,7 @@ impl EnvBasedTestDependencies {
                 config.oplog_archive_interval,
                 true,
                 false,
+                launches,
             )
             .await,
         )
@@ -586,17 +870,34 @@ impl EnvBasedTestDependencies {
 
         let rdb = Self::make_rdb(&config, temp_directory.path()).await;
 
-        let component_compilation_service = Self::make_component_compilation_service(&config).await;
+        let component_compilation_service =
+            Self::make_component_compilation_service(&config, &rdb, temp_directory.path()).await;
 
-        let registry_service =
-            Self::make_registry_service(&config, &rdb, &component_compilation_service).await;
+        let registry_service = Self::make_registry_service(
+            &config,
+            &rdb,
+            &component_compilation_service,
+            temp_directory.path(),
+        )
+        .await;
 
-        let shard_manager =
-            Self::make_shard_manager(&config, rdb.clone(), registry_service.clone()).await;
+        let shard_manager = Self::make_shard_manager(
+            &config,
+            rdb.clone(),
+            registry_service.clone(),
+            temp_directory.path(),
+        )
+        .await;
 
-        let worker_service =
-            Self::make_worker_service(&config, &shard_manager, &rdb, &redis, &registry_service)
-                .await;
+        let worker_service = Self::make_worker_service(
+            &config,
+            &shard_manager,
+            &rdb,
+            &redis,
+            &registry_service,
+            temp_directory.path(),
+        )
+        .await;
 
         let worker_executor_cluster = Self::make_worker_executor_cluster(
             &config,
@@ -604,6 +905,7 @@ impl EnvBasedTestDependencies {
             worker_service.clone(),
             rdb.clone(),
             registry_service.clone(),
+            temp_directory.path(),
         )
         .await;
 
@@ -620,6 +922,7 @@ impl EnvBasedTestDependencies {
             worker_executor_cluster,
             worker_service,
             test_component_dir: config.test_components_dir(),
+            suite_plans: config.service_inputs == TestServiceInputs::Suite,
         })
     }
 }
@@ -702,10 +1005,10 @@ struct RegistryServiceDescriptor {
     admin_account_token: String,
     builtin_plugin_owner_account_id: Uuid,
     default_plan_id: Uuid,
-    low_fuel_plan_id: Uuid,
-    low_disk_space_plan_id: Uuid,
-    low_http_calls_plan_id: Uuid,
-    low_rpc_calls_plan_id: Uuid,
+    low_fuel_plan_id: Option<Uuid>,
+    low_disk_space_plan_id: Option<Uuid>,
+    low_http_calls_plan_id: Option<Uuid>,
+    low_rpc_calls_plan_id: Option<Uuid>,
 }
 
 impl test_r::core::AsyncHostedDep for EnvBasedTestDependencies {
@@ -798,10 +1101,18 @@ impl test_r::core::AsyncHostedDep for EnvBasedTestDependencies {
                     .builtin_plugin_owner_account_id()
                     .0,
                 default_plan_id: self.registry_service.default_plan().0,
-                low_fuel_plan_id: self.registry_service.low_fuel_plan().0,
-                low_disk_space_plan_id: self.registry_service.low_disk_space_plan().0,
-                low_http_calls_plan_id: self.registry_service.low_http_calls_plan().0,
-                low_rpc_calls_plan_id: self.registry_service.low_rpc_calls_plan().0,
+                low_fuel_plan_id: self
+                    .suite_plans
+                    .then(|| self.registry_service.low_fuel_plan().0),
+                low_disk_space_plan_id: self
+                    .suite_plans
+                    .then(|| self.registry_service.low_disk_space_plan().0),
+                low_http_calls_plan_id: self
+                    .suite_plans
+                    .then(|| self.registry_service.low_http_calls_plan().0),
+                low_rpc_calls_plan_id: self
+                    .suite_plans
+                    .then(|| self.registry_service.low_rpc_calls_plan().0),
             },
         };
 
@@ -881,8 +1192,9 @@ impl test_r::core::AsyncHostedDep for EnvBasedTestDependencies {
                     .collect(),
             ));
 
+        let suite_plans = descriptor.registry_service.low_fuel_plan_id.is_some();
         let registry_service: Arc<dyn RegistryService> = Arc::new(
-            ProvidedRegistryService::new(
+            ProvidedRegistryService::new_with_optional_plans(
                 descriptor.registry_service.host,
                 descriptor.registry_service.http_port,
                 descriptor.registry_service.grpc_port,
@@ -891,10 +1203,19 @@ impl test_r::core::AsyncHostedDep for EnvBasedTestDependencies {
                 TokenSecret::trusted(descriptor.registry_service.admin_account_token),
                 AccountId(descriptor.registry_service.builtin_plugin_owner_account_id),
                 PlanId(descriptor.registry_service.default_plan_id),
-                PlanId(descriptor.registry_service.low_fuel_plan_id),
-                PlanId(descriptor.registry_service.low_disk_space_plan_id),
-                PlanId(descriptor.registry_service.low_http_calls_plan_id),
-                PlanId(descriptor.registry_service.low_rpc_calls_plan_id),
+                descriptor.registry_service.low_fuel_plan_id.map(PlanId),
+                descriptor
+                    .registry_service
+                    .low_disk_space_plan_id
+                    .map(PlanId),
+                descriptor
+                    .registry_service
+                    .low_http_calls_plan_id
+                    .map(PlanId),
+                descriptor
+                    .registry_service
+                    .low_rpc_calls_plan_id
+                    .map(PlanId),
             )
             .await,
         );
@@ -912,6 +1233,7 @@ impl test_r::core::AsyncHostedDep for EnvBasedTestDependencies {
             worker_executor_cluster,
             worker_service,
             test_component_dir: descriptor.test_component_dir,
+            suite_plans,
         }
     }
 }
@@ -1264,12 +1586,131 @@ mod tests {
         RegistryServiceDescriptor, ShardManagerDescriptor, TestTempDir, WorkerExecutorDescriptor,
         WorkerServiceDescriptor, locate_service_executable,
     };
+    use crate::components::rdb::borrowed_sqlite::BorrowedSqliteRdb;
     use crate::config::EnvBasedTestDependenciesConfig;
+    use crate::config::TestServiceInputs;
+    use golem_common::config::{DbConfig, env_config_provider, server_settings};
     use std::fs;
     use std::path::PathBuf;
     use tempfile::TempDir;
     use test_r::test;
     use uuid::Uuid;
+
+    #[test]
+    fn supported_settings_prepare_isolated_service_inputs() {
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            let root = TempDir::new().unwrap();
+            let target = root.path().join("target");
+            fs::create_dir_all(target.join("debug")).unwrap();
+            let sqlite = root.path().join("sqlite");
+            fs::create_dir_all(&sqlite).unwrap();
+            let rdb = BorrowedSqliteRdb::new(&sqlite);
+            let config = EnvBasedTestDependenciesConfig {
+                service_inputs: TestServiceInputs::SupportedSettings,
+                registry_grpc_port: 19301,
+                compilation_grpc_port: 19302,
+                worker_mcp_port: 19309,
+                ..EnvBasedTestDependenciesConfig::default()
+            };
+            let services = server_settings::SERVICES;
+            services.into_iter().try_for_each(|service| {
+                jail.clear_env();
+                jail.set_env("CARGO_TARGET_DIR", target.display());
+                jail.set_env("GOLEM_TEST_GATEWAY_SESSION_STORAGE", "sqlite");
+                jail.set_env(
+                    "GOLEM_ADVANCED__WORKER_EXECUTOR__LIMITS__FUEL_TO_BORROW",
+                    "7",
+                );
+                jail.set_env("GOLEM__LOGGING__STDOUT__JSON", "false");
+                jail.set_env("GOLEM__LOGGING__FILE_NAME", "inherited.log");
+                let slug = service.replace('_', "-");
+                let binary = if service == "worker_executor" {
+                    "worker-executor".to_string()
+                } else {
+                    format!("golem-{slug}")
+                };
+                fs::write(target.join("debug").join(binary), "").unwrap();
+                let launch = super::EnvBasedTestDependencies::supported_launch(
+                    &config,
+                    root.path(),
+                    service,
+                    &rdb,
+                    0,
+                )
+                .unwrap();
+                let command = launch.command(&[]);
+                assert!(PathBuf::from(command.get_program()).is_absolute());
+                let working = command.get_current_dir().unwrap();
+                assert!(working.starts_with(root.path()));
+                let file = working.join("config").join(format!("{slug}.toml"));
+                assert_eq!(fs::read_to_string(file).unwrap(), "");
+                let env = command
+                    .get_envs()
+                    .map(|(key, value)| {
+                        (
+                            key.to_str().unwrap().to_string(),
+                            value.unwrap().to_str().unwrap().to_string(),
+                        )
+                    })
+                    .collect::<std::collections::HashMap<_, _>>();
+                assert!(
+                    env.keys()
+                        .all(|key| { !key.contains("FUEL_TO_BORROW") && !key.contains("STDOUT") })
+                );
+                assert!(
+                    env.get("GOLEM__LOGGING__FILE_NAME")
+                        .is_none_or(|name| name == "executor-0.jsonl")
+                );
+                let home = PathBuf::from(&env["HOME"]);
+                assert!(home.starts_with(root.path()));
+                assert_eq!(fs::read_dir(home).unwrap().count(), 0);
+                jail.clear_env();
+                env.iter().for_each(|(key, value)| jail.set_env(key, value));
+                let projected = server_settings::project(service, &env_config_provider());
+                if service != "shard_manager" {
+                    assert_eq!(
+                        projected.extract_inner::<String>("blob_storage.config.root")?,
+                        root.path().join("blob_storage").to_str().unwrap(),
+                    );
+                }
+                match service {
+                    "registry_service" => assert_eq!(
+                        projected.extract_inner::<u16>("component_compilation.config.port")?,
+                        19302,
+                    ),
+                    "component_compilation_service" => assert_eq!(
+                        projected.extract_inner::<u16>("registry_service.config.port")?,
+                        19301,
+                    ),
+                    "worker_service" => {
+                        assert_eq!(projected.extract_inner::<u16>("mcp_port")?, 19309);
+                        let db = projected.extract_inner::<DbConfig>("gateway_session_storage")?;
+                        match db {
+                            DbConfig::Sqlite(db) => assert_eq!(
+                                PathBuf::from(db.database),
+                                sqlite.join("gateway-sessions.db"),
+                            ),
+                            other => panic!("expected supported SQLite sessions, got {other:?}"),
+                        }
+                    }
+                    "worker_executor" => {
+                        assert!(
+                            projected.extract_inner::<bool>("tracing.file.json_source_location")?
+                        );
+                        assert!(!projected.extract_inner::<bool>("tracing.file.json_flatten")?);
+                        assert!(
+                            !projected.extract_inner::<bool>("tracing.file.json_flatten_span")?
+                        );
+                        assert!(projected.extract_inner::<bool>("tracing.file.json")?);
+                    }
+                    _ => {}
+                }
+                Ok::<(), figment::Error>(())
+            })?;
+            Ok(())
+        });
+    }
 
     fn ports(config: &EnvBasedTestDependenciesConfig) -> Vec<u16> {
         let mut ports = vec![
@@ -1511,10 +1952,10 @@ mod tests {
                 admin_account_token: "tok".to_string(),
                 builtin_plugin_owner_account_id: Uuid::nil(),
                 default_plan_id: Uuid::nil(),
-                low_fuel_plan_id: Uuid::nil(),
-                low_disk_space_plan_id: Uuid::nil(),
-                low_http_calls_plan_id: Uuid::nil(),
-                low_rpc_calls_plan_id: Uuid::nil(),
+                low_fuel_plan_id: Some(Uuid::nil()),
+                low_disk_space_plan_id: Some(Uuid::nil()),
+                low_http_calls_plan_id: Some(Uuid::nil()),
+                low_rpc_calls_plan_id: Some(Uuid::nil()),
             },
         }
     }

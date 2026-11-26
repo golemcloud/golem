@@ -10,6 +10,134 @@ const ADMIN_TOKEN: &str = "server-config-test-admin-token";
 const WEBHOOK_KEY: &str = "AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE=";
 const SESSION_TOKEN_KEY: &str = "AgICAgICAgICAgICAgICAgICAgICAgICAgICAgICAgI=";
 
+#[cfg(unix)]
+#[test]
+#[timeout("10m")]
+async fn server_warns_about_manifest_ports_before_successful_shutdown(_tracing: &Tracing) {
+    use futures_util::StreamExt;
+    use std::time::Duration;
+
+    futures_util::stream::iter([("text", false), ("json", false), ("text", true)])
+        .for_each(|(format, quiet)| async move {
+            let mut ctx = TestContext::new();
+            std::fs::write(
+                ctx.working_dir.join("golem.yaml"),
+                format!(
+                    r#"
+manifestVersion: {}
+app: server-port-warning
+environments:
+  local:
+    server: local
+localServer:
+  customRequestPort: 1
+  mcpPort: 2
+"#,
+                    golem_cli::versions::sdk::MANIFEST,
+                ),
+            )
+            .unwrap();
+            std::fs::write(
+                ctx.working_dir.join("settings.toml"),
+                "[filesystem_snapshots]\nenabled = false\n\
+                 [logging.stdout]\nenabled = false\n\
+                 [logging.stderr]\nenabled = false\n",
+            )
+            .unwrap();
+            ctx.add_server_args([
+                "--local",
+                "--server-no-limit-change",
+                "--format",
+                format,
+                "--config",
+                "settings.toml",
+            ]);
+            if quiet {
+                ctx.add_server_args(["-q"]);
+            }
+            let stdout = ctx.working_dir.join("server.stdout").into_boxed_path();
+            let stderr = ctx.working_dir.join("server.stderr").into_boxed_path();
+            let mut command = tokio::process::Command::new(&ctx.golem_path);
+            std::env::vars_os()
+                .filter_map(|(name, _)| name.into_string().ok())
+                .filter(|name| name.starts_with("GOLEM__") || name.starts_with("GOLEM_ADVANCED__"))
+                .for_each(|name| {
+                    command.env_remove(name);
+                });
+            ctx.server_process = Some(
+                command
+                    .args(ctx.server_run_args())
+                    .current_dir(&ctx.working_dir)
+                    .envs(&ctx.env)
+                    .env_remove("RUST_LOG")
+                    .env_remove("GOLEM_LOG_FILTER")
+                    .stdout(std::fs::File::create(&stdout).unwrap())
+                    .stderr(std::fs::File::create(&stderr).unwrap())
+                    .kill_on_drop(true)
+                    .spawn()
+                    .unwrap(),
+            );
+            ctx.wait_for_server_startup().await;
+            assert_ne!(ctx.custom_request_port(), 1);
+            assert_ne!(ctx.mcp_port(), 2);
+            let warnings = [
+                format!("port {} differs from port 1", ctx.custom_request_port()).into_boxed_str(),
+                format!("port {} differs from port 2", ctx.mcp_port()).into_boxed_str(),
+            ];
+            let destination = if format == "text" { &stdout } else { &stderr };
+            if !quiet {
+                let seen_before_shutdown = futures_util::stream::iter(0..300)
+                    .then(|_| async {
+                        let contents = std::fs::read_to_string(destination)
+                            .unwrap()
+                            .into_boxed_str();
+                        let seen = warnings
+                            .iter()
+                            .all(|warning| contents.contains(warning.as_ref()));
+                        if !seen {
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+                        }
+                        seen
+                    })
+                    .any(std::future::ready)
+                    .await;
+                assert!(
+                    seen_before_shutdown,
+                    "missing port warning on {format} output"
+                );
+            }
+
+            let process = ctx.server_process.as_mut().unwrap();
+            let signal = tokio::process::Command::new("kill")
+                .args(["-TERM", &process.id().unwrap().to_string()])
+                .status()
+                .await
+                .unwrap();
+            assert!(signal.success());
+            let status = tokio::time::timeout(Duration::from_secs(60), process.wait())
+                .await
+                .expect("server did not shut down after SIGTERM")
+                .unwrap();
+            ctx.server_process = None;
+            assert!(status.success(), "{status}");
+            let stdout = std::fs::read_to_string(&stdout).unwrap().into_boxed_str();
+            let stderr = std::fs::read_to_string(&stderr).unwrap().into_boxed_str();
+            warnings.iter().for_each(|warning| {
+                assert_eq!(
+                    stdout.contains(warning.as_ref()),
+                    !quiet && format == "text",
+                    "{stdout}"
+                );
+                assert_eq!(
+                    stderr.contains(warning.as_ref()),
+                    !quiet && format != "text",
+                    "{stderr}"
+                );
+            });
+        })
+        .await;
+}
+
 async fn current_token_status(ctx: &TestContext, token: &str) -> StatusCode {
     reqwest::Client::builder()
         .no_proxy()
@@ -44,6 +172,15 @@ async fn server_refuses_well_known_token_on_non_loopback_address(_tracing: &Trac
         "{output}"
     );
     assert!(output.contains("router.address = 0.0.0.0"), "{output}");
+
+    ctx.add_server_args(["-q"]);
+    let output = ctx.run_server_expecting_startup_failure().await;
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Refusing to listen on addresses that are not loopback addresses"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("router.address = 0.0.0.0"), "{stderr}");
 }
 
 #[test]

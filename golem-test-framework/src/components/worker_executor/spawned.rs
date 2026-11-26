@@ -12,12 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::components::ChildProcessLogger;
 use crate::components::rdb::Rdb;
 use crate::components::registry_service::RegistryService;
 use crate::components::shard_manager::ShardManager;
 use crate::components::worker_executor::{WorkerExecutor, wait_for_startup};
 use crate::components::worker_service::WorkerService;
+use crate::components::{ChildProcessLogger, SupportedServiceLaunch};
 use async_trait::async_trait;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -48,6 +48,7 @@ pub struct SpawnedWorkerExecutor {
     oplog_archive_interval: Option<Duration>,
     enable_fs_cache: bool,
     otlp: bool,
+    launch: Option<SupportedServiceLaunch>,
 }
 
 impl SpawnedWorkerExecutor {
@@ -68,13 +69,52 @@ impl SpawnedWorkerExecutor {
         enable_fs_cache: bool,
         otlp: bool,
     ) -> Self {
+        Self::new_with_launch(
+            executable,
+            working_directory,
+            http_port,
+            grpc_port,
+            rdb,
+            shard_manager,
+            worker_service,
+            verbosity,
+            out_level,
+            err_level,
+            registry_service,
+            environment_state_cache_capacity,
+            oplog_archive_interval,
+            enable_fs_cache,
+            otlp,
+            None,
+        )
+        .await
+    }
+
+    pub(crate) async fn new_with_launch(
+        executable: &Path,
+        working_directory: &Path,
+        http_port: u16,
+        grpc_port: u16,
+        rdb: Arc<dyn Rdb>,
+        shard_manager: Arc<dyn ShardManager>,
+        worker_service: Arc<dyn WorkerService>,
+        verbosity: Level,
+        out_level: Level,
+        err_level: Level,
+        registry_service: Arc<dyn RegistryService>,
+        environment_state_cache_capacity: Option<usize>,
+        oplog_archive_interval: Option<Duration>,
+        enable_fs_cache: bool,
+        otlp: bool,
+        launch: Option<SupportedServiceLaunch>,
+    ) -> Self {
         info!("Starting golem-worker-executor process");
 
         if !executable.exists() {
             panic!("Expected to have precompiled golem-worker-executor at {executable:?}");
         }
 
-        let (child, logger) = Self::start(
+        let command = Self::prepare_command(
             executable,
             working_directory,
             http_port,
@@ -83,16 +123,16 @@ impl SpawnedWorkerExecutor {
             &shard_manager,
             &worker_service,
             verbosity,
-            out_level,
-            err_level,
             &registry_service,
             environment_state_cache_capacity,
             oplog_archive_interval,
             enable_fs_cache,
             otlp,
+            launch.as_ref(),
             &[],
         )
         .await;
+        let (child, logger) = Self::start(command, grpc_port, out_level, err_level).await;
 
         Self {
             http_port,
@@ -115,11 +155,12 @@ impl SpawnedWorkerExecutor {
             oplog_archive_interval,
             enable_fs_cache,
             otlp,
+            launch,
         }
     }
 
     #[allow(clippy::too_many_arguments)]
-    async fn start(
+    async fn prepare_command(
         executable: &Path,
         working_directory: &Path,
         http_port: u16,
@@ -128,15 +169,17 @@ impl SpawnedWorkerExecutor {
         shard_manager: &Arc<dyn ShardManager>,
         worker_service: &Arc<dyn WorkerService>,
         verbosity: Level,
-        out_level: Level,
-        err_level: Level,
         registry_service: &Arc<dyn RegistryService>,
         environment_state_cache_capacity: Option<usize>,
         oplog_archive_interval: Option<Duration>,
         enable_fs_cache: bool,
         otlp: bool,
+        launch: Option<&SupportedServiceLaunch>,
         extra_env_vars: &[(String, String)],
-    ) -> (Child, ChildProcessLogger) {
+    ) -> Command {
+        if let Some(launch) = launch {
+            return launch.command(extra_env_vars);
+        }
         let mut env = super::env_vars(
             http_port,
             grpc_port,
@@ -158,9 +201,18 @@ impl SpawnedWorkerExecutor {
             env.insert(key.clone(), value.clone());
         }
 
-        let mut child = Command::new(executable)
-            .current_dir(working_directory)
-            .envs(env)
+        let mut command = Command::new(executable);
+        command.current_dir(working_directory).envs(env);
+        command
+    }
+
+    async fn start(
+        mut command: Command,
+        grpc_port: u16,
+        out_level: Level,
+        err_level: Level,
+    ) -> (Child, ChildProcessLogger) {
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -364,8 +416,6 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             self.child.lock().unwrap().is_none(),
             "cannot restart an unreaped executor"
         );
-        self.reaped.store(false, Ordering::Release);
-        self.generation.fetch_add(1, Ordering::AcqRel);
         if extra_env_vars.is_empty() {
             info!("Restarting golem-worker-executor {}", self.grpc_port);
         } else {
@@ -376,7 +426,7 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             );
         }
 
-        let (child, logger) = Self::start(
+        let command = Self::prepare_command(
             &self.executable,
             &self.working_directory,
             self.http_port,
@@ -385,16 +435,19 @@ impl WorkerExecutor for SpawnedWorkerExecutor {
             &self.shard_manager,
             &self.worker_service,
             self.verbosity,
-            self.out_level,
-            self.err_level,
             &self.registry_service,
             self.environment_state_cache_capacity,
             self.oplog_archive_interval,
             self.enable_fs_cache,
             self.otlp,
+            self.launch.as_ref(),
             &extra_env_vars,
         )
         .await;
+        self.reaped.store(false, Ordering::Release);
+        self.generation.fetch_add(1, Ordering::AcqRel);
+        let (child, logger) =
+            Self::start(command, self.grpc_port, self.out_level, self.err_level).await;
 
         info!("Restarted golem-worker-executor {}", self.grpc_port);
 
