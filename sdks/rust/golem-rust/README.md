@@ -51,7 +51,9 @@ an optional default; false, zero, empty strings and empty lists are supplied
 values, not absence. Optional tuple elements retain their positions.
 
 Field names default to lowerCamelCase at metadata production; `rename` or
-`rename_all` can supply an explicit mapping.
+`rename_all` can supply an explicit mapping. For example, `request_timeout`
+becomes `requestTimeout` in manifest keys, CLI paths and Secret paths; the Rust
+field remains `request_timeout`.
 `rename_all` accepts `preserve`, `camelCase`, `PascalCase`, `snake_case`,
 `kebab-case` and `SCREAMING_SNAKE_CASE`; a field's `rename` wins. Names must be
 nonempty, cannot contain dots or start with `$`, and cannot collide after
