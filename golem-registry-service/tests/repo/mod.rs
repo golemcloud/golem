@@ -265,12 +265,29 @@ impl Deps {
         DbPlanRepo<DBP>: PlanRepo + 'static,
         DbAuditStagingRepo<DBP>: AuditStagingRepo + 'static,
     {
+        self.account_service_for(pool.clone(), test_decisions(pool))
+    }
+
+    /// The account service, with `decisions` as its decision step.
+    pub fn account_service_with_decisions(&self, decisions: Decisions) -> Arc<AccountService> {
+        match &self.test_db {
+            TestDb::Postgres(pool) => self.account_service_for(pool.clone(), decisions),
+            TestDb::Sqlite(pool) => self.account_service_for(pool.clone(), decisions),
+        }
+    }
+
+    fn account_service_for<DBP>(&self, pool: DBP, decisions: Decisions) -> Arc<AccountService>
+    where
+        DBP: Pool + Clone + 'static,
+        DbAccountRepo<DBP>: AccountRepo + 'static,
+        DbPlanRepo<DBP>: PlanRepo + 'static,
+    {
         Arc::new(AccountService::new(
             Arc::new(DbAccountRepo::new(pool.clone())),
-            Arc::new(PlanService::new(Arc::new(DbPlanRepo::new(pool.clone())))),
+            Arc::new(PlanService::new(Arc::new(DbPlanRepo::new(pool)))),
             golem_common::model::plan::PlanId(self.test_plan_id()),
             self.test_registry_change_notifier(),
-            test_decisions(pool),
+            decisions,
         ))
     }
 
@@ -394,6 +411,36 @@ pub fn failing_decisions() -> Decisions {
 }
 
 struct FailingAuditSink;
+
+/// The registry's decision step, with an audit sink that keeps its records in memory, so that a
+/// test counts the records of one request.
+pub fn recording_decisions() -> (Decisions, Arc<RecordingAuditSink>) {
+    let sink = Arc::new(RecordingAuditSink::default());
+    let decisions = Decisions::new(
+        "https://golem.test".parse().unwrap(),
+        DecisionAudit::new(sink.clone(), Duration::from_secs(5)),
+    );
+    (decisions, sink)
+}
+
+#[derive(Default)]
+pub struct RecordingAuditSink {
+    records: std::sync::Mutex<Vec<AuditRecord>>,
+}
+
+impl RecordingAuditSink {
+    pub fn records(&self) -> Vec<AuditRecord> {
+        self.records.lock().unwrap().clone()
+    }
+}
+
+#[async_trait::async_trait]
+impl AuditSink for RecordingAuditSink {
+    async fn record(&self, record: AuditRecord) -> Result<(), AuditSinkError> {
+        self.records.lock().unwrap().push(record);
+        Ok(())
+    }
+}
 
 #[async_trait::async_trait]
 impl AuditSink for FailingAuditSink {

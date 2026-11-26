@@ -350,6 +350,20 @@ async fn test_runtime_card_creation_rejects_system_cards(
 }
 
 #[test]
+async fn test_an_api_token_revoke_writes_one_audit_record(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_an_api_token_revoke_writes_one_audit_record(deps).await;
+}
+
+#[test]
+async fn test_an_account_create_writes_one_audit_record(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_an_account_create_writes_one_audit_record(deps).await;
+}
+
+#[test]
 async fn test_card_revoke_whose_record_cannot_be_written_is_unavailable_and_keeps_the_card(
     #[dimension(postgres_variant)] deps: &Deps,
 ) {
