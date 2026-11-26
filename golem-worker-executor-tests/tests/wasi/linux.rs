@@ -836,7 +836,8 @@ async fn physical_pressure_unloads_loaded_idle_and_retries_safe_write(
         tokio::time::sleep(PRESSURE_OBSERVATION_DELAY * 2).await;
         // Before Linux 6.11, XFS zeroes the EOF block and keeps the grown size when a
         // write past EOF fails with ENOSPC, so the refused write may leave the seed
-        // zero-padded to one allocation unit. A retry would add the retry contents.
+        // zero-padded to the write offset, one allocation unit. A retry would add the
+        // retry contents.
         let before_retry = std::fs::read(trigger_path.join("pressure-target"))?;
         assert!(
             before_retry.starts_with(b"seed")
