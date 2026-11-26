@@ -12,6 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+use super::reading::{GuestSearchBatch, guest_oplog_read_error, guest_search_batch};
 use super::*;
 use crate::services::golem_config::ScanBudget;
 use crate::services::oplog::retention::OplogRetention;
