@@ -93,8 +93,13 @@ impl WorkerService {
         query: InvocationListQuery,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<InvocationPage> {
-        self.require_agent_address(&OwnedAgentId::new(environment_id, agent_id))
-            .await?;
+        self.require_agent_address(
+            &OwnedAgentId::new(environment_id, agent_id),
+            &auth_ctx,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )
+        .await?;
         self.agent_for_invocation_read(
             environment_id,
             agent_id,
@@ -146,6 +151,15 @@ impl WorkerService {
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<InvocationSummary>> {
         if let Some(tool_name) = tool_name {
+            if let Some(agent_id) = agent_id {
+                self.require_agent_address(
+                    &OwnedAgentId::new(environment_id, agent_id),
+                    &auth_ctx,
+                    AgentVerb::View,
+                    AgentResourcePattern::Any,
+                )
+                .await?;
+            }
             if operation.is_some() {
                 return Err(WorkerServiceError::TypeChecker(
                     "operation and tool are mutually exclusive".into(),
@@ -169,8 +183,6 @@ impl WorkerService {
                 WorkerServiceError::InvocationNotFound(format!("tool {tool_name} is not deployed"))
             })?;
             let definitions = if let Some(agent_id) = agent_id {
-                self.require_agent_address(&OwnedAgentId::new(environment_id, agent_id))
-                    .await?;
                 let agent = self
                     .agent_for_invocation_read(
                         environment_id,
@@ -307,8 +319,13 @@ impl WorkerService {
         operation: Option<String>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<Vec<InvocationSummary>> {
-        self.require_agent_address(&OwnedAgentId::new(environment_id, agent_id))
-            .await?;
+        self.require_agent_address(
+            &OwnedAgentId::new(environment_id, agent_id),
+            &auth_ctx,
+            AgentVerb::View,
+            AgentResourcePattern::Any,
+        )
+        .await?;
         self.agent_for_invocation_read(
             environment_id,
             agent_id,

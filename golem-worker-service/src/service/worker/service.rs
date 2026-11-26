@@ -1346,7 +1346,13 @@ impl WorkerService {
         requester: Option<Caller>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<OplogIndex> {
-        self.require_agent_address(agent_id).await?;
+        self.require_agent_address(
+            agent_id,
+            &auth_ctx,
+            AgentVerb::UpdateRevision,
+            AgentResourcePattern::Empty,
+        )
+        .await?;
         let agent = self
             .managed_agent(
                 agent_id,
@@ -1824,7 +1830,13 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<AgentId> {
-        self.require_agent_address(source_agent_id).await?;
+        self.require_agent_address(
+            source_agent_id,
+            &auth_ctx,
+            AgentVerb::Fork,
+            AgentResourcePattern::Empty,
+        )
+        .await?;
         let agent = self
             .managed_agent(
                 source_agent_id,
@@ -1885,7 +1897,13 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: AuthCtx,
     ) -> WorkerResult<()> {
-        self.require_agent_address(agent_id).await?;
+        self.require_agent_address(
+            agent_id,
+            &auth_ctx,
+            AgentVerb::Revert,
+            AgentResourcePattern::Any,
+        )
+        .await?;
         let agent = self
             .read_agent(
                 agent_id,
@@ -3834,8 +3852,13 @@ impl WorkerService {
     )> {
         match (agent_id, component_id) {
             (Some(agent_id), None) => {
-                self.require_agent_address(&OwnedAgentId::new(environment_id, &agent_id))
-                    .await?;
+                self.require_agent_address(
+                    &OwnedAgentId::new(environment_id, &agent_id),
+                    auth,
+                    verb,
+                    AgentResourcePattern::Any,
+                )
+                .await?;
                 let agent = self
                     .managed_agent(
                         &OwnedAgentId::new(environment_id, &agent_id),
@@ -4059,8 +4082,13 @@ impl WorkerService {
     ) -> WorkerResult<NativeToolDefinition> {
         let (component, owner) = match (request.agent_id, request.component_id) {
             (Some(agent_id), None) => {
-                self.require_agent_address(&OwnedAgentId::new(environment_id, &agent_id))
-                    .await?;
+                self.require_agent_address(
+                    &OwnedAgentId::new(environment_id, &agent_id),
+                    &auth,
+                    AgentVerb::View,
+                    AgentResourcePattern::Any,
+                )
+                .await?;
                 let agent = self
                     .managed_agent(
                         &OwnedAgentId::new(environment_id, &agent_id),
@@ -4159,18 +4187,51 @@ impl WorkerService {
         Ok((definition, state.deployment_revision))
     }
 
-    async fn require_agent_address(&self, id: &OwnedAgentId) -> WorkerResult<()> {
-        if !self
+    async fn require_agent_address(
+        &self,
+        id: &OwnedAgentId,
+        auth: &AuthCtx,
+        verb: AgentVerb,
+        resource: AgentResourcePattern,
+    ) -> WorkerResult<()> {
+        if self
             .agent_types
             .is_agent_address(id.environment_id, id.agent_id)
             .await?
         {
-            return Err(WorkerExecutorError::NotAnAgent {
-                agent_id: id.agent_id,
-            }
-            .into());
+            return Ok(());
         }
-        Ok(())
+        let permissions = [AgentPermission::Agent(verb, resource)];
+        match self
+            .worker_client
+            .get_metadata(&id.agent_id, id.environment_id, auth.clone())
+            .await
+        {
+            Ok(existing) => {
+                let component = self
+                    .component_service
+                    .get_revision(existing.component_id, existing.metadata.component_revision)
+                    .await?;
+                ManagedAgent {
+                    agent_id: id.clone(),
+                    component,
+                    metadata: existing.metadata,
+                }
+                .authorize(auth, &permissions)?;
+            }
+            Err(error) if is_agent_not_found(&error) => {
+                self.authorize_missing(id, auth, &permissions).await?;
+                // No Create entry exists against which to authorize the non-agent address.
+                if !auth.is_system() {
+                    return Err(WorkerServiceError::AgentAccessDenied(id.agent_id));
+                }
+            }
+            Err(error) => return Err(error),
+        }
+        Err(WorkerExecutorError::NotAnAgent {
+            agent_id: id.agent_id,
+        }
+        .into())
     }
 
     pub(crate) async fn standalone_tool_owner(
@@ -10015,6 +10076,117 @@ mod tests {
         let environment_only = auth_ctx_with_permissions(vec![environment_permission]);
         for tag in [42, 43, 98765, 0] {
             let agent = harness.owned(&AgentId::from_parts(tag, 123));
+            for auth in [
+                agent_only.clone(),
+                environment_only.clone(),
+                auth_ctx_with_permissions(vec![]),
+            ] {
+                let service = &harness.worker_service;
+                let tool = ToolName::try_from("weather").unwrap();
+                let key = IdempotencyKey::new("denied".to_string());
+                let errors = [
+                    service
+                        .list_invocations(
+                            agent.environment_id,
+                            &agent.agent_id,
+                            Default::default(),
+                            auth.clone(),
+                        )
+                        .await
+                        .unwrap_err(),
+                    service
+                        .lookup_invocations(
+                            agent.environment_id,
+                            Some(&agent.agent_id),
+                            &key,
+                            None,
+                            None,
+                            None,
+                            auth.clone(),
+                        )
+                        .await
+                        .unwrap_err(),
+                    service
+                        .lookup_invocations(
+                            agent.environment_id,
+                            Some(&agent.agent_id),
+                            &key,
+                            None,
+                            Some(&tool),
+                            None,
+                            auth.clone(),
+                        )
+                        .await
+                        .unwrap_err(),
+                    service
+                        .fork_worker(&agent, None, OplogIndex::INITIAL, None, None, auth.clone())
+                        .await
+                        .unwrap_err(),
+                    service
+                        .update(
+                            &agent,
+                            AgentUpdateMode::Automatic,
+                            ComponentRevision::INITIAL,
+                            false,
+                            None,
+                            None,
+                            auth.clone(),
+                        )
+                        .await
+                        .unwrap_err(),
+                    service
+                        .revert_worker(
+                            &agent,
+                            RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                                last_oplog_index: OplogIndex::INITIAL,
+                            }),
+                            None,
+                            auth.clone(),
+                        )
+                        .await
+                        .unwrap_err(),
+                    service
+                        .tool_target(
+                            agent.environment_id,
+                            Some(agent.agent_id),
+                            None,
+                            &InvocationRequestKey::external(None, Some(&key)),
+                            "weather",
+                            &[],
+                            AgentVerb::Invoke,
+                            &auth,
+                        )
+                        .await
+                        .unwrap_err(),
+                    service
+                        .describe_tool_rest(
+                            agent.environment_id,
+                            NativeToolDescribeRequest {
+                                agent_id: Some(agent.agent_id),
+                                component_id: None,
+                                tool_name: "weather".into(),
+                            },
+                            auth,
+                        )
+                        .await
+                        .unwrap_err(),
+                ];
+                for error in errors {
+                    if tag == 98765 && matches!(error, WorkerServiceError::AgentNotFound(_)) {
+                        continue;
+                    }
+                    assert!(
+                        matches!(&error, WorkerServiceError::AgentAccessDenied(id) if *id == agent.agent_id)
+                            || matches!(
+                                error,
+                                WorkerServiceError::RegistryServiceError(
+                                    RegistryServiceError::Unauthorized(_)
+                                )
+                            ),
+                        "tag={tag}: {error:?}"
+                    );
+                }
+            }
             for (auth, allowed) in [
                 (authorized.clone(), true),
                 (agent_only.clone(), false),
@@ -10701,7 +10873,7 @@ mod tests {
         );
         assert_eq!(
             *harness.worker_client.effects.lock().unwrap(),
-            Vec::<&str>::new()
+            vec!["metadata"]
         );
         assert!(
             harness
@@ -10801,7 +10973,10 @@ mod tests {
                 );
             }
         }
-        assert!(harness.worker_client.effects.lock().unwrap().is_empty());
+        assert_eq!(
+            *harness.worker_client.effects.lock().unwrap(),
+            vec!["metadata"; 6]
+        );
     }
 
     #[test]
