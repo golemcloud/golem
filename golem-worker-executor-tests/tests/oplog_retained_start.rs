@@ -37,7 +37,7 @@ use golem_worker_executor::storage::keyvalue::fault_injecting::{
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, force_oplog_retained_start,
-    remove_cached_status_and_result_index, start, start_with_overrides, start_with_snapshot_policy,
+    remove_cached_status_and_result_index, start_with_overrides, start_with_snapshot_policy,
     stored_primary_oplog_entries,
 };
 use pretty_assertions::assert_eq;
@@ -627,7 +627,8 @@ fn initializations(entries: &[PublicOplogEntryWithIndex]) -> Vec<OplogIndex> {
 /// A create of an existing agent after a real restart waits until the agent is initialized. The
 /// initialization of the agent is at or after the retained start of 2, so the executor finds it
 /// in the retained oplog. The create succeeds without a second initialization, and the agent
-/// keeps its state.
+/// keeps its state. The agent recovers from a snapshot after the start, because a recovery with a
+/// start above 1 and no usable snapshot fails as expired.
 #[test]
 #[timeout("4m")]
 #[tracing::instrument]
@@ -638,24 +639,32 @@ async fn a_create_after_the_retained_start_finds_the_initialization(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let policy = SnapshotPolicy::EveryNInvocation { count: 2 };
+    let executor = start_with_snapshot_policy(deps, &context, policy.clone()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
         .store()
         .await?;
     let agent = agent_key!("JsonSnapshotCounter", "initialized-after-the-start");
     let agent_id = executor.start_agent(&component.id, agent.clone()).await?;
-    increment(&executor, &component, &agent, 2).await?;
-    let initialized = initializations(&executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?);
+    increment(&executor, &component, &agent, 3).await?;
+    let snapshot = wait_for_snapshot_after(&executor, &agent_id, OplogIndex::NONE).await?;
+    let history = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
+    let initialized = initializations(&history);
     let retained_start = OplogIndex::from_u64(2);
     assert_eq!(initialized.len(), 1, "{initialized:?}");
     assert!(initialized[0] >= retained_start, "{initialized:?}");
+    // The start is at or before the bootstrap range of the snapshot, so the snapshot is usable.
+    assert!(
+        retained_start <= first_start(&history)? && retained_start < snapshot,
+        "start {retained_start}, snapshot {snapshot}"
+    );
     // The release waits until the executor stopped, so it writes nothing after the storage edit
     // below.
     executor.release().await?;
 
     force_oplog_retained_start(deps, &context, &agent_id, retained_start).await?;
-    let executor = start(deps, &context).await?;
+    let executor = start_with_snapshot_policy(deps, &context, policy).await?;
 
     assert_eq!(
         executor.start_agent(&component.id, agent.clone()).await?,
@@ -666,7 +675,7 @@ async fn a_create_after_the_retained_start_finds_the_initialization(
         .invoke_and_await_agent(&component, &agent, "get", data_value!())
         .await?
         .into_typed::<u32>()?;
-    assert_eq!(value, 2, "the agent keeps its state");
+    assert_eq!(value, 3, "the agent keeps its state");
     assert_eq!(
         initializations(&executor.get_oplog(&agent_id, retained_start).await?),
         initialized,
