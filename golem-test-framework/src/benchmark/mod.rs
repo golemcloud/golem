@@ -12,22 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+mod comparison;
 mod config;
 mod results;
 pub mod storage_metrics;
 #[cfg(test)]
 mod tests;
 
+pub use comparison::BenchmarkComparison;
 pub use config::{
-    BenchmarkConfig, BenchmarkSuite, BenchmarkSuiteItem, ChaosAction, ChaosScenarioArg,
-    DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg, DensityPromiseTopologyArg,
-    DensityPromiseWaiterPresenceArg, DensityScenarioArg, DensityScheduleTargetPatternArg,
-    DensityScheduleTargetResidencyArg, DensitySectionArg, DensitySharingArg,
-    DensitySnapshottingArg, RunConfig,
+    BenchmarkConfig, BenchmarkPartition, BenchmarkSuite, BenchmarkSuiteItem, ChaosAction,
+    ChaosScenarioArg, DensityAction, DensityAgentModeArg, DensityPromiseRuntimeArg,
+    DensityPromiseTopologyArg, DensityPromiseWaiterPresenceArg, DensityScenarioArg,
+    DensityScheduleTargetPatternArg, DensityScheduleTargetResidencyArg, DensitySectionArg,
+    DensitySharingArg, DensitySnapshottingArg, RunConfig,
 };
 pub use results::{
     BenchmarkArtifact, BenchmarkArtifacts, BenchmarkResult, BenchmarkRunResult, BenchmarkRunner,
-    BenchmarkSource, BenchmarkSuiteResult, ResultKey, RunMetadata,
+    BenchmarkSource, BenchmarkSuiteResult, BenchmarkSuiteResultCollection, CeilingMeasurement,
+    HARNESS_VERSION, MeasurementEnvironment, ResultKey, RunMetadata, benchmark_sockets_enabled,
 };
 
 use crate::config::benchmark::TestMode;
@@ -252,19 +255,24 @@ pub trait BenchmarkApi {
         mode: &TestMode,
         verbosity: Level,
         item: &BenchmarkSuiteItem,
+        measurement_environment: MeasurementEnvironment,
         otlp: bool,
     ) -> BenchmarkResult;
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_benchmark(
         mode: &TestMode,
         verbosity: Level,
         item: &BenchmarkSuiteItem,
+        measurement_environment: MeasurementEnvironment,
         primary_only: bool,
         retain_details: bool,
         retain_selected_zero_counts: bool,
         otlp: bool,
     ) -> BenchmarkResult {
-        let mut results = Self::run_benchmark_internal(mode, verbosity, item, otlp).await;
+        let mut results =
+            Self::run_benchmark_internal(mode, verbosity, item, measurement_environment, otlp)
+                .await;
         results.drop_zero_counts(retain_selected_zero_counts);
         if !retain_details {
             results.drop_details();
@@ -307,6 +315,7 @@ async fn run_benchmark<B: Benchmark>(
     .await
     else {
         aggregated_results.add(recorder);
+        aggregated_results.skip_iterations(iterations, "create");
         return aggregated_results;
     };
 
@@ -354,7 +363,7 @@ async fn run_benchmark<B: Benchmark>(
             )
             .await;
         }
-        aggregated_results.add(recorder);
+        aggregated_results.add_iteration(iteration, recorder);
 
         info!("Finished iteration");
     }
@@ -368,6 +377,7 @@ impl<B: Benchmark> BenchmarkApi for B {
         mode: &TestMode,
         verbosity: Level,
         item: &BenchmarkSuiteItem,
+        measurement_environment: MeasurementEnvironment,
         otlp: bool,
     ) -> BenchmarkResult {
         let span = tracing::info_span!("benchmark", name = B::name());
@@ -412,6 +422,7 @@ impl<B: Benchmark> BenchmarkApi for B {
                 for config in runs {
                     let mut result = BenchmarkRunResult::new(config.clone());
                     result.add(recorder.clone());
+                    result.skip_iterations(item.iterations, "setup-context");
                     results.push(result);
                 }
                 continue;
@@ -448,6 +459,11 @@ impl<B: Benchmark> BenchmarkApi for B {
         }
 
         BenchmarkResult {
+            entry_version: item.version,
+            iterations: item.iterations,
+            series_key: measurement_environment.series_key(HARNESS_VERSION, item.version),
+            measurement_environment,
+            ceiling: None,
             name: if item.disable_compilation_cache.unwrap_or_default() {
                 format!("{}-no-cache", B::name())
             } else {

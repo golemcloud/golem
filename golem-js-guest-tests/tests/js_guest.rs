@@ -2,7 +2,8 @@
 // Licensed under the Golem Source License v1.1 (http://license.golem.cloud/LICENSE).
 
 use anyhow::{Context, ensure};
-use camino::Utf8Path;
+use camino::{Utf8Path, Utf8PathBuf};
+use golem_common::javascript::{JS_COMPILATION_CACHE_MAX_BYTES, preinitialize_js};
 use golem_common::model::agent::extraction::extract_agent_type_schemas;
 use std::path::{Path, PathBuf};
 use test_r::{test, timeout};
@@ -35,9 +36,20 @@ async fn smoke_test(guest: &Path, bundle: &Path, expected: &str) -> anyhow::Resu
         Utf8Path::from_path(&injected).context("Non-UTF-8 temporary path")?,
         &[&source],
     )?;
+    let quick_agents = extract_agent_type_schemas(&injected, true, false).await?;
+    assert_eq!(quick_agents.len(), 1);
+    assert_eq!(quick_agents[0].type_name.0, "JsGuestSmoke");
+    assert!(
+        quick_agents[0]
+            .description
+            .starts_with(expected.trim_end_matches('0'))
+    );
+    assert_ne!(quick_agents[0].description, expected);
     golem_common::javascript::preinitialize_js(
-        Utf8Path::from_path(&injected).context("Non-UTF-8 temporary path")?,
+        Utf8Path::from_path(guest).context("Non-UTF-8 guest path")?,
         Utf8Path::from_path(&initialized).context("Non-UTF-8 temporary path")?,
+        source,
+        None,
     )
     .await?;
 
@@ -78,4 +90,209 @@ async fn effect_guest() -> anyhow::Result<()> {
         "Effect initialized value: 29, clock: 0",
     )
     .await
+}
+
+#[test]
+#[timeout("300s")]
+async fn typescript_compilation_cache() -> anyhow::Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let guest = Utf8PathBuf::from_path_buf(
+        root.join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm"),
+    )
+    .unwrap();
+    let source = std::fs::read_to_string(bundle("ts")?)?;
+    let edited = source.replace("TS initialized value:", "Edited TS initialized value:");
+    assert_ne!(
+        source, edited,
+        "fixture must contain the description being edited"
+    );
+    let dir = tempfile::tempdir()?;
+    let dir = Utf8Path::from_path(dir.path()).unwrap();
+    let cache = dir.join("native-cache");
+    let cold = dir.join("cold.wasm");
+    let warm = dir.join("warm.wasm");
+    let uncached = dir.join("uncached.wasm");
+    let edited_cached = dir.join("edited-cached.wasm");
+    let edited_uncached = dir.join("edited-uncached.wasm");
+
+    let stats = preinitialize_js(&guest, &cold, source.clone(), Some(cache.as_std_path()))
+        .await?
+        .compilation_cache
+        .unwrap();
+    assert!(stats.misses > 0);
+    let stats = preinitialize_js(&guest, &warm, source.clone(), Some(cache.as_std_path()))
+        .await?
+        .compilation_cache
+        .unwrap();
+    assert!(stats.hits > 0);
+    assert_eq!(stats.misses, 0);
+    assert!(
+        preinitialize_js(&guest, &uncached, source.clone(), None)
+            .await?
+            .compilation_cache
+            .is_none()
+    );
+    assert_eq!(std::fs::read(&cold)?, std::fs::read(&warm)?);
+    assert_eq!(std::fs::read(&cold)?, std::fs::read(&uncached)?);
+
+    let blocked = dir.join("not-a-directory");
+    std::fs::write(&blocked, "occupied")?;
+    let fallback = dir.join("fallback.wasm");
+    assert!(
+        preinitialize_js(
+            &guest,
+            &fallback,
+            source.clone(),
+            Some(blocked.as_std_path())
+        )
+        .await?
+        .compilation_cache
+        .is_none()
+    );
+    assert_eq!(std::fs::read(&fallback)?, std::fs::read(&uncached)?);
+
+    let stats = preinitialize_js(
+        &guest,
+        &edited_cached,
+        edited.clone(),
+        Some(cache.as_std_path()),
+    )
+    .await?
+    .compilation_cache
+    .unwrap();
+    assert!(
+        stats.hits > 0,
+        "a JS edit must reuse compiled template code"
+    );
+    assert_eq!(stats.misses, 0);
+    preinitialize_js(&guest, &edited_uncached, edited.clone(), None).await?;
+    assert_eq!(
+        std::fs::read(&edited_cached)?,
+        std::fs::read(&edited_uncached)?
+    );
+    let agents = extract_agent_type_schemas(edited_cached.as_std_path(), true, false).await?;
+    assert_eq!(
+        agents[0].description,
+        "Edited TS initialized value: 41, clock: 0"
+    );
+
+    let parallel_a = dir.join("parallel-a.wasm");
+    let parallel_b = dir.join("parallel-b.wasm");
+    let (a, b) = tokio::join!(
+        preinitialize_js(
+            &guest,
+            &parallel_a,
+            source.clone(),
+            Some(cache.as_std_path())
+        ),
+        preinitialize_js(&guest, &parallel_b, edited, Some(cache.as_std_path())),
+    );
+    a?;
+    b?;
+    assert_eq!(std::fs::read(&parallel_a)?, std::fs::read(&uncached)?);
+    assert_eq!(
+        std::fs::read(&parallel_b)?,
+        std::fs::read(&edited_uncached)?
+    );
+
+    let mut engine_config =
+        golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache();
+    engine_config.cranelift_opt_level(wasmtime::OptLevel::None);
+    let mut cache_config = wasmtime::CacheConfig::new();
+    cache_config.with_directory(cache.as_std_path());
+    let sources = [source.clone()];
+    let other_engine = dir.join("other-engine.wasm");
+    let stats = wasm_rquickjs::optimize_component_with_options(
+        &guest,
+        &other_engine,
+        "wizer-initialize",
+        &wasm_rquickjs::OptimizeOptions {
+            hostcall_fuel: Some(512 * 1024 * 1024),
+            sources: Some(&sources),
+            engine_config: Some(&engine_config),
+            cache_config: Some(&cache_config),
+        },
+    )
+    .await?
+    .compilation_cache
+    .unwrap();
+    assert!(stats.misses > 0, "different engine configuration must miss");
+
+    // A damaged artifact is disposable: the build must recompile, not fail.
+    for entry in walkdir::WalkDir::new(&cache) {
+        let entry = entry?;
+        if entry.file_type().is_file() {
+            std::fs::write(entry.path(), [])?;
+        }
+    }
+    let recovered = dir.join("recovered.wasm");
+    let stats = preinitialize_js(&guest, &recovered, source, Some(cache.as_std_path()))
+        .await?
+        .compilation_cache
+        .unwrap();
+    assert!(stats.misses > 0);
+    assert_eq!(std::fs::read(&recovered)?, std::fs::read(&uncached)?);
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
+async fn compilation_cache_evicts_cold_entries_together() -> anyhow::Result<()> {
+    use std::fs::{File, FileTimes};
+    use std::time::{Duration, SystemTime};
+
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("..");
+    let guest = Utf8PathBuf::from_path_buf(
+        root.join("sdks/ts/packages/golem-ts-sdk/wasm/agent_guest.wasm"),
+    )
+    .unwrap();
+    let source = std::fs::read_to_string(bundle("ts")?)?;
+    let directory = tempfile::tempdir()?;
+    let directory = Utf8Path::from_path(directory.path()).unwrap();
+    let cache = directory.join("native-cache");
+    let output = directory.join("output.wasm");
+    std::fs::create_dir(&cache)?;
+    let now = SystemTime::now();
+    for (name, module_age, stats_age) in [("hot", 40, 0), ("cold", 20, 10), ("recent", 1, 1)] {
+        for (suffix, length, age) in [
+            ("", 180 * 1024 * 1024, module_age),
+            (".stats", 1, stats_age),
+        ] {
+            let file = File::create(cache.join(format!("{name}{suffix}")))?;
+            file.set_len(length)?;
+            file.set_times(FileTimes::new().set_modified(now - Duration::from_secs(age * 86400)))?;
+        }
+    }
+    for name in ["entry.wip-123", ".cleanup.wip-123", "maintenance.lock"] {
+        std::fs::write(cache.join(name), "in progress")?;
+    }
+    preinitialize_js(&guest, &output, source, Some(cache.as_std_path())).await?;
+    for name in [
+        "hot",
+        "hot.stats",
+        "recent",
+        "recent.stats",
+        "entry.wip-123",
+        ".cleanup.wip-123",
+        "maintenance.lock",
+    ] {
+        assert!(cache.join(name).exists(), "must retain {name}");
+    }
+    assert!(!cache.join("cold").exists());
+    assert!(!cache.join("cold.stats").exists());
+    let size: u64 = walkdir::WalkDir::new(&cache)
+        .into_iter()
+        .map(|entry| {
+            let entry = entry?;
+            Ok::<_, anyhow::Error>(if entry.file_type().is_file() {
+                entry.metadata()?.len()
+            } else {
+                0
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .sum();
+    assert!(size <= JS_COMPILATION_CACHE_MAX_BYTES * 4 / 5);
+    Ok(())
 }

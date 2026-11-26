@@ -45,7 +45,7 @@ private[runtime] object StreamSessionProtocol {
     val kind = Json.requireField(json, "type").flatMap(Json.asString).fold(e => throw BridgeException(e), identity)
     kind match {
       case "invocationAccepted" | "invocationReady" =>
-        validate(json, kind, Set("attemptId", "agentId", "idempotencyKey", "mappings", "sessionToken"))
+        validate(json, kind, Set("attemptId", "agentId", "idempotencyKey", "mappings", "sessionToken"), Set("invocationId"))
       case "invocationRejected" => validate(json, kind, Set("code", "message", "retryable"), Set("attemptId", "stderr"))
       case "invocationResult" => validate(json, kind, Set("mappings", "result"))
       case "outputStreamItem" => validate(json, kind, Set("channel", "cursorToken", "mappings", "sequence", "value"))

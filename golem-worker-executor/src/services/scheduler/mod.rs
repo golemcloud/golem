@@ -57,6 +57,12 @@ pub trait SchedulerService: Send + Sync {
 /// for `SchedulerServiceDefault`, making it easier to test (by being independent of `WorkerCtx`).
 #[async_trait]
 pub trait SchedulerWorkerAccess {
+    async fn delete_finished_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError>;
+
     async fn active_worker_fingerprint(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -95,6 +101,16 @@ pub trait SchedulerWorkerAccess {
 
 #[async_trait]
 impl<Ctx: WorkerCtx> SchedulerWorkerAccess for Arc<dyn WorkerActivator<Ctx>> {
+    async fn delete_finished_invocation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
+        self.deref()
+            .delete_finished_invocation(owned_agent_id, fingerprint)
+            .await
+    }
+
     async fn active_worker_fingerprint(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -438,15 +454,32 @@ impl SchedulerServiceDefault {
         let action_start = std::time::Instant::now();
         let processed = tokio::select! {
             biased;
-            _ = lease_lost.cancelled() => false,
-            processed = self.process_claimed_action(claimed_action, now) => processed,
+            _ = lease_lost.cancelled() => Err(()),
+            processed = async {
+                if let ScheduledAction::DeleteFinishedInvocation { owned_agent_id, fingerprint } = &claimed_action.action {
+                    self.worker_access.delete_finished_invocation(owned_agent_id, *fingerprint).await.map_err(|error| {
+                        error!(agent_id = %owned_agent_id, error = %error, "Failed to delete finished invocation");
+                    })
+                } else if self.process_claimed_action(claimed_action, now).await {
+                    Ok(None)
+                } else {
+                    Err(())
+                }
+            } => processed,
         };
         crate::metrics::scheduler::record_scheduled_action_processing(
             action_kind,
             action_start.elapsed(),
         );
-        if !processed {
-            return Ok(());
+        match processed {
+            Err(()) => return Ok(()),
+            Ok(Some(deadline)) => {
+                self.scheduler_storage
+                    .reschedule(&schedule_id, lease_owner, deadline, jiff::Timestamp::now())
+                    .await?;
+                return Ok(());
+            }
+            Ok(None) => {}
         }
 
         let acked = self
@@ -498,6 +531,13 @@ impl SchedulerServiceDefault {
         now: jiff::Timestamp,
     ) -> bool {
         match claimed_action.action {
+            ScheduledAction::DeleteFinishedInvocation { .. } => {
+                error!(
+                    schedule_id = %claimed_action.schedule_id,
+                    "Retention action bypassed lease-aware rescheduling"
+                );
+                false
+            }
             ScheduledAction::CompletePromise {
                 account_id: _,
                 promise_id,
@@ -719,6 +759,74 @@ impl SchedulerService for SchedulerServiceDefault {
             crate::metrics::scheduler::action_kind_label(&action),
             serialized.len(),
         );
+
+        if let ScheduledAction::DeleteFinishedInvocation {
+            owned_agent_id,
+            fingerprint,
+        } = &action
+        {
+            loop {
+                // Observe the row before reading Create. A stale producer cannot observe a newer
+                // incarnation's row and then authorize its replacement from the old Create.
+                let observed = self
+                    .retry_storage_op("get_action", &format!("schedule {schedule_id}"), || {
+                        self.scheduler_storage.get_action(&schedule_id)
+                    })
+                    .await;
+                if observed.as_deref() == Some(serialized.as_slice()) {
+                    return schedule_id;
+                }
+                let create = match self
+                    .oplog_service
+                    .read_source(
+                        owned_agent_id,
+                        golem_common::model::agent::AgentMode::Durable,
+                        OplogIndex::INITIAL,
+                        1,
+                    )
+                    .await
+                {
+                    Ok(create) => create,
+                    Err(error) => {
+                        warn!(
+                            agent_id = %owned_agent_id,
+                            error = %error,
+                            "Failed to resolve retention owner; registration will retry on load"
+                        );
+                        return schedule_id;
+                    }
+                };
+                if !matches!(create.get(&OplogIndex::INITIAL), Some(golem_common::model::oplog::OplogEntry::Create { parameters, .. }) if AgentFingerprint(parameters.instance_id) == *fingerprint)
+                {
+                    return schedule_id;
+                }
+                if let Some(observed) = observed {
+                    if self
+                        .retry_storage_op(
+                            "replace_action",
+                            &format!("schedule {schedule_id}"),
+                            || {
+                                self.scheduler_storage.replace_action(
+                                    &schedule_id,
+                                    &observed,
+                                    &serialized,
+                                    time,
+                                )
+                            },
+                        )
+                        .await
+                    {
+                        return schedule_id;
+                    }
+                } else {
+                    self.retry_storage_op("insert", &format!("action {action}"), || {
+                        self.scheduler_storage
+                            .insert(schedule_id, time, shard_id, &serialized)
+                    })
+                    .await;
+                }
+            }
+        }
 
         self.retry_storage_op("insert", &format!("action {action}"), || {
             self.scheduler_storage

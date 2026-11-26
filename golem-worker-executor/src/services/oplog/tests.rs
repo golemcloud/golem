@@ -74,6 +74,7 @@ macro_rules! create_oplog_entry {
      $environment_id:expr, $created_by:expr, $parent:expr, $component_size:expr,
      $memory_size:expr, $plugins:expr, $config:expr, $instance_id:expr $(,)?) => {
         OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+            standalone_tool: None,
             component_id: ComponentId(Uuid::from_u128(1)),
             agent_type_name: None,
             canonical_key: None,
@@ -287,6 +288,7 @@ pub(super) fn make_agent_metadata(
     environment_id: EnvironmentId,
 ) -> AgentMetadata {
     AgentMetadata {
+        standalone_tool: None,
         component_id: ComponentId(Uuid::from_u128(1)),
         agent_type_name: None,
         canonical_key: None,
@@ -6997,6 +6999,7 @@ async fn read_initial_from_archive_impl(use_blob: bool) {
     let create_entry = OplogEntry::Create {
         timestamp,
         parameters: Box::new(golem_common::model::oplog::CreateParameters {
+            standalone_tool: None,
             owner_kind: OwnerKind::ComponentAgent,
             agent_id: AgentId::from_parts(7, 41),
             component_id: create_component_id,
@@ -7164,6 +7167,7 @@ async fn ephemeral_read_initial_from_archive_impl(use_blob: bool) {
     let create_entry = OplogEntry::Create {
         timestamp,
         parameters: Box::new(golem_common::model::oplog::CreateParameters {
+            standalone_tool: None,
             owner_kind: OwnerKind::ComponentAgent,
             agent_id: AgentId::from_parts(7, 41),
             component_id: create_component_id,
@@ -13907,6 +13911,7 @@ async fn a_fork_target_handle_is_not_reused_by_the_owners_first_open(_tracing: &
     let agent_id = AgentId::from_parts(7, 108);
     let owned_agent_id = OwnedAgentId::new(environment_id, &agent_id);
     let create_entry = OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+        standalone_tool: None,
         agent_id,
         component_id: ComponentId(Uuid::from_u128(1)),
         agent_type_name: None,
@@ -14102,6 +14107,7 @@ async fn a_stale_create_of_an_oplog_the_owner_already_created_is_fenced_not_fata
     let losing_executor = fencing_oplog_service(&tempdir, "shared").await;
     let create_entry = || {
         OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+            standalone_tool: None,
             agent_id,
             component_id: ComponentId(Uuid::from_u128(1)),
             agent_type_name: None,

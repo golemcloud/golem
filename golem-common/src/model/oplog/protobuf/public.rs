@@ -76,6 +76,43 @@ use crate::model::regions::OplogRegion;
 use crate::resource_runtime::ResourceTypeId;
 use golem_schema::Empty;
 
+impl TryFrom<golem_api_grpc::proto::golem::worker::PublicStandaloneToolInvocation>
+    for crate::model::oplog::PublicStandaloneToolInvocation
+{
+    type Error = String;
+
+    fn try_from(
+        value: golem_api_grpc::proto::golem::worker::PublicStandaloneToolInvocation,
+    ) -> Result<Self, String> {
+        Ok(Self {
+            tool_name: value.tool_name.try_into()?,
+            command_path: value.command_path,
+            invocation_id: crate::model::InvocationId::from(uuid::Uuid::from(
+                value
+                    .invocation_id
+                    .ok_or("Missing standalone invocation ID")?,
+            )),
+            caller: value
+                .caller
+                .ok_or("Missing standalone caller")?
+                .try_into()?,
+        })
+    }
+}
+
+impl From<crate::model::oplog::PublicStandaloneToolInvocation>
+    for golem_api_grpc::proto::golem::worker::PublicStandaloneToolInvocation
+{
+    fn from(value: crate::model::oplog::PublicStandaloneToolInvocation) -> Self {
+        Self {
+            tool_name: value.tool_name.to_string(),
+            command_path: value.command_path,
+            invocation_id: Some(value.invocation_id.0.into()),
+            caller: Some(value.caller.into()),
+        }
+    }
+}
+
 impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEntry {
     type Error = String;
 
@@ -129,6 +166,7 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::OplogEntry> for PublicOplogEn
                     .map(|id| id.into())
                     .ok_or("Missing instance_id in Create entry")?,
                 never_live: create.never_live,
+                standalone_tool: create.standalone_tool.map(TryInto::try_into).transpose()?,
             })),
             oplog_entry::Entry::Start(start) => Ok(PublicOplogEntry::Start(StartParams {
                 timestamp: start.timestamp.ok_or("Missing timestamp field")?.into(),
@@ -850,6 +888,7 @@ impl TryFrom<PublicOplogEntry> for golem_api_grpc::proto::golem::worker::OplogEn
                         agent_type_name: create.agent_type_name.map(|name| name.0),
                         instance_id: Some(create.instance_id.into()),
                         never_live: create.never_live,
+                        standalone_tool: create.standalone_tool.map(Into::into),
                     },
                 )),
             },
@@ -1963,6 +2002,7 @@ impl TryFrom<PublicOplogEntry> for OplogEnrichmentEntry {
                         .collect(),
                     instance_id: create.instance_id,
                     never_live: create.never_live,
+                    standalone_tool: create.standalone_tool,
                 }),
             }),
             PublicOplogEntry::Start(start) => {

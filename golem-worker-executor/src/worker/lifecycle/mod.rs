@@ -358,11 +358,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
         let metadata = worker.try_get_latest_worker_metadata().await?;
-        if metadata.owner_kind == OwnerKind::EphemeralExternalTool {
-            return Err(WorkerExecutorError::invalid_request(
-                "update is not supported for an external tool owner",
-            ));
-        }
         worker.ensure_component_agent_ingress("update")?;
         if worker.deletion_owns_retirement().await {
             return Err(WorkerExecutorError::invalid_request(
