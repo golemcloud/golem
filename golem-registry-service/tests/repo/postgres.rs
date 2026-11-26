@@ -350,6 +350,13 @@ async fn test_runtime_card_creation_rejects_system_cards(
 }
 
 #[test]
+async fn test_card_revoke_whose_record_cannot_be_written_is_unavailable_and_keeps_the_card(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::common::test_card_revoke_whose_record_cannot_be_written_is_unavailable_and_keeps_the_card(deps).await;
+}
+
+#[test]
 async fn test_installation_golem_issuer_is_stored_once(#[dimension(postgres_variant)] deps: &Deps) {
     crate::repo::common::test_installation_golem_issuer_is_stored_once(deps).await;
 }

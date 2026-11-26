@@ -157,6 +157,52 @@ async fn an_allowed_oplog_read_waits_in_the_staging_table_with_its_token_and_gra
 
 #[test]
 #[timeout("6m")]
+async fn a_read_with_the_bootstrap_token_names_that_token(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    // The admin of the test environment authenticates with the registry's bootstrap token.
+    let admin = deps.admin().await;
+    let (_, env) = admin.app_and_env().await?;
+    let component = admin
+        .component(&env.id, "golem_it_agent_rpc_rust_release")
+        .store()
+        .await?;
+    let agent_id = admin
+        .start_agent(
+            &component.id,
+            agent_key!("RpcBlockingCounter", "audit-bootstrap"),
+        )
+        .await?;
+    let tokens = deps
+        .registry_service()
+        .client(&admin.token)
+        .await
+        .list_account_tokens(&admin.account_id.0)
+        .await?;
+
+    admin.get_oplog_last_index(&agent_id).await?;
+
+    let rows = staged_rows(
+        deps,
+        agent_id.environment_id,
+        CatalogOperation::ReadAgentOplog,
+    )
+    .await?;
+    assert_eq!(rows.len(), 1);
+    let record = &rows[0].record;
+    assert_eq!(record.outcome, AuditOutcome::Allowed);
+    let token_id = record
+        .authenticated_by
+        .expect("the record names the token that authenticated the read");
+    assert!(
+        tokens.values.iter().any(|token| token.id == token_id),
+        "{token_id:?} is not a token of the admin account: {tokens:?}"
+    );
+    Ok(())
+}
+
+#[test]
+#[timeout("6m")]
 async fn a_refused_oplog_read_waits_in_the_staging_table_with_the_real_target(
     deps: &EnvBasedTestDependencies,
 ) -> anyhow::Result<()> {

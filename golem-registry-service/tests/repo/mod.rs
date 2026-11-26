@@ -64,7 +64,9 @@ use golem_registry_service::services::registry_change_notifier::RegistryChangeNo
 use golem_service_base::db::Pool;
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::model::auth::audit::DecisionAudit;
+use golem_service_base::model::auth::audit::{
+    AuditRecord, AuditSink, AuditSinkError, DecisionAudit,
+};
 use golem_service_base::storage::blob::BlobStorage;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -381,6 +383,25 @@ where
             Duration::from_secs(5),
         ),
     )
+}
+
+/// The registry's decision step, with an audit sink that cannot store any record.
+pub fn failing_decisions() -> Decisions {
+    Decisions::new(
+        "https://golem.test".parse().unwrap(),
+        DecisionAudit::new(Arc::new(FailingAuditSink), Duration::from_secs(5)),
+    )
+}
+
+struct FailingAuditSink;
+
+#[async_trait::async_trait]
+impl AuditSink for FailingAuditSink {
+    async fn record(&self, _record: AuditRecord) -> Result<(), AuditSinkError> {
+        Err(AuditSinkError::Unavailable(
+            "the test sink stores nothing".to_string(),
+        ))
+    }
 }
 
 pub fn test_environment_default_card_record(environment_id: Uuid) -> CardRecord {

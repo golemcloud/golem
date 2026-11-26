@@ -614,6 +614,69 @@ pub async fn test_installation_golem_issuer_is_stored_once(deps: &Deps) {
     assert_eq!(deps.installation_repo.get().await.unwrap(), Some(stored));
 }
 
+/// A control whose audit record cannot be written must not run: the revoke answers that the
+/// audit is unavailable, and the card stays.
+pub async fn test_card_revoke_whose_record_cannot_be_written_is_unavailable_and_keeps_the_card(
+    deps: &Deps,
+) {
+    use golem_common::model::card::owner::AccountOwnerPattern;
+    use golem_common::model::card::{
+        CardResourcePattern, CardVerb, ClassPermissionTarget, EffectiveSurface, GrantSurface,
+        PermissionTarget,
+    };
+
+    let services =
+        environment_service_deps_with_card_decisions(deps, Some(crate::repo::failing_decisions()));
+    let account = deps.create_account().await;
+    let application = deps.create_application(account.revision.account_id).await;
+    let environment = deps.create_env(application.revision.application_id).await;
+    let card_id = CardId::new();
+    services
+        .card_service
+        .create_runtime_card(
+            runtime_card(card_id, Vec::new()),
+            CardManagedByRuntimeDerived {
+                environment_id: EnvironmentId(environment.revision.environment_id),
+                ..runtime_card_provenance()
+            },
+            &AuthCtx::System,
+        )
+        .await
+        .unwrap();
+    // A caller that may revoke the cards of the environment's owner.
+    let auth = AuthCtx::agent_with_effective_surface(
+        AccountId::new(),
+        AccountEmail::new("revoker@example.com"),
+        EffectiveSurface {
+            source_card_ids: Vec::new(),
+            lower: vec![GrantSurface {
+                positive: vec![PermissionTarget::Card(ClassPermissionTarget {
+                    verb: Some(CardVerb::Revoke),
+                    owner: AccountOwnerPattern::Account {
+                        account: AccountEmail::new(application.account_email.clone()),
+                    },
+                    resource: CardResourcePattern::Any,
+                })],
+                negative: Vec::new(),
+            }],
+            upper: Vec::new(),
+        },
+    );
+
+    let error = services
+        .card_service
+        .revoke_card(card_id, &auth)
+        .await
+        .unwrap_err();
+
+    let_assert!(CardError::Unauthorized(AuthorizationError::AuditUnavailable(_)) = error);
+    let card_repo: Arc<dyn CardRepo> = match &deps.test_db {
+        TestDb::Postgres(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+        TestDb::Sqlite(pool) => Arc::new(DbCardRepo::new(pool.clone())),
+    };
+    assert!(card_repo.get(card_id).await.unwrap().is_some());
+}
+
 pub async fn test_runtime_card_creation_requires_system_auth(deps: &Deps) {
     let services = environment_service_deps(deps);
     let auth = AuthCtx::agent_with_effective_surface(
@@ -2997,6 +3060,15 @@ struct EnvironmentServiceDeps {
 }
 
 fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
+    environment_service_deps_with_card_decisions(deps, None)
+}
+
+/// The services of `environment_service_deps`, with `card_decisions` as the card service's
+/// decision step when it is given.
+fn environment_service_deps_with_card_decisions(
+    deps: &Deps,
+    card_decisions: Option<golem_registry_service::services::decision::Decisions>,
+) -> EnvironmentServiceDeps {
     match &deps.test_db {
         TestDb::Postgres(pool) => {
             let notifier = deps.test_registry_change_notifier();
@@ -3061,7 +3133,7 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 component_service.clone(),
                 environment_service.clone(),
                 notifier,
-                crate::repo::test_decisions(pool.clone()),
+                card_decisions.unwrap_or_else(|| crate::repo::test_decisions(pool.clone())),
             );
 
             EnvironmentServiceDeps {
@@ -3133,7 +3205,7 @@ fn environment_service_deps(deps: &Deps) -> EnvironmentServiceDeps {
                 component_service.clone(),
                 environment_service.clone(),
                 notifier,
-                crate::repo::test_decisions(pool.clone()),
+                card_decisions.unwrap_or_else(|| crate::repo::test_decisions(pool.clone())),
             );
 
             EnvironmentServiceDeps {

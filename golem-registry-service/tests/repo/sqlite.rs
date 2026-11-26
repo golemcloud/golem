@@ -205,6 +205,13 @@ async fn test_audit_staging_stores_a_record_of_an_unknown_environment_without_an
 }
 
 #[test]
+async fn test_card_revoke_whose_record_cannot_be_written_is_unavailable_and_keeps_the_card(
+    deps: &Deps,
+) {
+    crate::repo::common::test_card_revoke_whose_record_cannot_be_written_is_unavailable_and_keeps_the_card(deps).await;
+}
+
+#[test]
 async fn test_runtime_card_creation_requires_system_auth(deps: &Deps) {
     crate::repo::common::test_runtime_card_creation_requires_system_auth(deps).await;
 }
