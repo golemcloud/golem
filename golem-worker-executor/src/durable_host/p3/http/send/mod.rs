@@ -92,6 +92,18 @@ impl<U: Send + 'static, Ctx: WorkerCtx> client::HostWithStore<U> for DurableP3<C
     }
 }
 
+fn reserve_http_key_position(
+    enabled: bool,
+    guest_key: bool,
+    reserve: impl FnOnce() -> Option<OplogIndex>,
+) -> Option<OplogIndex> {
+    if enabled && !guest_key {
+        reserve()
+    } else {
+        None
+    }
+}
+
 pub(super) async fn send_with_durability<Ctx, U, P>(
     store: &Accessor<U, DurableP3<Ctx>>,
     mut req: Resource<Request>,
@@ -162,13 +174,11 @@ where
                         ))
                     })?;
             }
-            let logical = if ctx.state.set_outgoing_http_idempotency_key
-                && !serialized_request.headers.contains_key("idempotency-key")
-            {
-                ctx.state.take_logical_key_position()
-            } else {
-                None
-            };
+            let logical = reserve_http_key_position(
+                ctx.state.set_outgoing_http_idempotency_key,
+                serialized_request.headers.contains_key("idempotency-key"),
+                || ctx.state.take_logical_key_position(),
+            );
             Ok::<_, WorkerExecutorError>(ctx.idempotency_key_position(logical))
         })
         .map_err(HttpError::trap)?;
