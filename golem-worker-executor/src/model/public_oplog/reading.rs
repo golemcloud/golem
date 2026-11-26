@@ -758,7 +758,10 @@ impl RangeScan {
     }
 
     fn unlimited() -> Self {
-        Self::new(UNLIMITED_SCAN)
+        Self::new(OplogScanAllowance {
+            entries: u64::MAX,
+            millis: u64::MAX,
+        })
     }
 
     /// The scan of a call that `budget` bounds. The scan stops at the entry limit or at the time
