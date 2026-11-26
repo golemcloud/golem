@@ -1382,14 +1382,11 @@ forwarding layer, and it is the only layer that reads the record. A staged oplog
 (`create_staged`) is the handle of the inner service. `create` and `create_fresh` read no record,
 so a new oplog starts at index 1; a later `open` reads the record. `Oplog::retention` and
 `OplogService::retention` give the plain `OplogRetention` value. Its pure rules give the reads:
-a walk in chunks reads with `chunk`, a public page reads with `page`, and a walk with a fixed
-start reads with `OplogRange::within`; `range`, `clamp`, `retains`, `create_read` and the agent
-checks give the rest. Four reads keep their own count. The refill of the replay buffer
-(`raw_read_next_oplog_entry` in `replay_state/cursor/io.rs`) reads one entry also when the read
-position is after the replay target, where `within` gives no range. The lookup of the component
-revision of a public read (`scan_component_revision`) charges each batch to its allowance. The
-whole-history walks
-`max_issued_epoch` and the creation receipt of a fork export count from their fixed start. The replay cursor reads each deleted region from the
+a walk in chunks reads with `chunk`, and a public page reads with `page`; `range`, `clamp`,
+`retains`, `create_read` and the agent checks give the rest. A walk with a fixed start, such as a
+fold from a status baseline, a replay cursor walk, `max_issued_epoch` or the creation receipt of
+a fork export, counts its reads itself and does not move its start. The lookup of the component
+revision of a public read (`scan_component_revision`) charges each batch to its allowance. The replay cursor reads each deleted region from the
 retained start (`deleted_region_contains_start`), because a snapshot recovery skips the region
 from index 2 to the snapshot. Some walks need the
 whole history, because a walk from the start gives a wrong result: the full status rebuild, the

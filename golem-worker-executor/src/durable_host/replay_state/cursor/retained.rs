@@ -13,8 +13,12 @@ pub(super) async fn host_internal_calls_are_replay_inert(
 ) -> Result<bool, UnreadableOplog> {
     let replay_target = cursor.replay_target();
     let mut next = start_index.next();
-    while let Some(chunk) = OplogRange::within(next, replay_target, CHUNK_SIZE) {
-        let entries = cursor.oplog.read_exact(chunk.start, chunk.count).await?;
+    while next <= replay_target {
+        let available = u64::from(replay_target) - u64::from(next) + 1;
+        let entries = cursor
+            .oplog
+            .read_exact(next, CHUNK_SIZE.min(available))
+            .await?;
         let last_read = *entries.last_key_value().unwrap().0;
         if let Some((_, terminal)) = entries.into_iter().find(|(index, entry)| {
             *index <= replay_target
@@ -704,12 +708,11 @@ impl ReplayState {
             let replay_target = state.cursor.replay_target();
             if let Some(first_unclosed) = unclosed.iter().min().copied() {
                 let mut next = first_unclosed.next();
-                while let Some(chunk) = OplogRange::within(next, replay_target, CHUNK_SIZE)
-                    && !unclosed.is_empty()
-                {
+                while next <= replay_target && !unclosed.is_empty() {
+                    let available = u64::from(replay_target) - u64::from(next) + 1;
                     let entries = state
                         .cursor
-                        .read_oplog(chunk.start, chunk.count)
+                        .read_oplog(next, CHUNK_SIZE.min(available))
                         .await?;
                     let Some(&(last_read, _)) = entries.last() else {
                         break;

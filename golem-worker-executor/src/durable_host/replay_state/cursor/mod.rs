@@ -39,7 +39,6 @@ use super::{ExportReturned, is_invocation_terminal_of, primary_invocation_termin
 use crate::durable_host::PositionalRead;
 use crate::durable_host::tool::operation::OwnerToolOperation;
 use crate::services::oplog::UnreadableOplog;
-use crate::services::oplog::retention::OplogRange;
 use golem_common::model::oplog::payload::types::{
     SerializableToolAdmissionRefusal, SerializableToolPositionalRequest,
 };

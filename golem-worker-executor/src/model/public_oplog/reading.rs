@@ -570,7 +570,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
 
     loop {
         let to_last = last_oplog_index.map_or(u64::MAX, |last| {
-            OplogRange::within(current_index, last, u64::MAX).map_or(0, |range| range.count)
+            (last.as_u64() + 1).saturating_sub(current_index.as_u64())
         });
         let chunk_size = (count.saturating_sub(results.len()) as u64)
             .min(budget.remaining_entries(scanned))

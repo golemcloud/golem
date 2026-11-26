@@ -28,7 +28,6 @@ use crate::durable_host::p3::{
     DurableP3, durable_worker_ctx, observe_function_call_store, wasi_http_view,
 };
 use crate::durable_host::tail_work::TailActivity;
-use crate::services::oplog::retention::OplogRange;
 use crate::services::oplog::{Oplog, OplogError, OplogFence, OplogOps};
 use crate::workerctx::WorkerCtx;
 use bytes::Bytes;
@@ -842,8 +841,9 @@ pub(super) async fn scan_recorded_request_body_frames(
     let mut trailers_index: Option<OplogIndex> = None;
     let mut terminal: Option<RecordedRequestBodyTerminal> = None;
     let mut next = parent_start_index.next();
-    while let Some(chunk) = OplogRange::within(next, scan_end, SCAN_CHUNK) {
-        let entries = oplog.read_exact(chunk.start, chunk.count).await?;
+    while next <= scan_end {
+        let available = scan_end.as_u64() - next.as_u64() + 1;
+        let entries = oplog.read_exact(next, SCAN_CHUNK.min(available)).await?;
         for (index, entry) in &entries {
             let OplogEntry::HostStreamFrame {
                 parent_start_index: frame_parent,

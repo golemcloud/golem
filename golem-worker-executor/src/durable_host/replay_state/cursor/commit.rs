@@ -582,11 +582,12 @@ impl CursorTx<'_> {
         region: &OplogRegion,
     ) -> Result<(), UnreadableOplog> {
         let mut next = region.start;
-        while let Some(chunk) = OplogRange::within(next, region.end, CHUNK_SIZE) {
+        while next <= region.end {
+            let remaining = region.end.as_u64() - next.as_u64() + 1;
             let entries = self
                 .cursor
                 .oplog
-                .read_exact(chunk.start, chunk.count)
+                .read_exact(next, CHUNK_SIZE.min(remaining))
                 .await?;
             let last_read = *entries.last_key_value().unwrap().0;
             for (index, entry) in entries {

@@ -367,7 +367,8 @@ where
     let chunk_size = this
         .config()
         .invocation_results
-        .physical_index_catch_up_chunk_size;
+        .physical_index_catch_up_chunk_size
+        .max(1);
 
     if full_rebuild {
         return fold_status_with_precomputed_regions(this, reader, baseline, chunk_size).await;
@@ -377,8 +378,9 @@ where
     // no start.
     let original_baseline = baseline.clone();
     let mut first = baseline.oplog_idx.next();
-    while let Some(chunk) = OplogRange::within(first, last_oplog_index, chunk_size) {
-        let mut entries = reader.read_exact(chunk.start, chunk.count).await?;
+    while first <= last_oplog_index {
+        let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
+        let mut entries = reader.read_exact(first, count).await?;
         if entries.is_empty() {
             return Ok(None);
         }
@@ -475,8 +477,9 @@ where
     let mut final_pending_updates = Some(std::mem::take(&mut regions.queue).into_open().0);
 
     let mut first = start;
-    while let Some(chunk) = OplogRange::within(first, last_oplog_index, chunk_size) {
-        let mut entries = reader.read_exact(chunk.start, chunk.count).await?;
+    while first <= last_oplog_index {
+        let count = (last_oplog_index.as_u64() - first.as_u64() + 1).min(chunk_size);
+        let mut entries = reader.read_exact(first, count).await?;
         if entries.is_empty() {
             return Ok(None);
         }
@@ -751,8 +754,9 @@ pub(super) async fn read_region_entries(
 ) -> Result<Option<BTreeMap<OplogIndex, OplogEntry>>, UnreadableOplog> {
     let mut regions = BTreeMap::new();
     let horizon = reader.horizon;
-    while let Some(chunk) = OplogRange::within(first, horizon, chunk_size) {
-        let entries = reader.read_exact(chunk.start, chunk.count).await?;
+    while first <= horizon {
+        let count = (horizon.as_u64() - first.as_u64() + 1).min(chunk_size);
+        let entries = reader.read_exact(first, count).await?;
         let Some(last) = entries.keys().next_back() else {
             return Ok(None);
         };

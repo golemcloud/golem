@@ -639,11 +639,12 @@ impl ReplayState {
         }
         let mut projection = OplogScopeProjection::new(start_index);
         let mut next = start_index.next();
-        while let Some(chunk) = OplogRange::within(next, replay_target, CHUNK_SIZE) {
+        while next <= replay_target {
+            let available = u64::from(replay_target) - u64::from(next) + 1;
             let entries = self
                 .cursor
                 .oplog
-                .read_exact(chunk.start, chunk.count)
+                .read_exact(next, CHUNK_SIZE.min(available))
                 .await?;
             let last_read = *entries.last_key_value().unwrap().0;
             for (index, entry) in entries {
@@ -687,11 +688,12 @@ impl ReplayState {
             state.skipped_regions.clone()
         };
         let mut next = start_index.next();
-        while let Some(chunk) = OplogRange::within(next, replay_target, CHUNK_SIZE) {
+        while next <= replay_target {
+            let available = u64::from(replay_target) - u64::from(next) + 1;
             let entries = self
                 .cursor
                 .oplog
-                .read_exact(chunk.start, chunk.count)
+                .read_exact(next, CHUNK_SIZE.min(available))
                 .await?;
             let last_read = *entries.last_key_value().unwrap().0;
             if let Some((index, entry)) = entries.into_iter().find(|(index, entry)| {
@@ -756,8 +758,12 @@ impl ReplayState {
             let mut projection = OplogScopeProjection::new(root);
             let mut parents = HashMap::new();
             let mut next = root;
-            while let Some(chunk) = OplogRange::within(next, head, CHUNK_SIZE) {
-                let entries = cursor.oplog.read_exact(chunk.start, chunk.count).await?;
+            while next <= head {
+                let available = u64::from(head) - u64::from(next) + 1;
+                let entries = cursor
+                    .oplog
+                    .read_exact(next, CHUNK_SIZE.min(available))
+                    .await?;
                 let last_read = *entries.last_key_value().unwrap().0;
 
                 for (index, entry) in entries {

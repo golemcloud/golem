@@ -117,12 +117,9 @@ impl ReplayCursor {
 
         let mut violation = false;
 
-        // `end` is the index after the scan, so the last index that the scan reads is the one
-        // before it. `start < end` keeps that index at 0 or above.
-        while start < end
-            && let Some(chunk) = OplogRange::within(start, end.previous(), CHUNK_SIZE)
-        {
-            let entries = self.read_oplog(chunk.start, chunk.count).await?;
+        while start < end {
+            let available = end.as_u64() - start.as_u64();
+            let entries = self.read_oplog(start, CHUNK_SIZE.min(available)).await?;
             for (idx, entry) in &entries {
                 if current_next_skip_region
                     .as_ref()

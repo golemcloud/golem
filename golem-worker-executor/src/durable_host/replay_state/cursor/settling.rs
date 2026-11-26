@@ -95,10 +95,12 @@ impl CursorTx<'_> {
         let mut incomplete_reconstructions = self.st.starts.pending_reconstruction_starts();
         if let Some(first_start) = incomplete_reconstructions.iter().min().copied() {
             let mut next = first_start.next();
-            while let Some(chunk) = OplogRange::within(next, replay_target, CHUNK_SIZE)
-                && !incomplete_reconstructions.is_empty()
-            {
-                let entries = self.cursor.read_oplog(chunk.start, chunk.count).await?;
+            while next <= replay_target && !incomplete_reconstructions.is_empty() {
+                let available = u64::from(replay_target) - u64::from(next) + 1;
+                let entries = self
+                    .cursor
+                    .read_oplog(next, CHUNK_SIZE.min(available))
+                    .await?;
                 let last_read = entries
                     .last()
                     .expect("the fixed replay target must remain readable")

@@ -23,14 +23,12 @@
 //! expired.
 //!
 //! The rules here are pure functions over the retained start. A walk in chunks reads with
-//! [`OplogRetention::chunk`], a public page reads with [`OplogRetention::page`], and a walk with a
-//! fixed start reads with [`OplogRange::within`]. Four reads keep their own count: the refill of
-//! the replay buffer (`raw_read_next_oplog_entry` in `durable_host/replay_state/cursor/io.rs`)
-//! reads one entry also when the read position is after the replay target, where
-//! [`OplogRange::within`] gives no range; the lookup of the component revision of a public read
+//! [`OplogRetention::chunk`], and a public page reads with [`OplogRetention::page`]. A walk with
+//! a fixed start, such as a fold from a status baseline, a replay cursor walk or the two
+//! whole-history walks below, counts its reads itself and does not move its start, so the layer
+//! refuses its read below the start. The lookup of the component revision of a public read
 //! (`scan_component_revision` in `model/public_oplog/reading.rs`) charges each batch to its
-//! allowance; and the two whole-history walks `max_issued_epoch` and the creation receipt of a
-//! fork export, below, count from their fixed start.
+//! allowance.
 //! A read that reaches below the start fails with [`OplogReadError::Expired`], which names the
 //! start. A [`OplogReadError::Gap`] that ends below the start becomes the same error. A gap that
 //! ends at or after the start stays a read error, because entries that the oplog keeps are
