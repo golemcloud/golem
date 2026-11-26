@@ -3009,7 +3009,7 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
     assert_eq!(at_the_largest_index.last_index, indices[4]);
 
     // The range drops the matches before and after it.
-    let search = search_public_oplog_page(
+    let search = search_public_oplog_remote(
         Arc::new(PanicComponentService),
         oplog_service.clone(),
         &owned_agent_id,
@@ -3017,7 +3017,7 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
         test_component_id(),
         OwnerKind::ComponentAgent,
         None,
-        ComponentRevision::INITIAL,
+        None,
         OplogRange::new(Some(indices[1]), Some(indices[3])).unwrap(),
         limits(100),
         "needle",
@@ -3028,9 +3028,9 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
     .unwrap();
     assert_eq!(page_indices(&search.entries), vec![(indices[2], true)]);
     assert_eq!(search.last_index, indices[3]);
-    assert_eq!(search.next_oplog_index, indices[4]);
+    assert_eq!(search.next, None);
 
-    let search_to_the_largest_index = search_public_oplog_page(
+    let search_to_the_largest_index = search_public_oplog_remote(
         Arc::new(PanicComponentService),
         oplog_service.clone(),
         &owned_agent_id,
@@ -3038,7 +3038,7 @@ async fn oplog_pages_and_searches_read_only_their_range_and_clamp_its_end_to_the
         test_component_id(),
         OwnerKind::ComponentAgent,
         None,
-        ComponentRevision::INITIAL,
+        None,
         OplogRange::new(Some(indices[3]), Some(OplogIndex::from_u64(u64::MAX))).unwrap(),
         limits(100),
         "needle",
@@ -3077,8 +3077,8 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
     }
     oplog.commit(CommitLevel::Always).await.unwrap();
 
-    let search = |from: OplogIndex| {
-        search_public_oplog_page(
+    let search = |cursor: Option<OplogCursor>| {
+        search_public_oplog_remote(
             Arc::new(PanicComponentService),
             oplog_service.clone(),
             &owned_agent_id,
@@ -3086,8 +3086,8 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
-            ComponentRevision::INITIAL,
-            OplogRange::new(Some(from), None).unwrap(),
+            cursor,
+            OplogRange::ALL,
             PublicOplogPageLimits {
                 count: 3,
                 max_bytes: 2500,
@@ -3101,14 +3101,15 @@ async fn oplog_search_pages_share_the_byte_budget_across_chunks_and_count_only_m
 
     // The 2000 byte log entries do not match and do not count against the budget, so the first
     // two matches fit, from different chunks, and the third match ends the page.
-    let first = search(OplogIndex::INITIAL).await.unwrap();
+    let first = search(None).await.unwrap();
     assert_eq!(
         page_indices(&first.entries),
         vec![(matching[0], true), (matching[1], true)]
     );
-    assert_eq!(first.next_oplog_index, matching[2]);
+    let cursor = first.next.expect("the third match ends the first page");
+    assert_eq!(cursor.next_oplog_index, matching[2].as_u64());
 
-    let second = search(first.next_oplog_index).await.unwrap();
+    let second = search(Some(cursor)).await.unwrap();
     assert_eq!(page_indices(&second.entries), vec![(matching[2], true)]);
 }
 
@@ -3140,8 +3141,8 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
 
     // A first chunk of two entries finds one match. The search then reads only the one entry
     // that it still needs, not a full chunk, which would find two more matches.
-    let page = |from: OplogIndex| {
-        search_public_oplog_page(
+    let page = |cursor: Option<OplogCursor>| {
+        search_public_oplog_remote(
             Arc::new(PanicComponentService),
             oplog_service.clone(),
             &owned_agent_id,
@@ -3149,8 +3150,8 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
-            ComponentRevision::INITIAL,
-            OplogRange::new(Some(from), None).unwrap(),
+            cursor,
+            OplogRange::ALL,
             PublicOplogPageLimits {
                 count: 2,
                 max_bytes: 1_000_000,
@@ -3161,13 +3162,14 @@ async fn an_oplog_search_returns_at_most_count_matches_and_resumes_after_the_las
             ClaimVisibility::Hidden,
         )
     };
-    let first = page(OplogIndex::INITIAL).await.unwrap();
+    let first = page(None).await.unwrap();
     assert_eq!(
         page_indices(&first.entries),
         vec![(matching[0], true), (matching[1], true)]
     );
-    assert_eq!(first.next_oplog_index, matching[2]);
-    let second = page(first.next_oplog_index).await.unwrap();
+    let cursor = first.next.expect("the second match ends the first page");
+    assert_eq!(cursor.next_oplog_index, matching[2].as_u64());
+    let second = page(Some(cursor)).await.unwrap();
     assert_eq!(
         page_indices(&second.entries),
         vec![(matching[2], true), (matching[3], true)]
@@ -3321,7 +3323,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         time: std::time::Duration::from_secs(600),
     };
     let search = |start: OplogIndex, revision: ComponentRevision| {
-        search_public_oplog_page(
+        search_public_oplog_remote(
             Arc::new(PanicComponentService),
             oplog_service.clone(),
             &owned_agent_id,
@@ -3329,8 +3331,13 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
             test_component_id(),
             OwnerKind::ComponentAgent,
             None,
-            revision,
-            OplogRange::new(Some(start), None).unwrap(),
+            Some(OplogCursor {
+                next_oplog_index: start.as_u64(),
+                current_component_revision: revision.into(),
+                query_hash: OplogCursor::query_hash(Some("needle")),
+                scan_to: None,
+            }),
+            OplogRange::ALL,
             PublicOplogPageLimits {
                 count: 3,
                 max_bytes: 1_000_000,
@@ -3367,13 +3374,9 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         .await
         .unwrap();
     assert!(first.entries.is_empty());
-    let cursor = oplog_page_cursor(
-        first.next_oplog_index,
-        first.current_component_revision,
-        first.last_index,
-        Some("needle"),
-    )
-    .expect("a page that ends before the last entry has a cursor");
+    let cursor = first
+        .next
+        .expect("a page that ends before the last entry has a cursor");
     assert_eq!(
         cursor,
         OplogCursor {
@@ -3422,13 +3425,9 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
         .await
         .unwrap();
     assert_eq!(page_indices(&second.entries), vec![(indices[9], true)]);
-    let second_cursor = oplog_page_cursor(
-        second.next_oplog_index,
-        second.current_component_revision,
-        second.last_index,
-        Some("needle"),
-    )
-    .expect("the budget ends the second search before the last entry");
+    let second_cursor = second
+        .next
+        .expect("the budget ends the second search before the last entry");
     assert_eq!(second_cursor.next_oplog_index, indices[12].as_u64());
     assert_eq!(
         second_cursor.current_component_revision,
@@ -3438,15 +3437,7 @@ async fn a_cursor_carries_the_next_index_and_the_revision_and_a_stale_cursor_is_
     // A page that reads the last entry has no cursor.
     let third = search(indices[12], updated_revision).await.unwrap();
     assert!(third.entries.is_empty());
-    assert_eq!(
-        oplog_page_cursor(
-            third.next_oplog_index,
-            third.current_component_revision,
-            third.last_index,
-            Some("needle"),
-        ),
-        None
-    );
+    assert_eq!(third.next, None);
 
     // A cursor at the last entry is valid; one past it never came from a page of this oplog.
     for (next_oplog_index, accepted) in [

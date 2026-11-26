@@ -398,44 +398,6 @@ pub async fn search_public_oplog(
     .await
 }
 
-/// Searches the oplog for a remote reader. The result is an oplog page with the limits of
-/// `get_public_oplog_page`; only the matching entries count against the limits. The search reads
-/// from the first index of `range`. It reads no entry after the end of `range`, and stops early
-/// when `budget` is spent.
-pub async fn search_public_oplog_page(
-    component_service: Arc<dyn ComponentService>,
-    oplog_service: Arc<dyn OplogService>,
-    owned_agent_id: &OwnedAgentId,
-    agent_mode: AgentMode,
-    owner_component_id: ComponentId,
-    owner_kind: OwnerKind,
-    agent_type_name: Option<&AgentTypeName>,
-    initial_component_revision: ComponentRevision,
-    range: OplogRange,
-    limits: PublicOplogPageLimits,
-    query: &str,
-    budget: ScanBudget,
-    claims: ClaimVisibility,
-) -> Result<PublicOplogSearchResult<golem_api_grpc::proto::golem::worker::OplogPageEntry>, String> {
-    search_public_oplog_with(
-        component_service,
-        oplog_service,
-        owned_agent_id,
-        agent_mode,
-        owner_component_id,
-        owner_kind,
-        agent_type_name,
-        initial_component_revision,
-        range,
-        limits.count,
-        &Query::parse(query)?,
-        RangeScan::within(budget),
-        claims,
-        RemotePage::new(limits),
-    )
-    .await
-}
-
 /// An oplog search page for a remote reader.
 #[derive(Debug)]
 pub struct PublicOplogSearchPage {
@@ -447,7 +409,7 @@ pub struct PublicOplogSearchPage {
 }
 
 /// Searches one page of `range` for a remote reader, from `cursor`. The page has the limits of
-/// [`search_public_oplog_page`].
+/// [`get_public_oplog_page`]; only the matching entries count against the limits.
 ///
 /// `budget` covers the whole call. A search of a range with a start first scans the oplog before
 /// the start for the component revision at the start. That scan counts against `budget`. When
