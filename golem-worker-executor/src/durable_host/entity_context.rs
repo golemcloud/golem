@@ -164,7 +164,22 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .then(|| self.state.invocations.loop_key().invocation_id())
             .flatten()
             .map(|key| {
-                golem_common::model::OwnedInvocationId::new(self.state.owned_agent_id.agent_id, key)
+                let metadata = self.public_state.worker().get_initial_worker_metadata();
+                let owner = if metadata.owner_kind
+                    == golem_common::model::agent::OwnerKind::StandaloneTool
+                {
+                    golem_common::model::InvocationOwner::Tool(
+                        metadata
+                            .standalone_tool
+                            .as_ref()
+                            .expect("standalone owner has a validated Create identity")
+                            .tool_name
+                            .clone(),
+                    )
+                } else {
+                    golem_common::model::InvocationOwner::Agent(self.state.owned_agent_id.agent_id)
+                };
+                golem_common::model::OwnedInvocationId::new(owner, key)
             });
         self.state.loop_invocation_state_mut().invocation_id = invocation_id;
     }

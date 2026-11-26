@@ -1339,6 +1339,8 @@ pub trait Streaming {
 
     async fn no_stream(&self, value: String) -> Result<String, StreamingError>;
 
+    async fn invocation_id(&self, rpc_name: Option<String>) -> String;
+
     async fn echo_secret(
         &self,
         value: GuestSecretHandle,
@@ -2572,6 +2574,25 @@ impl Streaming for StreamingImpl {
         }
         summary.output_closed |= stdout.finish().await.is_err();
         Ok(summary)
+    }
+
+    async fn invocation_id(&self, rpc_name: Option<String>) -> String {
+        let id = golem_rust::golem_agentic::golem::agent::invocation_context::invocation_id()
+            .expect("tool runs inside an invocation");
+        if let Some(name) = rpc_name {
+            let _report = CallerReportClient::upsert(name).report().await;
+        }
+        let owner = match id.owner {
+            wire::InvocationOwner::Agent(agent) => {
+                golem_rust::Uuid::from_u64_pair(agent.uuid.high_bits, agent.uuid.low_bits)
+                    .to_string()
+            }
+            wire::InvocationOwner::Tool(name) => name,
+        };
+        format!(
+            "{owner}.{}",
+            golem_rust::Uuid::from_u64_pair(id.id.high_bits, id.id.low_bits)
+        )
     }
 
     async fn no_stream(&self, value: String) -> Result<String, StreamingError> {

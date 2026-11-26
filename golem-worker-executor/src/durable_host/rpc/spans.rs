@@ -30,17 +30,19 @@ use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-pub(super) fn invocation_metadata(invocation_id: &OwnedInvocationId) -> InvocationMetadata {
-    let agent_id = *invocation_id
-        .agent_id()
-        .expect("agent RPC has an agent-owned invocation ID");
-    InvocationMetadata {
+pub(super) fn invocation_metadata(
+    invocation_id: &OwnedInvocationId,
+) -> Result<InvocationMetadata, WorkerExecutorError> {
+    let agent_id = *invocation_id.agent_id().ok_or_else(|| {
+        WorkerExecutorError::runtime("agent RPC has a tool-owned target invocation ID")
+    })?;
+    Ok(InvocationMetadata {
         agent_id: agent_id.into(),
         invocation_id: golem_schema::schema::wit::wire::InvocationId {
             owner: golem_schema::schema::wit::wire::InvocationOwner::Agent(agent_id.into()),
             id: invocation_id.uuid().into(),
         },
-    }
+    })
 }
 
 pub(super) fn rpc_span_finished<T>(

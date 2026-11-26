@@ -271,7 +271,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .table()
                         .push(CancellationTokenEntry {
                             schedule_id,
-                            metadata: invocation_metadata(&invocation_id),
+                            metadata: invocation_metadata(&invocation_id)?,
                             owner,
                             recipient: remote_agent_id,
                         })
@@ -433,7 +433,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         })?;
         let cancellation_token = CancellationTokenEntry {
             schedule_id: serialized_result,
-            metadata: invocation_metadata(&invocation_id),
+            metadata: invocation_metadata(&invocation_id)?,
             owner: self.owned_agent_id().clone(),
             recipient: remote_agent_id,
         };

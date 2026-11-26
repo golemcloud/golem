@@ -23150,6 +23150,175 @@ async fn native_external_tool_scalar_admission(
     Ok(())
 }
 
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn tool_guest_invocation_id_names_its_public_owner_and_can_call_an_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::{ExternalToolInvocation, InvocationStart};
+    use golem_common::model::{
+        AgentId, InvocationOwner, InvocationRequestKey, OwnedInvocationId, StandaloneToolInvocation,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let environment_state = Arc::new(TestEnvironmentStateService::default());
+    let overrides = TestExecutorOverrides {
+        environment_state_service: Some(environment_state.clone()),
+        wrap_component_service: Some(Arc::new(|inner| {
+            Arc::new(BaselineOwnerComponentService {
+                inner,
+                owner_loads: Default::default(),
+                http_port: 0,
+                extra_env: Default::default(),
+            })
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let provider_component = executor
+        .component_dep(&context.default_environment_id, provider)
+        .store()
+        .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, caller)
+        .name("virtual-native-policy")
+        .store()
+        .await?;
+    let metadata = extract_component_metadata(
+        &deps
+            .component_directory
+            .join(format!("{}.wasm", provider.wasm_name)),
+        false,
+        true,
+    )
+    .await?;
+    let mut deployment = deployment_state(
+        context.account_id,
+        provider_component.id,
+        provider_component.revision,
+        "golem-it:tool-streaming-rust-provider",
+        "ToolStreamingCaller",
+        metadata.tools,
+    );
+    let tool = ToolName::try_from("streaming").unwrap();
+    let type_id = deployment.registered_tools[&tool].type_id;
+    let mut baseline_bindings = deployment.tool_bindings[&ToolBindingOwner::AgentType {
+        agent_type_name: AgentTypeName("ToolStreamingCaller".into()),
+    }]
+        .clone();
+    let baseline = ToolBindingOwner::ComponentBaseline {
+        component_id: component.id,
+    };
+    for binding in baseline_bindings.values_mut() {
+        binding.owner = baseline.clone();
+    }
+    deployment.tool_bindings.insert(baseline, baseline_bindings);
+    environment_state.set_tool_deployment(
+        context.default_environment_id,
+        component.id,
+        component.revision,
+        Some(deployment),
+    );
+    let hosted = executor
+        .start_agent(&component.id, agent_key!("ToolStreamingCaller", "guest-id"))
+        .await?;
+    let fingerprint = executor.get_worker_metadata(&hosted).await?.fingerprint;
+    for standalone in [true, false] {
+        let key = IdempotencyKey::fresh();
+        let request_key =
+            InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key));
+        let id = StandaloneToolInvocation::unique_part(
+            context.default_environment_id,
+            &tool,
+            executor.auth_ctx().idempotency_scope(),
+            "invocation-id",
+            Some(&key),
+        );
+        let owner = if standalone {
+            AgentId::standalone_tool_invocation(context.default_environment_id, type_id, id)
+        } else {
+            hosted.agent_id
+        };
+        let expected = if standalone {
+            OwnedInvocationId::new(InvocationOwner::Tool(tool.clone()), id)
+        } else {
+            request_key.finalize(owner, fingerprint, "tool:streaming/invocation-id")
+        };
+        let input = TypedSchemaValue::new(
+            SchemaGraph::anonymous(SchemaType::record(vec![
+                golem_common::schema::NamedFieldType {
+                    name: "rpc-name".into(),
+                    body: SchemaType::option(SchemaType::string()),
+                    metadata: Default::default(),
+                },
+            ])),
+            SchemaValue::Record {
+                fields: vec![SchemaValue::Option {
+                    inner: standalone
+                        .then(|| Box::new(SchemaValue::String("standalone-guest-id".into()))),
+                }],
+            },
+        );
+        let result = executor
+            .invoke_agent_session(InvocationStart {
+                target: Some(crate::agent::id_target(&OwnedAgentId::new(
+                    context.default_environment_id,
+                    &owner,
+                ))),
+                component_id: Some(component.id.into()),
+                idempotency_key: Some(
+                    if standalone {
+                        IdempotencyKey::new(id.to_string())
+                    } else {
+                        key
+                    }
+                    .into(),
+                ),
+                request_key: Some(request_key.into()),
+                auth_ctx: Some(executor.auth_ctx().into()),
+                caller: Some(callers::account(context.account_id).into()),
+                environment_id: Some(context.default_environment_id.into()),
+                component_owner_account_id: Some(context.account_id.into()),
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+                expected_callee_fingerprint: (!standalone).then(|| fingerprint.0.into()),
+                external_tool: Some(ExternalToolInvocation {
+                    tool_name: tool.to_string(),
+                    command_path: vec!["invocation-id".into()],
+                    input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+                    fresh_owner: standalone,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .await?;
+        let Some(
+            golem_api_grpc::proto::golem::worker::invocation_session_result::Result::ToolResult(
+                result,
+            ),
+        ) = result.result
+        else {
+            anyhow::bail!("expected a tool result");
+        };
+        let result: golem_common::model::oplog::PublicExternalToolResult =
+            result.try_into().map_err(anyhow::Error::msg)?;
+        let golem_common::model::oplog::PublicExternalToolResult::Success(result) = result else {
+            anyhow::bail!("tool failed: {result:?}");
+        };
+        assert_eq!(
+            result.result.unwrap().value(),
+            &SchemaValue::String(expected.to_string())
+        );
+    }
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    Ok(())
+}
+
 struct BaselineOwnerComponentService {
     inner: Arc<dyn golem_worker_executor::services::component::ComponentService>,
     owner_loads: Arc<AtomicUsize>,
