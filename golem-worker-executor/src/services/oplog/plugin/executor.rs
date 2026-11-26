@@ -213,6 +213,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                 use std::collections::HashMap;
                 let latest_status = &worker_metadata.last_known_status;
                 golem_api_grpc::proto::golem::worker::AgentMetadata {
+                    origin: i32::from(worker_metadata.origin()),
                     agent_id: Some(worker_metadata.agent_id.into()),
                     owner_kind: worker_metadata.owner_kind.into(),
                     agent_type_name: worker_metadata
@@ -282,6 +283,7 @@ impl<Ctx: WorkerCtx> OplogProcessorPlugin for PerExecutorOplogProcessorPlugin<Ct
                         .map(|region| region.clone().into())
                         .collect(),
                     oplog_idx: u64::from(latest_status.oplog_idx),
+                    state_oplog_idx: u64::from(latest_status.state_oplog_idx),
                     fingerprint: Some(worker_metadata.fingerprint.0.into()),
                 }
             };

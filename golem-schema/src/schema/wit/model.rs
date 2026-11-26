@@ -16,7 +16,6 @@ use super::wire;
 use crate::model::{
     AccountId, AgentId, CardId, ComponentId, Datetime, EnvironmentId, PromiseId, Uuid,
 };
-use chrono::TimeZone;
 
 pub fn uuid_to_wire(uuid: &Uuid) -> wire::Uuid {
     let (high_bits, low_bits) = uuid.as_u64_pair();
@@ -32,15 +31,16 @@ pub fn uuid_from_wire(uuid: &wire::Uuid) -> Uuid {
 
 pub fn datetime_to_wire(datetime: &Datetime) -> wire::Datetime {
     wire::Datetime {
-        seconds: datetime.timestamp(),
-        nanoseconds: datetime.timestamp_subsec_nanos(),
+        seconds: datetime.as_nanosecond().div_euclid(1_000_000_000) as i64,
+        nanoseconds: datetime.as_nanosecond().rem_euclid(1_000_000_000) as u32,
     }
 }
 
 pub fn datetime_from_wire(datetime: &wire::Datetime) -> Option<Datetime> {
-    chrono::Utc
-        .timestamp_opt(datetime.seconds, datetime.nanoseconds)
-        .single()
+    if datetime.nanoseconds >= 1_000_000_000 {
+        return None;
+    }
+    jiff::Timestamp::new(datetime.seconds, datetime.nanoseconds as i32).ok()
 }
 
 impl From<&EnvironmentId> for wire::EnvironmentId {

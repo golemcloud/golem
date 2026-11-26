@@ -25,7 +25,7 @@
 //! uniquely within an environment.
 
 use anyhow::Context;
-use chrono::{DateTime, Utc};
+
 use golem_client::api::{RegistryServiceClient, ResourcesClient};
 use golem_common::model::account::{AccountCreation, AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationCreation, ApplicationName};
@@ -150,7 +150,7 @@ pub async fn run_prep(deps: &BenchmarkTestDependencies) -> anyhow::Result<ChaosP
         .create_token(
             &account.id.0,
             &TokenCreation {
-                expires_at: DateTime::<Utc>::MAX_UTC,
+                expires_at: jiff::Timestamp::MAX,
             },
         )
         .await

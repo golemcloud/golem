@@ -574,7 +574,7 @@ export const getRemoteAgentById = (
       try: () => agentIdToWit(agentId),
       catch: (cause): RemoteCallError => ({
         _tag: "InvalidUuidError",
-        value: String(agentId?.uuid),
+        value: String(agentId),
         reason: String(cause),
       }),
     })

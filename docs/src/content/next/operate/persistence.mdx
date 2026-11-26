@@ -67,15 +67,17 @@ With `namespace_prefixes = true`, the keys have these prefixes:
 
 | Blobs | Key prefix |
 | --- | --- |
-| Compilation cache | `<object_prefix>/compilation_cache/<environment id>/` |
+| Compilation cache | `<object_prefix>/compilation_cache/<Wasm hash>/` |
 | WASI Blob Store data | `<object_prefix>/custom_data/<environment id>/` |
 | Oplog payloads | `<object_prefix>/oplog_payload/<agent mode>/<environment id>/<agent>/` |
 | Compressed oplog | `<object_prefix>/compressed_oplog/<agent mode>/<environment id>/<component id>/<layer>/` |
 | Initial agent files | `<object_prefix>/initial_agent_files/<environment id>/` |
-| Components | `<object_prefix>/component_store/<environment id>/` |
+| Component uploads | `<object_prefix>/component_uploads/<account id>/` |
 | Filesystem snapshots | `<object_prefix>/filesystem_snapshots/<environment id>/<agent>/<incarnation id>/` |
 
 Without `object_prefix`, each prefix starts at the segment of its kind. `<agent mode>` is `durable` or `ephemeral`, and `<layer>` is the index of the archive layer in the blob storage, from 0. `<agent>` is the agent part of the location of [filesystem snapshots](/next/operate/filesystem_snapshots/recovery#where-the-snapshots-are). The same segments make the directories of the file system blob storage below its `root`.
+
+Component upload keys end in `<sha256>-<uuid>`. With `namespace_prefixes = false`, the key is `<object_prefix>/component_uploads/<account id>/<sha256>-<uuid>` in `components_bucket`, with `<object_prefix>/` omitted when it is not configured.
 
 To give a service access to one kind of blob only, use a policy on its key prefix. For example, without `object_prefix`, grant the object permissions on `arn:aws:s3:::golem/initial_agent_files/*`, and grant `s3:ListBucket` on `arn:aws:s3:::golem` with the condition that `s3:prefix` starts with `initial_agent_files/`. The services list objects to read and delete directories.
 
@@ -87,7 +89,11 @@ To give a service access to one kind of blob only, use a policy on its key prefi
 
 The Golem **registry service** stores original component Wasm files in its configured blob storage, which supports S3, local filesystem, SQLite, and in-memory backends. It exposes them through its [download API](/next/rest-api/component) for the worker executor. The Wasm files must be **compiled** to native code before execution, which is time-consuming. To reduce agent startup time, these compiled binaries are cached in the worker executor's **blob storage**.
 
+If the registry database and its blob storage both use SQLite, configure separate database files. An upload can repair a missing Wasm file while the registry holds a write transaction. If both stores use the same file, that transaction blocks the repair write.
+
 The **component compilation service** is a special, horizontally scalable component of the Golem system which shares this storage with worker executors and is capable of precompiling components before they are being used by any of the executors.
+
+The compilation cache uses the Wasm content hash and the Wasmtime artifact fingerprint. Environments with identical Wasm share the same compiled artifact. After all services use the new keys, you can remove old filesystem entries at `compilation_cache/<environment id>/<component id>/<revision>/<fingerprint>.cwasm`. For S3, prepend the configured object prefix. If S3 namespace prefixes were disabled, the old path inside the compilation cache bucket omitted `compilation_cache/`. For SQLite, remove rows whose namespace starts with `compilation_cache-`, and keep the new `compilation_cache` namespace. Do not delete the original component Wasm.
 
 ## Oplog
 

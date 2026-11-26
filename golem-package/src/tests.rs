@@ -379,6 +379,38 @@ async fn expansion_keeps_only_the_selected_tool_in_declarations_and_metadata() {
 }
 
 #[test]
+async fn expansion_refuses_a_replacement_at_the_locked_url() {
+    let (spec, mut blobs) = sample();
+    let (digest, _) = pack(&spec, &blobs).unwrap();
+    let mut replacement = spec;
+    replacement.components.values_mut().next().unwrap().wasm =
+        add_blob(&mut blobs, WASM, vec![9]).digest;
+    let (replacement_digest, bytes) = pack(&replacement, &blobs).unwrap();
+    assert_ne!(digest, replacement_digest);
+    let pins = Pins::from([(
+        "example".into(),
+        FilePin {
+            source: "https://example.com/package.tar".into(),
+            version: "1.2.3".into(),
+            digest,
+        },
+    )]);
+    let mut effects = MemoryEffects {
+        source: Some(bytes),
+        ..Default::default()
+    };
+    let error = expand(&pins, &pins, &BTreeMap::new(), Path::new("unpack"), &mut effects)
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("Package digest mismatch") && error.contains(&replacement_digest),
+        "{error}"
+    );
+    assert!(effects.cache.is_empty() && effects.files.is_empty());
+}
+
+#[test]
 fn archive_round_trips_and_content_determines_identity() {
     let (mut config, mut layers) = sample();
     let (digest, archive) = pack(&config, &layers).unwrap();

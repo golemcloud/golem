@@ -103,7 +103,7 @@ export type AgentMetadata = {
 
 function wrapAgentMetadata(raw: RawAgentMetadata): AgentMetadata {
   return {
-    agentId: AgentId.from(raw.agentId),
+    agentId: AgentId.fromWit(raw.agentId),
     ...(raw.agentTypeName === undefined ? {} : { agentTypeName: raw.agentTypeName }),
     fingerprint: Uuid.from(raw.fingerprint),
     args: raw.args,
@@ -144,8 +144,8 @@ export function getSelfMetadata(): AgentMetadata {
 /**
  * Get agent metadata.
  */
-export function getAgentMetadata(agentId: RawAgentId): AgentMetadata | undefined {
-  const raw = rawGetAgentMetadata(agentId);
+export function getAgentMetadata(agentId: AgentId): AgentMetadata | undefined {
+  const raw = rawGetAgentMetadata(AgentId.toWit(agentId));
   return raw ? wrapAgentMetadata(raw) : undefined;
 }
 
@@ -153,8 +153,8 @@ export function getAgentMetadata(agentId: RawAgentId): AgentMetadata | undefined
  * Forks an agent at a given oplog index into a new agent of the same type, and returns the ID
  * that Golem issued for the new agent. The new agent has no key.
  */
-export function forkAgent(sourceAgentId: RawAgentId, oplogIdxCutOff: OplogIndex): AgentId {
-  return AgentId.from(rawForkAgent(sourceAgentId, oplogIdxCutOff));
+export function forkAgent(sourceAgentId: AgentId, oplogIdxCutOff: OplogIndex): AgentId {
+  return AgentId.fromWit(rawForkAgent(AgentId.toWit(sourceAgentId), oplogIdxCutOff));
 }
 
 /**
@@ -321,7 +321,7 @@ export function fork(): ForkResult {
   const raw: RawForkResult = rawFork();
   return {
     tag: raw.tag,
-    val: { forkedAgentId: AgentId.from(raw.val.forkedAgentId) },
+    val: { forkedAgentId: AgentId.fromWit(raw.val.forkedAgentId) },
   };
 }
 

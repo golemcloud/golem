@@ -422,6 +422,31 @@ impl DurableStreamStore {
         }))
     }
 
+    /// Returns the terminal of an input stream when the host or the session protocol selected
+    /// it, not the client that produces the input.
+    pub async fn input_server_terminal(
+        &self,
+        stream_id: StreamId,
+    ) -> Result<Option<StreamTerminal>, StreamStoreError> {
+        let index = self.index_for_terminal([], stream_id).await?;
+        let stream = index
+            .streams
+            .get(&stream_id)
+            .ok_or(StreamStoreError::UnknownStream(stream_id))?;
+        Ok(stream
+            .terminal_event
+            .as_ref()
+            .filter(|event| {
+                event
+                    .terminal_author
+                    .is_some_and(|author| author != StreamTerminalAuthor::Guest)
+            })
+            .and_then(|event| match &event.payload {
+                CommittedProducerStreamEventPayload::Terminal(terminal) => Some(terminal.clone()),
+                _ => None,
+            }))
+    }
+
     /// Returns the input high-water mark while validating the consumer attachment.
     pub async fn attached_input_high_water(
         &self,

@@ -1685,7 +1685,7 @@ async fn resident_unload_retains_accepted_operations_until_settlement() {
 
         let clock = crate::services::resource_usage_metering::TestClock::new_at(
             Instant::now(),
-            chrono::Utc::now(),
+            jiff::Timestamp::now(),
         );
         let (filesystem, control, window, _generation_handle, node) =
             billing_metered_resident_with_open_node_for_unload_test(Some(clock.clone())).await;

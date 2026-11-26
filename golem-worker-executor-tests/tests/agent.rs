@@ -841,7 +841,7 @@ async fn constructor_failure_refuses_admission_on_an_already_acquired_worker(
                 worker
                     .schedule_invocation(
                         invocation,
-                        chrono::Utc::now() + chrono::Duration::hours(1),
+                        jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
                     )
                     .await
                     .expect_err("a failed constructor must refuse a new schedule")
@@ -1341,7 +1341,7 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
     for schedule_at in [
         None,
         Some(prost_types::Timestamp {
-            seconds: chrono::Utc::now().timestamp() + 1,
+            seconds: jiff::Timestamp::now().as_second() + 1,
             nanos: 0,
         }),
     ] {
@@ -1390,7 +1390,10 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
         golem_common::model::ShardAssignment::unexpiring(1, [golem_common::model::ShardId::new(0)]);
     assert_eq!(
         scheduler
-            .count_due(chrono::Utc::now() + chrono::Duration::days(1), &assignment)
+            .count_due(
+                jiff::Timestamp::now() + jiff::SignedDuration::from_hours((1) * 24),
+                &assignment
+            )
             .await?,
         0,
         "rejection must not create an immediate or delayed scheduled action"
@@ -1557,6 +1560,95 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
     let stream_free_metadata = executor.get_worker_metadata(&stream_free_worker_id).await?;
     assert_eq!(
         stream_free_metadata.component_revision,
+        ComponentRevision::INITIAL
+    );
+    Ok(())
+}
+
+/// A same-key external REST retry by ID observes a stream-free result that a public session
+/// recorded. Whether the result may cross the REST boundary comes from the component revision
+/// that recorded it, so it still holds after a deployment removes the agent type and the agent
+/// is reconstructed.
+#[test]
+#[timeout("2 minutes")]
+#[tracing::instrument]
+async fn rest_retry_of_a_session_result_uses_the_recorded_revision(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::{
+        AgentInvocationMode, InvocationFreshnessDisposition,
+    };
+    use golem_common::model::agent::{AgentMethodInput, NativeMethodInput};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let agent = agent_key!("RustMethodFailure", "rest-retry-recorded-revision");
+    let worker = executor.start_agent(&component.id, agent.clone()).await?;
+    let key = IdempotencyKey::fresh();
+    let start_for = |executor: &TestWorkerExecutor,
+                     target: golem_api_grpc::proto::golem::worker::AgentTarget|
+     -> anyhow::Result<InvocationStart> {
+        let (_, input) = data_value!().into_parts();
+        Ok(InvocationStart {
+            target: Some(target),
+            component_id: Some(component.id.into()),
+            method_name: Some("increment".to_string()),
+            input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+            mode: AgentInvocationMode::Await as i32,
+            idempotency_key: Some(key.clone().into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
+            request_key: Some(
+                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
+                    .into(),
+            ),
+            caller: Some(callers::anonymous().into()),
+            ..Default::default()
+        })
+    };
+    let rest_retry = async |executor: &TestWorkerExecutor| -> anyhow::Result<_> {
+        let mut start = start_for(executor, id_target(&worker))?;
+        let (native, _) =
+            NativeMethodInput::capture(start.input.take().expect("input"), Vec::new())
+                .map_err(anyhow::Error::msg)?;
+        start.captured_method_input = Some(
+            golem_common::serialization::serialize(&AgentMethodInput::Native(
+                native.for_external_rest(),
+            ))
+            .map_err(anyhow::Error::msg)?,
+        );
+        Ok(executor.invoke_agent_session(start).await?.result)
+    };
+
+    let mut session = start_for(&executor, key_target(&agent)?)?;
+    session.allow_streams = true;
+    session.attempt_id = Some(uuid::Uuid::new_v4().into());
+    let recorded = executor.invoke_agent_session(session).await?.result;
+    assert!(recorded.is_some());
+    assert_eq!(rest_retry(&executor).await?, recorded);
+
+    // The latest revision has no `RustMethodFailure` type.
+    executor
+        .update_component(&component.id, &agent_counters.wasm_name)
+        .await?;
+    drop(executor);
+    let executor = start(deps, &context).await?;
+    assert_eq!(rest_retry(&executor).await?, recorded);
+    assert_eq!(
+        executor
+            .get_worker_metadata(&worker)
+            .await?
+            .component_revision,
         ComponentRevision::INITIAL
     );
     Ok(())
@@ -2113,7 +2205,7 @@ async fn scheduled_ephemeral_invocation_uses_schedule_time_component_revision(
             ),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
             schedule_at: Some(prost_types::Timestamp {
-                seconds: chrono::Utc::now().timestamp() + 3,
+                seconds: jiff::Timestamp::now().as_second() + 3,
                 nanos: 0,
             }),
             idempotency_key: Some(idempotency_key.into()),
@@ -3274,7 +3366,7 @@ async fn assert_every_mode_refuses_fingerprint(
 ) -> anyhow::Result<()> {
     use golem_api_grpc::proto::golem::worker::AgentInvocationMode;
     let later = prost_types::Timestamp {
-        seconds: chrono::Utc::now().timestamp() + 3600,
+        seconds: jiff::Timestamp::now().as_second() + 3600,
         nanos: 0,
     };
     for (mode, schedule_at) in [
@@ -3742,5 +3834,121 @@ async fn a_key_collision_hides_the_other_agents_constructor_failure(
         .unwrap_err();
     assert!(format!("{error:#}").contains("constructor gave up"));
     executor.shutdown_and_wait_for_invocation_loops().await?;
+    Ok(())
+}
+
+/// Concurrent upserts of one key and a keyed create racing them make one agent: every upsert
+/// gets its ID, the oplog has one `Create` entry, and the constructor runs once. The keyed create
+/// either wins, and its overrides are the agent's, or conflicts and leaves its overrides out.
+/// The rounds alternate which side starts first, so that both outcomes occur.
+#[test]
+#[timeout("5m")]
+#[tracing::instrument]
+async fn concurrent_upserts_and_a_keyed_create_of_one_key_make_one_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_service_base::error::worker_executor::WorkerExecutorError;
+
+    const UPSERTS: usize = 8;
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+
+    let mut outcomes = Vec::new();
+    for round in 0..10 {
+        let key = agent_key!("Counter", format!("concurrent-{round}"));
+        let upserts = futures::future::join_all(
+            (0..UPSERTS).map(|_| executor.start_agent(&component.id, key.clone())),
+        );
+        let keyed_create = async {
+            let request = CreateWorkerRequest {
+                ignore_already_existing: false,
+                env: [("OWNER".to_string(), "keyed-create".to_string())].into(),
+                ..executor.create_keyed_worker_request(&component.id, &key)?
+            };
+            Ok::<_, anyhow::Error>(
+                executor
+                    .client
+                    .clone()
+                    .create_worker(request)
+                    .await?
+                    .into_inner(),
+            )
+        };
+        let (upserts, keyed_create) = if round % 2 == 0 {
+            let (keyed_create, upserts) = tokio::join!(keyed_create, upserts);
+            (upserts, keyed_create)
+        } else {
+            tokio::join!(upserts, keyed_create)
+        };
+        let upserts = upserts.into_iter().collect::<anyhow::Result<Vec<_>>>()?;
+        let agent_id = upserts[0].clone();
+        assert!(
+            upserts.iter().all(|id| *id == agent_id),
+            "round {round}: {upserts:?}"
+        );
+        let create_won = match keyed_create?.result {
+            Some(create_worker_response::Result::Success(success)) => {
+                let created: AgentId = success
+                    .agent_id
+                    .ok_or_else(|| anyhow::anyhow!("the create response has no agent ID"))?
+                    .try_into()
+                    .map_err(anyhow::Error::msg)?;
+                assert_eq!(created, agent_id.agent_id, "round {round}");
+                true
+            }
+            Some(create_worker_response::Result::Failure(error)) => {
+                let error = WorkerExecutorError::try_from(error).map_err(anyhow::Error::msg)?;
+                assert!(
+                    matches!(error, WorkerExecutorError::AgentAlreadyExists { .. }),
+                    "round {round}: {error:?}"
+                );
+                false
+            }
+            None => anyhow::bail!("round {round}: missing create result"),
+        };
+
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &key, "increment", data_value!())
+                .await?
+                .into_typed::<u32>()?,
+            1,
+            "round {round}"
+        );
+        let oplog = executor.get_oplog(&agent_id, OplogIndex::INITIAL).await?;
+        let creates = oplog
+            .iter()
+            .filter(|entry| matches!(entry.entry, PublicOplogEntry::Create(_)))
+            .count();
+        let constructor_runs = oplog
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    &entry.entry,
+                    PublicOplogEntry::AgentInvocationStarted(start)
+                        if matches!(start.invocation, PublicAgentInvocation::AgentInitialization(_))
+                )
+            })
+            .count();
+        assert_eq!((creates, constructor_runs), (1, 1), "round {round}");
+        let env = executor.get_worker_metadata(&agent_id).await?.env;
+        assert_eq!(
+            env.get("OWNER").map(String::as_str),
+            create_won.then_some("keyed-create"),
+            "round {round}"
+        );
+        outcomes.push(create_won);
+    }
+    assert!(
+        outcomes.contains(&true) && outcomes.contains(&false),
+        "both outcomes of the race must occur: {outcomes:?}"
+    );
     Ok(())
 }

@@ -81,7 +81,7 @@ use crate::chaos::summary::{
 };
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig};
-use chrono::Utc;
+
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
 use std::sync::Arc;
@@ -122,7 +122,7 @@ pub async fn run(
     signals: &FaultSignals,
     outputs: &OutputPaths,
 ) -> anyhow::Result<ChaosResult> {
-    let started_at = Utc::now();
+    let started_at = jiff::Timestamp::now();
     let workload_config = config.require_workload()?;
     let ownership_config = config.require_ownership()?;
     let history = OperationHistory::new(ScenarioCode::S1.as_str());
@@ -279,13 +279,13 @@ pub async fn run(
         "S1: baseline phase, running mixed workload for {:?}",
         config.phases.baseline()
     );
-    phases.baseline = Some(PhaseWindow::started(Utc::now()));
+    phases.baseline = Some(PhaseWindow::started(jiff::Timestamp::now()));
     let handle = workload::start(ctx.clone(), workload_config);
     tokio::time::sleep(config.phases.baseline()).await;
     routing_snapshots.push(snapshot_routing(deps, "before-fault").await);
     ownership.push(sample_ownership(deps, "before-fault", ownership.last(), false).await);
     if let Some(window) = phases.baseline.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
 
     // A routing table the driver cannot read before the fault means the
@@ -366,7 +366,7 @@ pub async fn run(
     info!("S1: baseline complete ({baseline_operations} confirmed ops), signalling readiness");
     signals.write_baseline_ready(&BaselineReady {
         scenario_code: ScenarioCode::S1.as_str().to_string(),
-        ready_at: Utc::now(),
+        ready_at: jiff::Timestamp::now(),
         baseline_operations,
         // The partition is selected by label. Which executors end up on the far
         // side of it carries no information the run depends on — the claim is
@@ -449,7 +449,7 @@ pub async fn run(
 
     // ── Settle, then judge ──────────────────────────────────────────────────
     ctx.phase.set(Phase::Recovery);
-    phases.recovery = Some(PhaseWindow::started(Utc::now()));
+    phases.recovery = Some(PhaseWindow::started(jiff::Timestamp::now()));
 
     info!(
         "S1: letting shard assignment settle for {:?} before the judged sample",
@@ -485,7 +485,7 @@ pub async fn run(
     sampler.abort();
     handle.stop().await;
     if let Some(window) = phases.recovery.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
     routing_snapshots.push(snapshot_routing(deps, "after-recovery").await);
 
@@ -645,8 +645,8 @@ mod tests {
             agent: agent.to_string(),
             method: "increment".to_string(),
             idempotency_key: format!("{agent}-{op_id:08}"),
-            submitted_at: Utc::now(),
-            completed_at: Some(Utc::now()),
+            submitted_at: jiff::Timestamp::now(),
+            completed_at: Some(jiff::Timestamp::now()),
             attempts: 1,
             outcome,
             duration_ms: 12,
@@ -656,7 +656,7 @@ mod tests {
             error_class: None,
             attempt_log: vec![AttemptRecord {
                 attempt: 1,
-                started_at: Utc::now(),
+                started_at: jiff::Timestamp::now(),
                 duration_ms: 12,
                 returned_value: value,
                 succeeded: outcome == Outcome::Confirmed,
@@ -723,7 +723,7 @@ mod tests {
     fn a_partition_that_cannot_move_anything_is_refused() {
         let one_executor = OwnershipSample {
             at: "before-fault".to_string(),
-            taken_at: Utc::now(),
+            taken_at: jiff::Timestamp::now(),
             number_of_shards: Some(1024),
             shards_per_executor: BTreeMap::from([("172.17.217.159:9093".to_string(), 1024usize)]),
             unassigned_shards: 0,
@@ -753,7 +753,7 @@ mod tests {
     fn an_unchanged_assignment_across_the_fault_is_detected() {
         let before = OwnershipSample {
             at: "before-fault".to_string(),
-            taken_at: Utc::now(),
+            taken_at: jiff::Timestamp::now(),
             number_of_shards: Some(1024),
             shards_per_executor: BTreeMap::from([("a:9093".to_string(), 1024usize)]),
             unassigned_shards: 0,

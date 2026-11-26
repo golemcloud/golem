@@ -16,7 +16,6 @@ use axum::Router;
 use axum::body::Body;
 use axum::http::{Response, StatusCode};
 use axum::routing::post;
-use chrono::Utc;
 use golem_api_grpc::proto::golem::common::ErrorBody;
 use golem_api_grpc::proto::golem::registry::v1::{
     CreateRuntimeCardResponse, CreateRuntimeCardSuccessResponse, RuntimeCardData,
@@ -29,6 +28,7 @@ use golem_common::model::{AgentId, InvocationId, OplogIndex};
 use golem_service_base::clients::registry::{
     GrpcRegistryService, GrpcRegistryServiceConfig, RegistryService, RegistryServiceError,
 };
+use jiff::Timestamp;
 use prost::Message;
 use test_r::test;
 
@@ -79,7 +79,7 @@ async fn call_create_runtime_card(
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,

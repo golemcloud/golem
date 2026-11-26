@@ -71,7 +71,7 @@
 use crate::chaos::PromiseConfig;
 use crate::chaos::history::{Stream, WaiterWakeupLog, WakeupRecord};
 use crate::chaos::workload::{self, WorkloadContext};
-use chrono::{DateTime, TimeZone, Utc};
+
 use golem_common::model::PromiseId;
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::{agent_key, data_value};
@@ -596,10 +596,8 @@ fn parse_wakeups(value: anyhow::Result<Vec<(String, u64, u64)>>) -> Vec<WakeupRe
 /// only produces if its own arm log rolled over. It is kept as the epoch rather
 /// than dropped so the resulting nonsense interval is visible instead of the
 /// wakeup silently going missing.
-fn from_millis(millis: u64) -> DateTime<Utc> {
-    Utc.timestamp_millis_opt(millis as i64)
-        .single()
-        .unwrap_or_else(|| Utc.timestamp_nanos(0))
+fn from_millis(millis: u64) -> jiff::Timestamp {
+    jiff::Timestamp::from_millisecond(millis as i64).unwrap_or(jiff::Timestamp::UNIX_EPOCH)
 }
 
 #[cfg(test)]
@@ -637,6 +635,6 @@ mod tests {
 
     #[test]
     fn an_agent_timestamp_of_zero_stays_visible_as_the_epoch() {
-        assert_eq!(from_millis(0).timestamp_millis(), 0);
+        assert_eq!(from_millis(0).as_millisecond(), 0);
     }
 }

@@ -119,7 +119,7 @@ use crate::chaos::history::{OperationRecord, Stream};
 use crate::chaos::pinned::routing_agent_id;
 use crate::chaos::split::{self, FaultWindow, Group, PodSplit, Window};
 use crate::chaos::workload::{QUOTA_COUNTER_AGENT, WorkloadContext};
-use chrono::{DateTime, Utc};
+
 use golem_common::base_model::OplogIndex;
 use golem_common::model::oplog::PublicOplogEntry;
 use golem_test_framework::dsl::TestDsl;
@@ -167,10 +167,10 @@ pub struct ClockProbe {
     /// different reports.
     pub window: Window,
     /// The driver's clock, immediately before the invocation.
-    pub asked_at: DateTime<Utc>,
+    pub asked_at: jiff::Timestamp,
     /// The executor's stamp on the oplog entry, when it could be read.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub stamped_at: Option<DateTime<Utc>>,
+    pub stamped_at: Option<jiff::Timestamp>,
     /// `stamped_at - asked_at`, in milliseconds.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub offset_ms: Option<i64>,
@@ -495,7 +495,7 @@ pub async fn probe_clock(ctx: &WorkloadContext, agent: &str, group: Group) -> Cl
         &routing_agent_id(ctx, QUOTA_COUNTER_AGENT, agent),
     );
 
-    let failed = |asked_at: DateTime<Utc>, error: String| ClockProbe {
+    let failed = |asked_at: jiff::Timestamp, error: String| ClockProbe {
         agent: agent.to_string(),
         group,
         window: Window::Unknown,
@@ -508,10 +508,15 @@ pub async fn probe_clock(ctx: &WorkloadContext, agent: &str, group: Group) -> Cl
     let before =
         match tokio::time::timeout(PROBE_TIMEOUT, ctx.user.get_oplog_last_index(&agent_id)).await {
             Ok(Ok(index)) => index,
-            Ok(Err(e)) => return failed(Utc::now(), format!("reading the oplog length: {e:#}")),
+            Ok(Err(e)) => {
+                return failed(
+                    jiff::Timestamp::now(),
+                    format!("reading the oplog length: {e:#}"),
+                );
+            }
             Err(_) => {
                 return failed(
-                    Utc::now(),
+                    jiff::Timestamp::now(),
                     format!("reading the oplog length timed out after {PROBE_TIMEOUT:?}"),
                 );
             }
@@ -519,7 +524,7 @@ pub async fn probe_clock(ctx: &WorkloadContext, agent: &str, group: Group) -> Cl
 
     // Taken as late as possible, so the interval this reading has to absorb is
     // the invocation alone rather than the invocation plus the read before it.
-    let asked_at = Utc::now();
+    let asked_at = jiff::Timestamp::now();
     let parsed = golem_common::agent_key!(QUOTA_COUNTER_AGENT, agent.to_string());
     if let Err(e) = tokio::time::timeout(
         PROBE_TIMEOUT,
@@ -571,7 +576,7 @@ pub async fn probe_clock(ctx: &WorkloadContext, agent: &str, group: Group) -> Cl
         window: Window::Unknown,
         asked_at,
         stamped_at: Some(stamped_at),
-        offset_ms: Some((stamped_at - asked_at).num_milliseconds()),
+        offset_ms: Some((stamped_at - asked_at).as_millis() as i64),
         error: None,
     }
 }
@@ -583,12 +588,10 @@ pub async fn probe_clock(ctx: &WorkloadContext, agent: &str, group: Group) -> Cl
 /// of the serialised form whatever the entry turned out to be. Going through
 /// JSON rather than matching thirty variants keeps this from needing an arm per
 /// entry kind, which is a list that grows.
-fn entry_timestamp(entry: &PublicOplogEntry) -> Option<DateTime<Utc>> {
+fn entry_timestamp(entry: &PublicOplogEntry) -> Option<jiff::Timestamp> {
     let value = serde_json::to_value(entry).ok()?;
     let raw = value.get("timestamp")?.as_str()?;
-    DateTime::parse_from_rfc3339(raw)
-        .ok()
-        .map(|at| at.with_timezone(&Utc))
+    str::parse::<jiff::Timestamp>(raw).ok().map(|at| at)
 }
 
 /// Takes a round of readings, `per_group` from each side of the split.
@@ -632,7 +635,7 @@ pub async fn probe_round(
 mod tests {
     use super::*;
     use crate::chaos::history::{Outcome, Phase};
-    use chrono::TimeDelta;
+
     use std::collections::BTreeMap;
     use test_r::test;
 
@@ -640,8 +643,8 @@ mod tests {
     const TOLERANCE_MS: i64 = 5_000;
     const RECOVERY_FLOOR: f64 = 150.0;
 
-    fn at(offset_secs: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(1_800_000_000 + offset_secs, 0).unwrap()
+    fn at(offset_secs: i64) -> jiff::Timestamp {
+        jiff::Timestamp::new(1_800_000_000 + offset_secs, 0).unwrap()
     }
 
     /// Injected at +100s, healed at +200s, so `at(50)` is baseline, `at(150)`
@@ -673,7 +676,7 @@ mod tests {
             group,
             window: Window::Unknown,
             asked_at: at(asked_secs),
-            stamped_at: offset_ms.map(|ms| at(asked_secs) + TimeDelta::milliseconds(ms)),
+            stamped_at: offset_ms.map(|ms| at(asked_secs) + jiff::SignedDuration::from_millis(ms)),
             offset_ms,
             error: offset_ms.is_none().then(|| "unreadable".to_string()),
         }

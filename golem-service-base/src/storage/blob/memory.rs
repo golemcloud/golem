@@ -238,6 +238,23 @@ impl InMemoryBlobStorage {
 
 #[async_trait]
 impl BlobStorageBackend for InMemoryBlobStorage {
+    async fn put_published_file_if_absent_at(
+        &self,
+        path: &NormalizedBlobPath<'_>,
+        file: tempfile::NamedTempFile,
+    ) -> Result<PutIfAbsent, Error> {
+        let key = Self::blob_key(BlobStorageNamespace::PublishedBlobs, path)?;
+        // This backend is itself the in-memory store. Keep only the stored copy.
+        let mut storage = self.data.write().await;
+        match storage.entry(key) {
+            std::collections::btree_map::Entry::Occupied(_) => Ok(PutIfAbsent::AlreadyExists),
+            std::collections::btree_map::Entry::Vacant(entry) => {
+                entry.insert(Self::file_entry(tokio::fs::read(file.path()).await?.into()));
+                Ok(PutIfAbsent::Written)
+            }
+        }
+    }
+
     async fn get_raw_at(
         &self,
         _target_label: &'static str,
@@ -263,6 +280,19 @@ impl BlobStorageBackend for InMemoryBlobStorage {
         let key = Self::blob_key(namespace, path)?;
         let data = self.data.read().await;
         Ok(data.get(&key).and_then(|entry| match entry {
+            Entry::File { data, .. } if key.namespace == BlobStorageNamespace::PublishedBlobs => {
+                let data = data.clone();
+                Some(
+                    Box::pin(futures::stream::unfold(data, |mut data| async move {
+                        if data.is_empty() {
+                            None
+                        } else {
+                            let block = data.split_to(data.len().min(BLOB_STREAM_CHUNK_SIZE));
+                            Some((Ok(block), data))
+                        }
+                    })) as BoxStream<'static, _>,
+                )
+            }
             Entry::File { data, .. } => {
                 let stream = tokio_stream::once(Ok(data.clone()));
                 let boxed: Pin<Box<dyn Stream<Item = Result<Bytes, Error>> + Send>> =

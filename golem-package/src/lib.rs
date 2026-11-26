@@ -25,7 +25,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
-use std::io::Read;
+use std::io::{Read, Seek, SeekFrom};
 
 mod expand;
 pub use expand::*;
@@ -38,7 +38,7 @@ test_r::enable!();
 const ARTIFACT: &str = "application/vnd.golem.package.v1";
 const CONFIG: &str = "application/vnd.golem.package.config.v1+json";
 const INDEX: &str = "application/vnd.oci.image.index.v1+json";
-const MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
+pub const MANIFEST: &str = "application/vnd.oci.image.manifest.v1+json";
 pub const WASM: &str = "application/wasm";
 pub const INITIAL_FILES: &str = "application/vnd.golem.package.initial-files.v1.tar";
 pub const FILE: &str = "application/vnd.golem.package.file.v1";
@@ -682,6 +682,15 @@ pub fn pack(
     config: &PackageConfig,
     blobs: &BTreeMap<String, Vec<u8>>,
 ) -> anyhow::Result<(String, Vec<u8>)> {
+    let (digest, bytes) = pack_archive(config, blobs)?;
+    read(bytes.as_slice())?;
+    Ok((digest, bytes))
+}
+
+fn pack_archive(
+    config: &PackageConfig,
+    blobs: &BTreeMap<String, Vec<u8>>,
+) -> anyhow::Result<(String, Vec<u8>)> {
     let layers = layers_for(config)?
         .into_iter()
         .map(|(media_type, digest)| {
@@ -725,9 +734,7 @@ pub fn pack(
         "oci-layout".into(),
         std::borrow::Cow::Borrowed(br#"{"imageLayoutVersion":"1.0.0"}"#),
     );
-    let bytes = write_tar(&entries)?;
-    let validated = read(bytes.as_slice())?;
-    Ok((validated.digest, bytes))
+    Ok((digest, write_tar(&entries)?))
 }
 
 pub fn write_tar(entries: &BTreeMap<String, impl AsRef<[u8]>>) -> anyhow::Result<Vec<u8>> {
@@ -746,7 +753,65 @@ pub fn write_tar(entries: &BTreeMap<String, impl AsRef<[u8]>>) -> anyhow::Result
     Ok(archive.into_inner()?)
 }
 
-fn archive_entries(input: impl Read) -> anyhow::Result<BTreeMap<String, Vec<u8>>> {
+type ArchiveEntries = BTreeMap<String, Vec<u8>>;
+
+/// Rebuilds the archive envelope without serializing the registry's manifest again.
+/// The caller passes the completed archive to `read` for package validation.
+pub fn registry_archive(
+    manifest: &[u8],
+) -> anyhow::Result<(ArchiveEntries, BTreeMap<String, u64>)> {
+    let root = describe(MANIFEST, manifest);
+    let manifest_path = blob_path(&root.digest)?;
+    let parsed: OciManifest = parse(manifest, &manifest_path)?;
+    ensure!(
+        parsed.schema_version == 2
+            && parsed.media_type == MANIFEST
+            && parsed.artifact_type == ARTIFACT
+            && parsed.config.media_type == CONFIG,
+        "Invalid Golem package manifest"
+    );
+    let entries = BTreeMap::from([
+        (manifest_path, manifest.to_vec()),
+        (
+            "oci-layout".into(),
+            br#"{"imageLayoutVersion":"1.0.0"}"#.to_vec(),
+        ),
+        (
+            "index.json".into(),
+            canonical_json(&OciIndex {
+                schema_version: 2,
+                media_type: INDEX.into(),
+                manifests: vec![root],
+            })?,
+        ),
+    ]);
+    let mut blobs = BTreeMap::new();
+    for descriptor in std::iter::once(parsed.config).chain(parsed.layers) {
+        let path = blob_path(&descriptor.digest)?;
+        ensure!(!entries.contains_key(&path), "Invalid package blob {path}");
+        if let Some(size) = blobs.insert(path, descriptor.size) {
+            ensure!(size == descriptor.size, "Conflicting package blob sizes");
+        }
+    }
+    ensure!(
+        entries.len() + blobs.len() <= MAX_ENTRIES,
+        "Too many package blobs"
+    );
+    let mut remaining = MAX_PACKAGE_BYTES - 1024; // Two end-of-archive blocks.
+    for size in entries
+        .values()
+        .map(|bytes| bytes.len() as u64)
+        .chain(blobs.values().copied())
+    {
+        ensure!(size <= remaining, "Package size limit exceeded");
+        remaining = remaining
+            .checked_sub(512 + size.div_ceil(512) * 512)
+            .context("Package size limit exceeded")?;
+    }
+    Ok((entries, blobs))
+}
+
+fn archive_entries(input: impl Read) -> anyhow::Result<ArchiveEntries> {
     archive_entries_with_limit(input, MAX_ENTRIES)
 }
 
@@ -782,8 +847,27 @@ fn archive_entries_with_limit(
     input: impl Read,
     max_entries: usize,
 ) -> anyhow::Result<BTreeMap<String, Vec<u8>>> {
-    let mut archive = tar::Archive::new(input.take(MAX_PACKAGE_BYTES + 1));
     let mut entries = BTreeMap::new();
+    visit_archive(input, max_entries, |path, entry| {
+        let mut contents = Vec::new();
+        entry.read_to_end(&mut contents)?;
+        ensure!(
+            contents.len() as u64 == entry.size(),
+            "Truncated tar entry {path:?}"
+        );
+        entries.insert(path, contents);
+        Ok(())
+    })?;
+    Ok(entries)
+}
+
+fn visit_archive<R: Read>(
+    input: R,
+    max_entries: usize,
+    mut visit: impl FnMut(String, &mut tar::Entry<'_, std::io::Take<R>>) -> anyhow::Result<()>,
+) -> anyhow::Result<BTreeSet<String>> {
+    let mut archive = tar::Archive::new(input.take(MAX_PACKAGE_BYTES + 1));
+    let mut paths = BTreeSet::new();
     // Reject extension headers rather than allowing them to override raw entry paths or sizes.
     for entry in archive.entries()?.raw(true) {
         let mut entry = entry.context("Invalid package tar entry")?;
@@ -798,20 +882,13 @@ fn archive_entries_with_limit(
             entry.header().entry_type() == tar::EntryType::Regular,
             "Non-regular tar entry {path:?}"
         );
-        ensure!(!entries.contains_key(&path), "Duplicate tar entry {path:?}");
+        ensure!(!paths.contains(&path), "Duplicate tar entry {path:?}");
         ensure!(
-            entries.len() < max_entries && entry.size() <= MAX_PACKAGE_BYTES,
+            paths.len() < max_entries && entry.size() <= MAX_PACKAGE_BYTES,
             "Package limit exceeded at {path:?}"
         );
-        let mut contents = Vec::new();
-        entry
-            .read_to_end(&mut contents)
-            .with_context(|| format!("Invalid tar entry {path:?}"))?;
-        ensure!(
-            contents.len() as u64 == entry.size(),
-            "Truncated tar entry {path:?}"
-        );
-        entries.insert(path, contents);
+        visit(path.clone(), &mut entry).with_context(|| format!("Invalid tar entry {path:?}"))?;
+        paths.insert(path);
     }
     let mut remaining = archive.into_inner();
     let mut trailer = [0; 512];
@@ -831,7 +908,7 @@ fn archive_entries_with_limit(
             .context("Truncated package tar trailer")?;
     }
     ensure!(remaining.limit() != 0, "Package size limit exceeded");
-    Ok(entries)
+    Ok(paths)
 }
 
 fn entry<'a>(entries: &'a BTreeMap<String, Vec<u8>>, path: &str) -> anyhow::Result<&'a [u8]> {
@@ -842,6 +919,10 @@ fn entry<'a>(entries: &'a BTreeMap<String, Vec<u8>>, path: &str) -> anyhow::Resu
 }
 
 fn parse<T: DeserializeOwned>(bytes: &[u8], path: &str) -> anyhow::Result<T> {
+    ensure!(
+        bytes.len() as u64 <= metadata_limit(path),
+        "Package metadata size limit exceeded at {path}"
+    );
     let value: Value =
         serde_json::from_slice(bytes).with_context(|| format!("Invalid package entry {path}"))?;
     ensure!(
@@ -849,6 +930,14 @@ fn parse<T: DeserializeOwned>(bytes: &[u8], path: &str) -> anyhow::Result<T> {
         "Non-canonical JSON in package entry {path}"
     );
     serde_json::from_value(value).with_context(|| format!("Invalid package entry {path}"))
+}
+
+fn metadata_limit(path: &str) -> u64 {
+    if matches!(path, "index.json" | "oci-layout") {
+        4096
+    } else {
+        16 * 1024 * 1024
+    }
 }
 
 fn verify_blob<'a>(
@@ -871,11 +960,104 @@ fn verify_blob<'a>(
     Ok(bytes)
 }
 
-/// Checks the complete OCI layout, including every referenced blob, without unpacking or executing it.
-pub fn read(input: impl Read) -> anyhow::Result<ValidatedPackage> {
-    let entries = archive_entries(input)?;
-    let index: OciIndex = parse(entry(&entries, "index.json")?, "index.json")?;
-    let layout: Value = parse(entry(&entries, "oci-layout")?, "oci-layout")?;
+/// Checks the OCI identity and every referenced blob without loading layers into memory.
+/// The input starts at the archive's first byte. Only the OCI metadata is loaded for parsing.
+pub fn verify_manifest_digest(
+    mut input: impl Read + Seek,
+    claimed_digest: &str,
+) -> anyhow::Result<()> {
+    let manifest_path = blob_path(claimed_digest)?;
+    let start = input.stream_position()?;
+    let mut entries = BTreeMap::new();
+    visit_archive(&mut input, MAX_ENTRIES, |path, entry| {
+        let offset = entry.raw_file_position();
+        let size = if matches!(path.as_str(), "index.json" | "oci-layout") {
+            std::io::copy(entry, &mut std::io::sink())?
+        } else {
+            let hex = path
+                .strip_prefix("blobs/sha256/")
+                .with_context(|| format!("Unexpected package entry {path:?}"))?;
+            let mut hash = Sha256::new();
+            let size = std::io::copy(entry, &mut hash)?;
+            ensure!(
+                format!("{:x}", hash.finalize()) == hex,
+                "Digest mismatch for {path}"
+            );
+            size
+        };
+        ensure!(size == entry.size(), "Truncated tar entry {path:?}");
+        entries.insert(path, (offset, size));
+        Ok(())
+    })?;
+
+    let mut metadata = |path: &str| -> anyhow::Result<Vec<u8>> {
+        let &(offset, size) = entries
+            .get(path)
+            .with_context(|| format!("Missing package entry {path}"))?;
+        ensure!(
+            size <= metadata_limit(path),
+            "Package metadata size limit exceeded at {path}"
+        );
+        input.seek(SeekFrom::Start(start + offset))?;
+        let mut bytes = vec![0; size as usize];
+        input.read_exact(&mut bytes)?;
+        Ok(bytes)
+    };
+    let index: OciIndex = parse(&metadata("index.json")?, "index.json")?;
+    let layout: Value = parse(&metadata("oci-layout")?, "oci-layout")?;
+    let root = package_root(&index, layout)?;
+    ensure!(
+        root.digest == claimed_digest,
+        "Package manifest digest mismatch"
+    );
+    let manifest = parse_manifest(&metadata(&manifest_path)?, &manifest_path)?;
+    let config_path = blob_path(&manifest.config.digest)?;
+    let config: PackageConfig = parse(&metadata(&config_path)?, &config_path)?;
+    check_manifest_layers(&manifest, &config, &manifest_path, &config_path)?;
+    let mut used = BTreeSet::from(["index.json".to_string(), "oci-layout".to_string()]);
+    for descriptor in [root, &manifest.config].into_iter().chain(&manifest.layers) {
+        let path = blob_path(&descriptor.digest)?;
+        let &(_, size) = entries
+            .get(&path)
+            .with_context(|| format!("Missing package entry {path}"))?;
+        ensure!(size == descriptor.size, "Size mismatch for {path}");
+        used.insert(path);
+    }
+    if let Some(path) = entries.keys().find(|path| !used.contains(*path)) {
+        bail!("Unexpected package entry {path:?}");
+    }
+    check_nested_layers(&manifest, &config, |path| {
+        let &(offset, size) = entries
+            .get(path)
+            .with_context(|| format!("Missing package entry {path}"))?;
+        input.seek(SeekFrom::Start(start + offset))?;
+        archive_names((&mut input).take(size))
+    })
+}
+
+fn check_manifest_layers(
+    manifest: &OciManifest,
+    config: &PackageConfig,
+    manifest_path: &str,
+    config_path: &str,
+) -> anyhow::Result<()> {
+    let expected =
+        layers_for(config).with_context(|| format!("Invalid package config {config_path}"))?;
+    ensure!(
+        manifest.layers.len() == expected.len(),
+        "Layer count mismatch in {manifest_path}"
+    );
+    for (layer, (media_type, digest)) in manifest.layers.iter().zip(expected) {
+        ensure!(
+            layer.media_type == media_type && layer.digest == digest,
+            "Invalid layer {} in {manifest_path}",
+            layer.digest
+        );
+    }
+    Ok(())
+}
+
+fn package_root(index: &OciIndex, layout: Value) -> anyhow::Result<&Descriptor> {
     ensure!(
         layout == json!({"imageLayoutVersion":"1.0.0"}),
         "Unsupported package oci-layout"
@@ -891,9 +1073,21 @@ pub fn read(input: impl Read) -> anyhow::Result<ValidatedPackage> {
         root.media_type == MANIFEST,
         "Invalid manifest media type in index.json"
     );
-    let mut used = BTreeSet::from(["index.json".into(), "oci-layout".into()]);
-    let manifest_path = blob_path(&root.digest)?;
-    let manifest: OciManifest = parse(verify_blob(&entries, root, &mut used)?, &manifest_path)?;
+    Ok(root)
+}
+
+fn parse_manifest(bytes: &[u8], manifest_path: &str) -> anyhow::Result<OciManifest> {
+    // Reject malformed descriptor shapes before constructing a JSON value tree.
+    ensure!(
+        bytes.len() as u64 <= metadata_limit(manifest_path),
+        "Package metadata size limit exceeded at {manifest_path}"
+    );
+    let manifest: OciManifest = serde_json::from_slice(bytes)
+        .with_context(|| format!("Invalid package entry {manifest_path}"))?;
+    ensure!(
+        canonical_json(&manifest)? == bytes,
+        "Non-canonical JSON in package entry {manifest_path}"
+    );
     ensure!(
         manifest.schema_version == 2
             && manifest.media_type == MANIFEST
@@ -901,27 +1095,59 @@ pub fn read(input: impl Read) -> anyhow::Result<ValidatedPackage> {
             && manifest.config.media_type == CONFIG,
         "Invalid Golem manifest {manifest_path}"
     );
+    Ok(manifest)
+}
+
+/// Checks the complete OCI layout, including every referenced blob, without unpacking or executing it.
+pub fn read(input: impl Read) -> anyhow::Result<ValidatedPackage> {
+    let entries = archive_entries(input)?;
+    let index = parse(entry(&entries, "index.json")?, "index.json")?;
+    let layout = parse(entry(&entries, "oci-layout")?, "oci-layout")?;
+    let root = package_root(&index, layout)?;
+    let mut used = BTreeSet::from(["index.json".into(), "oci-layout".into()]);
+    let manifest_path = blob_path(&root.digest)?;
+    let manifest = parse_manifest(verify_blob(&entries, root, &mut used)?, &manifest_path)?;
     let config_path = blob_path(&manifest.config.digest)?;
     let config: PackageConfig = parse(
         verify_blob(&entries, &manifest.config, &mut used)?,
         &config_path,
     )?;
-    let expected =
-        layers_for(&config).with_context(|| format!("Invalid package config {config_path}"))?;
-    ensure!(
-        manifest.layers.len() == expected.len(),
-        "Layer count mismatch in {manifest_path}"
-    );
-    for (layer, (media_type, digest)) in manifest.layers.iter().zip(expected) {
-        ensure!(
-            layer.media_type == media_type && layer.digest == digest,
-            "Invalid layer {} in {manifest_path}",
-            layer.digest
-        );
-        let contents = verify_blob(&entries, layer, &mut used)?;
+    check_manifest_layers(&manifest, &config, &manifest_path, &config_path)?;
+    for layer in &manifest.layers {
+        verify_blob(&entries, layer, &mut used)?;
+    }
+    check_nested_layers(&manifest, &config, |path| {
+        archive_names(entry(&entries, path)?)
+    })?;
+    if let Some(path) = entries.keys().find(|path| !used.contains(*path)) {
+        bail!("Unexpected package entry {path:?}");
+    }
+    Ok(ValidatedPackage {
+        digest: root.digest.clone(),
+        config,
+        entries,
+    })
+}
+
+fn archive_names(input: impl Read) -> anyhow::Result<BTreeSet<String>> {
+    visit_archive(input, MAX_ENTRIES, |path, entry| {
+        let size = std::io::copy(entry, &mut std::io::sink())?;
+        ensure!(size == entry.size(), "Truncated tar entry {path:?}");
+        Ok(())
+    })
+}
+
+fn check_nested_layers(
+    manifest: &OciManifest,
+    config: &PackageConfig,
+    mut names: impl FnMut(&str) -> anyhow::Result<BTreeSet<String>>,
+) -> anyhow::Result<()> {
+    let mut nested = BTreeMap::new();
+    for layer in &manifest.layers {
         if layer.media_type == FILE_DIRECTORY {
-            archive_entries(contents)
-                .with_context(|| format!("Invalid File directory layer {}", layer.digest))?;
+            nested
+                .entry(blob_path(&layer.digest)?)
+                .or_insert_with(Vec::new);
         }
     }
     for component in config.components.values() {
@@ -931,7 +1157,31 @@ pub fn read(input: impl Read) -> anyhow::Result<ValidatedPackage> {
             .chain(component.tool_middlewares.values())
             .filter_map(|provision| provision.files.as_ref())
         {
-            let path = blob_path(&files.layer)?;
+            nested
+                .entry(blob_path(&files.layer)?)
+                .or_default()
+                .push(files);
+        }
+    }
+    // Group references so each tar is scanned once and only one set of names is live.
+    for (path, provisions) in nested {
+        let contents = names(&path).with_context(|| {
+            if provisions.is_empty() {
+                format!("Invalid File directory layer {path}")
+            } else {
+                format!("Invalid initial-file layer {path}")
+            }
+        })?;
+        if !provisions.is_empty() {
+            ensure!(
+                contents
+                    .iter()
+                    .enumerate()
+                    .all(|(index, key)| *key == format!("{index:08}")),
+                "Initial-file entries do not match config in {path}"
+            );
+        }
+        for files in provisions {
             let mut targets = BTreeSet::new();
             for file in files.entries.values() {
                 ensure!(
@@ -940,24 +1190,11 @@ pub fn read(input: impl Read) -> anyhow::Result<ValidatedPackage> {
                     file.target.as_abs_str()
                 );
             }
-            let contents = archive_entries(entry(&entries, &path)?)
-                .with_context(|| format!("Invalid initial-file layer {path}"))?;
             ensure!(
-                contents.keys().eq(files.entries.keys())
-                    && contents
-                        .keys()
-                        .enumerate()
-                        .all(|(index, key)| *key == format!("{index:08}")),
+                contents.iter().eq(files.entries.keys()),
                 "Initial-file entries do not match config in {path}"
             );
         }
     }
-    if let Some(path) = entries.keys().find(|path| !used.contains(*path)) {
-        bail!("Unexpected package entry {path:?}");
-    }
-    Ok(ValidatedPackage {
-        digest: root.digest.clone(),
-        config,
-        entries,
-    })
+    Ok(())
 }

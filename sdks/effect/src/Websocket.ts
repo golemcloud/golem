@@ -302,7 +302,7 @@ export interface Writer extends Socket.Writer {
 /** An Effect socket with Golem's compatibility helpers. */
 export interface GolemSocket extends Omit<Socket.Socket, "writer"> {
   readonly writer: Effect.Effect<Writer, never, Scope.Scope>
-  readonly runString: <A, E, R>(
+  readonly runString: <A = void, E = never, R = never>(
     handler: (chunk: string) => Effect.Effect<A, E, R> | void,
   ) => Effect.Effect<void, Socket.SocketError | E, Scope.Scope | R>
 }

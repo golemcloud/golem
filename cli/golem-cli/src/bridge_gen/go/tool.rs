@@ -581,8 +581,8 @@ impl GoToolBridgeGenerator {
             ),
             SchemaValue::Datetime { value } => format!(
                 "time.Unix({}, {}).UTC()",
-                value.timestamp(),
-                value.timestamp_subsec_nanos()
+                value.as_nanosecond().div_euclid(1_000_000_000),
+                value.as_nanosecond().rem_euclid(1_000_000_000)
             ),
             SchemaValue::Enum { case } => {
                 let name = self.inner.named(typ)?;

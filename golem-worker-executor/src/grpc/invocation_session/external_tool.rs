@@ -315,13 +315,13 @@ where
                 &tool_name,
                 &tool.command_path,
             )?;
-            let at = DateTime::from_timestamp(
-                timestamp.seconds,
-                timestamp.nanos.try_into().map_err(|_| {
-                    WorkerExecutorError::invalid_request("invalid schedule timestamp")
-                })?,
-            )
-            .ok_or_else(|| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
+            if !(0..1_000_000_000).contains(&timestamp.nanos) {
+                return Err(WorkerExecutorError::invalid_request(
+                    "invalid schedule timestamp",
+                ));
+            }
+            let at = jiff::Timestamp::new(timestamp.seconds, timestamp.nanos)
+                .map_err(|_| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
             let _account_id: golem_common::model::account::AccountId = request
                 .component_owner_account_id
                 .ok_or_else(|| WorkerExecutorError::invalid_request("account_id not found"))?
@@ -494,13 +494,13 @@ where
             Worker::start_if_needed(worker.clone()).await?;
         } else if mode == Mode::Schedule && request.schedule_at.is_some() {
             let timestamp = request.schedule_at.as_ref().unwrap();
-            let at = DateTime::from_timestamp(
-                timestamp.seconds,
-                timestamp.nanos.try_into().map_err(|_| {
-                    WorkerExecutorError::invalid_request("invalid schedule timestamp")
-                })?,
-            )
-            .ok_or_else(|| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
+            if !(0..1_000_000_000).contains(&timestamp.nanos) {
+                return Err(WorkerExecutorError::invalid_request(
+                    "invalid schedule timestamp",
+                ));
+            }
+            let at = jiff::Timestamp::new(timestamp.seconds, timestamp.nanos)
+                .map_err(|_| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
             let _account_id: golem_common::model::account::AccountId = request
                 .component_owner_account_id
                 .ok_or_else(|| WorkerExecutorError::invalid_request("account_id not found"))?

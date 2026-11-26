@@ -17,7 +17,7 @@ use crate::base_model::diff::Hash;
 use crate::base_model::tool::{BUILTIN_BASH_TOOL_NAME, ToolName, ToolSource};
 use crate::schema::tool::Tool;
 use crate::{declare_enums, declare_structs, declare_unions, newtype_uuid};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use std::fmt::{Display, Formatter};
 
 newtype_uuid!(ToolReleaseId);
@@ -63,7 +63,11 @@ impl Display for ToolPublicationPlanAction {
     }
 }
 
-declare_structs! {
+crate::declare_datetime_struct! {
+    crate::base_model::tool_release::ToolRelease,
+    [],
+    [],
+    [],
     pub struct ToolRelease {
         pub id: ToolReleaseId,
         pub owner_account_id: AccountId,
@@ -77,11 +81,13 @@ declare_structs! {
         pub lifecycle: ToolReleaseLifecycle,
         pub origin: ToolReleaseOrigin,
         pub system_availability: Option<SystemToolAvailability>,
-        pub created_at: DateTime<Utc>,
+        pub created_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
         pub created_by: AccountId,
-        pub state_changed_at: DateTime<Utc>,
+        pub state_changed_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
         pub state_changed_by: AccountId,
     }
+}
+declare_structs! {
 
     /// Safe release metadata available to a consumer through an active environment grant.
     /// Executable source identities remain publisher-only.
@@ -132,6 +138,7 @@ declare_structs! {
         pub version: String,
         pub reason: Option<String>,
     }
+
 }
 
 declare_unions! {

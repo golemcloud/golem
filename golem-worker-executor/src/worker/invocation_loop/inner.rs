@@ -334,11 +334,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             }
         }
 
-        let constructor_key = self
-            .parent
-            .parsed_agent_id
-            .as_ref()
-            .map(|_| self.parent.initialization_idempotency_key());
+        let constructor_key =
+            self.parent.parsed_agent_id.as_ref().map(|_| {
+                InvocationId::constructor(self.parent.initial_worker_metadata.fingerprint)
+            });
         Ok(SelectedWork::next(
             &mut queue,
             status,

@@ -439,6 +439,23 @@ impl InvocationSessionState {
         self.inputs.values().all(|state| state.terminal)
     }
 
+    /// The sequence of the next new item of an input stream that has no terminal, or `None`
+    /// when the stream is unknown or has a terminal.
+    pub fn next_input_sequence(&self, transport_stream_id: u64) -> Option<u64> {
+        self.inputs
+            .get(&transport_stream_id)
+            .filter(|state| !state.terminal)
+            .map(|state| state.next_offset)
+    }
+
+    /// Whether the consumer cancelled the input stream. The producer events that follow the
+    /// cancellation are discarded.
+    pub fn input_consumer_cancelled(&self, transport_stream_id: u64) -> bool {
+        self.inputs
+            .get(&transport_stream_id)
+            .is_some_and(|state| state.consumer_cancelled)
+    }
+
     fn validate_request(
         &mut self,
         message: RequestMessage<'_>,
@@ -3431,6 +3448,7 @@ mod tests {
             highest_contiguous_sequence: 2,
             resulting_offset: durable_offset(2),
             terminal: false,
+            server_outcome: None,
         });
         state.validate_response(&acceptance).unwrap();
         state
@@ -4192,6 +4210,7 @@ mod tests {
             highest_contiguous_sequence: 0,
             resulting_offset: durable_offset(2),
             terminal: false,
+            server_outcome: None,
         });
         retried.validate_response(&acceptance).unwrap();
         retried.validate_public_request(&end).unwrap();

@@ -101,8 +101,9 @@ cwd = "sdks/effect"
 env = { NODE_OPTIONS = "--max-old-space-size=4096", NPM_CONFIG_AUDIT = "false" }
 script_runner = "@duckscript"
 script = '''
+exec --fail-on-error npm ci --prefix integration-test
 failed = set 0
-checks = array lint format:check typecheck test check:dts check:contracts check:artifacts check:package
+checks = array lint format:check typecheck typecheck:integration test check:dts check:contracts check:artifacts check:package
 for check in ${checks}
     code = exec --get-exit-code npm run ${check}
     failed = calc ${failed} + ${code}

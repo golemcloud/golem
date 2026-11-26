@@ -57,7 +57,6 @@ use golem_common::model::component::{
     AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
 };
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
-use golem_common::model::diff::Hash;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionConfig};
@@ -317,15 +316,6 @@ impl ComponentWriteService {
         };
 
         let component_id = ComponentId::new();
-        let wasm_bytes = wasm.len() as u64;
-        let (wasm_hash, wasm_object_store_key) = self
-            .upload_and_hash_component_wasm(environment_id, wasm.clone())
-            .await?;
-        record_component_uploaded(
-            &auth.actor_account_id().to_string(),
-            &environment_id.to_string(),
-            wasm_bytes,
-        );
 
         // Batch-resolve all plugin grants referenced across all agent types in one pass,
         // so the same grant is only fetched once even if shared by multiple agent types.
@@ -480,6 +470,19 @@ impl ComponentWriteService {
         validate_component_metadata_invariants(&component_metadata)?;
 
         let component_size = wasm.len() as u64;
+        let (wasm_hash, upload) = self
+            .object_store
+            .stage(
+                self.component_repo.as_ref(),
+                environment.owner_account_id,
+                wasm,
+            )
+            .await?;
+        record_component_uploaded(
+            &auth.actor_account_id().to_string(),
+            &environment_id.to_string(),
+            component_size,
+        );
 
         let record = ComponentRevisionRecord::creation(
             component_id,
@@ -487,19 +490,26 @@ impl ComponentWriteService {
             component_metadata,
             wasm_hash,
             component_creation.package_metadata,
-            wasm_object_store_key,
+            upload.object_key.clone(),
             auth.actor_account_id(),
         );
 
-        let stored_component: Component = self
+        let result = self
             .component_repo
-            .create(
+            .create_with_upload(
                 environment_id.0,
                 &component_creation.component_name.0,
                 record,
                 cards_to_create,
+                Some(upload.clone()),
             )
-            .await
+            .await;
+        if result.is_err() {
+            self.object_store
+                .abandon_upload(self.component_repo.as_ref(), &upload.object_key)
+                .await;
+        }
+        let stored_component: Component = result
             .map_err(|err| match err {
                 ComponentRepoError::ConcurrentModification
                 | ComponentRepoError::VersionAlreadyExists { .. } => {
@@ -521,7 +531,12 @@ impl ComponentWriteService {
             )?;
 
         self.component_compilation
-            .enqueue_compilation(environment_id, component_id, stored_component.revision)
+            .enqueue_compilation(
+                environment_id,
+                component_id,
+                stored_component.revision,
+                stored_component.wasm_hash,
+            )
             .await;
 
         Ok(stored_component)
@@ -825,7 +840,7 @@ impl ComponentWriteService {
             }
         }
 
-        if let Some(new_wasm) = new_wasm {
+        if let Some(new_wasm) = &new_wasm {
             self.account_usage_service
                 .ensure_updated_component_within_limits(
                     environment.owner_account_id,
@@ -834,19 +849,7 @@ impl ComponentWriteService {
                 )
                 .await?;
 
-            let new_wasm_bytes = new_wasm.len() as u64;
-            let (wasm_hash, wasm_object_store_key) = self
-                .upload_and_hash_component_wasm(environment_id, new_wasm.clone())
-                .await?;
-            record_component_uploaded(
-                &auth.actor_account_id().to_string(),
-                &environment_id.to_string(),
-                new_wasm_bytes,
-            );
-
-            component.wasm_hash = wasm_hash;
             component.package_metadata = package_metadata;
-            component.object_store_key = wasm_object_store_key;
             let metadata = analyze_and_validate_component_wasm(
                 final_config_schema.clone(),
                 final_component_provision_config.clone(),
@@ -862,7 +865,7 @@ impl ComponentWriteService {
             // TODO: skip the download here
             let old_data = self
                 .object_store
-                .get(environment_id, &component.object_store_key)
+                .get(environment.owner_account_id, &component.object_store_key)
                 .await?;
 
             let metadata = analyze_and_validate_component_wasm(
@@ -898,13 +901,40 @@ impl ComponentWriteService {
         }
 
         validate_component_metadata_invariants(&component.metadata)?;
+        let upload = if let Some(new_wasm) = new_wasm {
+            let new_wasm_bytes = new_wasm.len() as u64;
+            let (wasm_hash, staged) = self
+                .object_store
+                .stage(
+                    self.component_repo.as_ref(),
+                    environment.owner_account_id,
+                    new_wasm,
+                )
+                .await?;
+            component.wasm_hash = wasm_hash;
+            component.object_store_key.clone_from(&staged.object_key);
+            record_component_uploaded(
+                &auth.actor_account_id().to_string(),
+                &environment_id.to_string(),
+                new_wasm_bytes,
+            );
+            Some(staged)
+        } else {
+            None
+        };
 
         let record = ComponentRevisionRecord::from_model(component, auth.actor_account_id());
 
-        let stored_component: Component = self
+        let result = self
             .component_repo
-            .update(record, cards_to_create)
-            .await
+            .update_with_upload(record, cards_to_create, upload.clone())
+            .await;
+        if let Some(upload) = upload.filter(|_| result.is_err()) {
+            self.object_store
+                .abandon_upload(self.component_repo.as_ref(), &upload.object_key)
+                .await;
+        }
+        let stored_component: Component = result
             .map_err(|err| match err {
                 ComponentRepoError::ConcurrentModification => ComponentError::ConcurrentUpdate,
                 ComponentRepoError::VersionAlreadyExists { version } => {
@@ -921,7 +951,12 @@ impl ComponentWriteService {
             )?;
 
         self.component_compilation
-            .enqueue_compilation(environment_id, component_id, stored_component.revision)
+            .enqueue_compilation(
+                environment_id,
+                component_id,
+                stored_component.revision,
+                stored_component.wasm_hash,
+            )
             .await;
 
         Ok(stored_component)
@@ -969,16 +1004,6 @@ impl ComponentWriteService {
             .signal_new_events_available(self.registry_change_notifier.as_ref());
 
         Ok(())
-    }
-
-    async fn upload_and_hash_component_wasm(
-        &self,
-        environment_id: EnvironmentId,
-        data: Arc<[u8]>,
-    ) -> Result<(Hash, String), ComponentError> {
-        // TODO: use something like PluginWasmFilesService instead of raw object store
-        let hash = self.object_store.put(environment_id, data).await?;
-        Ok((hash, hash.to_string()))
     }
 
     async fn upload_agent_files(
@@ -2392,6 +2417,7 @@ mod initial_agent_file_tests {
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::card::owner::EnvironmentOwnerPattern;
     use golem_common::model::card::{EffectiveSurface, EnvironmentResourcePattern, GrantSurface};
+    use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentName, EnvironmentRevision};
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use test_r::test;

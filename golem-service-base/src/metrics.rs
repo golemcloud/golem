@@ -54,13 +54,13 @@ pub mod storage {
         .unwrap();
         pub static ref COMPILATION_CACHE_BYTES_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
             "golem_compilation_cache_bytes_written_total",
-            "Total bytes written to the compiled component cache, by environment",
+            "Total bytes written to the shared compiled component cache, attributed to the environment that triggered the write",
             &["storage_type", "environment_id"]
         )
         .unwrap();
         pub static ref COMPILATION_CACHE_OBJECTS_WRITTEN_TOTAL: CounterVec = register_counter_vec!(
             "golem_compilation_cache_objects_written_total",
-            "Total objects written to the compiled component cache, by environment",
+            "Total objects written to the shared compiled component cache, attributed to the environment that triggered the write",
             &["storage_type", "environment_id"]
         )
         .unwrap();

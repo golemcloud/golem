@@ -41,7 +41,7 @@
             "additionalProperties": false,
             "required": ["source", "version", "digest"],
             "properties": {
-              "source": { "type": "string", "minLength": 1, "maxLength": 4096 },
+              "source": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "Archive path, HTTP(S) URL, or oci:// registry reference." },
               "version": { "type": "string", "maxLength": 128, "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[a-zA-Z0-9.-]+)?$" },
               "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" }
             }

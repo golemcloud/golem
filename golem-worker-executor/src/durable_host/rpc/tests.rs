@@ -364,7 +364,7 @@ impl Rpc for ActivatingRpc {
         _expected_fingerprint: AgentFingerprint,
         _request_key: InvocationRequestKey,
         _invocation: golem_common::model::AgentInvocation,
-        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _scheduled_at: jiff::Timestamp,
         _self_agent_id: &golem_common::model::AgentId,
         _auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
@@ -476,7 +476,7 @@ impl Rpc for RecordingScopeCardRpc {
         _expected_fingerprint: AgentFingerprint,
         _request_key: InvocationRequestKey,
         _invocation: golem_common::model::AgentInvocation,
-        _scheduled_at: chrono::DateTime<chrono::Utc>,
+        _scheduled_at: jiff::Timestamp,
         _self_agent_id: &golem_common::model::AgentId,
         _auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
