@@ -841,6 +841,10 @@ pub struct WorkerService {
     agent_resolution_cache: Arc<AgentResolutionCache>,
     agent_types: Arc<AgentTypeResolver>,
     golem_issuer: GolemIssuer,
+    /// The decision requests that this service made. Only its unit tests count them; production
+    /// builds do not compile this field.
+    #[cfg(test)]
+    decisions: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 pub struct PublicAgentSessionStart {
@@ -926,6 +930,8 @@ impl WorkerService {
             agent_resolution_cache,
             agent_types,
             golem_issuer,
+            #[cfg(test)]
+            decisions: Arc::default(),
         }
     }
 
@@ -981,6 +987,9 @@ impl WorkerService {
     ) -> Result<Grantors, AuthorizationError> {
         let request =
             access.decision_request(operation, |operation| self.entry_request(auth, operation));
+        #[cfg(test)]
+        self.decisions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         decide_with_todays_checks(auth, request, checks).await
     }
 
@@ -3373,8 +3382,16 @@ impl WorkerService {
                     &request_key,
                     &method_name,
                 )?;
+                self.authorize_routed(
+                    &auth,
+                    &component,
+                    &target,
+                    &AgentAccess::invoke(&method_name),
+                )
+                .await?;
                 (target, component, None)
             }
+            // `resolve_requested_target` decides `invoke-agent` on the agent that the ID names.
             PublicAgentTarget::Id {
                 agent_id,
                 expected_fingerprint,
@@ -3400,13 +3417,6 @@ impl WorkerService {
                 (target, component, expected_fingerprint)
             }
         };
-        self.authorize_routed(
-            &auth,
-            &component,
-            &target,
-            &AgentAccess::invoke(&method_name),
-        )
-        .await?;
         let invocation_component = component;
         let caller: golem_api_grpc::proto::golem::component::Caller =
             self.rest_caller(&auth).into();
@@ -11349,6 +11359,47 @@ mod tests {
 
             let unnamed = access(None).decision_request(operation, entry);
             assert_eq!(unnamed.caller, auth.entry_caller("golem"));
+        }
+    }
+
+    /// A public session decides `invoke-agent` once, by agent ID as by key.
+    #[test]
+    async fn a_public_session_decides_once_by_agent_id_and_by_key() {
+        use std::sync::atomic::Ordering;
+
+        let harness = RestHarness::new_with_output(
+            AgentMode::Durable,
+            OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u32())))),
+        );
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let decisions = || harness.worker_service.decisions.load(Ordering::SeqCst);
+
+        let mut by_id = harness.public_invocation_start(IdempotencyKey::fresh());
+        by_id.selector.target = PublicAgentTarget::Id {
+            agent_id: harness.keyed_agent_id(),
+            expected_fingerprint: Some(harness.worker_client.fingerprint),
+        };
+        for (target, start) in [
+            (
+                "by key",
+                harness.public_invocation_start(IdempotencyKey::fresh()),
+            ),
+            ("by agent ID", by_id),
+        ] {
+            let before = decisions();
+            harness
+                .worker_service
+                .invoke_public_agent_session_v1(
+                    start,
+                    Box::pin(stream::empty()),
+                    AuthCtx::system(),
+                    |_, _| panic!("stream-free input"),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+            assert_eq!(decisions() - before, 1, "{target}");
         }
     }
 

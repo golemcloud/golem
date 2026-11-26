@@ -354,32 +354,59 @@ impl TokenService {
         let account_email = record.account_email();
         let account_id = AccountId(record.token.account_id);
 
-        self.authorize_token(
-            auth,
-            account_id,
-            &account_email,
-            CatalogOperation::ViewApiToken,
-            AccountTokenVerb::View,
-            Some(token_id),
-        )
-        .await
-        .map_err(|_| TokenError::TokenNotFound(token_id))?;
-
-        self.authorize_token(
-            auth,
-            account_id,
-            &account_email,
-            CatalogOperation::RevokeApiToken,
-            AccountTokenVerb::Delete,
-            Some(token_id),
-        )
-        .await?;
+        decide_revoke(&self.decisions, auth, account_id, &account_email, token_id).await?;
 
         if let Some(account_id) = self.token_repo.delete(token_id.0).await? {
             let _ = account_id.signal_new_events_available(&self.registry_change_notifier);
         }
 
         Ok(())
+    }
+}
+
+/// Decides the revoke of `token_id` of `account_id` in one decision, `revoke-api-token`, with
+/// today's two checks: view, then delete.
+pub(crate) async fn decide_revoke(
+    decisions: &Decisions,
+    auth: &AuthCtx,
+    account_id: AccountId,
+    account_email: &AccountEmail,
+    token_id: TokenId,
+) -> Result<(), TokenError> {
+    let token = AccountTokenResourcePattern::Token(token_id);
+    let view =
+        account_token_permission_target(account_email, AccountTokenVerb::View, token.clone());
+    let revoke = account_token_permission_target(account_email, AccountTokenVerb::Delete, token);
+    decisions
+        .decide_checks(
+            auth,
+            Operation::single(
+                CatalogOperation::RevokeApiToken,
+                Resource::ApiToken(token_id),
+                account_target(account_id),
+            ),
+            vec![view, revoke.clone()],
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| revoke_refusal(error, &revoke, token_id))
+}
+
+/// The error of a refused revoke: a `403` when the delete check `revoke` refused, so the caller
+/// may see the token; otherwise "token not found", as for an unknown token.
+fn revoke_refusal(
+    error: AuthorizationError,
+    revoke: &PermissionTarget,
+    token_id: TokenId,
+) -> TokenError {
+    match &error {
+        AuthorizationError::PermissionNotAllowed(check)
+        | AuthorizationError::PermissionEvaluationFailed { target: check, .. }
+            if **check == *revoke =>
+        {
+            TokenError::Unauthorized(error)
+        }
+        _ => TokenError::TokenNotFound(token_id),
     }
 }
 

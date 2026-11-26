@@ -361,6 +361,8 @@ impl AccountService {
             .map(|_| ())
     }
 
+    /// Creates the account. `create` decides the creation first; the initial accounts are created
+    /// by the system.
     async fn create_internal(
         &self,
         id: AccountId,
@@ -368,8 +370,6 @@ impl AccountService {
         plan_id: PlanId,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        self.authorize_account_creation(auth, id).await?;
-
         if id == AccountId::SYSTEM {
             Err(anyhow!("Cannot create account with reserved account id"))?
         };
