@@ -1022,6 +1022,64 @@ async fn the_stream_session_suffix_fold_reads_from_the_retained_start() {
     assert_eq!(resume_offset, None);
 }
 
+/// The fold of a stream session suffix gives the index of the first resume attempt of the
+/// session with the requested attempt id, and no index for a resume attempt with another id.
+#[test]
+async fn the_stream_session_suffix_fold_finds_the_resume_attempt_of_its_attempt() {
+    let owner = owned_agent("suffix-resume");
+    let (service, _) = service().await;
+    let (_, _, primary) = service_with_oplog().await;
+    let oplog = create_oplog(primary.as_ref(), &owner).await;
+    let key = test_invocation_id("suffix-resume".into());
+    let session = session_key(&owner, &key);
+    let attempt_id = AttemptId::fresh();
+    let resume = append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::ResumeAttempt(StreamSessionResumeAttemptRecord {
+            format_version: 1,
+            session_key: key,
+            attempt: ResumeAttemptDescriptor {
+                format_version: 1,
+                operation: StreamResumeOperation::Takeover,
+                session_key: session.clone(),
+                attachment_id: AttachmentId::primary(owner.environment_id, &owner.agent_id, &key)
+                    .unwrap(),
+                expected_callee_fingerprint: session.callee_fingerprint,
+                attempt_id,
+                expected_epoch: 1,
+                effective_identity: vec![],
+                cursors: vec![],
+                live_join_buffer_events: 1,
+            },
+            accepted_epoch: 2,
+        }),
+    )
+    .await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let resume_offset = |attempt| {
+        let oplog = oplog.clone();
+        let service = &service;
+        let owner = &owner;
+        let session = &session;
+        async move {
+            crate::worker::fold_stream_session_suffix(
+                oplog.as_ref(),
+                service,
+                owner,
+                AgentMode::Durable,
+                test_fingerprint(),
+                session,
+                Some(attempt),
+            )
+            .await
+            .expect("the fold reads the oplog")
+            .1
+        }
+    };
+    assert_eq!(resume_offset(attempt_id).await, Some(resume));
+    assert_eq!(resume_offset(AttemptId::fresh()).await, None);
+}
+
 async fn service() -> (DefaultWorkerService, Arc<InMemoryKeyValueStorage>) {
     let kv = Arc::new(InMemoryKeyValueStorage::new());
     let oplog = Arc::new(
