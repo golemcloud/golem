@@ -1,0 +1,23 @@
+syntax = "proto3";
+
+package golem.component;
+
+import "golem/schema/schema.proto";
+
+message ConfigBinding {
+  repeated string path = 1;
+  oneof value_source {
+    golem.schema.TypedSchemaValue static = 2;
+  }
+  repeated ConfigBindingOrigin origins = 3;
+}
+
+message ConfigBindingOrigin {
+  repeated string value_path = 1;
+  oneof location {
+    string manifest_file = 2;
+    bool component_metadata = 3;
+  }
+  repeated string source_path = 4;
+  string layer = 5;
+}

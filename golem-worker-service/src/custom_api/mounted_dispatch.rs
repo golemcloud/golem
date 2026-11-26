@@ -22,6 +22,7 @@ use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::ExternalSchemaValue;
 use golem_schema::http::{FileMapping, FileResponseHeader};
+use golem_schema::schema::render::json_value::from_untrusted_json_value;
 use golem_service_base::custom_api::{
     AgentSelection, CreateAgentBehaviour, MountAgent, MountFileSource, MountTarget, PathSegment,
     RouterFileIndexEntry,
@@ -32,14 +33,6 @@ use std::sync::Arc;
 
 use crate::config::HttpSessionLimits;
 use crate::service::worker::{AgentBinding, WorkerService};
-
-#[derive(serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct MountedCreateRequest {
-    parameters: ExternalSchemaValue,
-    #[serde(default)]
-    keyed: bool,
-}
 
 /// Owns mounted-route selection and both mounted storage backends. Guest HTTP value/body
 /// adaptation remains in [`RawHandler`], while invocation transport/recovery remains in
@@ -97,25 +90,29 @@ impl MountedDispatch {
         if let Some(name) = request.query_params().keys().min() {
             return Err(RequestHandlerError::UnknownQueryParameter { name: name.clone() });
         }
-        let body = request
-            .underlying
-            .take_body()
-            .into_json::<serde_json::Map<String, serde_json::Value>>()
-            .await
-            .map_err(|error| RequestHandlerError::BodyIsNotValidJson {
-                error: error.to_string(),
-            })?;
-        let body: MountedCreateRequest = serde_json::from_value(body.into()).map_err(|error| {
-            RequestHandlerError::BodyIsNotValidJson {
-                error: error.to_string(),
+        let body: serde_json::Value =
+            request
+                .underlying
+                .take_body()
+                .into_json()
+                .await
+                .map_err(|error| RequestHandlerError::BodyIsNotValidJson {
+                    error: error.to_string(),
+                })?;
+        let constructor = &behavior.agent.constructor_input;
+        let parameters = from_untrusted_json_value(
+            &constructor.graph,
+            &constructor.user_supplied_record(),
+            &body,
+        )
+        .map_err(|error| RequestHandlerError::JsonBodyParsingFailed {
+            errors: vec![error.to_string()],
+        })?;
+        let parameters = ExternalSchemaValue::try_from(parameters).map_err(|error| {
+            RequestHandlerError::JsonBodyParsingFailed {
+                errors: vec![error],
             }
         })?;
-        if body.keyed {
-            return Err(RequestHandlerError::InvalidParameter {
-                name: "keyed".into(),
-                error: "HTTP create routes create an agent without a key".into(),
-            });
-        }
         let key = request
             .headers()
             .get("idempotency-key")
@@ -128,7 +125,7 @@ impl MountedDispatch {
                 selected.route.environment_id,
                 &behavior.agent.agent_type,
                 CreateAgentRequest {
-                    parameters: body.parameters,
+                    parameters,
                     config: Vec::new(),
                     env: Default::default(),
                     keyed: false,

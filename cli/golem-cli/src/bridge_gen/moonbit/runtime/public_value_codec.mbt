@@ -187,158 +187,8 @@ fn pvc_regex_matches(pattern : String, value : String) -> Bool {
 }
 
 ///|
-fn pvc_language(value : String) -> Bool {
-  pvc_regex_matches("^[A-Za-z]{1,8}(?:-[A-Za-z0-9]{1,8})*$", value)
-}
-
-///|
-fn pvc_text_restrictions(
-  schema : Map[String, Json],
-  text : String,
-  language : String?,
-) -> Unit raise {
-  guard schema.get("restrictions") is Some(raw) else { return }
-  let r = pvc_object(raw)
-  match (r.get("languages"), language) {
-    (Some(v), Some(lang)) =>
-      if !pvc_array(v).map(pvc_string).any(fn(x) { x == lang }) {
-        pvc_fail("text language is not allowed")
-      }
-    _ => ()
-  }
-  match r.get("minLength") {
-    Some(v) =>
-      if text.char_length().reinterpret_as_uint() < pvc_u32(v) {
-        pvc_fail("text is shorter than minLength")
-      }
-    None => ()
-  }
-  match r.get("maxLength") {
-    Some(v) =>
-      if text.char_length().reinterpret_as_uint() > pvc_u32(v) {
-        pvc_fail("text is longer than maxLength")
-      }
-    None => ()
-  }
-  match r.get("regex") {
-    Some(v) =>
-      if !pvc_regex_matches(pvc_string(v), text) {
-        pvc_fail("text does not match regex")
-      }
-    None => ()
-  }
-}
-
-///|
-fn pvc_numeric_bound(bound : Json) -> (String, Json) raise {
-  let o = pvc_object(bound)
-  (pvc_string(pvc_field(o, "kind")), pvc_field(o, "value"))
-}
-
-///|
-fn pvc_integer_text(value : Json) -> String raise {
-  match value {
-    Json::String(v) => v
-    Json::Number(_) => number_literal(value)
-    _ => {
-      pvc_fail("expected integer text")
-      ""
-    }
-  }
-}
-
-///|
-fn pvc_numeric_restrictions(
-  schema : Map[String, Json],
-  family : String,
-  signed : Int64?,
-  unsigned : UInt64?,
-  float : Double?,
-) -> Unit raise {
-  guard schema.get("restrictions") is Some(raw) else { return }
-  let r = pvc_object(raw)
-  for name in ["min", "max"] {
-    guard r.get(name) is Some(raw_bound) else { continue }
-    let (kind, raw_value) = pvc_numeric_bound(raw_bound)
-    let ok = match (family, kind, signed, unsigned, float) {
-      ("signed", "signed", Some(v), _, _) => {
-        let b = @string.parse_int64(pvc_integer_text(raw_value))
-        if name == "min" {
-          v >= b
-        } else {
-          v <= b
-        }
-      }
-      ("unsigned", "unsigned", _, Some(v), _) => {
-        let b = @string.parse_uint64(pvc_integer_text(raw_value))
-        if name == "min" {
-          v >= b
-        } else {
-          v <= b
-        }
-      }
-      ("float", "float-bits", _, _, Some(v)) => {
-        let b = @string.parse_uint64(pvc_integer_text(raw_value)).reinterpret_as_double()
-        if name == "min" {
-          v >= b
-        } else {
-          v <= b
-        }
-      }
-      _ => true
-    }
-    if !ok {
-      pvc_fail("numeric value is outside restrictions")
-    }
-  }
-}
-
-///|
-fn pvc_quantity_bound(value : Json) -> (Int64, Int) raise {
-  let o = pvc_object(value)
-  (
-    @string.parse_int64(pvc_integer_text(pvc_field(o, "mantissa"))),
-    pvc_int(pvc_field(o, "scale"), -2147483648L, 2147483647L).to_int(),
-  )
-}
-
-///|
-fn pvc_quantity_le(
-  a_m : Int64,
-  a_s : Int,
-  b_m : Int64,
-  b_s : Int,
-) -> Bool raise {
-  let common = if a_s > b_s { a_s } else { b_s }
-  let a_shift = common.to_int64() - a_s.to_int64()
-  let b_shift = common.to_int64() - b_s.to_int64()
-  if a_shift > 38L || b_shift > 38L {
-    pvc_fail("quantity comparison overflow")
-  }
-  let ten = @bigint.BigInt::from_int(10)
-  let a = @bigint.BigInt::from_int64(a_m) *
-    ten.pow(@bigint.BigInt::from_int(a_shift.to_int()))
-  let b = @bigint.BigInt::from_int64(b_m) *
-    ten.pow(@bigint.BigInt::from_int(b_shift.to_int()))
-  let min_i128 = @bigint.BigInt::from_string(
-    "-170141183460469231731687303715884105728",
-  )
-  let max_i128 = @bigint.BigInt::from_string(
-    "170141183460469231731687303715884105727",
-  )
-  if a < min_i128 || a > max_i128 || b < min_i128 || b > max_i128 {
-    pvc_fail("quantity comparison overflow")
-  }
-  a <= b
-}
-
-///|
-fn pvc_quantity_restrictions(
-  schema : Map[String, Json],
-  mantissa : Int64,
-  scale : Int,
-  unit : String,
-) -> Unit raise {
+/// The quantity unit selects the quantity type, so a client checks it.
+fn pvc_quantity_unit(schema : Map[String, Json], unit : String) -> Unit raise {
   let spec = pvc_object(pvc_field(schema, "spec"))
   let suffixes = match spec.get("allowedSuffixes") {
     Some(v) => pvc_array(v).map(pvc_string)
@@ -352,59 +202,6 @@ fn pvc_quantity_restrictions(
   if !unit_ok {
     pvc_fail("quantity unit is not allowed")
   }
-  match spec.get("min") {
-    Some(v) => {
-      let (m, s) = pvc_quantity_bound(v)
-      if !pvc_quantity_le(m, s, mantissa, scale) {
-        pvc_fail("quantity is below minimum")
-      }
-    }
-    None => ()
-  }
-  match spec.get("max") {
-    Some(v) => {
-      let (m, s) = pvc_quantity_bound(v)
-      if !pvc_quantity_le(mantissa, scale, m, s) {
-        pvc_fail("quantity is above maximum")
-      }
-    }
-    None => ()
-  }
-}
-
-///|
-fn pvc_path_restrictions(
-  schema : Map[String, Json],
-  path : String,
-) -> Unit raise {
-  let spec = match schema.get("spec") {
-    Some(v) => pvc_object(v)
-    None => schema
-  }
-  guard spec.get("allowedExtensions") is Some(v) else { return }
-  let name = path.split("/").to_array().last().unwrap_or("")
-  let parts = name.split(".").to_array()
-  if parts.length() > 1 {
-    let ext = parts.last().unwrap().to_owned()
-    if !ext.is_empty() && !pvc_array(v).map(pvc_string).any(fn(x) { x == ext }) {
-      pvc_fail("path extension is not allowed")
-    }
-  }
-}
-
-///|
-fn pvc_ascii_lower(value : String) -> String {
-  let out = StringBuilder()
-  for c in value {
-    out.write_char(
-      if c >= 'A' && c <= 'Z' {
-        (c.to_int() + 32).unsafe_to_char()
-      } else {
-        c
-      },
-    )
-  }
-  out.to_string()
 }
 
 ///|
@@ -423,67 +220,17 @@ fn pvc_url_scheme(value : String) -> Bool {
 }
 
 ///|
-fn pvc_url_restrictions(schema : Map[String, Json], url : String) -> Unit raise {
+fn pvc_url_form(url : String) -> Unit raise {
   let url_parts = url.split(":").to_array()
   if url_parts.length() < 2 {
     pvc_fail("invalid URL")
     return
   }
-  let scheme = url_parts[0].to_owned()
-  if !pvc_url_scheme(scheme) {
+  if !pvc_url_scheme(url_parts[0].to_owned()) {
     pvc_fail("invalid URL scheme")
   }
   if url.any(fn(c) { c <= '\u{20}' || c == '\u{7f}' }) {
     pvc_fail("invalid URL")
-  }
-  let remainder = url[scheme.length() + 1:]
-  let restrictions = match schema.get("restrictions") {
-    Some(v) => pvc_object(v)
-    None => return
-  }
-  match restrictions.get("allowedSchemes") {
-    Some(v) =>
-      if !pvc_array(v)
-        .map(pvc_string)
-        .any(fn(x) { pvc_ascii_lower(x) == pvc_ascii_lower(scheme) }) {
-        pvc_fail("URL scheme is not allowed")
-      }
-    None => ()
-  }
-  match restrictions.get("allowedHosts") {
-    Some(v) => {
-      let authority_path = match remainder.strip_prefix("//") {
-        Some(value) => value.to_owned()
-        None => {
-          pvc_fail("URL host is missing")
-          ""
-        }
-      }
-      let authority = authority_path.split("/").to_array()[0]
-        .split("?")
-        .to_array()[0]
-        .split("#")
-        .to_array()[0]
-      let host_port = authority.split("@").to_array().last().unwrap_or("")
-      let host = if host_port.strip_prefix("[") is Some(ipv6) {
-        match ipv6.split("]").to_array() {
-          [host, ..] => host.to_owned()
-          _ => {
-            pvc_fail("invalid URL host")
-            ""
-          }
-        }
-      } else {
-        host_port.split(":").to_array()[0].to_owned()
-      }
-      if host.is_empty() ||
-        !pvc_array(v)
-        .map(pvc_string)
-        .any(fn(x) { pvc_ascii_lower(x) == pvc_ascii_lower(host) }) {
-        pvc_fail("URL host is not allowed")
-      }
-    }
-    None => ()
   }
 }
 
@@ -599,27 +346,6 @@ fn pvc_canonical_unsigned(value : String) -> Bool {
 }
 
 ///|
-fn pvc_canonical_signed(value : String) -> Bool {
-  match value.strip_prefix("-") {
-    Some(rest) => rest != "0" && pvc_canonical_unsigned(rest.to_owned())
-    None => pvc_canonical_unsigned(value)
-  }
-}
-
-///|
-fn pvc_int(value : Json, lo : Int64, hi : Int64) -> Int64 raise {
-  let literal = number_literal(value)
-  if !pvc_canonical_signed(literal) {
-    pvc_fail("integer is not canonical")
-  }
-  let parsed = @string.parse_int64(literal)
-  if parsed < lo || parsed > hi {
-    pvc_fail("integer is out of range")
-  }
-  parsed
-}
-
-///|
 fn pvc_u32(value : Json) -> UInt raise {
   let literal = number_literal(value)
   if !pvc_canonical_unsigned(literal) {
@@ -694,45 +420,6 @@ fn pvc_base64url_encode(bytes : Bytes) -> String {
   .replace(old="/", new="_")
   .trim_end(chars="=")
   .to_owned()
-}
-
-///|
-fn pvc_binary_restrictions(
-  schema : Map[String, Json],
-  bytes : Bytes,
-  mime : String?,
-) -> Unit raise {
-  let restrictions = match schema.get("restrictions") {
-    Some(v) => pvc_object(v)
-    None => return
-  }
-  match restrictions.get("minBytes") {
-    Some(v) =>
-      if bytes.length().reinterpret_as_uint() < pvc_u32(v) {
-        pvc_fail("binary is shorter than minBytes")
-      }
-    None => ()
-  }
-  match restrictions.get("maxBytes") {
-    Some(v) =>
-      if bytes.length().reinterpret_as_uint() > pvc_u32(v) {
-        pvc_fail("binary is longer than maxBytes")
-      }
-    None => ()
-  }
-  match restrictions.get("mimeTypes") {
-    Some(v) => {
-      let allowed = pvc_array(v).map(pvc_string)
-      match mime {
-        Some(m) =>
-          if !allowed.any(fn(x) { x == m }) {
-            pvc_fail("binary MIME type is not allowed")
-          }
-        None => ()
-      }
-    }
-    None => ()
-  }
 }
 
 ///|
@@ -872,7 +559,6 @@ fn PublicValueCodec::encode_at(
       if v < -128 || v > 127 {
         pvc_fail("s8 out of range")
       }
-      pvc_numeric_restrictions(schema, "signed", Some(v.to_int64()), None, None)
       pvc_charge(charge, 1)
       if materialize {
         json_int(v)
@@ -884,7 +570,6 @@ fn PublicValueCodec::encode_at(
       if v < -32768 || v > 32767 {
         pvc_fail("s16 out of range")
       }
-      pvc_numeric_restrictions(schema, "signed", Some(v.to_int64()), None, None)
       pvc_charge(charge, 2)
       if materialize {
         json_int(v)
@@ -893,7 +578,6 @@ fn PublicValueCodec::encode_at(
       }
     }
     ("s32", S32Value(v)) => {
-      pvc_numeric_restrictions(schema, "signed", Some(v.to_int64()), None, None)
       pvc_charge(charge, 4)
       if materialize {
         json_int(v)
@@ -902,7 +586,6 @@ fn PublicValueCodec::encode_at(
       }
     }
     ("s64", S64Value(v)) => {
-      pvc_numeric_restrictions(schema, "signed", Some(v), None, None)
       pvc_charge(charge, 8)
       if materialize {
         Json::string(v.to_string())
@@ -914,13 +597,6 @@ fn PublicValueCodec::encode_at(
       if v < 0 || v > 255 {
         pvc_fail("u8 out of range")
       }
-      pvc_numeric_restrictions(
-        schema,
-        "unsigned",
-        None,
-        Some(v.to_uint64()),
-        None,
-      )
       pvc_charge(charge, 1)
       if materialize {
         json_int(v)
@@ -932,13 +608,6 @@ fn PublicValueCodec::encode_at(
       if v < 0 || v > 65535 {
         pvc_fail("u16 out of range")
       }
-      pvc_numeric_restrictions(
-        schema,
-        "unsigned",
-        None,
-        Some(v.to_uint64()),
-        None,
-      )
       pvc_charge(charge, 2)
       if materialize {
         json_int(v)
@@ -947,13 +616,6 @@ fn PublicValueCodec::encode_at(
       }
     }
     ("u32", U32Value(v)) => {
-      pvc_numeric_restrictions(
-        schema,
-        "unsigned",
-        None,
-        Some(v.to_uint64()),
-        None,
-      )
       pvc_charge(charge, 4)
       if materialize {
         json_uint(v)
@@ -962,7 +624,6 @@ fn PublicValueCodec::encode_at(
       }
     }
     ("u64", U64Value(v)) => {
-      pvc_numeric_restrictions(schema, "unsigned", None, Some(v), None)
       pvc_charge(charge, 8)
       if materialize {
         Json::string(v.to_string())
@@ -974,7 +635,6 @@ fn PublicValueCodec::encode_at(
       if application && (v.is_nan() || v.is_inf()) {
         pvc_fail("exceptional floats have no application JSON representation")
       }
-      pvc_numeric_restrictions(schema, "float", None, None, Some(v.to_double()))
       pvc_charge(charge, 4)
       if materialize {
         pvc_encode_float(v.to_double())
@@ -986,7 +646,6 @@ fn PublicValueCodec::encode_at(
       if application && (v.is_nan() || v.is_inf()) {
         pvc_fail("exceptional floats have no application JSON representation")
       }
-      pvc_numeric_restrictions(schema, "float", None, None, Some(v))
       pvc_charge(charge, 8)
       if materialize {
         pvc_encode_float(v)
@@ -1142,14 +801,6 @@ fn PublicValueCodec::encode_at(
     ("result", ResultValue(v)) =>
       self.encode_result(schema, v, depth, charge, application, materialize)
     ("text", TextValue(text, language)) => {
-      match language {
-        Some(x) =>
-          if !pvc_language(x) {
-            pvc_fail("language is not valid BCP-47 syntax")
-          }
-        None => ()
-      }
-      pvc_text_restrictions(schema, text, language)
       let extra = match language {
         Some(x) => @utf8.encode(x).length()
         None => 0
@@ -1170,7 +821,6 @@ fn PublicValueCodec::encode_at(
         Some(x) => if !pvc_mime(x) { pvc_fail("invalid MIME type") }
         None => ()
       }
-      pvc_binary_restrictions(schema, bytes, mime)
       let extra = match mime {
         Some(x) => pvc_utf8_len(x)
         None => 0
@@ -1187,10 +837,6 @@ fn PublicValueCodec::encode_at(
       pvc_obj(f)
     }
     ("path", PathValue(v)) => {
-      if v.is_empty() {
-        pvc_fail("path must not be empty")
-      }
-      pvc_path_restrictions(schema, v)
       pvc_charge(charge, pvc_utf8_len(v))
       if materialize {
         Json::string(v)
@@ -1202,7 +848,7 @@ fn PublicValueCodec::encode_at(
       if v.is_empty() {
         pvc_fail("URL must not be empty")
       }
-      pvc_url_restrictions(schema, v)
+      pvc_url_form(v)
       pvc_charge(charge, pvc_utf8_len(v))
       if materialize {
         Json::string(v)
@@ -1230,7 +876,7 @@ fn PublicValueCodec::encode_at(
       }
     }
     ("quantity", QuantityValue(mantissa, scale, unit)) => {
-      pvc_quantity_restrictions(schema, mantissa, scale, unit)
+      pvc_quantity_unit(schema, unit)
       pvc_charge(charge, 12 + pvc_utf8_len(unit))
       if !materialize {
         return Json::null()

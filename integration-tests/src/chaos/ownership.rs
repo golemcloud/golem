@@ -113,7 +113,7 @@ pub struct OwnershipSample {
     /// Which sample this is, e.g. `before-fault`, `during-fault`,
     /// `after-settle`.
     pub at: String,
-    pub taken_at: chrono::DateTime<chrono::Utc>,
+    pub taken_at: jiff::Timestamp,
     /// `None` when the shard-manager could not be reached — expected during a
     /// fault aimed at it, and recorded rather than treated as an error.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -146,7 +146,7 @@ impl OwnershipSample {
         let Some(routing) = routing else {
             return Self {
                 at: at.to_string(),
-                taken_at: chrono::Utc::now(),
+                taken_at: jiff::Timestamp::now(),
                 number_of_shards: None,
                 shards_per_executor: BTreeMap::new(),
                 unassigned_shards: 0,
@@ -180,7 +180,7 @@ impl OwnershipSample {
 
         let sample = Self {
             at: at.to_string(),
-            taken_at: chrono::Utc::now(),
+            taken_at: jiff::Timestamp::now(),
             number_of_shards: Some(total),
             shards_per_executor,
             unassigned_shards: unassigned,
@@ -302,7 +302,7 @@ impl OwnershipSample {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::Utc;
+
     use test_r::test;
 
     fn sample(at: &str, settled: bool, pods: &[(&str, usize)], total: usize) -> OwnershipSample {
@@ -322,7 +322,7 @@ mod tests {
         }
         OwnershipSample {
             at: at.to_string(),
-            taken_at: Utc::now(),
+            taken_at: jiff::Timestamp::now(),
             number_of_shards: Some(total),
             shards_per_executor,
             unassigned_shards: unassigned,

@@ -1003,7 +1003,9 @@ async fn errors_are_typed_sanitized_and_not_retried() {
 
 #[test]
 fn retry_after_dates_are_recordable_relative_delays() {
-    let now = "2026-09-17T12:00:00.250Z".parse::<DateTime<Utc>>().unwrap();
+    let now = "2026-09-17T12:00:00.250Z"
+        .parse::<jiff::Timestamp>()
+        .unwrap();
     assert_eq!(
         retry_after("Thu, 17 Sep 2026 12:00:03 GMT", now),
         Some(2750)

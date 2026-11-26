@@ -29,7 +29,7 @@ const caller = callerFromHost({
     tag: 'agent',
     val: {
       pair: pair('agent:2/3'),
-      agentId: { componentId: { uuid: uuid(2n) }, agentId: 'Relay("r")' },
+      agentId: { uuid: uuid(2n) },
       agentType: 'Relay',
       environmentId: { uuid: uuid(4n) },
     },

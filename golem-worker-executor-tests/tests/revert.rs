@@ -358,7 +358,7 @@ async fn a_repeated_count_based_revert_of_the_same_resolution_writes_nothing(
     let resolve = || {
         let mut client = executor.client.clone();
         let request = ResolveRevertLastInvocationsRequest {
-            agent_id: Some(worker_id.agent_id.clone().into()),
+            agent_id: Some(worker_id.agent_id.into()),
             number_of_invocations: 1,
             environment_id: Some(context.default_environment_id.into()),
             auth_ctx: Some(executor.auth_ctx().into()),
@@ -380,7 +380,7 @@ async fn a_repeated_count_based_revert_of_the_same_resolution_writes_nothing(
     let revert = |resolved| {
         let mut client = executor.client.clone();
         let request = RevertWorkerRequest {
-            agent_id: Some(worker_id.agent_id.clone().into()),
+            agent_id: Some(worker_id.agent_id.into()),
             target: Some(
                 RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
                     number_of_invocations: 1,
@@ -397,7 +397,7 @@ async fn a_repeated_count_based_revert_of_the_same_resolution_writes_nothing(
     };
 
     let resolved = resolve().await?;
-    match revert(resolved.clone()).await? {
+    match revert(resolved).await? {
         Some(revert_worker_response::Result::Success(_)) => {}
         other => anyhow::bail!("the first revert failed: {other:?}"),
     }
@@ -410,7 +410,7 @@ async fn a_repeated_count_based_revert_of_the_same_resolution_writes_nothing(
          first resolution {resolved:?}"
     );
 
-    match revert(resolved.clone()).await? {
+    match revert(resolved).await? {
         Some(revert_worker_response::Result::Success(_)) => {}
         other => anyhow::bail!("the repeated revert of an applied resolution failed: {other:?}"),
     }

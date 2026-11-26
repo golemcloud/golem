@@ -35,7 +35,7 @@
 //! the `golem-dev` maintenance window open with nothing to show for it.
 
 use anyhow::Context;
-use chrono::{DateTime, Utc};
+
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -106,7 +106,7 @@ pub struct FaultTarget {
 #[serde(rename_all = "camelCase")]
 pub struct BaselineReady {
     pub scenario_code: String,
-    pub ready_at: DateTime<Utc>,
+    pub ready_at: jiff::Timestamp,
     /// Operations the baseline phase completed. Purely informational — it lets
     /// the workflow log something meaningful before it injects.
     pub baseline_operations: u64,
@@ -129,7 +129,7 @@ pub struct FaultInjected {
     pub kind: String,
     /// What the fault was aimed at, e.g. `shard-manager`.
     pub target: String,
-    pub injected_at: DateTime<Utc>,
+    pub injected_at: jiff::Timestamp,
 }
 
 /// Written by the workflow each time it changes the executor count mid-run.
@@ -142,7 +142,7 @@ pub struct FaultInjected {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScaleEvent {
-    pub scaled_at: DateTime<Utc>,
+    pub scaled_at: jiff::Timestamp,
     /// Replica count before and after, so the artifact records what was asked
     /// for rather than only what the routing table happened to show.
     pub from_replicas: u32,
@@ -158,7 +158,7 @@ pub struct ScaleEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RestartEvent {
-    pub killed_at: DateTime<Utc>,
+    pub killed_at: jiff::Timestamp,
     /// Which kill this is in the schedule, 1-based.
     pub sequence: u32,
     /// The Chaos Mesh object that did it, so a leftover can be traced back.
@@ -170,7 +170,7 @@ pub struct RestartEvent {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FaultRecovered {
-    pub recovered_at: DateTime<Utc>,
+    pub recovered_at: jiff::Timestamp,
     /// How the fault ended, e.g. `deleted` for the normal path or
     /// `duration_expired` when Chaos Mesh retired it on its own.
     pub termination_reason: String,
@@ -371,7 +371,7 @@ mod tests {
         dir
     }
 
-    fn injected(at: DateTime<Utc>) -> FaultInjected {
+    fn injected(at: jiff::Timestamp) -> FaultInjected {
         FaultInjected {
             fault_id: "s12-pod-kill".to_string(),
             kind: "pod-kill".to_string(),
@@ -384,7 +384,7 @@ mod tests {
     async fn await_returns_a_signal_written_before_the_wait() {
         let dir = temp_signal_dir("pre-written");
         let signals = FaultSignals::new(&dir).unwrap();
-        let at = Utc::now();
+        let at = jiff::Timestamp::now();
         std::fs::write(
             dir.join(FAULT_INJECTED_FILE),
             serde_json::to_string(&injected(at)).unwrap(),
@@ -410,7 +410,7 @@ mod tests {
             std::fs::write(
                 write_dir.join(FAULT_RECOVERED_FILE),
                 serde_json::to_string(&FaultRecovered {
-                    recovered_at: Utc::now(),
+                    recovered_at: jiff::Timestamp::now(),
                     termination_reason: "deleted".to_string(),
                 })
                 .unwrap(),
@@ -452,7 +452,7 @@ mod tests {
         signals
             .write_baseline_ready(&BaselineReady {
                 scenario_code: "S8".to_string(),
-                ready_at: Utc::now(),
+                ready_at: jiff::Timestamp::now(),
                 baseline_operations: 50,
                 fault_target: Some(FaultTarget {
                     pod_address: "10.0.14.207:9000".to_string(),
@@ -477,7 +477,7 @@ mod tests {
         signals
             .write_baseline_ready(&BaselineReady {
                 scenario_code: "S12".to_string(),
-                ready_at: Utc::now(),
+                ready_at: jiff::Timestamp::now(),
                 baseline_operations: 7,
                 fault_target: None,
             })
@@ -631,7 +631,7 @@ mod tests {
         let signals = FaultSignals::new(&dir).unwrap();
         let ready = BaselineReady {
             scenario_code: "S12".to_string(),
-            ready_at: Utc::now(),
+            ready_at: jiff::Timestamp::now(),
             baseline_operations: 1234,
             fault_target: None,
         };

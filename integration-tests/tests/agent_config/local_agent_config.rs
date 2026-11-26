@@ -366,13 +366,15 @@ async fn agent_with_mixed_agent_config_update(
                 golem_common::model::agent::AgentTypeName("LocalConfigAgent".to_string()),
                 AgentTypeProvisionConfigUpdate {
                     config: Some(vec![
-                        AgentConfigEntryDto {
+                        golem_common::model::component::ConfigBindingDto {
                             path: vec!["foo".to_string()],
                             value: json!(3).into(),
+                            origins: None,
                         },
-                        AgentConfigEntryDto {
+                        golem_common::model::component::ConfigBindingDto {
                             path: vec!["bar".to_string()],
                             value: json!("baz").into(),
+                            origins: None,
                         },
                     ]),
                     ..Default::default()

@@ -551,7 +551,7 @@ const importObject = {
     "get-agent-type-by-agent-id"(high, low, retPtr) {
       rpcHost.calls.push(`get-agent-type-by-agent-id ${rpcHostUuid(high, low)}`)
       const memory = new DataView(instance.exports.memory.buffer)
-      new Uint8Array(instance.exports.memory.buffer, retPtr, 240).fill(0)
+      new Uint8Array(instance.exports.memory.buffer, retPtr, 248).fill(0)
       if (rpcHost.selfType === null) return
       memory.setUint8(retPtr, 1)
       // Only the type name matters to the SDK. Every string and list of the
@@ -560,7 +560,7 @@ const importObject = {
       const agentType = retPtr + 8
       permissionHostWriteString(memory, agentType, rpcHost.selfType)
       for (const offset of [12, 20, 60]) permissionHostWriteString(memory, agentType + offset, "")
-      for (const offset of [28, 36, 84, 92, 100, 224])
+      for (const offset of [28, 36, 84, 92, 100, 232])
         memory.setInt32(agentType + offset, permissionHostAllocate(1), true)
     },
     "[resource-drop]wasm-rpc"(handle) {

@@ -33,7 +33,7 @@ use crate::model::app_raw::{
     AppVersionSource, BuiltinServer, CustomServerAuth, DeploymentOptions, Environment, Marker,
     Server,
 };
-use crate::model::config::server::ToFormattedServerContext;
+use crate::model::cli_config::server::ToFormattedServerContext;
 use crate::model::environment::{
     EnvironmentReference, ResolvedEnvironmentIdentity, SelectedManifestEnvironment,
 };

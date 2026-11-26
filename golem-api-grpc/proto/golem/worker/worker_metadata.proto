@@ -56,6 +56,20 @@ message AgentMetadata {
   optional string constructor_parameters = 26;
   // The folded status underneath `status`. Set only when `status` is SANDBOXED.
   optional AgentStatus underlying_status = 27;
+  // The index of the latest entry other than an invocation settlement. Read-only HTTP
+  // validators name it; the public agent metadata has no such index.
+  uint64 state_oplog_idx = 28;
+  // How the agent came to exist.
+  AgentOrigin origin = 29;
+}
+
+enum AgentOrigin {
+  // A keyed agent, created by an upsert or a keyed create.
+  AGENT_ORIGIN_KEYED = 0;
+  // Created without a key.
+  AGENT_ORIGIN_CREATED = 1;
+  // A fork of another agent.
+  AGENT_ORIGIN_FORKED = 2;
 }
 
 message UpdateRecord {

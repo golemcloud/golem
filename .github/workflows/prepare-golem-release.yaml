@@ -72,7 +72,7 @@ jobs:
       - uses: ./.github/actions/check-published-sdks
         with:
           prepare-binaries: 'true'
-          wasm-rquickjs-version: '0.5.4'
+          wasm-rquickjs-version: '0.5.5'
           moonbit-version: '0.10.18+6c83a7f62'
       - uses: actions/upload-artifact@v4
         if: always()
@@ -96,7 +96,7 @@ jobs:
     env:
       CARGO_BUILD_JOBS: 20
       WASI_SDK_PATH: /opt/wasi-sdk
-      WASM_RQUICKJS_VERSION: '0.5.4'
+      WASM_RQUICKJS_VERSION: '0.5.5'
     steps:
       - uses: actions/checkout@v5
         with:

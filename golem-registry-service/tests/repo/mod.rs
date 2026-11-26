@@ -47,6 +47,7 @@ use golem_registry_service::repo::model::environment::{
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::model::plan::PlanRecord;
 use golem_registry_service::repo::plan::{DbPlanRepo, PlanRepo};
+use golem_registry_service::repo::plan_storage::PlanStorageRepo;
 use golem_registry_service::repo::plugin::PluginRepo;
 use golem_registry_service::repo::registry_change::{
     ChangeEventId, DbRegistryChangeRepo, NewRegistryChangeEvent, RegistryChangeRepo,
@@ -70,9 +71,9 @@ use uuid::Uuid;
 pub mod account_tree;
 pub mod common;
 pub mod notifier_reconnect;
+pub mod plan_storage;
 pub mod postgres;
 pub mod resource_usage_reload;
-pub mod shared_config;
 pub mod sqlite;
 
 inherit_test_dep!(Tracing);
@@ -85,6 +86,7 @@ pub struct Deps {
     pub account_usage_repo: std::sync::Arc<dyn AccountUsageRepo>,
     pub account_resource_override_repo: std::sync::Arc<dyn AccountResourceOverrideRepo>,
     pub account_tree_repo: Arc<dyn AccountTreeRepo>,
+    pub plan_storage_repo: Arc<dyn PlanStorageRepo>,
     pub agent_secret_repo: Box<dyn AgentSecretRepo>,
     pub retry_policy_repo: Box<dyn RetryPolicyRepo>,
     pub installation_repo: Box<dyn InstallationRepo>,

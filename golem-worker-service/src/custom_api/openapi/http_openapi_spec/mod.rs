@@ -23,8 +23,8 @@ use super::response_schema::{
 };
 use super::route_schema::{RequestBodyModel, RouteSchema, build_document_schema};
 use super::schema_mapping::{
-    api_type_schema, arbitrary_binary_schema, render_input_schema, render_query_schema,
-    string_enum_schema, string_schema,
+    arbitrary_binary_schema, render_input_schema, render_query_schema, string_enum_schema,
+    string_schema,
 };
 use crate::custom_api::{RichCompiledRoute, RichRouteBehaviour, RichRouteSecurity};
 use base64::Engine;
@@ -275,7 +275,7 @@ fn build_operation(
         }
     }
     if matches!(&route.behavior, RichRouteBehaviour::CreateAgent(_)) {
-        operation.insert("description".into(), json!("Creates an unkeyed agent and waits for its constructor to complete. The parameters use canonical tagged SchemaValue JSON. keyed: true is rejected. Idempotency-Key is ignored for callers without a caller scope."));
+        operation.insert("description".into(), json!("Creates an agent without a key and waits for its constructor to complete. The body is a JSON object of the constructor parameters. Idempotency-Key is ignored for callers without a caller scope."));
     }
 
     let mut parameters: Vec<Value> = Vec::new();
@@ -419,34 +419,10 @@ fn build_request_body(
             ))
         }
         RequestBodyModel::CreateAgent(constructor) => {
-            let mut parameters =
-                api_type_schema::<golem_common::schema::external::ExternalSchemaValue>(components)?;
-            let field_count = match constructor.as_ref() {
-                golem_common::schema::SchemaType::Record { fields, .. } => fields.len(),
-                _ => return Err("Create constructor schema must be a record".into()),
-            };
-            parameters["properties"] = json!({
-                "kind": {"const": "record"},
-                "value": {"properties": {
-                    "fields": {"type": "array", "minItems": field_count, "maxItems": field_count}
-                }}
-            });
-            let constructor = render_input_schema(graph, constructor, components)?;
-            parameters["x-golem-constructor-schema"] = constructor;
+            let schema = render_input_schema(graph, constructor, components)?;
             Some(request_body_value(
-                "Create request. parameters is a canonical tagged record of the user-supplied constructor fields in declaration order. Only parameters and optional keyed: false are accepted. config and env overrides are rejected, including empty values. Only unkeyed creation is supported.",
-                vec![(
-                    "application/json".into(),
-                    json!({
-                        "type": "object",
-                        "required": ["parameters"],
-                        "additionalProperties": false,
-                        "properties": {
-                            "parameters": parameters,
-                            "keyed": {"const": false, "default": false}
-                        }
-                    }),
-                )],
+                "Constructor parameters of the new agent. The agent has no key.",
+                vec![("application/json".to_string(), schema)],
             ))
         }
         RequestBodyModel::UnrestrictedBinary => Some(request_body_value(

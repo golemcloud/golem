@@ -1118,13 +1118,26 @@ impl<'a, Dsl: TestDsl + ?Sized> StoreComponentBuilder<'a, Dsl> {
 
     pub fn with_agent_config(mut self, agent_type: &str, config: Vec<AgentConfigEntryDto>) -> Self {
         let entry = self.provision_config_entry_mut(agent_type);
-        entry.config = config;
+        entry.config = config
+            .into_iter()
+            .map(|value| golem_common::model::component::ConfigBindingDto {
+                path: value.path,
+                value: value.value,
+                origins: None,
+            })
+            .collect();
         self
     }
 
     pub fn add_agent_config(mut self, agent_type: &str, config_entry: AgentConfigEntryDto) -> Self {
         let entry = self.provision_config_entry_mut(agent_type);
-        entry.config.push(config_entry);
+        entry
+            .config
+            .push(golem_common::model::component::ConfigBindingDto {
+                path: config_entry.path,
+                value: config_entry.value,
+                origins: None,
+            });
         self
     }
 

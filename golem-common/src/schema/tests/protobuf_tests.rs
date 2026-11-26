@@ -288,7 +288,7 @@ fn permission_card_type_and_value_proto_round_trip() {
     let value = SchemaValue::PermissionCard(PermissionCardValuePayload {
         card_id: Uuid::from_u128(1),
         parent_ids: vec![Uuid::from_u128(2), Uuid::from_u128(3)],
-        expires_at: Some(chrono::DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap()),
+        expires_at: Some(jiff::Timestamp::new(1_700_000_000, 123_456_789).unwrap()),
         polymorphic: true,
     });
     let value_proto: golem_schema::proto::golem::schema::SchemaValue = value

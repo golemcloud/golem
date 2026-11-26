@@ -26,8 +26,17 @@
 //!   failed step rolls back all of them.
 //! - Writes are optimistic: a change names the revision it read and fails with
 //!   [`AccountTreeRepoError::ConcurrentModification`] when the node has moved on.
+//! - A guard timeout, or a purge whose plan links changed after discovery, rolls the attempt
+//!   back. The writer rediscovers and retries with backoff, up to its attempt limit, and then
+//!   fails with [`AccountTreeRepoError::Contention`]. Every attempt checks the expected revision
+//!   the caller named.
 //! - Path and ancestry reads are single statements, so each result comes from one database
 //!   snapshot.
+//! - Writes take the guards of [`crate::repo::account_guard`] before any data row: a child
+//!   creation takes shared guards on its ancestors, a node change an exclusive guard on the node
+//!   and shared guards on its ancestors. A purge also takes a shared guard on the node's assigned
+//!   definition and exclusive guards on the definitions it owns, and removes them with the node;
+//!   their history stays.
 //!
 //! The repository never changes a node's parent or depth: creation derives the depth and
 //! [`AccountNodeChange`] has neither field. The database does not enforce this rule.
@@ -37,10 +46,12 @@
 //! no live repository or service uses this code. HA-15 moves the schema into the production
 //! migrations and the active account path, with its own migration and active-path tests.
 
+use crate::repo::account_guard::{DbGuards, GuardClass, GuardMode, GuardSet, is_guard_timeout};
 use crate::repo::model::account_tree::{
     AccountLifecycleState, AccountNodeChange, AccountNodeRecord, AccountNodeRevisionRecord,
     AccountTreeRepoError,
 };
+use crate::repo::plan_storage::{DEFAULT_GUARD_TIMEOUT, DEFAULT_MAX_ATTEMPTS, backoff};
 use crate::repo::registry_change::{
     DbRegistryChangeRepo, NewRegistryChangeEvent, RequiresNotificationSignal, RequiresSignalExt,
 };
@@ -50,20 +61,23 @@ use futures::FutureExt;
 use golem_common::model::account_path::{AccountPath, AccountSegment};
 use golem_service_base::db::postgres::PostgresPool;
 use golem_service_base::db::sqlite::SqlitePool;
-use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
+use golem_service_base::db::{LabelledPoolApi, LabelledPoolTransaction, Pool, PoolApi};
 use golem_service_base::repo::{RepoError, SqlDateTime};
 use indoc::indoc;
+use std::time::Duration;
 use tracing::{Instrument, Span, info_span};
 use uuid::Uuid;
 
 /// The test-only schema scripts, in order. Tests run them after the production migrations.
 pub mod preview_schema {
-    pub const POSTGRES: &[&str] = &[include_str!(
-        "../../db/preview/hierarchical-accounts/postgres/001_account_tree.sql"
-    )];
-    pub const SQLITE: &[&str] = &[include_str!(
-        "../../db/preview/hierarchical-accounts/sqlite/001_account_tree.sql"
-    )];
+    pub const POSTGRES: &[&str] = &[
+        include_str!("../../db/preview/hierarchical-accounts/postgres/001_account_tree.sql"),
+        include_str!("../../db/preview/hierarchical-accounts/postgres/002_plan_storage.sql"),
+    ];
+    pub const SQLITE: &[&str] = &[
+        include_str!("../../db/preview/hierarchical-accounts/sqlite/001_account_tree.sql"),
+        include_str!("../../db/preview/hierarchical-accounts/sqlite/002_plan_storage.sql"),
+    ];
 }
 
 #[async_trait]
@@ -238,6 +252,8 @@ impl<Repo: AccountTreeRepo> AccountTreeRepo for LoggedAccountTreeRepo<Repo> {
 
 pub struct DbAccountTreeRepo<DBP: Pool> {
     db_pool: DBP,
+    guard_timeout: Duration,
+    max_attempts: usize,
 }
 
 static METRICS_SVC_NAME: &str = "account_tree";
@@ -247,7 +263,17 @@ const NODE_COLUMNS: &str = "account_id, parent_id, segment, depth, display_name,
 
 impl<DBP: Pool> DbAccountTreeRepo<DBP> {
     pub fn new(db_pool: DBP) -> Self {
-        Self { db_pool }
+        Self::with_limits(db_pool, DEFAULT_GUARD_TIMEOUT, DEFAULT_MAX_ATTEMPTS)
+    }
+
+    /// `guard_timeout` bounds each wait for a guard; `max_attempts` bounds the retries after a
+    /// guard timeout or changed plan links.
+    pub fn with_limits(db_pool: DBP, guard_timeout: Duration, max_attempts: usize) -> Self {
+        Self {
+            db_pool,
+            guard_timeout,
+            max_attempts: max_attempts.max(1),
+        }
     }
 
     pub fn logged(db_pool: DBP) -> LoggedAccountTreeRepo<Self>
@@ -340,6 +366,53 @@ impl DbAccountTreeRepo<PostgresPool> {
         Ok(())
     }
 
+    /// The IDs of the node and its ancestors, root first, read outside the write transaction.
+    async fn discover_ancestry(&self, account_id: Uuid) -> Result<Vec<Uuid>, RepoError> {
+        let mut ro = self.with_ro("discover_ancestry").begin().await?;
+        let rows: Vec<(Uuid,)> = ro
+            .fetch_all_as(
+                sqlx::query_as(indoc! { r#"
+                    WITH RECURSIVE chain AS (
+                        SELECT account_id, parent_id, depth FROM account_nodes WHERE account_id = $1
+                        UNION ALL
+                        SELECT p.account_id, p.parent_id, p.depth
+                        FROM account_nodes p JOIN chain c ON p.account_id = c.parent_id)
+                    SELECT account_id FROM chain ORDER BY depth
+                "#})
+                .bind(account_id),
+            )
+            .await?;
+        ro.commit().await?;
+        Ok(rows.into_iter().map(|(id,)| id).collect())
+    }
+
+    /// The plan the node is assigned and the definitions it owns.
+    async fn plan_links_in(
+        api: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
+        account_id: Uuid,
+    ) -> Result<(Option<Uuid>, Vec<Uuid>), RepoError> {
+        let assigned: Option<(Uuid,)> = api
+            .fetch_optional_as(
+                sqlx::query_as(
+                    "SELECT plan_id FROM account_plan_assignments WHERE account_id = $1",
+                )
+                .bind(account_id),
+            )
+            .await?;
+        let owned: Vec<(Uuid,)> = api
+            .fetch_all_as(
+                sqlx::query_as(
+                    "SELECT plan_id FROM account_plans WHERE owner_account_id = $1 ORDER BY plan_id",
+                )
+                .bind(account_id),
+            )
+            .await?;
+        Ok((
+            assigned.map(|(id,)| id),
+            owned.into_iter().map(|(id,)| id).collect(),
+        ))
+    }
+
     async fn get_in_tx(
         tx: &mut <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction,
         account_id: Uuid,
@@ -377,60 +450,70 @@ fn new_node(
     }
 }
 
+/// The outcome of one attempt of a guarded write.
+#[derive(Debug)]
+enum AttemptError {
+    /// A guard wait timed out, or the plan links of a purge changed after discovery. The next
+    /// attempt rediscovers from the start.
+    Retry,
+    Fail(AccountTreeRepoError),
+}
+
+impl From<RepoError> for AttemptError {
+    fn from(error: RepoError) -> Self {
+        if is_guard_timeout(&error) {
+            AttemptError::Retry
+        } else {
+            AttemptError::Fail(error.into())
+        }
+    }
+}
+
+impl From<AccountTreeRepoError> for AttemptError {
+    fn from(error: AccountTreeRepoError) -> Self {
+        AttemptError::Fail(error)
+    }
+}
+
 fn expected_revision(expected_revision: u64) -> Result<i64, AccountTreeRepoError> {
     i64::try_from(expected_revision).map_err(|_| AccountTreeRepoError::ConcurrentModification)
 }
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
-#[async_trait]
-impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
-    async fn create_root(
-        &self,
-        account_id: Uuid,
-        display_name: Option<String>,
-        actor: Uuid,
-    ) -> Result<AccountNodeRecord, AccountTreeRepoError> {
-        self.db_pool
-            .with_tx_err(METRICS_SVC_NAME, "create_root", |tx| {
-                async move {
-                    let record = new_node(account_id, None, String::new(), 0, display_name, actor);
-                    let record = Self::insert_node_in_tx(tx, &record).await.map_err(|err| {
-                        if err.is_unique_violation() {
-                            AccountTreeRepoError::RootExists
-                        } else {
-                            err.into()
-                        }
-                    })?;
-                    Self::insert_revision_in_tx(tx, &record).await?;
-                    Ok(record)
-                }
-                .boxed()
-            })
-            .await
-    }
-
-    async fn create_child(
+impl DbAccountTreeRepo<PostgresPool> {
+    async fn create_child_attempt(
         &self,
         account_id: Uuid,
         parent_id: Uuid,
-        segment: AccountSegment,
+        segment: &AccountSegment,
         display_name: Option<String>,
         actor: Uuid,
-    ) -> Result<AccountNodeRecord, AccountTreeRepoError> {
+    ) -> Result<AccountNodeRecord, AttemptError> {
+        let ancestry = self.discover_ancestry(parent_id).await?;
+        if ancestry.is_empty() {
+            return Err(AccountTreeRepoError::ParentNotFound.into());
+        }
+        let mut guards = GuardSet::new();
+        guards
+            .add_all(GuardClass::Account, ancestry, GuardMode::Shared)
+            .add(GuardClass::Account, account_id, GuardMode::Exclusive);
+        let timeout = self.guard_timeout;
+        let segment = segment.as_str().to_string();
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "create_child", |tx| {
                 async move {
+                    DbGuards::<PostgresPool>::acquire_in_tx(tx, &guards, timeout).await?;
                     let parent = Self::get_in_tx(tx, parent_id)
                         .await?
                         .ok_or(AccountTreeRepoError::ParentNotFound)?;
                     if usize::try_from(parent.depth).unwrap_or(usize::MAX) >= AccountPath::MAX_DEPTH
                     {
-                        return Err(AccountTreeRepoError::TooDeep);
+                        return Err(AccountTreeRepoError::TooDeep.into());
                     }
                     let record = new_node(
                         account_id,
                         Some(parent_id),
-                        segment.as_str().to_string(),
+                        segment,
                         parent.depth + 1,
                         display_name,
                         actor,
@@ -453,25 +536,33 @@ impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
             .await
     }
 
-    async fn update(
+    async fn update_attempt(
         &self,
         account_id: Uuid,
-        expected_revision: u64,
+        expected: i64,
         change: AccountNodeChange,
         actor: Uuid,
-    ) -> Result<RequiresNotificationSignal<AccountNodeRecord>, AccountTreeRepoError> {
-        let expected = self::expected_revision(expected_revision)?;
-        let record = self
-            .db_pool
+    ) -> Result<AccountNodeRecord, AttemptError> {
+        let mut ancestry = self.discover_ancestry(account_id).await?;
+        if ancestry.pop().is_none() {
+            return Err(AccountTreeRepoError::NotFound.into());
+        }
+        let mut guards = GuardSet::new();
+        guards
+            .add_all(GuardClass::Account, ancestry, GuardMode::Shared)
+            .add(GuardClass::Account, account_id, GuardMode::Exclusive);
+        let timeout = self.guard_timeout;
+        self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "update", |tx| {
                 async move {
+                    DbGuards::<PostgresPool>::acquire_in_tx(tx, &guards, timeout).await?;
                     let current = Self::get_in_tx(tx, account_id)
                         .await?
                         .ok_or(AccountTreeRepoError::NotFound)?;
                     let segment = match (&current.parent_id, change.segment) {
-                        (None, Some(_)) => return Err(AccountTreeRepoError::RootImmutable),
+                        (None, Some(_)) => return Err(AccountTreeRepoError::RootImmutable.into()),
                         (None, None) if change.own_state != AccountLifecycleState::Active => {
-                            return Err(AccountTreeRepoError::RootImmutable);
+                            return Err(AccountTreeRepoError::RootImmutable.into());
                         }
                         (_, Some(segment)) => segment.as_str().to_string(),
                         (_, None) => current.segment,
@@ -513,29 +604,72 @@ impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
                 }
                 .boxed()
             })
-            .await?;
-        Ok(record.requires_notification_signal())
+            .await
     }
 
-    async fn purge(
-        &self,
-        account_id: Uuid,
-        expected_revision: u64,
-        _actor: Uuid,
-    ) -> Result<RequiresNotificationSignal<()>, AccountTreeRepoError> {
-        let expected = self::expected_revision(expected_revision)?;
+    async fn purge_attempt(&self, account_id: Uuid, expected: i64) -> Result<(), AttemptError> {
+        let mut ancestry = self.discover_ancestry(account_id).await?;
+        if ancestry.pop().is_none() {
+            return Err(AccountTreeRepoError::NotFound.into());
+        }
+        let links = {
+            let mut ro = self.with_ro("purge_discover").begin().await?;
+            let links = Self::plan_links_in(&mut ro, account_id).await?;
+            ro.commit().await?;
+            links
+        };
+        let mut guards = GuardSet::new();
+        guards
+            .add_all(GuardClass::Account, ancestry, GuardMode::Shared)
+            .add(GuardClass::Account, account_id, GuardMode::Exclusive)
+            .add_all(GuardClass::Plan, links.0, GuardMode::Shared)
+            .add_all(
+                GuardClass::Plan,
+                links.1.iter().copied(),
+                GuardMode::Exclusive,
+            );
+        let timeout = self.guard_timeout;
         self.db_pool
             .with_tx_err(METRICS_SVC_NAME, "purge", |tx| {
                 async move {
+                    DbGuards::<PostgresPool>::acquire_in_tx(tx, &guards, timeout).await?;
+                    if Self::plan_links_in(tx, account_id).await? != links {
+                        return Err(AttemptError::Retry);
+                    }
                     let current = Self::get_in_tx(tx, account_id)
                         .await?
                         .ok_or(AccountTreeRepoError::NotFound)?;
                     if current.current_revision != expected {
-                        return Err(AccountTreeRepoError::ConcurrentModification);
+                        return Err(AccountTreeRepoError::ConcurrentModification.into());
                     }
                     if current.own_state != i16::from(AccountLifecycleState::DeletionGrace) {
-                        return Err(AccountTreeRepoError::NotInDeletionGrace);
+                        return Err(AccountTreeRepoError::NotInDeletionGrace.into());
                     }
+                    // A child assigned to an owned definition would make the definition delete
+                    // fail, so the children are checked first. The exclusive node guard keeps
+                    // new children out.
+                    let child: Option<(Uuid,)> = tx
+                        .fetch_optional_as(
+                            sqlx::query_as(
+                                "SELECT account_id FROM account_nodes WHERE parent_id = $1 LIMIT 1",
+                            )
+                            .bind(account_id),
+                        )
+                        .await?;
+                    if child.is_some() {
+                        return Err(AccountTreeRepoError::HasChildren.into());
+                    }
+                    tx.execute(
+                        sqlx::query("DELETE FROM account_plan_assignments WHERE account_id = $1")
+                            .bind(account_id),
+                    )
+                    .await?;
+                    // An owned definition of a childless node has no members.
+                    tx.execute(
+                        sqlx::query("DELETE FROM account_plans WHERE owner_account_id = $1")
+                            .bind(account_id),
+                    )
+                    .await?;
                     let deleted = tx
                         .execute(
                             sqlx::query(
@@ -546,16 +680,9 @@ impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
                             .bind(expected)
                             .bind(i16::from(AccountLifecycleState::DeletionGrace)),
                         )
-                        .await
-                        .map_err(|err| {
-                            if err.is_foreign_key_violation() {
-                                AccountTreeRepoError::HasChildren
-                            } else {
-                                err.into()
-                            }
-                        })?;
+                        .await?;
                     if deleted.rows_affected() != 1 {
-                        return Err(AccountTreeRepoError::ConcurrentModification);
+                        return Err(AccountTreeRepoError::ConcurrentModification.into());
                     }
                     DbRegistryChangeRepo::<PostgresPool>::create_change_event_in_tx(
                         tx,
@@ -566,8 +693,95 @@ impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
                 }
                 .boxed()
             })
-            .await?;
-        Ok(().requires_notification_signal())
+            .await
+    }
+}
+
+#[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
+#[async_trait]
+impl AccountTreeRepo for DbAccountTreeRepo<PostgresPool> {
+    async fn create_root(
+        &self,
+        account_id: Uuid,
+        display_name: Option<String>,
+        actor: Uuid,
+    ) -> Result<AccountNodeRecord, AccountTreeRepoError> {
+        self.db_pool
+            .with_tx_err(METRICS_SVC_NAME, "create_root", |tx| {
+                async move {
+                    let record = new_node(account_id, None, String::new(), 0, display_name, actor);
+                    let record = Self::insert_node_in_tx(tx, &record).await.map_err(|err| {
+                        if err.is_unique_violation() {
+                            AccountTreeRepoError::RootExists
+                        } else {
+                            err.into()
+                        }
+                    })?;
+                    Self::insert_revision_in_tx(tx, &record).await?;
+                    Ok(record)
+                }
+                .boxed()
+            })
+            .await
+    }
+
+    async fn create_child(
+        &self,
+        account_id: Uuid,
+        parent_id: Uuid,
+        segment: AccountSegment,
+        display_name: Option<String>,
+        actor: Uuid,
+    ) -> Result<AccountNodeRecord, AccountTreeRepoError> {
+        for attempt in 1..=self.max_attempts {
+            match self
+                .create_child_attempt(account_id, parent_id, &segment, display_name.clone(), actor)
+                .await
+            {
+                Ok(record) => return Ok(record),
+                Err(AttemptError::Retry) => backoff(attempt).await,
+                Err(AttemptError::Fail(error)) => return Err(error),
+            }
+        }
+        Err(AccountTreeRepoError::Contention)
+    }
+
+    async fn update(
+        &self,
+        account_id: Uuid,
+        expected_revision: u64,
+        change: AccountNodeChange,
+        actor: Uuid,
+    ) -> Result<RequiresNotificationSignal<AccountNodeRecord>, AccountTreeRepoError> {
+        let expected = self::expected_revision(expected_revision)?;
+        for attempt in 1..=self.max_attempts {
+            match self
+                .update_attempt(account_id, expected, change.clone(), actor)
+                .await
+            {
+                Ok(record) => return Ok(record.requires_notification_signal()),
+                Err(AttemptError::Retry) => backoff(attempt).await,
+                Err(AttemptError::Fail(error)) => return Err(error),
+            }
+        }
+        Err(AccountTreeRepoError::Contention)
+    }
+
+    async fn purge(
+        &self,
+        account_id: Uuid,
+        expected_revision: u64,
+        _actor: Uuid,
+    ) -> Result<RequiresNotificationSignal<()>, AccountTreeRepoError> {
+        let expected = self::expected_revision(expected_revision)?;
+        for attempt in 1..=self.max_attempts {
+            match self.purge_attempt(account_id, expected).await {
+                Ok(()) => return Ok(().requires_notification_signal()),
+                Err(AttemptError::Retry) => backoff(attempt).await,
+                Err(AttemptError::Fail(error)) => return Err(error),
+            }
+        }
+        Err(AccountTreeRepoError::Contention)
     }
 
     async fn get(&self, account_id: Uuid) -> Result<Option<AccountNodeRecord>, RepoError> {

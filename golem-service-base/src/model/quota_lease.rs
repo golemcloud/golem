@@ -12,10 +12,10 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::{DateTime, Utc};
 use golem_common::model::Pod;
 use golem_common::model::quota::LeaseEpoch;
 use golem_common::model::quota::{EnforcementAction, ResourceDefinitionId, ResourceLimit};
+use jiff::Timestamp;
 
 /// A lease granted by the shard manager to a worker executor.
 #[derive(Debug, Clone, PartialEq)]
@@ -26,7 +26,7 @@ pub enum QuotaLease {
         pod: Pod,
         epoch: LeaseEpoch,
         allocation: u64,
-        expires_at: DateTime<Utc>,
+        expires_at: Timestamp,
         resource_limit: ResourceLimit,
         enforcement_action: EnforcementAction,
         /// Total available capacity for this resource across all executors
@@ -36,7 +36,7 @@ pub enum QuotaLease {
     /// The resource definition does not exist or was deleted.
     /// The executor may use unlimited capacity but must renew
     /// to detect if a limit is later imposed.
-    Unlimited { pod: Pod, expires_at: DateTime<Utc> },
+    Unlimited { pod: Pod, expires_at: Timestamp },
 }
 
 /// A pending reservation request from an agent on an executor.
@@ -71,7 +71,8 @@ mod protobuf {
                         .ok_or("missing expires_at")?
                         .apply(SystemTime::try_from)
                         .map_err(|_| "Failed to convert timestamp".to_string())?
-                        .into();
+                        .try_into()
+                        .map_err(|err: jiff::Error| err.to_string())?;
 
                     let resource_limit = b
                         .resource_limit
@@ -104,7 +105,8 @@ mod protobuf {
                         .ok_or("missing expires_at")?
                         .apply(SystemTime::try_from)
                         .map_err(|_| "Failed to convert timestamp".to_string())?
-                        .into();
+                        .try_into()
+                        .map_err(|err: jiff::Error| err.to_string())?;
 
                     Ok(Self::Unlimited { pod, expires_at })
                 }

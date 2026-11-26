@@ -67,17 +67,17 @@ object AgentClientRuntime {
     }
 
   /**
-   * A client of the existing agent with the given ID. Fails with
-   * [[AgentRpcException]] carrying [[AgentRpcError.NotFound]] for an unknown ID
-   * or an agent of another type.
+   * A client of the existing agent with the given ID. Never creates the agent.
+   * An unknown ID, or the ID of an agent of another type, fails with
+   * [[AgentRpcError.NotFound]].
    */
   def getByIdWire[Trait](
     agentType: WireAgentClientType[Trait, ?],
     agentId: AgentId
-  ): Future[WireResolvedAgent[Trait]] =
+  ): Either[AgentRpcError, WireResolvedAgent[Trait]] =
     AgentIdentity
       .getById(agentType.metadata.name, agentId)
-      .map(remote => WireResolvedAgent(agentType, remote))(scala.scalajs.concurrent.JSExecutionContext.Implicits.queue)
+      .map(remote => WireResolvedAgent(agentType, remote))
 
   /**
    * Bind the current durable incarnation without creating it or waiting for
@@ -233,12 +233,10 @@ object AgentClientRuntime {
     }
 
   /** Like [[getByIdWire]], for a reflective agent type. */
-  def getById[Trait](agentType: AgentType[Trait, ?], agentId: AgentId): Future[ResolvedAgent[Trait]] =
+  def getById[Trait](agentType: AgentType[Trait, ?], agentId: AgentId): Either[AgentRpcError, ResolvedAgent[Trait]] =
     AgentIdentity
       .getById(agentType.typeName, agentId)
-      .map(remote => ResolvedAgent(agentType.asInstanceOf[AgentType[Trait, Any]], remote))(
-        scala.scalajs.concurrent.JSExecutionContext.Implicits.queue
-      )
+      .map(remote => ResolvedAgent(agentType.asInstanceOf[AgentType[Trait, Any]], remote))
 
   private def encodeInput[In](
     inputCodec: golem.runtime.InputRecordCodec[In],

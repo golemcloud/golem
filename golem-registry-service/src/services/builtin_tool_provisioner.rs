@@ -285,7 +285,7 @@ pub async fn provision_descriptors(
                     .await
                     .map_err(|error| {
                         anyhow::anyhow!(
-                            "failed to extract built-in export '{}@{}': {error}",
+                            "failed to extract built-in export '{}@{}': {error:#}",
                             descriptor.export_name,
                             descriptor.release_version
                         )

@@ -26,9 +26,9 @@ use crate::schema::wit::{
     decode_value_rejecting_quota_with, decode_value_with, encode_graph, encode_typed, encode_value,
     encode_value_with, encode_value_with_streams, wire,
 };
-use chrono::{TimeZone, Utc};
 use golem_schema::model::EnvironmentId;
 use golem_schema::schema::{SchemaValueStream, SchemaValueStreamHandleRep};
+use jiff::Timestamp as JiffTimestamp;
 use proptest::prelude::*;
 use strategies::{
     schema_graph_strategy, transportable_schema_value_strategy,
@@ -257,7 +257,7 @@ fn sample_snapshot() -> QuotaTokenValuePayload {
         resource_name: "gpu-tokens".to_string(),
         expected_use: 1000,
         last_credit: -5,
-        last_credit_at: Utc.timestamp_opt(1_700_000_000, 0).single().unwrap(),
+        last_credit_at: JiffTimestamp::new(1_700_000_000, 0).unwrap(),
     }
 }
 
@@ -266,7 +266,7 @@ fn sample_secret_snapshot() -> SecretValuePayload {
         secret_id: uuid::Uuid::from_u64_pair(3, 4),
         config_key: Some(vec!["db".to_string(), "password".to_string()]),
         version: 7,
-        resolved_at: Utc.timestamp_opt(1_700_000_010, 0).single().unwrap(),
+        resolved_at: JiffTimestamp::new(1_700_000_010, 0).unwrap(),
         category: Some("api-key".to_string()),
     }
 }
@@ -564,7 +564,7 @@ fn nested_permission_card_round_trips_through_resolver() {
                     SchemaValue::PermissionCard(PermissionCardValuePayload {
                         card_id: uuid::Uuid::from_u64_pair(9, 10),
                         parent_ids: vec![],
-                        expires_at: Some(Utc.timestamp_opt(1_700_000_020, 0).single().unwrap()),
+                        expires_at: Some(JiffTimestamp::new(1_700_000_020, 0).unwrap()),
                         polymorphic: true,
                     }),
                 ],

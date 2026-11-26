@@ -52,7 +52,7 @@ const uuidToString = (uuid: { highBits: bigint; lowBits: bigint }): string =>
 
 /** The raw WIT agent ID that the `Oplog` host wrappers take. */
 const selfRawAgentId = Effect.map(SelfAgentId.SelfAgentId, (id) => ({
-  uuid: CoreTypes.parseUuid(id.uuid),
+  uuid: CoreTypes.parseUuid(id),
 }))
 
 const HostFeaturesSpec = defineAgent({

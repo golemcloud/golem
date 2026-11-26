@@ -16,10 +16,10 @@ path = "src/lib.rs"
 # common-lib = { path = "../../common-rust/common-lib" }
 
 blake3 = { version = "1", default-features = false, features = ["pure"] }
-chrono = { version = "0.4.42", default-features = false }
+jiff = { version = "1.0.1", default-features = false }
 futures = { version = "0.3", default-features = false, features = ["std", "async-await"] }
 log = { version = "0.4.29", features = ["kv"] }
-golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic", "chrono", "url"] }
+golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic", "jiff", "url"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 wasi-fetch = "=0.2.0"

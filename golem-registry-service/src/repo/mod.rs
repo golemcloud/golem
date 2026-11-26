@@ -14,6 +14,7 @@
 
 // Repos
 pub mod account;
+pub mod account_guard;
 pub mod account_resource_override;
 pub mod account_tree;
 pub mod account_usage;
@@ -33,8 +34,10 @@ pub mod mcp_deployment;
 pub mod mcp_oauth;
 pub mod oauth2_token;
 pub mod oauth2_webflow_state;
+pub mod package;
 pub mod permission_share;
 pub mod plan;
+pub mod plan_storage;
 pub mod plugin;
 pub mod registry_change;
 pub(crate) mod release_grant_lifecycle;
@@ -42,7 +45,6 @@ pub mod report;
 pub mod resource_definition;
 pub mod retry_policy;
 pub mod security_scheme;
-pub mod shared_config;
 pub mod token;
 pub mod tool_middleware_release;
 pub mod tool_release;

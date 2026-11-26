@@ -16,6 +16,7 @@ use super::*;
 use crate::config::{CompileWorkerConfig, RegistryServiceConfig, StaticRegistryServiceConfig};
 use crate::model::*;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use golem_service_base::service::compiled_component::CompiledComponentService;
 use std::sync::Arc;
@@ -57,6 +58,7 @@ impl ComponentCompilationService {
         component_id: ComponentId,
         component_revision: ComponentRevision,
         environment_id: EnvironmentId,
+        wasm_hash: Hash,
         sender: Option<StaticRegistryServiceConfig>,
     ) -> Result<(), CompilationError> {
         tracing::info!(
@@ -70,6 +72,7 @@ impl ComponentCompilationService {
                 revision: component_revision,
             },
             environment_id,
+            wasm_hash,
             sender,
         };
         let permit = self.queue.try_reserve().map_err(|error| match error {
@@ -98,7 +101,9 @@ mod tests {
     };
     use golem_common::base_model::api::error_code::INTERNAL_COMPILATION_QUEUE_FULL;
     use golem_service_base::error::worker_executor::WorkerExecutorError;
-    use std::num::NonZeroUsize;
+    use golem_service_base::service::compiled_component::DefaultCompiledComponentService;
+    use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::time::Duration;
     use test_r::{test, timeout};
     use tokio::sync::Semaphore;
@@ -118,6 +123,82 @@ mod tests {
     }
 
     #[test]
+    #[timeout("30s")]
+    async fn compilation_rejects_mismatched_wasm_and_retries_only_missing_artifacts() {
+        let engine =
+            Engine::new(&golem_common::wasmtime_config::create_wasmtime_config_without_fs_cache())
+                .unwrap();
+        let storage = Arc::new(DefaultCompiledComponentService::new(Arc::new(
+            InMemoryBlobStorage::new(),
+        )));
+        let (queue, requests) = mpsc::channel(2);
+        let (upload_queue, mut artifacts) = mpsc::channel(1);
+        let wasm = b"\0asm\x0d\0\x01\0";
+        let hash = Hash::new(blake3::hash(wasm));
+        let compile_count = Arc::new(AtomicUsize::new(0));
+        CompileWorker::start_queue(engine.clone(), storage.clone(), upload_queue, requests, {
+            let engine = engine.clone();
+            let compile_count = compile_count.clone();
+            move |request| {
+                compile_count.fetch_add(1, Ordering::Relaxed);
+                let engine = engine.clone();
+                async move {
+                    let mut bytes = wasm.to_vec();
+                    if request.component.revision == ComponentRevision::INITIAL {
+                        bytes.extend_from_slice(b"\0\x02\x01x"); // A valid custom section named x.
+                    }
+                    CompileWorker::compile_downloaded(engine, &request, bytes).await
+                }
+            }
+        });
+        let service = ComponentCompilationService { queue };
+        let id = ComponentId::new();
+        let environment = EnvironmentId::new();
+        let enqueue = async |revision| {
+            service
+                .enqueue_compilation(
+                    id,
+                    ComponentRevision::new(revision).unwrap(),
+                    environment,
+                    hash,
+                    None,
+                )
+                .await
+                .unwrap();
+        };
+
+        enqueue(u64::from(ComponentRevision::INITIAL)).await;
+        enqueue(1).await;
+        let failed = artifacts.recv().await.unwrap();
+        assert_eq!(u64::from(failed.component_and_revision.revision), 1);
+        // Model an upload that has completed without writing the artifact.
+        crate::metrics::decrement_upload_queue_length();
+        failed.upload_finished.send(()).unwrap();
+        assert!(!storage.exists(hash, &engine).await.unwrap());
+
+        enqueue(2).await;
+        let retried = artifacts.recv().await.unwrap();
+        assert_eq!(u64::from(retried.component_and_revision.revision), 2);
+        crate::metrics::decrement_upload_queue_length();
+        storage
+            .put(
+                environment,
+                hash,
+                id,
+                retried.component_and_revision.revision,
+                &retried.component,
+            )
+            .await
+            .unwrap();
+        retried.upload_finished.send(()).unwrap();
+
+        enqueue(3).await;
+        drop(service);
+        assert!(artifacts.recv().await.is_none());
+        assert_eq!(compile_count.load(Ordering::Relaxed), 3);
+    }
+
+    #[test]
     async fn enqueue_rejects_full_and_closed_queues_without_waiting() {
         let (queue, mut receiver) = mpsc::channel(1);
         let service = CompileGrpcService::new(
@@ -131,9 +212,10 @@ mod tests {
             component_revision: 7,
             component_service_port: None,
             environment_id: Some(environment_id.into()),
+            wasm_hash: Some(Hash::empty().into()),
         };
         let accepted = service
-            .enqueue_compilation(tonic::Request::new(request))
+            .enqueue_compilation(tonic::Request::new(request.clone()))
             .now_or_never()
             .expect("admission must not wait")
             .unwrap()
@@ -145,7 +227,7 @@ mod tests {
         assert_eq!(queue_length("component_compilation_queue_length"), 1.0);
 
         let rejected = service
-            .enqueue_compilation(tonic::Request::new(request))
+            .enqueue_compilation(tonic::Request::new(request.clone()))
             .now_or_never()
             .expect("a full queue must not wait")
             .unwrap()
@@ -186,7 +268,7 @@ mod tests {
     }
 
     struct GatedStorage {
-        component: Component,
+        inner: DefaultCompiledComponentService,
         gets: Semaphore,
         get_gate: Semaphore,
         uploads: mpsc::UnboundedSender<ComponentRevision>,
@@ -195,28 +277,35 @@ mod tests {
 
     #[async_trait]
     impl CompiledComponentService for GatedStorage {
+        async fn exists(&self, hash: Hash, engine: &Engine) -> anyhow::Result<bool> {
+            self.gets.add_permits(1);
+            self.get_gate.acquire().await.unwrap().forget();
+            self.inner.exists(hash, engine).await
+        }
+
         async fn get(
             &self,
-            _: EnvironmentId,
+            _: Hash,
             _: ComponentId,
             _: ComponentRevision,
             _: &Engine,
         ) -> Result<Option<Component>, WorkerExecutorError> {
-            self.gets.add_permits(1);
-            self.get_gate.acquire().await.unwrap().forget();
-            Ok(Some(self.component.clone()))
+            panic!("precompilation must check existence without loading an artifact")
         }
 
         async fn put(
             &self,
-            _: EnvironmentId,
-            _: ComponentId,
+            environment_id: EnvironmentId,
+            hash: Hash,
+            id: ComponentId,
             revision: ComponentRevision,
-            _: &Component,
+            component: &Component,
         ) -> Result<(), WorkerExecutorError> {
             self.uploads.send(revision).unwrap();
             self.upload_gate.acquire().await.unwrap().forget();
-            Ok(())
+            self.inner
+                .put(environment_id, hash, id, revision, component)
+                .await
         }
     }
 
@@ -228,27 +317,25 @@ mod tests {
                 .unwrap();
         let (uploads, mut uploaded) = mpsc::unbounded_channel();
         let storage = Arc::new(GatedStorage {
-            component: Component::new(&engine, "(component)").unwrap(),
+            inner: DefaultCompiledComponentService::new(Arc::new(InMemoryBlobStorage::new())),
             gets: Semaphore::new(0),
             get_gate: Semaphore::new(0),
             uploads,
             upload_gate: Semaphore::new(0),
         });
-        let service = ComponentCompilationService::new(
-            CompileWorkerConfig {
-                queue_capacity: NonZeroUsize::new(2).unwrap(),
-                upload_queue_capacity: NonZeroUsize::new(1).unwrap(),
-                ..Default::default()
-            },
-            RegistryServiceConfig::default(),
-            engine,
-            storage.clone(),
-        )
-        .await;
+        let (queue, requests) = mpsc::channel(2);
+        let (upload_queue, artifacts) = mpsc::channel(1);
+        let artifact = Component::new(&engine, "(component)").unwrap();
+        CompileWorker::start_queue(engine, storage.clone(), upload_queue, requests, move |_| {
+            std::future::ready(Ok(artifact.clone()))
+        });
+        UploadWorker::start(storage.clone(), artifacts);
+        let service = ComponentCompilationService { queue };
         let id = ComponentId::new();
         let environment = EnvironmentId::new();
+        let hash = |revision: u8| Hash::new(blake3::hash(&[revision]));
         service
-            .enqueue_compilation(id, ComponentRevision::INITIAL, environment, None)
+            .enqueue_compilation(id, ComponentRevision::INITIAL, environment, hash(0), None)
             .await
             .unwrap();
         storage.gets.acquire().await.unwrap().forget();
@@ -258,6 +345,7 @@ mod tests {
                     id,
                     ComponentRevision::new(revision).unwrap(),
                     environment,
+                    hash(revision as u8),
                     None,
                 )
                 .await
@@ -265,7 +353,13 @@ mod tests {
         }
         assert!(matches!(
             service
-                .enqueue_compilation(id, ComponentRevision::new(3).unwrap(), environment, None)
+                .enqueue_compilation(
+                    id,
+                    ComponentRevision::new(3).unwrap(),
+                    environment,
+                    hash(3),
+                    None
+                )
                 .await,
             Err(CompilationError::QueueFull)
         ));
@@ -279,6 +373,7 @@ mod tests {
                     id,
                     ComponentRevision::new(revision).unwrap(),
                     environment,
+                    hash(revision as u8),
                     None,
                 )
                 .await
@@ -286,7 +381,13 @@ mod tests {
         }
         assert!(matches!(
             service
-                .enqueue_compilation(id, ComponentRevision::new(5).unwrap(), environment, None)
+                .enqueue_compilation(
+                    id,
+                    ComponentRevision::new(5).unwrap(),
+                    environment,
+                    hash(5),
+                    None
+                )
                 .await,
             Err(CompilationError::QueueFull)
         ));
@@ -301,15 +402,40 @@ mod tests {
             queue_length("component_compilation_upload_queue_length"),
             1.0
         );
-        storage.upload_gate.add_permits(10);
+        storage.upload_gate.add_permits(4);
         for revision in 1..5 {
             assert_eq!(u64::from(uploaded.recv().await.unwrap()), revision);
         }
+        storage.gets.acquire_many(2).await.unwrap().forget();
+        service
+            .enqueue_compilation(
+                ComponentId::new(),
+                ComponentRevision::new(5).unwrap(),
+                EnvironmentId::new(),
+                hash(4),
+                None,
+            )
+            .await
+            .unwrap();
+        service
+            .enqueue_compilation(
+                id,
+                ComponentRevision::new(6).unwrap(),
+                environment,
+                hash(6),
+                None,
+            )
+            .await
+            .unwrap();
+        // The next distinct artifact must start while revision 4's upload is still blocked.
+        storage.gets.acquire().await.unwrap().forget();
+        storage.upload_gate.add_permits(2);
+        assert_eq!(u64::from(uploaded.recv().await.unwrap()), 6);
         drop(service);
         drop(storage);
         assert!(
             uploaded.recv().await.is_none(),
-            "workers must drain and exit when admission closes"
+            "the duplicate from another environment must not compile or upload again"
         );
         assert_eq!(queue_length("component_compilation_queue_length"), 0.0);
         assert_eq!(
