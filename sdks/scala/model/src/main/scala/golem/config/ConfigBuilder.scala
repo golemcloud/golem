@@ -63,9 +63,9 @@ object ConfigBuilder {
           buildRecord(path, record, loader)
         case _ =>
           reflect.asWrapperUnknown match {
-            case Some(u) =>
-              buildWrapper(path, u, loader).asInstanceOf[A]
-            case None =>
+            case Some(u) if root || ConfigIntrospection.containsSecret(reflect) =>
+              buildWrapper(path, u, loader, root).asInstanceOf[A]
+            case _ =>
               buildLeaf(path, reflect, loader)
           }
       }
@@ -113,11 +113,12 @@ object ConfigBuilder {
   private def buildWrapper(
     path: List[String],
     u: Reflect.Wrapper.Unknown[Binding],
-    loader: ConfigFieldLoader
+    loader: ConfigFieldLoader,
+    root: Boolean
   ): Any = {
     val wrapper = u.wrapper
     val wrapped = wrapper.wrapped.asInstanceOf[Reflect.Bound[Any]]
-    val value   = buildFromReflect(path, wrapped, loader)
+    val value   = buildFromReflect(path, wrapped, loader, root)
     wrapper.binding.wrap(value.asInstanceOf[u.Wrapped])
   }
 }

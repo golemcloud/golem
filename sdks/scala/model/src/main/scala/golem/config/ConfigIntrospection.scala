@@ -73,9 +73,9 @@ private[golem] object ConfigIntrospection {
       )
     } else {
       reflect.asWrapperUnknown match {
-        case Some(u) =>
+        case Some(u) if root || containsSecret(reflect) =>
           walk(path, u.wrapper.wrapped.asInstanceOf[Reflect.Bound[Any]], root, default)
-        case None =>
+        case _ =>
           reflect.asRecord match {
             case Some(rec) if !isTupleRecord(rec) && (root || containsSecret(reflect)) =>
               require(default.isEmpty, s"Code default on config group ${path.mkString(".")}; default its static fields")

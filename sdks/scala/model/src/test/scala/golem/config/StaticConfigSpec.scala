@@ -52,6 +52,19 @@ object StaticConfigSpec extends ZIOSpecDefault {
     @Modifier.config("golem.config.default", "\"123456789012345678901234567890\"") integer: BigInt,
     @Modifier.config("golem.config.default", "[\"1.25\",\"-0.5\"]") decimals: List[BigDecimal]
   ) derives Schema
+  final case class CheckedValue(value: String)
+  given Schema[CheckedValue] = Schema[String].transform[CheckedValue](
+    value => {
+      require(value.startsWith("valid:"), "Expected a valid prefix")
+      CheckedValue(value)
+    },
+    _.value
+  )
+  final case class BadWrapped(@Modifier.config("golem.config.default", "\"bad\"") value: CheckedValue) derives Schema
+  final case class GoodWrapped(@Modifier.config("golem.config.default", "\"valid:value\"") value: CheckedValue)
+      derives Schema
+  final case class WrappedValues(value: Values)
+  given Schema[WrappedValues] = Schema[Values].transform[WrappedValues](WrappedValues.apply, _.value)
 
   private val supplied = Values(
     Settings("creation", UInt(0L)),
@@ -123,10 +136,13 @@ object StaticConfigSpec extends ZIOSpecDefault {
       type Alias = Values
       val aliased: Config[Alias]    = config
       val aliasedSettings: Settings = aliased.settings
+      val wrapped                   = ConfigBuilder[WrappedValues].build(Nil, loader)
       currentSettings = Settings("updated", UInt(17L))
       assertTrue(
         settings == supplied.settings,
         aliasedSettings == supplied.settings,
+        wrapped.value == supplied,
+        ConfigSchema[WrappedValues].describe(Nil) == ConfigSchema[Values].describe(Nil),
         !enabled,
         config.slots == supplied.slots,
         original == supplied,
@@ -150,6 +166,15 @@ object StaticConfigSpec extends ZIOSpecDefault {
           Some(SchemaValue.StringValue("123456789012345678901234567890")),
           Some(SchemaValue.ListValue(List(SchemaValue.StringValue("1.25"), SchemaValue.StringValue("-0.5"))))
         )
+      )
+    },
+    test("validates defaults against their native wrapper") {
+      val invalid = scala.util.Try(ConfigSchema[BadWrapped].describe(Nil))
+      val valid   = ConfigSchema[GoodWrapped].describe(Nil)
+      assertTrue(
+        invalid.isFailure,
+        valid.head.defaultValue.contains(SchemaValue.StringValue("valid:value")),
+        valid.head.valueType == IntoSchema[CheckedValue].graph
       )
     },
     test("projects native config names and recursive values without changing ordinary schemas") {

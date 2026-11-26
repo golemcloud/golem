@@ -23,10 +23,8 @@ componentTemplates:
           targets:
           - test-static-config/.golem/scala.js
           - test-static-config/.generated/agent_guest.wasm
-        - injectToPrebuiltQuickjs: test-static-config/.generated/agent_guest.wasm
+        - preinitializeJs: test-static-config/.generated/agent_guest.wasm
           module: test-static-config/.golem/scala.js
-          into: "{{ golemTempDir }}/agents/scala_static_config.dynamic.wasm"
-        - preinitializeJs: "{{ golemTempDir }}/agents/scala_static_config.dynamic.wasm"
           into: "{{ golemTempDir }}/agents/scala_static_config.preinitialized.wasm"
         componentWasm: "{{ golemTempDir }}/agents/scala_static_config.preinitialized.wasm"
         customCommands:
