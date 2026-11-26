@@ -56,14 +56,6 @@ impl DockerRustFs {
                 .with_wait_for(WaitFor::message_on_stdout(Self::STARTED_MESSAGE))
                 .with_env_var("RUSTFS_ACCESS_KEY", Self::ACCESS_KEY_ID)
                 .with_env_var("RUSTFS_SECRET_KEY", Self::SECRET_ACCESS_KEY)
-                .with_env_var("RUSTFS_KMS_ENABLE", "true")
-                .with_env_var("RUSTFS_KMS_BACKEND", "static")
-                // Disposable test-only material: 32 bytes encoded as standard base64.
-                .with_env_var(
-                    "RUSTFS_KMS_STATIC_SECRET_KEY",
-                    "volume-test-key:MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY=",
-                )
-                .with_env_var("RUSTFS_KMS_DEFAULT_KEY_ID", "volume-test-key")
                 .start()
         })
         .retries(5)

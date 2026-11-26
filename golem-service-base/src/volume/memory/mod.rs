@@ -12,617 +12,314 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::keys::{
-    check_not_marker, full_key, multipart_key, relative_key, strong_etag, validate_delete,
-    validate_parts, validate_read, write_key,
-};
 use super::{
-    BucketVersioning, LifecycleRule, ListedObject, ObjectBody, ObjectMetadata, ObjectPage,
-    ObjectRead, ObjectVersion, ResponseValue, UploadedPart, VolumeClient, VolumeError,
-    WriteCondition, WriteTarget,
+    Cursor, Entry, FileReader, FileState, Node, Page, ReadStream, VolumeClient, VolumeError,
+    VolumeFile, VolumePath, VolumeRecovery,
 };
 use async_trait::async_trait;
-use base64::Engine;
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
-use bytes::{Bytes, BytesMut};
+use bytes::Bytes;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::fmt::{Debug, Formatter};
-use std::ops::RangeInclusive;
-use std::sync::{Arc, Mutex, Weak};
-use uuid::Uuid;
+use std::ops::Range;
+use std::sync::{Arc, Mutex};
 
-/// An isolated volume with conditional writes and optional retained versions.
+pub use super::placement::verdict as place;
+
+/// A file store with optional retained states. Only its control handle changes files.
+#[derive(Debug, Clone)]
 pub struct InMemoryVolume {
-    versioned: bool,
-    page_size: usize,
-    prefix_len: usize,
-    state: Mutex<State>,
+    files: Arc<Mutex<Files>>,
 }
 
-impl Debug for InMemoryVolume {
+/// Competing writes, state retention and failures for an isolated file store.
+#[derive(Debug, Clone)]
+pub struct MemoryControl {
+    files: Arc<Mutex<Files>>,
+}
+
+struct Files {
+    retained: bool,
+    page_size: usize,
+    paths: BTreeMap<VolumePath, Vec<StoredFile>>,
+    next_failure: Option<VolumeError>,
+}
+
+// Bytes and file names can contain credentials reflected by a store.
+impl Debug for Files {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("InMemoryVolume")
+        f.write_str("Files")
     }
 }
 
-#[derive(Default)]
-struct State {
-    objects: BTreeMap<Arc<str>, ObjectPhase>,
-    uploads: BTreeMap<Arc<str>, Upload>,
+struct StoredFile {
+    state: FileState,
+    bytes: Bytes,
 }
 
-enum ObjectPhase {
-    Missing,
-    Present {
-        object: Arc<StoredObject>,
-        versions: BTreeMap<Arc<str>, HistoricalVersion>,
-    },
-    Deleted {
-        versions: BTreeMap<Arc<str>, HistoricalVersion>,
-    },
-}
-
-enum ObjectEvent {
-    Publish(Arc<StoredObject>),
-    Delete { marker_id: Arc<str> },
-}
-
-enum HistoricalVersion {
-    Object(Arc<StoredObject>),
-    DeleteMarker,
-}
-
-struct StoredObject {
-    version: ObjectVersion,
-    body: Bytes,
-}
-
-struct Upload {
-    key: Arc<str>,
-    phase: UploadPhase,
-}
-
-enum UploadPhase {
-    Open(BTreeMap<i32, Arc<StoredPart>>),
-    Completed(Box<CompletedUpload>),
-    Aborted,
-}
-
-struct CompletedUpload {
-    object: Weak<StoredObject>,
-    parts: Box<[(i32, Arc<str>)]>,
-}
-
-struct StoredPart {
-    number: i32,
-    etag: Arc<str>,
-    body: Bytes,
-}
-
-enum UploadEvent {
-    Part(Arc<StoredPart>),
-    Complete(Box<CompletedUpload>),
-    Abort,
-}
-
-impl InMemoryVolume {
-    pub fn new(versioned: bool, page_size: usize, prefix: &str) -> Result<Self, VolumeError> {
-        relative_key(prefix)?;
-        if page_size == 0 || (!prefix.is_empty() && !prefix.ends_with('/')) {
-            return Err(VolumeError::InvalidRequest);
-        }
-        Ok(Self {
-            versioned,
-            page_size,
-            prefix_len: prefix.len(),
-            state: Mutex::new(State::default()),
-        })
+fn stored_file(
+    path: &VolumePath,
+    bytes: Bytes,
+    retained: bool,
+    version: uuid::Uuid,
+) -> Result<StoredFile, VolumeError> {
+    if path.as_str().is_empty() {
+        return Err(VolumeError::UnrepresentablePath);
     }
-}
-
-fn validate_condition(condition: WriteCondition<'_>) -> Result<(), VolumeError> {
-    match condition {
-        WriteCondition::Matches(etag) if !strong_etag(etag) => Err(VolumeError::InvalidRequest),
-        _ => Ok(()),
-    }
-}
-
-fn check_condition(
-    current: Option<&StoredObject>,
-    condition: WriteCondition<'_>,
-) -> Result<(), VolumeError> {
-    match (condition, current) {
-        (WriteCondition::Absent, Some(_)) => Err(VolumeError::Exists),
-        (WriteCondition::Matches(etag), Some(current)) if current.version.etag.as_ref() == etag => {
-            Ok(())
-        }
-        (WriteCondition::Matches(_), _) => Err(VolumeError::Conflict),
-        (WriteCondition::Absent, None) => Ok(()),
-    }
-}
-
-fn normalized_id(id: Option<&str>) -> Option<&str> {
-    id.filter(|id| *id != "null")
-}
-
-fn current_object(phase: &ObjectPhase) -> Option<&StoredObject> {
-    match phase {
-        ObjectPhase::Present { object, .. } => Some(object.as_ref()),
-        ObjectPhase::Missing | ObjectPhase::Deleted { .. } => None,
-    }
-}
-
-fn select<'a>(
-    state: &'a State,
-    key: &str,
-    version_id: Option<&str>,
-) -> Result<(&'a Arc<str>, &'a StoredObject), VolumeError> {
-    let (key, phase) = state
-        .objects
-        .get_key_value(key)
-        .ok_or(VolumeError::NotFound)?;
-    match version_id {
-        None => current_object(phase),
-        Some("null") => current_object(phase).filter(|object| object.version.version_id.is_none()),
-        Some(id) => {
-            let historical = match phase {
-                ObjectPhase::Present { versions, .. } | ObjectPhase::Deleted { versions } => {
-                    versions.get(id)
-                }
-                ObjectPhase::Missing => None,
-            };
-            match historical {
-                Some(HistoricalVersion::Object(object)) => Some(object.as_ref()),
-                Some(HistoricalVersion::DeleteMarker) => return Err(VolumeError::Unsupported),
-                None => None,
-            }
-        }
-    }
-    .map(|object| (key, object))
-    .ok_or(VolumeError::NotFound)
-}
-
-fn check_reference(reference: &ObjectVersion, actual: &ObjectVersion) -> Result<(), VolumeError> {
-    if reference.etag.as_ref() != actual.etag.as_ref() {
-        Err(VolumeError::Conflict)
-    } else if normalized_id(reference.version_id.as_deref()) != actual.version_id.as_deref() {
-        Err(VolumeError::InvalidResponse)
-    } else {
-        Ok(())
-    }
-}
-
-fn check_visible(key: &str, object: &StoredObject) -> Result<(), VolumeError> {
-    check_not_marker(key, object.body.is_empty()).map_err(|_| VolumeError::NotFound)
-}
-
-fn selected_body(body: &Bytes, range: Option<RangeInclusive<u64>>) -> Bytes {
-    match range {
-        Some(range) if *range.start() >= body.len() as u64 => Bytes::new(),
-        Some(range) => {
-            let end = (*range.end()).min(body.len() as u64 - 1) as usize;
-            body.slice(*range.start() as usize..=end)
-        }
-        None => body.clone(),
-    }
-}
-
-fn new_version(versioned: bool, body: &[u8], version_id: Uuid) -> ObjectVersion {
-    ObjectVersion {
-        etag: format!("\"{:x}\"", Sha256::digest(body)).into(),
-        version_id: versioned.then(|| version_id.to_string().into()),
-    }
-}
-
-fn object_transition(
-    phase: ObjectPhase,
-    event: ObjectEvent,
-    versioned: bool,
-) -> (ObjectPhase, Result<Option<Arc<str>>, VolumeError>) {
-    match event {
-        ObjectEvent::Publish(object) => {
-            let mut versions = match phase {
-                ObjectPhase::Present { versions, .. } | ObjectPhase::Deleted { versions } => {
-                    versions
-                }
-                ObjectPhase::Missing => BTreeMap::new(),
-            };
-            if let Some(id) = &object.version.version_id {
-                versions.insert(id.clone(), HistoricalVersion::Object(object.clone()));
-            }
-            (ObjectPhase::Present { object, versions }, Ok(None))
-        }
-        ObjectEvent::Delete { marker_id } => match phase {
-            ObjectPhase::Present { mut versions, .. } if versioned => {
-                versions.insert(marker_id.clone(), HistoricalVersion::DeleteMarker);
-                (ObjectPhase::Deleted { versions }, Ok(Some(marker_id)))
-            }
-            ObjectPhase::Present { .. } => (ObjectPhase::Missing, Ok(None)),
-            phase => (phase, Err(VolumeError::NotFound)),
-        },
-    }
-}
-
-fn apply_object(
-    state: &mut State,
-    key: Arc<str>,
-    event: ObjectEvent,
-    versioned: bool,
-) -> Result<Option<Arc<str>>, VolumeError> {
-    let (key, phase) = state
-        .objects
-        .remove_entry(key.as_ref())
-        .unwrap_or((key, ObjectPhase::Missing));
-    let (next, result) = object_transition(phase, event, versioned);
-    if !matches!(next, ObjectPhase::Missing) {
-        state.objects.insert(key, next);
-    }
-    result
-}
-
-fn versioning_status(versioned: bool) -> BucketVersioning {
-    if versioned {
-        BucketVersioning::Enabled
-    } else {
-        BucketVersioning::Unversioned
-    }
-}
-
-fn continuation_key(token: &str) -> Result<Box<str>, VolumeError> {
-    token
-        .strip_prefix("memory:")
-        .and_then(|token| URL_SAFE_NO_PAD.decode(token).ok())
-        .and_then(|key| String::from_utf8(key).ok())
-        .map(String::into_boxed_str)
-        .ok_or(VolumeError::InvalidRequest)
-}
-
-fn object_page(
-    objects: &BTreeMap<Arc<str>, ObjectPhase>,
-    prefix: &str,
-    after: Option<&str>,
-    page_size: usize,
-) -> ObjectPage {
-    let page = objects
-        .iter()
-        .filter_map(|(key, phase)| current_object(phase).map(|object| (key, object)))
-        .filter(|(key, _)| {
-            key.starts_with(prefix) && after.is_none_or(|after| key.as_ref() > after)
-        })
-        .take(page_size.saturating_add(1))
-        .collect::<Vec<_>>();
-    let continuation = (page.len() > page_size).then(|| {
-        format!(
-            "memory:{}",
-            URL_SAFE_NO_PAD.encode(page[page_size - 1].0.as_bytes())
-        )
-        .into_boxed_str()
-    });
-    let objects = page
-        .into_iter()
-        .take(page_size)
-        .filter(|(key, object)| relative_key(key).is_ok() && check_visible(key, object).is_ok())
-        .map(|(key, object)| ListedObject {
-            key: key.clone(),
-            size: object.body.len() as u64,
-            etag: object.version.etag.clone(),
-        })
-        .collect();
-    ObjectPage {
-        objects,
-        continuation,
-    }
-}
-
-fn upload<'a>(state: &'a mut State, key: &str, id: &str) -> Result<&'a mut Upload, VolumeError> {
-    state
-        .uploads
-        .get_mut(id)
-        .filter(|upload| upload.key.as_ref() == key)
-        .ok_or(VolumeError::NotFound)
-}
-
-fn upload_transition(upload: &Upload, event: UploadEvent) -> Result<Upload, VolumeError> {
-    let UploadPhase::Open(parts) = &upload.phase else {
-        return Err(VolumeError::NotFound);
-    };
-    let phase = match event {
-        UploadEvent::Part(part) => {
-            let mut parts = parts.clone();
-            parts.insert(part.number, part);
-            UploadPhase::Open(parts)
-        }
-        UploadEvent::Complete(completed) => UploadPhase::Completed(completed),
-        UploadEvent::Abort => UploadPhase::Aborted,
-    };
-    Ok(Upload {
-        key: upload.key.clone(),
-        phase,
+    Ok(StoredFile {
+        state: FileState::from_reference(
+            format!("\"{:x}\"", Sha256::digest(&bytes)).into(),
+            retained.then(|| version.to_string().into()),
+        ),
+        bytes,
     })
 }
 
-fn multipart_body(upload: &Upload, parts: &[UploadedPart]) -> Result<Bytes, VolumeError> {
-    let UploadPhase::Open(stored) = &upload.phase else {
-        return Err(VolumeError::NotFound);
-    };
-    parts
-        .iter()
-        .enumerate()
-        .try_fold(BytesMut::new(), |mut body, (index, part)| {
-            let actual = stored
-                .get(&part.number)
-                .filter(|actual| actual.etag.as_ref() == part.etag.as_ref())
-                .ok_or(VolumeError::RequestFailed)?;
-            if index + 1 != parts.len() && actual.body.len() < 5 * 1024 * 1024 {
-                return Err(VolumeError::RequestFailed);
-            }
-            body.extend_from_slice(&actual.body);
-            Ok(body)
-        })
-        .map(BytesMut::freeze)
+fn written(mut history: Vec<StoredFile>, retained: bool, file: StoredFile) -> Vec<StoredFile> {
+    if !retained {
+        history.clear();
+    }
+    history.push(file);
+    history
 }
 
-fn retained_object(upload: &Upload) -> Option<Arc<StoredObject>> {
-    match &upload.phase {
-        UploadPhase::Completed(completed) => completed.object.upgrade(),
-        _ => None,
+fn forgotten(mut history: Vec<StoredFile>, state: &FileState) -> Vec<StoredFile> {
+    history.retain(|file| &file.state != state);
+    history
+}
+
+fn selected<'a>(
+    files: &'a Files,
+    path: &VolumePath,
+    state: Option<&FileState>,
+) -> Result<&'a StoredFile, VolumeError> {
+    let history = files.paths.get(path);
+    match state {
+        Some(state) => history
+            .and_then(|history| history.iter().find(|file| &file.state == state))
+            .ok_or(VolumeError::Changed),
+        None => history
+            .and_then(|history| history.last())
+            .ok_or(VolumeError::NotFound),
     }
 }
 
-fn complete_upload(
-    upload: &Upload,
-    retained: Option<Arc<StoredObject>>,
-    parts: &[UploadedPart],
-    versioned: bool,
-    version_id: Uuid,
-) -> Result<(Option<Upload>, Arc<StoredObject>), VolumeError> {
-    match &upload.phase {
-        UploadPhase::Open(stored) => {
-            let body = multipart_body(upload, parts)?;
-            let version = new_version(versioned, &body, version_id);
-            let selected = parts
-                .iter()
-                .map(|part| {
-                    stored
-                        .get(&part.number)
-                        .map(|actual| (actual.number, actual.etag.clone()))
-                        .ok_or(VolumeError::RequestFailed)
-                })
-                .collect::<Result<_, _>>()?;
-            let object = Arc::new(StoredObject { version, body });
-            let next = upload_transition(
-                upload,
-                UploadEvent::Complete(Box::new(CompletedUpload {
-                    object: Arc::downgrade(&object),
-                    parts: selected,
-                })),
-            )?;
-            Ok((Some(next), object))
-        }
-        UploadPhase::Completed(completed) => {
-            let object = retained.ok_or(VolumeError::NotFound)?;
-            if completed.parts.len() != parts.len()
-                || completed
-                    .parts
-                    .iter()
-                    .zip(parts)
-                    .any(|((number, etag), part)| {
-                        *number != part.number || etag.as_ref() != part.etag.as_ref()
-                    })
-            {
-                return Err(VolumeError::RequestFailed);
+fn next_call(files: &mut Files) -> Result<(), VolumeError> {
+    files.next_failure.take().map_or(Ok(()), Err)
+}
+
+fn child_prefix(directory: &VolumePath) -> Box<str> {
+    if directory.as_str().is_empty() {
+        "".into()
+    } else {
+        format!("{}/", directory.as_str()).into()
+    }
+}
+
+fn node(files: &Files, path: &VolumePath) -> Option<Node> {
+    selected(files, path, None)
+        .ok()
+        .map(|file| Node::File {
+            size: file.bytes.len() as u64,
+        })
+        .or_else(|| {
+            let prefix = child_prefix(path);
+            (path.as_str().is_empty()
+                || files
+                    .paths
+                    .keys()
+                    .any(|path| path.as_str().starts_with(prefix.as_ref())))
+            .then_some(Node::Directory)
+        })
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct ListCursor {
+    directory: VolumePath,
+    last: VolumePath,
+}
+
+fn page(
+    files: &Files,
+    directory: &VolumePath,
+    after: Option<&Cursor>,
+) -> Result<Page, VolumeError> {
+    let after = after
+        .map(|cursor| {
+            let cursor: ListCursor =
+                serde_json::from_str(cursor.as_str()).map_err(|_| VolumeError::InvalidRequest)?;
+            if &cursor.directory != directory {
+                return Err(VolumeError::InvalidRequest);
             }
-            Ok((None, object))
+            Ok(cursor.last)
+        })
+        .transpose()?;
+    let prefix = child_prefix(directory);
+    let children = files
+        .paths
+        .iter()
+        .filter_map(|(path, history)| {
+            let relative = path.as_str().strip_prefix(prefix.as_ref())?;
+            if relative.is_empty() {
+                return None;
+            }
+            let child = relative.split('/').next()?;
+            let path = VolumePath::new(format!("{prefix}{child}")).ok()?;
+            let node = if child == relative {
+                Node::File {
+                    size: history.last()?.bytes.len() as u64,
+                }
+            } else {
+                Node::Directory
+            };
+            Some((path, node))
+        })
+        .fold(BTreeMap::new(), |mut entries, (path, node)| {
+            entries.entry(path).or_insert(node);
+            entries
+        });
+    let mut entries = children
+        .into_iter()
+        .filter(|(path, _)| after.as_ref().is_none_or(|after| path > after))
+        .take(files.page_size.saturating_add(1))
+        .map(|(path, node)| Entry { path, node })
+        .collect::<Vec<_>>();
+    let after = if entries.len() > files.page_size {
+        entries.pop();
+        let last = entries.last().unwrap().path.clone();
+        Some(Cursor::new(
+            serde_json::to_string(&ListCursor {
+                directory: directory.clone(),
+                last,
+            })
+            .unwrap(),
+        ))
+    } else {
+        None
+    };
+    Ok(Page {
+        entries: entries.into_boxed_slice(),
+        after,
+    })
+}
+
+impl InMemoryVolume {
+    pub fn new(retained: bool, page_size: usize) -> Result<(Self, MemoryControl), VolumeError> {
+        if page_size == 0 {
+            return Err(VolumeError::InvalidRequest);
         }
-        UploadPhase::Aborted => Err(VolumeError::NotFound),
+        let files = Arc::new(Mutex::new(Files {
+            retained,
+            page_size,
+            paths: BTreeMap::new(),
+            next_failure: None,
+        }));
+        Ok((
+            Self {
+                files: files.clone(),
+            },
+            MemoryControl { files },
+        ))
+    }
+
+    fn open_at(
+        &self,
+        path: &VolumePath,
+        recorded: Option<&FileState>,
+    ) -> Result<VolumeFile, VolumeError> {
+        let mut files = self.files.lock().unwrap();
+        next_call(&mut files)?;
+        let file = selected(&files, path, recorded)?;
+        Ok(VolumeFile::new(
+            file.bytes.len() as u64,
+            file.state.clone(),
+            file.state.reference().1.is_some(),
+            Arc::new(MemoryReader {
+                files: self.files.clone(),
+                path: path.clone(),
+            }),
+        ))
+    }
+}
+
+impl MemoryControl {
+    /// Writes a new current file as a competing writer.
+    pub fn write(&self, path: &VolumePath, bytes: Bytes) -> Result<FileState, VolumeError> {
+        let version = uuid::Uuid::new_v4();
+        let mut files = self.files.lock().unwrap();
+        let retained = files.retained;
+        let file = stored_file(path, bytes, retained, version)?;
+        let state = file.state.clone();
+        let history = files.paths.entry(path.clone()).or_default();
+        *history = written(std::mem::take(history), retained, file);
+        Ok(state)
+    }
+
+    /// Removes the recorded state, also when an open file still refers to it.
+    pub fn forget(&self, path: &VolumePath, state: &FileState) {
+        let mut files = self.files.lock().unwrap();
+        if let Some(history) = files.paths.get_mut(path) {
+            *history = forgotten(std::mem::take(history), state);
+            if history.is_empty() {
+                files.paths.remove(path);
+            }
+        }
+    }
+
+    pub fn fail_next(&self, error: VolumeError) {
+        self.files.lock().unwrap().next_failure = Some(error);
     }
 }
 
 #[async_trait]
 impl VolumeClient for InMemoryVolume {
-    async fn stat(
-        &self,
-        key: &str,
-        version_id: Option<&str>,
-    ) -> Result<ObjectMetadata, VolumeError> {
-        relative_key(key)?;
-        full_key(self.prefix_len, key)?;
-        let state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
-        let (key, object) = select(&state, key, version_id)?;
-        check_visible(key, object)?;
-        Ok(ObjectMetadata {
-            key: key.clone(),
-            size: object.body.len() as u64,
-            version: object.version.clone(),
-        })
-    }
-
-    async fn read(
-        &self,
-        key: &str,
-        reference: &ObjectVersion,
-        range: Option<RangeInclusive<u64>>,
-    ) -> Result<ObjectRead, VolumeError> {
-        relative_key(key)?;
-        validate_read(reference, range.as_ref())?;
-        full_key(self.prefix_len, key)?;
-        let state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
-        let (_, object) = select(&state, key, reference.version_id.as_deref())?;
-        check_reference(reference, &object.version)?;
-        check_visible(key, object)?;
-        let body = selected_body(&object.body, range);
-        Ok(ObjectRead {
-            version: object.version.clone(),
-            length: body.len() as u64,
-            body: ObjectBody::from_bytes(body),
-        })
+    async fn stat(&self, path: &VolumePath) -> Result<Option<Node>, VolumeError> {
+        let mut files = self.files.lock().unwrap();
+        next_call(&mut files)?;
+        Ok(node(&files, path))
     }
 
     async fn list(
         &self,
-        prefix: &str,
-        continuation: Option<&str>,
-    ) -> Result<ObjectPage, VolumeError> {
-        relative_key(prefix)?;
-        let after = continuation.map(continuation_key).transpose()?;
-        let state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
-        Ok(object_page(
-            &state.objects,
-            prefix,
-            after.as_deref(),
-            self.page_size,
-        ))
+        directory: &VolumePath,
+        after: Option<&Cursor>,
+    ) -> Result<Page, VolumeError> {
+        let mut files = self.files.lock().unwrap();
+        next_call(&mut files)?;
+        page(&files, directory, after)
     }
 
-    async fn put(
+    async fn open(&self, path: &VolumePath) -> Result<VolumeFile, VolumeError> {
+        self.open_at(path, None)
+    }
+}
+
+#[async_trait]
+impl VolumeRecovery for InMemoryVolume {
+    async fn open_recorded(
         &self,
-        target: WriteTarget<'_>,
-        condition: WriteCondition<'_>,
-        body: Bytes,
-    ) -> Result<ObjectVersion, VolumeError> {
-        let key: Arc<str> = write_key("", target)?.into();
-        full_key(self.prefix_len, &key)?;
-        check_not_marker(&key, body.is_empty())?;
-        validate_condition(condition)?;
-        let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
-        check_condition(state.objects.get(&key).and_then(current_object), condition)?;
-        let version = new_version(self.versioned, &body, Uuid::new_v4());
-        let reference = version.clone();
-        apply_object(
-            &mut state,
-            key,
-            ObjectEvent::Publish(Arc::new(StoredObject { version, body })),
-            self.versioned,
-        )?;
-        Ok(reference)
+        path: &VolumePath,
+        recorded: &FileState,
+    ) -> Result<VolumeFile, VolumeError> {
+        self.open_at(path, Some(recorded))
     }
+}
 
-    async fn delete(
-        &self,
-        target: WriteTarget<'_>,
-        reference: &ObjectMetadata,
-    ) -> Result<Option<ResponseValue<Arc<str>>>, VolumeError> {
-        let key: Arc<str> = write_key("", target)?.into();
-        validate_delete(&key, reference)?;
-        check_not_marker(&key, reference.size == 0)?;
-        full_key(self.prefix_len, &key)?;
-        let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
-        check_condition(
-            state.objects.get(&key).and_then(current_object),
-            WriteCondition::Matches(&reference.version.etag),
-        )?;
-        let marker = apply_object(
-            &mut state,
-            key,
-            ObjectEvent::Delete {
-                marker_id: Uuid::new_v4().to_string().into(),
-            },
-            self.versioned,
-        )?;
-        Ok(marker.map(ResponseValue::new))
-    }
+#[derive(Debug)]
+struct MemoryReader {
+    files: Arc<Mutex<Files>>,
+    path: VolumePath,
+}
 
-    async fn start_multipart(
-        &self,
-        target: WriteTarget<'_>,
-    ) -> Result<ResponseValue<Arc<str>>, VolumeError> {
-        let key: Arc<str> = multipart_key("", target)?.into();
-        full_key(self.prefix_len, &key)?;
-        let id: Arc<str> = Uuid::new_v4().to_string().into();
-        let result = ResponseValue::new(id.clone());
-        let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
-        state.uploads.insert(
-            id,
-            Upload {
-                key,
-                phase: UploadPhase::Open(BTreeMap::new()),
-            },
-        );
-        Ok(result)
-    }
-
-    async fn upload_part(
-        &self,
-        target: WriteTarget<'_>,
-        upload_id: &str,
-        number: i32,
-        body: Bytes,
-    ) -> Result<UploadedPart, VolumeError> {
-        let key = multipart_key("", target)?;
-        full_key(self.prefix_len, &key)?;
-        let metadata = UploadedPart {
-            number,
-            etag: format!("\"{:x}\"", Sha256::digest(&body)).into(),
-            size: body.len() as u64,
-        };
-        validate_parts(std::slice::from_ref(&metadata))?;
-        let part = Arc::new(StoredPart {
-            number,
-            etag: metadata.etag.clone(),
-            body,
-        });
-        let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
-        let upload = upload(&mut state, &key, upload_id)?;
-        let next = upload_transition(upload, UploadEvent::Part(part))?;
-        *upload = next;
-        Ok(metadata)
-    }
-
-    async fn complete_multipart(
-        &self,
-        target: WriteTarget<'_>,
-        upload_id: &str,
-        parts: &[UploadedPart],
-        condition: WriteCondition<'_>,
-    ) -> Result<ObjectVersion, VolumeError> {
-        validate_parts(parts)?;
-        validate_condition(condition)?;
-        let key = multipart_key("", target)?;
-        full_key(self.prefix_len, &key)?;
-        let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
-        check_condition(
-            state.objects.get(key.as_ref()).and_then(current_object),
-            condition,
-        )?;
-        let upload = upload(&mut state, &key, upload_id)?;
-        let retained = retained_object(upload);
-        let (next, object) =
-            complete_upload(upload, retained, parts, self.versioned, Uuid::new_v4())?;
-        let reference = object.version.clone();
-        if let Some(next) = next {
-            let publication_key = upload.key.clone();
-            *upload = next;
-            apply_object(
-                &mut state,
-                publication_key,
-                ObjectEvent::Publish(object),
-                self.versioned,
-            )?;
-        }
-        Ok(reference)
-    }
-
-    async fn abort_multipart(
-        &self,
-        target: WriteTarget<'_>,
-        upload_id: &str,
-    ) -> Result<(), VolumeError> {
-        let key = multipart_key("", target)?;
-        full_key(self.prefix_len, &key)?;
-        let mut state = self.state.lock().map_err(|_| VolumeError::RequestFailed)?;
-        let upload = upload(&mut state, &key, upload_id)?;
-        let next = upload_transition(upload, UploadEvent::Abort)?;
-        *upload = next;
-        Ok(())
-    }
-
-    async fn versioning(&self) -> Result<BucketVersioning, VolumeError> {
-        Ok(versioning_status(self.versioned))
-    }
-
-    async fn lifecycle(&self) -> Result<Box<[LifecycleRule]>, VolumeError> {
-        Ok(Box::new([]))
+#[async_trait]
+impl FileReader for MemoryReader {
+    async fn read(&self, state: &FileState, range: Range<u64>) -> Result<ReadStream, VolumeError> {
+        let mut files = self.files.lock().unwrap();
+        next_call(&mut files)?;
+        let file = selected(&files, &self.path, Some(state))?;
+        let bytes = file.bytes.slice(range.start as usize..range.end as usize);
+        Ok(Box::pin(futures::stream::once(async move { Ok(bytes) })))
     }
 }
 

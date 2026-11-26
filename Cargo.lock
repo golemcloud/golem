@@ -4587,7 +4587,6 @@ dependencies = [
  "aws-credential-types",
  "aws-runtime",
  "aws-sdk-s3",
- "aws-sigv4",
  "aws-smithy-runtime-api",
  "aws-smithy-types",
  "axum",

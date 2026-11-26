@@ -56,17 +56,17 @@ pub(super) fn protected_port(policy: &ConnectionPolicy, port: u16) -> bool {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum ConnectionRefusal {
-    #[error("volume destination is cloud metadata")]
+    #[error("volume destination is cloud metadata; nothing was sent")]
     Metadata,
-    #[error("volume destination is link-local")]
+    #[error("volume destination is link-local; nothing was sent")]
     LinkLocal,
-    #[error("volume destination is a Golem service endpoint")]
+    #[error("volume destination is a Golem service endpoint; nothing was sent")]
     GolemEndpoint,
-    #[error("volume destination is a private address outside the allowed ranges")]
+    #[error("volume destination is a private address outside the allowed ranges; nothing was sent")]
     Private,
-    #[error("volume destination is loopback")]
+    #[error("volume destination is loopback; nothing was sent")]
     Loopback,
-    #[error("volume destination is not a supported unicast address")]
+    #[error("volume destination is not a supported unicast address; nothing was sent")]
     Other,
 }
 

@@ -12,48 +12,34 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use super::connection::ConnectionPolicy;
-use super::keys::{
-    check_not_marker, full_key, multipart_key, relative_key, strong_etag, validate_delete,
-    validate_parts, validate_read, write_key,
+use super::connection::{ConnectionPolicy, ConnectionRefusal};
+use super::keys::{full_key, strong_etag};
+use super::placement::{
+    BucketVersioning, LifecycleRule, LifecycleRuleStatus, NoncurrentExpiration, Placement,
+    PlacementObservations, VersionRead, verdict,
 };
-use super::signing::Signing;
 use super::transport::{SystemResolver, Transport};
 use super::{
-    BucketVersioning, LifecycleRule, LifecycleRuleStatus, ListedObject, NoncurrentExpiration,
-    ObjectBody, ObjectMetadata, ObjectPage, ObjectRead, ObjectVersion, ResponseValue, UploadedPart,
-    VolumeClient, VolumeError, WriteCondition, WriteTarget,
+    Cursor, Entry, FileReader, FileState, Node, Page, ReadStream, VolumeClient, VolumeError,
+    VolumeFile, VolumePath, VolumeRecovery,
 };
 use crate::aws::AwsCredentials;
 use async_trait::async_trait;
 use aws_sdk_s3::config::{BehaviorVersion, Region, RequestChecksumCalculation};
 use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
-use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::types::{
-    BucketVersioningStatus, CompletedMultipartUpload, CompletedPart, EncodingType,
-    ExpirationStatus, ServerSideEncryption,
-};
-use aws_smithy_runtime_api::box_error::BoxError;
+use aws_sdk_s3::types::{BucketVersioningStatus, ExpirationStatus};
 use aws_smithy_runtime_api::client::http::{SharedHttpConnector, http_client_fn};
-use aws_smithy_runtime_api::client::identity::SharedIdentityResolver;
-use aws_smithy_runtime_api::client::interceptors::{
-    Intercept, context::BeforeDeserializationInterceptorContextRef,
-};
-use aws_smithy_runtime_api::client::runtime_components::RuntimeComponents;
-use aws_smithy_types::{config_bag::ConfigBag, retry::RetryConfig, timeout::TimeoutConfig};
-use bytes::Bytes;
+use aws_smithy_types::{retry::RetryConfig, timeout::TimeoutConfig};
+use futures::TryStreamExt;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::error::Error;
 use std::fmt::{Debug, Formatter};
-use std::ops::RangeInclusive;
-use std::sync::{Arc, OnceLock};
+use std::ops::{Range, RangeInclusive};
+use std::sync::Arc;
 use std::time::Duration;
 use tracing::instrument::WithSubscriber;
 use tracing::subscriber::NoSubscriber;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Encryption {
-    S3,
-    Kms { key_id: Box<str> },
-}
 
 #[derive(Debug)]
 pub struct S3VolumeConfig {
@@ -62,58 +48,64 @@ pub struct S3VolumeConfig {
     pub bucket: Box<str>,
     /// An empty prefix selects the bucket root. A nonempty prefix ends in `/`.
     pub prefix: Box<str>,
-    pub encryption: Option<Encryption>,
 }
 
-/// S3 operations with static credentials, conditional writes and checked connections.
+/// Read-only S3 access with static credentials and checked connections.
 /// No operation retries a request or follows a redirect.
 /// SDK tracing is disabled because a response can reflect credentials in an error.
 pub struct S3Volume {
     client: aws_sdk_s3::Client,
-    config: S3VolumeConfig,
+    bucket: Arc<str>,
+    prefix: Box<str>,
 }
 
 impl Debug for S3Volume {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        f.write_str("S3Volume")
+        // The SDK can retain untrusted endpoint metadata that reflects credentials.
+        f.write_str("S3Volume([redacted])")
     }
 }
 
-#[derive(Clone, Debug, Default)]
-struct StatusObserver(Arc<OnceLock<u16>>);
-
-impl Intercept for StatusObserver {
-    fn name(&self) -> &'static str {
-        "VolumeResponseStatus"
-    }
-
-    fn read_before_deserialization(
-        &self,
-        context: &BeforeDeserializationInterceptorContextRef<'_>,
-        _: &RuntimeComponents,
-        _: &mut ConfigBag,
-    ) -> Result<(), BoxError> {
-        let _ = self.0.set(context.response().status().as_u16());
-        Ok(())
-    }
+#[derive(Serialize, Deserialize)]
+struct ListCursor {
+    directory: Box<str>,
+    continuation: Box<str>,
+    last_child: Option<VolumePath>,
 }
 
-fn readonly_result<T, E: ProvideErrorMetadata>(
-    result: Result<T, SdkError<E>>,
-    status: Option<u16>,
-    expected: u16,
-) -> Result<T, VolumeError> {
-    match result {
-        Ok(result) if status == Some(expected) => Ok(result),
-        Ok(_) => Err(VolumeError::InvalidResponse),
-        Err(error)
-            if matches!(error, SdkError::ServiceError(_))
-                && status.is_some_and(|status| (200..300).contains(&status)) =>
-        {
-            Err(VolumeError::InvalidResponse)
-        }
-        Err(error) => Err(failure(error, None)),
-    }
+/// Builds both handles without sending a request.
+#[expect(
+    clippy::type_complexity,
+    reason = "the two handles expose live reads and recovery separately"
+)]
+pub fn connect(
+    config: S3VolumeConfig,
+    credentials: AwsCredentials,
+    policy: ConnectionPolicy,
+) -> Result<(Arc<dyn VolumeClient>, Arc<dyn VolumeRecovery>), VolumeError> {
+    let volume = Arc::new(S3Volume::new(config, credentials, policy)?);
+    Ok((volume.clone(), volume))
+}
+
+/// Runs the read-only placement checks.
+pub async fn place(
+    config: S3VolumeConfig,
+    credentials: AwsCredentials,
+    policy: ConnectionPolicy,
+) -> Result<Placement, VolumeError> {
+    let volume = S3Volume::new(config, credentials, policy)?;
+    let versioning = volume.versioning().await;
+    let version_read = if matches!(versioning, Ok(BucketVersioning::Enabled)) {
+        volume.version_read().await
+    } else {
+        Ok(VersionRead::NoObject)
+    };
+    let lifecycle = volume.lifecycle().await;
+    verdict(PlacementObservations {
+        versioning,
+        version_read,
+        lifecycle,
+    })
 }
 
 fn normalized_version_id(id: Option<&str>) -> Result<Option<&str>, VolumeError> {
@@ -124,42 +116,70 @@ fn normalized_version_id(id: Option<&str>) -> Result<Option<&str>, VolumeError> 
     }
 }
 
-fn decoded_list_key(key: &str) -> Result<Box<str>, VolumeError> {
-    let mut bytes = key.bytes();
-    let decoded = std::iter::from_fn(|| {
-        bytes.next().map(|byte| {
-            if byte == b'%' {
-                let high = bytes.next().and_then(|byte| char::from(byte).to_digit(16));
-                let low = bytes.next().and_then(|byte| char::from(byte).to_digit(16));
-                high.zip(low)
-                    .map(|(high, low)| (high * 16 + low) as u8)
-                    .ok_or(VolumeError::InvalidResponse)
-            } else {
-                Ok(byte)
-            }
-        })
-    })
-    .collect::<Result<Vec<_>, _>>()?;
-    String::from_utf8(decoded)
-        .map(String::into_boxed_str)
-        .map_err(|_| VolumeError::InvalidResponse)
-}
-
-fn version(etag: Option<&str>, version_id: Option<&str>) -> Result<ObjectVersion, VolumeError> {
-    Ok(ObjectVersion {
-        etag: etag
-            .filter(|etag| strong_etag(etag))
+fn state(etag: Option<&str>, version_id: Option<&str>) -> Result<FileState, VolumeError> {
+    Ok(FileState::from_reference(
+        etag.filter(|etag| strong_etag(etag))
             .ok_or(VolumeError::InvalidResponse)?
             .into(),
-        version_id: normalized_version_id(version_id)?.map(Into::into),
-    })
+        normalized_version_id(version_id)?.map(Into::into),
+    ))
+}
+
+fn check_reference(
+    requested_version: Option<&str>,
+    requested_etag: Option<&str>,
+    actual: &FileState,
+) -> Result<(), VolumeError> {
+    let (etag, version) = actual.reference();
+    if requested_version.is_some_and(|id| version != (id != "null").then_some(id))
+        || requested_etag.is_some_and(|requested| requested != etag)
+    {
+        Err(VolumeError::InvalidResponse)
+    } else {
+        Ok(())
+    }
+}
+
+fn check_range(
+    requested: Option<&RangeInclusive<u64>>,
+    content_range: Option<&str>,
+    length: u64,
+    size: u64,
+) -> Result<(), VolumeError> {
+    let Some(requested) = requested else {
+        return if content_range.is_none() && length == size {
+            Ok(())
+        } else {
+            Err(VolumeError::InvalidResponse)
+        };
+    };
+    let parse = || {
+        let (range, total) = content_range?.strip_prefix("bytes ")?.split_once('/')?;
+        let (start, end) = range.split_once('-')?;
+        Some((
+            start.parse::<u64>().ok()?,
+            end.parse::<u64>().ok()?,
+            total.parse::<u64>().ok()?,
+        ))
+    };
+    let (start, end, total) = parse().ok_or(VolumeError::InvalidResponse)?;
+    if start != *requested.start()
+        || total != size
+        || total == 0
+        || end != (*requested.end()).min(total - 1)
+        || end.checked_sub(start).and_then(|n| n.checked_add(1)) != Some(length)
+    {
+        Err(VolumeError::InvalidResponse)
+    } else {
+        Ok(())
+    }
 }
 
 fn lifecycle_rule(rule: aws_sdk_s3::types::LifecycleRule) -> Result<LifecycleRule, VolumeError> {
     let status = match rule.status() {
         ExpirationStatus::Enabled => LifecycleRuleStatus::Enabled,
         ExpirationStatus::Disabled => LifecycleRuleStatus::Disabled,
-        other => LifecycleRuleStatus::Unknown(ResponseValue::new(other.as_str().into())),
+        other => LifecycleRuleStatus::Unknown(other.as_str().into()),
     };
     #[expect(
         deprecated,
@@ -174,7 +194,7 @@ fn lifecycle_rule(rule: aws_sdk_s3::types::LifecycleRule) -> Result<LifecycleRul
                 .or_else(|| filter.and().and_then(|and| and.prefix()))
         })
         .or(rule_prefix)
-        .map(|prefix| ResponseValue::new(prefix.into()));
+        .map(Into::into);
     let noncurrent_expiration = rule
         .noncurrent_version_expiration()
         .map(|expiration| {
@@ -199,126 +219,65 @@ fn lifecycle_rule(rule: aws_sdk_s3::types::LifecycleRule) -> Result<LifecycleRul
     })
 }
 
-fn check_reference(
-    requested_version: Option<&str>,
-    requested_etag: Option<&str>,
-    actual: &ObjectVersion,
-) -> Result<(), VolumeError> {
-    if requested_version
-        .is_some_and(|id| actual.version_id.as_deref() != (id != "null").then_some(id))
-        || requested_etag.is_some_and(|etag| actual.etag.as_ref() != etag)
-    {
-        Err(VolumeError::InvalidResponse)
-    } else {
-        Ok(())
-    }
-}
-
-fn check_range(
-    requested: Option<&RangeInclusive<u64>>,
-    content_range: Option<&str>,
-    length: u64,
-) -> Result<(), VolumeError> {
-    let Some(requested) = requested else {
-        return if content_range.is_none() {
-            Ok(())
-        } else {
-            Err(VolumeError::InvalidResponse)
-        };
-    };
-    let parse = || {
-        let (range, total) = content_range?.strip_prefix("bytes ")?.split_once('/')?;
-        let (start, end) = range.split_once('-')?;
-        Some((
-            start.parse::<u64>().ok()?,
-            end.parse::<u64>().ok()?,
-            total.parse::<u64>().ok()?,
-        ))
-    };
-    let (start, end, total) = parse().ok_or(VolumeError::InvalidResponse)?;
-    if start != *requested.start()
-        || total == 0
-        || end != (*requested.end()).min(total - 1)
-        || end.checked_sub(start).and_then(|n| n.checked_add(1)) != Some(length)
-    {
-        Err(VolumeError::InvalidResponse)
-    } else {
-        Ok(())
-    }
-}
-
-fn encryption_headers(
-    encryption: Option<&Encryption>,
-) -> (Option<ServerSideEncryption>, Option<String>) {
-    match encryption {
-        Some(Encryption::S3) => (Some(ServerSideEncryption::Aes256), None),
-        Some(Encryption::Kms { key_id }) => {
-            (Some(ServerSideEncryption::AwsKms), Some(key_id.to_string()))
-        }
-        None => (None, None),
-    }
-}
-
-fn condition_headers(
-    condition: WriteCondition<'_>,
-) -> Result<(Option<String>, Option<String>), VolumeError> {
-    match condition {
-        WriteCondition::Absent => Ok((None, Some("*".to_owned()))),
-        WriteCondition::Matches(etag) if strong_etag(etag) => Ok((Some(etag.to_owned()), None)),
-        _ => Err(VolumeError::InvalidRequest),
-    }
-}
-
-fn failure<E: ProvideErrorMetadata>(
+fn failure<E: ProvideErrorMetadata + Error + 'static>(
     error: SdkError<E>,
-    condition: Option<WriteCondition<'_>>,
+    action: &'static str,
+    recorded: bool,
 ) -> VolumeError {
+    if let Some(error) = std::iter::successors(Some(&error as &(dyn Error + 'static)), |error| {
+        (*error).source()
+    })
+    .find_map(|error| {
+        if error.is::<ConnectionRefusal>() {
+            Some(VolumeError::ConnectionRefused)
+        } else {
+            error.downcast_ref::<VolumeError>().cloned()
+        }
+    }) {
+        return error;
+    }
     if matches!(error, SdkError::ConstructionFailure(_)) {
         return VolumeError::InvalidRequest;
     }
     let status = error
         .raw_response()
         .map(|response| response.status().as_u16());
-    classify_failure(
-        status,
-        error
-            .as_service_error()
-            .and_then(ProvideErrorMetadata::code),
-        condition,
-    )
-}
-
-fn classify_failure(
-    status: Option<u16>,
-    code: Option<&str>,
-    condition: Option<WriteCondition<'_>>,
-) -> VolumeError {
-    match code {
-        Some("PreconditionFailed") if matches!(condition, Some(WriteCondition::Absent)) => {
-            VolumeError::Exists
-        }
-        Some("PreconditionFailed" | "ConditionalRequestConflict") => VolumeError::Conflict,
-        Some("NoSuchKey" | "NotFound") if matches!(condition, Some(WriteCondition::Matches(_))) => {
-            VolumeError::Conflict
-        }
-        Some("NoSuchKey" | "NotFound" | "NoSuchUpload" | "NoSuchBucket") => VolumeError::NotFound,
-        Some("AccessDenied" | "ExpiredToken" | "InvalidToken" | "TokenRefreshRequired") => {
-            VolumeError::Denied
-        }
-        Some("NotImplemented") => VolumeError::Unsupported,
-        _ => match status {
-            Some(412) if matches!(condition, Some(WriteCondition::Absent)) => VolumeError::Exists,
-            Some(409 | 412) => VolumeError::Conflict,
-            Some(404)
-                if code.is_none() && matches!(condition, Some(WriteCondition::Matches(_))) =>
-            {
-                VolumeError::Conflict
-            }
-            Some(404) => VolumeError::NotFound,
-            Some(401 | 403) => VolumeError::Denied,
-            Some(405 | 501) => VolumeError::Unsupported,
-            _ => VolumeError::RequestFailed,
+    if status.is_some_and(|status| (200..300).contains(&status)) {
+        return VolumeError::InvalidResponse;
+    }
+    let code = error
+        .as_service_error()
+        .and_then(ProvideErrorMetadata::code);
+    match (status, code) {
+        (Some(401 | 403), _)
+        | (
+            _,
+            Some(
+                "AccessDenied"
+                | "ExpiredToken"
+                | "InvalidToken"
+                | "TokenRefreshRequired"
+                | "SignatureDoesNotMatch"
+                | "InvalidAccessKeyId",
+            ),
+        ) => VolumeError::Denied {
+            action: action.into(),
         },
+        (Some(404), _) | (_, Some("NoSuchKey" | "NotFound" | "NoSuchVersion" | "NoSuchBucket")) => {
+            if recorded {
+                VolumeError::Changed
+            } else {
+                VolumeError::NotFound
+            }
+        }
+        (Some(412), _) | (_, Some("PreconditionFailed")) => VolumeError::Changed,
+        (Some(405), _) if recorded => VolumeError::Changed,
+        (Some(416), _) => VolumeError::InvalidResponse,
+        (Some(400), _) => VolumeError::InvalidRequest,
+        (Some(500..=599), _) => VolumeError::Unanswered,
+        (Some(_), _) => VolumeError::InvalidResponse,
+        _ if matches!(error, SdkError::ResponseError(_)) => VolumeError::InvalidResponse,
+        _ => VolumeError::Unanswered,
     }
 }
 
@@ -328,10 +287,14 @@ impl S3Volume {
         credentials: AwsCredentials,
         policy: ConnectionPolicy,
     ) -> Result<Self, VolumeError> {
-        relative_key(&config.prefix)?;
         if config.bucket.is_empty()
             || config.region.is_empty()
-            || (!config.prefix.is_empty() && !config.prefix.ends_with('/'))
+            || config.prefix.len() > 1024
+            || (!config.prefix.is_empty()
+                && config
+                    .prefix
+                    .strip_suffix('/')
+                    .is_none_or(|prefix| prefix.is_empty() || VolumePath::new(prefix).is_err()))
         {
             return Err(VolumeError::InvalidRequest);
         }
@@ -352,6 +315,7 @@ impl S3Volume {
         let mut sdk = aws_sdk_s3::Config::builder()
             .behavior_version(BehaviorVersion::latest())
             .region(Region::new(config.region.to_string()))
+            .credentials_provider(credentials.0)
             .force_path_style(true)
             .http_client(http_client_fn(move |_, _| transport.clone()))
             .retry_config(RetryConfig::disabled())
@@ -360,462 +324,114 @@ impl S3Volume {
                     .operation_timeout(Duration::from_secs(60))
                     .build(),
             )
-            .request_checksum_calculation(RequestChecksumCalculation::WhenRequired)
-            .push_auth_scheme(Signing {
-                region: config.region.clone(),
-                identity: SharedIdentityResolver::new(credentials),
-            });
+            .request_checksum_calculation(RequestChecksumCalculation::WhenRequired);
         if let Some(endpoint) = &config.endpoint {
             sdk = sdk.endpoint_url(endpoint.as_ref());
         }
         Ok(Self {
             client: aws_sdk_s3::Client::from_conf(sdk.build()),
-            config,
+            bucket: config.bucket.into(),
+            prefix: config.prefix,
         })
-    }
-}
-
-#[async_trait]
-impl VolumeClient for S3Volume {
-    async fn stat(
-        &self,
-        key: &str,
-        version_id: Option<&str>,
-    ) -> Result<ObjectMetadata, VolumeError> {
-        relative_key(key)?;
-        let object_key = format!("{}{key}", self.config.prefix);
-        if object_key.is_empty() {
-            return Err(VolumeError::NotFound);
-        }
-        full_key(0, &object_key)?;
-        let slash_key = object_key.ends_with('/');
-        let status = StatusObserver::default();
-        let result = self
-            .client
-            .head_object()
-            .bucket(self.config.bucket.as_ref())
-            .key(object_key)
-            .set_version_id(version_id.map(str::to_owned))
-            .customize()
-            .interceptor(status.clone())
-            .send()
-            .with_subscriber(NoSubscriber::default())
-            .await;
-        let result = readonly_result(result, status.0.get().copied(), 200)?;
-        let size = result
-            .content_length()
-            .and_then(|n| u64::try_from(n).ok())
-            .ok_or(VolumeError::InvalidResponse)?;
-        let version = version(result.e_tag(), result.version_id())?;
-        check_reference(version_id, None, &version)?;
-        if size == 0 && slash_key {
-            return Err(VolumeError::NotFound);
-        }
-        Ok(ObjectMetadata {
-            key: key.into(),
-            size,
-            version,
-        })
-    }
-
-    /// Returns one recursive page. The continuation token is opaque.
-    /// Sends one ListObjectsV2 request and takes each key, size and ETag from that page.
-    /// Hides zero-byte keys ending in `/`. The page has no version IDs.
-    async fn list(
-        &self,
-        prefix: &str,
-        continuation: Option<&str>,
-    ) -> Result<ObjectPage, VolumeError> {
-        relative_key(prefix)?;
-        let requested_prefix = format!("{}{prefix}", self.config.prefix);
-        let status = StatusObserver::default();
-        let result = self
-            .client
-            .list_objects_v2()
-            .bucket(self.config.bucket.as_ref())
-            .prefix(&requested_prefix)
-            .encoding_type(EncodingType::Url)
-            .set_continuation_token(continuation.map(str::to_owned))
-            .customize()
-            .interceptor(status.clone())
-            .send()
-            .with_subscriber(NoSubscriber::default())
-            .await;
-        let result = readonly_result(result, status.0.get().copied(), 200)?;
-        if result.encoding_type() != Some(&EncodingType::Url) {
-            return Err(VolumeError::InvalidResponse);
-        }
-        match (result.is_truncated(), result.next_continuation_token()) {
-            (Some(true), Some(next)) if !next.is_empty() && Some(next) != continuation => (),
-            (Some(false), None) => (),
-            _ => return Err(VolumeError::InvalidResponse),
-        }
-        let objects = result
-            .contents()
-            .iter()
-            .try_fold(
-                Vec::with_capacity(result.contents().len()),
-                |mut objects, object| {
-                    let object_key =
-                        decoded_list_key(object.key().ok_or(VolumeError::InvalidResponse)?)?;
-                    if !object_key.starts_with(&requested_prefix) {
-                        return Err(VolumeError::InvalidResponse);
-                    }
-                    if full_key(0, &object_key).is_err() {
-                        return Ok(objects);
-                    }
-                    let key = object_key
-                        .strip_prefix(self.config.prefix.as_ref())
-                        .ok_or(VolumeError::InvalidResponse)?;
-                    if relative_key(key).is_err() {
-                        return Ok(objects);
-                    }
-                    let size = object
-                        .size()
-                        .and_then(|size| u64::try_from(size).ok())
-                        .ok_or(VolumeError::InvalidResponse)?;
-                    let etag = object
-                        .e_tag()
-                        .filter(|etag| strong_etag(etag))
-                        .ok_or(VolumeError::InvalidResponse)?;
-                    if size != 0 || !object_key.ends_with('/') {
-                        objects.push(ListedObject {
-                            key: key.into(),
-                            size,
-                            etag: etag.into(),
-                        });
-                    }
-                    Ok::<_, VolumeError>(objects)
-                },
-            )?
-            .into_boxed_slice();
-        Ok(ObjectPage {
-            objects,
-            continuation: result.next_continuation_token().map(Into::into),
-        })
-    }
-
-    async fn read(
-        &self,
-        key: &str,
-        reference: &ObjectVersion,
-        range: Option<RangeInclusive<u64>>,
-    ) -> Result<ObjectRead, VolumeError> {
-        relative_key(key)?;
-        validate_read(reference, range.as_ref())?;
-        let version_id = reference.version_id.as_deref();
-        let object_key = format!("{}{key}", self.config.prefix);
-        if object_key.is_empty() {
-            return Err(VolumeError::NotFound);
-        }
-        full_key(0, &object_key)?;
-        let slash_key = object_key.ends_with('/');
-        let status = StatusObserver::default();
-        let result = self
-            .client
-            .get_object()
-            .bucket(self.config.bucket.as_ref())
-            .key(&object_key)
-            .set_version_id(version_id.map(str::to_owned))
-            .if_match(reference.etag.as_ref())
-            .set_range(range.as_ref().map(|r| {
-                // S3 content lengths are signed. This offset is beyond every valid object byte.
-                let limit = i64::MAX as u64;
-                format!(
-                    "bytes={}-{}",
-                    (*r.start()).min(limit),
-                    (*r.end()).min(limit)
-                )
-            }))
-            .customize()
-            .interceptor(status.clone())
-            .send()
-            .with_subscriber(NoSubscriber::default())
-            .await;
-        let result = match result {
-            Err(error)
-                if range.is_some()
-                    && matches!(error, SdkError::ServiceError(_))
-                    && error
-                        .raw_response()
-                        .is_some_and(|response| response.status().as_u16() == 416)
-                    && matches!(
-                        error
-                            .as_service_error()
-                            .and_then(ProvideErrorMetadata::code),
-                        None | Some("InvalidRange" | "RequestedRangeNotSatisfiable")
-                    ) =>
-            {
-                let head_status = StatusObserver::default();
-                let head = self
-                    .client
-                    .head_object()
-                    .bucket(self.config.bucket.as_ref())
-                    .key(object_key)
-                    .set_version_id(version_id.map(str::to_owned))
-                    .if_match(reference.etag.as_ref())
-                    .customize()
-                    .interceptor(head_status.clone())
-                    .send()
-                    .with_subscriber(NoSubscriber::default())
-                    .await;
-                let head = readonly_result(head, head_status.0.get().copied(), 200)?;
-                let size = head
-                    .content_length()
-                    .and_then(|n| u64::try_from(n).ok())
-                    .ok_or(VolumeError::InvalidResponse)?;
-                let version = version(head.e_tag(), head.version_id())?;
-                check_reference(
-                    Some(version_id.unwrap_or("null")),
-                    Some(&reference.etag),
-                    &version,
-                )?;
-                if size == 0 && slash_key {
-                    return Err(VolumeError::NotFound);
-                }
-                if range.as_ref().is_some_and(|range| *range.start() >= size) {
-                    return Ok(ObjectRead {
-                        version,
-                        length: 0,
-                        body: ObjectBody::from_bytes(Bytes::new()),
-                    });
-                }
-                return Err(VolumeError::InvalidResponse);
-            }
-            result => readonly_result(
-                result,
-                status.0.get().copied(),
-                if range.is_some() { 206 } else { 200 },
-            )?,
-        };
-        let length = result
-            .content_length()
-            .and_then(|n| u64::try_from(n).ok())
-            .ok_or(VolumeError::InvalidResponse)?;
-        let version = version(result.e_tag(), result.version_id())?;
-        check_reference(
-            Some(version_id.unwrap_or("null")),
-            Some(&reference.etag),
-            &version,
-        )?;
-        check_range(range.as_ref(), result.content_range(), length)?;
-        if length == 0 && slash_key {
-            return Err(VolumeError::NotFound);
-        }
-        Ok(ObjectRead {
-            version,
-            length,
-            body: ObjectBody::from_stream(futures::stream::try_unfold(
-                result.body,
-                |mut body| async move {
-                    body.try_next()
-                        .with_subscriber(NoSubscriber::default())
-                        .await
-                        .map_err(|_| VolumeError::RequestFailed)
-                        .map(|chunk| chunk.map(|chunk| (chunk, body)))
-                },
-            )),
-        })
-    }
-
-    async fn put(
-        &self,
-        target: WriteTarget<'_>,
-        condition: WriteCondition<'_>,
-        body: Bytes,
-    ) -> Result<ObjectVersion, VolumeError> {
-        let key = write_key(&self.config.prefix, target)?;
-        check_not_marker(&key, body.is_empty())?;
-        let (if_match, if_none_match) = condition_headers(condition)?;
-        let (algorithm, kms_key) = encryption_headers(self.config.encryption.as_ref());
-        let request = self
-            .client
-            .put_object()
-            .bucket(self.config.bucket.as_ref())
-            .key(key)
-            .set_if_match(if_match)
-            .set_if_none_match(if_none_match)
-            .set_server_side_encryption(algorithm)
-            .set_ssekms_key_id(kms_key)
-            .body(ByteStream::from(body));
-        let result = request
-            .send()
-            .with_subscriber(NoSubscriber::default())
-            .await
-            .map_err(|error| failure(error, Some(condition)))?;
-        version(result.e_tag(), result.version_id()).map_err(|_| VolumeError::RequestFailed)
-    }
-
-    /// The reference size and ETag describe the same observed object. Folder markers are not files.
-    async fn delete(
-        &self,
-        target: WriteTarget<'_>,
-        reference: &ObjectMetadata,
-    ) -> Result<Option<ResponseValue<Arc<str>>>, VolumeError> {
-        let key = write_key("", target)?;
-        validate_delete(&key, reference)?;
-        check_not_marker(&key, reference.size == 0)?;
-        let object_key = [self.config.prefix.as_ref(), key.as_ref()].concat();
-        full_key(0, &object_key)?;
-        let etag = reference.version.etag.as_ref();
-        let (if_match, _) = condition_headers(WriteCondition::Matches(etag))?;
-        let result = self
-            .client
-            .delete_object()
-            .bucket(self.config.bucket.as_ref())
-            .key(object_key)
-            .set_if_match(if_match)
-            .send()
-            .with_subscriber(NoSubscriber::default())
-            .await
-            .map_err(|error| failure(error, Some(WriteCondition::Matches(etag))))?;
-        Ok(normalized_version_id(result.version_id())
-            .map_err(|_| VolumeError::RequestFailed)?
-            .map(|id| ResponseValue::new(id.into())))
-    }
-
-    async fn start_multipart(
-        &self,
-        target: WriteTarget<'_>,
-    ) -> Result<ResponseValue<Arc<str>>, VolumeError> {
-        let (algorithm, kms_key) = encryption_headers(self.config.encryption.as_ref());
-        let request = self
-            .client
-            .create_multipart_upload()
-            .bucket(self.config.bucket.as_ref())
-            .key(multipart_key(&self.config.prefix, target)?)
-            .set_server_side_encryption(algorithm)
-            .set_ssekms_key_id(kms_key);
-        let result = request
-            .send()
-            .with_subscriber(NoSubscriber::default())
-            .await
-            .map_err(|error| failure(error, None))?;
-        result
-            .upload_id()
-            .filter(|id| !id.is_empty())
-            .map(|id| ResponseValue::new(id.into()))
-            .ok_or(VolumeError::InvalidResponse)
-    }
-
-    async fn upload_part(
-        &self,
-        target: WriteTarget<'_>,
-        upload_id: &str,
-        number: i32,
-        body: Bytes,
-    ) -> Result<UploadedPart, VolumeError> {
-        if !(1..=10000).contains(&number) {
-            return Err(VolumeError::InvalidRequest);
-        }
-        let size = body.len() as u64;
-        let result = self
-            .client
-            .upload_part()
-            .bucket(self.config.bucket.as_ref())
-            .key(multipart_key(&self.config.prefix, target)?)
-            .upload_id(upload_id)
-            .part_number(number)
-            .body(ByteStream::from(body))
-            .send()
-            .with_subscriber(NoSubscriber::default())
-            .await
-            .map_err(|error| failure(error, None))?;
-        Ok(UploadedPart {
-            number,
-            etag: result
-                .e_tag()
-                .filter(|etag| strong_etag(etag))
-                .ok_or(VolumeError::InvalidResponse)?
-                .into(),
-            size,
-        })
-    }
-
-    async fn complete_multipart(
-        &self,
-        target: WriteTarget<'_>,
-        upload_id: &str,
-        parts: &[UploadedPart],
-        condition: WriteCondition<'_>,
-    ) -> Result<ObjectVersion, VolumeError> {
-        validate_parts(parts)?;
-        let key = multipart_key(&self.config.prefix, target)?;
-        let parts = parts
-            .iter()
-            .map(|part| {
-                CompletedPart::builder()
-                    .part_number(part.number)
-                    .e_tag(part.etag.as_ref())
-                    .build()
-            })
-            .collect::<Vec<_>>();
-        let (if_match, if_none_match) = condition_headers(condition)?;
-        let result = self
-            .client
-            .complete_multipart_upload()
-            .bucket(self.config.bucket.as_ref())
-            .key(key)
-            .upload_id(upload_id)
-            .multipart_upload(
-                CompletedMultipartUpload::builder()
-                    .set_parts(Some(parts))
-                    .build(),
-            )
-            .set_if_match(if_match)
-            .set_if_none_match(if_none_match)
-            .send()
-            .with_subscriber(NoSubscriber::default())
-            .await
-            .map_err(|error| failure(error, Some(condition)))?;
-        version(result.e_tag(), result.version_id()).map_err(|_| VolumeError::RequestFailed)
-    }
-
-    async fn abort_multipart(
-        &self,
-        target: WriteTarget<'_>,
-        upload_id: &str,
-    ) -> Result<(), VolumeError> {
-        self.client
-            .abort_multipart_upload()
-            .bucket(self.config.bucket.as_ref())
-            .key(multipart_key(&self.config.prefix, target)?)
-            .upload_id(upload_id)
-            .send()
-            .with_subscriber(NoSubscriber::default())
-            .await
-            .map_err(|error| failure(error, None))?;
-        Ok(())
     }
 
     async fn versioning(&self) -> Result<BucketVersioning, VolumeError> {
-        let status = StatusObserver::default();
         let result = self
             .client
             .get_bucket_versioning()
-            .bucket(self.config.bucket.as_ref())
-            .customize()
-            .interceptor(status.clone())
+            .bucket(self.bucket.as_ref())
             .send()
             .with_subscriber(NoSubscriber::default())
-            .await;
-        let result = readonly_result(result, status.0.get().copied(), 200)?;
+            .await
+            .map_err(|error| failure(error, "GetBucketVersioning", false))?;
         Ok(match result.status() {
             None => BucketVersioning::Unversioned,
             Some(BucketVersioningStatus::Enabled) => BucketVersioning::Enabled,
             Some(BucketVersioningStatus::Suspended) => BucketVersioning::Suspended,
-            Some(other) => BucketVersioning::Unknown(ResponseValue::new(other.as_str().into())),
+            Some(other) => BucketVersioning::Unknown(other.as_str().into()),
         })
     }
 
+    async fn version_read(&self) -> Result<VersionRead, VolumeError> {
+        // ListBucketVersions is not part of the volume's required credential permissions.
+        let pages = futures::stream::try_unfold(Some(None), |continuation| async move {
+            let Some(continuation) = continuation else {
+                return Ok(None);
+            };
+            let result = self
+                .client
+                .list_objects_v2()
+                .bucket(self.bucket.as_ref())
+                .prefix(self.prefix.as_ref())
+                .set_continuation_token(continuation.clone())
+                .send()
+                .with_subscriber(NoSubscriber::default())
+                .await
+                .map_err(|error| failure(error, "ListBucket", false))?;
+            if result.encoding_type().is_some()
+                || !result.common_prefixes().is_empty()
+                || result
+                    .prefix()
+                    .is_some_and(|prefix| prefix != self.prefix.as_ref())
+            {
+                return Err(VolumeError::InvalidResponse);
+            }
+            let next = match (result.is_truncated(), result.next_continuation_token()) {
+                (Some(true), Some(next))
+                    if !next.is_empty() && Some(next) != continuation.as_deref() =>
+                {
+                    Some(Some(next.to_owned()))
+                }
+                (Some(false), None) => None,
+                _ => return Err(VolumeError::InvalidResponse),
+            };
+            let keys = result
+                .contents()
+                .iter()
+                .map(|object| {
+                    let key = object
+                        .key()
+                        .filter(|key| key.starts_with(self.prefix.as_ref()))
+                        .ok_or(VolumeError::InvalidResponse)?;
+                    full_key(0, key).map_err(|_| VolumeError::InvalidResponse)?;
+                    Ok::<_, VolumeError>(Box::<str>::from(key))
+                })
+                .collect::<Result<Box<[_]>, _>>()?;
+            Ok::<_, VolumeError>(Some((keys, next)))
+        })
+        .map_ok(|keys| futures::stream::iter(keys.into_vec().into_iter().map(Ok)))
+        .try_flatten()
+        .try_filter_map(|key| async move {
+            let (size, reference) = self.head(&key, None).await?;
+            Ok(reference
+                .reference()
+                .1
+                .is_some()
+                .then_some((key, reference, size)))
+        });
+        futures::pin_mut!(pages);
+        let Some((key, reference, size)) = pages.try_next().await? else {
+            return Ok(VersionRead::NoObject);
+        };
+        let reader = S3FileReader {
+            client: self.client.clone(),
+            bucket: self.bucket.clone(),
+            key,
+            size,
+        };
+        reader
+            .get(&reference, (size > 0).then_some(0..=0))
+            .await?
+            .try_for_each(|_| futures::future::ready(Ok(())))
+            .await?;
+        Ok(VersionRead::Verified)
+    }
+
     async fn lifecycle(&self) -> Result<Box<[LifecycleRule]>, VolumeError> {
-        let status = StatusObserver::default();
         let result = self
             .client
             .get_bucket_lifecycle_configuration()
-            .bucket(self.config.bucket.as_ref())
-            .customize()
-            .interceptor(status.clone())
+            .bucket(self.bucket.as_ref())
             .send()
             .with_subscriber(NoSubscriber::default())
             .await;
@@ -828,7 +444,7 @@ impl VolumeClient for S3Volume {
             {
                 return Ok(Box::new([]));
             }
-            result => readonly_result(result, status.0.get().copied(), 200)?,
+            result => result.map_err(|error| failure(error, "GetLifecycleConfiguration", false))?,
         };
         result
             .rules
@@ -836,6 +452,327 @@ impl VolumeClient for S3Volume {
             .into_iter()
             .map(lifecycle_rule)
             .collect()
+    }
+
+    fn object_key(&self, path: &VolumePath) -> Result<Box<str>, VolumeError> {
+        if path.as_str().is_empty() {
+            return Err(VolumeError::NotFound);
+        }
+        full_key(self.prefix.len(), path.as_str())?;
+        Ok(format!("{}{}", self.prefix, path.as_str()).into_boxed_str())
+    }
+
+    async fn open_at(
+        &self,
+        path: &VolumePath,
+        recorded: Option<&FileState>,
+    ) -> Result<VolumeFile, VolumeError> {
+        let key = self.object_key(path).map_err(|error| {
+            if recorded.is_some() && error == VolumeError::NotFound {
+                VolumeError::Changed
+            } else {
+                error
+            }
+        })?;
+        let (size, state) = self.head(&key, recorded).await?;
+        let replayable = state.reference().1.is_some();
+        Ok(VolumeFile::new(
+            size,
+            state,
+            replayable,
+            Arc::new(S3FileReader {
+                client: self.client.clone(),
+                bucket: self.bucket.clone(),
+                key,
+                size,
+            }),
+        ))
+    }
+
+    async fn head(
+        &self,
+        key: &str,
+        recorded: Option<&FileState>,
+    ) -> Result<(u64, FileState), VolumeError> {
+        let (etag, version) = recorded.map_or((None, None), |state| {
+            let (etag, version) = state.reference();
+            (Some(etag), version)
+        });
+        if etag.is_some_and(|etag| !strong_etag(etag)) || version == Some("") {
+            return Err(VolumeError::InvalidRequest);
+        }
+        let result = self
+            .client
+            .head_object()
+            .bucket(self.bucket.as_ref())
+            .key(key)
+            .set_version_id(version.map(str::to_owned))
+            .set_if_match(etag.map(str::to_owned))
+            .send()
+            .with_subscriber(NoSubscriber::default())
+            .await
+            .map_err(|error| {
+                failure(
+                    error,
+                    if version.is_some() {
+                        "GetObjectVersion"
+                    } else {
+                        "GetObject"
+                    },
+                    recorded.is_some(),
+                )
+            })?;
+        let size = result
+            .content_length()
+            .and_then(|n| u64::try_from(n).ok())
+            .ok_or(VolumeError::InvalidResponse)?;
+        check_range(None, result.content_range(), size, size)?;
+        let state = state(result.e_tag(), result.version_id())?;
+        check_reference(recorded.map(|_| version.unwrap_or("null")), etag, &state)?;
+        if result.delete_marker() == Some(true) {
+            return Err(if recorded.is_some() {
+                VolumeError::Changed
+            } else {
+                VolumeError::NotFound
+            });
+        }
+        Ok((size, state))
+    }
+}
+
+#[async_trait]
+impl VolumeClient for S3Volume {
+    async fn stat(&self, path: &VolumePath) -> Result<Option<Node>, VolumeError> {
+        if path.as_str().is_empty() {
+            return Ok(Some(Node::Directory));
+        }
+        match self.open_at(path, None).await {
+            Ok(file) => Ok(Some(Node::File { size: file.size() })),
+            Err(VolumeError::NotFound) => {
+                if self.prefix.len() + path.as_str().len() >= 1024 {
+                    return Ok(None);
+                }
+                let found = futures::stream::try_unfold(Some(None), |after| async move {
+                    let Some(after) = after else { return Ok(None) };
+                    let page = self.list(path, after.as_ref()).await?;
+                    Ok::<_, VolumeError>(Some((!page.entries.is_empty(), page.after.map(Some))))
+                })
+                .try_any(futures::future::ready)
+                .await?;
+                Ok(found.then_some(Node::Directory))
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn list(
+        &self,
+        directory: &VolumePath,
+        after: Option<&Cursor>,
+    ) -> Result<Page, VolumeError> {
+        let prefix = if directory.as_str().is_empty() {
+            self.prefix.clone()
+        } else {
+            let key = self.object_key(directory)?;
+            full_key(1, &key)?;
+            format!("{key}/").into_boxed_str()
+        };
+        let cursor = after
+            .map(|cursor| {
+                serde_json::from_str::<ListCursor>(cursor.as_str())
+                    .map_err(|_| VolumeError::InvalidRequest)
+            })
+            .transpose()?;
+        if cursor
+            .as_ref()
+            .is_some_and(|cursor| cursor.directory != prefix || cursor.continuation.is_empty())
+        {
+            return Err(VolumeError::InvalidRequest);
+        }
+        let continuation = cursor.as_ref().map(|cursor| cursor.continuation.as_ref());
+        let result = self
+            .client
+            .list_objects_v2()
+            .bucket(self.bucket.as_ref())
+            .prefix(prefix.as_ref())
+            .set_continuation_token(continuation.map(str::to_owned))
+            .send()
+            .with_subscriber(NoSubscriber::default())
+            .await
+            .map_err(|error| failure(error, "ListBucket", false))?;
+        if result.encoding_type().is_some()
+            || !result.common_prefixes().is_empty()
+            || result
+                .prefix()
+                .is_some_and(|returned| returned != prefix.as_ref())
+        {
+            return Err(VolumeError::InvalidResponse);
+        }
+        let next = match (result.is_truncated(), result.next_continuation_token()) {
+            (Some(true), Some(next)) if !next.is_empty() && Some(next) != continuation => {
+                Some(next)
+            }
+            (Some(false), None) => None,
+            _ => return Err(VolumeError::InvalidResponse),
+        };
+        let previous_child = cursor
+            .as_ref()
+            .and_then(|cursor| cursor.last_child.as_ref());
+        let (entries, last_child) = result.contents().iter().try_fold(
+            (BTreeMap::new(), previous_child.cloned()),
+            |(mut entries, last_child), object| {
+                let key = object.key().ok_or(VolumeError::InvalidResponse)?;
+                let relative = key
+                    .strip_prefix(prefix.as_ref())
+                    .ok_or(VolumeError::InvalidResponse)?;
+                let size = object
+                    .size()
+                    .and_then(|size| u64::try_from(size).ok())
+                    .ok_or(VolumeError::InvalidResponse)?;
+                if (size == 0 && key.ends_with('/'))
+                    || full_key(0, key).is_err()
+                    || relative.is_empty()
+                    || VolumePath::new(relative).is_err()
+                {
+                    return Ok((entries, last_child));
+                }
+                let (child, node) = relative
+                    .split_once('/')
+                    .map_or((relative, Node::File { size }), |(child, _)| {
+                        (child, Node::Directory)
+                    });
+                let child = VolumePath::new(if directory.as_str().is_empty() {
+                    child.to_owned()
+                } else {
+                    format!("{}/{child}", directory.as_str())
+                })?;
+                if previous_child != Some(&child) {
+                    entries.entry(child.clone()).or_insert(node);
+                }
+                Ok::<_, VolumeError>((entries, Some(child)))
+            },
+        )?;
+        let after = next
+            .map(|next| {
+                serde_json::to_string(&ListCursor {
+                    directory: prefix,
+                    continuation: next.into(),
+                    last_child,
+                })
+                .map(Cursor::new)
+                .map_err(|_| VolumeError::InvalidResponse)
+            })
+            .transpose()?;
+        Ok(Page {
+            entries: entries
+                .into_iter()
+                .map(|(path, node)| Entry { path, node })
+                .collect(),
+            after,
+        })
+    }
+
+    async fn open(&self, path: &VolumePath) -> Result<VolumeFile, VolumeError> {
+        self.open_at(path, None).await
+    }
+}
+
+#[async_trait]
+impl VolumeRecovery for S3Volume {
+    async fn open_recorded(
+        &self,
+        path: &VolumePath,
+        recorded: &FileState,
+    ) -> Result<VolumeFile, VolumeError> {
+        self.open_at(path, Some(recorded)).await
+    }
+}
+
+struct S3FileReader {
+    client: aws_sdk_s3::Client,
+    bucket: Arc<str>,
+    key: Box<str>,
+    size: u64,
+}
+
+impl Debug for S3FileReader {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        // Untrusted endpoint metadata can reflect credentials in an object key.
+        f.write_str("S3FileReader([redacted])")
+    }
+}
+
+impl S3FileReader {
+    async fn get(
+        &self,
+        reference: &FileState,
+        range: Option<RangeInclusive<u64>>,
+    ) -> Result<ReadStream, VolumeError> {
+        let (etag, version) = reference.reference();
+        let result = self
+            .client
+            .get_object()
+            .bucket(self.bucket.as_ref())
+            .key(self.key.as_ref())
+            .set_version_id(version.map(str::to_owned))
+            .if_match(etag)
+            .set_range(
+                range
+                    .as_ref()
+                    .map(|range| format!("bytes={}-{}", range.start(), range.end())),
+            )
+            .send()
+            .with_subscriber(NoSubscriber::default())
+            .await
+            .map_err(|error| {
+                failure(
+                    error,
+                    if version.is_some() {
+                        "GetObjectVersion"
+                    } else {
+                        "GetObject"
+                    },
+                    true,
+                )
+            })?;
+        let length = result
+            .content_length()
+            .and_then(|n| u64::try_from(n).ok())
+            .ok_or(VolumeError::InvalidResponse)?;
+        let actual = state(result.e_tag(), result.version_id())?;
+        check_reference(Some(version.unwrap_or("null")), Some(etag), &actual)?;
+        check_range(range.as_ref(), result.content_range(), length, self.size)?;
+        Ok(Box::pin(futures::stream::try_unfold(
+            (result.body, length),
+            |(mut body, remaining)| async move {
+                let chunk = body
+                    .try_next()
+                    .with_subscriber(NoSubscriber::default())
+                    .await
+                    .map_err(|_| VolumeError::Unanswered)?;
+                match chunk {
+                    Some(chunk) => {
+                        let remaining = remaining
+                            .checked_sub(chunk.len() as u64)
+                            .ok_or(VolumeError::InvalidResponse)?;
+                        Ok(Some((chunk, (body, remaining))))
+                    }
+                    None if remaining == 0 => Ok(None),
+                    None => Err(VolumeError::Unanswered),
+                }
+            },
+        )))
+    }
+}
+
+#[async_trait]
+impl FileReader for S3FileReader {
+    async fn read(
+        &self,
+        reference: &FileState,
+        range: Range<u64>,
+    ) -> Result<ReadStream, VolumeError> {
+        self.get(reference, Some(range.start..=range.end - 1)).await
     }
 }
 
