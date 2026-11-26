@@ -402,7 +402,7 @@ export const RpcLocalConfigAgent = defineAgent({
   id: { name: z.string() },
   config: {
     foo: z.number(),
-    nested_a: z.boolean().optional(),
+    nested: z.object({ a: z.boolean(), b: z.array(z.number()) }).optional(),
   },
   methods: {
     echoLocalConfig: method({ input: {}, returns: z.string() }),
@@ -414,13 +414,12 @@ export const RpcLocalConfigAgentImpl = RpcLocalConfigAgent.implement({
   methods: {
     async echoLocalConfig() {
       const config = this.config;
-      // Override `foo`, and `nested.a` only when it is actually set (omitting an
-      // undefined leaf leaves the callee's manifest value in place).
-      const overrides: { foo: number; nested?: { a: boolean } } = {
+      // An omitted declaration leaves the callee's manifest value in place.
+      const overrides: { foo: number; nested?: { a: boolean; b: number[] } } = {
         foo: config.foo,
       };
-      if (config.nested_a !== undefined) {
-        overrides.nested = { a: config.nested_a };
+      if (config.nested !== undefined) {
+        overrides.nested = config.nested;
       }
       let client;
       try {

@@ -164,27 +164,42 @@ export type RemoteClient<
     : DurableRemoteMethodFor<Methods[K]>;
 } & (Mode extends 'ephemeral' ? unknown : RemoteAgentIdAccessor);
 
-type ConfigObjectShapeOf<S> = S extends { readonly shape: infer Shape }
-  ? Shape
-  : S extends { readonly entries: infer Shape }
+type ConfigObjectShapeOf<S> = unknown extends S
+  ? never
+  : S extends { readonly shape: infer Shape }
     ? Shape
-    : S extends { readonly fields: infer Shape }
+    : S extends { readonly entries: infer Shape }
       ? Shape
+      : S extends { readonly fields: infer Shape }
+        ? Shape
+        : S extends { unwrap(): infer Inner }
+          ? ConfigObjectShapeOf<Inner>
+          : S extends { readonly wrapped: infer Inner }
+            ? ConfigObjectShapeOf<Inner>
+            : never;
+
+type ConfigSecretFields<S> =
+  MarkerKindOf<S> extends 'secret'
+    ? S
+    : ConfigObjectShapeOf<S> extends infer Shape
+      ? Shape extends ConfigSpec
+        ? { [K in keyof Shape]: ConfigSecretFields<Shape[K]> }[keyof Shape]
+        : never
       : never;
 
 type ConfigOverrideField<S> =
   MarkerKindOf<S> extends 'secret'
     ? never
-    : [ConfigObjectShapeOf<S>] extends [never]
+    : [ConfigSecretFields<S>] extends [never]
       ? S extends StandardSchemaV1
         ? StandardSchemaV1.InferOutput<S>
         : never
       : ConfigOverrides<Extract<ConfigObjectShapeOf<S>, ConfigSpec>>;
 
-/** Typed, partial non-secret configuration values that `create` sets on the new agent. */
-export type ConfigOverrides<Config extends ConfigSpec> = {
-  readonly [K in keyof Config]?: ConfigOverrideField<Config[K]>;
-};
+/** Partial non-secret declarations; each static record value remains complete. */
+export type ConfigOverrides<Config extends ConfigSpec> = Config extends ConfigSpec
+  ? { readonly [K in keyof Config]?: ConfigOverrideField<Config[K]> }
+  : never;
 
 /** Options of `create`. */
 export interface RemoteCreateOptions<Config extends ConfigSpec = {}> extends RemoteClientOptions {

@@ -1,6 +1,6 @@
-import type { JsonValue } from './ref';
+import { SchemaRef, type JsonValue } from './ref';
 import { graphMayContainCapability, type SchemaCodec } from './codec';
-import { canonicalConfigName } from './config';
+import { canonicalConfigGraph, canonicalConfigName } from './config';
 
 export function collectConfigDefault(
   codec: SchemaCodec,
@@ -69,7 +69,11 @@ export function portableDefault(value: unknown): JsonValue {
 }
 
 /** Read a vendor's literal default without invoking an opaque accessor or callback. */
-export function nativeConfigDefault(owner: object, key: string): JsonValue | undefined {
+export function nativeConfigDefault(
+  owner: object,
+  key: string,
+  codec: SchemaCodec,
+): JsonValue | undefined {
   const descriptor = Object.getOwnPropertyDescriptor(owner, key);
   if (descriptor === undefined || ('value' in descriptor && descriptor.value === undefined))
     return undefined;
@@ -78,5 +82,6 @@ export function nativeConfigDefault(owner: object, key: string): JsonValue | und
       'Cannot extract an opaque native config default; use s.default(schema, JSON data)',
     );
   }
-  return portableDefault(descriptor.value);
+  const native = portableDefault(descriptor.value);
+  return new SchemaRef(canonicalConfigGraph(codec.graph)).unpackJson(codec.toValue(native));
 }

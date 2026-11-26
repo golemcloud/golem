@@ -192,9 +192,6 @@ const valibotWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
     const optionCodec: SchemaCodec = {
       graph: { defs: innerCodec.graph.defs, root },
       validateConfigContainer: validateContainer,
-      configDefault: context?.config
-        ? nativeConfigDefault(unwrapPipe(schema), 'default')
-        : undefined,
       optionKind: kind as 'optional' | 'nullable' | 'nullish',
       optionInner: innerCodec,
       toValue: (value) =>
@@ -204,13 +201,19 @@ const valibotWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
         return opt === undefined ? noneValue : innerCodec.fromValue(opt);
       },
     };
+    const codec = {
+      ...optionCodec,
+      configDefault: context?.config
+        ? nativeConfigDefault(unwrapPipe(schema), 'default', optionCodec)
+        : undefined,
+    };
     // An OPTIONAL object group: expose the inner object's per-field codecs (so the
     // config surface can descend it) and flag it optional (so descended leaves are
     // declared as `option<leaf>` with required-child presence). See zod.ts.
     if (kind !== 'nullable' && innerCodec.fields !== undefined) {
-      return { ...optionCodec, fields: innerCodec.fields, optionalGroup: true };
+      return { ...codec, fields: innerCodec.fields, optionalGroup: true };
     }
-    return optionCodec;
+    return codec;
   }
 
   switch (kind) {

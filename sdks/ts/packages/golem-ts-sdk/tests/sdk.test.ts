@@ -1263,7 +1263,7 @@ describe('RPC client', () => {
       id: {},
       config: {
         max_chars: s.u32(),
-        display_record: z.object({ display_name: z.string() }),
+        display_record: z.object({ display_name: z.string(), display_limit: s.u32() }),
         nested_group: z.object({ min_chars: s.u32(), api_key: s.secret(z.string()) }),
       },
       methods: {},
@@ -1274,7 +1274,7 @@ describe('RPC client', () => {
       {
         config: {
           nested_group: { min_chars: 0 },
-          display_record: { display_name: 'native record' },
+          display_record: { display_name: 'native record', display_limit: 13 },
           max_chars: 7,
         },
       },
@@ -1288,9 +1288,17 @@ describe('RPC client', () => {
       }),
     ).toEqual([
       { path: ['maxChars'], value: 7 },
-      { path: ['displayRecord'], value: { displayName: 'native record' } },
+      { path: ['displayRecord'], value: { displayName: 'native record', displayLimit: 13 } },
       { path: ['nestedGroup', 'minChars'], value: 0 },
     ]);
+    await expect(
+      def.client.create(
+        {},
+        {
+          config: { display_record: { display_name: 'incomplete' } } as never,
+        },
+      ),
+    ).rejects.toThrow();
     await expect(def.client.create({}, { config: { maxChars: 8 } as never })).rejects.toThrow(
       "Unknown config path 'maxChars'",
     );

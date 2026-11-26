@@ -243,6 +243,41 @@ describe('static config', () => {
     expect(compileConfig({ omitted: z.string().optional() })[0].defaultValue).toBeUndefined();
   });
 
+  it('projects native record defaults to canonical names, including nested union fields', () => {
+    const [declaration] = compileConfig({
+      settings: valibot.optional(
+        valibot.object({
+          max_chars: valibot.number(),
+          delivery: valibot.variant('delivery_kind', [
+            valibot.object({
+              delivery_kind: valibot.literal('mail'),
+              mail_address: valibot.string(),
+            }),
+            valibot.object({
+              delivery_kind: valibot.literal('queue'),
+              queue_name: valibot.string(),
+            }),
+          ]),
+        }),
+        { max_chars: 13, delivery: { delivery_kind: 'queue', queue_name: 'work' } },
+      ),
+    });
+    expect(new SchemaRef(declaration.graph).unpackJson(declaration.defaultValue!)).toEqual({
+      maxChars: 13,
+      delivery: { deliveryKind: 'queue', queueName: 'work' },
+    });
+    expect(declaration.codec.fromValue(declaration.defaultValue!)).toEqual({
+      max_chars: 13,
+      delivery: { delivery_kind: 'queue', queue_name: 'work' },
+    });
+    const [ark] = compileConfig({
+      settings: type({ limits: { max_chars: 'number = 13' } }),
+    });
+    expect(new SchemaRef(ark.graph).unpackJson(ark.defaultValue!)).toEqual({
+      limits: { maxChars: 13 },
+    });
+  });
+
   it('never calls opaque factories or getters, and rejects unsupported defaults clearly', () => {
     const callback = vi.fn(() => 'unsafe');
     const schemas = [
@@ -407,6 +442,26 @@ describe('static config', () => {
         service: s.default(z.object({ apiKey: s.secret(z.string()) }), { apiKey: 'secret' }),
       }),
     ).toThrow(/managed fields/);
+  });
+
+  it('validates defaults below optional managed groups', () => {
+    for (const value of ['x', 'valid']) {
+      const compile = () =>
+        compileConfig({
+          service: z
+            .object({
+              label: s.default(z.string().min(3), value),
+              apiKey: s.secret(z.string()),
+            })
+            .optional(),
+        });
+      if (value === 'x') {
+        expect(compile).toThrow(/Invalid static config default/);
+      } else {
+        const [label] = compile();
+        expect(new SchemaRef(label.graph).unpackJson(label.defaultValue!)).toBe('valid');
+      }
+    }
   });
 
   it('reads the host value at the canonical path with no SDK-local default fallback', () => {

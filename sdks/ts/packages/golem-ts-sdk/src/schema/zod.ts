@@ -72,7 +72,6 @@ function numberRestrictions(schema: any): NumericRestrictions | undefined {
   };
 }
 import { registerSchemaWalker } from './adapter';
-import { nativeConfigDefault } from './configDefault';
 import { buildConfigUnionCodec } from './union';
 
 interface NormalizedDef {
@@ -251,8 +250,6 @@ const zodWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
   } = normalize(schema);
 
   if (context?.config && ['default', 'prefault', 'catch', 'effects', 'pipe'].includes(kind)) {
-    if (kind === 'default')
-      nativeConfigDefault((schema as any)._zod?.def ?? (schema as any)._def, 'defaultValue');
     throw new TypeError(
       `Cannot extract Zod ${kind} as static config; use s.default(schema, JSON data)`,
     );

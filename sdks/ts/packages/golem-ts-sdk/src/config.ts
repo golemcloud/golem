@@ -110,6 +110,7 @@ function liftCodecToOption(inner: SchemaCodec): SchemaCodec {
   return {
     graph: { defs: inner.graph.defs, root: t.option(inner.graph.root) },
     optionKind: 'optional',
+    optionInner: inner,
     toValue: (value) =>
       value === undefined ? v.option(undefined) : v.option(inner.toValue(value)),
     fromValue: (sv) => {

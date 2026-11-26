@@ -59,31 +59,12 @@ async fn agent_with_only_component_agent_config(
         .name(ctx.test_component_name())
         .with_agent_config(
             "LocalConfigAgent",
-            vec![
-                AgentConfigEntryDto {
-                    path: vec!["foo".to_string()],
-                    value: json!(1).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["bar".to_string()],
-                    value: json!("bar").into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "a".to_string()],
-                    value: json!(true).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "b".to_string()],
-                    value: json!([1, 2]).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec![
-                        ctx.case_config_path_segment("aliased-nested"),
-                        "c".to_string(),
-                    ],
-                    value: json!(3).into(),
-                },
-            ],
+            ctx.local_config(json!({
+                "foo": 1,
+                "bar": "bar",
+                "nested": { "a": true, "b": [1, 2] },
+                "aliasedNested": { "c": 3 }
+            })),
         )
         .store()
         .await?;
@@ -145,31 +126,12 @@ async fn agent_with_only_worker_agent_config(
         &component.id,
         agent_id.clone(),
         HashMap::new(),
-        vec![
-            AgentConfigEntryDto {
-                path: vec!["foo".to_string()],
-                value: json!(1).into(),
-            },
-            AgentConfigEntryDto {
-                path: vec!["bar".to_string()],
-                value: json!("bar").into(),
-            },
-            AgentConfigEntryDto {
-                path: vec!["nested".to_string(), "a".to_string()],
-                value: json!(true).into(),
-            },
-            AgentConfigEntryDto {
-                path: vec!["nested".to_string(), "b".to_string()],
-                value: json!([1, 2]).into(),
-            },
-            AgentConfigEntryDto {
-                path: vec![
-                    ctx.case_config_path_segment("aliased-nested"),
-                    "c".to_string(),
-                ],
-                value: json!(3).into(),
-            },
-        ],
+        ctx.local_config(json!({
+            "foo": 1,
+            "bar": "bar",
+            "nested": { "a": true, "b": [1, 2] },
+            "aliasedNested": { "c": 3 }
+        })),
     )
     .await?;
 
@@ -240,27 +202,11 @@ async fn agent_with_mixed_agent_config(
         &component.id,
         agent_id.clone(),
         HashMap::new(),
-        vec![
-            AgentConfigEntryDto {
-                path: vec!["foo".to_string()],
-                value: json!(2).into(),
-            },
-            AgentConfigEntryDto {
-                path: vec!["nested".to_string(), "a".to_string()],
-                value: json!(true).into(),
-            },
-            AgentConfigEntryDto {
-                path: vec!["nested".to_string(), "b".to_string()],
-                value: json!([1, 2]).into(),
-            },
-            AgentConfigEntryDto {
-                path: vec![
-                    ctx.case_config_path_segment("aliased-nested"),
-                    "c".to_string(),
-                ],
-                value: json!(3).into(),
-            },
-        ],
+        ctx.local_config(json!({
+            "foo": 2,
+            "nested": { "a": true, "b": [1, 2] },
+            "aliasedNested": { "c": 3 }
+        })),
     )
     .await?;
 
@@ -333,27 +279,11 @@ async fn agent_with_mixed_agent_config_update(
             &component.id,
             agent_id.clone(),
             HashMap::new(),
-            vec![
-                AgentConfigEntryDto {
-                    path: vec!["foo".to_string()],
-                    value: json!(2).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "a".to_string()],
-                    value: json!(true).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "b".to_string()],
-                    value: json!([1, 2]).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec![
-                        ctx.case_config_path_segment("aliased-nested"),
-                        "c".to_string(),
-                    ],
-                    value: json!(3).into(),
-                },
-            ],
+            ctx.local_config(json!({
+                "foo": 2,
+                "nested": { "a": true, "b": [1, 2] },
+                "aliasedNested": { "c": 3 }
+            })),
         )
         .await?;
 
@@ -443,27 +373,11 @@ async fn missing_agent_config_key(
             &component.id,
             agent_id.clone(),
             HashMap::new(),
-            vec![
-                AgentConfigEntryDto {
-                    path: vec!["bar".to_string()],
-                    value: json!("bar").into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "a".to_string()],
-                    value: json!(true).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "b".to_string()],
-                    value: json!([1, 2]).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec![
-                        ctx.case_config_path_segment("aliased-nested"),
-                        "c".to_string(),
-                    ],
-                    value: json!(3).into(),
-                },
-            ],
+            ctx.local_config(json!({
+                "bar": "bar",
+                "nested": { "a": true, "b": [1, 2] },
+                "aliasedNested": { "c": 3 }
+            })),
         )
         .await?;
 
@@ -498,31 +412,12 @@ async fn mistyped_agent_config_key(
             &component.id,
             agent_id.clone(),
             HashMap::new(),
-            vec![
-                AgentConfigEntryDto {
-                    path: vec!["foo".to_string()],
-                    value: json!("foo").into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["bar".to_string()],
-                    value: json!("bar").into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "a".to_string()],
-                    value: json!(true).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "b".to_string()],
-                    value: json!([1, 2]).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec![
-                        ctx.case_config_path_segment("aliased-nested"),
-                        "c".to_string(),
-                    ],
-                    value: json!(3).into(),
-                },
-            ],
+            ctx.local_config(json!({
+                "foo": "foo",
+                "bar": "bar",
+                "nested": { "a": true, "b": [1, 2] },
+                "aliasedNested": { "c": 3 }
+            })),
         )
         .await?;
 
@@ -555,24 +450,12 @@ async fn optional_agent_config_does_not_need_to_be_provided(
         &component.id,
         agent_id.clone(),
         HashMap::new(),
-        vec![
-            AgentConfigEntryDto {
-                path: vec!["foo".to_string()],
-                value: json!(1).into(),
-            },
-            AgentConfigEntryDto {
-                path: vec!["bar".to_string()],
-                value: json!("bar").into(),
-            },
-            AgentConfigEntryDto {
-                path: vec!["nested".to_string(), "a".to_string()],
-                value: json!(true).into(),
-            },
-            AgentConfigEntryDto {
-                path: vec!["nested".to_string(), "b".to_string()],
-                value: json!([1, 2]).into(),
-            },
-        ],
+        ctx.local_config(json!({
+            "foo": 1,
+            "bar": "bar",
+            "nested": { "a": true, "b": [1, 2] },
+            "aliasedNested": {}
+        })),
     )
     .await?;
 

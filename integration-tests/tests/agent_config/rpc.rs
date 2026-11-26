@@ -54,31 +54,12 @@ async fn rpc_provided_config_overrides_defaults(
         .name(ctx.test_component_name())
         .with_agent_config(
             "LocalConfigAgent",
-            vec![
-                AgentConfigEntryDto {
-                    path: vec!["foo".to_string()],
-                    value: json!(1).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["bar".to_string()],
-                    value: json!("bar").into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "a".to_string()],
-                    value: json!(true).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "b".to_string()],
-                    value: json!([1, 2]).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec![
-                        ctx.case_config_path_segment("aliased-nested"),
-                        "c".to_string(),
-                    ],
-                    value: json!(3).into(),
-                },
-            ],
+            ctx.local_config(json!({
+                "foo": 1,
+                "bar": "bar",
+                "nested": { "a": true, "b": [1, 2] },
+                "aliasedNested": { "c": 3 }
+            })),
         )
         .with_agent_config(
             "RpcLocalConfigAgent",
@@ -141,27 +122,11 @@ async fn rpc_can_start_agent_by_providing_config_missing_in_defaults(
         .name(ctx.test_component_name())
         .with_agent_config(
             "LocalConfigAgent",
-            vec![
-                AgentConfigEntryDto {
-                    path: vec!["bar".to_string()],
-                    value: json!("bar").into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "a".to_string()],
-                    value: json!(true).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "b".to_string()],
-                    value: json!([1, 2]).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec![
-                        ctx.case_config_path_segment("aliased-nested"),
-                        "c".to_string(),
-                    ],
-                    value: json!(3).into(),
-                },
-            ],
+            ctx.local_config(json!({
+                "bar": "bar",
+                "nested": { "a": true, "b": [1, 2] },
+                "aliasedNested": { "c": 3 }
+            })),
         )
         .with_agent_config(
             "RpcLocalConfigAgent",
@@ -224,31 +189,12 @@ async fn rpc_does_not_override_values_of_existing_agent(
         .name(ctx.test_component_name())
         .with_agent_config(
             "LocalConfigAgent",
-            vec![
-                AgentConfigEntryDto {
-                    path: vec!["foo".to_string()],
-                    value: json!(1).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["bar".to_string()],
-                    value: json!("bar").into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "a".to_string()],
-                    value: json!(true).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec!["nested".to_string(), "b".to_string()],
-                    value: json!([1, 2]).into(),
-                },
-                AgentConfigEntryDto {
-                    path: vec![
-                        ctx.case_config_path_segment("aliased-nested"),
-                        "c".to_string(),
-                    ],
-                    value: json!(3).into(),
-                },
-            ],
+            ctx.local_config(json!({
+                "foo": 1,
+                "bar": "bar",
+                "nested": { "a": true, "b": [1, 2] },
+                "aliasedNested": { "c": 3 }
+            })),
         )
         .with_agent_config(
             "RpcLocalConfigAgent",

@@ -20,6 +20,7 @@ import { defineAgent } from '../src/defineAgent';
 import { method } from '../src/method';
 import { s } from '../src/schema/markers';
 import { Secret } from '../src/secret';
+import type { ConfigOverrides } from '../src/client';
 
 // ---------------------------------------------------------------------------
 // Typed config: local field → decoded value; secret field → Secret<Inner>
@@ -203,3 +204,25 @@ void staticDef.implement({
     },
   },
 });
+
+const overrideConfig = {
+  settings: z.object({ label: z.string(), count: s.u32() }),
+  service: z.object({ timeout: z.number(), apiKey: s.secret(z.string()) }),
+  optionalService: z.object({ timeout: z.number(), apiKey: s.secret(z.string()) }).optional(),
+};
+const wholeRecord: ConfigOverrides<typeof overrideConfig> = {
+  settings: { label: 'whole', count: 7 },
+  service: { timeout: 13 },
+  optionalService: { timeout: 19 },
+};
+void wholeRecord;
+const partialRecord: ConfigOverrides<typeof overrideConfig> = {
+  // @ts-expect-error a static record is one declaration, not a partial namespace
+  settings: { label: 'incomplete' },
+};
+void partialRecord;
+const secretOverride: ConfigOverrides<typeof overrideConfig> = {
+  // @ts-expect-error a namespace cannot supply a managed Secret
+  service: { apiKey: 'secret' },
+};
+void secretOverride;

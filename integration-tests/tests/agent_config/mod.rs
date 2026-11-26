@@ -19,7 +19,9 @@ mod ts_optional_group_agent_config;
 
 use crate::Tracing;
 use convert_case::ccase;
+use golem_common::model::agent::AgentConfigEntryDto;
 use golem_test_framework::config::EnvBasedTestDependencies;
+use serde_json::Value;
 use std::sync::Arc;
 use test_r::{inherit_test_dep, test_dep};
 
@@ -32,6 +34,8 @@ trait TestContext: std::fmt::Debug + Send + Sync {
     fn agent_method_name(&self) -> &'static str;
 
     fn case_config_path_segment(&self, segment: &str) -> String;
+
+    fn local_config(&self, value: Value) -> Vec<AgentConfigEntryDto>;
 }
 
 #[test_dep(scope = PerWorker, tagged_as = "ts")]
@@ -51,6 +55,17 @@ fn test_context_ts() -> Arc<dyn TestContext> {
         }
         fn case_config_path_segment(&self, segment: &str) -> String {
             ccase!(kebab -> camel, segment)
+        }
+        fn local_config(&self, value: Value) -> Vec<AgentConfigEntryDto> {
+            value
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(name, value)| AgentConfigEntryDto {
+                    path: vec![name.clone()],
+                    value: value.clone().into(),
+                })
+                .collect()
         }
     }
 
@@ -74,6 +89,29 @@ fn test_context_rust() -> Arc<dyn TestContext> {
         }
         fn case_config_path_segment(&self, segment: &str) -> String {
             ccase!(kebab -> snake, segment)
+        }
+        fn local_config(&self, value: Value) -> Vec<AgentConfigEntryDto> {
+            value
+                .as_object()
+                .unwrap()
+                .iter()
+                .flat_map(|(name, value)| {
+                    let name = ccase!(camel -> snake, name);
+                    match value.as_object() {
+                        Some(fields) => fields
+                            .iter()
+                            .map(|(field, value)| AgentConfigEntryDto {
+                                path: vec![name.clone(), field.clone()],
+                                value: value.clone().into(),
+                            })
+                            .collect(),
+                        None => vec![AgentConfigEntryDto {
+                            path: vec![name],
+                            value: value.clone().into(),
+                        }],
+                    }
+                })
+                .collect()
         }
     }
 

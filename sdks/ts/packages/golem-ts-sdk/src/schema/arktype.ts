@@ -354,14 +354,17 @@ function walkStructure(node: Node, reg: RecursionRegistry): SchemaCodec {
       codec: walkNode(nodeOf(r.value), reg),
       optional: false,
     })),
-    ...optional.map((o) => ({
-      name: o.key as string,
-      codec: {
-        ...optionCodec(walkNode(nodeOf(o.value), reg)),
-        configDefault: reg.config ? nativeConfigDefault(o.inner, 'default') : undefined,
-      },
-      optional: true,
-    })),
+    ...optional.map((o) => {
+      const codec = optionCodec(walkNode(nodeOf(o.value), reg));
+      return {
+        name: o.key as string,
+        codec: {
+          ...codec,
+          configDefault: reg.config ? nativeConfigDefault(o.inner, 'default', codec) : undefined,
+        },
+        optional: true,
+      };
+    }),
   ];
   const fields: NamedFieldType[] = fieldCodecs.map((f) => field(f.name, f.codec.graph.root));
   const defs = mergeGraphDefs(fieldCodecs.map((f) => f.codec.graph));
