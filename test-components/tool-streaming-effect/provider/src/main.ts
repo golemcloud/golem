@@ -1,6 +1,5 @@
 import { Effect, Schema, Stream } from "effect"
 import {
-  AgentId,
   type InvocationContext,
   Quota,
   Secrets,
@@ -70,7 +69,7 @@ const ChunkMStreamEvidence = Schema.Struct({
 
 const ChunkMRejected = Schema.Struct({ reason: Schema.String })
 
-const selfAgentIdText = Effect.map(SelfAgentId.SelfAgentId, AgentId.format) as Effect.Effect<string>
+const selfAgentIdText = Effect.map(SelfAgentId.SelfAgentId, (id): string => id) as Effect.Effect<string>
 
 /** Both roles of the caller: "<original>|<immediate>", each "<kind> <ref text>" or "anonymous". */
 const callerLabel = (context: { readonly caller: InvocationContext.Caller }): string =>

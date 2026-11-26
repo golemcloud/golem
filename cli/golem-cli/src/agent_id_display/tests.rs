@@ -358,11 +358,11 @@ fn renders_anonymous_recursive_type() {
 
 #[test]
 fn round_trip_rich_constructors() {
-    use chrono::DateTime;
     use golem_common::schema::schema_type::{
         PathDirection, PathKind, PathSpec, QuantityValue, UrlRestrictions,
     };
     use golem_common::schema::schema_value::DurationValuePayload;
+    use jiff::Timestamp;
 
     round_trip_all(
         SchemaValue::Path {
@@ -387,7 +387,7 @@ fn round_trip_rich_constructors() {
     );
     round_trip_all(
         SchemaValue::Datetime {
-            value: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            value: Timestamp::new(1_700_000_000, 0).unwrap(),
         },
         SchemaType::datetime(),
     );
@@ -530,8 +530,8 @@ fn ts_native_quantity_and_duration_literals() {
 
 #[test]
 fn scala_native_datetime_literal() {
-    use chrono::DateTime;
-    let expected_millis = DateTime::from_timestamp_millis(1_700_000_000_000).unwrap();
+    use jiff::Timestamp;
+    let expected_millis = Timestamp::from_millisecond(1_700_000_000_000).unwrap();
     assert_eq!(
         parse_native(
             "Datetime.fromEpochMillis(1700000000000)",
@@ -542,7 +542,7 @@ fn scala_native_datetime_literal() {
             value: expected_millis,
         },
     );
-    let expected_secs = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let expected_secs = Timestamp::new(1_700_000_000, 0).unwrap();
     assert_eq!(
         parse_native(
             "Datetime.fromEpochSeconds(1700000000)",
@@ -557,8 +557,8 @@ fn scala_native_datetime_literal() {
 
 #[test]
 fn moonbit_native_datetime_literal() {
-    use chrono::DateTime;
-    let expected = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    use jiff::Timestamp;
+    let expected = Timestamp::new(1_700_000_000, 0).unwrap();
     assert_eq!(
         parse_native(
             "Datetime::{ seconds: 1700000000, nanoseconds: 0 }",
@@ -637,7 +637,7 @@ fn rust_native_duration_rejects_overflow() {
 
 #[test]
 fn scala_native_datetime_fractional_epochs() {
-    use chrono::DateTime;
+    use jiff::Timestamp;
     // `fromEpochSeconds`/`fromEpochMillis` take a Scala `Double`: fractional
     // arguments keep sub-unit precision instead of being truncated.
     assert_eq!(
@@ -647,7 +647,7 @@ fn scala_native_datetime_fractional_epochs() {
             SourceLanguage::Scala
         ),
         SchemaValue::Datetime {
-            value: DateTime::from_timestamp(1, 500_000_000).unwrap(),
+            value: Timestamp::new(1, 500_000_000).unwrap(),
         },
     );
     assert_eq!(
@@ -657,20 +657,20 @@ fn scala_native_datetime_fractional_epochs() {
             SourceLanguage::Scala
         ),
         SchemaValue::Datetime {
-            value: DateTime::from_timestamp(1, 234_500_000).unwrap(),
+            value: Timestamp::new(1, 234_500_000).unwrap(),
         },
     );
     // Far-future fractional epoch (year 9999): the whole-value epoch
     // nanoseconds would overflow i64, but seconds-first splitting keeps it
-    // inside chrono's range.
+    // inside jiff's range.
     assert_eq!(
         parse_native(
-            "Datetime.fromEpochMillis(253402300799999.5)",
+            "Datetime.fromEpochMillis(253402128000999.5)",
             SchemaType::datetime(),
             SourceLanguage::Scala
         ),
         SchemaValue::Datetime {
-            value: DateTime::from_timestamp(253_402_300_799, 999_500_000).unwrap(),
+            value: Timestamp::new(253_402_128_000, 999_500_000).unwrap(),
         },
     );
 }
@@ -692,8 +692,8 @@ fn scala_native_datetime_rejects_non_finite() {
 
 #[test]
 fn moonbit_native_datetime_qualified_and_defaults() {
-    use chrono::DateTime;
-    let expected = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    use jiff::Timestamp;
+    let expected = Timestamp::new(1_700_000_000, 0).unwrap();
     // The idiomatic re-exported `@wallClock.Datetime` qualifier is accepted.
     assert_eq!(
         parse_native(
@@ -716,7 +716,7 @@ fn moonbit_native_datetime_qualified_and_defaults() {
 
 #[test]
 fn moonbit_native_datetime_nested_in_list() {
-    use chrono::DateTime;
+    use jiff::Timestamp;
     // A qualified literal must also lex inside a nested position where the
     // dispatcher peeks the leading `@` before choosing a parser.
     assert_eq!(
@@ -728,10 +728,10 @@ fn moonbit_native_datetime_nested_in_list() {
         SchemaValue::List {
             elements: vec![
                 SchemaValue::Datetime {
-                    value: DateTime::from_timestamp(1, 0).unwrap(),
+                    value: Timestamp::new(1, 0).unwrap(),
                 },
                 SchemaValue::Datetime {
-                    value: DateTime::from_timestamp(2, 0).unwrap(),
+                    value: Timestamp::new(2, 0).unwrap(),
                 },
             ],
         },
@@ -742,15 +742,17 @@ fn moonbit_native_datetime_nested_in_list() {
 fn moonbit_native_datetime_rejects_out_of_range_nanos() {
     let dt = SchemaType::datetime();
     let graph = SchemaGraph::anonymous(dt.clone());
-    assert!(
-        parse_value_for_language(
-            "Datetime::{ seconds: 1, nanoseconds: 1000000000 }",
-            &graph,
-            &dt,
-            &SourceLanguage::MoonBit
-        )
-        .is_err()
-    );
+    for nanos in [1_000_000_000u32, 2_147_483_648, u32::MAX] {
+        assert!(
+            parse_value_for_language(
+                &format!("Datetime::{{ seconds: 1, nanoseconds: {nanos} }}"),
+                &graph,
+                &dt,
+                &SourceLanguage::MoonBit
+            )
+            .is_err()
+        );
+    }
 }
 
 #[test]
@@ -771,7 +773,7 @@ fn capability_values_render_as_redacted_in_every_language() {
         secret_id: uuid::Uuid::nil(),
         config_key: Some(vec!["shhh-do-not-log".to_string()]),
         version: 0,
-        resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        resolved_at: jiff::Timestamp::UNIX_EPOCH,
         category: None,
     });
     let secret_graph = SchemaGraph::anonymous(secret_ty.clone());
@@ -784,7 +786,7 @@ fn capability_values_render_as_redacted_in_every_language() {
         resource_name: "gpu-quota".to_string(),
         expected_use: 1,
         last_credit: 0,
-        last_credit_at: chrono::Utc::now(),
+        last_credit_at: jiff::Timestamp::now(),
     });
     let quota_graph = SchemaGraph::anonymous(quota_ty.clone());
 

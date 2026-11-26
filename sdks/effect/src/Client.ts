@@ -325,7 +325,7 @@ const witAgentId = (id: AgentId) =>
     try: () => agentIdToWit(id),
     catch: (cause): RemoteCallError => ({
       _tag: "InvalidUuidError",
-      value: String(id?.uuid),
+      value: String(id),
       reason: String(cause),
     }),
   })
@@ -345,7 +345,7 @@ export const registeredTypeOf = (id: AgentId) =>
     if (registered === undefined)
       return yield* Effect.fail<RemoteCallError>({
         _tag: "RpcCallError",
-        cause: { tag: "not-found", val: `no deployed agent type has agent ID ${id.uuid}` },
+        cause: { tag: "not-found", val: `no deployed agent type has agent ID ${id}` },
       })
     return { raw, registered }
   })
@@ -524,7 +524,7 @@ const bindingForDefinition = <Methods extends Record<string, AnyMethodSpec>>(def
       if (definition.mode === "ephemeral")
         return yield* Effect.fail(
           new ClientBindingError(
-            `Cannot bind agent ID '${id.uuid}' to ephemeral agent type '${definition.name}'; use upsert(...)`,
+            `Cannot bind agent ID '${id}' to ephemeral agent type '${definition.name}'; use upsert(...)`,
           ),
         )
       let typeName = definition.name
@@ -534,7 +534,7 @@ const bindingForDefinition = <Methods extends Record<string, AnyMethodSpec>>(def
         if (resolved.registered.agentType.mode === "ephemeral")
           return yield* Effect.fail(
             new ClientBindingError(
-              `Cannot bind agent ID '${id.uuid}' to ephemeral agent type '${resolved.registered.agentType.typeName}'`,
+              `Cannot bind agent ID '${id}' to ephemeral agent type '${resolved.registered.agentType.typeName}'`,
             ),
           )
         typeName = resolved.registered.agentType.typeName

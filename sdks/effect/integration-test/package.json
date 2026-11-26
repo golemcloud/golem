@@ -3,6 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "typecheck": "tsc -p components/agents/tsconfig.json && tsc -p components/tool-caller/tsconfig.json && tsc -p components/tool-provider/tsconfig.json && tsc -p components/tool-middleware/tsconfig.json",
     "infra:up": "docker compose -f test-infra/compose.yaml up -d",
     "infra:down": "docker compose -f test-infra/compose.yaml down",
     "infra:logs": "docker compose -f test-infra/compose.yaml logs -f postgres",

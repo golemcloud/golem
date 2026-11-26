@@ -709,7 +709,7 @@ impl<'r, 'a> Walker<'r, 'a> {
                 self,
                 ScalarKind::Datetime,
                 "datetime",
-                datetime.to_rfc3339().into(),
+                datetime.to_string().into(),
             ),
             SchemaValue::Duration(duration) => scalar(
                 self,

@@ -21,12 +21,20 @@ use crate::fs;
 use crate::log::LogColorize;
 use crate::model::app::app_builder::{build_application, build_application_preload};
 use crate::model::app_raw;
+use crate::model::cascade::error::StoreGetValueError;
+use crate::model::cascade::layer::Layer;
+use crate::model::cascade::property::Property;
 use crate::model::cascade::property::json::JsonProperty;
 use crate::model::cascade::property::map::{MapMergeMode, MapProperty};
 use crate::model::cascade::property::optional::{OptionalProperty, OptionalPropertyTraceElem};
 use crate::model::cascade::property::tool_bindings::{ToolBindingState, ToolBindingsProperty};
 use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
+use crate::model::cascade::store::Store;
 use crate::model::cli_output::StructuredOutput;
+use crate::model::config::resolver::{ConfigFieldPlan, ConfigLayer, ConfigSchemaResolution};
+use crate::model::config::{
+    CONFIG_FIELD, CONFIG_SCHEMA_FIELD, PRESETS_FIELD, manifest_property_origin,
+};
 use crate::model::language::GuestLanguage;
 use crate::model::repl::ReplLanguage;
 use crate::model::template_render::TemplateRender;
@@ -36,10 +44,6 @@ use crate::model::tool_deployment::{
 };
 use crate::validation::{ValidatedResult, ValidationBuilder};
 use anyhow::{Context, anyhow};
-use golem_common::cascade::error::StoreGetValueError;
-use golem_common::cascade::layer::Layer;
-use golem_common::cascade::property::Property;
-use golem_common::cascade::store::Store;
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentName};
@@ -52,9 +56,7 @@ use golem_common::model::tool_middleware::{ToolMiddlewareInstallation, ToolMiddl
 use golem_common::model::validate_lower_kebab_case_identifier;
 use golem_common::schema::AgentTypeSchema;
 use golem_common::schema::ComponentConfigSchema;
-use golem_common::schema::config::{
-    ConfigCatalogSources, ConfigError, ConfigFieldPlan, ConfigLayer, ConfigOrigin, ConfigSchema,
-};
+use golem_common::schema::config::{ConfigCatalogSources, ConfigError, ConfigOrigin, ConfigSchema};
 use golem_common::schema::tool::Tool;
 use heck::{
     ToKebabCase, ToLowerCamelCase, ToPascalCase, ToShoutyKebabCase, ToShoutySnakeCase, ToSnakeCase,
@@ -1712,11 +1714,11 @@ impl Application {
                     .map(|tool| &tool.declaration)
             })
             .with_context(|| format!("Tool '{}' is not declared", tool_name))?;
-        let mut config_path = vec!["tools".to_owned()];
+        let mut source_path = vec!["tools".to_owned()];
         if declaration_override.is_some() {
-            config_path.push("middleware".into());
+            source_path.push("middleware".into());
         }
-        config_path.push(tool_name.to_string());
+        source_path.push(tool_name.to_string());
         let mut store = Store::new();
 
         let (mut latest_parent, template_apply_context) = match component_name {
@@ -1804,7 +1806,7 @@ impl Application {
                 properties: ToolLayerPropertiesKind::Common(Box::new(ToolLayerInput::from_raw(
                     declaration.value.tool_layer_properties(),
                     &declaration.source,
-                    &config_path,
+                    &source_path,
                 ))),
             })
             .map_err(|error| anyhow!(error.to_string()))?;
@@ -1822,7 +1824,7 @@ impl Application {
                         presets: ToolLayerInput::from_raw_presets(
                             presets.env_presets,
                             &declaration.source,
-                            &config_path,
+                            &source_path,
                             APP_ENV_PRESET_PREFIX,
                         ),
                         default_preset: EMPTY_STR.to_string(),
@@ -1841,7 +1843,7 @@ impl Application {
                         presets: ToolLayerInput::from_raw_presets(
                             presets.custom_presets,
                             &declaration.source,
-                            &config_path,
+                            &source_path,
                             "",
                         ),
                         default_preset,
@@ -2720,25 +2722,23 @@ impl Layer for ComponentLayer {
                 selection,
                 properties.config_schema.value().clone(),
             );
-            if properties.config_schema.value().is_some() {
-                let mut path = vec![
-                    if id.is_template() {
-                        "componentTemplates"
-                    } else {
-                        "components"
-                    }
-                    .into(),
-                    id.name().to_owned(),
-                ];
-                if let Some(preset) = &preset {
-                    path.extend(["presets".into(), preset.clone()]);
+            let owner_path = [
+                if id.is_template() {
+                    "componentTemplates"
+                } else {
+                    "components"
                 }
-                path.push("configSchema".into());
-                value.config_schema_origin = Some(ConfigOrigin {
-                    file: self.source.clone(),
-                    path,
-                    layer: id.to_string(),
-                });
+                .into(),
+                id.name().to_owned(),
+            ];
+            if properties.config_schema.value().is_some() {
+                value.config_schema_origin = Some(manifest_property_origin(
+                    &self.source,
+                    &owner_path,
+                    preset.as_deref(),
+                    CONFIG_SCHEMA_FIELD,
+                    id,
+                ));
             }
 
             value.node_http_routers.apply_layer(
@@ -2747,25 +2747,14 @@ impl Layer for ComponentLayer {
                 properties.node_http_routers.value().clone(),
             );
             if let Some(config) = properties.config.value() {
-                let mut path = vec![
-                    if id.is_template() {
-                        "componentTemplates"
-                    } else {
-                        "components"
-                    }
-                    .into(),
-                    id.name().to_owned(),
-                ];
-                if let Some(preset) = &preset {
-                    path.extend(["presets".into(), preset.clone()]);
-                }
-                path.push("config".into());
                 value.config_layers.push(ConfigLayer {
-                    origin: ConfigOrigin {
-                        file: self.source.clone(),
-                        path,
-                        layer: id.to_string(),
-                    },
+                    origin: manifest_property_origin(
+                        &self.source,
+                        &owner_path,
+                        preset.as_deref(),
+                        CONFIG_FIELD,
+                        id,
+                    ),
                     value: config.clone(),
                 });
             }
@@ -3088,12 +3077,14 @@ pub struct ComponentLayerProperties {
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
     pub config_schema: OptionalProperty<ComponentLayer, ComponentConfigSchema>,
+    // Resolver bookkeeping; field inspection reports the effective origins.
     #[serde(skip)]
     pub config_schema_origin: Option<ConfigOrigin>,
     pub node_http_routers:
         OptionalProperty<ComponentLayer, IndexMap<String, app_raw::NodeHttpRouter>>,
     #[serde(skip)]
     node_http_routers_origin: Option<(PathBuf, ComponentLayerId, Option<String>)>,
+    // The schema-aware resolver consumes configInputs, not this alternate merged view.
     #[serde(skip)]
     pub config: JsonProperty<ComponentLayer>,
     #[serde(rename = "configInputs")]
@@ -3327,11 +3318,7 @@ impl ToolLayerInput {
             .config
             .iter()
             .map(|value| ConfigLayer {
-                origin: ConfigOrigin {
-                    file: source.to_path_buf(),
-                    path: path.iter().cloned().chain(["config".into()]).collect(),
-                    layer: String::new(),
-                },
+                origin: manifest_property_origin(source, path, None, CONFIG_FIELD, &""),
                 value: value.clone(),
             })
             .collect();
@@ -3352,7 +3339,7 @@ impl ToolLayerInput {
             .into_iter()
             .map(|(name, properties)| {
                 let mut path = path.to_vec();
-                path.extend(["presets".into(), format!("{preset_prefix}{name}")]);
+                path.extend([PRESETS_FIELD.into(), format!("{preset_prefix}{name}")]);
                 let input = Self::from_raw(properties, source, &path);
                 (name, input)
             })
@@ -3779,17 +3766,14 @@ impl Layer for AgentLayer {
             | AgentLayerId::AgentCustomPresets(name) = id
                 && let Some(config) = &properties.config
             {
-                let mut path = vec!["agents".into(), name.0.clone()];
-                if let Some(preset) = preset {
-                    path.extend(["presets".into(), preset]);
-                }
-                path.push("config".into());
                 value.config_layers.push(ConfigLayer {
-                    origin: ConfigOrigin {
-                        file: self.source.clone(),
-                        path,
-                        layer: id.to_string(),
-                    },
+                    origin: manifest_property_origin(
+                        &self.source,
+                        &["agents".into(), name.0.clone()],
+                        preset.as_deref(),
+                        CONFIG_FIELD,
+                        id,
+                    ),
                     value: config.clone(),
                 });
             }
@@ -3870,6 +3854,7 @@ pub struct AgentLayerProperties {
     )]
     pub applied_layers: Vec<(AgentLayerId, Option<String>)>,
     pub config: JsonProperty<AgentLayer>,
+    // Ordered resolver inputs duplicate the public config trace.
     #[serde(skip)]
     config_layers: Vec<ConfigLayer>,
     pub initial_card: OptionalProperty<AgentLayer, app_raw::ManifestInitialCard>,
@@ -4425,15 +4410,15 @@ mod app_builder {
         PartitionedComponentPresets, SubjectSource, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
+    use crate::model::cascade::error::StoreGetValueError;
+    use crate::model::cascade::property::Property;
+    use crate::model::cascade::store::Store;
     use crate::model::http_api::HttpApiDeploymentDeployProperties;
     use crate::model::language::GuestLanguage;
     use crate::model::mcp::{McpDeploymentAgentOptions, McpDeploymentDeployProperties};
     use crate::validation::{ValidatedResult, ValidationBuilder};
     use crate::{fs, fuzzy};
     use colored::Colorize;
-    use golem_common::cascade::error::StoreGetValueError;
-    use golem_common::cascade::property::Property;
-    use golem_common::cascade::store::Store;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::application::ApplicationName;
     use golem_common::model::component::ComponentName;
@@ -6658,9 +6643,10 @@ mod test {
         EnvironmentToolBridgeRequests, SubjectSource, ToolName, includes_from_yaml_file,
     };
     use crate::model::app_raw;
+    use crate::model::cascade::property::Property;
     use crate::model::cascade::property::optional::OptionalPropertyTraceElem;
+    use crate::model::config::resolver::ConfigSourcePlan;
     use crate::model::language::GuestLanguage;
-    use golem_common::cascade::property::Property;
     use golem_common::model::agent::AgentTypeName;
     use golem_common::model::component::ComponentName;
     use golem_common::model::domain_registration::Domain;
@@ -6668,7 +6654,7 @@ mod test {
     use golem_common::model::http_api_deployment::HttpApiDeploymentScheme;
     use golem_common::model::tool::ToolFilesystemAccess;
     use golem_common::schema::config::{
-        ConfigFieldKind, ConfigFieldSchema, ConfigOrigin, ConfigSchema, ConfigSourcePlan,
+        ConfigFieldKind, ConfigFieldSchema, ConfigOrigin, ConfigSchema,
     };
     use golem_common::schema::{NamedFieldType, SchemaGraph, SchemaType, SchemaValue};
     use indoc::indoc;
@@ -6926,7 +6912,7 @@ mod test {
             let result = app.resolve_config(&schema, &tool.layer_properties.config_layers, &code);
             assert_eq!(result.is_ok(), valid);
             if let Ok(plan) = result {
-                assert_eq!(plan[1].source, ConfigSourcePlan::CapturedAbsence);
+                assert_eq!(plan[1].source, ConfigSourcePlan::SharedAbsence);
             }
         }
     }

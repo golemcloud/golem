@@ -17,7 +17,7 @@ use super::{
     millis_to_datetime,
 };
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
 use golem_common::serialization::deserialize;
 use std::collections::HashMap;
@@ -52,7 +52,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
     async fn insert(
         &self,
         schedule_id: ScheduleId,
-        due_at: DateTime<Utc>,
+        due_at: jiff::Timestamp,
         shard_id: ShardId,
         action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
@@ -78,7 +78,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
 
     async fn claim_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
         limit: u32,
         lease_ttl: Duration,
@@ -124,7 +124,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
 
     async fn count_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError> {
         let now_ms = datetime_to_millis(now);
@@ -141,8 +141,8 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
-        lease_until: DateTime<Utc>,
-        now: DateTime<Utc>,
+        lease_until: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         let now_ms = datetime_to_millis(now);
         let requested_until_ms = datetime_to_millis(lease_until);
@@ -164,7 +164,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         let mut entries = self.entries.lock().unwrap();
         if entries.get(&schedule_id.id).is_some_and(|entry| {

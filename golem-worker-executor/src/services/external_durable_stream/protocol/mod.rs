@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use base64::Engine;
-use chrono::{DateTime, Utc};
+
 use golem_common::model::oplog::payload::external_durable_stream::*;
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, Response, StatusCode, Url};
@@ -338,7 +338,11 @@ pub(super) async fn read_batch(
         .map_err(transport)?;
     let status = response.status();
     if status != StatusCode::OK && status != StatusCode::NO_CONTENT {
-        return Err(http_error(status, response.headers(), Utc::now()));
+        return Err(http_error(
+            status,
+            response.headers(),
+            jiff::Timestamp::now(),
+        ));
     }
     if request.transport == DurableStreamTransport::Sse {
         return read_sse(response, request, max_bytes).await;
@@ -406,7 +410,11 @@ pub(super) async fn append_batch(
         .map_err(transport)?;
     let status = response.status();
     if status != StatusCode::OK && status != StatusCode::NO_CONTENT {
-        return Err(http_error(status, response.headers(), Utc::now()));
+        return Err(http_error(
+            status,
+            response.headers(),
+            jiff::Timestamp::now(),
+        ));
     }
     let headers = response.headers();
     let epoch = integer_header(headers, "producer-epoch")?
@@ -527,7 +535,7 @@ fn checkpoint(
     })
 }
 
-fn http_error(status: StatusCode, headers: &HeaderMap, now: DateTime<Utc>) -> DurableStreamError {
+fn http_error(status: StatusCode, headers: &HeaderMap, now: jiff::Timestamp) -> DurableStreamError {
     let epoch = match integer_header(headers, "producer-epoch") {
         Ok(value) => value,
         Err(error) => return error,
@@ -573,15 +581,17 @@ fn http_error(status: StatusCode, headers: &HeaderMap, now: DateTime<Utc>) -> Du
     error
 }
 
-fn retry_after(value: &str, now: DateTime<Utc>) -> Option<u64> {
+fn retry_after(value: &str, now: jiff::Timestamp) -> Option<u64> {
     if value.bytes().all(|c| c.is_ascii_digit()) {
         return value
             .parse::<u64>()
             .ok()
             .and_then(|seconds| seconds.checked_mul(1000));
     }
-    let date = DateTime::parse_from_rfc2822(value).ok()?;
-    Some(date.signed_duration_since(now).num_milliseconds().max(0) as u64)
+    let date = jiff::fmt::rfc2822::DateTimeParser::new()
+        .parse_timestamp(value)
+        .ok()?;
+    Some(date.duration_since(now).as_millis().max(0) as u64)
 }
 
 async fn read_body(

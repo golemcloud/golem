@@ -35,19 +35,18 @@ pub mod oauth2_token;
 pub mod oauth2_webflow_state;
 pub mod permission_share;
 pub mod plan;
+pub mod plan_storage;
 pub mod plugin;
 pub mod reports;
 pub mod resource_definition;
 pub mod retry_policy;
 pub mod security_scheme;
-pub mod shared_config;
 pub mod token;
 pub mod tool_middleware_release;
 pub mod tool_release;
 
 use self::audit::ImmutableAuditFields;
 use crate::repo::model::audit::{AuditFields, DeletableRevisionAuditFields, RevisionAuditFields};
-use chrono::NaiveDateTime;
 use golem_service_base::repo::SqlDateTime;
 use sqlx::Database;
 use sqlx::query::{Query, QueryAs};
@@ -70,7 +69,7 @@ pub trait BindFields {
 
 impl<'q, DB: Database, O> BindFields for QueryAs<'q, DB, O, <DB as Database>::Arguments<'q>>
 where
-    NaiveDateTime: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
+    SqlDateTime: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
     Uuid: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
     bool: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
     Option<SqlDateTime>: sqlx::Encode<'q, DB>,
@@ -106,7 +105,7 @@ where
 
 impl<'q, DB: Database> BindFields for Query<'q, DB, <DB as Database>::Arguments<'q>>
 where
-    NaiveDateTime: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
+    SqlDateTime: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
     Uuid: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
     bool: sqlx::Type<DB> + sqlx::Encode<'q, DB>,
     Option<SqlDateTime>: sqlx::Encode<'q, DB>,

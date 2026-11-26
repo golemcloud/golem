@@ -235,6 +235,14 @@ impl Services {
 
         let initial_agent_files = Arc::new(InitialAgentFilesService::new(blob_storage.clone()));
         let component_object_store = Arc::new(ComponentObjectStore::new(blob_storage.clone()));
+        {
+            let store = component_object_store.clone();
+            let repo = repos.component_repo.clone();
+            join_set.spawn(async move {
+                store.run_upload_cleanup(repo.as_ref()).await;
+                Ok(())
+            });
+        }
 
         let component_compilation_service =
             crate::services::component_compilation::configured(&config.component_compilation);

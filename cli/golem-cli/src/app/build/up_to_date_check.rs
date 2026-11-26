@@ -15,7 +15,7 @@
 use crate::app::build::task_result_marker::{TaskResultMarker, TaskResultMarkerHashSource};
 use crate::app::context::BuildContext;
 use crate::fs;
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use std::cmp::Ordering;
 use std::fmt::Debug;
 use std::path::{Path, PathBuf};
@@ -60,7 +60,7 @@ where
 
         debug!(
             path = %path.display(),
-            max_modified = max_modified.map(|d| DateTime::<Utc>::from(d).to_string()),
+            max_modified = max_modified.and_then(|d| Timestamp::try_from(d).ok()).map(|d| d.to_string()),
             "max modified"
         );
 

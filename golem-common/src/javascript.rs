@@ -11,7 +11,9 @@ pub async fn preinitialize_js(input: &Utf8Path, output: &Utf8Path) -> anyhow::Re
         "wizer-initialize",
         &wasm_rquickjs::OptimizeOptions {
             hostcall_fuel: Some(512 * 1024 * 1024),
+            ..Default::default()
         },
     )
     .await
+    .map(|_| ())
 }

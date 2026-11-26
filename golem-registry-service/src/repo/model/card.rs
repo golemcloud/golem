@@ -13,13 +13,13 @@
 // limitations under the License.
 
 use anyhow::anyhow;
-use chrono::{DateTime, Timelike, Utc};
 use golem_common::model::card::{
     Card, CardId, CardManagedBy, CardManagedByRuntimeDerived, PermissionPattern, PolymorphicCard,
     StoredCard,
 };
 use golem_common::{IntoAnyhow, error_forwarding};
 use golem_service_base::repo::{Blob, RepoError, SqlDateTime};
+use jiff::Timestamp;
 use sqlx::FromRow;
 use uuid::Uuid;
 
@@ -154,7 +154,7 @@ impl CardRecord {
         lower_negative: Vec<PermissionPattern>,
         upper_positive: Vec<PermissionPattern>,
         upper_negative: Vec<PermissionPattern>,
-        expires_at: Option<DateTime<Utc>>,
+        expires_at: Option<Timestamp>,
         system_card: bool,
         managed_by: Option<CardManagedBy>,
     ) -> Self {
@@ -165,7 +165,7 @@ impl CardRecord {
             lower_negative,
             upper_positive,
             upper_negative,
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
             expires_at,
             system_card,
             managed_by,
@@ -223,9 +223,8 @@ impl CardRecord {
     }
 }
 
-fn sql_timestamp_precision(timestamp: DateTime<Utc>) -> DateTime<Utc> {
-    timestamp
-        .with_nanosecond(timestamp.nanosecond() / 1_000 * 1_000)
+fn sql_timestamp_precision(timestamp: Timestamp) -> Timestamp {
+    Timestamp::from_microsecond(timestamp.as_microsecond())
         .expect("truncating nanoseconds preserves a valid timestamp")
 }
 
@@ -251,8 +250,8 @@ mod tests {
     #[test]
     fn concrete_creation_persists_runtime_derived_provenance() {
         let provenance = runtime_derived_provenance();
-        let created_at = DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap();
-        let expires_at = DateTime::from_timestamp(1_800_000_000, 987_654_321).unwrap();
+        let created_at = Timestamp::new(1_700_000_000, 123_456_789).unwrap();
+        let expires_at = Timestamp::new(1_800_000_000, 987_654_321).unwrap();
         let record = CardRecord::runtime_creation(
             StoredCard::Concrete(Card {
                 card_id: CardId::new(),
@@ -282,7 +281,7 @@ mod tests {
 
     #[test]
     fn polymorphic_creation_persists_agent_initial_card_grants() {
-        let created_at = DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap();
+        let created_at = Timestamp::new(1_700_000_000, 123_456_789).unwrap();
         let initial_card = PolymorphicCard {
             card_id: CardId::new(),
             parent_ids: Vec::new(),
@@ -309,7 +308,7 @@ mod tests {
     #[test]
     fn polymorphic_creation_persists_runtime_derived_provenance() {
         let provenance = runtime_derived_provenance();
-        let created_at = DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap();
+        let created_at = Timestamp::new(1_700_000_000, 123_456_789).unwrap();
         let record = CardRecord::runtime_creation(
             StoredCard::Polymorphic(PolymorphicCard {
                 card_id: CardId::new(),

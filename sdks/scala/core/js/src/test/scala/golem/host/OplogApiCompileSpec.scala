@@ -45,8 +45,7 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     original = PublicPrincipal.User(PublicPrincipalRef("https://idp.example", "bob"), ts),
     immediate = PublicPrincipal.Agent(
       PublicPrincipalRef("https://golem.example", "agent:relay"),
-      new java.util.UUID(3L, 4L),
-      "Relay(\"r\")",
+      golem.AgentId(new java.util.UUID(3L, 4L)),
       "Relay",
       new java.util.UUID(5L, 6L)
     ),
@@ -301,11 +300,11 @@ object OplogApiCompileSpec extends ZIOSpecDefault {
     },
     test("PublicPrincipal exhaustive match") {
       List(sampleCaller.original, sampleCaller.immediate, PublicPrincipal.Anonymous).foreach {
-        case PublicPrincipal.User(pair, _)           => Predef.assert(pair.subject.nonEmpty)
-        case PublicPrincipal.Account(pair, _, _)     => Predef.assert(pair.subject.nonEmpty)
-        case PublicPrincipal.Agent(pair, _, _, _, _) => Predef.assert(pair.subject.nonEmpty)
-        case PublicPrincipal.Tool(pair, _, _)        => Predef.assert(pair.subject.nonEmpty)
-        case PublicPrincipal.Anonymous               => ()
+        case PublicPrincipal.User(pair, _)        => Predef.assert(pair.subject.nonEmpty)
+        case PublicPrincipal.Account(pair, _, _)  => Predef.assert(pair.subject.nonEmpty)
+        case PublicPrincipal.Agent(pair, _, _, _) => Predef.assert(pair.subject.nonEmpty)
+        case PublicPrincipal.Tool(pair, _, _)     => Predef.assert(pair.subject.nonEmpty)
+        case PublicPrincipal.Anonymous            => ()
       }
       assertCompletes
     },

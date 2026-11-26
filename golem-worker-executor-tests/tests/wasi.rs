@@ -341,8 +341,8 @@ async fn clocks(
         .unwrap()
         .as_secs_f64();
     let diff1 = (epoch_seconds - *elapsed1).abs();
-    let parsed_odt = chrono::DateTime::parse_from_rfc3339(odt.as_str()).unwrap();
-    let odt_diff = epoch_seconds - parsed_odt.timestamp() as f64;
+    let parsed_odt = str::parse::<jiff::Timestamp>(odt.as_str()).unwrap();
+    let odt_diff = epoch_seconds - parsed_odt.as_second() as f64;
 
     assert!(diff1 < 5.0);
     assert!(*elapsed2 >= 2.0);
@@ -6616,17 +6616,20 @@ async fn wasi_config_component_update(
                 golem_common::model::agent::AgentTypeName("WasiConfig".to_string()),
                 golem_common::model::component::AgentTypeProvisionConfigUpdate {
                     config: Some(vec![
-                        AgentConfigEntryDto {
+                        golem_common::model::component::ConfigBindingDto {
                             path: vec!["k1".to_string()],
                             value: serde_json::Value::String("v2".to_string()).into(),
+                            origins: None,
                         },
-                        AgentConfigEntryDto {
+                        golem_common::model::component::ConfigBindingDto {
                             path: vec!["k3".to_string()],
                             value: serde_json::Value::String("v4".to_string()).into(),
+                            origins: None,
                         },
-                        AgentConfigEntryDto {
+                        golem_common::model::component::ConfigBindingDto {
                             path: vec!["k4".to_string()],
                             value: serde_json::Value::String("v4".to_string()).into(),
+                            origins: None,
                         },
                     ]),
                     ..Default::default()

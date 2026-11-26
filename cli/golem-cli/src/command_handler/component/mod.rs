@@ -33,6 +33,7 @@ use crate::model::app::{
     ApplicationComponentSelectMode, BuildConfig, ComponentDependency, DynamicHelpSections,
 };
 use crate::model::app_raw;
+use crate::model::cascade::property::Property;
 use crate::model::cascade::property::tool_bindings::ToolBindingState;
 use crate::model::component::{
     AgentTypeManifestProvisionConfig, ComponentDeployProperties, ComponentNameMatchKind,
@@ -66,7 +67,6 @@ use futures_util::future::OptionFuture;
 use golem_client::api::ComponentClient;
 use golem_client::model::{ComponentCreation, ComponentDto};
 use golem_common::cache::SimpleCache;
-use golem_common::cascade::property::Property;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::AgentFileContentHash;
 use golem_common::model::agent::{AgentConfigSource, AgentTypeName};
@@ -141,12 +141,8 @@ impl ComponentCommandHandler {
                 }
                 ComponentSubcommand::ManifestTrace {
                     component_name,
-                    resolved,
                     build,
-                } => {
-                    self.cmd_manifest_trace(component_name, resolved, build)
-                        .await
-                }
+                } => self.cmd_manifest_trace(component_name, build).await,
             }
         })
     }
@@ -346,7 +342,6 @@ impl ComponentCommandHandler {
     async fn cmd_manifest_trace(
         &self,
         component_names: OptionalComponentNames,
-        resolved: bool,
         build: bool,
     ) -> anyhow::Result<()> {
         if build {
@@ -367,26 +362,10 @@ impl ComponentCommandHandler {
             )
             .await?;
 
-        let views = self.prepare_manifest_traces(resolved).await?;
-
-        for view in views {
-            log_action(
-                "Showing",
-                format!(
-                    "manifest trace for {}",
-                    view.component_name.as_str().log_color_highlight()
-                ),
-            );
-            let _indent = self.ctx.log_handler().decorated_indent_primary();
-            self.ctx.log_handler().log_output(view)?;
-        }
-        Ok(())
+        self.log_manifest_traces(build).await
     }
 
-    async fn prepare_manifest_traces(
-        &self,
-        resolved: bool,
-    ) -> anyhow::Result<Vec<ComponentManifestTraceView>> {
+    async fn log_manifest_traces(&self, resolved: bool) -> anyhow::Result<()> {
         let mut app_ctx = self.ctx.app_context_lock_mut().await?;
         let app_ctx = app_ctx.some_or_err_mut()?;
 
@@ -395,7 +374,6 @@ impl ComponentCommandHandler {
             .iter()
             .cloned()
             .collect::<Vec<_>>();
-        let mut views = Vec::new();
         for component_name in component_names {
             let metadata = if resolved
                 || app_ctx
@@ -454,7 +432,7 @@ impl ComponentCommandHandler {
                 BTreeMap::new()
             };
 
-            views.push(ComponentManifestTraceView {
+            let view = ComponentManifestTraceView {
                 component_name: component_name.clone(),
                 properties: app_ctx
                     .application()
@@ -463,10 +441,19 @@ impl ComponentCommandHandler {
                     .with_compacted_traces(),
                 agents,
                 resolved_config,
-            });
+            };
+            log_action(
+                "Showing",
+                format!(
+                    "manifest trace for {}",
+                    view.component_name.as_str().log_color_highlight()
+                ),
+            );
+            let _indent = self.ctx.log_handler().decorated_indent_primary();
+            self.ctx.log_handler().log_output(view)?;
         }
 
-        Ok(views)
+        Ok(())
     }
 
     pub async fn update_agents_by_components(
@@ -2110,8 +2097,13 @@ impl ComponentCommandHandler {
                     config: static_config
                         .iter()
                         .filter(|field| field.agent_type.as_ref() == Some(&agent_type.type_name))
-                        .map(|field| field.config_entry())
-                        .collect(),
+                        .map(|field| {
+                            field.config_binding(
+                                app_ctx.application().app_root_dir(),
+                                &component.wasm(),
+                            )
+                        })
+                        .collect::<anyhow::Result<Vec<_>>>()?,
                     initial_card: resolved_agent
                         .initial_card()
                         .map(initial_permission_from_manifest_card)
@@ -2159,8 +2151,10 @@ impl ComponentCommandHandler {
             component_config: static_config
                 .iter()
                 .filter(|field| field.agent_type.is_none())
-                .map(|field| field.config_entry())
-                .collect(),
+                .map(|field| {
+                    field.config_binding(app_ctx.application().app_root_dir(), &component.wasm())
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?,
             static_config,
             component_initial_card: component
                 .initial_card()

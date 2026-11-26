@@ -525,15 +525,11 @@ pub const COMPONENT_MANIFEST_TRACE: &str = "Examples:
   golem-cli component manifest-trace
   golem-cli component manifest-trace my-component
 
-  # Build the component first, so that the trace includes its agent types
+  # Incrementally build and show agent types, validated config and code defaults
   golem-cli component manifest-trace my-component --build
 
-  # Also show schema-validated static config and provenance, including code defaults.
-  # Requires locally built components; does not build or read deployed state.
-  golem-cli component manifest-trace --resolved
-
   # Config payloads are masked by default. Only reveal them in a trusted terminal.
-  golem-cli component manifest-trace --resolved --show-secrets";
+  golem-cli component manifest-trace --build --show-secrets";
 
 // Environment commands -----------------------------------------------------------------------------
 

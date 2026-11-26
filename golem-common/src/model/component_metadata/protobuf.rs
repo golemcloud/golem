@@ -13,8 +13,8 @@
 // limitations under the License.
 
 use crate::base_model::component_metadata::{
-    AgentTypeProvisionConfig, ComponentProvisionConfig, ConfigSourceMetadata, KnownExports,
-    OwnerConfig, OwnerConfigEntry, OwnerConfigSource,
+    AgentTypeProvisionConfig, ComponentProvisionConfig, ConfigBinding, ConfigBindingOrigin,
+    ConfigBindingSource, ConfigOriginLocation, KnownExports,
 };
 use crate::base_model::json::NormalizedJsonValue;
 use crate::model::account::{AccountEmail, AccountId};
@@ -682,81 +682,79 @@ impl From<SecretKeyScope> for golem_api_grpc::proto::golem::component::SecretKey
     }
 }
 
-impl TryFrom<golem_api_grpc::proto::golem::component::OwnerConfig> for OwnerConfig {
+impl TryFrom<golem_api_grpc::proto::golem::component::ConfigBinding> for ConfigBinding {
     type Error = String;
 
     fn try_from(
-        proto: golem_api_grpc::proto::golem::component::OwnerConfig,
+        proto: golem_api_grpc::proto::golem::component::ConfigBinding,
     ) -> Result<Self, Self::Error> {
-        use golem_api_grpc::proto::golem::component::owner_config_entry::Source;
+        use golem_api_grpc::proto::golem::component::config_binding::ValueSource;
         Ok(Self {
-            entries: proto
-                .entries
+            path: proto.path,
+            value_source: match proto
+                .value_source
+                .ok_or("Missing config binding value source")?
+            {
+                ValueSource::Static(value) => ConfigBindingSource::Static(value.try_into()?),
+            },
+            origins: proto
+                .origins
                 .into_iter()
-                .map(|entry| {
-                    let source = match entry.source.ok_or("Missing owner config source")? {
-                        Source::Captured(value) => OwnerConfigSource::Captured(value.try_into()?),
-                    };
-                    Ok(OwnerConfigEntry {
-                        path: entry.path,
-                        source,
-                    })
-                })
+                .map(TryInto::try_into)
                 .collect::<Result<_, String>>()?,
-            source_meta: proto
-                .source_meta
-                .into_iter()
-                .map(|(path, meta)| {
-                    (
-                        path,
-                        ConfigSourceMetadata {
-                            source: meta.source,
-                            path: meta.path,
-                            layer: meta.layer,
-                        },
-                    )
-                })
-                .collect(),
         })
     }
 }
 
-impl TryFrom<OwnerConfig> for golem_api_grpc::proto::golem::component::OwnerConfig {
+impl TryFrom<ConfigBinding> for golem_api_grpc::proto::golem::component::ConfigBinding {
     type Error = String;
 
-    fn try_from(config: OwnerConfig) -> Result<Self, Self::Error> {
-        use golem_api_grpc::proto::golem::component::{
-            ConfigSourceMetadata, OwnerConfigEntry, owner_config_entry::Source,
-        };
+    fn try_from(binding: ConfigBinding) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::config_binding::ValueSource;
         Ok(Self {
-            entries: config
-                .entries
-                .into_iter()
-                .map(|entry| {
-                    let source = match entry.source {
-                        OwnerConfigSource::Captured(value) => Source::Captured(value.try_into()?),
-                    };
-                    Ok(OwnerConfigEntry {
-                        path: entry.path,
-                        source: Some(source),
-                    })
-                })
-                .collect::<Result<_, String>>()?,
-            source_meta: config
-                .source_meta
-                .into_iter()
-                .map(|(path, meta)| {
-                    (
-                        path,
-                        ConfigSourceMetadata {
-                            source: meta.source,
-                            path: meta.path,
-                            layer: meta.layer,
-                        },
-                    )
-                })
-                .collect(),
+            path: binding.path,
+            value_source: Some(match binding.value_source {
+                ConfigBindingSource::Static(value) => ValueSource::Static(value.try_into()?),
+            }),
+            origins: binding.origins.into_iter().map(Into::into).collect(),
         })
+    }
+}
+
+impl TryFrom<golem_api_grpc::proto::golem::component::ConfigBindingOrigin> for ConfigBindingOrigin {
+    type Error = String;
+
+    fn try_from(
+        origin: golem_api_grpc::proto::golem::component::ConfigBindingOrigin,
+    ) -> Result<Self, Self::Error> {
+        use golem_api_grpc::proto::golem::component::config_binding_origin::Location;
+        Ok(Self {
+            value_path: origin.value_path,
+            location: match origin
+                .location
+                .ok_or("Missing config binding origin location")?
+            {
+                Location::ManifestFile(file) => ConfigOriginLocation::Manifest { file },
+                Location::ComponentMetadata(_) => ConfigOriginLocation::ComponentMetadata,
+            },
+            source_path: origin.source_path,
+            layer: origin.layer,
+        })
+    }
+}
+
+impl From<ConfigBindingOrigin> for golem_api_grpc::proto::golem::component::ConfigBindingOrigin {
+    fn from(origin: ConfigBindingOrigin) -> Self {
+        use golem_api_grpc::proto::golem::component::config_binding_origin::Location;
+        Self {
+            value_path: origin.value_path,
+            location: Some(match origin.location {
+                ConfigOriginLocation::Manifest { file } => Location::ManifestFile(file),
+                ConfigOriginLocation::ComponentMetadata => Location::ComponentMetadata(true),
+            }),
+            source_path: origin.source_path,
+            layer: origin.layer,
+        }
     }
 }
 
@@ -771,8 +769,9 @@ impl TryFrom<golem_api_grpc::proto::golem::component::AgentTypeProvisionConfig>
         use crate::base_model::component::{InitialAgentFile, InstalledPlugin};
         let config = proto
             .config
-            .ok_or("Missing agent owner config")?
-            .try_into()?;
+            .into_iter()
+            .map(TryInto::try_into)
+            .collect::<Result<_, _>>()?;
 
         let plugins = proto
             .plugins
@@ -809,8 +808,9 @@ impl TryFrom<golem_api_grpc::proto::golem::component::ComponentProvisionConfig>
             env: proto.env.into_iter().collect(),
             config: proto
                 .config
-                .ok_or("Missing component owner config")?
-                .try_into()?,
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
             plugins: proto
                 .plugins
                 .into_iter()
@@ -834,7 +834,11 @@ impl TryFrom<ComponentProvisionConfig>
             initial_permissions: crate::serialization::serialize(&config.initial_permissions)
                 .expect("failed to serialize component initial permission card"),
             env: config.env.into_iter().collect(),
-            config: Some(config.config.try_into()?),
+            config: config
+                .config
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
             plugins: config.plugins.into_iter().map(Into::into).collect(),
             files: config.files.into_iter().map(Into::into).collect(),
         })
@@ -853,7 +857,11 @@ impl TryFrom<AgentTypeProvisionConfig>
             initial_permissions: crate::serialization::serialize(&config.initial_permissions)
                 .expect("failed to serialize agent initial permission card"),
             env: config.env.into_iter().collect(),
-            config: Some(config.config.try_into()?),
+            config: config
+                .config
+                .into_iter()
+                .map(TryInto::try_into)
+                .collect::<Result<_, _>>()?,
             plugins: config
                 .plugins
                 .into_iter()

@@ -1534,18 +1534,10 @@ impl AppCommandHandler {
                     || deploy_diff.environment_setup.is_some()
                 {
                     let _indent = self.ctx.log_handler().decorated_indent_secondary();
-                    let static_config = deploy_diff
-                        .deployable_manifest
-                        .components
-                        .iter()
-                        .filter(|(name, _)| deploy_diff.diff.components.contains_key(name.as_str()))
-                        .flat_map(|(_, component)| component.static_config.iter().cloned())
-                        .collect::<Vec<_>>();
                     self.ctx.log_handler().log_output(DeployPlanView {
                         deployment_diff: &deploy_diff.diff,
                         tool_publications: &deploy_diff.tool_publication_plan,
                         environment_setup: deploy_diff.environment_setup.as_ref(),
-                        static_config: &static_config,
                     })?;
                 }
                 if deploy_diff.has_deployment_request_changes() && !deployment_version.0.is_empty()
@@ -4638,7 +4630,6 @@ mod tests {
     use crate::fuzzy::Match;
     use crate::model::app::EnvironmentToolBridgeRequests;
     use crate::model::deploy::EnvironmentToolGrantPlanAction;
-    use chrono::Utc;
     use golem_common::model::account::{AccountEmail, AccountId, AccountSummary};
     use golem_common::model::agent_secret::{AgentSecretPath, CanonicalAgentSecretPath};
     use golem_common::model::deployment::DeploymentAgentSecretDefault;
@@ -4658,6 +4649,7 @@ mod tests {
     };
     use golem_common::schema::SchemaGraph;
     use golem_common::schema::tool::{CommandNode, CommandTree, Doc, Globals, Tool};
+    use jiff::Timestamp;
     use std::collections::{BTreeSet, HashMap};
     use test_r::test;
 
@@ -5186,7 +5178,7 @@ mod tests {
     ) -> EnvironmentToolGrantWithDetails {
         let release_id = ToolReleaseId::new();
         let actor = AccountId::new();
-        let now = Utc::now();
+        let now = Timestamp::now();
         let name = ToolName::try_from(name).unwrap();
         let definition = Tool {
             version: version.to_string(),

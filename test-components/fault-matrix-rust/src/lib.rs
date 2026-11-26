@@ -3,11 +3,57 @@
 //! It implements the fixture contract documented in `integration-tests/src/fault_matrix.rs`.
 //! Record `seq` of run `run` is the number `run * 100_000 + seq`, for `seq` in 1..=count.
 
-use golem_rust::agentic::{AgentStream, StreamError, spawn_local};
-use golem_rust::{PromiseId, agent_definition, agent_implementation, endpoint};
+use golem_rust::agentic::{AgentStream, OutputStream, StreamError, spawn_local};
+use golem_rust::{
+    PromiseId, agent_definition, agent_implementation, endpoint, tool_definition,
+    tool_implementation,
+};
 
 fn record(run: u32, seq: u32) -> u32 {
     run * 100_000 + seq
+}
+
+#[tool_definition(version = "1.0.0")]
+pub trait FaultMatrix {
+    async fn produce(
+        &self,
+        run: u32,
+        count: u32,
+        pause_after: u32,
+        gate: PromiseId,
+        stdout: OutputStream,
+    ) -> u32;
+}
+
+struct FaultMatrixImpl;
+
+#[tool_implementation]
+impl FaultMatrix for FaultMatrixImpl {
+    async fn produce(
+        &self,
+        run: u32,
+        count: u32,
+        pause_after: u32,
+        gate: PromiseId,
+        mut stdout: OutputStream,
+    ) -> u32 {
+        let mut written = 0;
+        for seq in 1..=count {
+            if seq == pause_after + 1 {
+                golem_rust::await_promise(&gate).await;
+            }
+            if stdout
+                .write(record(run, seq).to_be_bytes().to_vec())
+                .await
+                .is_err()
+            {
+                break;
+            }
+            written = seq;
+        }
+        let _ = stdout.finish().await;
+        written
+    }
 }
 
 #[agent_definition(mount = "/fault-matrix/{name}")]

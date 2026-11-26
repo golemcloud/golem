@@ -31,14 +31,13 @@ use crate::model::environment::{
 };
 use crate::model::masking::{Masked, MaskingConfig, mask_agent_config_entries, mask_sensitive_map};
 use crate::model::text_format::*;
-use chrono::DateTime;
 use clap::ValueEnum;
 use colored::Colorize;
 use colored::control::SHOULD_COLORIZE;
 use comfy_table::Color as ComfyColor;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentConfigEntryDto, UpdateRecord};
+use golem_common::model::agent::{AgentConfigEntryDto, AgentOrigin, UpdateRecord};
 use golem_common::model::agent::{AgentTypeName, DeployedRegisteredAgentType, ParsedAgentKey};
 use golem_common::model::component::{ComponentId, ComponentName, ComponentRevision};
 use golem_common::model::component_metadata::ComponentMetadata;
@@ -49,6 +48,7 @@ use golem_common::model::{
     Timestamp,
 };
 use itertools::Itertools;
+use jiff::Timestamp as JiffTimestamp;
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt::{Display, Formatter, Write};
@@ -231,6 +231,8 @@ pub struct AgentMetadataView {
     pub agent_type: Option<AgentTypeName>,
     /// The key of a keyed agent, rendered as `Type(parameters)`. An agent without a key has none.
     pub agent_key: Option<String>,
+    /// How the agent came to exist: keyed, created without a key, or forked.
+    pub origin: AgentOrigin,
     pub fingerprint: AgentFingerprint,
     pub created_by: AccountId,
     pub environment_id: EnvironmentId,
@@ -266,6 +268,7 @@ impl From<AgentMetadata> for AgentMetadataView {
             agent_id: value.agent_id,
             agent_type: value.agent_type_name,
             agent_key,
+            origin: value.origin,
             fingerprint: value.fingerprint,
             created_by: value.created_by,
             environment_id: value.environment_id,
@@ -314,12 +317,21 @@ impl AgentMetadataView {
     pub fn with_defaults(mut self, defaults: Option<AgentTypeProvisionConfig>) -> Self {
         if let Some(defaults) = defaults {
             self.default_env = defaults.env.into_iter().collect();
-            self.default_config = defaults
-                .config
-                .captures()
-                .into_iter()
-                .map(Into::into)
-                .collect();
+            self.default_config =
+                defaults
+                    .config
+                    .into_iter()
+                    .map(|binding| {
+                        let golem_common::model::component_metadata::ConfigBindingSource::Static(
+                            value,
+                        ) = binding.value_source;
+                        golem_common::model::agent::TypedAgentConfigEntry {
+                            path: binding.path,
+                            value,
+                        }
+                        .into()
+                    })
+                    .collect();
         }
         self
     }
@@ -351,6 +363,7 @@ pub struct AgentMetadata {
     pub agent_id: AgentId,
     pub agent_type_name: Option<AgentTypeName>,
     pub canonical_key: Option<String>,
+    pub origin: AgentOrigin,
     /// The canonical constructor parameter text, without the agent type name.
     pub constructor_parameters: Option<String>,
     pub fingerprint: AgentFingerprint,
@@ -395,6 +408,7 @@ impl AgentMetadata {
             agent_id: value.agent_id,
             agent_type_name: value.agent_type_name,
             canonical_key: value.canonical_key,
+            origin: value.origin,
             constructor_parameters: value.constructor_parameters,
             fingerprint: value.fingerprint,
             component_name,
@@ -877,6 +891,7 @@ impl MessageWithFields for AgentGetView {
                     field_value_width::<Self>(),
                 )
             })
+            .fmt_field("Origin", &self.metadata.origin, format_id)
             .fmt_field("Fingerprint", &self.metadata.fingerprint, format_id)
             .field("Created at", &self.metadata.created_at)
             .fmt_field(
@@ -1142,8 +1157,8 @@ fn format_agent_id_in(agent_id: &str, colorize: bool, width: usize) -> String {
 
 // Helper function to convert Unix timestamp to human-readable format
 pub fn format_timestamp(timestamp: u64) -> String {
-    if let Some(datetime) = DateTime::from_timestamp(timestamp as i64, 0) {
-        datetime.format("%Y-%m-%d %H:%M:%S").to_string()
+    if let Ok(datetime) = JiffTimestamp::from_second(timestamp as i64) {
+        datetime.strftime("%Y-%m-%d %H:%M:%S").to_string()
     } else {
         format!("{timestamp}") // Fallback to raw timestamp if conversion fails
     }

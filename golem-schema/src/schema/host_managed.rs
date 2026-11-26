@@ -717,7 +717,7 @@ mod tests {
     use crate::schema::schema_value::{
         PermissionCardValuePayload, QuotaTokenValuePayload, SecretValuePayload,
     };
-    use chrono::{TimeZone, Utc};
+    use jiff::Timestamp;
     use test_r::test;
 
     fn secret_value() -> SchemaValue {
@@ -725,7 +725,7 @@ mod tests {
             secret_id: uuid::Uuid::nil(),
             config_key: None,
             version: 0,
-            resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+            resolved_at: Timestamp::UNIX_EPOCH,
             category: None,
         })
     }
@@ -736,7 +736,7 @@ mod tests {
             resource_name: "gpu-quota".to_string(),
             expected_use: 1,
             last_credit: 0,
-            last_credit_at: Utc.timestamp_opt(0, 0).unwrap(),
+            last_credit_at: Timestamp::UNIX_EPOCH,
         })
     }
 

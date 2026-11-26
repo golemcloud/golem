@@ -28,7 +28,7 @@ use crate::preview2::golem::secrets::types::{
 };
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use chrono::Utc;
+
 use golem_common::model::agent_secret::{AgentSecretRevision, CanonicalAgentSecretPath};
 use golem_common::model::card::PermissionTarget;
 use golem_common::model::card::SecretVerb;
@@ -478,7 +478,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                             audit: SecretRevealAudit {
                                 calling_agent: self.owned_agent_id.agent_id,
                                 config_key: None,
-                                timestamp: Utc::now().into(),
+                                timestamp: jiff::Timestamp::now().into(),
                             },
                         },
                     )
@@ -503,7 +503,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                                 audit: SecretRevealAudit {
                                     calling_agent: self.owned_agent_id.agent_id,
                                     config_key: entry.config_key.clone(),
-                                    timestamp: Utc::now().into(),
+                                    timestamp: jiff::Timestamp::now().into(),
                                 },
                             },
                         )
@@ -569,7 +569,7 @@ impl<Ctx: WorkerCtx> reveal::Host for DurableWorkerCtx<Ctx> {
                         audit: SecretRevealAudit {
                             calling_agent: self.owned_agent_id.agent_id,
                             config_key: entry.config_key.clone(),
-                            timestamp: Utc::now().into(),
+                            timestamp: jiff::Timestamp::now().into(),
                         },
                     },
                 )
@@ -669,7 +669,7 @@ mod tests {
             secret_id: uuid::Uuid::nil(),
             config_key: Some(path.iter().map(|segment| (*segment).to_string()).collect()),
             version: AgentSecretRevision::INITIAL.get(),
-            resolved_at: Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         })
     }
@@ -701,14 +701,14 @@ mod tests {
             secret_id,
             pinned_revision: AgentSecretRevision::INITIAL,
             config_key: Some(vec!["apiKey".to_string()]),
-            resolved_at: Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         };
         let second = SecretEntry {
             secret_id,
             pinned_revision: AgentSecretRevision::INITIAL.next().unwrap(),
             config_key: Some(vec!["apiKey".to_string()]),
-            resolved_at: Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         };
 
@@ -725,7 +725,7 @@ mod tests {
             secret_id: golem_common::model::agent_secret::AgentSecretId(uuid::Uuid::nil()),
             pinned_revision: AgentSecretRevision::INITIAL,
             config_key: Some(vec!["service".to_string(), "api-key".to_string()]),
-            resolved_at: Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         };
 
@@ -741,7 +741,7 @@ mod tests {
             secret_id: golem_common::model::agent_secret::AgentSecretId(uuid::Uuid::nil()),
             pinned_revision: AgentSecretRevision::INITIAL,
             config_key: Some(vec!["service".to_string(), "*".to_string()]),
-            resolved_at: Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         };
 
@@ -792,7 +792,7 @@ mod tests {
             secret_id: uuid::Uuid::nil(),
             config_key: None,
             version: AgentSecretRevision::INITIAL.get(),
-            resolved_at: Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         });
 
