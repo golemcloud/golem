@@ -29,7 +29,7 @@ use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start_with_overrides,
+    UpdateRequestPoint, WorkerExecutorTestDependencies, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -242,6 +242,7 @@ async fn every_folded_status_of_a_never_live_fork_applies_updates_also_after_sha
 
     drop(executor);
     let executor = start_with_overrides(deps, &context, overrides()).await?;
+    push_shards(&executor, 3, 3).await?;
     tokio::time::sleep(Duration::from_secs(1)).await;
     for (fork, underlying, forked) in &forks {
         assert!(
@@ -327,9 +328,10 @@ async fn a_crash_around_the_outcome_commit_of_a_never_live_fork_leaves_one_outco
 
 /// E3c and the stop handoff: an automatic update requested while the previous update's outcome
 /// commits, while the generation stops after its admission, and right after the outcome became
-/// visible, while the generation unloads. In the first two cases the held generation is released
-/// only after the second request entered its admission under the instance lock. Each later
-/// update runs in a later generation: the fork ends with two outcomes and no pending update.
+/// visible, while the generation unloads. The held generation is released only after the second
+/// request reached its first status read, which queues behind the held commit, or, across the
+/// early stop, entered its admission under the instance lock. Each later update runs in a later
+/// generation: the fork ends with two outcomes and no pending update.
 #[test]
 #[timeout("6m")]
 async fn an_update_requested_while_a_never_live_generation_stops_runs_in_a_later_generation(
@@ -360,9 +362,11 @@ async fn an_update_requested_while_a_never_live_generation_stops_runs_in_a_later
         .auto_update_worker(&fork, component.revision, false)
         .await?;
     tokio::time::timeout(Duration::from_secs(60), gate.entered()).await?;
-    let admitted = executor.observe_next_update_admission(&fork).await?;
+    let submitted = executor
+        .observe_next_update_request(&fork, UpdateRequestPoint::StatusRead)
+        .await?;
     let second = request(fork.clone());
-    tokio::time::timeout(Duration::from_secs(60), admitted).await??;
+    tokio::time::timeout(Duration::from_secs(60), submitted).await??;
     drop(gate);
     second.await??;
     let outcomes = wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 2, true).await?;
@@ -377,7 +381,9 @@ async fn an_update_requested_while_a_never_live_generation_stops_runs_in_a_later
         .auto_update_worker(&fork, component.revision, false)
         .await?;
     tokio::time::timeout(Duration::from_secs(60), entered).await??;
-    let admitted = executor.observe_next_update_admission(&fork).await?;
+    let admitted = executor
+        .observe_next_update_request(&fork, UpdateRequestPoint::Admission)
+        .await?;
     let second = request(fork.clone());
     tokio::time::timeout(Duration::from_secs(60), admitted).await??;
     let _ = release.send(());

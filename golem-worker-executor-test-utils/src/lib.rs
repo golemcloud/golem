@@ -173,6 +173,7 @@ use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
+pub use golem_worker_executor::worker::UpdateRequestPoint;
 use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor::worker::{
     InvocationFailureDecision, RetryDecision, Worker, WorkerDeletionHook,
@@ -1877,18 +1878,18 @@ impl TestWorkerExecutor {
         Ok(worker.test_gate_next_update_activation())
     }
 
-    /// Resolves when the next automatic update request of the cached worker holds the instance
-    /// lock, before it reads the status for its duplicate check.
-    pub async fn observe_next_update_admission(
+    /// Resolves when the next automatic update request of the cached worker reaches `point`.
+    pub async fn observe_next_update_request(
         &self,
         owned_agent_id: &OwnedAgentId,
+        point: UpdateRequestPoint,
     ) -> anyhow::Result<tokio::sync::oneshot::Receiver<()>> {
         let worker = self
             .additional_test_deps
             .try_get_worker(owned_agent_id)
             .await
             .ok_or_else(|| anyhow::anyhow!("{owned_agent_id} is not cached"))?;
-        Ok(worker.test_observe_next_update_admission())
+        Ok(worker.test_observe_next_update_request(point))
     }
 
     /// Appends a buffered lifecycle hint after the next source commit has flushed.

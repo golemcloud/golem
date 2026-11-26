@@ -368,6 +368,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
+        #[cfg(any(test, feature = "test-utils"))]
+        if mode == UpdateMode::Automatic {
+            worker.pass_update_request_probe(crate::worker::UpdateRequestPoint::StatusRead);
+        }
         let metadata = worker.try_get_latest_worker_metadata().await?;
         if metadata.owner_kind == OwnerKind::EphemeralExternalTool {
             return Err(WorkerExecutorError::invalid_request(
@@ -897,14 +901,27 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         (entered_rx, release_tx)
     }
 
-    /// Signals when the next automatic update request of this worker holds the instance lock,
-    /// before it reads the status for its duplicate check. The request does not wait.
+    /// Signals when the next automatic update request of this worker reaches `point`. The
+    /// request does not wait.
     #[cfg(any(test, feature = "test-utils"))]
     #[doc(hidden)]
-    pub fn test_observe_next_update_admission(&self) -> tokio::sync::oneshot::Receiver<()> {
-        let (admitted_tx, admitted_rx) = tokio::sync::oneshot::channel();
-        *self.update_admission_probe.lock().unwrap() = Some(admitted_tx);
-        admitted_rx
+    pub fn test_observe_next_update_request(
+        &self,
+        point: crate::worker::UpdateRequestPoint,
+    ) -> tokio::sync::oneshot::Receiver<()> {
+        let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
+        *self.update_request_probe.lock().unwrap() = Some((point, reached_tx));
+        reached_rx
+    }
+
+    #[cfg(any(test, feature = "test-utils"))]
+    fn pass_update_request_probe(&self, point: crate::worker::UpdateRequestPoint) {
+        let mut probe = self.update_request_probe.lock().unwrap();
+        if probe.as_ref().is_some_and(|(armed, _)| *armed == point)
+            && let Some((_, reached)) = probe.take()
+        {
+            let _ = reached.send(());
+        }
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -931,9 +948,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let instance_guard = self.lock_non_stopping_worker().await;
         instance_guard.ensure_not_deleting()?;
         #[cfg(any(test, feature = "test-utils"))]
-        if let Some(admitted) = self.update_admission_probe.lock().unwrap().take() {
-            let _ = admitted.send(());
-        }
+        self.pass_update_request_probe(crate::worker::UpdateRequestPoint::Admission);
         let status = self.state_actor.status().await;
         if lifecycle::has_duplicate_pending_update(&status, target_revision) {
             return Err(WorkerExecutorError::invalid_request(

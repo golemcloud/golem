@@ -1259,7 +1259,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             #[cfg(any(test, feature = "test-utils"))]
             update_activation_gate: StdMutex::new(None),
             #[cfg(any(test, feature = "test-utils"))]
-            update_admission_probe: StdMutex::new(None),
+            update_request_probe: StdMutex::new(None),
             snapshot_exclusions: StdMutex::new(SnapshotExclusions::default()),
             startup_linear_memory_bytes: AtomicU64::new(0),
             memory_growth: StdMutex::new(Arc::new(PendingMemoryGrowth::default())),

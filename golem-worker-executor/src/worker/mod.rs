@@ -605,6 +605,18 @@ enum DeletionRuntime {
 /// If the queue is empty, the service can trigger invocations directly as an optimization.
 ///
 /// Every worker invocation should be done through this service.
+/// A point in an automatic update request that a test observes.
+#[cfg(any(test, feature = "test-utils"))]
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UpdateRequestPoint {
+    /// Right before the request submits its first status read. From there the request submits
+    /// the read without yielding, so the read queues behind a status fold that is held.
+    StatusRead,
+    /// The request holds the instance lock, before it reads the status for its duplicate check.
+    Admission,
+}
+
 #[cfg(any(test, feature = "test-utils"))]
 type UpdateActivationGate = (
     tokio::sync::oneshot::Sender<()>,
@@ -711,7 +723,7 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     #[cfg(any(test, feature = "test-utils"))]
     update_activation_gate: StdMutex<Option<UpdateActivationGate>>,
     #[cfg(any(test, feature = "test-utils"))]
-    update_admission_probe: StdMutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    update_request_probe: StdMutex<Option<(UpdateRequestPoint, tokio::sync::oneshot::Sender<()>)>>,
     /// The automatic snapshot entries that the starts of the agent exclude.
     snapshot_exclusions: StdMutex<SnapshotExclusions>,
     startup_linear_memory_bytes: AtomicU64,
