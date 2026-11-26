@@ -4515,7 +4515,7 @@
       "required": ["component", "agentType", "path", "schema", "fill", "sources", "catalogOrigin"],
       "properties": {
         "component": { "type": "string" },
-        "agentType": { "type": ["string", "null"] },
+        "agentType": { "type": "string" },
         "path": { "type": "array", "items": { "type": "string" } },
         "schema": { "$ref": "#/definitions/SchemaGraph" },
         "fill": {},
@@ -4786,16 +4786,19 @@
     },
     "component.manifest-trace": {
       "type": "object",
-      "description": "Manifest property traces and ordered config inputs. resolvedConfig is null by default; --build incrementally builds components and adds schema-validated static values and provenance from local component metadata, not deployed state.",
+      "description": "Manifest property traces. manifestOnly is true by default, and no existing Wasm is inspected. --build incrementally builds components and adds agent traces, schema-validated static values and provenance from local component metadata, not deployed state.",
       "x-golem-output-mode": "stream",
       "x-golem-command": "component manifest-trace",
-      "required": ["$type", "componentName", "properties", "resolvedConfig"],
+      "required": ["$type", "componentName", "manifestOnly", "properties", "resolvedConfig"],
       "properties": {
         "$type": {
           "const": "component.manifest-trace"
         },
         "componentName": {
           "type": "string"
+        },
+        "manifestOnly": {
+          "type": "boolean"
         },
         "properties": {
           "$ref": "#/definitions/ComponentLayerProperties"
@@ -4811,7 +4814,7 @@
         },
         "agents": {
           "type": "object",
-          "description": "The resolved layers of each agent type, keyed by agent type name. Absent when the component is not built.",
+          "description": "The resolved layers of each agent type, keyed by agent type name. Absent in manifest-only mode.",
           "additionalProperties": { "$ref": "#/definitions/AgentLayerProperties" }
         }
       },
@@ -4827,9 +4830,8 @@
         "build",
         "customCommands",
         "clean",
-        "configSchema",
         "nodeHttpRouters",
-        "configInputs",
+        "config",
         "env",
         "plugins",
         "files",
@@ -4845,12 +4847,8 @@
         "build": { "$ref": "#/definitions/ComponentLayerBuildCommandVecProperty" },
         "customCommands": { "$ref": "#/definitions/ComponentLayerCustomCommandsMapProperty" },
         "clean": { "$ref": "#/definitions/ComponentLayerStringVecProperty" },
-        "configSchema": { "$ref": "#/definitions/ComponentLayerConfigSchemaProperty" },
         "nodeHttpRouters": { "$ref": "#/definitions/ComponentLayerNodeHttpRoutersProperty" },
-        "configInputs": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/ConfigLayer" }
-        },
+        "config": { "$ref": "#/definitions/ComponentLayerJsonProperty" },
         "envMergeMode": { "$ref": "#/definitions/MapMergeMode" },
         "env": { "$ref": "#/definitions/ComponentLayerStringMapProperty" },
         "pluginsMergeMode": { "$ref": "#/definitions/VecMergeMode" },
@@ -4976,6 +4974,56 @@
       ]
     },
     "JsonMergeMode": { "type": "string", "enum": ["merge-object-replace-other"] },
+    "ComponentLayerJsonProperty": {
+      "type": "object",
+      "required": ["value", "trace"],
+      "properties": {
+        "value": { "$ref": "#/definitions/JsonValue" },
+        "trace": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ComponentLayerJsonTraceElem" }
+        }
+      },
+      "additionalProperties": false
+    },
+    "ComponentLayerJsonTraceElem": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "id"],
+          "properties": {
+            "type": { "const": "object-merge" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" },
+            "insertedEntries": { "type": "object", "additionalProperties": { "$ref": "#/definitions/JsonValue" } },
+            "updatedEntries": { "type": "object", "additionalProperties": { "$ref": "#/definitions/JsonValue" } }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "id", "mode", "newValue"],
+          "properties": {
+            "type": { "const": "replace" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" },
+            "mode": { "$ref": "#/definitions/JsonMergeMode" },
+            "newValue": { "$ref": "#/definitions/JsonValue" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "id"],
+          "properties": {
+            "type": { "const": "skip" },
+            "id": { "$ref": "#/definitions/ComponentLayerId" },
+            "selection": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
     "AgentLayerJsonProperty": {
       "type": "object",
       "required": [
@@ -5623,48 +5671,6 @@
       },
       "additionalProperties": false
     },
-    "ComponentLayerConfigSchemaProperty": {
-      "type": "object",
-      "required": ["value", "trace"],
-      "properties": {
-        "value": {
-          "oneOf": [
-            { "type": "null" },
-            { "$ref": "#/definitions/ComponentConfigSchema" }
-          ]
-        },
-        "trace": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/ComponentLayerConfigSchemaTraceElem" }
-        }
-      },
-      "additionalProperties": false
-    },
-    "ComponentLayerConfigSchemaTraceElem": {
-      "oneOf": [
-        {
-          "type": "object",
-          "required": ["type", "id", "value"],
-          "properties": {
-            "type": { "const": "override" },
-            "id": { "$ref": "#/definitions/ComponentLayerId" },
-            "selection": { "type": "string" },
-            "value": { "$ref": "#/definitions/ComponentConfigSchema" }
-          },
-          "additionalProperties": false
-        },
-        {
-          "type": "object",
-          "required": ["type", "id"],
-          "properties": {
-            "type": { "const": "skip" },
-            "id": { "$ref": "#/definitions/ComponentLayerId" },
-            "selection": { "type": "string" }
-          },
-          "additionalProperties": false
-        }
-      ]
-    },
     "ComponentLayerNodeHttpRoutersProperty": {
       "type": "object",
       "required": ["value", "trace"],
@@ -5724,18 +5730,6 @@
         "mount": { "type": "string" },
         "auth": { "type": "boolean" },
         "cors": { "type": "array", "items": { "type": "string" } }
-      },
-      "additionalProperties": false
-    },
-    "ComponentConfigSchema": {
-      "type": "object",
-      "required": ["schema"],
-      "properties": {
-        "schema": { "$ref": "#/definitions/SchemaGraph" },
-        "declarations": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/AgentConfigDeclarationSchema" }
-        }
       },
       "additionalProperties": false
     },
@@ -6392,15 +6386,6 @@
         { "type": "string" },
         { "type": "array", "items": { "type": "string" } }
       ]
-    },
-    "ConfigLayer": {
-      "type": "object",
-      "required": ["origin", "value"],
-      "properties": {
-        "origin": { "$ref": "#/definitions/ConfigOrigin" },
-        "value": { "$ref": "#/definitions/JsonValue" }
-      },
-      "additionalProperties": false
     },
     "VecMergeMode": { "type": "string", "enum": ["append", "prepend", "replace"] },
     "MapMergeMode": { "type": "string", "enum": ["upsert", "replace", "remove"] },

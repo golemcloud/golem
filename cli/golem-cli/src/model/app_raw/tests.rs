@@ -538,22 +538,6 @@ fn arb_initial_component_file_model() -> BoxedStrategy<InitialComponentFile> {
         .boxed()
 }
 
-fn arb_component_config_schema_model() -> BoxedStrategy<ComponentConfigSchema> {
-    arb_ident()
-        .prop_map(|name| ComponentConfigSchema {
-            schema: golem_common::schema::SchemaGraph::anonymous(
-                golem_common::schema::SchemaType::string(),
-            ),
-            declarations: vec![golem_common::schema::agent::AgentConfigDeclarationSchema {
-                source: golem_common::model::agent::AgentConfigSource::Local,
-                default_value: None,
-                path: vec![name],
-                value_type: golem_common::schema::SchemaType::string(),
-            }],
-        })
-        .boxed()
-}
-
 fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
     (
         any::<bool>(),
@@ -572,7 +556,6 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
             prop::collection::vec(arb_ident(), 0..=3),
         ),
         (
-            arb_opt(arb_component_config_schema_model()),
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
@@ -593,7 +576,7 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
                 is_default,
                 component_wasm,
                 (build_merge_mode, build, custom_commands, clean),
-                (config_schema, config, env_merge_mode, env),
+                (config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
                 (tools_merge_mode, tools),
             )| ComponentPreset {
@@ -605,7 +588,6 @@ fn arb_component_preset_model() -> BoxedStrategy<ComponentPreset> {
                 build,
                 custom_commands,
                 clean,
-                config_schema,
                 config,
                 initial_card: None,
                 env_merge_mode,
@@ -639,7 +621,6 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
             prop::collection::vec(arb_ident(), 0..=3),
         ),
         (
-            arb_opt(arb_component_config_schema_model()),
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
@@ -662,7 +643,7 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 (templates, guest_language),
                 component_wasm,
                 (build_merge_mode, build, custom_commands, clean),
-                (config_schema, config, env_merge_mode, env),
+                (config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
                 (tools_merge_mode, tools),
                 presets,
@@ -676,7 +657,6 @@ fn arb_component_template_model() -> BoxedStrategy<ComponentTemplate> {
                 build,
                 custom_commands,
                 clean,
-                config_schema,
                 config,
                 initial_card: None,
                 env_merge_mode,
@@ -712,7 +692,6 @@ fn arb_component_model() -> BoxedStrategy<Component> {
             prop::collection::vec(arb_ident(), 0..=3),
         ),
         (
-            arb_opt(arb_component_config_schema_model()),
             arb_opt(arb_json_value()),
             arb_opt(arb_map_merge_mode_model()),
             arb_opt(arb_string_index_map_model()),
@@ -736,7 +715,7 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 dir,
                 component_wasm,
                 (build_merge_mode, build, custom_commands, clean),
-                (config_schema, config, env_merge_mode, env),
+                (config, env_merge_mode, env),
                 (plugins_merge_mode, plugins, files_merge_mode, files),
                 (tools_merge_mode, tools),
                 presets,
@@ -750,7 +729,6 @@ fn arb_component_model() -> BoxedStrategy<Component> {
                 build,
                 custom_commands,
                 clean,
-                config_schema,
                 config,
                 initial_card: None,
                 env_merge_mode,
@@ -1949,27 +1927,33 @@ fn schema_and_parser_reject_unsupported_wasi_config() {
 }
 
 #[test]
-fn schema_and_serde_accept_inherited_component_config_schema() {
-    let config_schema = serde_json::to_value(
-        arb_component_config_schema_model()
-            .new_tree(&mut proptest::test_runner::TestRunner::deterministic())
-            .unwrap()
-            .current(),
-    )
-    .unwrap();
+fn schema_and_serde_reject_component_config_schema() {
     let value = serde_json::json!({
         "app": "test-app",
         "componentTemplates": {"configured": {
-            "configSchema": config_schema,
-            "presets": {"custom": {"configSchema": config_schema}}
+            "presets": {"custom": {}}
         }},
         "components": {"app:main": {
             "templates": "configured", "componentWasm": "main.wasm",
-            "presets": {"custom": {"configSchema": config_schema}}
+            "presets": {"custom": {}}
         }}
     });
     assert!(JSON_SCHEMA_VALIDATOR.is_valid(&value));
-    serde_json::from_value::<Application>(value).unwrap();
+    for path in [
+        "/componentTemplates/configured",
+        "/componentTemplates/configured/presets/custom",
+        "/components/app:main",
+        "/components/app:main/presets/custom",
+    ] {
+        let mut unsupported = value.clone();
+        unsupported.pointer_mut(path).unwrap()["configSchema"] = serde_json::json!({});
+        assert!(!JSON_SCHEMA_VALIDATOR.is_valid(&unsupported), "{path}");
+        let error = serde_json::from_value::<Application>(unsupported).unwrap_err();
+        assert!(
+            error.to_string().contains("configSchema"),
+            "{path}: {error}"
+        );
+    }
 }
 
 #[test]

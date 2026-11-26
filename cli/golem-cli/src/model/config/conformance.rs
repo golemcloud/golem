@@ -237,7 +237,7 @@ fn provisioning_binding_preserves_nested_origins_and_portable_locations() {
     let wasm = app.join("main.wasm");
     let field = StaticConfigFieldView {
         component: ComponentName("app:main".into()),
-        agent_type: None,
+        agent_type: golem_common::model::agent::AgentTypeName("Main".into()),
         path: vec!["settings".into()],
         schema: SchemaGraph::empty(),
         fill: json!({"timeout": 3000, "maxRetries": 5, "batchSize": 20}).into(),

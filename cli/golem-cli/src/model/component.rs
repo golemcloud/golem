@@ -57,9 +57,7 @@ use golem_common::model::environment::EnvironmentId;
 use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionConfig};
 use golem_common::model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolMiddlewareName};
 use golem_common::model::{diff, tool};
-use golem_common::schema::agent::{
-    AgentTypeKind, AgentTypeSchema, ComponentConfigSchema, InputSchema, OutputSchema,
-};
+use golem_common::schema::agent::{AgentTypeKind, AgentTypeSchema, InputSchema, OutputSchema};
 use golem_common::schema::graph::SchemaGraph;
 use golem_common::schema::tool::Tool;
 use heck::{ToLowerCamelCase, ToSnakeCase};
@@ -502,8 +500,6 @@ pub fn agent_type_reads_identity_from_env(agent_type: &AgentTypeSchema) -> bool 
 pub struct ComponentDeployProperties {
     pub wasm_path: PathBuf,
     pub package_metadata: Option<golem_common::model::component::ComponentPackageMetadata>,
-    pub config_schema: ComponentConfigSchema,
-    pub component_config: Vec<ConfigBindingDto>,
     pub static_config: Vec<crate::model::config::StaticConfigFieldView>,
     pub component_initial_card: Option<ParsedInitialPermissionCard>,
     pub component_env: BTreeMap<String, String>,
@@ -1533,10 +1529,10 @@ impl StructuredOutput for ComponentGetView {
 #[serde(rename_all = "camelCase")]
 pub struct ComponentManifestTraceView {
     pub component_name: ComponentName,
+    pub manifest_only: bool,
     pub properties: ComponentLayerProperties,
     pub resolved_config: Option<Vec<StaticConfigFieldView>>,
-    /// The resolved layers of each agent type of the component. Empty when the component is not
-    /// built, because the agent types come from the built component.
+    /// The resolved layers of each agent type of the component. Empty in manifest-only mode.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub agents: BTreeMap<AgentTypeName, AgentLayerProperties>,
 }
@@ -1578,16 +1574,6 @@ impl Masked for ComponentManifestTraceView {
             self.properties
                 .config
                 .for_each_value_mut(mask_json_leaf_values);
-            for input in &mut self.properties.config_layers {
-                mask_json_leaf_values(&mut input.value);
-            }
-            self.properties.config_schema.for_each_value_mut(|schema| {
-                for declaration in &mut schema.declarations {
-                    if let Some(value) = &mut declaration.default_value {
-                        *value = golem_common::schema::SchemaValue::String(mask_secret());
-                    }
-                }
-            });
             self.properties
                 .env
                 .for_each_value_mut(|key, value| mask_manifest_env(key, value));

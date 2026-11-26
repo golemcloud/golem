@@ -37,7 +37,6 @@ impl ComponentMetadata {
 
     pub fn analyse_component_with_config(
         data: &[u8],
-        config_schema: ComponentConfigSchema,
         component_provision_config: ComponentProvisionConfig,
         agent_types: Vec<AgentTypeSchema>,
         agent_type_provision_configs: BTreeMap<AgentTypeName, AgentTypeProvisionConfig>,
@@ -51,7 +50,6 @@ impl ComponentMetadata {
             tools,
             tool_middlewares,
         );
-        metadata.config_schema = config_schema;
         metadata.component_provision_config = component_provision_config;
         Ok(Self {
             data: Arc::new(metadata),
@@ -192,7 +190,6 @@ impl RawComponentMetadata {
             known_exports: self.known_exports,
             producers,
             memories,
-            config_schema: ComponentConfigSchema::default(),
             component_provision_config: ComponentProvisionConfig::default(),
             agent_method_streams: ComponentMetadata::derive_agent_method_streams(&agent_types),
             agent_types,

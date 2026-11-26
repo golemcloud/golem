@@ -7,7 +7,6 @@ import "golem/component/agent_files.proto";
 import "golem/component/plugin.proto";
 import "golem/component/producers.proto";
 import "golem/component/linear_memory.proto";
-import "golem/component/config_binding.proto";
 import "golem/common/empty.proto";
 import "golem/schema/agent.proto";
 import "golem/tool/tool.proto";
@@ -29,7 +28,6 @@ message ComponentMetadata {
   map<string, golem.component.AgentTypeProvisionConfig> agent_type_provision_configs = 9;
   map<string, ToolDeploymentMetadata> tools = 11;
   map<string, AgentMethodStreams> agent_method_streams = 12;
-  golem.schema.ComponentConfigSchema config_schema = 13;
   ComponentProvisionConfig component_provision_config = 14;
   map<string, ToolMiddlewareDeploymentMetadata> tool_middlewares = 15;
   map<string, uint32> agent_type_ids = 16;
@@ -38,7 +36,6 @@ message ComponentMetadata {
 
 message ComponentProvisionConfig {
   map<string, string> env = 1;
-  repeated ConfigBinding config = 2;
   repeated PluginInstallation plugins = 3;
   repeated InitialAgentFile files = 4;
   bytes initial_permissions = 5;

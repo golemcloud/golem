@@ -18,7 +18,7 @@ use crate::base_model::tool_middleware::{ToolMiddlewareDeploymentMetadata, ToolM
 use crate::base_model::worker::TypedAgentConfigEntry;
 use crate::model::agent::AgentTypeName;
 use crate::model::card::PolymorphicCard;
-use crate::schema::{AgentTypeSchema, ComponentConfigSchema, TypedSchemaValue};
+use crate::schema::{AgentTypeSchema, TypedSchemaValue};
 use serde::{Deserialize, Serialize, Serializer};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -192,10 +192,6 @@ pub struct ComponentMetadataInnerData {
     pub producers: Vec<Producers>,
     pub memories: Vec<LinearMemory>,
 
-    #[serde(default)]
-    #[cfg_attr(feature = "full", oai(default))]
-    pub config_schema: ComponentConfigSchema,
-
     pub component_provision_config: ComponentProvisionConfig,
 
     #[serde(default)]
@@ -232,9 +228,6 @@ crate::declare_structs! {
         pub known_exports: KnownExports,
         pub producers: Vec<Producers>,
         pub memories: Vec<LinearMemory>,
-        #[serde(default)]
-        #[cfg_attr(feature = "full", oai(default))]
-        pub config_schema: ComponentConfigSchema,
         pub component_provision_config: ComponentProvisionConfig,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
@@ -273,7 +266,6 @@ impl From<ComponentMetadata> for ComponentMetadataDto {
             known_exports: data.known_exports,
             producers: data.producers,
             memories: data.memories,
-            config_schema: data.config_schema,
             component_provision_config: data.component_provision_config,
             agent_types: data
                 .agent_types
@@ -333,7 +325,6 @@ impl From<ComponentMetadataDto> for ComponentMetadata {
                 known_exports: value.known_exports,
                 producers: value.producers,
                 memories: value.memories,
-                config_schema: value.config_schema,
                 component_provision_config: value.component_provision_config,
                 agent_types,
                 agent_type_ids,
@@ -436,8 +427,6 @@ pub struct ComponentProvisionConfig {
     #[serde(default)]
     pub env: BTreeMap<String, String>,
     #[serde(default)]
-    pub config: ConfigBindings,
-    #[serde(default)]
     pub plugins: Vec<InstalledPlugin>,
     #[serde(default)]
     pub files: Vec<InitialAgentFile>,
@@ -449,7 +438,6 @@ impl Default for ComponentProvisionConfig {
             initial_permissions: crate::model::component::AgentTypeInitialPermissions::default()
                 .to_polymorphic_card(),
             env: BTreeMap::new(),
-            config: ConfigBindings::default(),
             plugins: Vec::new(),
             files: Vec::new(),
         }
