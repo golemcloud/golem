@@ -18,8 +18,8 @@ use crate::durable_host::durability::GuestImportNumbering;
 use futures::future::Either;
 use futures::stream::FuturesUnordered;
 use futures::{FutureExt, StreamExt};
+use golem_common::model::InterruptKind;
 use golem_common::model::entity::EntityInvocationId;
-use golem_service_base::error::worker_executor::InterruptKind;
 use tokio::sync::Notify;
 use wasmtime::component::{
     RuntimeActivityId, RuntimeActivityKind, RuntimeInvalidation, RuntimeObservation,

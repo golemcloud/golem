@@ -61,6 +61,7 @@ use async_trait::async_trait;
 use golem_common::base_model::OplogIndex;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::model::InterruptKind;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::AccountUsagePeriod;
 use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
@@ -80,9 +81,7 @@ use golem_common::model::{
 use golem_common::resource_runtime::Uri;
 use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_common::schema::SchemaValue;
-use golem_service_base::error::worker_executor::{
-    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
-};
+use golem_service_base::error::worker_executor::{GolemSpecificWasmTrap, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
 use std::collections::HashSet;

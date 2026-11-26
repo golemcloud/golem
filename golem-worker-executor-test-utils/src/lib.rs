@@ -64,6 +64,7 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::regions::OplogRegion;
 mod oplog_fixture;
+use golem_common::model::InterruptKind;
 use golem_common::model::agent::{AgentConfigEntryDto, AgentMetadataDto};
 use golem_common::model::plan::PlanId;
 use golem_common::model::retry_policy::NamedRetryPolicy;
@@ -78,9 +79,7 @@ use golem_common::resource_runtime::{ResourceStore, ResourceTypeId};
 use golem_common::schema::{FromSchema, IntoTypedSchemaValue, SchemaValue, TypedSchemaValue};
 use golem_service_base::clients::registry::RegistryService;
 use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
-use golem_service_base::error::worker_executor::{
-    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
-};
+use golem_service_base::error::worker_executor::{GolemSpecificWasmTrap, WorkerExecutorError};
 use golem_service_base::grpc::server::GrpcServerTlsConfig;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::{AuthCtx, UserAuthCtx};
@@ -1982,7 +1981,7 @@ impl TestWorkerExecutor {
     pub async fn interrupt_loaded_worker(
         &self,
         agent_id: &AgentId,
-        kind: golem_service_base::error::worker_executor::InterruptKind,
+        kind: golem_common::model::InterruptKind,
     ) -> anyhow::Result<()> {
         let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
         let worker = self

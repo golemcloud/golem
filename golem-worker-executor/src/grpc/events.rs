@@ -14,11 +14,12 @@
 
 use super::{
     AgentEvent, AgentStatus, BroadcastStreamRecvError, ConnectWorkerRequest, Context, HasAll,
-    InternalWorkerEvent, InterruptKind, Pin, Poll, Response, Status, Stream, Timestamp,
-    UsesAllDeps, Worker, WorkerCtx, WorkerEventReceiver, WorkerExecutor, WorkerExecutorError,
-    WorkerExecutorImpl, extract_caller, extract_owned_agent_id, golem, info,
-    record_closed_grpc_api_active_stream, record_new_grpc_api_active_stream,
+    InternalWorkerEvent, Pin, Poll, Response, Status, Stream, Timestamp, UsesAllDeps, Worker,
+    WorkerCtx, WorkerEventReceiver, WorkerExecutor, WorkerExecutorError, WorkerExecutorImpl,
+    extract_caller, extract_owned_agent_id, golem, info, record_closed_grpc_api_active_stream,
+    record_new_grpc_api_active_stream,
 };
+use golem_common::model::InterruptKind;
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
     WorkerExecutorImpl<Ctx, Svcs>

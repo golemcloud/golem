@@ -20,6 +20,7 @@ use super::{RetirementReason, Worker};
 use crate::services::{HasAll, HasOplogService, HasWorkerService};
 use crate::workerctx::WorkerCtx;
 use golem_common::model::AgentStatusRecord;
+use golem_common::model::InterruptKind;
 use golem_common::model::agent::ScheduleId;
 use golem_common::model::agent::{AgentMode, ParsedAgentKey};
 use golem_common::model::agent::{ResolvedRevert, RevertWorkerTarget};
@@ -28,7 +29,7 @@ use golem_common::model::oplog::{OplogEntry, OplogErrorKind, OplogIndex};
 use golem_common::model::{
     AgentFingerprint, AgentStatus, OwnedAgentId, PendingUpdateKind, Timestamp,
 };
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use tracing::{debug, info, warn};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

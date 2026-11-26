@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use crate::durable_host::durability::InterruptSources;
-use golem_service_base::error::worker_executor::InterruptKind;
+use golem_common::model::InterruptKind;
 use std::future::Future;
 use std::pin::Pin;
 

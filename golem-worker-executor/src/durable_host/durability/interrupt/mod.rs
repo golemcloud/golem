@@ -15,8 +15,8 @@
 use crate::durable_host::DurableWorkerCtx;
 use crate::model::ExecutionStatus;
 use crate::workerctx::WorkerCtx;
+use golem_common::model::InterruptKind;
 use golem_common::model::Timestamp;
-use golem_service_base::error::worker_executor::InterruptKind;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;

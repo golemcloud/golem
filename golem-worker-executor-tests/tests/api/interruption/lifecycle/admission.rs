@@ -4,8 +4,8 @@ use golem_worker_executor_test_utils::callers;
 mod initialization {
     use super::*;
     use anyhow::Context as _;
+    use golem_common::model::InterruptKind;
     use golem_common::model::oplog::{AgentError, OplogEntry, OplogErrorKind};
-    use golem_service_base::error::worker_executor::InterruptKind;
     use golem_worker_executor::services::{HasOplog, UsesAllDeps};
     use golem_worker_executor::worker::Worker;
     use pretty_assertions::assert_eq;

@@ -47,6 +47,7 @@ use crate::worker::{InvocationFailureDecision, RetryDecision, Worker, WorkerDele
 use async_trait::async_trait;
 use golem_common::base_model::component_metadata::AgentTypeProvisionConfig;
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId;
+use golem_common::model::InterruptKind;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
@@ -63,7 +64,7 @@ use golem_common::model::{
 };
 use golem_common::resource_runtime::ResourceStore;
 use golem_common::schema::SchemaValue;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
 use std::collections::HashSet;

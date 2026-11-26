@@ -6,8 +6,9 @@ use crate::services::resource_usage_metering::{
 };
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
+use golem_common::model::InterruptKind;
 use golem_common::model::{OplogIndex, Timestamp};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;

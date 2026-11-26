@@ -69,6 +69,7 @@ use arc_swap::ArcSwap;
 
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
+use golem_common::model::InterruptKind;
 use golem_common::model::InvocationId;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
@@ -78,7 +79,7 @@ use golem_common::model::oplog::{
 use golem_common::model::{
     AgentFingerprint, AgentStatus, AgentStatusRecord, OwnedAgentId, ScheduledAction, Timestamp,
 };
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::any::Any;
 use std::collections::BTreeMap;
 use std::future::Future;

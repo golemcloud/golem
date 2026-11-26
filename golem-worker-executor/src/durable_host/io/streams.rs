@@ -531,8 +531,8 @@ fn file_stream_replay_divergence(got: u64, expected: u64) -> StreamError {
 #[cfg(test)]
 mod tcp_input_tests {
     use super::{NativeIoWait, interruptible_tcp_input};
+    use golem_common::model::InterruptKind;
     use golem_common::model::Timestamp;
-    use golem_service_base::error::worker_executor::InterruptKind;
     use std::future::{pending, poll_fn, ready};
     use std::task::Poll;
     use test_r::{test, timeout};
@@ -610,7 +610,7 @@ mod tcp_input_tests {
 #[cfg(test)]
 mod file_observation_tests {
     use super::*;
-    use golem_service_base::error::worker_executor::InterruptKind;
+    use golem_common::model::InterruptKind;
     use test_r::test;
 
     #[test]

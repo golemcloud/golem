@@ -58,6 +58,7 @@ use async_lock::Mutex;
 use futures::FutureExt;
 use futures::channel::oneshot::{self, Sender};
 use futures::future::{BoxFuture, Shared};
+use golem_common::model::InterruptKind;
 use golem_common::model::agent::{AgentMode, OwnerKind, ParsedAgentKey};
 use golem_common::model::component::{CanonicalFilePath, ComponentRevision};
 use golem_common::model::filesystem::{FileByteSelection, FileReadError};
@@ -74,7 +75,7 @@ use golem_common::model::{
     invocation_context::{AttributeValue, InvocationContextStack, SpanId},
 };
 use golem_common::retries::get_delay;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 use uuid::Uuid;

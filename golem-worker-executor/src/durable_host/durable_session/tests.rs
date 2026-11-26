@@ -287,9 +287,8 @@ async fn quiet_durable_source_stop_preserves_journal_and_same_key_continuation()
     );
     let (guard, live_calls) = receive_guard_counts();
     let (stop, signal) = oneshot::channel();
-    let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
-        golem_common::model::Timestamp::now_utc(),
-    );
+    let kind =
+        golem_common::model::InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
     let (mut suspension, owner, _timer) = receive_wait_for_test();
     suspension.interrupt = Box::pin(async move { signal.await.unwrap() });
     input.pending = Some(input.input.receive(Some(guard), Some(suspension)));
@@ -312,7 +311,7 @@ async fn quiet_durable_source_stop_preserves_journal_and_same_key_continuation()
         .expect("quiet durable demand must observe the published stop");
     let error = input.finish_receive(read).unwrap_err();
     assert_eq!(
-        error.downcast_ref::<golem_service_base::error::worker_executor::InterruptKind>(),
+        error.downcast_ref::<golem_common::model::InterruptKind>(),
         Some(&kind)
     );
     assert_eq!(input.input.consumer_read_ordinal, 0);
@@ -473,9 +472,8 @@ async fn source_selected_item_finishes_consumer_commit_before_later_stop() {
     let (guard, live_calls) = receive_guard_counts();
     let stop = tokio_util::sync::CancellationToken::new();
     let cancelled = stop.clone();
-    let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
-        golem_common::model::Timestamp::now_utc(),
-    );
+    let kind =
+        golem_common::model::InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
     let (mut suspension, owner, _timer) = receive_wait_for_test();
     suspension.interrupt = Box::pin(async move {
         cancelled.cancelled().await;

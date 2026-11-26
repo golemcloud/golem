@@ -567,7 +567,7 @@ async fn p3_unread_response_reconstructs_with_changed_drop_schedule(
             executor
                 .interrupt_loaded_worker(
                     &worker.agent_id,
-                    golem_service_base::error::worker_executor::InterruptKind::Suspend(
+                    golem_common::model::InterruptKind::Suspend(
                         golem_common::model::Timestamp::now_utc(),
                     ),
                 )

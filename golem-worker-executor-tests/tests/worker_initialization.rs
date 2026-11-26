@@ -1367,8 +1367,8 @@ async fn grpc_create_preserves_interrupted_constructor_retry_across_restart(
         CreateWorkerRequest, CreateWorkerResponse, create_worker_response,
     };
     use golem_common::model::AgentStatus;
+    use golem_common::model::InterruptKind;
     use golem_common::model::oplog::{AgentError, OplogErrorKind};
-    use golem_service_base::error::worker_executor::InterruptKind;
 
     let context = TestContext::new(last_unique_id);
     let faults = KeyValueStorageFaults::default();

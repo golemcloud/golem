@@ -38,6 +38,7 @@ use crate::preview2::golem::tool::host::{ByteStreamCloseCause, ByteStreamFailure
 use crate::services::environment_state::ToolDiscoveryError;
 use futures::FutureExt;
 use golem_common::base_model::durable_stream::StreamTerminal;
+use golem_common::model::InterruptKind;
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::application::ApplicationName;
@@ -74,7 +75,7 @@ use golem_common::schema::{
     TypeId, TypedSchemaValue,
 };
 use golem_schema::schema::SchemaValueStream;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

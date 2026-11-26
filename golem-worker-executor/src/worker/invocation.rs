@@ -32,6 +32,7 @@ use crate::services::oplog::UnreadableOplog;
 use crate::workerctx::{PublicWorkerIo, ResultRecordedAt, WorkerCtx};
 use futures::FutureExt;
 use golem_common::model::AgentId;
+use golem_common::model::InterruptKind;
 use golem_common::model::agent::{AgentMode, ParsedAgentKey, ResolvedOwnerContext};
 use golem_common::model::component_metadata::{AgentMethodStreamMetadata, ComponentMetadata};
 use golem_common::model::oplog::AgentError as OplogAgentError;
@@ -50,9 +51,7 @@ use golem_common::schema::schema_type::SchemaType;
 use golem_common::schema::validation::value::validate_value;
 use golem_schema::schema::wit::wire as core_wire;
 use golem_schema::schema::wit::{decode_value_with, encode_value_with, encode_value_with_streams};
-use golem_service_base::error::worker_executor::{
-    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
-};
+use golem_service_base::error::worker_executor::{GolemSpecificWasmTrap, WorkerExecutorError};
 use std::future::Future;
 use std::pin::Pin;
 use tracing::{Instrument, Level, debug, span};

@@ -82,6 +82,7 @@ use crate::worker::{
 };
 use crate::workerctx::WorkerCtx;
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::InterruptKind;
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::InvocationFreshnessDisposition;
@@ -94,7 +95,6 @@ use golem_common::model::entity::{
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::invocation_context::InvocationContextStack;
 use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OwnedAgentId, Timestamp};
-use golem_service_base::error::worker_executor::InterruptKind;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::service::initial_agent_files::InitialAgentFilesService;
 use wasmtime::Store;

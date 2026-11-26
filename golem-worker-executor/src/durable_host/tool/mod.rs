@@ -177,6 +177,7 @@ use crate::worker::invocation::{
 use crate::workerctx::WorkerCtx;
 use crate::workerctx::WorkerCtxExecutable;
 use anyhow::{Context, anyhow};
+use golem_common::model::InterruptKind;
 use golem_common::model::OwnedAgentId;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::ResolvedOwnerContext;
@@ -225,9 +226,7 @@ use golem_common::schema::{
 };
 use golem_common::schema::{IntoTypedSchemaValue, SchemaGraph};
 use golem_schema::schema::SchemaValueStream;
-use golem_service_base::error::worker_executor::{
-    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
-};
+use golem_service_base::error::worker_executor::{GolemSpecificWasmTrap, WorkerExecutorError};
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Mutex;

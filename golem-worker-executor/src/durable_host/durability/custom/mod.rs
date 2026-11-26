@@ -28,6 +28,7 @@ use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::oplog::OplogOps;
 use crate::services::{HasShutdownToken, HasWorker};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::InterruptKind;
 use golem_common::model::Timestamp;
 use golem_common::model::entity::{AgentEntity, OwnerRuntime};
 use golem_common::model::oplog::host_functions::HostFunctionName;
@@ -35,7 +36,7 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostRequest, HostResponse, OplogEntry, OplogIndex,
 };
 use golem_common::model::retry_policy::NamedRetryPolicy;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};

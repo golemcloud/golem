@@ -250,7 +250,7 @@ pub(crate) enum AgentOpenRouteError {
     Unsupported,
     SymlinkLoop,
     Filesystem(AgentFilesystemError),
-    Interrupted(golem_service_base::error::worker_executor::InterruptKind),
+    Interrupted(golem_common::model::InterruptKind),
 }
 
 impl From<AgentOpenPolicyError> for AgentOpenRouteError {
@@ -328,21 +328,15 @@ pub(crate) async fn run_agent_filesystem_call<T: Send + 'static>(
     }
 }
 
-pub(crate) type FilesystemInterruptSignal = std::pin::Pin<
-    Box<
-        dyn std::future::Future<Output = golem_service_base::error::worker_executor::InterruptKind>
-            + Send,
-    >,
->;
+pub(crate) type FilesystemInterruptSignal =
+    std::pin::Pin<Box<dyn std::future::Future<Output = golem_common::model::InterruptKind> + Send>>;
 
 /// Stops guest observation only. Dropping a started FilesystemCall retains its operation and lease
 /// under the filesystem owner, so drain can still wait for backend completion.
 pub(crate) async fn observe_filesystem_operation<T>(
-    interrupt: impl std::future::Future<
-        Output = golem_service_base::error::worker_executor::InterruptKind,
-    >,
+    interrupt: impl std::future::Future<Output = golem_common::model::InterruptKind>,
     operation: impl std::future::Future<Output = T>,
-) -> Result<T, golem_service_base::error::worker_executor::InterruptKind> {
+) -> Result<T, golem_common::model::InterruptKind> {
     tokio::select! { biased; result = operation => Ok(result), kind = interrupt => Err(kind) }
 }
 

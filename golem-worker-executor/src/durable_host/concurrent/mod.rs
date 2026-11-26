@@ -34,15 +34,14 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::InterruptKind;
 use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::{
     DeniablePair, DurableFunctionType, HostPayloadPair, HostRequest, HostResponse, OplogEntry,
     OplogIndex, OplogPayload, host_functions::HostFunctionName,
 };
 use golem_common::model::{RetryProperties, Timestamp};
-use golem_service_base::error::worker_executor::{
-    GolemSpecificWasmTrap, InterruptKind, WorkerExecutorError,
-};
+use golem_service_base::error::worker_executor::{GolemSpecificWasmTrap, WorkerExecutorError};
 use tokio::sync::mpsc::UnboundedSender;
 use tokio::sync::oneshot;
 use wasmtime::component::{Accessor, HasData, TerminalConsumption};

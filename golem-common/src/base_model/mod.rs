@@ -42,6 +42,7 @@ pub mod environment_tool_middleware_grant;
 pub mod error;
 pub mod external_agent_secret;
 pub mod http_api_deployment;
+pub mod interrupt;
 pub mod invocation_context;
 pub mod invocation_id;
 pub mod json;
@@ -70,6 +71,7 @@ pub mod worker;
 pub mod worker_filter;
 
 pub use durable_stream::*;
+pub use interrupt::InterruptKind;
 pub use invocation_id::{
     IdempotencyScope, InvocationOwner, InvocationRequestKey, OwnedInvocationId,
     StandaloneToolInvocation,

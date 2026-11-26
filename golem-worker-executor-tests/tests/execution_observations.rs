@@ -1,4 +1,5 @@
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_common::model::InterruptKind;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_worker_executor::durable_host::tool::ToolOwnerFailureMetadata;
 use golem_worker_executor::worker::Worker;
 use golem_worker_executor::workerctx::WorkerCtx;

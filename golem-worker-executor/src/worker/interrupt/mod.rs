@@ -20,7 +20,7 @@
 
 use super::{PendingWorkerInterrupt, WorkerInterruptState};
 use async_lock::{Mutex, MutexGuard};
-use golem_service_base::error::worker_executor::InterruptKind;
+use golem_common::model::InterruptKind;
 use std::ops::{Deref, DerefMut};
 use tokio::sync::watch;
 

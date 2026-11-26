@@ -21,11 +21,12 @@ use crate::services::{HasActiveAgents, HasWorker};
 use crate::workerctx::WorkerCtx;
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
+use golem_common::model::InterruptKind;
 use golem_common::model::Timestamp;
 use golem_common::model::card::{CardId, ScopeCard, StoredCard};
 use golem_common::model::entity::OwnerRuntime;
 use golem_common::model::oplog::UpdateDescription;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::BTreeMap;
 use std::sync::{Arc, Weak};
 
@@ -141,7 +142,7 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
             let _application = task_application;
             let result = async {
                 let _admission = admission.ok_or(WorkerExecutorError::Interrupted {
-                    kind: golem_service_base::error::worker_executor::InterruptKind::Jump,
+                    kind: golem_common::model::InterruptKind::Jump,
                 })?;
                 if let Some(predecessor) = predecessor {
                     predecessor.result.clone().await?;
@@ -374,7 +375,7 @@ pub(super) fn reserve<Ctx: WorkerCtx>(
             drop(order);
             worker.recover_wallet_generation();
             return Err(WorkerExecutorError::Interrupted {
-                kind: golem_service_base::error::worker_executor::InterruptKind::Jump,
+                kind: golem_common::model::InterruptKind::Jump,
             });
         }
         order.tail = Arc::downgrade(&application);

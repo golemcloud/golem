@@ -4,6 +4,7 @@ use crate::services::oplog::{CommitLevel, OplogAddReceipt, OrderedOplogStart, Pe
 use crate::services::worker_fork::ForkCallOwner;
 use crate::services::worker_fork::publication::write_guest_result;
 use async_trait::async_trait;
+use golem_common::model::InterruptKind;
 use golem_common::model::InvocationRequestOperation;
 use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::card::{
@@ -27,7 +28,6 @@ use golem_common::model::oplog::{
 use golem_common::model::regions::OplogRegion;
 use golem_common::model::{AgentId, ForkResult, Timestamp};
 use golem_common::schema::IntoTypedSchemaValue;
-use golem_service_base::error::worker_executor::InterruptKind;
 use std::collections::BTreeMap;
 use std::time::Duration;
 use test_r::test;

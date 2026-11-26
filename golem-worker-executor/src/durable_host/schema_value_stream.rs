@@ -226,15 +226,23 @@ impl ProjectionStreamHandler for ExecutorProjectionStreams {
                                     ),
                                 }
                             }
-                            Ok(Some(DurableInputEvent::Terminal { authored_by, terminal })) => {
-                                (Box::pin(publisher.publish_terminal(authored_by, terminal)), true)
-                            }
+                            Ok(Some(DurableInputEvent::Terminal {
+                                authored_by,
+                                terminal,
+                            })) => (
+                                Box::pin(publisher.publish_terminal(authored_by, terminal)),
+                                true,
+                            ),
                             Ok(None) => {
                                 source.abort_for_teardown();
                                 target_lifecycle.abort();
                                 return;
                             }
-                            Err(error) if error.downcast_ref::<golem_service_base::error::worker_executor::InterruptKind>().is_some() => {
+                            Err(error)
+                                if error
+                                    .downcast_ref::<golem_common::model::InterruptKind>()
+                                    .is_some() =>
+                            {
                                 source.abort_for_teardown();
                                 target_lifecycle.abort();
                                 return;
@@ -786,9 +794,8 @@ mod tests {
             matches!(subscriber.recv().await.unwrap().payload, LiveStreamEventPayload::Item(SchemaValue::Record { fields }) if fields == vec![SchemaValue::String("seven".into()), SchemaValue::U64(7)])
         );
         let (stop, signal) = tokio::sync::oneshot::channel();
-        let kind = golem_service_base::error::worker_executor::InterruptKind::Suspend(
-            golem_common::model::Timestamp::now_utc(),
-        );
+        let kind =
+            golem_common::model::InterruptKind::Suspend(golem_common::model::Timestamp::now_utc());
         let cancelled = {
             let lifecycle = lifecycle.clone();
             async move { lifecycle.cancelled().await }

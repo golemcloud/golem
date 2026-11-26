@@ -13271,7 +13271,7 @@ async fn a_stop_while_the_result_is_recorded_interrupts_a_drain_with_a_staged_ca
     });
     assert!(matches!(
         tokio::time::timeout(std::time::Duration::from_secs(30), accepted).await?,
-        golem_service_base::error::worker_executor::InterruptKind::Interrupt(_)
+        golem_common::model::InterruptKind::Interrupt(_)
     ));
     tokio::time::timeout(
         std::time::Duration::from_secs(30),
@@ -13698,7 +13698,7 @@ async fn suspended_restart_replays_completed_tool_without_semantic_retry(
     let restart = tokio::spawn(async move {
         let worker = drain_worker.primary();
         worker
-            .set_interrupting(golem_service_base::error::worker_executor::InterruptKind::Restart)
+            .set_interrupting(golem_common::model::InterruptKind::Restart)
             .await?;
         worker.join_accepted_stops_for_test().await
     });

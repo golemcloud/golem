@@ -25,6 +25,7 @@ use crate::services::oplog::OplogError;
 use crate::workerctx::WorkerCtx;
 use anyhow::Error;
 use async_trait::async_trait;
+use golem_common::model::InterruptKind;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::oplog::{DurableFunctionType, OplogEntry, OplogErrorKind, OplogIndex};
@@ -32,7 +33,6 @@ use golem_common::model::{
     NamedRetryPolicy, PredicateValue, RetryEvaluationError, RetryPolicyState, RetryProperties,
     RetryVerdict, ThreadRng, Timestamp,
 };
-use golem_service_base::error::worker_executor::InterruptKind;
 use std::collections::{BTreeMap, HashMap};
 use std::fmt::Display;
 use std::future::Future;

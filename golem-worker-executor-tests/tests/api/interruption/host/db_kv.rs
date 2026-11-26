@@ -1,9 +1,9 @@
 use super::*;
 use anyhow::{Context as _, ensure};
+use golem_common::model::InterruptKind;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, OplogEntry};
 use golem_common::model::{RdbmsPoolKey, TransactionId};
-use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor::services::rdbms::ignite::IgniteType;
 use golem_worker_executor::services::rdbms::mysql::MysqlType;

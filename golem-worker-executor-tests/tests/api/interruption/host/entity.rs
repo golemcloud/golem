@@ -6,6 +6,7 @@
 use super::*;
 use anyhow::Context as _;
 use golem_common::base_model::json::NormalizedJsonValue;
+use golem_common::model::InterruptKind;
 use golem_common::model::account::AccountEmail;
 use golem_common::model::agent::ResolvedOwnerContext;
 use golem_common::model::component::ComponentName;
@@ -20,7 +21,6 @@ use golem_common::model::tool::{
     ToolProvisionConfig, ToolSource,
 };
 use golem_common::model::{AgentInvocation, AgentInvocationResult};
-use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::durable_host::DurableWorkerCtxView;
 use golem_worker_executor::services::oplog::CommitLevel;
 use golem_worker_executor::services::{HasComponentService, HasOplog};

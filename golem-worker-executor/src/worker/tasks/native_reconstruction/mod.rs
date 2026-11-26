@@ -14,7 +14,8 @@
 
 use super::{JoinedChildren, TaskScope, WorkerTasks};
 use futures::FutureExt;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_common::model::InterruptKind;
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::future::{Future, poll_fn};
 use std::sync::{Arc, Mutex, Weak};
 use std::task::{Context, Poll, Waker};

@@ -548,7 +548,7 @@ async fn idle_tcp_reader_collection_does_not_create_a_receive_chunk(
         executor
             .interrupt_loaded_worker(
                 &worker.agent_id,
-                golem_service_base::error::worker_executor::InterruptKind::Suspend(
+                golem_common::model::InterruptKind::Suspend(
                     golem_common::model::Timestamp::now_utc(),
                 ),
             )
@@ -650,9 +650,7 @@ async fn partial_tcp_receive_preserves_completed_read_and_reports_session_loss(
     executor
         .interrupt_loaded_worker(
             &worker.agent_id,
-            golem_service_base::error::worker_executor::InterruptKind::Suspend(
-                golem_common::model::Timestamp::now_utc(),
-            ),
+            golem_common::model::InterruptKind::Suspend(golem_common::model::Timestamp::now_utc()),
         )
         .await?;
     executor

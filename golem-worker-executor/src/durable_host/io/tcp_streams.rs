@@ -28,6 +28,7 @@ use crate::durable_host::io::streams::interruptible_tcp_input;
 use crate::durable_host::sockets::tcp::{LostTcpInputStream, LostTcpOutputStream};
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::InterruptKind;
 use golem_common::model::oplog::host_functions::{
     SocketsTcpInputStreamBlockingRead, SocketsTcpInputStreamBlockingSkip,
     SocketsTcpInputStreamRead, SocketsTcpInputStreamSkip, SocketsTcpOutputStreamBlockingFlush,
@@ -40,7 +41,6 @@ use golem_common::model::oplog::{
     DurableFunctionType, HostPayloadPair, HostRequestNoInput, HostResponseSocketsTcpStreamCount,
     HostResponseSocketsTcpStreamFlush, HostResponseSocketsTcpStreamRead,
 };
-use golem_service_base::error::worker_executor::InterruptKind;
 use wasmtime::component::{Resource, ResourceTableError};
 use wasmtime_wasi::StreamError;
 use wasmtime_wasi::p2::bindings::io::streams::{

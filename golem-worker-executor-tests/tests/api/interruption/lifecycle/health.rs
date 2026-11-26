@@ -1,6 +1,6 @@
 use super::*;
+use golem_common::model::InterruptKind;
 use golem_common::model::Timestamp;
-use golem_service_base::error::worker_executor::InterruptKind;
 use golem_worker_executor::services::UsesAllDeps;
 use golem_worker_executor::worker::Worker;
 use golem_worker_executor_test_utils::callers;

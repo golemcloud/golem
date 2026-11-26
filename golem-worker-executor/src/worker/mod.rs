@@ -193,6 +193,7 @@ use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantId
 use golem_common::base_model::oplog::QueuedCardEvent;
 use golem_common::cache::PendingOrFinal;
 use golem_common::model::AgentStatus;
+use golem_common::model::InterruptKind;
 use golem_common::model::InvocationEnd;
 use golem_common::model::RetryConfig;
 use golem_common::model::agent::{AgentConfigEntryDto, TypedAgentConfigEntry};
@@ -230,7 +231,7 @@ use golem_common::related_span;
 use golem_common::retries::get_delay;
 use golem_common::schema::TypedSchemaValue;
 use golem_common::tracing::TraceOrigin;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::FileReadResponse;
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::auth::AuthCtx;

@@ -16,9 +16,10 @@ use std::future::Future;
 use std::pin::Pin;
 use std::time::Duration;
 
+use golem_common::model::InterruptKind;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, EphemeralSleepTooLongError};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 use crate::metrics::ephemeral::{dec_promise_waiting, inc_promise_waiting};
 

@@ -500,7 +500,7 @@ impl ReplayState {
                 Err(super::cursor::historical_reconstruction_owner_failure(failure))
             }
             () = owner_tasks_stopped => Err(WorkerExecutorError::Interrupted {
-                kind: golem_service_base::error::worker_executor::InterruptKind::Jump,
+                kind: golem_common::model::InterruptKind::Jump,
             }),
             _ = blocked.wait(progress) => Ok(()),
         }

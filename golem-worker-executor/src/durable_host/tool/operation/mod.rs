@@ -30,6 +30,7 @@ use crate::worker::owner_lane::{
 };
 use futures::FutureExt;
 use futures::future::{BoxFuture, Shared};
+use golem_common::model::InterruptKind;
 use golem_common::model::caller::Caller;
 use golem_common::model::entity::{
     EntityActivation, EntityCallMode, EntityInvocationDescriptor, EntityInvocationId,
@@ -40,7 +41,7 @@ use golem_common::model::oplog::payload::types::{
     SerializableToolAdmissionRefusal, SerializableToolOperationTerminal,
 };
 use golem_common::schema::TypedSchemaValue;
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};

@@ -27,6 +27,7 @@ use crate::workerctx::WorkerCtx;
 use futures::future::Either;
 use futures::stream::{SplitSink, SplitStream};
 use futures::{SinkExt, StreamExt, pin_mut};
+use golem_common::model::InterruptKind;
 use golem_common::model::oplog::host_functions;
 use golem_common::model::oplog::payload::types::{
     SerializableWebsocketCloseInfo, SerializableWebsocketError, SerializableWebsocketMessage,
@@ -39,7 +40,6 @@ use golem_common::model::oplog::{
     HostResponseWebsocketReceiveResponse, HostResponseWebsocketReceiveWithTimeoutResponse,
     HostResponseWebsocketSendResponse,
 };
-use golem_service_base::error::worker_executor::InterruptKind;
 use std::future::Future;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1142,25 +1142,15 @@ fn mark_websocket_terminal<Ctx: WorkerCtx>(
 
 async fn acquire_websocket_connection_or_interrupt(
     pool: &WebSocketConnectionPool,
-    interrupt_signal: impl Future<Output = golem_service_base::error::worker_executor::InterruptKind>,
-) -> anyhow::Result<
-    Result<
-        tokio::sync::OwnedSemaphorePermit,
-        golem_service_base::error::worker_executor::InterruptKind,
-    >,
-> {
+    interrupt_signal: impl Future<Output = golem_common::model::InterruptKind>,
+) -> anyhow::Result<Result<tokio::sync::OwnedSemaphorePermit, golem_common::model::InterruptKind>> {
     acquire_websocket_connection_or_interrupt_future(pool.acquire(), interrupt_signal).await
 }
 
 async fn acquire_websocket_connection_or_interrupt_future(
     acquire: impl Future<Output = anyhow::Result<tokio::sync::OwnedSemaphorePermit>>,
-    interrupt_signal: impl Future<Output = golem_service_base::error::worker_executor::InterruptKind>,
-) -> anyhow::Result<
-    Result<
-        tokio::sync::OwnedSemaphorePermit,
-        golem_service_base::error::worker_executor::InterruptKind,
-    >,
-> {
+    interrupt_signal: impl Future<Output = golem_common::model::InterruptKind>,
+) -> anyhow::Result<Result<tokio::sync::OwnedSemaphorePermit, golem_common::model::InterruptKind>> {
     pin_mut!(acquire, interrupt_signal);
     match futures::future::select(acquire, interrupt_signal).await {
         Either::Left((result, _)) => result.map(Ok),
@@ -1318,8 +1308,8 @@ mod tests {
     #[test]
     #[timeout("10s")]
     async fn occupied_pool_observes_preexisting_deadline_or_entity_cancellation() {
+        use golem_common::model::InterruptKind;
         use golem_common::model::Timestamp;
-        use golem_service_base::error::worker_executor::InterruptKind;
         use tokio_util::sync::CancellationToken;
 
         let pool = WebSocketConnectionPool::new(1);

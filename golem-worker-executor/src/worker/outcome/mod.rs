@@ -18,10 +18,11 @@ use crate::model::TrapType;
 use crate::services::golem_config::GolemConfig;
 use crate::services::resource_limits::{MonthlyResourceCapacityError, MonthlyResourceExhaustion};
 use crate::workerctx::WorkerCtx;
+use golem_common::model::InterruptKind;
 use golem_common::model::OplogIndex;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::{AgentError, EphemeralCannotSuspendError};
-use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 
 #[cfg(test)]
 mod tests;

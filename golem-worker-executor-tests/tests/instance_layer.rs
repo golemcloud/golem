@@ -1039,7 +1039,7 @@ async fn gol838_retained_replay_preparation_is_helped_or_fails_closed(
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_rpc_rust")] fixture: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
-    use golem_service_base::error::worker_executor::InterruptKind;
+    use golem_common::model::InterruptKind;
     use golem_worker_executor::durable_host::TestReplayEvent;
 
     // The primary bootstrap context tests preparation ownership, not guest reconstruction.
