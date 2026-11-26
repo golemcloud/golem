@@ -2673,8 +2673,8 @@ rights granted to you under this License for this implementation of Go
 shall terminate as of the date such litigation is filed.
 
 ================================================================
-wasi_snapshot_preview1 adapter embedded by github.com/bytecodealliance/componentize-go v0.4.3
-LICENSE
+wasi_snapshot_preview1 adapter, golemcloud/wasmtime golem-adapter-v50.0.1-1
+LICENSE (Apache-2.0 WITH LLVM-exception, as shipped by componentize-go v0.4.3)
 ----------------------------------------------------------------
 
                                  Apache License
