@@ -107,7 +107,7 @@ async fn standalone_tool_invocations_survive_service_restart_and_keep_caller_sco
         tool_middleware_provision_config_updates: None,
         allow_incompatible_config: false,
     };
-    registry
+    let updated = registry
         .update_component(
             &component.id.0,
             &binding_update,
@@ -288,6 +288,65 @@ async fn standalone_tool_invocations_survive_service_restart_and_keep_caller_sco
     let agents = agents["workers"].as_array().expect("agent listing");
     assert_eq!(agents.len(), 1);
     assert_eq!(agents[0]["agentId"], serde_json::to_value(agent.agent_id)?);
+
+    registry
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: updated.revision,
+                tools: Some(vec![]),
+                tool_deployment_config_updates: None,
+                ..binding_update
+            },
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+        )
+        .await?;
+    user.deploy_environment(env.id).await?;
+    service.restart().await;
+    assert_eq!(
+        client
+            .get_invocation(&env.id.0, &id)
+            .await?
+            .summary
+            .invocation_id,
+        id
+    );
+    assert_eq!(
+        client
+            .cancel_invocation(&env.id.0, &id)
+            .await?
+            .invocation_id,
+        id
+    );
+    for (owner, expected) in [(None, &id), (Some(&agent.agent_id.0), &hosted_id)] {
+        let found = client
+            .lookup_invocations(
+                &env.id.0,
+                owner,
+                Some("streaming"),
+                Some("no-stream"),
+                None,
+                "shared-key",
+            )
+            .await?;
+        assert_eq!(&found.invocations[0].invocation_id, expected);
+        assert_eq!(
+            error_code(
+                client
+                    .lookup_invocations(
+                        &env.id.0,
+                        owner,
+                        Some("streaming"),
+                        None,
+                        None,
+                        "shared-key"
+                    )
+                    .await
+            ),
+            (400, error_code::TYPE_CHECKER_ERROR.into())
+        );
+    }
     Ok(())
 }
 

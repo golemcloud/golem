@@ -111,6 +111,14 @@ impl AgentTypeResolver {
             .tool_deployment)
     }
 
+    pub async fn tool_type_id(
+        &self,
+        environment_id: EnvironmentId,
+        name: &golem_common::model::tool::ToolName,
+    ) -> Result<Option<golem_common::model::type_id::TypeId>, RegistryServiceError> {
+        self.type_ids.tool_type_id(environment_id, name).await
+    }
+
     /// Retained declarations for management, including past implementing components.
     pub async fn retained(
         &self,

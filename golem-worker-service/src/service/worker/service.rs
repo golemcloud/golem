@@ -4777,6 +4777,21 @@ mod tests {
 
     #[async_trait]
     impl RegistryService for TestRegistryService {
+        async fn resolve_tool_type_id(
+            &self,
+            environment_id: EnvironmentId,
+            name: &ToolName,
+        ) -> Result<Option<golem_common::model::type_id::TypeId>, RegistryServiceError> {
+            if environment_id != self.resolved.environment_id {
+                return Ok(None);
+            }
+            Ok(match name.as_str() {
+                "weather" => Some(1u32.try_into().unwrap()),
+                "renamed-weather" => Some(44u32.try_into().unwrap()),
+                _ => None,
+            })
+        }
+
         async fn resolve_mcp_import(
             &self,
             _: &golem_common::model::mcp_import::McpImportSource,
@@ -4933,6 +4948,18 @@ mod tests {
             environment_id: EnvironmentId,
             type_id: TypeId,
         ) -> Result<Option<ResolvedTypeId>, RegistryServiceError> {
+            if environment_id == self.resolved.environment_id && matches!(type_id.get(), 1 | 44) {
+                return Ok(Some(ResolvedTypeId {
+                    kind: TypeIdKind::Tool,
+                    name: if type_id.get() == 1 {
+                        "weather"
+                    } else {
+                        "renamed-weather"
+                    }
+                    .into(),
+                    implemented_by: None,
+                }));
+            }
             if environment_id == self.resolved.environment_id && type_id.get() == 43 {
                 return Ok(Some(ResolvedTypeId {
                     kind: TypeIdKind::Tool,
@@ -4995,6 +5022,14 @@ mod tests {
             environment_id: EnvironmentId,
         ) -> Result<golem_service_base::model::environment::EnvironmentState, RegistryServiceError>
         {
+            if self.removed {
+                return Ok(golem_service_base::model::environment::EnvironmentState {
+                    agent_deployment_details: HashMap::new(),
+                    agent_secrets: HashMap::new(),
+                    retry_policies: vec![],
+                    tool_deployment: None,
+                });
+            }
             if let Some(state) = &self.provisional_tool_state {
                 return Ok(golem_service_base::model::environment::EnvironmentState {
                     agent_deployment_details: HashMap::new(),
@@ -5759,7 +5794,12 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push((*agent_id, *invocation_id));
-            Ok(self.invocation_summary.lock().unwrap().clone())
+            Ok(self
+                .invocation_summary
+                .lock()
+                .unwrap()
+                .clone()
+                .filter(|summary| summary.invocation_id == Some(invocation_id.0.into())))
         }
 
         async fn list_invocations(
@@ -5777,12 +5817,23 @@ mod tests {
             &self,
             _: &AgentId,
             _: &IdempotencyKey,
-            _: Option<String>,
+            operation: Option<String>,
             _: EnvironmentId,
             _: AuthCtx,
         ) -> WorkerResult<Vec<golem_api_grpc::proto::golem::workerexecutor::v1::InvocationSummary>>
         {
-            unimplemented!()
+            Ok(self
+                .invocation_summary
+                .lock()
+                .unwrap()
+                .clone()
+                .into_iter()
+                .filter(|summary| {
+                    operation
+                        .as_ref()
+                        .is_none_or(|op| summary.operation.as_ref() == Some(op))
+                })
+                .collect())
         }
 
         async fn invoke_agent(

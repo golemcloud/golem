@@ -170,76 +170,91 @@ impl WorkerService {
                     .authorize_environment(environment_id, &auth_ctx)
                     .await?;
             }
-            let state = self
-                .agent_types
-                .tool_deployment(environment_id)
+            self.agent_types
+                .tool_type_id(environment_id, tool_name)
                 .await?
-                .ok_or_else(|| {
-                    WorkerServiceError::InvocationNotFound(format!(
-                        "tool {tool_name} is not deployed"
-                    ))
-                })?;
-            let tool = state.registered_tools.get(tool_name).ok_or_else(|| {
-                WorkerServiceError::InvocationNotFound(format!("tool {tool_name} is not deployed"))
-            })?;
-            let definitions = if let Some(agent_id) = agent_id {
-                let agent = self
-                    .agent_for_invocation_read(
-                        environment_id,
-                        agent_id,
-                        &auth_ctx,
-                        AgentVerb::View,
-                        AgentResourcePattern::Any,
-                    )
-                    .await?;
-                let agent_type_name = agent
-                    .metadata
-                    .agent_type_name
-                    .clone()
-                    .ok_or_else(|| WorkerServiceError::AgentNotFound(*agent_id))?;
-                vec![
-                    self.effective_tool_definition(
-                        &agent.component,
-                        &ToolBindingOwner::AgentType { agent_type_name },
-                        tool_name.as_str(),
-                    )
-                    .await?
-                    .0,
-                ]
+                .ok_or_else(|| WorkerServiceError::InvocationNotFound(tool_name.to_string()))?;
+            let mut paths = if let Some(command) = command {
+                std::collections::BTreeSet::from([command
+                    .split_whitespace()
+                    .map(str::to_owned)
+                    .collect::<Vec<_>>()])
             } else {
-                if !matches!(tool.registration.source, ToolSource::Component { .. }) {
-                    return Err(WorkerServiceError::InvocationNotFound(format!(
-                        "tool {tool_name} has no standalone invocation lookup"
-                    )));
-                }
-                state
-                    .tool_bindings
-                    .iter()
-                    .filter(|(owner, bindings)| {
-                        matches!(owner, ToolBindingOwner::ComponentBaseline { .. })
-                            && bindings.contains_key(tool_name)
-                    })
-                    .map(|(owner, _)| {
-                        state
-                            .tool_middleware_chains
-                            .get(owner)
-                            .and_then(|chains| chains.get(tool_name))
-                            .map(|chain| chain.effective_definition.clone())
-                            .unwrap_or_else(|| tool.registration.definition.clone())
-                    })
-                    .collect()
+                std::collections::BTreeSet::new()
             };
-            let mut paths = std::collections::BTreeSet::new();
-            for definition in definitions {
-                // A command may be exposed by one baseline's middleware but not another's.
-                if let Ok(candidates) = tool_command_paths(&definition, command) {
-                    paths.extend(candidates);
+            let state = self.agent_types.tool_deployment(environment_id).await?;
+            if let Some((state, tool)) = state.as_ref().and_then(|state| {
+                state
+                    .registered_tools
+                    .get(tool_name)
+                    .map(|tool| (state, tool))
+            }) {
+                let definitions = if let Some(agent_id) = agent_id {
+                    let agent = self
+                        .agent_for_invocation_read(
+                            environment_id,
+                            agent_id,
+                            &auth_ctx,
+                            AgentVerb::View,
+                            AgentResourcePattern::Any,
+                        )
+                        .await?;
+                    let agent_type_name = agent
+                        .metadata
+                        .agent_type_name
+                        .clone()
+                        .ok_or_else(|| WorkerServiceError::AgentNotFound(*agent_id))?;
+                    let owner = ToolBindingOwner::AgentType { agent_type_name };
+                    if state
+                        .tool_bindings
+                        .get(&owner)
+                        .is_some_and(|bindings| bindings.contains_key(tool_name))
+                    {
+                        vec![
+                            state
+                                .tool_middleware_chains
+                                .get(&owner)
+                                .and_then(|chains| chains.get(tool_name))
+                                .map(|chain| chain.effective_definition.clone())
+                                .unwrap_or_else(|| tool.registration.definition.clone()),
+                        ]
+                    } else {
+                        vec![]
+                    }
+                } else {
+                    if command.is_none()
+                        && !matches!(tool.registration.source, ToolSource::Component { .. })
+                    {
+                        return Err(WorkerServiceError::InvocationNotFound(format!(
+                            "tool {tool_name} has no standalone invocation lookup"
+                        )));
+                    }
+                    state
+                        .tool_bindings
+                        .iter()
+                        .filter(|(owner, bindings)| {
+                            matches!(owner, ToolBindingOwner::ComponentBaseline { .. })
+                                && bindings.contains_key(tool_name)
+                        })
+                        .map(|(owner, _)| {
+                            state
+                                .tool_middleware_chains
+                                .get(owner)
+                                .and_then(|chains| chains.get(tool_name))
+                                .map(|chain| chain.effective_definition.clone())
+                                .unwrap_or_else(|| tool.registration.definition.clone())
+                        })
+                        .collect()
+                };
+                for definition in definitions {
+                    // A command may be exposed by one baseline's middleware but not another's.
+                    if let Ok(candidates) = tool_command_paths(&definition, command) {
+                        paths.extend(candidates);
+                    }
                 }
-            }
-            if command.is_some() && paths.is_empty() {
+            } else if command.is_none() {
                 return Err(WorkerServiceError::TypeChecker(format!(
-                    "unknown tool command {}",
-                    command.unwrap()
+                    "tool {tool_name} is no longer deployed; specify --command for invocation lookup"
                 )));
             }
             let mut matches = Vec::new();
@@ -403,20 +418,6 @@ impl WorkerService {
             .await
     }
 
-    async fn deployed_tool(
-        &self,
-        environment_id: EnvironmentId,
-        name: &ToolName,
-    ) -> WorkerResult<golem_common::model::tool::RegisteredTool> {
-        self.agent_types
-            .tool_deployment(environment_id)
-            .await?
-            .and_then(|state| state.registered_tools.get(name).cloned())
-            .ok_or_else(|| {
-                WorkerServiceError::InvocationNotFound(format!("tool {name} is not deployed"))
-            })
-    }
-
     async fn invocation_address(
         &self,
         environment_id: EnvironmentId,
@@ -431,13 +432,14 @@ impl WorkerService {
                         .authorize_environment(environment_id, auth_ctx)
                         .await?;
                 }
-                let tool = self.deployed_tool(environment_id, name).await?;
-                if !matches!(tool.registration.source, ToolSource::Component { .. }) {
-                    return Err(WorkerServiceError::InvocationNotFound(id.to_string()));
-                }
+                let type_id = self
+                    .agent_types
+                    .tool_type_id(environment_id, name)
+                    .await?
+                    .ok_or_else(|| WorkerServiceError::InvocationNotFound(id.to_string()))?;
                 Ok(AgentId::standalone_tool_invocation(
                     environment_id,
-                    tool.type_id,
+                    type_id,
                     id.id(),
                 ))
             }
