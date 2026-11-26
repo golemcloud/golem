@@ -549,8 +549,9 @@ impl GetOplogEntry {
     }
 
     /// Moves the reader past the batch of `response`. A failed batch, such as a denied one, leaves
-    /// the reader as it was, so a later call reads the same batch and again finds the component
-    /// revision at its start.
+    /// the reader as it was, also when the response holds other position fields, so a later call
+    /// reads the same batch again. Before the first successful batch, that call again finds the
+    /// component revision at its start.
     pub fn advance(&mut self, response: &HostResponseGolemApiOplogChunk) {
         if response.result.is_err() {
             return;
@@ -754,8 +755,9 @@ impl SearchOplogEntry {
     }
 
     /// Moves the reader past the batch of `response`. A failed batch, such as a denied one, leaves
-    /// the reader as it was, so a later call reads the same batch and again finds the component
-    /// revision at its start.
+    /// the reader as it was, also when the response holds other position fields, so a later call
+    /// reads the same batch again. Before the first successful batch, that call again finds the
+    /// component revision at its start.
     pub fn advance(&mut self, response: &HostResponseGolemApiOplogChunk) {
         if response.result.is_err() {
             return;
@@ -987,9 +989,10 @@ mod tests {
     }
 
     /// A reader finds the component revision at its start before its first batch, and uses the
-    /// revision of the previous batch after it. A failed first batch, such as one without the
-    /// grant, is not a previous batch: a later call that the grant allows must find the revision
-    /// at the start again, not use the revision of the reading agent.
+    /// revision of the previous batch after it. A failed batch, such as one without the grant, is
+    /// not a previous batch: it changes no field of the reader, also when the response holds other
+    /// position fields. So a later call that the grant allows after a failed first batch finds the
+    /// revision at the start again, not the revision of the reading agent.
     #[test]
     fn a_failed_batch_leaves_the_oplog_readers_as_they_were() {
         let owned_agent_id = OwnedAgentId::new(
@@ -997,34 +1000,50 @@ mod tests {
             &AgentId::from_parts(7, 1),
         );
         let start = OplogIndex::from_u64(201);
-        let reader_revision = ComponentRevision::new(5).unwrap();
-        let mut get = GetOplogEntry::new(owned_agent_id.clone(), start, reader_revision, 100);
+        let mut get = GetOplogEntry::new(
+            owned_agent_id.clone(),
+            start,
+            ComponentRevision::new(5).unwrap(),
+            100,
+        );
         let mut search = SearchOplogEntry::new(
             owned_agent_id,
             start,
-            reader_revision,
+            ComponentRevision::new(5).unwrap(),
             100,
             "failed-update".to_string(),
         );
-        for error in [AGENT_OPERATION_PERMISSION_DENIED, "agent does not exist"] {
-            let failed = HostResponseGolemApiOplogChunk {
-                result: Err(error.to_string()),
-                next_oplog_index: start,
-                current_component_revision: reader_revision,
-                last_oplog_index: None,
-            };
-            get.advance(&failed);
-            search.advance(&failed);
-        }
-        assert_eq!((get.next_oplog_index, get.initialized), (start, false));
-        assert_eq!(
+        let state = |get: &GetOplogEntry, search: &SearchOplogEntry| {
             (
-                search.next_oplog_index,
-                search.last_oplog_index,
-                search.initialized
-            ),
-            (start, None, false)
-        );
+                (
+                    get.next_oplog_index,
+                    get.current_component_revision,
+                    get.initialized,
+                ),
+                (
+                    search.next_oplog_index,
+                    search.current_component_revision,
+                    search.last_oplog_index,
+                    search.initialized,
+                ),
+            )
+        };
+        let fail = |get: &mut GetOplogEntry, search: &mut SearchOplogEntry| {
+            for error in [AGENT_OPERATION_PERMISSION_DENIED, "agent does not exist"] {
+                let failed = HostResponseGolemApiOplogChunk {
+                    result: Err(error.to_string()),
+                    next_oplog_index: OplogIndex::from_u64(401),
+                    current_component_revision: ComponentRevision::new(9).unwrap(),
+                    last_oplog_index: Some(OplogIndex::from_u64(400)),
+                };
+                get.advance(&failed);
+                search.advance(&failed);
+            }
+        };
+
+        let before = state(&get, &search);
+        fail(&mut get, &mut search);
+        assert_eq!(state(&get, &search), before);
 
         let read = HostResponseGolemApiOplogChunk {
             result: Ok(None),
@@ -1034,27 +1053,17 @@ mod tests {
         };
         get.advance(&read);
         search.advance(&read);
-        assert_eq!(
-            (
-                get.next_oplog_index,
-                get.current_component_revision,
-                get.initialized
-            ),
-            (read.next_oplog_index, read.current_component_revision, true)
-        );
-        assert_eq!(
-            (
-                search.next_oplog_index,
-                search.current_component_revision,
-                search.last_oplog_index,
-                search.initialized
-            ),
+        let after_read = (
+            (read.next_oplog_index, read.current_component_revision, true),
             (
                 read.next_oplog_index,
                 read.current_component_revision,
                 read.last_oplog_index,
-                true
-            )
+                true,
+            ),
         );
+        assert_eq!(state(&get, &search), after_read);
+        fail(&mut get, &mut search);
+        assert_eq!(state(&get, &search), after_read);
     }
 }
