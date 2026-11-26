@@ -9,7 +9,8 @@
     "collect": "Root command collect, summary \"Collect values\", with a body. Options: include (-I, list of string, repeated, \"Include path\"), tag (list of string, delimited by ',', \"Tag\"), env (-e, map string to string, repeated, duplicate keys rejected, \"Variable\"), label (map string to string, repeated or delimited by ',', last key wins, \"Label\").",
     "report": "Root command report, summary \"Write a report\", with a body. Options: user (string, optional, \"User\"), password (string, optional, \"Password\"), mode (enum [live, dry], default live, \"Mode\"). Flags: json (\"JSON output\"), text (\"Text output\"). Constraints, in order: 0 mutex groups [[present json], [present text]]; 1 implies all [present user] then all [present password]; 2 forbids all [mode is dry] with any [present json].",
     "env": "Root command env, summary \"Read variables\", with a body. Options: token (string, required, variable TOKEN, \"Token\"), port (u32, default 80, variable PORT, \"Port\"), path (list of string, delimited by ':', variable PATHS, \"Search path\"). Flags: debug (bool, variable DEBUG, \"Debug output\"), level (count, max 2, variable LEVEL, \"Log level\").",
-    "numbers": "Root command numbers, summary \"Read a number\", with a body. Positional value (s32, required, \"Value\"). Flag one (-1, \"Use one\")."
+    "numbers": "Root command numbers, summary \"Read a number\", with a body. Positional value (s32, required, \"Value\"). Flag one (-1, \"Use one\").",
+    "bounded": "Root command bounded, summary \"Read a bounded size\", with a body. Positional size (u8, required, range 1 to 10, \"Size\"). Option count (u32, optional, \"Count\")."
   },
   "cases": [
     {
@@ -392,6 +393,24 @@
       "fixture": "numbers",
       "args": ["-0"],
       "expected": {"errorPrefix": "invalid value \"-0\": "}
+    },
+    {
+      "id": "bounded-in-range",
+      "fixture": "bounded",
+      "args": ["5"],
+      "expected": {"invoke": {"path": [], "input": {"size": 5, "count": null}}}
+    },
+    {
+      "id": "bounded-restriction-is-checked-after-every-value-decodes",
+      "fixture": "bounded",
+      "args": ["50", "--count", "x"],
+      "expected": {"errorPrefix": "invalid value \"x\": "}
+    },
+    {
+      "id": "bounded-restriction-violation",
+      "fixture": "bounded",
+      "args": ["50"],
+      "expected": {"errorPrefix": "invalid tool arguments: "}
     }
   ]
 }
