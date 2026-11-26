@@ -11427,6 +11427,41 @@ async fn an_expired_fold_from_the_cached_status_falls_back_to_the_checkpoint() {
     assert_eq!(status.oplog_idx, last);
 }
 
+/// Only an expired fold from the cached status goes on to the clean status checkpoint. A fold
+/// that fails for another reason gives its error, and the rebuild does not read the checkpoint.
+#[test]
+async fn a_fold_from_the_cached_status_that_fails_for_another_reason_gives_its_error() {
+    let mut case = retained_test_case();
+    let owned_agent_id = case.owned_agent_id.clone();
+    let cached = case.entries[2].expected_status.clone();
+    case.unreadable_from = Some(case.entries.len() as u64);
+    let retained = RetainedTestCase::new(case, 3).await;
+    let checkpoint_read = std::sync::atomic::AtomicBool::new(false);
+
+    let status = super::calculate_last_known_status_with_checkpoint_reader(
+        &retained,
+        &owned_agent_id,
+        AgentMode::Durable,
+        Some(cached),
+        || async {
+            checkpoint_read.store(true, std::sync::atomic::Ordering::SeqCst);
+            None
+        },
+    )
+    .await;
+    assert!(
+        matches!(
+            status,
+            Err(super::StatusError::Unreadable(UnreadableOplog {
+                error: crate::services::oplog::OplogReadError::Gap { .. },
+                ..
+            }))
+        ),
+        "{status:?}"
+    );
+    assert!(!checkpoint_read.load(std::sync::atomic::Ordering::SeqCst));
+}
+
 /// The skipped regions of a fork source read from the start of the retention that the caller
 /// passes, and keep the regions after it.
 #[test]
