@@ -248,8 +248,10 @@ impl WorkerService {
                 };
                 for definition in definitions {
                     // A command may be exposed by one baseline's middleware but not another's.
-                    if let Ok(candidates) = tool_command_paths(&definition, command) {
-                        paths.extend(candidates);
+                    match tool_command_paths(&definition, command) {
+                        Ok(candidates) => paths.extend(candidates),
+                        Err(WorkerServiceError::TypeChecker(_)) => {}
+                        Err(error) => return Err(error),
                     }
                 }
             } else if command.is_none() {
@@ -591,6 +593,26 @@ fn tool_command_paths(
     tool: &golem_common::schema::tool::Tool,
     command: Option<&str>,
 ) -> WorkerResult<Vec<Vec<String>>> {
+    let invalid = || WorkerServiceError::Internal("malformed tool command tree".into());
+    let mut paths = Vec::new();
+    let mut visited = std::collections::HashSet::new();
+    let mut pending = vec![(0usize, Vec::new())];
+    while let Some((index, path)) = pending.pop() {
+        if !visited.insert(index) {
+            return Err(invalid());
+        }
+        let node = tool.commands.nodes.get(index).ok_or_else(invalid)?;
+        if node.body.is_some() {
+            paths.push(path.clone());
+        }
+        for child in node.subcommands.iter().rev() {
+            let index = child.as_usize().ok_or_else(invalid)?;
+            let child = tool.commands.nodes.get(index).ok_or_else(invalid)?;
+            let mut path = path.clone();
+            path.push(child.name.clone());
+            pending.push((index, path));
+        }
+    }
     if let Some(command) = command {
         let path = command
             .split_whitespace()
@@ -602,27 +624,6 @@ fn tool_command_paths(
             .ok_or_else(|| {
                 WorkerServiceError::TypeChecker(format!("unknown tool command {command}"))
             });
-    }
-    fn visit(
-        tool: &golem_common::schema::tool::Tool,
-        index: usize,
-        path: Vec<String>,
-        paths: &mut Vec<Vec<String>>,
-    ) {
-        let node = &tool.commands.nodes[index];
-        if node.body.is_some() {
-            paths.push(path.clone());
-        }
-        for child in &node.subcommands {
-            let index = child.as_usize().expect("validated command index");
-            let mut path = path.clone();
-            path.push(tool.commands.nodes[index].name.clone());
-            visit(tool, index, path, paths);
-        }
-    }
-    let mut paths = Vec::new();
-    if !tool.commands.nodes.is_empty() {
-        visit(tool, 0, Vec::new(), &mut paths);
     }
     Ok(paths)
 }
@@ -803,6 +804,27 @@ mod tests {
             vec![vec!["x", "y"]]
         );
         assert!(tool_command_paths(&tool, Some("y")).is_err());
+        for children in [
+            vec![CommandIndex(-1)],
+            vec![CommandIndex(99)],
+            vec![CommandIndex(0)],
+            vec![CommandIndex(1)],
+        ] {
+            let mut malformed = tool.clone();
+            malformed.commands.nodes[2].subcommands = children;
+            for command in [None, Some("x")] {
+                assert!(matches!(
+                    tool_command_paths(&malformed, command),
+                    Err(WorkerServiceError::Internal(_))
+                ));
+            }
+        }
+        let mut malformed = tool;
+        malformed.commands.nodes.clear();
+        assert!(matches!(
+            tool_command_paths(&malformed, None),
+            Err(WorkerServiceError::Internal(_))
+        ));
     }
 
     #[test]

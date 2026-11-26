@@ -34,11 +34,23 @@ pub(super) fn deadline(
         None if gave_up => status.terminal_failure_at?,
         None => return None,
     };
-    Some(
-        DateTime::from_timestamp_millis(finished_at.to_millis() as i64)
-            .expect("invocation finish time is representable")
-            + lifetime,
-    )
+    let deadline = i64::try_from(finished_at.to_millis())
+        .ok()
+        .and_then(DateTime::from_timestamp_millis)
+        .and_then(|finished_at| {
+            chrono::TimeDelta::from_std(lifetime)
+                .ok()
+                .and_then(|lifetime| finished_at.checked_add_signed(lifetime))
+        });
+    if deadline.is_none() {
+        tracing::warn!(
+            invocation_id = %key,
+            finished_at_millis = finished_at.to_millis(),
+            lifetime = ?lifetime,
+            "Skipping retention for an unrepresentable invocation deadline"
+        );
+    }
+    deadline
 }
 
 pub(super) async fn schedule<T: HasConfig + HasSchedulerService + HasShutdownToken>(

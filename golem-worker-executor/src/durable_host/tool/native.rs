@@ -711,10 +711,19 @@ impl NativeToolTask {
                     };
                     let execution =
                         spawn_tool_execution(accessor, *accepted, stdout, stderr).await?;
-                    super::execution::await_tool_invoke_plans(accessor, vec![execution.get_plan()])
-                        .await?
-                        .pop()
-                        .expect("one tool execution has one result")
+                    let responses = super::execution::await_tool_invoke_plans(
+                        accessor,
+                        vec![execution.get_plan()],
+                    )
+                    .await?;
+                    let [response]: [_; 1] =
+                        responses.try_into().map_err(|responses: Vec<_>| {
+                            anyhow::anyhow!(
+                                "one tool execution returned {} results instead of one",
+                                responses.len()
+                            )
+                        })?;
+                    response
                 }
             };
             Ok::<_, anyhow::Error>(response)

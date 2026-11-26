@@ -1110,17 +1110,16 @@ impl SshCommandHandler {
             );
             return;
         };
+        let Some(agent_id) = session.owner.agent_id else {
+            return;
+        };
         logln(format!(
             "To see its result later, run this from the same directory, with any other global \
              options this session used:\n  {}",
             lookup_command(
                 &crate::command_name(),
                 &self.global_args(),
-                &session
-                    .owner
-                    .agent_id
-                    .expect("SSH has an agent owner")
-                    .to_string(),
+                &agent_id.to_string(),
                 &accepted.to_string(),
             )
         ));

@@ -532,7 +532,11 @@ impl SchedulerServiceDefault {
     ) -> bool {
         match claimed_action.action {
             ScheduledAction::DeleteFinishedInvocation { .. } => {
-                unreachable!("retention actions are processed with lease-aware rescheduling")
+                error!(
+                    schedule_id = %claimed_action.schedule_id,
+                    "Retention action bypassed lease-aware rescheduling"
+                );
+                false
             }
             ScheduledAction::CompletePromise {
                 account_id: _,

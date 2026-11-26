@@ -3265,8 +3265,16 @@ impl WorkerService {
                 (None, Some(ComponentId(component_id)))
             }
         };
-        let (routed, component, expected_callee_fingerprint, fresh_owner, command_path, final_key) =
-            self.tool_target(
+        let (
+            routed,
+            component,
+            expected_callee_fingerprint,
+            fresh_owner,
+            command_path,
+            final_key,
+            _,
+        ) = self
+            .tool_target(
                 start.environment_id,
                 agent_id,
                 component_id,
@@ -3830,7 +3838,8 @@ impl WorkerService {
     /// The target of a tool call: an existing agent, or a fresh owner on a component of the
     /// environment. Returns the target, the component, the expected fingerprint of an
     /// existing agent, whether the owner is fresh, and the canonical form of the command path,
-    /// from which the invocation ID and a fresh owner's agent ID are derived.
+    /// from which the invocation ID and a fresh owner's agent ID are derived, the final key,
+    /// and the validated tool name.
     #[allow(clippy::too_many_arguments)]
     async fn tool_target(
         &self,
@@ -3849,7 +3858,9 @@ impl WorkerService {
         bool,
         Vec<String>,
         Option<IdempotencyKey>,
+        ToolName,
     )> {
+        let name = ToolName::try_from(tool_name).map_err(WorkerServiceError::TypeChecker)?;
         match (agent_id, component_id) {
             (Some(agent_id), None) => {
                 self.require_agent_address(
@@ -3893,6 +3904,7 @@ impl WorkerService {
                     false,
                     command_path,
                     None,
+                    name,
                 ))
             }
             (None, Some(component_id)) => {
@@ -3916,7 +3928,7 @@ impl WorkerService {
                     &agent_owner(&component, target.agent_id, None),
                     &[AgentPermission::Agent(verb, AgentResourcePattern::Any)],
                 )?;
-                Ok((target, component, None, true, command_path, final_key))
+                Ok((target, component, None, true, command_path, final_key, name))
             }
             _ => Err(WorkerServiceError::TypeChecker(
                 "exactly one of agent_id and component_id is required".to_string(),
@@ -3953,8 +3965,16 @@ impl WorkerService {
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32
             }
         };
-        let (target, component, expected_callee_fingerprint, fresh_owner, command_path, final_key) =
-            self.tool_target(
+        let (
+            target,
+            component,
+            expected_callee_fingerprint,
+            fresh_owner,
+            command_path,
+            final_key,
+            name,
+        ) = self
+            .tool_target(
                 environment_id,
                 request.agent_id,
                 request.component_id,
@@ -4019,13 +4039,12 @@ impl WorkerService {
             }),
         };
         target.apply(&mut start);
-        let public_tool = (fresh_owner && target.agent_id.type_id().is_some())
-            .then(|| start.external_tool.as_ref().unwrap().tool_name.clone());
+        let public_tool = (fresh_owner && target.agent_id.type_id().is_some()).then_some(name);
         let mut output = self
             .worker_client
             .invoke_agent_session_one_shot(&target.agent_id, start)
             .await
-            .map_err(|error| match (error, public_tool.as_deref()) {
+            .map_err(|error| match (error, public_tool.as_ref()) {
                 (
                     WorkerServiceError::AcceptedInvocation {
                         mut accepted,
@@ -4034,9 +4053,7 @@ impl WorkerService {
                     Some(name),
                 ) => {
                     accepted.id = golem_common::model::OwnedInvocationId::new(
-                        golem_common::model::InvocationOwner::Tool(
-                            ToolName::try_from(name).expect("validated tool name"),
-                        ),
+                        golem_common::model::InvocationOwner::Tool(name.clone()),
                         accepted.id.id(),
                     );
                     WorkerServiceError::AcceptedInvocation { accepted, source }

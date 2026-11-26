@@ -10966,6 +10966,34 @@ fn terminal_failure_time_survives_checkpoint_reconstruction_before_invocation_st
 }
 
 #[test]
+fn retention_skips_unrepresentable_persisted_deadlines() {
+    use std::time::Duration;
+
+    let key = InvocationId(Uuid::new_v4());
+    let mut status = AgentStatusRecord {
+        status: AgentStatus::Failed,
+        terminal_failure_at: Some(Timestamp::from(5_000u64)),
+        ..Default::default()
+    };
+    assert_eq!(
+        super::super::retention::deadline(Some(key), &status, Duration::from_secs(17)),
+        chrono::DateTime::from_timestamp_millis(22_000)
+    );
+    for lifetime in [Duration::MAX, Duration::from_secs(10_000_000_000_000)] {
+        assert_eq!(
+            super::super::retention::deadline(Some(key), &status, lifetime),
+            None
+        );
+    }
+    status.terminal_failure_at =
+        Some(serde_json::from_str::<Timestamp>("\"1969-12-31T23:59:59.000Z\"").unwrap());
+    assert_eq!(
+        super::super::retention::deadline(Some(key), &status, Duration::ZERO),
+        None
+    );
+}
+
+#[test]
 fn retention_after_retry_uses_recovery_give_up_at_every_checkpoint_cut() {
     let key = InvocationId(Uuid::new_v4());
     let mut retry = invocation_error(&key);
