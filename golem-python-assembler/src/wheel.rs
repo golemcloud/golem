@@ -30,7 +30,7 @@ pub const SDK_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// The componentize-py revision that this assembler links. It must equal the
 /// revision of the workspace's `componentize-py` dependency.
-pub const COMPONENTIZE_PY_REVISION: &str = "58d479e5993b744314ec51a77a20e3b487c69aac";
+pub const COMPONENTIZE_PY_REVISION: &str = "cad25eefaa090c158bca5ba5882c389eade4bcac";
 
 const PACKAGE: &str = "golem/";
 const PREPARED: &str = "golem/_prepared/";
@@ -241,7 +241,7 @@ mod tests {
                 .collect()
         };
         let cargo = pins(&read("Cargo.toml"), "github.com/golemcloud/componentize-py");
-        assert_eq!(cargo.len(), 2, "{cargo:?}");
+        assert_eq!(cargo.len(), 1, "{cargo:?}");
         assert!(
             cargo
                 .iter()
