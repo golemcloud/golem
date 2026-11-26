@@ -626,6 +626,77 @@ fn a_promise_is_owned_by_the_agent_or_the_tool_invocation_that_created_it() {
 }
 
 #[test]
+fn a_methodless_upsert_asks_for_any_one_method_and_only_upsert_agent_takes_that_form() {
+    // The new operation is the last one, so the encodings of the others do not move.
+    assert_eq!(
+        CatalogOperation::ALL.last(),
+        Some(&CatalogOperation::UpsertAgent)
+    );
+    assert_eq!(
+        CatalogOperation::UpsertAgent
+            .parts()
+            .iter()
+            .map(class_and_verb)
+            .collect::<Vec<_>>(),
+        vec![(Class::Agent, "invoke")]
+    );
+    let taking_any_one_method: Vec<CatalogOperation> = CatalogOperation::ALL
+        .iter()
+        .copied()
+        .filter(|operation| {
+            operation
+                .parts()
+                .iter()
+                .any(|shape| shape.resource == ResourceKind::AnyOneMethod)
+        })
+        .collect();
+    assert_eq!(taking_any_one_method, vec![CatalogOperation::UpsertAgent]);
+
+    // An existing agent, and a keyed agent that does not exist yet.
+    let new_agent = AgentTarget {
+        fingerprint: None,
+        ..agent()
+    };
+    for target in [agent(), new_agent] {
+        let upsert = AuthorizationRequest::new(
+            sample_caller(),
+            Operation::single(
+                CatalogOperation::UpsertAgent,
+                Resource::AnyOneMethod,
+                Target::Agent(target),
+            )
+            .unwrap(),
+        );
+        assert_eq!(round_trip_json(&upsert), upsert);
+        assert_eq!(round_trip_desert(&upsert), upsert);
+    }
+
+    // invoke-agent stays exact: it refuses the weaker form.
+    assert_eq!(
+        Operation::single(
+            CatalogOperation::InvokeAgent,
+            Resource::AnyOneMethod,
+            Target::Agent(agent())
+        ),
+        Err(OperationShapeError::Resource {
+            operation: "invoke-agent",
+            index: 0,
+            expected: ResourceKind::Method,
+            actual: ResourceKind::AnyOneMethod,
+        })
+    );
+    // An upsert that calls a method uses invoke-agent, so upsert-agent refuses a method.
+    assert!(matches!(
+        Operation::single(
+            CatalogOperation::UpsertAgent,
+            Resource::Method("summary".to_string()),
+            Target::Agent(agent())
+        ),
+        Err(OperationShapeError::Resource { .. })
+    ));
+}
+
+#[test]
 fn a_forbidden_denial_names_its_grant_under_a_camel_case_key() {
     let json = serde_json::to_value(Denial::Forbidden {
         missing_grant: Some(GrantText("tool(?env/report) @ * : invoke : *".to_string())),

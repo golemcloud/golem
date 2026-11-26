@@ -140,3 +140,4 @@ install-card: card : install [pair] @ environment | account | invocation | promi
 revoke-card: card : revoke [card] @ environment | account | invocation | promise | webhook | artifact
 inspect-card: card : inspect [card] @ environment | account | invocation | promise | webhook | artifact
 list-card-tokens: card : revoke [card] @ environment | account | invocation | promise | webhook | artifact
+upsert-agent: agent : invoke [any-one-method] @ agent

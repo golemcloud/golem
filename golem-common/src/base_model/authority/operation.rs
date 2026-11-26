@@ -389,6 +389,13 @@ catalog! {
             [Environment, Account, Invocation, Promise, Webhook, Artifact]
         ),
     ],
+
+    // Invocation: request authority, appended (the binary encoding is the position).
+
+    /// A methodless upsert, including the client ID accessor: `invoke` on any one method of the
+    /// selected agent, or of the keyed agent if it does not exist yet. An upsert that calls a
+    /// method uses `invoke-agent`.
+    UpsertAgent("upsert-agent") => [(Verb::Agent(AgentVerb::Invoke), AnyOneMethod, [Agent])],
 }
 
 /// One part of an operation: a verb, the resource it asks for, and the target it names. The class
