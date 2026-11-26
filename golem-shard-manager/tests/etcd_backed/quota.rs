@@ -31,7 +31,6 @@ use crate::etcd_backed::persistence::{
     request_client,
 };
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use golem_common::model::Pod;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::{
@@ -52,6 +51,7 @@ use golem_shard_manager::quota::{
 };
 use golem_shard_manager::{ExternalRevision, NO_REVISION, ReadRetry};
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
+use jiff::Timestamp;
 use std::collections::BTreeSet;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -97,8 +97,8 @@ fn resource(definition: &ResourceDefinition, remaining: u64) -> QuotaResourceRec
         definition: Blob::new(definition.clone()),
         remaining: NumericU64::new(remaining),
         deficit: NumericU64::new(0),
-        last_refilled_at: SqlDateTime::new(Utc::now()),
-        last_refreshed_at: SqlDateTime::new(Utc::now()),
+        last_refilled_at: SqlDateTime::new(Timestamp::now()),
+        last_refreshed_at: SqlDateTime::new(Timestamp::now()),
     }
 }
 
@@ -106,7 +106,7 @@ fn lease(
     definition: &ResourceDefinition,
     pod: Pod,
     epoch: u64,
-    expires_at: DateTime<Utc>,
+    expires_at: Timestamp,
 ) -> QuotaLeaseRecord {
     QuotaLeaseRecord {
         resource_definition_id: definition.id.0,
@@ -114,18 +114,18 @@ fn lease(
         pod_port: pod.port.into(),
         epoch: NumericU64::new(epoch),
         allocated: NumericU64::new(1),
-        granted_at: SqlDateTime::new(Utc::now()),
+        granted_at: SqlDateTime::new(Timestamp::now()),
         expires_at: SqlDateTime::new(expires_at),
         pending_reservations: Blob::new(Vec::new()),
     }
 }
 
-fn in_a_minute() -> DateTime<Utc> {
-    Utc::now() + chrono::Duration::minutes(1)
+fn in_a_minute() -> Timestamp {
+    Timestamp::now() + jiff::SignedDuration::from_mins(1)
 }
 
-fn a_minute_ago() -> DateTime<Utc> {
-    Utc::now() - chrono::Duration::minutes(1)
+fn a_minute_ago() -> Timestamp {
+    Timestamp::now() - jiff::SignedDuration::from_mins(1)
 }
 
 fn expired(pod: Pod) -> (Blob<IpAddr>, i32) {

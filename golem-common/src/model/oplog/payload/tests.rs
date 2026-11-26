@@ -1288,20 +1288,20 @@ fn post_epoch_systemtime_beyond_i64_seconds_saturates_if_representable() {
 }
 
 #[test]
-fn extreme_serializable_datetime_to_datetime_utc_clamps_to_chrono_bounds() {
+fn extreme_serializable_datetime_to_datetime_utc_clamps_to_jiff_bounds() {
     let min = SerializableDateTime {
         seconds: i64::MIN,
         nanoseconds: 0,
     };
-    let result: chrono::DateTime<chrono::Utc> = min.into();
-    assert_eq!(result, chrono::DateTime::<chrono::Utc>::MIN_UTC);
+    let result: jiff::Timestamp = min.into();
+    assert_eq!(result, jiff::Timestamp::MIN);
 
     let max = SerializableDateTime {
         seconds: i64::MAX,
         nanoseconds: 999_999_999,
     };
-    let result: chrono::DateTime<chrono::Utc> = max.into();
-    assert_eq!(result, chrono::DateTime::<chrono::Utc>::MAX_UTC);
+    let result: jiff::Timestamp = max.into();
+    assert_eq!(result, jiff::Timestamp::MAX);
 }
 
 #[test]
@@ -1335,11 +1335,27 @@ fn pre_epoch_serializable_datetime_to_datetime_utc_roundtrip() {
         seconds: -3,
         nanoseconds: 250_000_000,
     };
-    let datetime: chrono::DateTime<chrono::Utc> = value.clone().into();
-    assert_eq!(datetime.to_rfc3339(), "1969-12-31T23:59:57.250+00:00");
+    let datetime: jiff::Timestamp = value.clone().into();
+    assert_eq!(datetime.to_string(), "1969-12-31T23:59:57.25Z");
 
     let result: SerializableDateTime = datetime.into();
     assert_eq!(result, value);
+}
+
+#[test]
+fn jiff_oplog_timestamps_use_non_negative_fractional_nanoseconds() {
+    for (seconds, nanoseconds) in [(-3, 0), (-3, 1), (-1, 999_999_999), (0, 0), (1, 1)] {
+        let value = SerializableDateTime {
+            seconds,
+            nanoseconds,
+        };
+        let timestamp: jiff::Timestamp = value.clone().into();
+        assert_eq!(
+            timestamp.as_nanosecond(),
+            i128::from(seconds) * 1_000_000_000 + i128::from(nanoseconds)
+        );
+        assert_eq!(SerializableDateTime::from(timestamp), value);
+    }
 }
 
 #[test]
@@ -2262,7 +2278,7 @@ fn external_durable_stream_payloads_preserve_checkpoints_and_producer_identity()
         secret_id: uuid::Uuid::from_u128(37),
         config_key: Some(vec!["external".to_string(), "credential".to_string()]),
         version: 9,
-        resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        resolved_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         category: None,
     });
     let reader = HostRequestDurableStreamReaderNew {
@@ -2371,12 +2387,12 @@ fn external_durable_stream_resource_identity_covers_descriptor_and_pinned_creden
         secret_id: uuid::Uuid::from_u128(37),
         config_key: Some(vec!["external".into(), "credential".into()]),
         version: 9,
-        resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        resolved_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         category: Some("streams".into()),
     };
     let id = reader.resource_id(Some(&auth)).unwrap();
     let mut reconstructed_auth = auth.clone();
-    reconstructed_auth.resolved_at += chrono::Duration::seconds(123);
+    reconstructed_auth.resolved_at += jiff::SignedDuration::from_secs(123);
     assert_eq!(reader.resource_id(Some(&reconstructed_auth)).unwrap(), id);
     assert_ne!(reader.resource_id(None).unwrap(), id);
     for altered in [

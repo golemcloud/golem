@@ -31,7 +31,7 @@ mod schema_native_tests {
         BinaryValuePayload, DurationValuePayload, ResultValuePayload, SchemaValue,
         SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
     };
-    use chrono::{TimeZone, Utc};
+    use jiff::Timestamp as JiffTimestamp;
     use pretty_assertions::assert_eq;
     use test_r::test;
     use uuid::Uuid;
@@ -310,7 +310,7 @@ mod schema_native_tests {
 
     #[test]
     fn rich_values_and_map_roundtrip() {
-        let dt = Utc.with_ymd_and_hms(2025, 4, 12, 13, 14, 15).unwrap();
+        let dt = "2025-04-12T13:14:15Z".parse::<JiffTimestamp>().unwrap();
         let v = typed(
             vec![
                 ("text", SchemaType::text(TextRestrictions::default())),
@@ -403,7 +403,7 @@ mod schema_native_tests {
                 secret_id: Uuid::nil(),
                 config_key: None,
                 version: 1,
-                resolved_at: Utc::now(),
+                resolved_at: JiffTimestamp::now(),
                 category: None,
             })],
         );

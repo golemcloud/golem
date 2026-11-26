@@ -422,15 +422,47 @@ async fn t5_read_only_bypasses_agent_loading(
     //   the math is easy to reason about.
     // - `component_size_coefficient` is pinned so the assertions below can recompute
     //   the module charge deterministically from `component_size`.
-    // - The budget is chosen experimentally to sit inside that window for the Rust
-    //   `agent_sdk` component. The assertions verify the calibration is still valid —
-    //   if the component's module or linear memory grows or shrinks materially, the
-    //   test fails with a clear diagnostic instead of silently passing or hanging.
-    const SYSTEM_MEMORY: u64 = 7 * 1024 * 1024;
+    // - The budget is derived from the current fixture: an executor without a memory
+    //   limit loads and warms one worker the same way, and the budget is the middle of
+    //   the window, `module + 1.5 * r_req`. The assertions below check that the
+    //   constrained worker still falls inside it.
     const COMPONENT_SIZE_COEFFICIENT: f64 = 2.0;
+    let system_memory = {
+        let calibration_context = TestContext::new(last_unique_id);
+        let executor = start(deps, &calibration_context).await?;
+        let component = executor
+            .component_dep(&calibration_context.default_environment_id, agent_sdk_rust)
+            .store()
+            .await?;
+        let agent_id = agent_key!(
+            AGENT_TYPE,
+            format!("t5-calibration-{}", calibration_context.redis_prefix())
+        );
+        let worker_id = executor
+            .start_agent(&component.id, agent_id.clone())
+            .await?;
+        let _ = executor
+            .invoke_and_await_agent(&component, &agent_id, "get_count", data_value!())
+            .await?;
+        let owned = OwnedAgentId::new(
+            calibration_context.default_environment_id,
+            &worker_id.agent_id,
+        );
+        let r_req = executor.worker_memory_requirement(&owned).await?;
+        let module_charge = (COMPONENT_SIZE_COEFFICIENT * component.component_size as f64) as u64;
+        anyhow::ensure!(r_req > 0, "calibration worker reports no linear memory");
+        let system_memory = module_charge + r_req + r_req / 2;
+        tracing::info!(
+            module_charge,
+            r_req,
+            system_memory,
+            "Calibrated the read-only eviction memory budget"
+        );
+        system_memory
+    };
     let overrides = TestExecutorOverrides {
-        configure: Some(Arc::new(|config| {
-            config.memory.system_memory_override = Some(SYSTEM_MEMORY);
+        configure: Some(Arc::new(move |config| {
+            config.memory.system_memory_override = Some(system_memory);
             config.memory.worker_memory_ratio = 1.0;
             config.memory.component_size_coefficient = COMPONENT_SIZE_COEFFICIENT;
             // Tight `acquire_retry_delay` so Q's permit-wait doesn't hang the
@@ -454,7 +486,7 @@ async fn t5_read_only_bypasses_agent_loading(
         executor.start_agent(&component.id, r_agent_id.clone()),
     )
     .await
-    .expect("first worker failed to load: check SYSTEM_MEMORY against the component's module charge and initial linear memory")?;
+    .expect("first worker failed to load: the calibrated budget does not cover the component's module charge and startup linear memory")?;
     let r_owned = OwnedAgentId::new(context.default_environment_id, &r_worker_id.agent_id);
 
     // Warm R's read-only cache: cache miss + populate via the detached observer.
@@ -473,13 +505,12 @@ async fn t5_read_only_bypasses_agent_loading(
     let one_worker = module_charge + r_req;
     let two_workers = module_charge + 2 * r_req;
     assert!(
-        one_worker <= SYSTEM_MEMORY,
-        "memory budget too tight: budget={SYSTEM_MEMORY} but R needs module {module_charge} + r_req {r_req} = {one_worker}. Increase SYSTEM_MEMORY."
+        one_worker <= system_memory,
+        "memory budget too tight: budget={system_memory} but R needs module {module_charge} + r_req {r_req} = {one_worker}; the calibration worker needed less than this worker."
     );
     assert!(
-        two_workers > SYSTEM_MEMORY,
-        "memory budget too generous: budget={SYSTEM_MEMORY}, but module {module_charge} + 2*r_req {} = {two_workers} fits inside budget so loading Q would not evict R. \
-         Decrease SYSTEM_MEMORY (or the component grew significantly).",
+        two_workers > system_memory,
+        "memory budget too generous: budget={system_memory}, but module {module_charge} + 2*r_req {} = {two_workers} fits inside budget so loading Q would not evict R; the calibration worker needed more than this worker.",
         2 * r_req
     );
 
@@ -509,7 +540,7 @@ async fn t5_read_only_bypasses_agent_loading(
         anyhow::anyhow!(
             "Q startup did not complete within 10s. Likely cause: memory budget miscalibrated \
              (R never evicted) — check that `R req = {r_req}` plus the second copy actually \
-             exceeds budget {SYSTEM_MEMORY}, and that R reached `LoadedIdle` before Q started."
+             exceeds budget {system_memory}, and that R reached `LoadedIdle` before Q started."
         )
     })??
     .into_typed::<u64>()?;

@@ -14,11 +14,11 @@
 
 use crate::durable_host::concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 use crate::durable_host::suspendable_wait::{
-    chrono_duration_to_nanos, ephemeral_sleep_too_long_error, std_duration_to_nanos,
+    ephemeral_sleep_too_long_error, signed_duration_to_nanos, std_duration_to_nanos,
 };
 use crate::durable_host::{DurabilityHost, DurableWorkerCtx, SuspendForSleep};
 use crate::workerctx::WorkerCtx;
-use chrono::Duration;
+
 use futures::pin_mut;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::oplog::host_functions::{IoPollPoll, IoPollReady};
@@ -323,7 +323,7 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
                 let max = self.state.config.suspend.ephemeral_max_sleep;
                 return Err(wasmtime::Error::from_anyhow(handle.trap(
                     ephemeral_sleep_too_long_error(
-                        chrono_duration_to_nanos(duration),
+                        signed_duration_to_nanos(duration),
                         std_duration_to_nanos(max),
                     ),
                 )));
@@ -368,13 +368,13 @@ async fn poll_borrowed(
     }
 }
 
-fn is_suspend_for_sleep<T>(result: &Result<T, wasmtime::Error>) -> Option<Duration> {
+fn is_suspend_for_sleep<T>(result: &Result<T, wasmtime::Error>) -> Option<jiff::SignedDuration> {
     if let Err(err) = result {
         // Walk the error source chain, since wasmtime::Error may wrap the original error
         let mut current: Option<&dyn std::error::Error> = Some(err.as_ref());
         while let Some(e) = current {
             if let Some(SuspendForSleep(duration)) = e.downcast_ref::<SuspendForSleep>() {
-                return Some(Duration::from_std(*duration).unwrap());
+                return Some(jiff::SignedDuration::try_from(*duration).unwrap());
             }
             current = e.source();
         }

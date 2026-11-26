@@ -16,6 +16,7 @@ use std::fmt::Display;
 
 use crate::config::StaticRegistryServiceConfig;
 use golem_common::model::component::{ComponentId, ComponentRevision};
+use golem_common::model::diff::Hash;
 use golem_common::model::environment::EnvironmentId;
 use wasmtime::component::Component;
 
@@ -31,17 +32,20 @@ impl Display for ComponentIdAndRevision {
     }
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct CompilationRequest {
     pub component: ComponentIdAndRevision,
     pub environment_id: EnvironmentId,
+    pub wasm_hash: Hash,
     pub sender: Option<StaticRegistryServiceConfig>,
 }
 
 pub struct CompiledComponent {
     pub component_and_revision: ComponentIdAndRevision,
     pub environment_id: EnvironmentId,
+    pub wasm_hash: Hash,
     pub component: Component,
+    pub upload_finished: tokio::sync::oneshot::Sender<()>,
 }
 
 #[derive(Debug, Clone, thiserror::Error)]

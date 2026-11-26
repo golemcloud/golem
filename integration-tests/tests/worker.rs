@@ -2021,15 +2021,15 @@ async fn cross_executor_schedule_commits_in_the_target_oplog(
     user.start_agent(&component.id, client_parsed.clone())
         .await?;
 
-    let due = chrono::Utc::now() + chrono::Duration::seconds(5);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(5);
     user.invoke_and_await_agent(
         &component,
         &client_parsed,
         "schedule_at",
         data_value!(
             server_name.clone(),
-            due.timestamp() as u64,
-            due.timestamp_subsec_nanos()
+            due.as_second() as u64,
+            due.subsec_nanosecond() as u32
         ),
     )
     .await?;
@@ -2049,7 +2049,7 @@ async fn cross_executor_schedule_commits_in_the_target_oplog(
     let key = scheduled_key(&user.get_oplog(&server, OplogIndex::INITIAL).await?)
         .ok_or_else(|| anyhow!("the schedule must be committed in the target oplog"))?;
     assert!(
-        chrono::Utc::now() < due,
+        jiff::Timestamp::now() < due,
         "the commit must be observed before the deadline"
     );
 

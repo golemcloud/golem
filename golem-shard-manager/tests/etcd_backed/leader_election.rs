@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::proxy::BreakableProxy;
-use chrono::DateTime;
 use etcd_client::{Client, ConnectOptions, EventType, GetOptions, WatchOptions};
 use golem_service_base::clients::shard_manager_leader::LeaderAddress;
 use golem_shard_manager::LEADER_ELECTION_NAME;
@@ -25,6 +24,7 @@ use golem_shard_manager::{
     ShardLeaseState, ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
+use jiff::Timestamp;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -1260,7 +1260,7 @@ fn state_with_one_executor(number_of_shards: usize) -> ShardLeaseState {
             port: 9010,
         },
         None,
-        DateTime::from_timestamp(1_700_000_000, 0).expect("valid timestamp"),
+        Timestamp::new(1_700_000_000, 0).expect("valid timestamp"),
         Duration::from_secs(60),
     );
     shard_state

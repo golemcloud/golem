@@ -501,12 +501,12 @@ describe("Client 1.6 durable lifecycle", () => {
         agentIdFor("created"),
         id,
       ])
-      expect(String(ids[3])).toBe(id.uuid)
+      expect(ids[3]).toBe(id)
       expect(runtime.lifecycle).toMatchObject({ connectionOpen: 4, connectionDrop: 4 })
       expect(runtime.calls).toHaveLength(0)
 
       const invalid = yield* Counter.client
-        .getById({ uuid: "bad" } as AgentId)
+        .getById("bad" as AgentId)
         .pipe(Effect.scoped, Effect.provide(runtime.layer), Effect.result)
       expect(invalid).toMatchObject({
         _tag: "Failure",

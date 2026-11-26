@@ -46,6 +46,11 @@ use tracing::info;
 
 inherit_test_dep!(Tracing);
 
+#[test]
+async fn package_version_repository(deps: &Deps) {
+    crate::repo::common::package_version_repository_contract(deps).await;
+}
+
 // Deps setup --------------------------------------------------------------------------------------
 
 pub struct SqliteDb {
@@ -292,6 +297,11 @@ async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
 #[test]
 async fn test_retry_policy_and_agent_secret_natural_key_lookups(deps: &Deps) {
     crate::repo::common::test_retry_policy_and_agent_secret_natural_key_lookups(deps).await;
+}
+
+#[test]
+async fn test_component_upload_reference_lifetime(deps: &Deps) {
+    crate::repo::common::test_component_upload_reference_lifetime(deps).await;
 }
 
 #[test]

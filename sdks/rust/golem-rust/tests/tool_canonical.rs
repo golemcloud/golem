@@ -20,7 +20,7 @@
 //! Adaptations from the spec's illustrative `golem_tool` crate to the finalized
 //! SDK + WIT model:
 //! - `Path` -> `std::path::PathBuf`, `Url` -> `url::Url`, `DateTime` ->
-//!   `chrono::DateTime<Utc>`, `RegexString` -> `String` refined with
+//!   `jiff::Timestamp`, `RegexString` -> `String` refined with
 //!   `#[arg(regex = ...)]`.
 //! - `keyvalue-t<string>` is `SchemaValue::Map`, authored as
 //!   `BTreeMap<String, String>` (a repeatable-map option).
@@ -66,7 +66,7 @@ mod canonical {
             .unwrap();
         assert_eq!(native, dynamic);
 
-        #[cfg(all(feature = "url", feature = "chrono"))]
+        #[cfg(all(feature = "url", feature = "jiff"))]
         {
             let arena = WireToolSchema::default();
             let wire = git_canonical::__golem_wire_tool_descriptor_for_Git(
@@ -88,7 +88,7 @@ mod canonical {
     #[test_r::test]
     #[test_r::never_capture]
     #[cfg_attr(
-        not(all(feature = "url", feature = "chrono")),
+        not(all(feature = "url", feature = "jiff")),
         allow(clippy::single_element_loop)
     )]
     fn prepared_canonical_descriptors_match_reference() {
@@ -98,7 +98,7 @@ mod canonical {
                 grep_canonical::__golem_prepared_tool_descriptor_for_Grep().unwrap(),
                 grep_canonical::__golem_tool_descriptor_for_Grep(&mut ToolBuildCtx::new()).unwrap(),
             ),
-            #[cfg(all(feature = "url", feature = "chrono"))]
+            #[cfg(all(feature = "url", feature = "jiff"))]
             (
                 git_canonical::__golem_prepared_tool_descriptor_for_Git().unwrap(),
                 git_canonical::__golem_tool_descriptor_for_Git(&mut ToolBuildCtx::new()).unwrap(),
@@ -714,10 +714,10 @@ mod canonical {
         }
     }
 
-    // The canonical `git` subset (§5.3.5.1). It needs the `url` and `chrono`
-    // schema features for the `Url` / `DateTime<Utc>` nodes, so it is compiled only
+    // The canonical `git` subset (§5.3.5.1). It needs the `url` and `jiff`
+    // schema features for the `Url` / `Timestamp` nodes, so it is compiled only
     // when those features are enabled (in addition to `export_golem_agentic`).
-    #[cfg(all(feature = "url", feature = "chrono"))]
+    #[cfg(all(feature = "url", feature = "jiff"))]
     #[allow(
         clippy::disallowed_names,
         dead_code,
@@ -725,7 +725,6 @@ mod canonical {
         unused_imports
     )]
     mod git_canonical {
-        use chrono::{DateTime, Utc};
         use golem_rust::agentic::{
             EffectiveCommandField, ErrorKind, ExtendedConstraint, ExtendedOptionShape, ExtendedRef,
             ExtendedRepeatableListShape, ExtendedToolType, ExtendedValueIsLiteral, FlagShape,
@@ -738,6 +737,7 @@ mod canonical {
             tool_implementation,
         };
         use golem_rust_macro::ToolError;
+        use jiff::Timestamp;
         use std::collections::BTreeMap;
         use std::path::PathBuf;
         use test_r::test;
@@ -763,7 +763,7 @@ mod canonical {
         struct LogEntry {
             hash: String,
             author: String,
-            date: DateTime<Utc>,
+            date: Timestamp,
             message: String,
         }
 
@@ -878,8 +878,8 @@ mod canonical {
             fn log(
                 &self,
                 max_count: Option<i64>,
-                since: Option<DateTime<Utc>>,
-                until: Option<DateTime<Utc>>,
+                since: Option<Timestamp>,
+                until: Option<Timestamp>,
                 author: Vec<String>,
                 grep: Vec<String>,
                 all_match: bool,
@@ -1017,8 +1017,8 @@ mod canonical {
             fn log(
                 &self,
                 _max_count: Option<i64>,
-                _since: Option<DateTime<Utc>>,
-                _until: Option<DateTime<Utc>>,
+                _since: Option<Timestamp>,
+                _until: Option<Timestamp>,
                 _author: Vec<String>,
                 _grep: Vec<String>,
                 _all_match: bool,

@@ -24,7 +24,6 @@ use crate::repo::model::account_usage::{
     MonthlyUsageAttribution, UsageType,
 };
 use crate::services::account_usage::error::AccountUsageError;
-use chrono::{TimeZone, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::account_usage::{
     AccountResourcePolicy, AccountUsage, AccountUsageMetering, AccountUsageMetrics,
@@ -45,6 +44,7 @@ use golem_service_base::model::auth::AuthorizationError;
 use golem_service_base::model::{AccountResourceLimits, MonthlyResourcePolicy, ResourceLimits};
 use golem_service_base::repo::SqlDateTime;
 use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
+use jiff::Timestamp;
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -252,9 +252,15 @@ impl AccountUsageService {
         metering: ResourceUsageMetering,
     ) -> Result<RepoAccountUsage, AccountUsageError> {
         let date = SqlDateTime::new(
-            Utc.with_ymd_and_hms(period.year, period.month, 1, 0, 0, 0)
-                .single()
-                .expect("validated account usage period"),
+            jiff::civil::date(
+                i16::try_from(period.year).expect("validated account usage year"),
+                i8::try_from(period.month).expect("validated account usage month"),
+                1,
+            )
+            .at(0, 0, 0, 0)
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .expect("validated account usage period")
+            .timestamp(),
         );
         match self
             .account_usage_repo
@@ -720,7 +726,7 @@ impl AccountUsageService {
             account_id,
             usage: AccountUsageMetrics {
                 period: report.period,
-                as_of: report.as_of.unwrap_or_else(Utc::now),
+                as_of: report.as_of.unwrap_or_else(Timestamp::now),
                 compute_gcu: fuel_to_gcu(report.compute_fuel),
                 memory_gb_seconds: report.memory_gb_seconds,
                 durable_storage_gb_month: byte_seconds_to_gb_month(
@@ -898,9 +904,15 @@ impl AccountUsageService {
         active_at: &SqlDateTime,
     ) -> Result<RepoAccountUsage, AccountUsageError> {
         let date = SqlDateTime::new(
-            Utc.with_ymd_and_hms(period.year, period.month, 1, 0, 0, 0)
-                .single()
-                .expect("validated account usage period"),
+            jiff::civil::date(
+                i16::try_from(period.year).expect("validated account usage year"),
+                i8::try_from(period.month).expect("validated account usage month"),
+                1,
+            )
+            .at(0, 0, 0, 0)
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .expect("validated account usage period")
+            .timestamp(),
         );
         let usage = match usage_type {
             Some(usage_type) => {
@@ -1524,7 +1536,7 @@ mod tests {
             value: 8,
             reason: golem_common::model::account_usage::AdminResourceGrantReason::Support,
             actor_account_id: AccountId::SYSTEM,
-            granted_at: Utc::now(),
+            granted_at: Timestamp::now(),
             expires_at: None,
         };
         usage.admin_grants = vec![grant.clone()];
@@ -1575,7 +1587,7 @@ mod tests {
             value: 8,
             reason: golem_common::model::account_usage::AdminResourceGrantReason::Support,
             actor_account_id: AccountId::SYSTEM,
-            granted_at: Utc::now(),
+            granted_at: Timestamp::now(),
             expires_at: None,
         };
         usage.admin_grants = vec![grant.clone()];
@@ -1600,7 +1612,7 @@ mod tests {
             value: usage.max_memory_per_worker_value,
             reason: golem_common::model::account_usage::AdminResourceGrantReason::Support,
             actor_account_id: AccountId::SYSTEM,
-            granted_at: Utc::now(),
+            granted_at: Timestamp::now(),
             expires_at: None,
         };
         let storage_grant = AdminResourceGrant {
@@ -1608,7 +1620,7 @@ mod tests {
             value: usage.max_disk_space_per_worker_value,
             reason: golem_common::model::account_usage::AdminResourceGrantReason::Support,
             actor_account_id: AccountId::SYSTEM,
-            granted_at: Utc::now(),
+            granted_at: Timestamp::now(),
             expires_at: None,
         };
         usage.admin_grants = vec![memory_grant.clone(), storage_grant.clone()];

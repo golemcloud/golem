@@ -26,7 +26,7 @@ test("template modules include the runtime initializer and portable source paths
   }
 });
 
-test("generator arguments register the native bridge and the forked wit-bindgen", () => {
+test("generator arguments register the native bridge, the forked wit-bindgen and the tool drains", () => {
   const pairs = [];
   for (let index = 0; index < templateGeneratorArgs.length; index += 2) {
     pairs.push([templateGeneratorArgs[index], templateGeneratorArgs[index + 1]]);
@@ -37,6 +37,8 @@ test("generator arguments register the native bridge and the forked wit-bindgen"
       ["--native-module", "golem-tool-process-bridge"],
       ["--dependency", "golem-js-tool-process-bridge"],
       ["--dependency", "wit-bindgen-p3"],
+      ["--drain-before-return", "golem:tool/guest"],
+      ["--drain-before-return", "golem:tool/tool-middleware-guest"],
     ],
   );
   assert.equal(

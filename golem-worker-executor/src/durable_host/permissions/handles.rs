@@ -13,15 +13,14 @@
 // limitations under the License.
 
 use super::{
-    Accessor, BTreeSet, CallReplayOutcome, CardId, CardState, DateTime, DurabilityHost,
-    DurableCallSession, DurableFunctionType, DurableWorkerCtx, GolemPermissionsCardLiveness,
-    HostFailureKind, HostPermissionCard, HostPermissionCardWithStore,
-    HostRequestPermissionCardLiveness, HostResponsePermissionCardLiveness, InternalRetryResult,
-    NotCancellable, PermissionCardEntry, PermissionCardHandleRep, PermissionCardResolver,
-    PermissionCardValuePayload, ResolvedPermissionCard, Resource, ScopeCard,
-    SerializablePermissionCardLiveness, StoredCard, Utc, Uuid, WorkerCtx, WorkerExecutorError,
-    anyhow, deserialize, permission_error_to_anyhow, permissions_types, serialize,
-    worker_error_to_permission_error,
+    Accessor, BTreeSet, CallReplayOutcome, CardId, CardState, DurabilityHost, DurableCallSession,
+    DurableFunctionType, DurableWorkerCtx, GolemPermissionsCardLiveness, HostFailureKind,
+    HostPermissionCard, HostPermissionCardWithStore, HostRequestPermissionCardLiveness,
+    HostResponsePermissionCardLiveness, InternalRetryResult, NotCancellable, PermissionCardEntry,
+    PermissionCardHandleRep, PermissionCardResolver, PermissionCardValuePayload,
+    ResolvedPermissionCard, Resource, ScopeCard, SerializablePermissionCardLiveness, StoredCard,
+    Uuid, WorkerCtx, WorkerExecutorError, anyhow, deserialize, permission_error_to_anyhow,
+    permissions_types, serialize, worker_error_to_permission_error,
 };
 
 impl PermissionCardEntry {
@@ -134,7 +133,7 @@ impl ResolvedPermissionCard {
         }
     }
 
-    pub(super) fn expires_at(&self) -> Option<DateTime<Utc>> {
+    pub(super) fn expires_at(&self) -> Option<jiff::Timestamp> {
         match self {
             Self::Persistent(card) => card.expires_at(),
             Self::Scope(card) => card.expires_at,
@@ -404,7 +403,7 @@ pub(super) fn card_expired_error(card_id: CardId) -> permissions_types::Permissi
 
 pub(super) fn card_is_expired_at(
     snapshot: &PermissionCardValuePayload,
-    now: DateTime<Utc>,
+    now: jiff::Timestamp,
 ) -> bool {
     snapshot
         .expires_at
@@ -432,7 +431,7 @@ pub(super) async fn observe_permission_card_liveness<Ctx: WorkerCtx>(
                 "the card service returned no state for permission card {card_id}"
             ))
         })?;
-    let expired = card_is_expired_at(snapshot, Utc::now());
+    let expired = card_is_expired_at(snapshot, jiff::Timestamp::now());
     match state {
         _ if expired => Ok(SerializablePermissionCardLiveness::Expired),
         CardState::Live(registered) => {

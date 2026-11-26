@@ -478,17 +478,15 @@ fn detail_for(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, TimeDelta, Utc};
+
     use std::collections::BTreeMap;
     use test_r::test;
 
     const ON_POD: &str = "chaos-s7-revert-0000";
     const CONTROL: &str = "chaos-s7-revert-0001";
 
-    fn t0() -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-08-24T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
+    fn t0() -> jiff::Timestamp {
+        str::parse::<jiff::Timestamp>("2026-08-24T12:00:00Z").unwrap()
     }
 
     fn split() -> PodSplit {
@@ -505,7 +503,7 @@ mod tests {
     fn fault() -> FaultWindow {
         FaultWindow {
             injected_at: t0(),
-            recovered_at: Some(t0() + TimeDelta::seconds(120)),
+            recovered_at: Some(t0() + jiff::SignedDuration::from_secs(120)),
         }
     }
 
@@ -518,7 +516,7 @@ mod tests {
         outcome: Outcome,
         observed: Option<u64>,
     ) -> RevertRound {
-        let submitted_at = t0() + TimeDelta::seconds(offset_secs);
+        let submitted_at = t0() + jiff::SignedDuration::from_secs(offset_secs);
         RevertRound {
             agent: agent.to_string(),
             round: 0,
@@ -526,7 +524,7 @@ mod tests {
             asked_to_revert: 2,
             outcome,
             submitted_at,
-            completed_at: Some(submitted_at + TimeDelta::milliseconds(80)),
+            completed_at: Some(submitted_at + jiff::SignedDuration::from_millis(80)),
             observed_after: observed,
         }
     }
@@ -661,7 +659,7 @@ mod tests {
     #[test]
     fn reverts_unresolved_when_the_pod_died_are_reported_separately() {
         let mut caught = round(ON_POD, -1, Some(10), Outcome::Indeterminate, Some(10));
-        caught.completed_at = Some(t0() + TimeDelta::seconds(30));
+        caught.completed_at = Some(t0() + jiff::SignedDuration::from_secs(30));
         let report = build(&[caught]);
 
         let entry = report

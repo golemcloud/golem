@@ -106,7 +106,7 @@ fn http_context(agents: Vec<AgentTypeSchema>) -> DeploymentContext {
             .collect(),
         webhooks_prefix: "/webhooks".into(),
         openapi_endpoint_prefix: "/".into(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
     };
     DeploymentContext {
         environment,
@@ -978,7 +978,7 @@ async fn router_index_preparation_reuses_upload_hash_and_pins_policy() {
             lower_negative: vec![],
             upper_positive: vec![],
             upper_negative: vec![],
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
         },
@@ -1608,7 +1608,7 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
                 agents: BTreeMap::from([(name, Default::default())]),
                 webhooks_prefix: "/webhooks".into(),
                 openapi_endpoint_prefix: "/".into(),
-                created_at: chrono::Utc::now(),
+                created_at: jiff::Timestamp::now(),
             },
         );
         let routes = context.compile_http_api_routes(
@@ -1778,7 +1778,7 @@ fn mcp_deployment(
         hash: diff::Hash::empty(),
         agents,
         tools,
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
     }
 }
 
@@ -1805,7 +1805,7 @@ fn test_tool_component(name: &str, tools: BTreeMap<ToolName, ToolDeploymentMetad
             BTreeMap::new(),
             tools,
         ),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         wasm_hash: diff::Hash::empty(),
         package_metadata: None,
         object_store_key: String::new(),
@@ -1843,9 +1843,9 @@ fn test_remote_tool(
         lifecycle: ToolReleaseLifecycle::Published,
         origin: ToolReleaseOrigin::Ordinary,
         system_availability: None,
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         created_by: owner_account_id,
-        state_changed_at: chrono::Utc::now(),
+        state_changed_at: jiff::Timestamp::now(),
         state_changed_by: owner_account_id,
     };
     (
@@ -1971,7 +1971,7 @@ fn compile_test_mcp() -> (CompiledMcp, Vec<RegisteredAgentTypeSchema>) {
             (agent_a_name.clone(), McpDeploymentAgentOptions::default()),
         ]),
         tools: BTreeMap::new(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
     };
     let context = DeploymentContext {
         environment,
@@ -2024,7 +2024,7 @@ fn compile_mcp_rejects_a_domain_that_also_has_an_http_api_deployment() {
                 agents: BTreeMap::new(),
                 webhooks_prefix: "/webhooks".into(),
                 openapi_endpoint_prefix: "/".into(),
-                created_at: chrono::Utc::now(),
+                created_at: jiff::Timestamp::now(),
             },
         )]),
         mcp_deployments: BTreeMap::from([

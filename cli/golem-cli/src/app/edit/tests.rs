@@ -1082,8 +1082,8 @@ serde = { version = "1", features = ["derive"] }
 "#;
 
     let update = r#"[dependencies]
-golem-rust = { features = ["chrono"] }
-chrono = "0.4.42"
+golem-rust = { features = ["jiff"] }
+jiff = "1.0.1"
 "#;
 
     let merged = cargo_toml::merge_documents(base, update).unwrap();
@@ -1109,11 +1109,11 @@ chrono = "0.4.42"
         .iter()
         .filter_map(|value| value.as_str())
         .collect::<Vec<_>>();
-    assert_eq!(features, vec!["export_golem_agentic", "chrono"]);
+    assert_eq!(features, vec!["export_golem_agentic", "jiff"]);
 
     assert_eq!(
-        deps.get("chrono").and_then(|item| item.as_str()),
-        Some("0.4.42")
+        deps.get("jiff").and_then(|item| item.as_str()),
+        Some("1.0.1")
     );
 }
 

@@ -104,9 +104,9 @@ pub(crate) fn std_duration_to_nanos(duration: Duration) -> u64 {
     duration.as_nanos().min(u64::MAX as u128) as u64
 }
 
-pub(crate) fn chrono_duration_to_nanos(duration: chrono::Duration) -> u64 {
+pub(crate) fn signed_duration_to_nanos(duration: jiff::SignedDuration) -> u64 {
     duration
-        .to_std()
+        .try_into()
         .map(std_duration_to_nanos)
         .unwrap_or(u64::MAX)
 }

@@ -49,6 +49,56 @@ pub enum OwnerKind {
     OplogProcessor,
 }
 
+/// How an agent came to exist.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, IntoSchema, FromSchema,
+)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Enum))]
+#[cfg_attr(feature = "full", oai(rename_all = "kebab-case"))]
+#[serde(rename_all = "kebab-case")]
+pub enum AgentOrigin {
+    /// A keyed agent, created by an upsert or a keyed create. Upserts of its key reach it.
+    Keyed,
+    /// Created without a key. Only its ID reaches it. Ephemeral agents and owners without an
+    /// agent type have this origin too.
+    Created,
+    /// A fork of another agent. It has no key.
+    Forked,
+}
+
+impl Display for AgentOrigin {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Keyed => write!(f, "keyed"),
+            Self::Created => write!(f, "created"),
+            Self::Forked => write!(f, "forked"),
+        }
+    }
+}
+
+impl TryFrom<i32> for AgentOrigin {
+    type Error = String;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        match value {
+            0 => Ok(Self::Keyed),
+            1 => Ok(Self::Created),
+            2 => Ok(Self::Forked),
+            _ => Err(format!("unknown agent origin: {value}")),
+        }
+    }
+}
+
+impl From<AgentOrigin> for i32 {
+    fn from(value: AgentOrigin) -> Self {
+        match value {
+            AgentOrigin::Keyed => 0,
+            AgentOrigin::Created => 1,
+            AgentOrigin::Forked => 2,
+        }
+    }
+}
+
 impl OwnerKind {
     /// Component agents have their type's tag; the other owners have the reserved tag.
     pub fn validate_agent_id(self, agent_id: &AgentId) -> Result<(), String> {

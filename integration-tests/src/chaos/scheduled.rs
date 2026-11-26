@@ -47,7 +47,7 @@
 use crate::chaos::ScheduledConfig;
 use crate::chaos::history::{FireRecord, Stream, TargetFireLog};
 use crate::chaos::workload::{self, SCHEDULE_EMITTER_AGENT, WorkloadContext};
-use chrono::{DateTime, Utc};
+
 use golem_common::model::agent::ParsedAgentKey;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::config::BenchmarkTestDependencies;
@@ -413,8 +413,8 @@ pub fn to_fire_records(raw: &[(String, u64, u64)]) -> Vec<FireRecord> {
     out
 }
 
-fn millis_to_time(millis: u64) -> Option<DateTime<Utc>> {
-    DateTime::from_timestamp_millis(i64::try_from(millis).ok()?)
+fn millis_to_time(millis: u64) -> Option<jiff::Timestamp> {
+    jiff::Timestamp::from_millisecond(i64::try_from(millis).ok()?).ok()
 }
 
 #[cfg(test)]

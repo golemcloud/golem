@@ -344,7 +344,23 @@ fn check(
 }
 
 fn rfc3339(time: SystemTime) -> String {
-    chrono::DateTime::<chrono::Utc>::from(time).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
+    // X.509's no-expiration value is later than Jiff's maximum timestamp.
+    let nanos = match time.duration_since(SystemTime::UNIX_EPOCH) {
+        Ok(duration) => duration.as_nanos() as i128,
+        Err(error) => -(error.duration().as_nanos() as i128),
+    };
+    match time::OffsetDateTime::from_unix_timestamp_nanos(nanos) {
+        Ok(value) => format!(
+            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+            value.year(),
+            value.month() as u8,
+            value.day(),
+            value.hour(),
+            value.minute(),
+            value.second(),
+        ),
+        Err(_) => format!("unrepresentable certificate time: {time:?}"),
+    }
 }
 
 fn log_loaded(name: &str, sources: &TlsSources, loaded: &TlsLoaded, what: &str) {
@@ -470,6 +486,30 @@ mod tests {
         assert_eq!(m.current().certificate.sha256, sha(&f.cert));
         assert!(m.has_files());
         assert!(matches!(m.reload_if_changed(), ReloadOutcome::Unchanged));
+    }
+
+    #[test]
+    fn certificates_without_expiration_load_and_reload_with_logging() {
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::INFO)
+            .with_writer(std::io::sink)
+            .finish();
+        let _guard = tracing::subscriber::set_default(subscriber);
+        let f = Fixture::new();
+        let not_after = SystemTime::UNIX_EPOCH + Duration::from_secs(253_402_300_799);
+        let (cert, key) = signed_by(&f.ca, Some((SystemTime::UNIX_EPOCH, not_after)));
+        f.write("tls.crt", &cert);
+        f.write("tls.key", &key);
+        let m = TlsMaterial::load("t-no-expiration", f.sources()).unwrap();
+        assert_eq!(m.current().certificate.not_after, not_after);
+
+        let (replacement, key) = signed_by(&f.ca, Some((SystemTime::UNIX_EPOCH, not_after)));
+        f.write("tls.crt", &replacement);
+        f.write("tls.key", &key);
+        assert!(matches!(m.reload_if_changed(), ReloadOutcome::Reloaded));
+        assert_eq!(m.current().certificate.sha256, sha(&replacement));
+        assert_eq!(m.current().certificate.not_after, not_after);
+        assert_eq!(rfc3339(not_after), "9999-12-31T23:59:59Z");
     }
 
     #[test]

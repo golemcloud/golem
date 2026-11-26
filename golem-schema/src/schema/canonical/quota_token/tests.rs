@@ -13,16 +13,14 @@
 // limitations under the License.
 
 use super::*;
-use chrono::{DateTime, TimeZone, Utc};
+use jiff::Timestamp;
 use proptest::prelude::*;
 use test_r::test;
 
-fn datetime_strategy() -> impl Strategy<Value = DateTime<Utc>> {
-    // RFC 3339 only encodes years 0000-9999.
-    (0i64..253_402_214_400i64, 0u32..1_000_000_000).prop_map(|(s, n)| {
-        Utc.timestamp_opt(s, n)
-            .single()
-            .expect("strategy bounds keep timestamps valid")
+fn datetime_strategy() -> impl Strategy<Value = Timestamp> {
+    // Keep generated instants within both RFC 3339 and Jiff's ranges.
+    (0i64..=Timestamp::MAX.as_second(), 0u32..1_000_000_000).prop_map(|(s, n)| {
+        Timestamp::new(s, n as i32).expect("strategy bounds keep timestamps valid")
     })
 }
 
@@ -164,7 +162,7 @@ fn output_uses_string_for_numeric_fields() {
         resource_name: "r".into(),
         expected_use: u64::MAX,
         last_credit: i64::MIN,
-        last_credit_at: chrono::Utc.timestamp_opt(0, 0).single().unwrap(),
+        last_credit_at: Timestamp::UNIX_EPOCH,
     };
     let v = to_json(&p).expect("to_json");
     let obj = v.as_object().expect("object");
