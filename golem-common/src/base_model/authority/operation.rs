@@ -117,6 +117,8 @@ catalog! {
     CancelInvocation("cancel-invocation") => [
         (Verb::Invocation(InvocationVerb::Cancel), None, [Invocation]),
     ],
+    /// Input to an invocation. Input to a tool invocation uses `send-tool-input` or
+    /// `send-hosted-exec-input`, which repeat the invocation's admission.
     SendInvocationInput("send-invocation-input") => [
         (Verb::Invocation(InvocationVerb::Send), None, [Invocation]),
     ],
@@ -389,6 +391,45 @@ catalog! {
             [Environment, Account, Invocation, Promise, Webhook, Artifact]
         ),
     ],
+
+    // Invocation: request authority, appended (the binary encoding is the position).
+
+    /// A methodless upsert, including the client ID accessor: `invoke` on any one method of the
+    /// selected agent, or of the keyed agent if it does not exist yet. An upsert that calls a
+    /// method uses `invoke-agent`.
+    UpsertAgent("upsert-agent") => [(Verb::Agent(AgentVerb::Invoke), AnyOneMethod, [Agent])],
+    /// Input to a standalone tool invocation, on the starting connection and every later one:
+    /// invocation `send` on the invocation, then tool admission again, against the input
+    /// sender's current authority.
+    SendToolInput("send-tool-input") => [
+        (Verb::Invocation(InvocationVerb::Send), None, [Invocation] owned by [Tool]),
+        (Verb::Tool(ToolVerb::Invoke), Command, [Tool]),
+    ],
+    /// Input to a hosted tool invocation, on the starting connection and every later one:
+    /// invocation `send` on the invocation, then hosted-exec admission again, against the input
+    /// sender's current authority: `agent : exec` on the hosting agent, then `tool : invoke`.
+    SendHostedExecInput("send-hosted-exec-input") => [
+        (Verb::Invocation(InvocationVerb::Send), None, [Invocation] owned by [Agent]),
+        (Verb::Agent(AgentVerb::Exec), None, [Agent]),
+        (Verb::Tool(ToolVerb::Invoke), Command, [Tool]),
+    ],
+
+    // Management: inspection, appended (the binary encoding is the position).
+
+    /// Reading another agent's config is management inspection: `view` on that agent. An agent
+    /// reads its own config with no decision.
+    InspectAgentConfig("inspect-agent-config") => [(Verb::Agent(AgentVerb::View), None, [Agent])],
+    /// Reading another agent's environment variables is management inspection: `view` on that
+    /// agent. An agent reads its own environment variables with no decision.
+    InspectAgentEnvVars("inspect-agent-env-vars") => [
+        (Verb::Agent(AgentVerb::View), None, [Agent]),
+    ],
+    /// Reading another tool's config is management inspection: `view` on that tool. A tool reads
+    /// its own config with no decision.
+    InspectToolConfig("inspect-tool-config") => [(Verb::Tool(ToolVerb::View), None, [Tool])],
+    /// Reading another tool's environment variables is management inspection: `view` on that
+    /// tool. A tool reads its own environment variables with no decision.
+    InspectToolEnvVars("inspect-tool-env-vars") => [(Verb::Tool(ToolVerb::View), None, [Tool])],
 }
 
 /// One part of an operation: a verb, the resource it asks for, and the target it names. The class
