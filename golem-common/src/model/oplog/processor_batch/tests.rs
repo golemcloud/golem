@@ -19,18 +19,24 @@ use crate::base_model::tool::ToolName;
 use crate::model::agent::{AgentMode, OwnerKind};
 use crate::model::card::{InvocationWalletPin, WalletVersionToken};
 use crate::model::component::ComponentRevision;
+use crate::model::deployment::DeploymentRevision;
 use crate::model::entity::{
     AgentEntity, EntityCallMode, EntityInvocationDescriptor, EntityInvocationPlanReference,
-    EntityInvocationRequest, ToolInvocationDescriptor, ToolOutputContract,
+    EntityInvocationRequest, FilesystemCapability, ToolInvocationDescriptor, ToolOutputContract,
 };
 use crate::model::environment::EnvironmentId;
 use crate::model::invocation_context::{InvocationContextStack, TraceId};
+use crate::model::json::NormalizedJsonValue;
 use crate::model::oplog::host_functions::HostFunctionName;
 use crate::model::oplog::payload::types::AgentMetadataForGuests;
 use crate::model::oplog::{
     CreateParameters, CreateRequest, CreateRequestKind, DurableFunctionType, HostRequest,
     HostRequestEntityInvocation, HostStreamKind, OplogEntry, OplogPayload, PayloadId,
-    UpdateDescription,
+    RawSnapshotData, UpdateDescription,
+};
+use crate::model::tool::{
+    CompiledToolBinding, ToolActivationSnapshot, ToolBindingOwner, ToolFilesystemAccess,
+    ToolRegistration, ToolSource,
 };
 use crate::model::{
     AccountId, AgentFingerprint, AgentId, AgentStatus, ComponentId, InvocationId,
@@ -39,6 +45,7 @@ use crate::model::{
 use crate::schema::graph::{SchemaGraph, TypedSchemaValue};
 use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::SchemaValue;
+use crate::schema::tool::{CommandTree, Tool};
 use prost::Message;
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -103,6 +110,59 @@ fn method_payload(caller: Caller) -> StoredAgentInvocationPayload {
         allow_streams: false,
         caller,
         scope_card: None,
+    }
+}
+
+/// The tool deployment that an external tool invocation pins.
+fn tool_activation() -> ToolActivationSnapshot {
+    let source = ToolSource::Component {
+        component_id: Default::default(),
+        component_revision: ComponentRevision::INITIAL,
+        component_name: "test:tool".try_into().unwrap(),
+    };
+    let tool_name = ToolName::try_from("grep").unwrap();
+    ToolActivationSnapshot {
+        registered_tool: ToolRegistration {
+            deployment_revision: DeploymentRevision::INITIAL,
+            release_id: None,
+            definition: Tool {
+                version: "1.0.0".to_string(),
+                requires_filesystem: false,
+                http_mount: None,
+                commands: CommandTree { nodes: Vec::new() },
+                schema: SchemaGraph::empty(),
+            },
+            provision: Default::default(),
+            source: source.clone(),
+            owner_account_id: Default::default(),
+            owner_account_email: "owner@example.com".into(),
+            metadata_version: String::new(),
+            metadata_digest: Default::default(),
+            component_bindings: Default::default(),
+        },
+        binding: CompiledToolBinding {
+            deployment_revision: DeploymentRevision::INITIAL,
+            release_id: None,
+            owner: ToolBindingOwner::AgentType {
+                agent_type_name: "Test".parse().unwrap(),
+            },
+            tool_name,
+            version: "1.0.0".to_string(),
+            metadata_version: String::new(),
+            metadata_digest: Default::default(),
+            account_id: Default::default(),
+            account_email: "owner@example.com".into(),
+            parameters: NormalizedJsonValue::new(serde_json::Value::Null),
+            config_keys_readable: Default::default(),
+            secret_keys_readable: Default::default(),
+            secret_keys_revealable: Default::default(),
+            filesystem_access: ToolFilesystemAccess::Denied,
+            source,
+            shell: false,
+        },
+        filesystem: FilesystemCapability::Incapable,
+        middleware_chain: None,
+        mcp_import: None,
     }
 }
 
@@ -346,6 +406,27 @@ fn every_kind_of_invocation_loses_the_users_claims() {
             caller: sample_caller(),
         },
         method_payload(sample_caller()),
+        StoredAgentInvocationPayload::ExternalTool {
+            input: Box::new(TypedSchemaValue::new(
+                SchemaGraph::anonymous(SchemaType::tuple(Vec::new())),
+                SchemaValue::Tuple {
+                    elements: Vec::new(),
+                },
+            )),
+            stdin: false,
+            stdout: true,
+            stderr: false,
+            activation: Box::new(tool_activation()),
+            caller: sample_caller(),
+            scope_card: None,
+        },
+        StoredAgentInvocationPayload::LoadSnapshot {
+            snapshot: RawSnapshotData {
+                data: vec![1, 2, 3],
+                mime_type: "application/octet-stream".to_string(),
+            },
+            caller: sample_caller(),
+        },
         StoredAgentInvocationPayload::SaveSnapshot {
             caller: sample_caller(),
         },
@@ -422,6 +503,12 @@ fn a_tool_call_request_reaches_a_processor_without_the_users_claims() {
     let entries = [
         tool_call_start(inline(tool_call_request(sample_caller()))),
         tool_call_start(serialized_inline(tool_call_request(sample_caller()))),
+        OplogEntry::HostStreamFrame {
+            timestamp: Timestamp::now_utc().rounded(),
+            parent_start_index: OplogIndex::from_u64(3),
+            kind: HostStreamKind::P3HttpRequestBody,
+            payload: inline(tool_call_request(sample_caller())),
+        },
         OplogEntry::HostStreamFrame {
             timestamp: Timestamp::now_utc().rounded(),
             parent_start_index: OplogIndex::from_u64(3),
