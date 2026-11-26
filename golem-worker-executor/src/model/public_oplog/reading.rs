@@ -799,7 +799,9 @@ impl RangeScan {
         Self::new(UNLIMITED_SCAN)
     }
 
-    /// The scan of a call that `budget` bounds, with the limit of `budget` in milliseconds.
+    /// The scan of a call that `budget` bounds. The scan stops at the entry limit or at the time
+    /// limit of `budget`. The time limit counts whole milliseconds and drops the rest, so a time
+    /// limit below 1 ms is spent after the first chunk.
     fn within(budget: ScanBudget) -> Self {
         Self::new(oplog_range_allowance(Some(UNLIMITED_SCAN), budget))
     }
