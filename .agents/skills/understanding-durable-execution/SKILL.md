@@ -336,11 +336,12 @@ Rules that follow from it:
   reach the successor carries the fingerprint: expected callee fingerprints, `PromiseId` and
   webhook IDs, pinned RPC, scheduled actions, stream sessions, export forks, ETags and session
   tokens.
-- **Derived caches are disposable.** The cached status, its checkpoint and the invocation-result
-  index are scoped by fingerprint; the agent-mode hint has one key per agent and carries the
-  fingerprint in its value. Archiving removes all four once the whole oplog is in the last layer
-  (`worker/persistence.rs` → `WorkerService::remove_cached_status`). The next load folds the status
-  caches from the oplog, and the next resolution writes the hint again. Test:
+- **Derived caches are disposable.** The cached status and the invocation-result index are scoped
+  by fingerprint; the agent-mode hint has one key per agent and carries the fingerprint in its
+  value. Archiving removes all three once the whole oplog is in the last layer
+  (`worker/persistence.rs` → `WorkerService::remove_cached_status`). The durable status baseline
+  (the clean checkpoint) is also scoped by fingerprint, but archiving keeps it. The next load folds
+  the status from the baseline and the oplog, and the next resolution writes the hint again. Test:
   `oplog_unreadable.rs::archived_keyed_agents_resolve_by_key_and_by_id_from_their_oplog`.
 
 ## Component map

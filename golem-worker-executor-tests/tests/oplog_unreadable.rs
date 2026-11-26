@@ -368,14 +368,11 @@ async fn archived_keyed_agents_resolve_by_key_and_by_id_from_their_oplog(
     executor.shutdown_and_wait_for_invocation_loops().await?;
     drop(executor);
 
+    // Archiving keeps the status baseline (`AgentStatusCheckpoint`), which is not a cache.
     let kv = SqliteKeyValueStorage::configured(&sqlite_storage_config(deps, &context)).await?;
     for (agent_id, fingerprint) in &agents {
         for namespace in [
             KeyValueStorageNamespace::AgentStatus {
-                owned_agent_id: agent_id.clone(),
-                fingerprint: *fingerprint,
-            },
-            KeyValueStorageNamespace::AgentStatusCheckpoint {
                 owned_agent_id: agent_id.clone(),
                 fingerprint: *fingerprint,
             },
