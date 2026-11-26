@@ -33,13 +33,12 @@ impl InvocationId {
 ///
 /// [`IdempotencyScope::encoded`] is the only encoding of a scope. Every derivation that depends
 /// on the caller hashes it: invocation IDs, the agent IDs of creates with an idempotency key,
-/// ephemeral agent IDs and external-tool-owner agent IDs.
+/// ephemeral agent IDs and external-tool-owner agent IDs. Two scopes are equal when their
+/// encodings are equal, so a token set is equal to the same tokens in another order or with
+/// repeats, however the value was built or decoded.
 #[derive(
     Clone,
     Debug,
-    PartialEq,
-    Eq,
-    Hash,
     serde::Serialize,
     serde::Deserialize,
     golem_schema_derive::IntoSchema,
@@ -139,6 +138,20 @@ impl IdempotencyScope {
             }
         }
         bytes
+    }
+}
+
+impl PartialEq for IdempotencyScope {
+    fn eq(&self, other: &Self) -> bool {
+        self.encoded() == other.encoded()
+    }
+}
+
+impl Eq for IdempotencyScope {}
+
+impl std::hash::Hash for IdempotencyScope {
+    fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
+        self.encoded().hash(state);
     }
 }
 
@@ -890,6 +903,20 @@ mod tests {
             Uuid::from_u128(7),
         ]);
         assert_eq!(unordered.encoded(), tokens(&[5, 7]).encoded());
+        // Such a value is also equal to the normal form, and it hashes the same.
+        assert_eq!(unordered, tokens(&[5, 7]));
+        let hash = |scope: &IdempotencyScope| {
+            use std::hash::{BuildHasher, BuildHasherDefault};
+            BuildHasherDefault::<std::collections::hash_map::DefaultHasher>::default()
+                .hash_one(scope)
+        };
+        assert_eq!(hash(&unordered), hash(&tokens(&[5, 7])));
+        // A token set that serde decodes in another order is equal to the normal form.
+        let decoded: IdempotencyScope = serde_json::from_value(serde_json::json!({
+            "Tokens": [Uuid::from_u128(7), Uuid::from_u128(5), Uuid::from_u128(5)]
+        }))
+        .unwrap();
+        assert_eq!(decoded, tokens(&[5, 7]));
     }
 
     #[test]
