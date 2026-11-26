@@ -625,12 +625,20 @@ fn a_promise_is_owned_by_the_agent_or_the_tool_invocation_that_created_it() {
     }
 }
 
+fn position_in_catalog(operation: CatalogOperation) -> usize {
+    CatalogOperation::ALL
+        .iter()
+        .position(|each| *each == operation)
+        .unwrap()
+}
+
 #[test]
 fn a_methodless_upsert_asks_for_any_one_method_and_only_upsert_agent_takes_that_form() {
-    // The new operation is the last one, so the encodings of the others do not move.
+    // The new operation follows the last operation of the first catalog, so the encodings of the
+    // others do not move.
     assert_eq!(
-        CatalogOperation::ALL.last(),
-        Some(&CatalogOperation::UpsertAgent)
+        position_in_catalog(CatalogOperation::UpsertAgent),
+        position_in_catalog(CatalogOperation::ListCardTokens) + 1
     );
     assert_eq!(
         CatalogOperation::UpsertAgent
@@ -693,6 +701,176 @@ fn a_methodless_upsert_asks_for_any_one_method_and_only_upsert_agent_takes_that_
             Target::Agent(agent())
         ),
         Err(OperationShapeError::Resource { .. })
+    ));
+}
+
+type Shape = (
+    Class,
+    &'static str,
+    ResourceKind,
+    Vec<TargetKind>,
+    Vec<OwnerKind>,
+);
+
+fn shapes(operation: CatalogOperation) -> Vec<Shape> {
+    operation
+        .parts()
+        .iter()
+        .map(|part| {
+            (
+                part.verb.class(),
+                part.verb.name(),
+                part.resource,
+                part.targets.to_vec(),
+                part.owners.to_vec(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn input_to_a_running_tool_invocation_repeats_its_admission() {
+    // Appended after upsert-agent, in this order.
+    assert_eq!(
+        position_in_catalog(CatalogOperation::SendToolInput),
+        position_in_catalog(CatalogOperation::UpsertAgent) + 1
+    );
+    assert_eq!(
+        position_in_catalog(CatalogOperation::SendHostedExecInput),
+        position_in_catalog(CatalogOperation::UpsertAgent) + 2
+    );
+
+    let standalone: Vec<Shape> = vec![
+        (
+            Class::Invocation,
+            "send",
+            ResourceKind::None,
+            vec![TargetKind::Invocation],
+            vec![OwnerKind::Tool],
+        ),
+        (
+            Class::Tool,
+            "invoke",
+            ResourceKind::Command,
+            vec![TargetKind::Tool],
+            vec![],
+        ),
+    ];
+    assert_eq!(shapes(CatalogOperation::SendToolInput), standalone);
+    let hosted: Vec<Shape> = vec![
+        (
+            Class::Invocation,
+            "send",
+            ResourceKind::None,
+            vec![TargetKind::Invocation],
+            vec![OwnerKind::Agent],
+        ),
+        (
+            Class::Agent,
+            "exec",
+            ResourceKind::None,
+            vec![TargetKind::Agent],
+            vec![],
+        ),
+        (
+            Class::Tool,
+            "invoke",
+            ResourceKind::Command,
+            vec![TargetKind::Tool],
+            vec![],
+        ),
+    ];
+    assert_eq!(shapes(CatalogOperation::SendHostedExecInput), hosted);
+
+    let agent_invocation = InvocationTarget {
+        invocation_id: InvocationId(Uuid::from_u128(0x2b)),
+        owner: InvocationOwner::Agent(agent()),
+    };
+    let standalone_input = |invocation: InvocationTarget, command: Resource| {
+        Operation::new(
+            CatalogOperation::SendToolInput,
+            vec![
+                OperationPart::new(
+                    InvocationVerb::Send,
+                    Resource::None,
+                    Target::Invocation(invocation),
+                ),
+                OperationPart::new(ToolVerb::Invoke, command, Target::Tool(tool())),
+            ],
+        )
+    };
+    let hosted_input = |invocation: InvocationTarget| {
+        Operation::new(
+            CatalogOperation::SendHostedExecInput,
+            vec![
+                OperationPart::new(
+                    InvocationVerb::Send,
+                    Resource::None,
+                    Target::Invocation(invocation),
+                ),
+                OperationPart::new(AgentVerb::Exec, Resource::None, Target::Agent(agent())),
+                OperationPart::new(
+                    ToolVerb::Invoke,
+                    Resource::Command("bash".to_string()),
+                    Target::Tool(tool()),
+                ),
+            ],
+        )
+    };
+
+    // The tool part carries the command that the input goes to.
+    let standalone_operation =
+        standalone_input(tool_invocation(), Resource::Command("summary".to_string())).unwrap();
+    assert_eq!(
+        standalone_operation.parts()[1].resource,
+        Resource::Command("summary".to_string())
+    );
+    let hosted_operation = hosted_input(agent_invocation.clone()).unwrap();
+    assert_eq!(
+        hosted_operation.parts()[2].resource,
+        Resource::Command("bash".to_string())
+    );
+    for operation in [standalone_operation, hosted_operation] {
+        let request = AuthorizationRequest::new(sample_caller(), operation);
+        assert_eq!(round_trip_json(&request), request);
+        assert_eq!(round_trip_desert(&request), request);
+    }
+
+    // A standalone input names a tool's invocation, and a hosted input an agent's.
+    assert!(matches!(
+        standalone_input(
+            agent_invocation.clone(),
+            Resource::Command("summary".to_string())
+        ),
+        Err(OperationShapeError::Owner { .. })
+    ));
+    assert!(matches!(
+        hosted_input(tool_invocation()),
+        Err(OperationShapeError::Owner { .. })
+    ));
+    // Tool admission is always repeated for a command, never for every command at once.
+    assert!(matches!(
+        standalone_input(tool_invocation(), Resource::All),
+        Err(OperationShapeError::Resource { .. })
+    ));
+    // Hosted input never skips `agent : exec`.
+    assert!(matches!(
+        Operation::new(
+            CatalogOperation::SendHostedExecInput,
+            vec![
+                OperationPart::new(
+                    InvocationVerb::Send,
+                    Resource::None,
+                    Target::Invocation(agent_invocation),
+                ),
+                OperationPart::new(
+                    ToolVerb::Invoke,
+                    Resource::Command("bash".to_string()),
+                    Target::Tool(tool()),
+                ),
+            ],
+        ),
+        Err(OperationShapeError::PartCount { .. })
     ));
 }
 

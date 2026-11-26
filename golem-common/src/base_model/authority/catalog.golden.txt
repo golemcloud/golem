@@ -141,3 +141,5 @@ revoke-card: card : revoke [card] @ environment | account | invocation | promise
 inspect-card: card : inspect [card] @ environment | account | invocation | promise | webhook | artifact
 list-card-tokens: card : revoke [card] @ environment | account | invocation | promise | webhook | artifact
 upsert-agent: agent : invoke [any-one-method] @ agent
+send-tool-input: invocation : send [none] @ invocation (tool) ; tool : invoke [command] @ tool
+send-hosted-exec-input: invocation : send [none] @ invocation (agent) ; agent : exec [none] @ agent ; tool : invoke [command] @ tool
