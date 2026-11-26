@@ -50,20 +50,46 @@ Anyone you give the tar file to can also read its contents. Do not put
 credentials in any of these inputs. Package defaults cannot name a secret or use
 a `$config` reference, even inside a record or list.
 
-## Install a file package
+## Install a package
 
-From the application that will use the package, run `golem install ./my-package.tar`.
-Install verifies the archive without running its components. It records the file
-source, exact version, and digest in `packages:` in the root `golem.yaml` and
-in `golem.lock`. Commit both files. Put the archive inside the application to
-record a portable path, and make the archive available on other machines that
-need to build it.
+From the application that will use the package, install from a local archive, an
+HTTP(S) URL that serves the archive, or an OCI registry:
 
-Build uses a verified archive from the per-user cache or reads the source on a
-cache miss. It unpacks under `golem-temp` and uses the publisher's metadata
-instead of running the installed components. Build and deploy do not change
+```shell
+golem install ./my-package.tar
+golem install https://downloads.example.com/my-package.tar
+golem install oci://ghcr.io/example/my-package:1.0.0
+```
+
+Install verifies the package without running its components. It records the
+source, exact version, and SHA-256 manifest digest in `packages:` in the root
+`golem.yaml` and in `golem.lock`. Commit both files. For a local source, put the
+archive inside the application to record a portable path, and make the archive
+available on other machines that need to build it.
+
+An OCI source must contain the Golem package manifest and blobs, not a container
+image or a tar file wrapped in an OCI layer. To upload the layout with ORAS, run
+`oras cp --from-oci-layout my-package.tar@sha256:<manifest-digest> ghcr.io/example/my-package:1.0.0`
+with the digest printed by `golem package pack`. For a private registry, sign in
+with `docker login <registry>` before installing or building. Golem looks up the
+registry in `$DOCKER_CONFIG/config.json` (default `~/.docker/config.json`),
+including configured credential helpers. Use a username and password or access
+token; Docker identity tokens are not supported. OCI uses HTTPS except for loopback
+registries, which use anonymous HTTP. Archive URLs are fetched anonymously and
+must use HTTPS except on loopback. Do not include credentials, a query string,
+or a fragment in the archive URL.
+
+Build uses a verified archive from the per-user cache or fetches the source on a
+cache miss. For OCI it requests the locked manifest digest, never the tag, so
+the registry must retain that digest even after the tag moves. For a URL it
+rejects a package whose manifest digest differs from the lock. If a source is
+unreachable with a cold cache, build fails and reports the source and the
+credential key it would use, if any. A download must finish within five minutes;
+large packages may need a faster connection. Build unpacks under `golem-temp`
+and uses the publisher's metadata instead of running the installed components.
+Build and deploy do not change
 `golem.lock`. If a pin is missing or differs, run `golem install` with the
-intended archive to repair it.
+intended source to repair it or accept a new digest.
 
 An installed agent keeps its published type name. To configure an installed
 agent, declare it under its published name with `package: <name>`:
@@ -147,6 +173,10 @@ cannot be included in a published package.
 
 Development packages cannot select agents or tools from the consuming
 application's installed file packages.
+
+Scala and MoonBit builds use the producer's build files. Scala writes the final
+component to the consuming application's `golem-temp` directory. MoonBit keeps
+its build output in the producer's `_build` directory.
 
 TypeScript and Effect development packages need their own `package.json` in the
 package directory. The CLI installs npm dependencies there, not in the consuming

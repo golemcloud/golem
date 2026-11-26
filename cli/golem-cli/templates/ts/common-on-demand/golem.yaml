@@ -7,20 +7,20 @@ componentTemplates:
       optimized:
         default: true
         build:
-        - command: npx --no rollup -- -c "{{ npmRootDir }}/golem-temp/common/ts/rollup.config.component.mjs"
+        - command: npx --no rollup -- -c "{{ componentBuildRootDir }}/golem-temp/common/ts/rollup.config.component.mjs"
           dir: "{{ componentDir }}"
           env:
-            GOLEM_APP_ROOT: "{{ npmRootDir }}"
+            GOLEM_APP_ROOT: "{{ componentBuildRootDir }}"
             GOLEM_TEMP: "{{ golemTempDir }}"
             GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
           sources:
           - "{{ componentDir }}/src"
-          - "{{ npmRootDir }}/golem-temp/common/ts/rollup.config.component.mjs"
+          - "{{ componentBuildRootDir }}/golem-temp/common/ts/rollup.config.component.mjs"
           - "{{ componentDir }}/tsconfig.json"
-          - "{{ npmRootDir }}/package.json"
+          - "{{ componentBuildRootDir }}/package.json"
           targets:
           - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
-        - injectToPrebuiltQuickjs: "{{ npmRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
+        - injectToPrebuiltQuickjs: "{{ componentBuildRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
           module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
           into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
         - preinitializeJs: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
@@ -28,20 +28,20 @@ componentTemplates:
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.preinitialized.wasm"
       quick:
         build:
-        - command: npx --no rollup -- -c "{{ npmRootDir }}/golem-temp/common/ts/rollup.config.component.mjs"
+        - command: npx --no rollup -- -c "{{ componentBuildRootDir }}/golem-temp/common/ts/rollup.config.component.mjs"
           dir: "{{ componentDir }}"
           env:
-            GOLEM_APP_ROOT: "{{ npmRootDir }}"
+            GOLEM_APP_ROOT: "{{ componentBuildRootDir }}"
             GOLEM_TEMP: "{{ golemTempDir }}"
             GOLEM_COMPONENT_NAME: "{{ component_name | to_kebab_case }}"
           sources:
           - "{{ componentDir }}/src"
-          - "{{ npmRootDir }}/golem-temp/common/ts/rollup.config.component.mjs"
+          - "{{ componentBuildRootDir }}/golem-temp/common/ts/rollup.config.component.mjs"
           - "{{ componentDir }}/tsconfig.json"
-          - "{{ npmRootDir }}/package.json"
+          - "{{ componentBuildRootDir }}/package.json"
           targets:
           - "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
-        - injectToPrebuiltQuickjs: "{{ npmRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
+        - injectToPrebuiltQuickjs: "{{ componentBuildRootDir }}/node_modules/@golemcloud/golem-ts-sdk/wasm/agent_guest.wasm"
           module: "{{ golemTempDir }}/ts-dist/{{ component_name | to_kebab_case }}/main.js"
           into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"
         componentWasm: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.dynamic.wasm"

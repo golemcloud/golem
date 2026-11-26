@@ -514,11 +514,11 @@ async fn ensure_common_deps_for_tool(
                 .await
         }
         "moon" | "moonx" => {
-            let app_root_dir = fs::absolute_lexical_path(ctx.application().app_root_dir())?;
+            let build_root = fs::absolute_lexical_path(build_root)?;
             let build_dir = fs::absolute_lexical_path(build_dir)?;
             let Some(moon_module_root) = build_dir
                 .ancestors()
-                .take_while(|dir| dir.starts_with(&app_root_dir))
+                .take_while(|dir| dir.starts_with(&build_root))
                 .find(|dir| dir.join("moon.mod").exists())
             else {
                 return Ok(());

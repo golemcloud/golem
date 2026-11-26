@@ -66,7 +66,7 @@ static JSON_SCHEMA_VALIDATOR: LazyLock<jsonschema::Validator> = LazyLock::new(||
 pub struct ApplicationWithSource {
     pub source: PathBuf,
     pub application: Application,
-    pub(crate) development_root: Option<PathBuf>,
+    pub(crate) development_root: Option<(PathBuf, Option<String>)>,
 }
 
 #[derive(Clone, Debug, Default, Deserialize)]

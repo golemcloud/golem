@@ -623,6 +623,11 @@ impl DeploymentWriteService {
                 .values()
                 .map(|component| (component.id, component.component_name.clone()))
                 .collect(),
+            &deployment_context
+                .components
+                .values()
+                .filter_map(|component| Some((component.id, component.package_metadata.as_ref()?)))
+                .collect(),
             deployment_context.environment.tool_compatibility_mode,
         );
         for diagnostic in compiled_middleware.errors {

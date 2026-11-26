@@ -1313,6 +1313,10 @@ fn development_manifests(
                 validate_manifest_versions(&collected.sources),
                 None,
             )?;
+            let producer_name =
+                app_raw::ApplicationWithSource::from_yaml_file(&collected.root_manifest)?
+                    .application
+                    .app;
             for source in collected.sources {
                 ensure!(
                     sources.insert(std::fs::canonicalize(&source)?),
@@ -1353,7 +1357,10 @@ fn development_manifests(
                 }
                 manifests.push(app_raw::ApplicationWithSource {
                     source,
-                    development_root: Some(fs::normalize_path_lexically(&directory)),
+                    development_root: Some((
+                        fs::normalize_path_lexically(&directory),
+                        producer_name.clone(),
+                    )),
                     application: app_raw::Application {
                         component_templates: raw.component_templates,
                         components: raw.components,
