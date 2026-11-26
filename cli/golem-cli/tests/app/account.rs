@@ -1,6 +1,5 @@
 use crate::Tracing;
 use crate::app::{TestContext, cmd, flag};
-use chrono::{DateTime, Datelike, TimeZone, Utc};
 use golem_cli::{fs, versions};
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
@@ -9,6 +8,7 @@ use golem_common::model::account_usage::{
     ResourceLimitValue, StorageLimit,
 };
 use indoc::{formatdoc, indoc};
+use jiff::Timestamp;
 use serde::Deserialize;
 use sqlx::SqlitePool;
 use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePoolOptions};
@@ -35,7 +35,7 @@ struct AccountUsageItemView {
     durable_storage_gb_month: f64,
     ephemeral_storage_gb_month: f64,
     period: AccountUsagePeriod,
-    as_of: DateTime<Utc>,
+    as_of: Timestamp,
     metering: AccountUsageMetering,
 }
 
@@ -89,7 +89,7 @@ async fn registry_pool(ctx: &TestContext) -> SqlitePool {
 async fn insert_monthly_compute_admin_grant(
     pool: &SqlitePool,
     account_id: Uuid,
-    granted_at: DateTime<Utc>,
+    granted_at: Timestamp,
 ) {
     sqlx::query(
         "INSERT INTO account_resource_overrides \
@@ -97,7 +97,7 @@ async fn insert_monthly_compute_admin_grant(
          VALUES ($1, 'monthly_compute_gcu', 'admin_grant', 9, 'support', NULL, $1, $2)",
     )
     .bind(account_id)
-    .bind(granted_at)
+    .bind(granted_at.strftime("%Y-%m-%d %H:%M:%S%.9f").to_string())
     .execute(pool)
     .await
     .expect("failed to seed monthly compute admin grant");
@@ -128,10 +128,11 @@ async fn seed_account_usage(
     .await
     .expect("failed to configure monthly plan amounts");
 
-    let now = Utc::now();
+    let now = Timestamp::now();
+    let date = now.to_zoned_datetime(jiff::tz::TimeZone::UTC).date();
     let current = AccountUsagePeriod {
-        year: now.year(),
-        month: now.month(),
+        year: i32::from(date.year()),
+        month: date.month() as u32,
     };
     let previous = previous_period(current);
     let zero_period = previous_period(previous);
@@ -170,7 +171,7 @@ async fn seed_account_usage(
             .bind(usage_type)
             .bind(&usage_key)
             .bind(value)
-            .bind(now)
+            .bind(now.strftime("%Y-%m-%d %H:%M:%S%.9f").to_string())
             .execute(&pool)
             .await
             .expect("failed to seed account usage");
@@ -186,7 +187,7 @@ async fn seed_account_usage(
         .bind(metering.0)
         .bind(metering.1)
         .bind(metering.2)
-        .bind(now)
+        .bind(now.strftime("%Y-%m-%d %H:%M:%S%.9f").to_string())
         .execute(&pool)
         .await
         .expect("failed to seed account usage metering state");
@@ -216,7 +217,7 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
     assert_eq!(usage.usage.memory_gb_seconds, 14);
     assert_eq!(usage.usage.durable_storage_gb_month, 1.0);
     assert_eq!(usage.usage.ephemeral_storage_gb_month, 2.0);
-    assert!(usage.usage.as_of <= Utc::now());
+    assert!(usage.usage.as_of <= Timestamp::now());
     assert_eq!(usage.usage.metering.compute, MeteringStatus::Enabled);
     assert_eq!(usage.usage.metering.memory, MeteringStatus::Enabled);
     assert_eq!(
@@ -370,7 +371,7 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
             .any(|line| line.contains("Active admin grant:") && line.contains("(none)"))
     );
 
-    let granted_at = Utc.with_ymd_and_hms(2026, 4, 1, 2, 3, 4).single().unwrap();
+    let granted_at = "2026-04-01T02:03:04Z".parse().unwrap();
     let pool = registry_pool(&ctx).await;
     insert_monthly_compute_admin_grant(&pool, account_id, granted_at).await;
     let expected_grant = format!(
@@ -385,13 +386,13 @@ async fn account_usage_and_limits_use_live_cli_wire_path(_tracing: &Tracing) {
     );
     assert!(output.stdout_contains(&expected_grant));
 
-    let expired_at = Utc.with_ymd_and_hms(2000, 1, 1, 0, 0, 0).single().unwrap();
+    let expired_at: Timestamp = "2000-01-01T00:00:00Z".parse().unwrap();
     let result = sqlx::query(
         "UPDATE account_resource_overrides SET expires_at = $2 \
          WHERE account_id = $1 AND dimension = 'monthly_compute_gcu' AND source = 'admin_grant'",
     )
     .bind(account_id)
-    .bind(expired_at)
+    .bind(expired_at.strftime("%Y-%m-%d %H:%M:%S%.9f").to_string())
     .execute(&pool)
     .await
     .expect("failed to expire monthly compute admin grant");

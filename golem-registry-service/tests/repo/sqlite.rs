@@ -31,6 +31,7 @@ use golem_registry_service::repo::installation::DbInstallationRepo;
 use golem_registry_service::repo::mcp_deployment::DbMcpDeploymentRepo;
 use golem_registry_service::repo::model::new_repo_uuid;
 use golem_registry_service::repo::plan::DbPlanRepo;
+use golem_registry_service::repo::plan_storage::DbPlanStorageRepo;
 use golem_registry_service::repo::plugin::DbPluginRepo;
 use golem_registry_service::repo::registry_change::DbRegistryChangeRepo;
 use golem_registry_service::repo::retry_policy::DbRetryPolicyRepo;
@@ -44,6 +45,11 @@ use test_r::{inherit_test_dep, test_dep};
 use tracing::info;
 
 inherit_test_dep!(Tracing);
+
+#[test]
+async fn package_version_repository(deps: &Deps) {
+    crate::repo::common::package_version_repository_contract(deps).await;
+}
 
 // Deps setup --------------------------------------------------------------------------------------
 
@@ -121,6 +127,7 @@ async fn deps(db: &SqliteDb) -> Deps {
             db.pool.clone(),
         )),
         account_tree_repo: std::sync::Arc::new(DbAccountTreeRepo::logged(db.pool.clone())),
+        plan_storage_repo: std::sync::Arc::new(DbPlanStorageRepo::logged(db.pool.clone())),
         agent_secret_repo: Box::new(DbAgentSecretRepo::logged(db.pool.clone())),
         retry_policy_repo: Box::new(DbRetryPolicyRepo::logged(db.pool.clone())),
         installation_repo: Box::new(DbInstallationRepo::logged(db.pool.clone())),
@@ -153,6 +160,21 @@ async fn deps(db: &SqliteDb) -> Deps {
 }
 
 // Test cases --------------------------------------------------------------------------------------
+
+#[test]
+async fn permission_share_mutations_invalidate_target_authentication(deps: &Deps, db: &SqliteDb) {
+    crate::repo::permission_share::mutations_invalidate_target_authentication(deps, db).await;
+}
+
+#[test]
+async fn permission_share_invalidation_failure_rolls_back_mutations(deps: &Deps, db: &SqliteDb) {
+    crate::repo::permission_share::invalidation_failure_rolls_back_mutations(deps, db).await;
+}
+
+#[test]
+async fn permission_share_creation_signals_only_after_success(deps: &Deps, db: &SqliteDb) {
+    crate::repo::permission_share::creation_signals_only_after_success(deps, db).await;
+}
 
 #[test]
 async fn test_runtime_card_creation_is_idempotent_and_rejects_conflicts(deps: &Deps) {
@@ -290,6 +312,11 @@ async fn test_agent_secret_get_revision_include_deleted(deps: &Deps) {
 #[test]
 async fn test_retry_policy_and_agent_secret_natural_key_lookups(deps: &Deps) {
     crate::repo::common::test_retry_policy_and_agent_secret_natural_key_lookups(deps).await;
+}
+
+#[test]
+async fn test_component_upload_reference_lifetime(deps: &Deps) {
+    crate::repo::common::test_component_upload_reference_lifetime(deps).await;
 }
 
 #[test]
@@ -682,6 +709,56 @@ async fn test_account_tree_cache_expiry_backup(deps: &Deps) {
 #[test]
 async fn test_account_tree_cache_eviction_and_lag(deps: &Deps) {
     crate::repo::account_tree::test_account_tree_cache_eviction_and_lag(deps).await;
+}
+
+#[test]
+async fn test_plan_definitions_are_versioned_and_owner_scoped(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_definitions_are_versioned_and_owner_scoped(deps).await;
+}
+
+#[test]
+async fn test_plan_assignment_follows_owner_and_latest_revision(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_assignment_follows_owner_and_latest_revision(deps).await;
+}
+
+#[test]
+async fn test_plan_writes_refuse_impossible_ranges(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_writes_refuse_impossible_ranges(deps).await;
+}
+
+#[test]
+async fn test_plan_opposing_writes_cannot_commit_impossible_range(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_opposing_writes_cannot_commit_impossible_range(deps).await;
+}
+
+#[test]
+async fn test_plan_retire_races_assignment(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_retire_races_assignment(deps).await;
+}
+
+#[test]
+async fn test_plan_seed_keeps_later_edits(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_seed_keeps_later_edits(deps).await;
+}
+
+#[test]
+async fn test_plan_operating_defaults_are_validated(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_operating_defaults_are_validated(deps).await;
+}
+
+#[test]
+async fn test_plan_bounds_round_trip_above_i64_max(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_bounds_round_trip_above_i64_max(deps).await;
+}
+
+#[test]
+async fn test_plan_edit_scales_with_members(deps: &Deps) {
+    crate::repo::plan_storage::test_plan_edit_scales_with_members(deps).await;
+}
+
+#[test]
+async fn test_tree_purge_releases_plan_records(deps: &Deps) {
+    crate::repo::plan_storage::test_tree_purge_releases_plan_records(deps).await;
 }
 
 #[test]

@@ -139,7 +139,11 @@ impl PermissionShareService {
                 )
                 .await
             {
-                Ok(record) => return Ok(record.try_into()?),
+                Ok(record) => {
+                    return Ok(record
+                        .signal_new_events_available(&self.registry_change_notifier)
+                        .try_into()?);
+                }
                 Err(PermissionShareRepoError::CardTreeChangedDuringDelete)
                     if attempt + 1 < MAX_CARD_TREE_DELETE_ATTEMPTS =>
                 {
@@ -619,7 +623,7 @@ fn validate_delegation_surface_derivation(
 }
 
 fn derivation_error(error: CardAlgebraError) -> PermissionShareError {
-    PermissionShareError::GrantNotDelegable(format!("{error:?}"))
+    PermissionShareError::GrantNotDelegable(error.to_string())
 }
 
 fn invalid_grant(grant: &str, err: CardParseError) -> PermissionShareError {

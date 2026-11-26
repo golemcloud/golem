@@ -153,20 +153,9 @@ pub fn build_document_schema(
             }
             super::super::RichRouteBehaviour::CreateAgent(inner) => {
                 graphs.push(inner.agent.constructor_input.graph.clone());
-                let fields = inner
-                    .agent
-                    .constructor_input
-                    .input_schema
-                    .fields()
-                    .iter()
-                    .filter(|field| matches!(field.source, FieldSource::UserSupplied))
-                    .map(|field| golem_common::schema::NamedFieldType {
-                        name: field.name.clone(),
-                        body: field.schema.clone(),
-                        metadata: field.metadata.clone(),
-                    })
-                    .collect();
-                RequestBodyModel::CreateAgent(Box::new(SchemaType::record(fields)))
+                RequestBodyModel::CreateAgent(Box::new(
+                    inner.agent.constructor_input.user_supplied_record(),
+                ))
             }
             _ => RequestBodyModel::Unused,
         };

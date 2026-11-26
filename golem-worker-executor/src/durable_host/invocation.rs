@@ -251,12 +251,18 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         use crate::worker::MethodFailureSettlementError;
 
         let mut store = store.as_context_mut();
+        // A failure read from replay, also one that replay consumed at the export's return before
+        // the Store switched to live, was settled by the run that recorded it.
+        let replayed = store
+            .data()
+            .durable_ctx()
+            .has_replayed_invocation_terminal();
         store
             .data_mut()
             .record_agent_method_failure(full_function_name, error.clone(), recorded_at)
             .await
             .map_err(MethodFailureSettlementError::Invocation)?;
-        if !store.data().durable_ctx().is_live() {
+        if replayed || !store.data().durable_ctx().is_live() {
             return Ok(());
         }
 
@@ -1298,12 +1304,18 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             .state
             .get_current_idempotency_key()
             .ok_or_else(|| WorkerExecutorError::runtime("method failure has no idempotency key"))?;
-        if !self.state.is_live() {
-            concurrent::drain_queued_dropped_call_events(self)
-                .await
-                .map_err(|error| error.source)?;
+        // As for a success, a terminal that replay consumed at the export's return is the
+        // recorded failure even when background work switched the Store to live since.
+        let replayed_terminal = self.state.replayed_invocation_terminal.take();
+        let is_live = self.state.is_live();
+        if !is_live || replayed_terminal.is_some() {
+            if !is_live {
+                concurrent::drain_queued_dropped_call_events(self)
+                    .await
+                    .map_err(|error| error.source)?;
+            }
             let parent = self.entity_parent_start_index();
-            let recorded = match self.state.replayed_invocation_terminal.take() {
+            let recorded = match replayed_terminal {
                 Some(terminal) => Some(ReplayState::agent_method_failure(
                     terminal?, anchor, &error, parent,
                 )?),
@@ -1424,16 +1436,22 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
             WorkerExecutorError::runtime("agent invocation finished without a current invocation")
         })?;
 
-        if !is_live {
+        // A terminal that replay consumed at the export's return is this invocation's recorded
+        // result even when the Store switched to live since: background work of the invocation
+        // can continue live at the replay tail before the result is recorded.
+        let replayed_terminal = self.state.replayed_invocation_terminal.take();
+        if !is_live || replayed_terminal.is_some() {
             // Mirror the live-path drain: events enqueued from synchronous drops during replay
             // (e.g. cleanup for a p3 HTTP response dropped unconsumed) must settle
             // their durable operations before the
             // `AgentInvocationFinished` entry is read.
-            concurrent::drain_queued_dropped_call_events(self)
-                .await
-                .map_err(|err| err.source)?;
+            if !is_live {
+                concurrent::drain_queued_dropped_call_events(self)
+                    .await
+                    .map_err(|err| err.source)?;
+            }
 
-            let response = match self.state.replayed_invocation_terminal.take() {
+            let response = match replayed_terminal {
                 Some(terminal) => Some(
                     self.state
                         .replay_state

@@ -31,7 +31,7 @@ describe('identity boundaries', () => {
     const invoke = vi.fn(() => hostInvocationMetadata());
     const rpc = { [Symbol.dispose]: drop, invoke } as unknown as WasmRpc;
     selectSelfAgent('Counter');
-    vi.mocked(WasmRpc.bindSelf).mockReturnValue([AgentId.parse(SELF_AGENT_ID), rpc]);
+    vi.mocked(WasmRpc.bindSelf).mockReturnValue([AgentId.toWit(AgentId.parse(SELF_AGENT_ID)), rpc]);
     const counter = defineAgent({
       name: 'Counter',
       id: {},
@@ -81,7 +81,7 @@ describe('identity boundaries', () => {
       ],
       env: [['REGION', 'eu']],
     });
-    expect(remote.target).toBe(`Durable[${AgentId.from(MOCK_REMOTE_AGENT_ID)}]`);
+    expect(remote.target).toBe(`Durable[${AgentId.fromWit(MOCK_REMOTE_AGENT_ID)}]`);
     await createRemoteAgent('Durable', v.record([]));
     expect(vi.mocked(WasmRpc.create).mock.calls.at(-1)![2]).toEqual({
       keyed: false,
@@ -103,18 +103,23 @@ describe('identity boundaries', () => {
     expect((error as RemoteCallError).message).toContain('conflict: key is current');
   });
 
-  it('gets by ID through the host get-by-id and never creates', async () => {
-    await getRemoteAgentById('Durable', targetId);
-    expect(WasmRpc.getById).toHaveBeenCalledWith('Durable', targetId);
+  it('gets by ID through the host get-by-id and never creates', () => {
+    getRemoteAgentById('Durable', targetId);
+    expect(WasmRpc.getById).toHaveBeenCalledWith('Durable', AgentId.toWit(targetId));
     expect(WasmRpc.upsert).not.toHaveBeenCalled();
     expect(WasmRpc.create).not.toHaveBeenCalled();
 
     vi.mocked(WasmRpc.getById).mockImplementationOnce(() => {
       throw { tag: 'not-found', val: 'no agent' };
     });
-    const missing = getRemoteAgentById('Durable', targetId);
-    await expect(missing).rejects.toBeInstanceOf(RemoteCallError);
-    await expect(missing).rejects.toMatchObject({
+    let missing: unknown;
+    try {
+      getRemoteAgentById('Durable', targetId);
+    } catch (thrown) {
+      missing = thrown;
+    }
+    expect(missing).toBeInstanceOf(RemoteCallError);
+    expect(missing).toMatchObject({
       cause: { tag: 'not-found', details: 'no agent' },
     });
   });
@@ -124,20 +129,25 @@ describe('identity boundaries', () => {
     const rpc = vi.mocked(WasmRpc.upsert).mock.results.at(-1)!.value;
     const agentId = await remote.agentId();
     expect(rpc.agentId).toHaveBeenCalledTimes(1);
-    expect(agentId).toBeInstanceOf(AgentId);
-    expect(agentId.equals(MOCK_REMOTE_AGENT_ID)).toBe(true);
+    expect(agentId).toBe(AgentId.fromWit(MOCK_REMOTE_AGENT_ID));
   });
 
-  it('connects a dynamic client by ID to the agent type that the ID tag names', async () => {
+  it('connects a dynamic client by ID to the agent type that the ID tag names', () => {
     vi.mocked(getAgentTypeByAgentId).mockReturnValueOnce({
       agentType: { typeName: 'Dynamic', mode: 'durable' },
     } as never);
-    const client = await DynamicAgentClient.getById(targetId);
+    const client = DynamicAgentClient.getById(targetId);
     expect(client.agentId).toBe(targetId);
-    expect(WasmRpc.getById).toHaveBeenCalledWith('Dynamic', targetId);
+    expect(WasmRpc.getById).toHaveBeenCalledWith('Dynamic', AgentId.toWit(targetId));
 
     vi.mocked(getAgentTypeByAgentId).mockReturnValueOnce(undefined);
-    await expect(DynamicAgentClient.getById(targetId)).rejects.toMatchObject({
+    let missing: unknown;
+    try {
+      DynamicAgentClient.getById(targetId);
+    } catch (thrown) {
+      missing = thrown;
+    }
+    expect(missing).toMatchObject({
       name: 'RemoteCallError',
       cause: { tag: 'not-found' },
     });

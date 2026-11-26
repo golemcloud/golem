@@ -33,7 +33,10 @@ use super::{assert_invocation_receipt, assert_json_content_type, assert_no_invoc
 use crate::custom_api::http_test_context::{HttpTestContext, make_test_context};
 use golem_common::base_model::agent::AgentTypeName;
 use golem_common::base_model::http_api_deployment::HttpApiDeploymentAgentOptions;
+use golem_common::model::oplog::PublicOplogEntry;
+use golem_common::model::{AgentId, OplogIndex, OwnedAgentId};
 use golem_test_framework::config::EnvBasedTestDependencies;
+use golem_test_framework::dsl::TestDsl;
 use pretty_assertions::assert_eq;
 use reqwest::header::{CACHE_CONTROL, CONTENT_LENGTH, ETAG, HeaderValue, IF_NONE_MATCH, VARY};
 use test_r::{define_matrix_dimension, test_dep};
@@ -88,6 +91,26 @@ define_matrix_dimension!(db: HttpTestContext -> "postgres", "sqlite");
 
 fn header_str(value: Option<&HeaderValue>) -> Option<&str> {
     value.and_then(|v| v.to_str().ok())
+}
+
+/// The agent and the oplog index that an ETag
+/// `"<environment-id>/<agent-id>/<fingerprint>/<caller>:<oplog-index>"` names.
+fn etag_agent_and_index(
+    agent: &HttpTestContext,
+    etag: &str,
+) -> anyhow::Result<(OwnedAgentId, u64)> {
+    let inner = etag.trim_matches('"');
+    let (token, index) = inner
+        .rsplit_once(':')
+        .ok_or_else(|| anyhow::anyhow!("malformed ETag {etag}"))?;
+    let agent_id = token
+        .split('/')
+        .nth(1)
+        .ok_or_else(|| anyhow::anyhow!("malformed ETag {etag}"))?;
+    Ok((
+        OwnedAgentId::new(agent.env_id, &AgentId(agent_id.parse()?)),
+        index.parse()?,
+    ))
 }
 
 /// True if `header_value` contains `token` as a complete comma-separated
@@ -239,6 +262,66 @@ async fn h2_if_none_match_returns_304(
     }
     let body = revalidate.text().await?;
     assert!(body.is_empty(), "304 response body must be empty");
+
+    // The result is recorded before its background work drains, and the
+    // `AgentInvocationSettled` after the drain does not change the state the
+    // ETag names: revalidation still hits once the settlement is in the oplog.
+    let (agent_id, finished) = etag_agent_and_index(agent, &etag)?;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !agent
+        .user
+        .get_oplog(&agent_id, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .any(|entry| {
+            u64::from(entry.oplog_index) > finished
+                && matches!(entry.entry, PublicOplogEntry::AgentInvocationSettled(_))
+        })
+    {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the read did not settle"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    let settled = agent
+        .client
+        .get(agent.base_url.join(path)?)
+        .header(IF_NONE_MATCH, etag.clone())
+        .send()
+        .await?;
+    assert_eq!(settled.status(), reqwest::StatusCode::NOT_MODIFIED);
+    assert_eq!(header_str(settled.headers().get(ETAG)), Some(etag.as_str()));
+
+    // A write after the settlement still invalidates the validator.
+    let write = agent
+        .client
+        .post(agent.base_url.join("/readonly-agents/h2-agent/increment")?)
+        .send()
+        .await?;
+    assert_eq!(write.status(), reqwest::StatusCode::OK);
+    let after_write = agent
+        .client
+        .get(agent.base_url.join(path)?)
+        .header(IF_NONE_MATCH, etag.clone())
+        .send()
+        .await?;
+    assert_eq!(after_write.status(), reqwest::StatusCode::OK);
+    let new_etag = header_str(after_write.headers().get(ETAG))
+        .expect("expected ETag after the write")
+        .to_string();
+    assert_ne!(new_etag, etag);
+    assert_eq!(
+        after_write.json::<serde_json::Value>().await?,
+        serde_json::json!("1")
+    );
+    let current = agent
+        .client
+        .get(agent.base_url.join(path)?)
+        .header(IF_NONE_MATCH, new_etag)
+        .send()
+        .await?;
+    assert_eq!(current.status(), reqwest::StatusCode::NOT_MODIFIED);
 
     let unknown_query = agent
         .client
@@ -439,9 +522,24 @@ async fn h5_ttl_method_returns_max_age(
     );
 
     // TTL still supports revalidation, so an ETag must be emitted as well.
-    assert!(
-        response.headers().get(ETAG).is_some(),
-        "TTL read must also emit an ETag for conditional GETs"
+    let etag = header_str(response.headers().get(ETAG))
+        .expect("TTL read must also emit an ETag for conditional GETs")
+        .to_string();
+
+    let revalidate = agent
+        .client
+        .get(agent.base_url.join("/readonly-agents/h5-agent/ttl-count")?)
+        .header(IF_NONE_MATCH, etag.clone())
+        .send()
+        .await?;
+    assert_eq!(revalidate.status(), reqwest::StatusCode::NOT_MODIFIED);
+    assert_eq!(
+        header_str(revalidate.headers().get(ETAG)),
+        Some(etag.as_str())
+    );
+    assert_eq!(
+        header_str(revalidate.headers().get(CACHE_CONTROL)),
+        Some("public, max-age=2")
     );
 
     Ok(())

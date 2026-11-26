@@ -57,6 +57,65 @@ async fn inspection_descriptor_metadata_and_selected_bytes() {
     delete(seal(resident)).await.unwrap();
 }
 
+#[test]
+#[timeout("30s")]
+async fn inspection_optional_modified_time_does_not_prevent_reading() {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let out_of_range = UNIX_EPOCH + Duration::from_secs(253_402_300_799);
+    assert!(jiff::Timestamp::try_from(out_of_range).is_err());
+    let valid = jiff::Timestamp::from_second(1_234_567_890).unwrap();
+    for (modified, expected) in [
+        (Some(out_of_range), None),
+        (
+            Some(UNIX_EPOCH + Duration::from_secs(1_234_567_890)),
+            Some(valid),
+        ),
+        (None, None),
+    ] {
+        let (filesystem, control, _) = resident(Err(unsupported_allocation())).await;
+        let handle = resident_generation_handle(&filesystem);
+        control.push_open(Ok(SandboxHandle::scripted_file(42)));
+        let mut attrs = sandbox_attributes(SandboxObjectKind::File);
+        attrs.size = 8;
+        attrs.modified = modified;
+        control.push_get_attributes(Ok(attrs));
+        let FileInspection::Opened { file, metadata } =
+            open_file_for_inspection(&handle, "/file", FileByteSelection::Full)
+                .await
+                .unwrap()
+        else {
+            panic!("regular file must open with modified time {modified:?}");
+        };
+        assert_eq!(metadata.modified_at, expected, "{modified:?}");
+        assert_eq!(metadata.total_size, 8);
+        assert_eq!(
+            metadata.selection,
+            FileReadExtent::Selected {
+                offset: 0,
+                length: 8,
+            }
+        );
+        control.push_read(Ok(bytes::Bytes::from_static(b"readable")));
+        let bytes = read_file(
+            &handle,
+            &file,
+            ReadRange {
+                offset: 0,
+                length: 8,
+            },
+        )
+        .unwrap()
+        .await
+        .unwrap();
+        assert_eq!(bytes.as_ref(), b"readable", "{modified:?}");
+        control.push_close(Ok(()));
+        close(OpenNode::File(file)).await.unwrap();
+        control.push_delete_and_verify(Ok(()));
+        delete(seal(filesystem)).await.unwrap();
+    }
+}
+
 #[cfg(unix)]
 mod unix {
     use super::*;

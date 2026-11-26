@@ -199,6 +199,8 @@ agents:
 
 An explicit `initialCard` replaces the default card. The Rust, TypeScript, Go, MoonBit and Effect SDKs read the agent's ID from `GOLEM_AGENT_ID` and the name of its agent type from `GOLEM_AGENT_TYPE`, and the agent sees these variables only when its card allows the read, so always include `env(?agent) @ ?agent : read : GOLEM_AGENT_ID` and `env(?agent) @ ?agent : read : GOLEM_AGENT_TYPE`, in the upper bound too when it has positive grants. Without them, Rust and TypeScript agents fail at their first call, and agents of all five SDKs fail when they load a snapshot. Add a grant for each other environment variable that the code reads.
 
+Component templates, components, component presets, agent templates, agents and agent presets can all set `initialCard`, in this order from least to most specific. The most specific layer that sets a card wins and replaces the inherited card completely; cards are never merged. A card on a component, a component template or a component preset therefore reaches every agent of the component that sets no card of its own, so it needs the `GOLEM_AGENT_ID` and `GOLEM_AGENT_TYPE` read grants too. `golem component manifest-trace <component>` shows which layer set each agent type's card once the component is built; `--build` builds it first.
+
 Use primary command and long-option names in manifests and permission shares. Short aliases require effective metadata and are rejected at these context-free boundaries. Runtime derivation resolves aliases before attenuation and freezes their meaning durably.
 
 Tool command paths match exactly. `.` means the root command, and whole-resource `*` means any invocation; an empty resource is not an alternative. Flags are unordered requirements, positionals are ordered prefixes, and extra arguments do not defeat a match. Thus `status` allows that command with arguments, not only an empty argument list. Denying `status --short --null` blocks both flags together even when reordered or accompanied by extras.
@@ -326,7 +328,8 @@ build:
     module: dist/bundle.js
     into: golem-temp/output.wasm
 
-  - preinitializeJs: golem-temp/output.wasm            # Pre-initialize JS runtime
+  - preinitializeJs: golem-temp/quickjs.wasm           # Pre-initialize with JS source
+    module: dist/bundle.js
     into: golem-temp/preinit.wasm
 ```
 

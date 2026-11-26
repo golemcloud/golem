@@ -4937,10 +4937,16 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
     state
         .validate_response(&accepted)
         .map_err(anyhow::Error::msg)?;
-    assert!(matches!(
-        accepted.response,
-        Some(invocation_response::Response::Accepted(_))
-    ));
+    let Some(invocation_response::Response::Accepted(accepted)) = accepted.response else {
+        anyhow::bail!("expected held-input acceptance, got {accepted:?}");
+    };
+    // A queued acceptance is followed by readiness when the selected revision starts the method.
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        await_session_readiness(&mut responses, Some(&mut state), accepted),
+    )
+    .await
+    .map_err(|_| anyhow::anyhow!("held-input invocation did not become ready"))??;
 
     tokio::time::timeout(Duration::from_secs(10), async {
         loop {
@@ -4969,12 +4975,11 @@ async fn active_ephemeral_streaming_input_interrupt_resume_same_key_does_not_res
     .await
     .map_err(|_| anyhow::anyhow!("hold_input did not reach its method-start marker"))??;
 
-    assert!(
-        tokio::time::timeout(Duration::from_millis(100), responses.message())
-            .await
-            .is_err(),
-        "host-wait invocation terminated before interruption"
-    );
+    if let Ok(response) =
+        tokio::time::timeout(Duration::from_millis(100), responses.message()).await
+    {
+        panic!("host-wait invocation terminated before interruption: {response:?}");
+    }
     executor.interrupt(&worker_agent_id).await?;
     assert_interrupted_transport_closed(&mut responses, &mut state).await?;
     assert_eq!(
@@ -8760,6 +8765,7 @@ async fn fork_completed_stream_reconstructs_state_without_repeating_output(
                 finished = true;
             }
             Some(invocation_response::Response::Accepted(_))
+            | Some(invocation_response::Response::Ready(_))
             | Some(invocation_response::Response::Result(_)) => {}
             other => anyhow::bail!("unexpected output response: {other:?}"),
         }
@@ -13472,5 +13478,74 @@ async fn ts_cancel_survives_executor_restart(
     let count_value = count_result.into_typed::<f64>()?;
     assert_eq!(count_value, 1.0);
 
+    Ok(())
+}
+
+/// A guest `getById` reaches only an existing agent of its own environment. The ID of an agent of
+/// the same type in another environment, and the ID of a deleted agent, are not found, and
+/// neither lookup creates an agent.
+#[test]
+#[timeout("2m")]
+async fn guest_get_by_id_of_another_environments_or_a_deleted_agent_is_not_found(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let other_environment_id = golem_common::model::environment::EnvironmentId::new();
+    let other_component = executor
+        .component_dep(&other_environment_id, agent_rpc_rust)
+        .unique()
+        .store()
+        .await?;
+    let parent = agent_key!("RustParent", "get-by-id");
+    executor.start_agent(&component.id, parent.clone()).await?;
+    let get_child_by_id = async |agent_id: &OwnedAgentId| -> anyhow::Result<String> {
+        executor
+            .invoke_and_await_agent(
+                &component,
+                &parent,
+                "get_child_by_id",
+                data_value!(agent_id.agent_id.as_uuid()),
+            )
+            .await?
+            .into_typed::<String>()
+    };
+
+    let live = executor
+        .start_agent(&component.id, agent_key!("RustChild", uuid::Uuid::new_v4()))
+        .await?;
+    assert_eq!(get_child_by_id(&live).await?, "found");
+
+    let foreign = executor
+        .start_agent(
+            &other_component.id,
+            agent_key!("RustChild", uuid::Uuid::new_v4()),
+        )
+        .await?;
+    let foreign_here = OwnedAgentId::new(context.default_environment_id, &foreign.agent_id);
+    let result = get_child_by_id(&foreign_here).await?;
+    assert!(result.starts_with("RemoteNotFound"), "{result}");
+    assert!(
+        executor
+            .get_worker_metadata_opt(&foreign_here)
+            .await?
+            .is_none()
+    );
+    assert!(executor.get_worker_metadata_opt(&foreign).await?.is_some());
+
+    let deleted = executor
+        .start_agent(&component.id, agent_key!("RustChild", uuid::Uuid::new_v4()))
+        .await?;
+    executor.delete_worker(&deleted).await?;
+    let result = get_child_by_id(&deleted).await?;
+    assert!(result.starts_with("RemoteNotFound"), "{result}");
+    assert!(executor.get_worker_metadata_opt(&deleted).await?.is_none());
     Ok(())
 }

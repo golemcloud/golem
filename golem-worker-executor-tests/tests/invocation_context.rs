@@ -109,6 +109,18 @@ fn observation(invocation_id: Option<String>, caller: &str) -> Observation {
     }
 }
 
+async fn constructor_invocation_id(
+    executor: &(impl TestDsl + Sync),
+    agent_id: &OwnedAgentId,
+) -> anyhow::Result<String> {
+    let fingerprint = executor.get_worker_metadata(agent_id).await?.fingerprint;
+    Ok(format!(
+        "{}.{}",
+        agent_id.agent_id,
+        uuid::Uuid::new_v5(&fingerprint.0, b"constructor")
+    ))
+}
+
 /// The start index and the text form of every `method` invocation recorded in the probe's
 /// oplog, in order.
 async fn method_invocations(
@@ -200,10 +212,11 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
     let report: Report = serde_json::from_str(&first.into_typed::<String>()?)?;
     let caller_reports = report_invocation_ids(&executor, &caller_id).await?;
     assert_eq!(caller_reports.len(), 1);
+    let constructor_id = constructor_invocation_id(&executor, &caller_id).await?;
     assert_eq!(
         report.constructor,
-        observation(None, &creator_text),
-        "the constructor is not an invocation and sees its creator"
+        observation(Some(constructor_id.clone()), &creator_text),
+        "the constructor sees its incarnation-bound invocation ID and its creator"
     );
     assert_eq!(
         report.method,
@@ -234,7 +247,7 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
     );
     assert_eq!(
         second.constructor,
-        observation(None, &creator_text),
+        observation(Some(constructor_id.clone()), &creator_text),
         "the constructor observation keeps the creator"
     );
     assert_eq!(second.method_caller, caller_text(&user_text, &user_text));
@@ -273,7 +286,10 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
             observed.immediate
         );
     }
-    assert_eq!(peer_report.constructor.invocation_id, None);
+    assert_eq!(
+        peer_report.constructor.invocation_id,
+        Some(constructor_invocation_id(&executor, &callee_id).await?)
+    );
     assert_eq!(
         peer_report.method.invocation_id,
         Some(callee_reports[0].clone())
@@ -308,7 +324,62 @@ async fn invocation_context_answers_with_the_running_invocation_and_its_caller(
         assert_eq!(recorded, expected, "{name}");
     }
 
+    let old_id = constructor_id
+        .parse::<golem_common::model::OwnedInvocationId>()
+        .map_err(anyhow::Error::msg)?;
+    executor.delete_worker(&caller_id).await?;
+    let (new_creator, new_creator_text) = golem_user();
+    let recreated = executor
+        .invoke_and_await_agent_as_caller(&component, &caller, new_creator, "report", data_value!())
+        .await?;
+    assert_eq!(recreated.agent_id(), &caller_id);
+    let recreated: Report = serde_json::from_str(&recreated.into_typed::<String>()?)?;
+    let new_constructor_id = constructor_invocation_id(&executor, &caller_id).await?;
+    assert_ne!(constructor_id, new_constructor_id);
+    assert_eq!(
+        recreated.constructor,
+        observation(Some(new_constructor_id.clone()), &new_creator_text)
+    );
+    assert!(
+        executor
+            .get_invocation(&caller_id.agent_id, caller_id.environment_id, old_id.id())
+            .await?
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?
+            .is_none(),
+        "the deleted incarnation's constructor must not resolve on its successor"
+    );
+
     drop(executor);
+    let executor = start(deps, &context).await?;
+    assert!(!executor.worker_is_cached(&caller_id).await);
+    let new_id = new_constructor_id
+        .parse::<golem_common::model::OwnedInvocationId>()
+        .map_err(anyhow::Error::msg)?;
+    let new_constructor = executor
+        .get_invocation(&caller_id.agent_id, caller_id.environment_id, new_id.id())
+        .await?
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?
+        .expect("the successor constructor is readable cold");
+    assert_eq!(
+        new_constructor.kind,
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationKind::Constructor as i32
+    );
+    assert_eq!(
+        new_constructor.state,
+        golem_api_grpc::proto::golem::workerexecutor::v1::InvocationLifecycleState::Completed
+            as i32
+    );
+    assert!(
+        executor
+            .get_invocation(&caller_id.agent_id, caller_id.environment_id, old_id.id())
+            .await?
+            .map_err(|error| anyhow::anyhow!("{error:?}"))?
+            .is_none()
+    );
+    assert!(
+        !executor.worker_is_loaded(&caller_id).await,
+        "cold invocation reads do not activate the guest"
+    );
     Ok(())
 }
 
@@ -374,7 +445,13 @@ async fn snapshot_save_and_load_see_no_invocation_and_the_agent_itself(
     assert_snapshot_recovery_loaded(&mut events).await;
 
     let itself = agent_text_prefix(&probe_id.agent_id);
-    assert_eq!(report.constructor, observation(None, &creator_text));
+    assert_eq!(
+        report.constructor,
+        observation(
+            Some(constructor_invocation_id(&executor, &probe_id).await?),
+            &creator_text
+        )
+    );
     assert_eq!(
         report.constructor_caller,
         caller_text(&creator_text, &creator_text)

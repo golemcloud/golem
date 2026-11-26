@@ -346,7 +346,7 @@ async fn invoke_agent_session(
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
-            attempt_id: None,
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,

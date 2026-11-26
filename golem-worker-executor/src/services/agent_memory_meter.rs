@@ -274,7 +274,7 @@ impl Drop for Inner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
+
     use std::time::Duration;
     use test_r::test;
 
@@ -285,17 +285,18 @@ mod tests {
     fn metering_time(instant: Instant) -> MeteringTime {
         MeteringTime {
             instant,
-            utc: Utc
-                .with_ymd_and_hms(2030, 6, 15, 12, 0, 0)
-                .single()
-                .unwrap(),
+            utc: jiff::civil::DateTime::new(2030, 6, 15, 12, 0, 0, 0)
+                .unwrap()
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                .unwrap()
+                .timestamp(),
         }
     }
 
     fn later(time: MeteringTime, duration: Duration) -> MeteringTime {
         MeteringTime {
             instant: time.instant + duration,
-            utc: time.utc + chrono::Duration::from_std(duration).unwrap(),
+            utc: time.utc + jiff::SignedDuration::try_from(duration).unwrap(),
         }
     }
 

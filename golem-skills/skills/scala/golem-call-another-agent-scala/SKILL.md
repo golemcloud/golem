@@ -37,7 +37,7 @@ val counter = CounterAgentClient.upsert("my-counter")
 
 This returns a `CounterAgentRemote` with per-method wrapper fields for the **keyed** agent of these constructor parameters. The host creates the agent when it is missing; if it already exists, you get a handle to the existing instance. It throws `AgentRpcException` when the host rejects the client.
 
-To create a new agent instead, use `CounterAgentClient.create(...)`, and to address an existing agent by its `golem.AgentId`, use `CounterAgentClient.getById(agentId)`; both return a `Future` of the client. `counter.agentId()` returns the client's `Future[AgentId]`. See the `golem-multi-instance-agent-scala` skill.
+To create a new agent instead, use `CounterAgentClient.create(...)`, and to address an existing agent by its `golem.AgentId`, use `CounterAgentClient.getById(agentId)`. `create` returns a `Future` of the client; `getById` returns the client at once and throws `AgentRpcException` when no agent of this type has the ID. `counter.agentId()` returns the client's `Future[AgentId]`. See the `golem-multi-instance-agent-scala` skill.
 
 ## Awaited Call
 

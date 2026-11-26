@@ -57,6 +57,23 @@ impl Benchmark for FailingBenchmark {
         recorder: BenchmarkRecorder,
     ) -> BenchmarkResultValue {
         context.lock().unwrap().push("run");
+        if self.0 == 4 {
+            let index = context
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|event| **event == "run")
+                .count()
+                - 1;
+            if index == 1 {
+                return Err(BenchmarkError::new("run", "failed middle iteration"));
+            }
+            recorder.duration(
+                &ResultKey::primary("complete"),
+                Duration::from_millis(11 + 13 * index as u64),
+            );
+            return Ok(());
+        }
         if self.0 == 2 {
             return Err(BenchmarkError::new("correctness", "wrong item"));
         }
@@ -70,7 +87,11 @@ impl Benchmark for FailingBenchmark {
         _: BenchmarkRecorder,
     ) -> BenchmarkResultValue {
         context.lock().unwrap().push("cleanup");
-        Err(BenchmarkError::new("cleanup", "cleanup failed"))
+        if self.0 == 4 {
+            Ok(())
+        } else {
+            Err(BenchmarkError::new("cleanup", "cleanup failed"))
+        }
     }
 }
 
@@ -116,7 +137,9 @@ async fn benchmark_context_failure_is_a_result_and_deadlines_are_failures() {
         BenchmarkCliParameters::parse_from(["benchmarks", "benchmark", "failing", "spawned"]);
     let item = BenchmarkSuiteItem {
         name: "failing".into(),
+        version: 1,
         iterations: 1,
+        partition: None,
         cluster_size: vec![1],
         size: vec![0],
         length: vec![4],
@@ -144,4 +167,64 @@ async fn benchmark_context_failure_is_a_result_and_deadlines_are_failures() {
     .await;
     assert!(value.is_none());
     assert_eq!(recorder.failures()[&ResultKey::primary("cleanup")].len(), 1);
+}
+
+#[test]
+async fn three_iterations_preserve_failed_middle_position_and_cleanup() {
+    let params =
+        BenchmarkCliParameters::parse_from(["benchmarks", "benchmark", "failing", "spawned"]);
+    let context = Mutex::new(Vec::new());
+    let result = run_benchmark::<FailingBenchmark>(
+        &context,
+        params.benchmark_config.mode(),
+        RunConfig {
+            cluster_size: 1,
+            size: 4,
+            length: 3,
+            disable_compilation_cache: false,
+        },
+        1,
+        3,
+        "1/1",
+    )
+    .await;
+    assert_eq!(
+        *context.lock().unwrap(),
+        vec![
+            "setup", "warmup", "run", "cleanup", "setup", "warmup", "run", "cleanup", "setup",
+            "warmup", "run", "cleanup"
+        ]
+    );
+    let parsed: BenchmarkRunResult =
+        serde_json::from_str(&serde_json::to_string(&result).unwrap()).unwrap();
+    let key = ResultKey::primary("complete");
+    assert_eq!(
+        parsed
+            .iteration_results
+            .iter()
+            .map(|iteration| iteration.index)
+            .collect::<Vec<_>>(),
+        vec![0, 1, 2]
+    );
+    assert_eq!(
+        parsed.iteration_results[0].duration_samples[&key],
+        vec![11.0]
+    );
+    assert!(parsed.iteration_results[1].duration_samples.is_empty());
+    assert!(
+        parsed.iteration_results[1]
+            .failures
+            .values()
+            .flatten()
+            .any(|message| message.contains("failed middle"))
+    );
+    assert_eq!(
+        parsed.iteration_results[2].duration_samples[&key],
+        vec![37.0]
+    );
+    assert_eq!(
+        parsed.duration_results[&key].all,
+        vec![Duration::from_millis(11), Duration::from_millis(37)]
+    );
+    assert_eq!(parsed.failure_count(), 1);
 }

@@ -415,7 +415,7 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
         expected_fingerprint: AgentFingerprint,
         request_key: InvocationRequestKey,
         invocation: AgentInvocation,
-        scheduled_at: chrono::DateTime<chrono::Utc>,
+        scheduled_at: jiff::Timestamp,
         self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
@@ -470,6 +470,14 @@ impl<Ctx: WorkerCtx> Rpc for DirectWorkerInvocationRpc<Ctx> {
                     .to_string(),
             });
         }
+        // This caller holds no task-scope bind, so a deletion may already have stopped the
+        // cached generation's state actor.
+        worker
+            .deleted_incarnation_as_not_found(
+                Some(expected_fingerprint),
+                worker.try_get_last_known_status().await,
+            )
+            .await?;
         let scheduled = worker.schedule_invocation(invocation, scheduled_at).await;
         worker
             .deleted_incarnation_as_not_found(Some(expected_fingerprint), scheduled)

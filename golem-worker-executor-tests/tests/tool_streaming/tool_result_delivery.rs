@@ -861,6 +861,7 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
         let key = IdempotencyKey::fresh();
         let request = InvocationRequest {
             request: Some(invocation_request::Request::Start(InvocationStart {
+                allow_streams: true,
                 target: Some(crate::agent::id_target(&worker)),
                 method_name: Some("produce_terminal".to_string()),
                 input: Some(input.try_into().map_err(anyhow::Error::msg)?),
@@ -903,7 +904,8 @@ async fn output_producer_trap_and_deadline_fail_the_invocation(
                 .validate_response(&response)
                 .map_err(anyhow::Error::msg)?;
             match response.response {
-                Some(invocation_response::Response::Accepted(_)) => {}
+                Some(invocation_response::Response::Accepted(_))
+                | Some(invocation_response::Response::Ready(_)) => {}
                 Some(invocation_response::Response::Result(_)) => result_seen = true,
                 Some(invocation_response::Response::OutputItem(item)) => {
                     assert!(result_seen, "producer ran before its stream was returned");

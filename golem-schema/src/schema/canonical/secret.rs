@@ -59,7 +59,7 @@ pub fn to_json(payload: &SecretValuePayload) -> Result<Value, ParseError> {
     obj.insert("version".to_string(), Value::Number(payload.version.into()));
     obj.insert(
         "resolvedAt".to_string(),
-        Value::String(payload.resolved_at.to_rfc3339()),
+        Value::String(payload.resolved_at.to_string()),
     );
     if let Some(category) = &payload.category {
         obj.insert("category".to_string(), Value::String(category.clone()));
@@ -118,7 +118,7 @@ pub fn from_json(value: &Value) -> Result<SecretValuePayload, ParseError> {
             expected: "string",
             field: Some("resolvedAt"),
         })?
-        .parse::<chrono::DateTime<chrono::Utc>>()
+        .parse::<jiff::Timestamp>()
         .map_err(|e| ParseError::BadFormat(e.to_string()))?;
     let category = match obj.get("category") {
         Some(Value::String(s)) => Some(s.clone()),
@@ -164,7 +164,7 @@ mod tests {
                 secret_id: uuid::Uuid::from_u128(id),
                 config_key,
                 version,
-                resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                resolved_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
                 category,
             })
     }

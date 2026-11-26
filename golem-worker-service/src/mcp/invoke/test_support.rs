@@ -22,7 +22,6 @@ use crate::service::worker::{
     WorkerStream,
 };
 use async_trait::async_trait;
-use chrono::Utc;
 use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem::worker::{InvocationContext, LogEvent};
 use golem_common::base_model::component_metadata::KnownExports;
@@ -55,6 +54,7 @@ use golem_service_base::clients::registry::{
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, FileReadResponse, GetOplogResponse};
+use jiff::Timestamp;
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -635,6 +635,7 @@ impl WorkerClient for RecordingWorkerClient {
             .get(agent_id)
             .cloned()
             .map(|metadata| ExistingAgent {
+                state_oplog_index: metadata.last_oplog_index,
                 metadata,
                 component_id: self.component_id,
             })
@@ -1141,6 +1142,7 @@ impl InvocationHarness {
                 owner_kind: golem_common::model::agent::OwnerKind::ComponentAgent,
                 agent_type_name: Some(key.agent_type().clone()),
                 canonical_key: Some(key.to_string()),
+                origin: golem_common::model::agent::AgentOrigin::Keyed,
                 constructor_parameters: Some(key.canonical_params().to_string()),
                 environment_id: self.environment_id,
                 created_by: self.account_id,
@@ -1267,7 +1269,7 @@ impl InvocationHarness {
                 vec![agent_type.clone()],
                 BTreeMap::new(),
             ),
-            created_at: Utc::now(),
+            created_at: Timestamp::now(),
             wasm_hash: Hash::empty(),
             package_metadata: None,
             object_store_key: String::new(),

@@ -20,6 +20,13 @@ use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 use uuid::Uuid;
 
+impl InvocationId {
+    /// The constructor belongs to the persisted agent incarnation, not a creating request.
+    pub fn constructor(fingerprint: AgentFingerprint) -> Self {
+        Self(Uuid::new_v5(&fingerprint.0, b"constructor"))
+    }
+}
+
 /// The caller scope of an idempotency key: who sent the keyed request. It is a namespace for
 /// the caller's keys, not an authorization grant. A request has a scope only when Golem knows
 /// its original caller, see [`IdempotencyScope::of`].
@@ -426,6 +433,48 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn constructor_identity_is_incarnation_bound_and_separate_from_methods() {
+        let constructor = InvocationId::constructor(fingerprint());
+        assert_eq!(
+            constructor.0,
+            uuid::uuid!("f8d406b8-7838-5397-8385-e22008a2ddcf")
+        );
+        assert_eq!(constructor, InvocationId::constructor(fingerprint()));
+        assert_eq!(
+            InvocationId::constructor(AgentFingerprint(Uuid::from_u128(99))).0,
+            uuid::uuid!("c1e4f2e6-4312-506e-b331-7f0e517fadbf")
+        );
+        for operation in ["constructor", "constructor/雪:internal"] {
+            for key in ["constructor", "constructor/雪:internal"] {
+                let key = IdempotencyKey::from(key);
+                for method in [
+                    OwnedInvocationId::external(
+                        owner(),
+                        fingerprint(),
+                        operation,
+                        Some(IdempotencyScope::User(AccountId(Uuid::from_u128(10)))),
+                        Some(&key),
+                    ),
+                    OwnedInvocationId::internal(owner(), fingerprint(), operation, &key),
+                    OwnedInvocationId::route_session(
+                        owner(),
+                        fingerprint(),
+                        operation,
+                        "constructor",
+                        &key,
+                    ),
+                ] {
+                    assert_ne!(constructor, method.id());
+                }
+            }
+        }
+        let unkeyed =
+            OwnedInvocationId::external(owner(), fingerprint(), "constructor", None, None);
+        assert_eq!(unkeyed.uuid().get_version_num(), 4);
+        assert_eq!(constructor.0.get_version_num(), 5);
     }
 
     #[test]

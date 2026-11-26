@@ -1071,7 +1071,7 @@ impl OwnerWallet {
                     .iter()
                     .filter_map(|card| {
                         card.expires_at()
-                            .filter(|at| *at <= chrono::Utc::now())
+                            .filter(|at| *at <= jiff::Timestamp::now())
                             .map(|_| card.card_id())
                     })
                     .collect::<Vec<_>>();
@@ -1318,7 +1318,7 @@ impl OwnerWallet {
             .iter()
             .filter_map(|(id, card)| {
                 card.expires_at()
-                    .filter(|at| *at <= chrono::Utc::now())
+                    .filter(|at| *at <= jiff::Timestamp::now())
                     .map(|_| *id)
             })
             .collect::<Vec<_>>();

@@ -211,7 +211,7 @@ fn a_remote_schedule_names_the_scheduling_agent_as_parent_also_for_a_tool() {
                 },
                 scope_card: None,
             },
-            chrono::Utc::now(),
+            jiff::Timestamp::now(),
             &scheduler,
             &AuthCtx::System,
         )

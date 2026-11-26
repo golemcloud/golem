@@ -78,7 +78,7 @@ fn scope_and_persistent_cards_share_the_metadata_and_inspection_shape() {
         lower_negative: scope.lower_negative.clone(),
         upper_positive: scope.upper_positive.clone(),
         upper_negative: scope.upper_negative.clone(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -236,7 +236,7 @@ fn derive_authorization_surface() -> EffectiveSurface {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -261,7 +261,7 @@ fn install_authority_card(card_id: CardId, target: &RecipientPattern) -> StoredC
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -406,7 +406,7 @@ fn install_card_recipients_must_cover_the_target() {
         ],
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -425,7 +425,7 @@ fn install_card_recipients_must_cover_the_target() {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
     });
@@ -460,8 +460,8 @@ fn installed_child_request_matches_registry_canonicalization() {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 123_456_789).unwrap(),
-        expires_at: Some(DateTime::from_timestamp(1_800_000_000, 987_654_321).unwrap()),
+        created_at: jiff::Timestamp::new(1_700_000_000, 123_456_789_i32).unwrap(),
+        expires_at: Some(jiff::Timestamp::new(1_800_000_000, 987_654_321_i32).unwrap()),
         system_card: false,
         managed_by: None,
     });
@@ -473,9 +473,9 @@ fn installed_child_request_matches_registry_canonicalization() {
     };
     let mut canonical = requested.clone();
     if let StoredCard::Concrete(canonical_card) = &mut canonical {
-        canonical_card.created_at = DateTime::from_timestamp(1_700_000_000, 123_456_000).unwrap();
+        canonical_card.created_at = jiff::Timestamp::new(1_700_000_000, 123_456_000_i32).unwrap();
         canonical_card.expires_at =
-            Some(DateTime::from_timestamp(1_800_000_000, 987_654_000).unwrap());
+            Some(jiff::Timestamp::new(1_800_000_000, 987_654_000_i32).unwrap());
         canonical_card.managed_by = Some(CardManagedBy::RuntimeDerived(provenance.clone()));
     }
 
@@ -626,29 +626,225 @@ fn revoke_requires_possession_of_the_target_or_a_live_ancestor() {
 }
 
 #[test]
-fn attenuation_errors_preserve_the_failed_bound() {
+fn attenuation_errors_keep_the_failed_bound_and_name_the_parent_grant() {
     let grant = parse_pattern_grant(&valid_filesystem_grant()).unwrap();
-    let rendered = grant.render().unwrap();
+    let denial = parse_pattern_grant(&grant_for_resource("/data/secret/**")).unwrap();
+    let rendered_denial = denial.render().unwrap();
 
-    assert!(matches!(
-        permission_error_from_algebra(CardAlgebraError::LowerBoundTooBroad {
+    let lower = [
+        CardAlgebraError::LowerBoundTooBroad {
             grant: Box::new(grant.clone()),
-        }),
-        permissions_types::PermissionError::LowerBoundTooBroad(message)
-            if message == rendered
-    ));
+        },
+        CardAlgebraError::LowerDenialNotKept {
+            grant: Box::new(grant.clone()),
+            denial: Box::new(denial.clone()),
+        },
+    ];
+    for error in lower {
+        let expected = error.to_string();
+        assert!(matches!(
+            permission_error_from_algebra(error),
+            permissions_types::PermissionError::LowerBoundTooBroad(message) if message == expected
+        ));
+    }
+
+    let upper = [
+        CardAlgebraError::UpperDenialNotKept {
+            denial: Box::new(denial.clone()),
+        },
+        CardAlgebraError::UpperCeilingNotKept {
+            ceiling: Box::new(grant.clone()),
+        },
+        CardAlgebraError::UpperBoundTooBroad {
+            grant: Box::new(grant.clone()),
+        },
+    ];
+    for error in upper {
+        let expected = error.to_string();
+        assert!(matches!(
+            permission_error_from_algebra(error),
+            permissions_types::PermissionError::UpperBoundTooBroad(message) if message == expected
+        ));
+    }
+
+    let explicit = permission_error_from_algebra(CardAlgebraError::UpperDenialNotKept {
+        denial: Box::new(denial),
+    });
     assert!(matches!(
-        permission_error_from_algebra(CardAlgebraError::UpperBoundTooBroad {
-            grant: Some(Box::new(grant)),
-        }),
+        explicit,
         permissions_types::PermissionError::UpperBoundTooBroad(message)
-            if message == rendered
+            if message.contains(&rendered_denial) && !message.contains("derive-from-wallet")
     ));
-    assert!(matches!(
-        permission_error_from_algebra(CardAlgebraError::UpperBoundTooBroad { grant: None }),
-        permissions_types::PermissionError::UpperBoundTooBroad(message)
-            if message == "upper-bound grant is too broad"
-    ));
+}
+
+/// The wallet card of the GOL-1075 report: a network grant with an upper-bound secret denial.
+fn wallet_card_with_secret_denial(card_id: u128, holder: &str) -> StoredCard {
+    let network = permissions_types::PatternGrant {
+        class: "network".to_string(),
+        owner: String::new(),
+        recipient: "*".to_string(),
+        verb: "connect".to_string(),
+        resource_id: "*".to_string(),
+    };
+    let secret = permissions_types::PatternGrant {
+        class: "secret".to_string(),
+        owner: "alice@example.com/shop/prod".to_string(),
+        recipient: holder.to_string(),
+        verb: "*".to_string(),
+        resource_id: "*".to_string(),
+    };
+    StoredCard::Concrete(Card {
+        card_id: CardId(Uuid::from_u128(card_id)),
+        parent_ids: Vec::new(),
+        lower_positive: vec![parse_pattern_grant(&network).unwrap()],
+        lower_negative: Vec::new(),
+        upper_positive: Vec::new(),
+        upper_negative: vec![parse_pattern_grant(&secret).unwrap()],
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
+        expires_at: None,
+        system_card: false,
+        managed_by: None,
+    })
+}
+
+#[test]
+fn wallet_derivation_names_a_dropped_upper_denial_and_what_to_restate() {
+    let holder = "alice@example.com/shop/prod/cart-svc/CartAgent";
+    let wallet = [wallet_card_with_secret_denial(1, holder)];
+    let StoredCard::Concrete(parent) = &wallet[0] else {
+        unreachable!()
+    };
+    let secret = concrete_pattern_grant(&parent.upper_negative[0]).unwrap();
+    let rendered_secret = parent.upper_negative[0].render().unwrap();
+    let request = permissions_types::PatternGrant {
+        class: "network".to_string(),
+        owner: String::new(),
+        recipient: "*".to_string(),
+        verb: "connect".to_string(),
+        resource_id: "example.com".to_string(),
+    };
+
+    let without_denial =
+        parse_derived_grant_sets(std::slice::from_ref(&request), &[], &[], &[]).unwrap();
+    let error =
+        select_wallet_derivation_parent(&wallet, &wallet_derivation_context(), &without_denial)
+            .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            permissions_types::PermissionError::UpperBoundTooBroad(message)
+                if *message == format!(
+                    "the child card must keep the parent's upper-bound denial `{rendered_secret}`; derive-from-wallet takes complete bounds, so restate this denial in the upper-negative grants of the request"
+                )
+        ),
+        "{error:?}"
+    );
+
+    let with_denial = parse_derived_grant_sets(
+        std::slice::from_ref(&request),
+        &[],
+        &[],
+        std::slice::from_ref(&secret),
+    )
+    .unwrap();
+    assert_eq!(
+        select_wallet_derivation_parent(&wallet, &wallet_derivation_context(), &with_denial)
+            .unwrap()
+            .card_id,
+        CardId(Uuid::from_u128(1))
+    );
+}
+
+#[test]
+fn wallet_derivation_says_that_the_parent_has_a_ceiling() {
+    let ceiling = valid_filesystem_grant();
+    let child = grant_for_resource("/data/public/**");
+    let StoredCard::Concrete(mut parent) = wallet_parent(1, &ceiling) else {
+        unreachable!()
+    };
+    parent.upper_positive = vec![parse_pattern_grant(&ceiling).unwrap()];
+    let rendered_ceiling = parent.upper_positive[0].render().unwrap();
+    let wallet = [StoredCard::Concrete(parent)];
+
+    let without_ceiling =
+        parse_derived_grant_sets(std::slice::from_ref(&child), &[], &[], &[]).unwrap();
+    let error =
+        select_wallet_derivation_parent(&wallet, &wallet_derivation_context(), &without_ceiling)
+            .unwrap_err();
+    assert!(
+        matches!(
+            &error,
+            permissions_types::PermissionError::UpperBoundTooBroad(message)
+                if message.starts_with(&format!("the parent card has the upper-bound ceiling `{rendered_ceiling}`"))
+                    && message.contains("an empty upper-positive list means no ceiling")
+                    && message.ends_with("restate this ceiling or a narrower one in the upper-positive grants of the request")
+        ),
+        "{error:?}"
+    );
+
+    let with_ceiling = parse_derived_grant_sets(
+        std::slice::from_ref(&child),
+        &[],
+        std::slice::from_ref(&child),
+        &[],
+    )
+    .unwrap();
+    assert!(
+        select_wallet_derivation_parent(&wallet, &wallet_derivation_context(), &with_ceiling)
+            .is_ok()
+    );
+}
+
+#[test]
+fn wallet_derivation_lists_the_reason_of_each_wallet_card() {
+    let holder = "alice@example.com/shop/prod/cart-svc/CartAgent";
+    let first = wallet_card_with_secret_denial(1, holder);
+    let StoredCard::Concrete(mut second) = wallet_card_with_secret_denial(2, holder) else {
+        unreachable!()
+    };
+    second.upper_negative =
+        vec![parse_pattern_grant(&grant_for_resource("/data/secret/**")).unwrap()];
+    let wallet = [first, StoredCard::Concrete(second)];
+    let request = permissions_types::PatternGrant {
+        class: "network".to_string(),
+        owner: String::new(),
+        recipient: "*".to_string(),
+        verb: "connect".to_string(),
+        resource_id: "example.com".to_string(),
+    };
+    let grants = parse_derived_grant_sets(std::slice::from_ref(&request), &[], &[], &[]).unwrap();
+
+    let error = select_wallet_derivation_parent(&wallet, &wallet_derivation_context(), &grants)
+        .unwrap_err();
+    let permissions_types::PermissionError::UpperBoundTooBroad(message) = &error else {
+        panic!("expected upper-bound-too-broad, got {error:?}");
+    };
+    assert!(
+        message.starts_with(
+            "no wallet card permits the requested derivation: across the whole wallet, the child card must keep the parent's upper-bound denial `"
+        ),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "; card {}: the child card must keep the parent's upper-bound denial `secret(",
+            Uuid::from_u128(1)
+        )),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!(
+            "; card {}: the child card must keep the parent's upper-bound denial `filesystem(",
+            Uuid::from_u128(2)
+        )),
+        "{message}"
+    );
+    assert!(
+        message.ends_with(
+            "derive-from-wallet takes complete bounds, so restate this denial in the upper-negative grants of the request"
+        ),
+        "{message}"
+    );
 }
 
 fn concrete_parent(grant: &permissions_types::PatternGrant) -> Card {
@@ -665,7 +861,7 @@ fn concrete_parent(grant: &permissions_types::PatternGrant) -> Card {
         lower_negative: vec![parse_pattern_grant(&lower_negative).unwrap()],
         upper_positive: vec![positive],
         upper_negative: vec![parse_pattern_grant(&upper_negative).unwrap()],
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -694,7 +890,7 @@ fn wallet_parent(card_id: u128, grant: &permissions_types::PatternGrant) -> Stor
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -713,7 +909,7 @@ fn scope_derivation_parent(
         lower_negative: Vec::new(),
         upper_positive: parse_grants(upper_positive).unwrap(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -851,7 +1047,7 @@ fn scope_derivation_combines_positive_authority_from_multiple_parents() {
 #[test]
 fn scope_card_expires_with_its_earliest_expiring_parent() {
     let grant = valid_filesystem_grant();
-    let at = |seconds| DateTime::from_timestamp(seconds, 0).unwrap();
+    let at = |seconds| jiff::Timestamp::new(seconds, 0).unwrap();
     let mut later = scope_derivation_parent(1, std::slice::from_ref(&grant), &[]);
     later.expires_at = Some(at(1_900_000_000));
     let earlier_scope = ScopeCard {
@@ -967,7 +1163,7 @@ fn explicit_derivation_resolves_a_wallet_template_parent_for_the_caller() {
         lower_negative: Vec::new(),
         upper_positive: vec![staging_write],
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
     });
@@ -996,7 +1192,7 @@ fn explicit_derivation_resolves_a_wallet_template_parent_for_the_caller() {
         polymorphic,
         &wallet_derivation_context(),
         CardId(Uuid::from_u128(8)),
-        DateTime::from_timestamp(1_700_000_001, 0).unwrap(),
+        jiff::Timestamp::new(1_700_000_001, 0).unwrap(),
     );
     assert_eq!(
         installed.lower_positive.len(),
@@ -1361,16 +1557,16 @@ fn lifespan(value: &str) -> permissions_types::Duration {
 
 #[test]
 fn derive_expiry_parses_fixed_iso_8601_duration() {
-    let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let now = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
 
     assert_eq!(
         derive_expires_at(now, Some(&lifespan("P1DT2H3M4.5S")), None).unwrap(),
         Some(
-            now + TimeDelta::days(1)
-                + TimeDelta::hours(2)
-                + TimeDelta::minutes(3)
-                + TimeDelta::seconds(4)
-                + TimeDelta::milliseconds(500)
+            now + jiff::SignedDuration::from_hours(24)
+                + jiff::SignedDuration::from_hours(2)
+                + jiff::SignedDuration::from_mins(3)
+                + jiff::SignedDuration::from_secs(4)
+                + jiff::SignedDuration::from_millis(500)
         )
     );
     assert_eq!(
@@ -1385,7 +1581,7 @@ fn derive_expiry_rejects_non_fixed_or_malformed_duration() {
         assert!(
             matches!(
                 derive_expires_at(
-                    DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                    jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
                     Some(&lifespan(value)),
                     None,
                 ),
@@ -1398,8 +1594,8 @@ fn derive_expiry_rejects_non_fixed_or_malformed_duration() {
 
 #[test]
 fn derive_expiry_enforces_parent_expiry() {
-    let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-    let parent_expires_at = now + TimeDelta::hours(1);
+    let now = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
+    let parent_expires_at = now + jiff::SignedDuration::from_hours(1);
 
     assert_eq!(
         derive_expires_at(now, Some(&lifespan("PT1H")), Some(parent_expires_at),).unwrap(),
@@ -1425,12 +1621,12 @@ fn derive_expiry_enforces_parent_expiry() {
 
 #[test]
 fn derive_expiry_handles_indefinite_parent_and_timestamp_overflow() {
-    let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let now = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
 
     assert_eq!(derive_expires_at(now, None, None).unwrap(), None);
     assert!(matches!(
         derive_expires_at(
-            DateTime::<Utc>::MAX_UTC,
+            jiff::Timestamp::MAX,
             Some(&lifespan("PT0.000000001S")),
             None,
         ),

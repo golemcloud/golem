@@ -52,7 +52,7 @@ fn answer(name: &str, record_type: RecordType, healed: bool) -> Result<Vec<Recor
         ("db.test", RecordType::A) => RData::A(A::new(127, 0, 0, 1)),
         ("db.test", RecordType::MX) => RData::MX(MX::new(10, test_name("mail.db.test."))),
         ("db.test", RecordType::TXT) => {
-            RData::TXT(TXT::new(vec!["v=spf1 ".to_string(), "-all".to_string()]))
+            RData::TXT(TXT::try_new([b"v=spf1 ".as_slice(), b"-all"].into_iter()).unwrap())
         }
         ("v6.test", RecordType::AAAA) => RData::AAAA(AAAA::new(0, 0, 0, 0, 0, 0, 0, 1)),
         ("alias.test", RecordType::CNAME) => RData::CNAME(CNAME(test_name("db.test."))),

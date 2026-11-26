@@ -70,6 +70,22 @@ fn key() -> TokenKey {
     TokenKey::from_bytes(KEY)
 }
 
+#[test]
+fn canonical_datetime_uses_floor_seconds_and_positive_fractional_nanoseconds() {
+    for (text, seconds, nanoseconds) in [
+        ("1969-12-31T23:59:59.5Z", -1i64, 500_000_000u32),
+        ("1970-01-01T00:00:00Z", 0, 0),
+        ("1970-01-01T00:00:00.5Z", 0, 500_000_000),
+    ] {
+        let bytes = encode(&SchemaValue::Datetime {
+            value: text.parse().unwrap(),
+        });
+        assert_eq!(bytes.len(), 13);
+        assert_eq!(&bytes[1..9], &seconds.to_be_bytes());
+        assert_eq!(&bytes[9..13], &nanoseconds.to_be_bytes());
+    }
+}
+
 fn json(node: &impl serde::Serialize) -> String {
     serde_json::to_string(node).unwrap()
 }
@@ -844,7 +860,7 @@ fn leaf_pair() -> impl Strategy<Value = Pair> {
         (0i64..4_000_000_000).prop_map(|s| (
             SchemaType::datetime(),
             SchemaValue::Datetime {
-                value: chrono::DateTime::from_timestamp(s, 0).unwrap(),
+                value: jiff::Timestamp::new(s, 0).unwrap(),
             },
         )),
         any::<i64>().prop_map(|n| (
@@ -1234,7 +1250,7 @@ fn host_managed_values_redacted() {
         secret_id: Uuid::from_u128(99),
         config_key: Some(vec!["MARKERKEY".into()]),
         version: 1,
-        resolved_at: chrono::Utc::now(),
+        resolved_at: jiff::Timestamp::now(),
         category: Some("MARKERCAT".into()),
     });
     let value = SchemaValue::Record {
@@ -4355,6 +4371,9 @@ fn every_entry_kind() -> Vec<PublicOplogEntryWithIndex> {
                 ),
                 actual: golem_common::model::oplog::ReplayStep::described("MARKER"),
                 mismatched: vec![],
+                replay_start: Some(golem_common::model::oplog::ReplayStart::full_replay(vec![
+                    OplogIndex::from_u64(19),
+                ])),
             })),
         }),
         PublicOplogEntry::GrowMemory(GrowMemoryParams {
@@ -4852,6 +4871,116 @@ fn every_entry_kind_keeps_metadata() {
         serde_json::to_value(golem_common::model::oplog::PublicEntityCallMode::Synchronous)
             .unwrap();
     assert!(json(&attribution).contains(&call_mode.to_string()));
+}
+
+#[test]
+fn public_json_method_input_hides_byte_arrays_as_one_token() {
+    // Untagged public JSON, and the canonical tagged schema-value JSON that the CLI sends.
+    let tagged = br#"{"kind":"record","value":{"fields":[
+        {"kind":"list","value":{"elements":[{"kind":"u8","value":1},{"kind":"u8","value":2},
+            {"kind":"u8","value":3},{"kind":"u8","value":1},{"kind":"u8","value":2}]}},
+        {"kind":"list","value":{"elements":[{"kind":"u16","value":300},{"kind":"u16","value":7}]}},
+        {"kind":"u64","value":"7391204117"},
+        {"kind":"stream","value":{"provisionalRef":"6b1a2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d"}}]}}"#;
+    for (raw, typed) in [
+        (
+            &br#"{"blob": [1, 2, 3, 1, 2], "amounts": [300, 7]}"#[..],
+            false,
+        ),
+        (&tagged[..], true),
+    ] {
+        public_json_method_input_case(raw, typed);
+    }
+}
+
+fn public_json_method_input_case(raw: &[u8], typed: bool) {
+    use golem_common::model::agent::AgentMethodInput;
+    use golem_common::model::oplog::*;
+    let input = AgentMethodInput::PublicJson(
+        golem_common::model::invocation_session_public::JsonMethodInput::capture(raw).unwrap(),
+    )
+    .to_public_value()
+    .unwrap();
+    let entry = with_entry(
+        3,
+        PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
+            timestamp: Timestamp::from(0),
+            invocation: PublicAgentInvocation::AgentMethodInvocation(
+                AgentMethodInvocationParameters {
+                    invocation_id: InvocationId(Uuid::from_u128(1)),
+                    method_name: "store".into(),
+                    function_input: input,
+                    caller: marker_user_caller(),
+                    trace_id: golem_common::model::invocation_context::TraceId::generate(),
+                    trace_states: vec![],
+                    invocation_context: vec![],
+                },
+            ),
+            wallet_pin: golem_common::model::card::PublicInvocationWalletPin {
+                wallet_token: golem_common::model::card::WalletVersionToken {
+                    wallet_id_hash: [0; 32],
+                    generation: 1,
+                },
+                scope_card_id: None,
+            },
+        }),
+    );
+    fn lists(value: &serde_json::Value, out: &mut Vec<serde_json::Map<String, serde_json::Value>>) {
+        match value {
+            serde_json::Value::Object(object) => {
+                if object.contains_key("length") {
+                    out.push(object.clone());
+                }
+                object.values().for_each(|value| lists(value, out));
+            }
+            serde_json::Value::Array(elements) => {
+                elements.iter().for_each(|value| lists(value, out))
+            }
+            _ => {}
+        }
+    }
+    for keep in all_keep() {
+        let rendered = rendered(keep, &entry, None);
+        let invocation = as_case(field(&rendered.entry, "invocation"))
+            .payload
+            .clone()
+            .unwrap();
+        let input = record_field(&invocation, "functionInput").clone();
+        assert_eq!(
+            as_case(&input).case.as_deref(),
+            Some("PublicJson"),
+            "{keep:?}"
+        );
+        let mut found = Vec::new();
+        lists(&serde_json::to_value(&input).unwrap(), &mut found);
+        let length = |length: u64| {
+            found
+                .iter()
+                .find(|list| list.get("length") == Some(&serde_json::Value::from(length)))
+        };
+        if keep.shape {
+            let bytes = length(5).unwrap_or_else(|| panic!("{keep:?}: {found:?}"));
+            assert!(!bytes.contains_key("elements"), "{keep:?}: {bytes:?}");
+            let amounts = length(2).unwrap_or_else(|| panic!("{keep:?}: {found:?}"));
+            assert!(amounts.contains_key("elements"), "{keep:?}: {amounts:?}");
+        } else {
+            assert!(found.is_empty(), "{keep:?}: {found:?}");
+        }
+        if typed {
+            // The tagged u64 is a number in a record, which expands: it shows only with
+            // `--keep-scalars`, and no tag of the encoding reaches the export.
+            let text = json(&input);
+            assert_eq!(
+                text.contains("7391204117"),
+                keep.scalars,
+                "{keep:?}: {text}"
+            );
+            assert!(!text.contains("\"u64\""), "{keep:?}: {text}");
+            // The stream argument is one redacted leaf; its reference does not reach the export.
+            assert!(text.contains("\"reason\":\"stream\""), "{keep:?}: {text}");
+            assert!(!text.contains("6b1a2c3d"), "{keep:?}: {text}");
+        }
+    }
 }
 
 /// The requester of an update is exported as a caller: kinds kept, pairs as tokens, no claims.

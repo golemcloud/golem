@@ -5,9 +5,11 @@ fn current_clock() -> Arc<TestClock> {
     let period = AccountUsagePeriod::current();
     TestClock::new_at(
         Instant::now(),
-        Utc.with_ymd_and_hms(period.year, period.month, 15, 12, 0, 0)
-            .single()
-            .unwrap(),
+        jiff::civil::DateTime::new((period.year) as i16, (period.month) as i8, 15, 12, 0, 0, 0)
+            .unwrap()
+            .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+            .unwrap()
+            .timestamp(),
     )
 }
 
@@ -194,9 +196,11 @@ async fn reconstruction_window_keeps_permit_without_memory_or_filesystem_charge(
         let period = AccountUsagePeriod::current();
         let clock = TestClock::new_at(
             Instant::now(),
-            Utc.with_ymd_and_hms(period.year, period.month, 15, 12, 0, 0)
-                .single()
-                .unwrap(),
+            jiff::civil::DateTime::new((period.year) as i16, (period.month) as i8, 15, 12, 0, 0, 0)
+                .unwrap()
+                .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+                .unwrap()
+                .timestamp(),
         );
         let entry = Arc::new(AtomicResourceEntry::new(0, usize::MAX, 0, 0, 1));
         let memory = replay_memory(&entry, GIB, &clock);

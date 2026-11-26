@@ -850,9 +850,17 @@ impl CellOutcome {
             disable_compilation_cache: false,
         };
         let mut run_result = BenchmarkRunResult::new(run_config.clone());
-        run_result.add(recorder);
+        run_result.add_iteration(0, recorder);
+        let measurement_environment =
+            golem_test_framework::benchmark::MeasurementEnvironment::remote_from_env();
 
         BenchmarkResult {
+            entry_version: 1,
+            iterations: 1,
+            series_key: measurement_environment
+                .series_key(golem_test_framework::benchmark::HARNESS_VERSION, 1),
+            measurement_environment,
+            ceiling: None,
             name: format!("density-agent-{}", config.cell_name()),
             description: format!(
                 "Agent-density cell: scenario={}, mode={}, sharing={}{}{}{}",

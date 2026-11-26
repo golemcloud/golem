@@ -25,13 +25,13 @@ use crate::model::{
     Timestamp,
 };
 use applying::Apply;
-use chrono::{DateTime, TimeDelta, Utc};
 use golem_api_grpc::proto::golem;
 use golem_api_grpc::proto::golem::shardmanager::{
     IpAddress as GrpcIpAddress, Pod as GrpcPod, RoutingTable as GrpcRoutingTable,
     RoutingTableEntry as GrpcRoutingTableEntry,
 };
 use golem_api_grpc::proto::golem::worker::Cursor;
+use jiff::{SignedDuration, Timestamp as JiffTimestamp};
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::ops::Add;
 use std::time::{Duration, Instant};
@@ -193,10 +193,10 @@ pub fn lease_expiry_from_ttl(
 /// Encodes a lease expiry for the wire as the time left on it, floored at zero:
 /// a lease that has already lapsed goes out as a zero TTL, which the receiver
 /// reads as expired on arrival.
-pub fn lease_ttl_to_proto(expires_at: DateTime<Utc>, now: DateTime<Utc>) -> prost_types::Duration {
-    let remaining = expires_at.signed_duration_since(now).max(TimeDelta::zero());
+pub fn lease_ttl_to_proto(expires_at: JiffTimestamp, now: JiffTimestamp) -> prost_types::Duration {
+    let remaining = expires_at.duration_since(now).max(SignedDuration::ZERO);
     prost_types::Duration {
-        seconds: remaining.num_seconds(),
+        seconds: remaining.as_secs(),
         nanos: remaining.subsec_nanos(),
     }
 }
@@ -1248,8 +1248,8 @@ mod tests {
         assert!(decoded.is_err());
     }
 
-    fn fixed_now() -> DateTime<Utc> {
-        DateTime::from_timestamp(1_764_000_000, 0).unwrap()
+    fn fixed_now() -> JiffTimestamp {
+        JiffTimestamp::new(1_764_000_000, 0).unwrap()
     }
 
     /// A lease TTL is required on the wire. `None` is the executor's
@@ -1312,7 +1312,7 @@ mod tests {
     #[test]
     fn a_lease_expiry_survives_the_round_trip_to_the_wire_and_back() {
         let now = fixed_now();
-        let granted = now + TimeDelta::new(60, 123_456_789).unwrap();
+        let granted = now + SignedDuration::new(60, 123_456_789);
 
         let on_the_wire = lease_ttl_to_proto(granted, now);
         assert_eq!(
@@ -1358,12 +1358,12 @@ mod tests {
     /// flight does not appear, because the decode does not depend on it.
     #[test]
     fn an_executors_lease_never_outlives_the_managers() {
-        let lease = TimeDelta::seconds(60);
+        let lease = SignedDuration::from_secs(60);
         let request_sent = fixed_now();
         let anchor = Instant::now();
 
-        for request_transit in [0, 1, 5, 30].map(TimeDelta::seconds) {
-            for write_time in [0, 1, 4].map(TimeDelta::seconds) {
+        for request_transit in [0, 1, 5, 30].map(SignedDuration::from_secs) {
+            for write_time in [0, 1, 4].map(SignedDuration::from_secs) {
                 let granted_at = request_sent + request_transit;
                 let managers_expiry = granted_at + lease;
                 let on_the_wire = lease_ttl_to_proto(managers_expiry, granted_at + write_time);
@@ -1373,7 +1373,7 @@ mod tests {
 
                 // both measured from the moment the request was sent
                 let executor_holds = executors_expiry - anchor;
-                let manager_holds = (managers_expiry - request_sent).to_std().unwrap();
+                let manager_holds = Duration::try_from(managers_expiry - request_sent).unwrap();
                 assert!(
                     executor_holds <= manager_holds,
                     "request transit {request_transit}, write {write_time}: the executor holds \
@@ -1389,7 +1389,7 @@ mod tests {
     #[test]
     fn a_lapsed_lease_is_sent_as_a_zero_ttl_and_arrives_expired() {
         let now = fixed_now();
-        let lapsed = now - TimeDelta::seconds(5);
+        let lapsed = now - SignedDuration::from_secs(5);
 
         let on_the_wire = lease_ttl_to_proto(lapsed, now);
         assert_eq!(

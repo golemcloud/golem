@@ -14,13 +14,13 @@
 
 use super::{
     AccountEmail, AgentPermissionMonomorphizationContext, BTreeSet, Card, CardId,
-    CardResourcePattern, CardVerb, DateTime, DecidedScopeParent, DelegationCard, DelegationSurface,
+    CardResourcePattern, CardVerb, DecidedScopeParent, DelegationCard, DelegationSurface,
     DerivedGrantSets, DurabilityHost, DurableWorkerCtx, EffectiveSurface,
     GolemPermissionsDeriveDecision, GolemPermissionsDeriveFromWalletDecision,
     GolemPermissionsDerivePersist, GolemPermissionsDeriveScopeDecision, PermissionCardEntry,
     PermissionCardHandleRep, PermissionPattern, PersistentDerivationSource, PolymorphicCard,
     PolymorphicPermissionPattern, Resource, ScopeCard, ScopeDerivationParent,
-    SerializablePermissionError, StoredCard, Utc, WalletDerivationParent, WorkerCtx,
+    SerializablePermissionError, StoredCard, WalletDerivationParent, WorkerCtx,
     WorkerExecutorError, agent_delegation_surface_from_wallet, anyhow,
     caller_monomorphization_context, derive_expires_at, durable_now, ensure_card_permission,
     ensure_card_permission_in_surface, handle_card_id, monomorphize_card_for_agent,
@@ -29,7 +29,8 @@ use super::{
     permission_error_from_algebra, permission_error_from_parse, permission_error_from_serializable,
     permission_error_to_serializable, permissions_derive, permissions_types, persist_runtime_card,
     record_card_decision, refuse_cut_off_scope_card, resolve_permission_card,
-    resolve_permission_card_handle, worker_error_to_permission_error,
+    resolve_permission_card_handle, wallet_permission_error_from_algebra,
+    worker_error_to_permission_error,
 };
 
 impl DerivedGrantSets {
@@ -65,8 +66,8 @@ impl DerivedGrantSets {
         self,
         card_id: CardId,
         parent_id: CardId,
-        created_at: DateTime<Utc>,
-        expires_at: Option<DateTime<Utc>>,
+        created_at: jiff::Timestamp,
+        expires_at: Option<jiff::Timestamp>,
     ) -> StoredCard {
         match self.as_concrete() {
             Some(grants) => StoredCard::Concrete(Card {
@@ -373,7 +374,7 @@ pub(super) fn select_wallet_derivation_parent(
             &envelope.upper_positive,
             &envelope.upper_negative,
         )
-        .map_err(permission_error_from_algebra)?
+        .map_err(wallet_permission_error_from_algebra)?
     {
         WalletDerivationParent::Single(parent_id) => parent_id,
         WalletDerivationParent::MultipleRequired => {
@@ -430,10 +431,10 @@ pub(super) fn ensure_persistent_derivation_repair_authority(
 pub(super) async fn persist_derived_card<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
     parent_id: CardId,
-    parent_expires_at: Option<DateTime<Utc>>,
+    parent_expires_at: Option<jiff::Timestamp>,
     grants: DerivedGrantSets,
-    created_at: DateTime<Utc>,
-    expires_at: Option<DateTime<Utc>>,
+    created_at: jiff::Timestamp,
+    expires_at: Option<jiff::Timestamp>,
     source: PersistentDerivationSource,
 ) -> anyhow::Result<Result<permissions_types::PersistentCard, permissions_types::PermissionError>> {
     let created = match persist_runtime_card::<Ctx, GolemPermissionsDerivePersist, _, _, _>(

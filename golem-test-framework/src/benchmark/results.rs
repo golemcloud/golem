@@ -12,9 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use crate::benchmark::BenchmarkRecorder;
 use crate::benchmark::config::RunConfig;
-use chrono::{DateTime, Utc};
+use crate::benchmark::{BenchmarkPartition, BenchmarkRecorder, BenchmarkSuite};
 use colored::Colorize;
 use comfy_table::presets::NOTHING;
 use comfy_table::{Attribute, Cell, CellAlignment, ContentArrangement, Table};
@@ -24,7 +23,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_with::{DurationMilliSecondsWithFrac, serde_as};
 use sha2::{Digest, Sha256};
 use std::cmp::Ordering;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fmt;
 use std::fmt::Write;
 use std::fmt::{Debug, Display, Formatter};
@@ -39,6 +38,10 @@ pub struct ResultKey {
 }
 
 impl ResultKey {
+    pub fn is_primary(&self) -> bool {
+        self.primary
+    }
+
     pub fn primary(name: impl AsRef<str>) -> Self {
         Self {
             name: name.as_ref().to_string(),
@@ -182,14 +185,22 @@ impl DurationResult {
 
         self.min = Duration::MAX;
         self.max = Duration::ZERO;
-        self.avg = Duration::ZERO;
+        let count = self.all.len() as u128;
+        let mut mean_nanos = 0;
+        let mut remainder = 0;
 
         for duration in &self.all {
             self.min = self.min.min(*duration);
             self.max = self.max.max(*duration);
-            self.avg += *duration;
+            // Divide before summing so the intermediate value stays representable.
+            mean_nanos += duration.as_nanos() / count;
+            remainder += duration.as_nanos() % count;
         }
-        self.avg /= self.all.len() as u32;
+        mean_nanos += remainder / count;
+        self.avg = Duration::new(
+            (mean_nanos / 1_000_000_000) as u64,
+            (mean_nanos % 1_000_000_000) as u32,
+        );
 
         fn percentile(k: f64, sorted_series: &[Duration]) -> Duration {
             assert!(!sorted_series.is_empty());
@@ -203,7 +214,7 @@ impl DurationResult {
                 sorted_series[p0]
             } else {
                 let d = p - (p0 as f64);
-                sorted_series[p0].mul_f64(1.0 - d) + sorted_series[p1].mul_f64(d)
+                sorted_series[p0] + (sorted_series[p1] - sorted_series[p0]).mul_f64(d)
             }
         }
 
@@ -262,14 +273,14 @@ impl CountResult {
 
         self.min = u64::MAX;
         self.max = 0;
-        self.avg = 0;
+        let mut total = 0u128;
 
         for count in &self.all {
             self.min = self.min.min(*count);
             self.max = self.max.max(*count);
-            self.avg += *count;
+            total += u128::from(*count);
         }
-        self.avg /= self.all.len() as u64;
+        self.avg = (total / self.all.len() as u128) as u64;
     }
 
     pub fn drop_details(&mut self) {
@@ -762,6 +773,17 @@ pub struct BenchmarkArtifacts {
 }
 
 impl BenchmarkArtifacts {
+    pub const SERVICE_EXECUTABLES: [(&'static str, &'static str); 5] = [
+        (
+            "golem-component-compilation-service",
+            "golem-component-compilation-service",
+        ),
+        ("golem-worker-service", "golem-worker-service"),
+        ("golem-worker-executor", "worker-executor"),
+        ("golem-shard-manager", "golem-shard-manager"),
+        ("golem-registry-service", "golem-registry-service"),
+    ];
+
     /// Hash exact input files before running a suite. Missing inputs fail the
     /// suite rather than silently producing incomplete provenance.
     pub fn collect(
@@ -785,13 +807,18 @@ impl BenchmarkArtifacts {
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkSuiteResult {
-    /// Result format version. Always `1` for results produced by this binary.
-    #[serde(default = "default_schema_version")]
+    /// Result format version. This producer writes schema 2 only.
+    #[serde(deserialize_with = "deserialize_schema_version")]
     pub schema_version: u32,
+    pub harness_version: u32,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub partitions: Vec<BenchmarkPartition>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub suite_fingerprint: Option<String>,
     pub suite: String,
     pub environment: String,
     pub version: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: jiff::Timestamp,
     #[serde(skip_serializing_if = "Option::is_none", default)]
     pub runner: Option<BenchmarkRunner>,
     #[serde(skip_serializing_if = "Option::is_none", default)]
@@ -809,8 +836,151 @@ pub struct BenchmarkSuiteResult {
     pub results: Vec<BenchmarkResult>,
 }
 
-fn default_schema_version() -> u32 {
-    1
+/// Bump when the measurement lifecycle or common workload contract changes.
+pub const HARNESS_VERSION: u32 = 1;
+
+fn deserialize_schema_version<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u32, D::Error> {
+    let version = u32::deserialize(deserializer)?;
+    if version != 2 {
+        return Err(D::Error::custom("benchmark schema_version must be 2"));
+    }
+    Ok(version)
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct MeasurementEnvironment {
+    pub runner_id: String,
+    pub hardware_fingerprint: String,
+    pub storage_profile: String,
+    pub sockets_enabled: bool,
+}
+
+impl MeasurementEnvironment {
+    /// Explicit provenance for a remote deployment; never substitute the load generator's CPU.
+    pub fn remote_from_env() -> Self {
+        let raw = std::env::var("GOLEM_BENCH_MEASUREMENT_ENVIRONMENT")
+            .expect("remote benchmarks require GOLEM_BENCH_MEASUREMENT_ENVIRONMENT JSON with runner_id, hardware_fingerprint, storage_profile and sockets_enabled");
+        let environment: Self =
+            serde_json::from_str(&raw).expect("invalid GOLEM_BENCH_MEASUREMENT_ENVIRONMENT");
+        assert!(
+            !environment.runner_id.is_empty()
+                && !environment.hardware_fingerprint.is_empty()
+                && !environment.storage_profile.is_empty(),
+            "remote measurement identity fields must not be empty"
+        );
+        environment
+    }
+
+    pub fn for_mode(mode: &crate::config::benchmark::TestMode) -> Self {
+        if !matches!(mode, crate::config::benchmark::TestMode::Spawned { .. }) {
+            return Self::remote_from_env();
+        }
+        let sys = System::new_all();
+        Self {
+            runner_id: format!("local-{}", std::env::consts::ARCH),
+            hardware_fingerprint: Self::hardware_fingerprint(
+                std::env::consts::ARCH,
+                &sys.cpus()
+                    .iter()
+                    .map(|cpu| (cpu.vendor_id().to_string(), cpu.brand().to_string()))
+                    .collect::<Vec<_>>(),
+                sys.total_memory(),
+            ),
+            storage_profile: "postgres-kv-indexed-scheduler+filesystem-blob+sqlite-shard"
+                .to_string(),
+            sockets_enabled: benchmark_sockets_enabled(),
+        }
+    }
+
+    pub fn series_key(&self, harness_version: u32, entry_version: u32) -> String {
+        let tuple = serde_json::to_vec(&(
+            harness_version,
+            entry_version,
+            &self.runner_id,
+            &self.hardware_fingerprint,
+            &self.storage_profile,
+            self.sockets_enabled,
+        ))
+        .expect("series identity is serializable");
+        format!("{:x}", Sha256::digest(tuple))
+    }
+
+    pub fn hardware_fingerprint(
+        architecture: &str,
+        cpus: &[(String, String)],
+        memory_bytes: u64,
+    ) -> String {
+        // Match the whole-GiB reporting convention used by historical benchmark records.
+        let memory_class_gib = (memory_bytes / (1024 * 1024 * 1024)).next_power_of_two();
+        let description = serde_json::to_vec(&(architecture, cpus, memory_class_gib))
+            .expect("hardware identity is serializable");
+        format!("{:x}", Sha256::digest(description))
+    }
+}
+
+/// The launcher and record share the operator's effective setting.
+pub fn benchmark_sockets_enabled() -> bool {
+    resolve_sockets_enabled(
+        std::env::var("GOLEM_BENCH_SOCKETS_ENABLED").ok().as_deref(),
+        std::env::var("GOLEM__AGENT_SOCKETS__ENABLED")
+            .ok()
+            .as_deref(),
+    )
+}
+
+fn resolve_sockets_enabled(benchmark_override: Option<&str>, native: Option<&str>) -> bool {
+    benchmark_override.or(native).is_some_and(|value| {
+        value
+            .parse()
+            .expect("the effective agent sockets setting must be true or false")
+    })
+}
+
+/// Optional fields used by ceiling measurements in the same result record.
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+pub struct CeilingMeasurement {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub value: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub lower_bound: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub top_load: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub spread: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub limiting_component: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shape: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub shard_manager_mode: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stores: Option<BTreeMap<String, String>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub capacity: Option<BTreeMap<String, f64>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_agent_memory_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub per_agent_disk_bytes: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub running_bound: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pending_bound: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pause_millis: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub workload: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sdk: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub service_criterion: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub architecture: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub measured_version: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub measured_at: Option<jiff::Timestamp>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub confidence_interval: Option<[f64; 2]>,
 }
 
 impl BenchmarkSuiteResult {
@@ -841,11 +1011,14 @@ impl BenchmarkSuiteResult {
         );
 
         Self {
-            schema_version: 1,
+            schema_version: 2,
+            harness_version: HARNESS_VERSION,
+            partitions: vec![],
+            suite_fingerprint: None,
             suite: suite.to_string(),
             environment,
             version: golem_common::golem_version().to_string(),
-            timestamp: Utc::now(),
+            timestamp: jiff::Timestamp::now(),
             runner: None,
             source: None,
             artifacts: None,
@@ -856,7 +1029,334 @@ impl BenchmarkSuiteResult {
     }
 
     pub fn add(&mut self, result: BenchmarkResult) {
+        let mut result = result;
+        if let Some(runner) = &self.runner {
+            result.measurement_environment.runner_id = runner.id.clone();
+            result.series_key = result
+                .measurement_environment
+                .series_key(self.harness_version, result.entry_version);
+        } else {
+            self.runner = Some(BenchmarkRunner {
+                id: result.measurement_environment.runner_id.clone(),
+                label: None,
+            });
+        }
         self.results.push(result);
+    }
+
+    /// Forms one complete run without pooling samples or replacing entry provenance.
+    pub fn merge_partials(
+        suite: &BenchmarkSuite,
+        mode: &crate::config::benchmark::TestMode,
+        partials: Vec<Self>,
+    ) -> anyhow::Result<Self> {
+        use anyhow::{bail, ensure};
+        let mut expected = BTreeMap::new();
+        let mut expected_partitions = BTreeSet::new();
+        for item in &suite.benchmarks {
+            let partition = item
+                .partition
+                .ok_or_else(|| anyhow::anyhow!("{} has no partition", item.name))?;
+            expected_partitions.insert(partition);
+            let name = if item.disable_compilation_cache.unwrap_or_default() {
+                format!("{}-no-cache", item.name)
+            } else {
+                item.name.clone()
+            };
+            let runs = item.runs(mode);
+            ensure!(!runs.is_empty(), "{name} has no workload configurations");
+            for config in runs {
+                let key = serde_json::to_string(&(&name, config))?;
+                ensure!(
+                    expected
+                        .insert(key, (partition, item.version, item.iterations))
+                        .is_none(),
+                    "duplicate expanded suite entry {name}"
+                );
+            }
+        }
+        let first = partials
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("no partial results"))?;
+        ensure!(
+            first
+                .source
+                .as_ref()
+                .and_then(|s| s.commit_sha.as_deref())
+                .is_some_and(|s| !s.is_empty()),
+            "partial results require a source commit"
+        );
+        ensure!(
+            first.run_id.as_ref().is_some_and(|id| !id.is_empty()),
+            "partial results require a common run ID"
+        );
+        let mut merged = first.clone();
+        merged.results.clear();
+        merged.partitions.clear();
+        merged.environment.clear();
+        let fingerprint = suite.fingerprint();
+        let mut seen_partitions = BTreeSet::new();
+        let mut seen_entries = BTreeSet::new();
+        let mut artifacts = first
+            .artifacts
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("partial results require artifact provenance"))?;
+        for partial in &partials {
+            ensure!(
+                partial.schema_version == 2 && partial.harness_version == first.harness_version,
+                "schema or harness mismatch"
+            );
+            ensure!(
+                partial.suite == suite.name
+                    && partial.suite_fingerprint.as_ref() == Some(&fingerprint),
+                "suite definition mismatch"
+            );
+            ensure!(
+                partial.source == first.source && partial.version == first.version,
+                "source mismatch"
+            );
+            ensure!(
+                partial.run_id == first.run_id && partial.timestamp == first.timestamp,
+                "logical run mismatch"
+            );
+            ensure!(
+                partial.runner == first.runner
+                    && partial.runner.as_ref().is_some_and(|r| !r.id.is_empty()),
+                "runner mismatch"
+            );
+            ensure!(
+                partial.run_metadata == first.run_metadata,
+                "run metadata mismatch"
+            );
+            ensure!(
+                partial.partitions.len() == 1,
+                "expected one partition per partial result"
+            );
+            let partition = partial.partitions[0];
+            ensure!(
+                expected_partitions.contains(&partition) && seen_partitions.insert(partition),
+                "unexpected or duplicate partition"
+            );
+            let provenance = partial
+                .artifacts
+                .as_ref()
+                .ok_or_else(|| anyhow::anyhow!("missing artifact provenance"))?;
+            if matches!(mode, crate::config::benchmark::TestMode::Spawned { .. }) {
+                ensure!(
+                    BenchmarkArtifacts::SERVICE_EXECUTABLES
+                        .iter()
+                        .all(|(name, _)| provenance.services.contains_key(*name)),
+                    "missing service provenance"
+                );
+            }
+            ensure!(
+                suite
+                    .select_partition(partition)?
+                    .fixture_names()
+                    .iter()
+                    .all(|name| provenance.fixtures.contains_key(*name)),
+                "missing fixture provenance"
+            );
+            ensure!(
+                provenance.runner == artifacts.runner && provenance.services == artifacts.services,
+                "binary provenance mismatch"
+            );
+            for (name, fixture) in &provenance.fixtures {
+                if let Some(previous) = artifacts.fixtures.insert(name.clone(), fixture.clone()) {
+                    ensure!(
+                        previous == *fixture,
+                        "conflicting fixture provenance for {name}"
+                    );
+                }
+            }
+            let _ = writeln!(
+                &mut merged.environment,
+                "{partition:?}: {}",
+                partial.environment
+            );
+            for entry in &partial.results {
+                ensure!(
+                    entry.measurement_environment.runner_id == partial.runner.as_ref().unwrap().id,
+                    "entry runner mismatch"
+                );
+                ensure!(
+                    entry.series_key
+                        == entry
+                            .measurement_environment
+                            .series_key(partial.harness_version, entry.entry_version),
+                    "invalid series key for {}",
+                    entry.name
+                );
+                ensure!(
+                    !entry
+                        .measurement_environment
+                        .hardware_fingerprint
+                        .is_empty()
+                        && !entry.measurement_environment.storage_profile.is_empty(),
+                    "missing measurement identity"
+                );
+                ensure!(
+                    !entry.results.is_empty() && entry.runs.len() == entry.results.len(),
+                    "missing configurations for {}",
+                    entry.name
+                );
+                let declared: BTreeSet<_> = entry
+                    .runs
+                    .iter()
+                    .map(serde_json::to_string)
+                    .collect::<Result<_, _>>()?;
+                let actual: BTreeSet<_> = entry
+                    .results
+                    .iter()
+                    .map(|r| serde_json::to_string(&r.run_config))
+                    .collect::<Result<_, _>>()?;
+                ensure!(
+                    declared == actual && actual.len() == entry.results.len(),
+                    "configuration mismatch for {}",
+                    entry.name
+                );
+                for result in &entry.results {
+                    let key = serde_json::to_string(&(&entry.name, &result.run_config))?;
+                    let Some(&(owner, version, iterations)) = expected.get(&key) else {
+                        bail!("unexpected entry {}", entry.name)
+                    };
+                    ensure!(
+                        owner == partition
+                            && version == entry.entry_version
+                            && iterations == entry.iterations,
+                        "entry contract mismatch for {}",
+                        entry.name
+                    );
+                    ensure!(
+                        seen_entries.insert(key),
+                        "duplicate expanded entry {}",
+                        entry.name
+                    );
+                    ensure!(
+                        result.iteration_results.len() == iterations
+                            && result
+                                .iteration_results
+                                .iter()
+                                .enumerate()
+                                .all(|(index, evidence)| evidence.index == index),
+                        "incomplete iteration evidence for {}",
+                        entry.name
+                    );
+                }
+                merged.results.push(entry.clone());
+            }
+        }
+        ensure!(
+            seen_partitions == expected_partitions && seen_entries.len() == expected.len(),
+            "missing partitions or expanded entries"
+        );
+        merged.partitions = seen_partitions.into_iter().collect();
+        merged.artifacts = Some(artifacts);
+        Ok(merged)
+    }
+
+    /// Combines repeated executions of one density cell without losing iteration evidence.
+    pub fn merge_iterations(inputs: Vec<Self>) -> anyhow::Result<Self> {
+        use anyhow::ensure;
+        let first = inputs
+            .first()
+            .ok_or_else(|| anyhow::anyhow!("no iterations"))?;
+        ensure!(
+            first.results.len() == 1 && first.results[0].results.len() == 1,
+            "iteration merge requires one entry and one configuration"
+        );
+        let template = &first.results[0];
+        let mut merged = first.clone();
+        let mut result = BenchmarkRunResult::new(template.results[0].run_config.clone());
+        for input in &inputs {
+            ensure!(
+                input.schema_version == 2
+                    && input.harness_version == first.harness_version
+                    && input.source == first.source
+                    && input.artifacts == first.artifacts
+                    && input.runner == first.runner
+                    && input.suite == first.suite,
+                "iteration source, harness or artifact mismatch"
+            );
+            ensure!(
+                input.results.len() == 1,
+                "expected one entry per iteration file"
+            );
+            let entry = &input.results[0];
+            ensure!(
+                entry.name == template.name
+                    && entry.entry_version == template.entry_version
+                    && entry.series_key == template.series_key
+                    && entry.measurement_environment == template.measurement_environment
+                    && entry.runs == template.runs
+                    && entry.results.len() == 1,
+                "iteration entry mismatch"
+            );
+            let run = &entry.results[0];
+            ensure!(
+                run.run_config == result.run_config
+                    && entry.iterations > 0
+                    && run.iteration_results.len() == entry.iterations
+                    && run
+                        .iteration_results
+                        .iter()
+                        .enumerate()
+                        .all(|(index, item)| item.index == index),
+                "iteration configuration or evidence mismatch"
+            );
+            for item in &run.iteration_results {
+                let mut item = item.clone();
+                item.index = result.iteration_results.len();
+                result.iteration_results.push(item);
+            }
+            for (key, values) in &run.duration_results {
+                ensure!(
+                    !values.all.is_empty() && !values.per_iteration.is_empty(),
+                    "retain duration details before merging"
+                );
+                for samples in &values.per_iteration {
+                    if !samples.is_empty() {
+                        result
+                            .duration_results
+                            .entry(key.clone())
+                            .or_default()
+                            .add_iteration(samples);
+                    }
+                }
+            }
+            for (key, values) in &run.count_results {
+                ensure!(
+                    !values.all.is_empty() && !values.per_iteration.is_empty(),
+                    "retain count details before merging"
+                );
+                for samples in &values.per_iteration {
+                    if !samples.is_empty() {
+                        result
+                            .count_results
+                            .entry(key.clone())
+                            .or_default()
+                            .add_iteration(samples);
+                    }
+                }
+            }
+            for (key, failure) in &run.failures {
+                ensure!(
+                    failure.per_iteration.iter().map(Vec::len).sum::<usize>() as u64
+                        == failure.count,
+                    "missing failure details"
+                );
+                for messages in &failure.per_iteration {
+                    result
+                        .failures
+                        .entry(key.clone())
+                        .or_default()
+                        .add_iteration(messages);
+                }
+            }
+        }
+        merged.results[0].iterations = result.iteration_results.len();
+        merged.results[0].results = vec![result];
+        Ok(merged)
     }
 
     /// Total number of failed attempts recorded by every benchmark in the
@@ -905,7 +1405,7 @@ impl BenchmarkSuiteResult {
 pub struct BenchmarkSuiteResultView {
     pub suite: String,
     pub environment: String,
-    pub timestamp: DateTime<Utc>,
+    pub timestamp: jiff::Timestamp,
     pub results: Vec<BenchmarkResultView>,
 }
 
@@ -974,6 +1474,12 @@ impl Display for BenchmarkSuiteResultView {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkResult {
     pub name: String,
+    pub entry_version: u32,
+    pub iterations: usize,
+    pub series_key: String,
+    pub measurement_environment: MeasurementEnvironment,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub ceiling: Option<CeilingMeasurement>,
     pub description: String,
     pub runs: Vec<RunConfig>,
     pub results: Vec<BenchmarkRunResult>,
@@ -1096,6 +1602,8 @@ impl BenchmarkResult {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct BenchmarkRunResult {
     pub run_config: RunConfig,
+    /// One record per requested iteration; lifecycle failures remain separate.
+    pub iteration_results: Vec<IterationResult>,
     #[serde(skip_serializing_if = "HashMap::is_empty", default)]
     pub duration_results: HashMap<ResultKey, DurationResult>,
     #[serde(skip_serializing_if = "HashMap::is_empty", default)]
@@ -1104,10 +1612,22 @@ pub struct BenchmarkRunResult {
     pub failures: HashMap<ResultKey, FailureResult>,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct IterationResult {
+    pub index: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub skipped: Option<String>,
+    /// Durations in milliseconds, matching the aggregate duration encoding.
+    pub duration_samples: HashMap<ResultKey, Vec<f64>>,
+    pub count_samples: HashMap<ResultKey, Vec<u64>>,
+    pub failures: HashMap<ResultKey, Vec<String>>,
+}
+
 impl BenchmarkRunResult {
     pub fn new(run_config: RunConfig) -> Self {
         Self {
             run_config,
+            iteration_results: Vec::new(),
             duration_results: HashMap::new(),
             count_results: HashMap::new(),
             failures: HashMap::new(),
@@ -1165,6 +1685,40 @@ impl BenchmarkRunResult {
             results.add_iteration(&messages);
         }
     }
+
+    pub fn add_iteration(&mut self, index: usize, recorder: BenchmarkRecorder) {
+        self.iteration_results.push(IterationResult {
+            index,
+            skipped: None,
+            duration_samples: recorder
+                .durations()
+                .into_iter()
+                .map(|(key, values)| {
+                    (
+                        key,
+                        values
+                            .into_iter()
+                            .map(|value| value.as_secs_f64() * 1000.0)
+                            .collect(),
+                    )
+                })
+                .collect(),
+            count_samples: recorder.counts(),
+            failures: recorder.failures(),
+        });
+        self.add(recorder);
+    }
+
+    pub fn skip_iterations(&mut self, iterations: usize, reason: &str) {
+        self.iteration_results
+            .extend((0..iterations).map(|index| IterationResult {
+                index,
+                skipped: Some(reason.to_string()),
+                duration_samples: HashMap::new(),
+                count_samples: HashMap::new(),
+                failures: HashMap::new(),
+            }));
+    }
 }
 
 #[cfg(test)]
@@ -1174,11 +1728,14 @@ mod tests {
 
     fn suite_result() -> BenchmarkSuiteResult {
         BenchmarkSuiteResult {
-            schema_version: 1,
+            schema_version: 2,
+            harness_version: HARNESS_VERSION,
+            partitions: vec![],
+            suite_fingerprint: None,
             suite: "CI".to_string(),
             environment: "test environment".to_string(),
             version: "0.0.0".to_string(),
-            timestamp: Utc::now(),
+            timestamp: jiff::Timestamp::now(),
             runner: None,
             source: None,
             artifacts: None,
@@ -1189,18 +1746,20 @@ mod tests {
     }
 
     #[test]
-    fn legacy_suite_result_deserializes_without_metadata() {
-        let result: BenchmarkSuiteResult = serde_json::from_value(serde_json::json!({
-            "suite": "CI",
-            "environment": "test environment",
-            "version": "0.0.0",
-            "timestamp": "2026-08-19T00:00:00Z",
-            "results": []
-        }))
-        .unwrap();
-
-        assert_eq!(result.runner, None);
-        assert_eq!(result.source, None);
+    fn schema_two_requires_explicit_versions() {
+        assert!(
+            serde_json::from_value::<BenchmarkSuiteResult>(serde_json::json!({
+                "suite": "CI",
+                "environment": "test environment",
+                "version": "0.0.0",
+                "timestamp": "2026-08-19T00:00:00Z",
+                "results": []
+            }))
+            .is_err()
+        );
+        let mut json = serde_json::to_value(suite_result()).unwrap();
+        json["schema_version"] = serde_json::json!(1);
+        assert!(serde_json::from_value::<BenchmarkSuiteResult>(json).is_err());
     }
 
     #[test]
@@ -1353,7 +1912,7 @@ mod tests {
     }
 
     #[test]
-    fn run_result_without_failures_serializes_and_deserializes_as_before() {
+    fn run_result_without_failures_round_trips() {
         let mut result = BenchmarkRunResult::new(run_config());
         let recorder = BenchmarkRecorder::new();
         recorder.duration(&"invocation".into(), Duration::from_millis(5));
@@ -1362,7 +1921,8 @@ mod tests {
         let json = serde_json::to_string(&result).unwrap();
         assert!(!json.contains("failures"));
 
-        let legacy: BenchmarkRunResult = serde_json::from_value(serde_json::json!({
+        let parsed: BenchmarkRunResult = serde_json::from_value(serde_json::json!({
+            "iteration_results": [],
             "run_config": {
                 "clusterSize": 1, "size": 10, "length": 100, "disableCompilationCache": false
             },
@@ -1374,8 +1934,8 @@ mod tests {
             }
         }))
         .unwrap();
-        assert!(legacy.failures.is_empty());
-        assert_eq!(legacy.failure_count(), 0);
+        assert!(parsed.failures.is_empty());
+        assert_eq!(parsed.failure_count(), 0);
     }
 
     #[test]
@@ -1409,6 +1969,11 @@ mod tests {
         let mut suite = suite_result();
         suite.add(BenchmarkResult {
             name: "clean".to_string(),
+            entry_version: 1,
+            iterations: 1,
+            series_key: measurement_environment().series_key(HARNESS_VERSION, 1),
+            measurement_environment: measurement_environment(),
+            ceiling: None,
             description: "no failures".to_string(),
             runs: vec![run_config()],
             results: vec![clean],
@@ -1420,6 +1985,11 @@ mod tests {
 
         suite.add(BenchmarkResult {
             name: "failing".to_string(),
+            entry_version: 1,
+            iterations: 1,
+            series_key: measurement_environment().series_key(HARNESS_VERSION, 1),
+            measurement_environment: measurement_environment(),
+            ceiling: None,
             description: "one retried invocation".to_string(),
             runs: vec![run_config()],
             results: vec![failing],
@@ -1444,12 +2014,328 @@ mod tests {
     }
 
     #[test]
-    fn legacy_suite_result_defaults_schema_version() {
-        let mut result = serde_json::to_value(BenchmarkSuiteResult::new("legacy")).unwrap();
-        result.as_object_mut().unwrap().remove("schema_version");
+    fn schema_two_requires_harness_version() {
+        let mut result = serde_json::to_value(suite_result()).unwrap();
+        result.as_object_mut().unwrap().remove("harness_version");
+        assert!(serde_json::from_value::<BenchmarkSuiteResult>(result).is_err());
+    }
 
-        let result: BenchmarkSuiteResult = serde_json::from_value(result).unwrap();
+    fn measurement_environment() -> MeasurementEnvironment {
+        MeasurementEnvironment {
+            runner_id: "runner-a".into(),
+            hardware_fingerprint: "cpu-a".into(),
+            storage_profile: "postgres".into(),
+            sockets_enabled: false,
+        }
+    }
 
-        assert_eq!(result.schema_version, 1);
+    #[test]
+    fn hardware_memory_classes_preserve_series_across_runner_memory_variation() {
+        const GIB: u64 = 1024 * 1024 * 1024;
+        let cpus = vec![("vendor".into(), "brand".into())];
+        let fingerprint =
+            |bytes| MeasurementEnvironment::hardware_fingerprint("x86_64", &cpus, bytes);
+        // SHA-256 of ["x86_64",[["vendor","brand"]],128].
+        let expected = "75e61b6ec5f5986297118d93cf3b4ad6336b4c523098febbedbeff4e9690c8cc";
+        let mut environment = measurement_environment();
+        let expected_series = "a920263ef28b2269396cdb6155ef9931967d987e22515f75438d849b64c6bae3";
+        for bytes in (113..=124)
+            .map(|gib| gib * GIB)
+            .chain([65 * GIB, 128 * GIB, 129 * GIB - 1])
+        {
+            environment.hardware_fingerprint = fingerprint(bytes);
+            assert_eq!(environment.hardware_fingerprint, expected, "{bytes}");
+            assert_eq!(environment.series_key(1, 3), expected_series, "{bytes}");
+        }
+        for bytes in [64 * GIB, 129 * GIB] {
+            environment.hardware_fingerprint = fingerprint(bytes);
+            assert_ne!(environment.hardware_fingerprint, expected, "{bytes}");
+            assert_ne!(environment.series_key(1, 3), expected_series, "{bytes}");
+        }
+        assert_eq!(fingerprint(31 * GIB), fingerprint(32 * GIB));
+        assert_ne!(
+            fingerprint(128 * GIB),
+            MeasurementEnvironment::hardware_fingerprint(
+                "x86_64",
+                &[("other-vendor".into(), "brand".into())],
+                128 * GIB,
+            )
+        );
+    }
+
+    #[test]
+    fn sockets_identity_honors_inherited_setting_and_benchmark_override() {
+        assert!(!resolve_sockets_enabled(None, None));
+        assert!(resolve_sockets_enabled(None, Some("true")));
+        assert!(!resolve_sockets_enabled(None, Some("false")));
+        assert!(resolve_sockets_enabled(Some("true"), None));
+        assert!(!resolve_sockets_enabled(Some("false"), None));
+        assert!(!resolve_sockets_enabled(Some("false"), Some("true")));
+        assert!(resolve_sockets_enabled(Some("true"), Some("false")));
+    }
+
+    #[test]
+    fn series_identity_uses_only_the_six_contract_inputs() {
+        let environment = measurement_environment();
+        let key = environment.series_key(1, 3);
+        assert_eq!(key, environment.series_key(1, 3));
+        assert_ne!(key, environment.series_key(2, 3));
+        assert_ne!(key, environment.series_key(1, 4));
+        for field in 0..4 {
+            let mut changed = environment.clone();
+            match field {
+                0 => changed.runner_id = "runner-b".into(),
+                1 => changed.hardware_fingerprint = "cpu-b".into(),
+                2 => changed.storage_profile = "redis".into(),
+                _ => changed.sockets_enabled = true,
+            }
+            assert_ne!(key, changed.series_key(1, 3));
+        }
+        let cpus = vec![("vendor".into(), "brand".into())];
+        let x86 = MeasurementEnvironment::hardware_fingerprint("x86_64", &cpus, 1024);
+        assert_eq!(
+            x86,
+            MeasurementEnvironment::hardware_fingerprint("x86_64", &cpus, 1024)
+        );
+        assert_ne!(
+            x86,
+            MeasurementEnvironment::hardware_fingerprint("aarch64", &cpus, 1024)
+        );
+
+        let mut suite = suite_result();
+        let entry = BenchmarkResult {
+            name: "case-path-a".into(),
+            entry_version: 3,
+            iterations: 3,
+            series_key: environment.series_key(HARNESS_VERSION, 3),
+            measurement_environment: environment,
+            ceiling: None,
+            description: "test case".into(),
+            runs: vec![run_config()],
+            results: vec![],
+            run_id: None,
+        };
+        suite.add(entry.clone());
+        let mut other = entry;
+        other.name = "case-path-b".into();
+        other.runs[0].size = 29;
+        other.ceiling = Some(CeilingMeasurement {
+            running_bound: Some(7),
+            pending_bound: Some(13),
+            pause_millis: Some(31),
+            ..Default::default()
+        });
+        suite.source = Some(BenchmarkSource {
+            repository: None,
+            commit_sha: Some("different-commit".into()),
+            source_ref: None,
+        });
+        suite.artifacts = Some(BenchmarkArtifacts {
+            runner: BenchmarkArtifact {
+                path: "runner".into(),
+                sha256: "changed-runner".into(),
+            },
+            services: BTreeMap::new(),
+            fixtures: BTreeMap::from([(
+                "fixture".into(),
+                BenchmarkArtifact {
+                    path: "fixture.wasm".into(),
+                    sha256: "changed-fixture".into(),
+                },
+            )]),
+        });
+        suite.add(other);
+        let parsed: BenchmarkSuiteResult =
+            serde_json::from_str(&serde_json::to_string(&suite).unwrap()).unwrap();
+        assert_ne!(parsed.results[0].name, parsed.results[1].name);
+        assert_ne!(parsed.results[0].runs, parsed.results[1].runs);
+        assert_eq!(parsed.results[0].series_key, parsed.results[1].series_key);
+    }
+
+    #[test]
+    fn partials_merge_once_with_complete_identity_and_evidence() {
+        use crate::config::BenchmarkCliParameters;
+        use clap::Parser;
+        let params =
+            BenchmarkCliParameters::parse_from(["benchmarks", "benchmark", "noop", "spawned"]);
+        let mode = params.benchmark_config.mode();
+        let suite: BenchmarkSuite = serde_yaml::from_str("name: CI\nbenchmarks:\n  - name: startup\n    version: 2\n    partition: startup\n    iterations: 3\n    clusterSize: [1]\n    size: [7, 11]\n    length: [13]\n    disableCompilationCache: true\n  - name: streaming-rpc\n    version: 4\n    partition: bulk\n    iterations: 3\n    clusterSize: [5]\n    size: [17]\n    length: [19]\n").unwrap();
+        let mut template = suite_result();
+        template.run_id = Some("workflow-17-attempt-2".into());
+        template.suite_fingerprint = Some(suite.fingerprint());
+        template.source = Some(BenchmarkSource {
+            repository: Some("golemcloud/golem".into()),
+            commit_sha: Some("commit-a".into()),
+            source_ref: None,
+        });
+        template.artifacts = Some(BenchmarkArtifacts {
+            runner: BenchmarkArtifact {
+                path: "benchmarks".into(),
+                sha256: "runner-hash".into(),
+            },
+            services: BenchmarkArtifacts::SERVICE_EXECUTABLES
+                .into_iter()
+                .map(|(name, path)| {
+                    (
+                        name.into(),
+                        BenchmarkArtifact {
+                            path: path.into(),
+                            sha256: format!("hash-{name}"),
+                        },
+                    )
+                })
+                .collect(),
+            fixtures: BTreeMap::new(),
+        });
+        let partials: Vec<_> = suite
+            .benchmarks
+            .iter()
+            .enumerate()
+            .map(|(job, item)| {
+                let mut partial = template.clone();
+                partial.partitions = vec![item.partition.unwrap()];
+                for name in suite
+                    .select_partition(item.partition.unwrap())
+                    .unwrap()
+                    .fixture_names()
+                {
+                    partial.artifacts.as_mut().unwrap().fixtures.insert(
+                        name.into(),
+                        BenchmarkArtifact {
+                            path: format!("{name}.wasm"),
+                            sha256: format!("hash-{name}"),
+                        },
+                    );
+                }
+                let mut environment = measurement_environment();
+                environment.hardware_fingerprint = format!("machine-{job}");
+                let runs = item.runs(mode);
+                let results = runs
+                    .iter()
+                    .map(|config| {
+                        let mut result = BenchmarkRunResult::new(config.clone());
+                        for (index, duration) in [11, 0, 37].into_iter().enumerate() {
+                            let recorder = BenchmarkRecorder::new();
+                            if index == 1 {
+                                recorder.failure(&"invocation".into(), "failed middle iteration");
+                            } else {
+                                recorder.duration(
+                                    &"invocation".into(),
+                                    Duration::from_millis(duration + config.size as u64),
+                                );
+                            }
+                            result.add_iteration(index, recorder);
+                        }
+                        result
+                    })
+                    .collect();
+                partial.add(BenchmarkResult {
+                    name: if item.disable_compilation_cache.unwrap_or_default() {
+                        format!("{}-no-cache", item.name)
+                    } else {
+                        item.name.clone()
+                    },
+                    entry_version: item.version,
+                    iterations: item.iterations,
+                    series_key: environment.series_key(HARNESS_VERSION, item.version),
+                    measurement_environment: environment,
+                    ceiling: None,
+                    description: "test".into(),
+                    runs,
+                    results,
+                    run_id: None,
+                });
+                partial.artifacts.as_mut().unwrap().fixtures.insert(
+                    format!("fixture-{job}"),
+                    BenchmarkArtifact {
+                        path: format!("fixture-{job}.wasm"),
+                        sha256: format!("hash-{job}"),
+                    },
+                );
+                partial
+            })
+            .collect();
+        let merged = BenchmarkSuiteResult::merge_partials(&suite, mode, partials.clone()).unwrap();
+        assert_eq!(
+            merged.results,
+            partials
+                .iter()
+                .flat_map(|p| p.results.clone())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(merged.artifacts.as_ref().unwrap().fixtures.len(), 4);
+        assert_eq!(merged.failure_count(), 3);
+        assert_ne!(
+            merged.results[0]
+                .measurement_environment
+                .hardware_fingerprint,
+            merged.results[1]
+                .measurement_environment
+                .hardware_fingerprint
+        );
+        let directory = tempfile::tempdir().unwrap();
+        let output = directory.path().join("merged.json");
+        merged.save_to_json(&output).unwrap();
+        let saved: BenchmarkSuiteResultCollection =
+            serde_json::from_slice(&std::fs::read(output).unwrap()).unwrap();
+        assert_eq!(saved.runs, vec![merged]);
+
+        for mutation in 0..16 {
+            let mut wrong = partials.clone();
+            match mutation {
+                0 => wrong[1].source.as_mut().unwrap().commit_sha = Some("commit-b".into()),
+                1 => wrong[1].harness_version += 1,
+                2 => wrong[1].run_id = Some("other-attempt".into()),
+                3 => wrong[1].timestamp += jiff::SignedDuration::from_secs(1),
+                4 => wrong[1].suite_fingerprint = Some("other-suite".into()),
+                5 => wrong[1].runner.as_mut().unwrap().id = "other-runner".into(),
+                6 => wrong[1].partitions = wrong[0].partitions.clone(),
+                7 => {
+                    let duplicate = wrong[0].results[0].clone();
+                    wrong[0].results.push(duplicate);
+                }
+                8 => wrong[1].results[0].entry_version += 1,
+                9 => wrong[1].results[0].results[0]
+                    .iteration_results
+                    .pop()
+                    .map(|_| ())
+                    .unwrap(),
+                10 => {
+                    wrong.pop();
+                }
+                11 => {
+                    wrong[1].artifacts.as_mut().unwrap().runner.sha256 = "different-binary".into()
+                }
+                12 => {
+                    let mut fixture =
+                        wrong[0].artifacts.as_ref().unwrap().fixtures["fixture-0"].clone();
+                    fixture.sha256 = "conflict".into();
+                    wrong[1]
+                        .artifacts
+                        .as_mut()
+                        .unwrap()
+                        .fixtures
+                        .insert("fixture-0".into(), fixture);
+                }
+                13 => {
+                    for partial in &mut wrong {
+                        partial.artifacts.as_mut().unwrap().services.clear();
+                    }
+                }
+                14 => {
+                    wrong[1]
+                        .artifacts
+                        .as_mut()
+                        .unwrap()
+                        .fixtures
+                        .remove("golem_it_agent_rpc_rust_release");
+                }
+                _ => wrong[1].artifacts = None,
+            }
+            assert!(
+                BenchmarkSuiteResult::merge_partials(&suite, mode, wrong).is_err(),
+                "mutation {mutation} was accepted"
+            );
+        }
     }
 }

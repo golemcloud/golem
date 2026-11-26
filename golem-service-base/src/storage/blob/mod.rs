@@ -19,13 +19,17 @@ use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use futures::stream::BoxStream;
 use futures::{StreamExt, TryStreamExt};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentMode;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{AgentFingerprint, AgentId, Timestamp};
 use golem_common::serialization::{deserialize, serialize};
+use sha2::{Digest, Sha256};
 use std::fmt::Debug;
 use std::ops::RangeInclusive;
 use std::path::{Path, PathBuf};
+use tempfile::NamedTempFile;
+use tokio::io::AsyncWriteExt;
 use typed_path::{Utf8UnixComponent, Utf8UnixPath, Utf8UnixPathBuf};
 
 pub mod fs;
@@ -37,6 +41,77 @@ pub use normalized_path::NormalizedBlobPath;
 pub(crate) use normalized_path::normalized_blob_path;
 
 pub const BLOB_STREAM_CHUNK_SIZE: usize = 64 * 1024;
+
+/// A digest whose bytes were verified and stored in the published blob namespace.
+#[derive(Debug)]
+pub struct StoredPublishedBlob(String);
+
+impl StoredPublishedBlob {
+    pub fn digest(&self) -> &str {
+        &self.0
+    }
+}
+
+/// A verified upload that isn't visible in blob storage yet.
+#[derive(Debug)]
+pub struct StagedPublishedBlob {
+    digest: String,
+    file: NamedTempFile,
+}
+
+impl StagedPublishedBlob {
+    async fn read(
+        staged: NamedTempFile,
+        digest: &str,
+        mut input: BoxStream<'_, Result<Bytes, Error>>,
+    ) -> Result<Self, Error> {
+        published_blob_path(digest)?;
+        let (staged, file) = tokio::task::spawn_blocking(move || -> std::io::Result<_> {
+            let file = staged.reopen()?;
+            Ok((staged, file))
+        })
+        .await??;
+        let mut file = tokio::fs::File::from_std(file);
+        let mut hash = Sha256::new();
+        while let Some(chunk) = input.try_next().await? {
+            hash.update(&chunk);
+            file.write_all(&chunk).await?;
+        }
+        file.flush().await?;
+        anyhow::ensure!(
+            format!("sha256:{:x}", hash.finalize()) == digest,
+            "Published blob digest mismatch"
+        );
+        Ok(Self {
+            digest: digest.to_string(),
+            file: staged,
+        })
+    }
+
+    pub fn open(&self) -> std::io::Result<std::fs::File> {
+        std::fs::File::open(self.file.path())
+    }
+}
+
+fn published_blob_path(digest: &str) -> Result<&Path, Error> {
+    let hex = digest.strip_prefix("sha256:").unwrap_or_default();
+    anyhow::ensure!(
+        hex.len() == 64
+            && hex
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c)),
+        "Invalid SHA-256 digest"
+    );
+    Ok(Path::new(hex))
+}
+
+fn ensure_mutable_namespace(namespace: &BlobStorageNamespace) -> Result<(), Error> {
+    anyhow::ensure!(
+        *namespace != BlobStorageNamespace::PublishedBlobs,
+        "Published blobs are immutable; use the verified storage API"
+    );
+    Ok(())
+}
 
 pub struct BlobRangeStream {
     pub total_size: u64,
@@ -74,6 +149,41 @@ fn validate_range(offset: u64, length: u64, total_size: u64) -> Result<(), Error
 /// applies a request that it got in full within one deadline.
 #[async_trait]
 pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
+    /// Verifies the bytes even on a deduplication hit. A failed stream or digest mismatch
+    /// never publishes an object. The digest is of the bytes, not of metadata inside them.
+    async fn store_published_blob(
+        &self,
+        digest: &str,
+        input: BoxStream<'_, Result<Bytes, Error>>,
+    ) -> Result<(StoredPublishedBlob, PutIfAbsent), Error> {
+        self.store_staged_published_blob(self.stage_published_blob(digest, input).await?)
+            .await
+    }
+
+    async fn stage_published_blob(
+        &self,
+        digest: &str,
+        input: BoxStream<'_, Result<Bytes, Error>>,
+    ) -> Result<StagedPublishedBlob, Error>;
+
+    async fn store_staged_published_blob(
+        &self,
+        blob: StagedPublishedBlob,
+    ) -> Result<(StoredPublishedBlob, PutIfAbsent), Error>;
+
+    async fn read_published_blob(
+        &self,
+        digest: &str,
+    ) -> Result<Option<BoxStream<'static, Result<Bytes, Error>>>, Error> {
+        self.get_stream(
+            "published_blobs",
+            "read",
+            BlobStorageNamespace::PublishedBlobs,
+            published_blob_path(digest)?,
+        )
+        .await
+    }
+
     /// Gives the bytes of the blob at the path, or nothing if the path has no blob.
     ///
     /// A directory is not a blob, and a root path is a directory that names no blob.
@@ -390,6 +500,21 @@ mod sealed {
 /// except where its own doc says otherwise.
 #[async_trait]
 pub trait BlobStorageBackend: Debug + Send + Sync {
+    /// The default uses the process temp directory. Set TMPDIR to a disk-backed directory when the
+    /// standard temp directory is in memory.
+    async fn create_published_staging_file(&self) -> Result<NamedTempFile, Error> {
+        Ok(tokio::task::spawn_blocking(NamedTempFile::new).await??)
+    }
+
+    /// Installs a verified, disk-backed object atomically, without replacing an existing object.
+    async fn put_published_file_if_absent_at(
+        &self,
+        _path: &NormalizedBlobPath<'_>,
+        _file: NamedTempFile,
+    ) -> Result<PutIfAbsent, Error> {
+        anyhow::bail!("Published blobs are not supported by this backend")
+    }
+
     /// Gives the bytes of the blob at the path, or nothing if the path has no blob.
     async fn get_raw_at(
         &self,
@@ -641,6 +766,24 @@ fn blob_found(found: bool, guest_from: &Path) -> Result<(), Error> {
 /// the answers at a root path, and then gives the operation to the backend.
 #[async_trait]
 impl<B: BlobStorageBackend> BlobStorage for B {
+    async fn stage_published_blob(
+        &self,
+        digest: &str,
+        input: BoxStream<'_, Result<Bytes, Error>>,
+    ) -> Result<StagedPublishedBlob, Error> {
+        StagedPublishedBlob::read(self.create_published_staging_file().await?, digest, input).await
+    }
+
+    async fn store_staged_published_blob(
+        &self,
+        blob: StagedPublishedBlob,
+    ) -> Result<(StoredPublishedBlob, PutIfAbsent), Error> {
+        let StagedPublishedBlob { digest, file } = blob;
+        let path = written_blob_path(published_blob_path(&digest)?)?;
+        let result = self.put_published_file_if_absent_at(&path, file).await?;
+        Ok((StoredPublishedBlob(digest), result))
+    }
+
     async fn get_raw(
         &self,
         target_label: &'static str,
@@ -734,6 +877,7 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         path: &Path,
         data: &[u8],
     ) -> Result<(), Error> {
+        ensure_mutable_namespace(&namespace)?;
         let path = written_blob_path(path)?;
         self.put_raw_at(target_label, op_label, namespace, &path, data)
             .await
@@ -747,6 +891,7 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         path: &Path,
         data: &[u8],
     ) -> Result<PutIfAbsent, Error> {
+        ensure_mutable_namespace(&namespace)?;
         let path = written_blob_path(path)?;
         self.put_raw_if_absent_at(target_label, op_label, namespace, &path, data)
             .await
@@ -760,6 +905,7 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         path: &Path,
         stream: &dyn ErasedReplayableStream<Item = Result<Vec<u8>, Error>, Error = Error>,
     ) -> Result<(), Error> {
+        ensure_mutable_namespace(&namespace)?;
         let path = written_blob_path(path)?;
         self.put_stream_at(target_label, op_label, namespace, &path, stream)
             .await
@@ -772,6 +918,7 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
+        ensure_mutable_namespace(&namespace)?;
         match blob_path(path)? {
             Some(path) => {
                 self.delete_at(target_label, op_label, namespace, &path)
@@ -788,6 +935,7 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         namespace: BlobStorageNamespace,
         paths: &[PathBuf],
     ) -> Result<(), Error> {
+        ensure_mutable_namespace(&namespace)?;
         // Every path is read before the first blob goes. A root path names no blob, so it is
         // not in the list. The list is a `Vec` and not a boxed slice: it lives only for this
         // call, and `filter_map` does not know its length, so a boxed slice can copy the list a
@@ -807,6 +955,7 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<(), Error> {
+        ensure_mutable_namespace(&namespace)?;
         match blob_path(path)? {
             Some(path) => {
                 self.create_dir_at(target_label, op_label, namespace, &path)
@@ -847,6 +996,7 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         namespace: BlobStorageNamespace,
         path: &Path,
     ) -> Result<Option<u64>, Error> {
+        ensure_mutable_namespace(&namespace)?;
         match blob_path(path)? {
             Some(path) => {
                 self.delete_dir_at(target_label, op_label, namespace, &path)
@@ -900,6 +1050,7 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         to_namespace: BlobStorageNamespace,
         to: &Path,
     ) -> Result<(), Error> {
+        ensure_mutable_namespace(&to_namespace)?;
         let (source, target) = (normalized_blob_path(from)?, normalized_blob_path(to)?);
         // A copy onto the same path writes nothing, and it still needs the blob that it reads.
         let found =
@@ -928,6 +1079,7 @@ impl<B: BlobStorageBackend> BlobStorage for B {
         from: &Path,
         to: &Path,
     ) -> Result<(), Error> {
+        ensure_mutable_namespace(&namespace)?;
         let (source, target) = (normalized_blob_path(from)?, normalized_blob_path(to)?);
         // A move onto the same path keeps the blob, so it is the copy and no delete.
         if blob_copy_changes_nothing(&source, &target)? {
@@ -1212,9 +1364,7 @@ impl<'a, S: BlobStorage + ?Sized + Sync> LabelledBlobStorage<'a, S> {
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum BlobStorageNamespace {
-    CompilationCache {
-        environment_id: EnvironmentId,
-    },
+    CompilationCache,
     InitialAgentFiles {
         environment_id: EnvironmentId,
     },
@@ -1234,9 +1384,10 @@ pub enum BlobStorageNamespace {
         agent_mode: AgentMode,
         level: usize,
     },
-    Components {
-        environment_id: EnvironmentId,
+    ComponentUploads {
+        account_id: AccountId,
     },
+    PublishedBlobs,
     /// The filesystem snapshots of one incarnation of an agent. Each incarnation has its own
     /// location on each backend. The locations of the incarnations of one agent share the prefix
     /// of the agent.
@@ -1275,9 +1426,7 @@ pub fn agent_path_segment(agent_id: &AgentId) -> String {
 /// deletes below the location of a namespace touches no blob of another namespace.
 pub(crate) fn namespace_segments(namespace: &BlobStorageNamespace) -> Vec<String> {
     match namespace {
-        BlobStorageNamespace::CompilationCache { environment_id } => {
-            vec!["compilation_cache".to_string(), environment_id.to_string()]
-        }
+        BlobStorageNamespace::CompilationCache => vec!["compilation_cache".to_string()],
         BlobStorageNamespace::CustomStorage { environment_id } => {
             vec!["custom_data".to_string(), environment_id.to_string()]
         }
@@ -1309,9 +1458,10 @@ pub(crate) fn namespace_segments(namespace: &BlobStorageNamespace) -> Vec<String
                 environment_id.to_string(),
             ]
         }
-        BlobStorageNamespace::Components { environment_id } => {
-            vec!["component_store".to_string(), environment_id.to_string()]
+        BlobStorageNamespace::ComponentUploads { account_id } => {
+            vec!["component_uploads".to_string(), account_id.to_string()]
         }
+        BlobStorageNamespace::PublishedBlobs => vec!["published_blobs".to_string()],
         BlobStorageNamespace::FilesystemSnapshots {
             environment_id,
             agent_id,

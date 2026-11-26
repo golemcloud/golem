@@ -226,16 +226,11 @@ impl ResourceDefinitionService {
 
         resource_definition.revision = resource_definition.revision.next()?;
         if let Some(limit) = update.limit {
-            match (&mut resource_definition.limit, limit) {
-                (ResourceLimit::Capacity(current), ResourceLimit::Capacity(updated)) => {
-                    current.value = updated.value;
-                }
-                (ResourceLimit::Concurrency(current), ResourceLimit::Concurrency(updated)) => {
-                    current.value = updated.value;
-                }
-                (ResourceLimit::Rate(current), ResourceLimit::Rate(updated)) => {
-                    current.value = updated.value;
-                    current.period = updated.period;
+            match (&resource_definition.limit, &limit) {
+                (ResourceLimit::Capacity(_), ResourceLimit::Capacity(_))
+                | (ResourceLimit::Concurrency(_), ResourceLimit::Concurrency(_))
+                | (ResourceLimit::Rate(_), ResourceLimit::Rate(_)) => {
+                    resource_definition.limit = limit;
                 }
                 _ => return Err(ResourceDefinitionError::LimitTypeCannotBeChanged),
             }
