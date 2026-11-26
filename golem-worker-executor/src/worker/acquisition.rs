@@ -1256,10 +1256,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             status_flusher,
             status_checkpointer,
             last_resume_request: Mutex::new(Timestamp::now_utc()),
-            #[cfg(any(test, feature = "test-utils"))]
-            update_activation_gate: StdMutex::new(None),
-            #[cfg(any(test, feature = "test-utils"))]
-            update_request_probe: StdMutex::new(None),
             snapshot_exclusions: StdMutex::new(SnapshotExclusions::default()),
             startup_linear_memory_bytes: AtomicU64::new(0),
             memory_growth: StdMutex::new(Arc::new(PendingMemoryGrowth::default())),

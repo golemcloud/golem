@@ -368,24 +368,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         worker
             .ensure_management_fingerprint(expected_fingerprint)
             .await?;
-        #[cfg(any(test, feature = "test-utils"))]
-        let metadata = match (mode == UpdateMode::Automatic)
-            .then(|| {
-                worker.take_update_request_probe(crate::worker::UpdateRequestPoint::StatusRead)
-            })
-            .flatten()
-        {
-            Some(queued) => {
-                crate::worker::state_actor::STATUS_READ_QUEUED
-                    .scope(
-                        std::cell::Cell::new(Some(queued)),
-                        worker.try_get_latest_worker_metadata(),
-                    )
-                    .await?
-            }
-            None => worker.try_get_latest_worker_metadata().await?,
-        };
-        #[cfg(not(any(test, feature = "test-utils")))]
         let metadata = worker.try_get_latest_worker_metadata().await?;
         if metadata.owner_kind == OwnerKind::EphemeralExternalTool {
             return Err(WorkerExecutorError::invalid_request(
@@ -495,8 +477,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let update_attempt_index = worker
                     .enqueue_automatic_update(target_revision, requester)
                     .await?;
-                #[cfg(any(test, feature = "test-utils"))]
-                worker.pass_update_activation_gate().await;
 
                 match decision {
                     UpdateDecision::Queue => {
@@ -504,18 +484,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     }
                     UpdateDecision::QueueAndStart => {
                         debug!("Resuming initialization to perform the update");
-                        match Self::start_if_needed(worker.clone()).await {
-                            Ok(_) => {}
-                            // A never-live generation that was already running can apply this
-                            // update and stop before the start takes the lock. The start then
-                            // finds no pending update and refuses, but the update has its outcome.
-                            Err(error @ WorkerExecutorError::AgentNeverLive { .. }) => {
-                                if !worker.update_outcome_recorded(update_attempt_index).await? {
-                                    return Err(error);
-                                }
-                            }
-                            Err(error) => return Err(error),
-                        }
+                        Self::activate_admitted_update(worker, update_attempt_index).await?;
                     }
                     UpdateDecision::QueueAndRestart => {
                         debug!("Enqueued update for running worker");
@@ -875,6 +844,29 @@ mod tests {
 use crate::worker::*;
 
 impl<Ctx: WorkerCtx> Worker<Ctx> {
+    /// Starts the worker for the automatic update that the `PendingUpdate` at `admission_index`
+    /// admitted. Unlike an ordinary start, the admitted update may already be applied: a
+    /// never-live generation that was already running can apply it and stop before this start
+    /// takes the instance lock. The start then finds no pending update and refuses with
+    /// `AgentNeverLive`, and the activation succeeds when the outcome of exactly this admission
+    /// is recorded.
+    pub async fn activate_admitted_update(
+        this: Arc<Self>,
+        admission_index: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        match Self::start_if_needed(this.clone()).await {
+            Ok(_) => Ok(()),
+            Err(error @ WorkerExecutorError::AgentNeverLive { .. }) => {
+                if this.update_outcome_recorded(admission_index).await? {
+                    Ok(())
+                } else {
+                    Err(error)
+                }
+            }
+            Err(error) => Err(error),
+        }
+    }
+
     /// Whether the status records an outcome of the update that the `PendingUpdate` at
     /// `update_attempt_index` admitted. The read fails instead of panicking when a deletion
     /// retired the generation after the activation released the instance lock.
@@ -898,59 +890,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 .any(|outcome| admitted(&outcome.pending_update)))
     }
 
-    /// Holds the next automatic update request of this worker after its `PendingUpdate` is
-    /// committed and before the worker is activated for it. The first receiver resolves when the
-    /// request reaches the gate; sending on the sender releases it.
-    #[cfg(any(test, feature = "test-utils"))]
-    #[doc(hidden)]
-    pub fn test_gate_next_update_activation(
-        &self,
-    ) -> (
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Sender<()>,
-    ) {
-        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
-        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-        *self.update_activation_gate.lock().unwrap() = Some((entered_tx, release_rx));
-        (entered_rx, release_tx)
-    }
-
-    /// Signals when the next automatic update request of this worker reaches `point`. The
-    /// request does not wait.
-    #[cfg(any(test, feature = "test-utils"))]
-    #[doc(hidden)]
-    pub fn test_observe_next_update_request(
-        &self,
-        point: crate::worker::UpdateRequestPoint,
-    ) -> tokio::sync::oneshot::Receiver<()> {
-        let (reached_tx, reached_rx) = tokio::sync::oneshot::channel();
-        *self.update_request_probe.lock().unwrap() = Some((point, reached_tx));
-        reached_rx
-    }
-
-    /// The signal of the probe when it is armed for `point`.
-    #[cfg(any(test, feature = "test-utils"))]
-    fn take_update_request_probe(
-        &self,
-        point: crate::worker::UpdateRequestPoint,
-    ) -> Option<tokio::sync::oneshot::Sender<()>> {
-        let mut probe = self.update_request_probe.lock().unwrap();
-        if probe.as_ref().is_some_and(|(armed, _)| *armed == point) {
-            probe.take().map(|(_, reached)| reached)
-        } else {
-            None
-        }
-    }
-
-    #[cfg(any(test, feature = "test-utils"))]
-    async fn pass_update_activation_gate(&self) {
-        let gate = self.update_activation_gate.lock().unwrap().take();
-        if let Some((entered_tx, release_rx)) = gate {
-            let _ = entered_tx.send(());
-            let _ = release_rx.await;
-        }
-    }
-
     /// Enqueue attempting an update.
     ///
     /// The update itself is not performed by the invocation queue's processing loop,
@@ -965,12 +904,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         // when this request reaches the queue head.
         let instance_guard = self.lock_non_stopping_worker().await;
         instance_guard.ensure_not_deleting()?;
-        #[cfg(any(test, feature = "test-utils"))]
-        if let Some(admitted) =
-            self.take_update_request_probe(crate::worker::UpdateRequestPoint::Admission)
-        {
-            let _ = admitted.send(());
-        }
         let status = self.state_actor.status().await;
         if lifecycle::has_duplicate_pending_update(&status, target_revision) {
             return Err(WorkerExecutorError::invalid_request(

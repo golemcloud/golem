@@ -26,10 +26,11 @@ use golem_common::model::component::ComponentDto;
 use golem_common::model::oplog::{PublicOplogEntry, PublicOplogEntryWithIndex};
 use golem_common::model::{AgentId, AgentStatus, OplogIndex, OwnedAgentId};
 use golem_common::{agent_key, data_value};
+use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    UpdateRequestPoint, WorkerExecutorTestDependencies, start_with_overrides,
+    WorkerExecutorTestDependencies, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
 use std::sync::Arc;
@@ -326,100 +327,38 @@ async fn a_crash_around_the_outcome_commit_of_a_never_live_fork_leaves_one_outco
     Ok(())
 }
 
-/// E3c and the stop handoff: an automatic update requested while the previous update's outcome
-/// commits, while the generation stops after its admission, and right after the outcome became
-/// visible, while the generation unloads. The held generation is released only after the second
-/// request queued its first status read behind the held commit, or, across the early stop,
-/// entered its admission under the instance lock. Each later update runs in a later generation:
-/// the fork ends with two outcomes and no pending update.
-#[test]
-#[timeout("6m")]
-async fn an_update_requested_while_a_never_live_generation_stops_runs_in_a_later_generation(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, overrides()).await?;
-    let component = store_component(&executor, &context, host_api_tests).await?;
-    let request = |worker_id: OwnedAgentId| {
-        let executor = executor.clone();
-        let revision = component.revision;
-        tokio::spawn(async move {
-            executor
-                .auto_update_worker(&worker_id, revision, false)
-                .await
+/// The admission indices of the automatic update requests of `worker` after `after`: the
+/// `PendingUpdate` entries whose update attempt is their own index, in order.
+async fn admissions(
+    executor: &TestWorkerExecutor,
+    worker: &OwnedAgentId,
+    after: OplogIndex,
+) -> anyhow::Result<Vec<OplogIndex>> {
+    Ok(executor
+        .get_oplog(worker, OplogIndex::INITIAL)
+        .await?
+        .into_iter()
+        .filter(|entry| entry.oplog_index > after)
+        .filter_map(|entry| match entry.entry {
+            PublicOplogEntry::PendingUpdate(params)
+                if params.update_attempt_index == entry.oplog_index =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
         })
-    };
-
-    // While the outcome commits: the outcome is committed and its append is held.
-    let fork = idle_fork(&executor, &component, "handoff-commit").await?;
-    let mut gate = executor
-        .gate_next_update_outcome_append(&fork.agent_id, true)
-        .await;
-    executor
-        .auto_update_worker(&fork, component.revision, false)
-        .await?;
-    tokio::time::timeout(Duration::from_secs(60), gate.entered()).await?;
-    let submitted = executor
-        .observe_next_update_request(&fork, UpdateRequestPoint::StatusRead)
-        .await?;
-    let second = request(fork.clone());
-    tokio::time::timeout(Duration::from_secs(60), submitted).await??;
-    drop(gate);
-    second.await??;
-    let outcomes = wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 2, true).await?;
-    assert_eq!(outcomes.len(), 2, "{outcomes:?}");
-    assert_all_successful(&outcomes);
-
-    // Across the admission's early stop: the generation prepared its instance and wrote its
-    // outcome, and the invocation loop has not yet taken the stop.
-    let fork = idle_fork(&executor, &component, "handoff-admission").await?;
-    let (entered, release) = executor.gate_next_prepared_instance(&fork.agent_id);
-    executor
-        .auto_update_worker(&fork, component.revision, false)
-        .await?;
-    tokio::time::timeout(Duration::from_secs(60), entered).await??;
-    let admitted = executor
-        .observe_next_update_request(&fork, UpdateRequestPoint::Admission)
-        .await?;
-    let second = request(fork.clone());
-    tokio::time::timeout(Duration::from_secs(60), admitted).await??;
-    let _ = release.send(());
-    second.await??;
-    let outcomes = wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 2, true).await?;
-    assert_eq!(outcomes.len(), 2, "{outcomes:?}");
-    assert_all_successful(&outcomes);
-
-    // While the generation unloads: the second request follows the first outcome at once.
-    let fork = idle_fork(&executor, &component, "handoff-unload").await?;
-    executor
-        .auto_update_worker(&fork, component.revision, false)
-        .await?;
-    tokio::time::timeout(Duration::from_secs(60), async {
-        while update_outcomes(&executor, &fork).await?.is_empty() {
-            tokio::task::yield_now().await;
-        }
-        anyhow::Ok(())
-    })
-    .await??;
-    executor
-        .auto_update_worker(&fork, component.revision, false)
-        .await?;
-    let outcomes = wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 2, true).await?;
-    assert_eq!(outcomes.len(), 2, "{outcomes:?}");
-    assert_all_successful(&outcomes);
-    Ok(())
+        .collect())
 }
 
-/// An automatic update requested while a never-live generation runs is applied by that
-/// generation, which unloads before the request activates the worker. The activation then finds
-/// no pending update, and the request still succeeds, because the outcome of its update is
-/// recorded.
+/// E3c and the stop handoff, when the admission commits first: an automatic update requested
+/// while a never-live generation has prepared its instance for the previous update and has not
+/// taken its stop. The generation is released only after the second `PendingUpdate` is in the
+/// oplog, so its stop sees the pending update. The fork ends with two outcomes and no pending
+/// update. The other order, where the stop completes before the admission, is the second update
+/// of each fork in the lifecycle matrix.
 #[test]
 #[timeout("4m")]
-async fn an_update_applied_before_its_activation_is_accepted(
+async fn an_update_admitted_before_a_never_live_generation_stops_is_applied(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
@@ -428,31 +367,89 @@ async fn an_update_applied_before_its_activation_is_accepted(
     let context = TestContext::new(last_unique_id);
     let executor = start_with_overrides(deps, &context, overrides()).await?;
     let component = store_component(&executor, &context, host_api_tests).await?;
-    let fork = idle_fork(&executor, &component, "applied-before-activation").await?;
+    let fork = idle_fork(&executor, &component, "handoff-admission").await?;
+    let forked = tip(&executor, &fork).await?;
 
-    let (prepared, release_generation) = executor.gate_next_prepared_instance(&fork.agent_id);
+    let (prepared, release) = executor.gate_next_prepared_instance(&fork.agent_id);
     executor
         .auto_update_worker(&fork, component.revision, false)
         .await?;
     tokio::time::timeout(Duration::from_secs(60), prepared).await??;
-
-    let (entered, release_activation) = executor.gate_next_update_activation(&fork).await?;
     let second = {
         let executor = executor.clone();
         let fork = fork.clone();
         let revision = component.revision;
         tokio::spawn(async move { executor.auto_update_worker(&fork, revision, false).await })
     };
-    tokio::time::timeout(Duration::from_secs(60), entered).await??;
+    tokio::time::timeout(Duration::from_secs(60), async {
+        while admissions(&executor, &fork, forked).await?.len() < 2 {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    let _ = release.send(());
+    tokio::time::timeout(Duration::from_secs(60), second).await???;
 
-    let _ = release_generation.send(());
     let outcomes = wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 2, true).await?;
     assert_eq!(outcomes.len(), 2, "{outcomes:?}");
     assert_all_successful(&outcomes);
+    assert_sandboxed(&executor, &fork, AgentStatus::Idle).await?;
+    Ok(())
+}
 
-    let _ = release_activation.send(());
-    tokio::time::timeout(Duration::from_secs(60), second).await???;
-    assert_eq!(update_outcomes(&executor, &fork).await?.len(), 2);
+/// The activation of an admitted update after the never-live generation that applied it has
+/// unloaded, as when the generation applies an update before its request activates the worker.
+/// The activation succeeds for the admission of a successful and of a failed outcome, and
+/// starts nothing. For an index that admitted no update it refuses with `AgentNeverLive`,
+/// although the fork has outcomes of other admissions.
+#[test]
+#[timeout("4m")]
+async fn the_activation_of_an_applied_update_accepts_only_its_own_outcome(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let component = store_component(&executor, &context, host_api_tests).await?;
+    let fork = idle_fork(&executor, &component, "activate-admitted").await?;
+    let forked = tip(&executor, &fork).await?;
+
+    executor
+        .auto_update_worker(&fork, component.revision, false)
+        .await?;
+    wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 1, true).await?;
+    executor
+        .auto_update_worker(&fork, component.revision.next()?, false)
+        .await?;
+    let outcomes = wait_for_update_outcomes(&executor, &fork, OplogIndex::NONE, 2, true).await?;
+    assert!(
+        matches!(outcomes[0].entry, PublicOplogEntry::SuccessfulUpdate(_))
+            && matches!(outcomes[1].entry, PublicOplogEntry::FailedUpdate(_)),
+        "{outcomes:?}"
+    );
+    let admitted = admissions(&executor, &fork, forked).await?;
+    assert_eq!(admitted.len(), 2, "{admitted:?}");
+
+    let settled = tip(&executor, &fork).await?;
+    for admission in &admitted {
+        executor.activate_admitted_update(&fork, *admission).await?;
+    }
+    let refused = executor
+        .activate_admitted_update(&fork, forked)
+        .await
+        .expect_err("an index without an outcome authorized the activation");
+    assert!(
+        matches!(
+            refused.downcast_ref::<WorkerExecutorError>(),
+            Some(WorkerExecutorError::AgentNeverLive { .. })
+        ),
+        "{refused:?}"
+    );
+    assert_eq!(tip(&executor, &fork).await?, settled);
+    assert!(!executor.worker_is_loaded(&fork).await);
     assert_sandboxed(&executor, &fork, AgentStatus::Idle).await?;
     Ok(())
 }

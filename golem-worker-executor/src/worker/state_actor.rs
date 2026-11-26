@@ -87,12 +87,6 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use tokio::sync::{Mutex, OwnedMutexGuard, mpsc, oneshot};
 use tracing::{debug, warn};
 
-#[cfg(any(test, feature = "test-utils"))]
-tokio::task_local! {
-    /// Signalled when the next status read of the current task is queued, before it waits.
-    pub(super) static STATUS_READ_QUEUED: std::cell::Cell<Option<oneshot::Sender<()>>>;
-}
-
 /// Handle to the worker-state actor's two job queues. Dropping it requests ordered shutdown.
 pub(super) struct WorkerStateActor<Ctx: WorkerCtx> {
     commit: Arc<OwnerCommitController>,
@@ -970,12 +964,6 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         {
             return Ok(None);
         }
-        #[cfg(any(test, feature = "test-utils"))]
-        let _ = STATUS_READ_QUEUED.try_with(|queued| {
-            if let Some(queued) = queued.take() {
-                let _ = queued.send(());
-            }
-        });
         Ok(response.await.ok())
     }
 

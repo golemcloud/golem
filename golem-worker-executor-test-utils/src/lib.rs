@@ -173,7 +173,6 @@ use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
 use golem_worker_executor::storage::keyvalue::KeyValueStorage;
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
-pub use golem_worker_executor::worker::UpdateRequestPoint;
 use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor::worker::{
     InvocationFailureDecision, RetryDecision, Worker, WorkerDeletionHook,
@@ -1860,36 +1859,20 @@ impl TestWorkerExecutor {
         (entered_rx, release_tx)
     }
 
-    /// Holds the next automatic update request of the cached worker after its `PendingUpdate`
-    /// is committed and before the worker is activated for it. The receiver resolves when the
-    /// request reaches the gate; sending on the sender releases it.
-    pub async fn gate_next_update_activation(
+    /// Activates the cached worker for the automatic update that the `PendingUpdate` at
+    /// `admission_index` admitted, as an update request does after its admission.
+    pub async fn activate_admitted_update(
         &self,
         owned_agent_id: &OwnedAgentId,
-    ) -> anyhow::Result<(
-        tokio::sync::oneshot::Receiver<()>,
-        tokio::sync::oneshot::Sender<()>,
-    )> {
+        admission_index: OplogIndex,
+    ) -> anyhow::Result<()> {
         let worker = self
             .additional_test_deps
             .try_get_worker(owned_agent_id)
             .await
             .ok_or_else(|| anyhow::anyhow!("{owned_agent_id} is not cached"))?;
-        Ok(worker.test_gate_next_update_activation())
-    }
-
-    /// Resolves when the next automatic update request of the cached worker reaches `point`.
-    pub async fn observe_next_update_request(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        point: UpdateRequestPoint,
-    ) -> anyhow::Result<tokio::sync::oneshot::Receiver<()>> {
-        let worker = self
-            .additional_test_deps
-            .try_get_worker(owned_agent_id)
-            .await
-            .ok_or_else(|| anyhow::anyhow!("{owned_agent_id} is not cached"))?;
-        Ok(worker.test_observe_next_update_request(point))
+        Worker::activate_admitted_update(worker, admission_index).await?;
+        Ok(())
     }
 
     /// Appends a buffered lifecycle hint after the next source commit has flushed.
