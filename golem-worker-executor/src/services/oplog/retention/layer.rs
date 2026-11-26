@@ -933,46 +933,6 @@ mod tests {
         assert_eq!(oplog.start().await, idx(2), "the record keeps the start");
     }
 
-    /// The retained range read of the handle and of the service reads the retained entries from
-    /// the retained start to the last index, and reads nothing when the last index is below the
-    /// start. The deletion scan and the consumer probe read through it.
-    #[test]
-    async fn a_retained_range_read_reads_only_the_retained_entries() {
-        use crate::services::oplog::{OplogOps, OplogServiceOps};
-
-        let oplog = RetainedOplog::new().await;
-        oplog.with_jumps(6).await;
-        oplog.advance(4).await;
-        let keys = |entries: BTreeMap<OplogIndex, OplogEntry>| {
-            entries
-                .into_keys()
-                .map(|index| index.as_u64())
-                .collect::<Vec<_>>()
-        };
-        let handle = oplog.open().await;
-        let service = |last: u64| {
-            oplog
-                .service
-                .read_retained_range(&oplog.owned_agent_id, AgentMode::Durable, idx(last))
-        };
-
-        assert_eq!(
-            keys(handle.read_retained_range(idx(6)).await.unwrap()),
-            vec![4, 5, 6]
-        );
-        assert_eq!(
-            keys(handle.read_retained_range(idx(4)).await.unwrap()),
-            vec![4]
-        );
-        assert_eq!(
-            keys(handle.read_retained_range(idx(3)).await.unwrap()),
-            Vec::<u64>::new()
-        );
-        assert_eq!(keys(service(6).await.unwrap()), vec![4, 5, 6]);
-        assert_eq!(keys(service(4).await.unwrap()), vec![4]);
-        assert_eq!(keys(service(3).await.unwrap()), Vec::<u64>::new());
-    }
-
     /// Every call of an open oplog that the layer does not check reaches the inner oplog with the
     /// same arguments, and its answer comes back unchanged.
     #[test]

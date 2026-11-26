@@ -79,18 +79,6 @@ impl From<OplogPayloadDownloadError> for String {
 
 #[async_trait]
 pub trait OplogOps: Oplog {
-    /// Reads the retained entries from the retained start to `last`, both included. When `last`
-    /// is below the retained start, the read reads nothing.
-    async fn read_retained_range(
-        &self,
-        last: OplogIndex,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
-        match self.retention().range(OplogIndex::INITIAL, last) {
-            Some(range) => self.read_exact(range.start, range.count).await,
-            None => Ok(BTreeMap::new()),
-        }
-    }
-
     /// Uploads a big oplog payload and returns a reference to it
     async fn upload_payload<T: BinaryCodec + Debug + Clone + PartialEq + Sync>(
         &self,
@@ -513,27 +501,6 @@ impl<O: Oplog + ?Sized> OplogOps for O {}
 
 #[async_trait]
 pub trait OplogServiceOps: OplogService {
-    /// Reads the retained entries of the oplog from the retained start to `last`, both included.
-    /// When `last` is below the retained start, the read reads nothing.
-    async fn read_retained_range(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        agent_mode: AgentMode,
-        last: OplogIndex,
-    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
-        match self
-            .retention(owned_agent_id, agent_mode)
-            .await?
-            .range(OplogIndex::INITIAL, last)
-        {
-            Some(range) => {
-                self.read_exact(owned_agent_id, agent_mode, range.start, range.count)
-                    .await
-            }
-            None => Ok(BTreeMap::new()),
-        }
-    }
-
     /// Uploads a big oplog payload and returns a reference to it
     async fn upload_payload<T: BinaryCodec + Debug + Clone + PartialEq + Sync>(
         &self,
