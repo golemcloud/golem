@@ -468,7 +468,7 @@ mod tests {
                         owner(),
                         fingerprint(),
                         operation,
-                        Some(IdempotencyScope::User(AccountId(Uuid::from_u128(10)))),
+                        Some(alice()),
                         Some(&key),
                     ),
                     OwnedInvocationId::internal(owner(), fingerprint(), operation, &key),

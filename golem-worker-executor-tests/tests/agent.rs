@@ -1430,8 +1430,7 @@ async fn streaming_schedule_is_rejected_without_creating_or_queueing_a_worker(
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
             request_key: Some(
-                InvocationRequestKey::external(executor.idempotency_scope(), Some(&key))
-                    .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&key)).into(),
             ),
             ..Default::default()
         })
@@ -1504,8 +1503,7 @@ async fn invocation_classification_uses_the_existing_workers_component_revision(
             origin_invocation: None,
             external_tool: None,
             request_key: Some(
-                InvocationRequestKey::external(executor.idempotency_scope(), Some(&key))
-                    .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&key)).into(),
             ),
         })
         .await?;
@@ -1608,8 +1606,7 @@ async fn rest_retry_of_a_session_result_uses_the_recorded_revision(
             auth_ctx: Some(executor.auth_ctx().into()),
             freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
             request_key: Some(
-                InvocationRequestKey::external(executor.idempotency_scope(), Some(&key))
-                    .into(),
+                InvocationRequestKey::external(executor.idempotency_scope(), Some(&key)).into(),
             ),
             caller: Some(callers::anonymous().into()),
             ..Default::default()
