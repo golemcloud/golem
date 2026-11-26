@@ -129,6 +129,12 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
             ],
         }),
     }];
+    agents[0].config.push(AgentConfigDeclarationSchema {
+        source: AgentConfigSource::Local,
+        path: vec!["global".into()],
+        value_type: SchemaType::bool(),
+        default_value: None,
+    });
     let mut incomplete = agents[0].clone();
     incomplete.type_name = AgentTypeName("Incomplete".into());
     incomplete.config[0].default_value = None;
@@ -146,12 +152,8 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
         manifestVersion: {version}
         componentTemplates:
           with-config:
-            configSchema:
-              declarations:
-                - source: Local
-                  path: [global]
-                  value_type: {{ kind: bool, value: {{}} }}
-                  default_value: {{ kind: bool, value: true }}
+            config:
+              global: true
         "#, version = versions::sdk::MANIFEST},
     )
     .unwrap();
@@ -212,12 +214,14 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
         .await;
     assert!(list.success_or_dump());
     let documents: Vec<JsonValue> = list.stdout_json();
-    assert_eq!(documents[0]["fields"], serde_json::json!([field]));
+    let fields = documents[0]["fields"].as_array().unwrap();
+    assert_eq!(fields.len(), 2);
+    assert!(fields.contains(field));
     let component = ctx
         .cli([
             "config",
             "get",
-            "global",
+            "BarAgent.global",
             "--component",
             "app:main",
             "--format",
@@ -227,7 +231,7 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
     assert!(component.success_or_dump());
     let documents: Vec<JsonValue> = component.stdout_json();
     assert_eq!(documents[0]["field"]["fill"], true);
-    assert!(documents[0]["field"]["agentType"].is_null());
+    assert_eq!(documents[0]["field"]["agentType"], "BarAgent");
     assert!(
         documents[0]["field"]["sources"][0]["origin"]["file"]
             .as_str()
@@ -236,12 +240,7 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
     );
     assert_eq!(
         documents[0]["field"]["sources"][0]["origin"]["path"],
-        serde_json::json!([
-            "componentTemplates",
-            "with-config",
-            "configSchema",
-            "global"
-        ])
+        serde_json::json!(["componentTemplates", "with-config", "config", "global"])
     );
     let all = ctx.cli(["config", "list"]).await;
     assert!(!all.success());
@@ -262,10 +261,11 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
     assert!(inputs.success_or_dump());
     let input_documents: Vec<JsonValue> = inputs.stdout_json();
     assert!(input_documents[0]["resolvedConfig"].is_null());
-    assert!(input_documents[0]["properties"].get("config").is_none());
+    assert_eq!(input_documents[0]["manifestOnly"], true);
+    assert!(input_documents[0].get("agents").is_none());
     assert_eq!(
-        input_documents[0]["properties"]["configInputs"],
-        serde_json::json!([])
+        input_documents[0]["properties"]["config"]["value"],
+        serde_json::json!({"global": true})
     );
 
     let invalid = ctx.cli(["component", "manifest-trace", "--build"]).await;
@@ -291,20 +291,25 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
         .await;
     assert!(resolved.success_or_dump());
     let documents: Vec<JsonValue> = resolved.stdout_json();
+    assert_eq!(documents[0]["manifestOnly"], false);
     assert_eq!(documents[0]["properties"], input_documents[0]["properties"]);
     let fields = documents[0]["resolvedConfig"].as_array().unwrap();
     assert_eq!(fields.len(), 2);
     assert_eq!(
         fields
             .iter()
-            .find(|f| f["agentType"] == "BarAgent")
+            .find(|f| f["path"] == serde_json::json!(["settings"]))
             .unwrap(),
         field
     );
     assert_eq!(
-        fields.iter().find(|f| f["agentType"].is_null()).unwrap()["fill"],
+        fields
+            .iter()
+            .find(|f| f["path"] == serde_json::json!(["global"]))
+            .unwrap()["fill"],
         true
     );
+    assert!(fields.iter().all(|field| field["agentType"] == "BarAgent"));
 
     let manifest = ctx.cwd_path_join("golem.yaml");
     fs::write_str(
@@ -339,6 +344,15 @@ async fn static_config_inspection_resolves_selected_owner_and_provenance(_tracin
     assert!(partial.stderr_contains("Incomplete"));
     let partial_documents: Vec<JsonValue> = partial.stdout_json();
     assert_eq!(partial_documents, documents);
+
+    std::fs::write(&wasm, b"invalid stale Wasm").unwrap();
+    let stale = ctx.cli(["component", "manifest-trace", "-F", "json"]).await;
+    assert!(stale.success_or_dump());
+    for document in stale.stdout_json::<JsonValue>() {
+        assert_eq!(document["manifestOnly"], true);
+        assert!(document.get("agents").is_none());
+        assert!(document["resolvedConfig"].is_null());
+    }
 
     std::fs::remove_file(wasm).unwrap();
     let inputs = ctx.cli(["component", "manifest-trace"]).await;

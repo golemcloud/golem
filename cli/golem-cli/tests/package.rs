@@ -387,7 +387,6 @@ fn write_install_fixture(path: &Path, name: &str, wasm: Vec<u8>) -> String {
         "application": name, "package": {"name": name, "version": "1.2.3"},
         "components": {format!("pkg:{name}"): {
             "wasm": wasm["digest"], "metadata": {"agentTypes": [], "tools": [], "toolMiddlewares": []},
-            "configSchema": {},
             "provision": {"config": null, "fileDefaults": [], "env": {}, "initialCard": null, "plugins": [], "files": null},
             "agents": {}, "tools": {}, "toolMiddlewares": {}
         }}

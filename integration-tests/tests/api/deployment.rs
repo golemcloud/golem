@@ -833,7 +833,6 @@ async fn get_component_version_from_previous_deployment(
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
@@ -1118,7 +1117,6 @@ async fn filter_deployments_by_version(deps: &EnvBasedTestDependencies) -> anyho
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: Some(BTreeMap::from([(
@@ -1526,7 +1524,6 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
                 package_metadata: None,
                 component_name: ComponentName::try_from("publisher-tools:search")
                     .map_err(anyhow::Error::msg)?,
-                config_schema: Default::default(),
                 component_provision_config: Default::default(),
                 agent_types: Vec::new(),
                 agent_type_provision_configs: BTreeMap::new(),
@@ -1724,7 +1721,6 @@ async fn cross_account_tool_release_lifecycle_reaches_snapshot_activation(
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: publisher_component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: None,
                 agent_type_provision_config_updates: None,
@@ -2444,7 +2440,6 @@ async fn deploy_counters_with_declarations(
             &ComponentUpdate {
                 package_metadata: None,
                 current_revision: component.revision,
-                config_schema: None,
                 component_provision_config: None,
                 agent_types: Some(agent_types),
                 agent_type_provision_config_updates: Some(provision_config_updates),

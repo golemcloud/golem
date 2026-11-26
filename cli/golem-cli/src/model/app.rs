@@ -32,9 +32,7 @@ use crate::model::cascade::property::vec::{VecMergeMode, VecProperty};
 use crate::model::cascade::store::Store;
 use crate::model::cli_output::StructuredOutput;
 use crate::model::config::resolver::{ConfigFieldPlan, ConfigLayer, ConfigSchemaResolution};
-use crate::model::config::{
-    CONFIG_FIELD, CONFIG_SCHEMA_FIELD, PRESETS_FIELD, manifest_property_origin,
-};
+use crate::model::config::{CONFIG_FIELD, PRESETS_FIELD, manifest_property_origin};
 use crate::model::language::GuestLanguage;
 use crate::model::repl::ReplLanguage;
 use crate::model::template_render::TemplateRender;
@@ -55,7 +53,6 @@ use golem_common::model::tool::ToolName;
 use golem_common::model::tool_middleware::{ToolMiddlewareInstallation, ToolMiddlewareName};
 use golem_common::model::validate_lower_kebab_case_identifier;
 use golem_common::schema::AgentTypeSchema;
-use golem_common::schema::ComponentConfigSchema;
 use golem_common::schema::config::{ConfigCatalogSources, ConfigError, ConfigOrigin, ConfigSchema};
 use golem_common::schema::tool::Tool;
 use heck::{
@@ -869,8 +866,7 @@ pub struct Application {
     environment_sources: BTreeMap<EnvironmentName, PathBuf>,
     component_preset_selector: ComponentPresetSelector,
     all_sources: BTreeSet<PathBuf>,
-    components:
-        BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
+    components: BTreeMap<ComponentName, WithSource<(ComponentProperties, ResolvedComponentLayers)>>,
     agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
     pub(crate) package_agent_defaults: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
     tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
@@ -1448,7 +1444,7 @@ impl Application {
         agent_type_name: &AgentTypeName,
         component_base: app_raw::AgentLayerProperties,
         component_tool_bindings: ToolBindingsProperty<AgentLayer>,
-    ) -> anyhow::Result<(AgentProperties, AgentLayerProperties)> {
+    ) -> anyhow::Result<(AgentProperties, ResolvedAgentLayers)> {
         let base_component_id = AgentLayerId::Component(component_name.clone());
         let mut agent_layer_store = Store::new();
 
@@ -1460,11 +1456,7 @@ impl Application {
                 properties: AgentLayerPropertiesKind::ComponentBase {
                     properties: Box::new(component_base),
                     tool_bindings: component_tool_bindings,
-                    config_layers: self
-                        .component(component_name)
-                        .layer_properties()
-                        .config_layers
-                        .clone(),
+                    config_layers: self.component(component_name).config_layers().to_vec(),
                     config: self
                         .component(component_name)
                         .layer_properties()
@@ -1472,7 +1464,7 @@ impl Application {
                         .clone(),
                     files: self
                         .component(component_name)
-                        .layer_properties()
+                        .resolved_layers()
                         .provision_files(),
                 },
             })
@@ -1546,12 +1538,12 @@ impl Application {
                     })?;
 
                 let template_agent_props = app_raw::AgentLayerProperties {
-                    config: template_layer_props.config.value().clone(),
-                    initial_card: template_layer_props.initial_card.value().clone(),
+                    config: template_layer_props.properties.config.value().clone(),
+                    initial_card: template_layer_props.properties.initial_card.value().clone(),
                     env_merge_mode: None,
-                    env: Some(template_layer_props.env.value().clone()),
+                    env: Some(template_layer_props.properties.env.value().clone()),
                     plugins_merge_mode: None,
-                    plugins: Some(template_layer_props.plugins.value().clone()),
+                    plugins: Some(template_layer_props.properties.plugins.value().clone()),
                     files_merge_mode: None,
                     files: None,
                     tools_merge_mode: None,
@@ -1567,10 +1559,10 @@ impl Application {
                         source: source.clone(),
                         properties: AgentLayerPropertiesKind::ComponentTemplate {
                             properties: Box::new(template_agent_props),
-                            tool_bindings: template_layer_props.tool_bindings.clone(),
+                            tool_bindings: template_layer_props.properties.tool_bindings.clone(),
                             config_layers: template_layer_props.config_layers.clone(),
                             files: template_layer_props.provision_files(),
-                            config: template_layer_props.config,
+                            config: template_layer_props.properties.config,
                         },
                     })
                     .map_err(|err| anyhow!(err.to_string()))
@@ -1640,7 +1632,7 @@ impl Application {
             base_id
         };
 
-        let resolved = AgentLayerProperties::from_store(
+        let resolved = ResolvedAgentLayers::from_store(
             &target_id,
             &self.component_preset_selector,
             &agent_layer_store,
@@ -1648,7 +1640,10 @@ impl Application {
         .map_err(|err| anyhow!(err))
         .with_context(|| format!("Failed to resolve final agent layer '{}'", target_id))?;
 
-        Ok((AgentProperties::from_resolved(&resolved), resolved))
+        Ok((
+            AgentProperties::from_resolved(&resolved.properties),
+            resolved,
+        ))
     }
 
     pub fn resolve_tool_provision(
@@ -1860,7 +1855,7 @@ impl Application {
 
         Ok(ResolvedToolProvision {
             source: declaration.source.clone(),
-            properties: ToolProvisionProperties::from_resolved(&layer_properties),
+            properties: ToolProvisionProperties::from_resolved(&layer_properties.properties),
             layer_properties,
         })
     }
@@ -2116,10 +2111,10 @@ pub struct ComponentPresetSelector {
 
 #[derive(Debug, Clone)]
 struct PartitionedComponentPresets {
-    custom_presets: IndexMap<String, ComponentLayerProperties>,
+    custom_presets: IndexMap<String, ComponentLayerInput>,
     default_custom_preset: Option<String>,
 
-    env_presets: IndexMap<String, ComponentLayerProperties>,
+    env_presets: IndexMap<String, ComponentLayerInput>,
 }
 
 #[derive(Debug, Clone)]
@@ -2332,7 +2327,6 @@ impl ComponentLayerId {
 pub struct ComponentLayer {
     id: ComponentLayerId,
     parents: Vec<ComponentLayerId>,
-    #[serde(skip)]
     source: PathBuf,
     properties: ComponentLayerPropertiesKind,
 }
@@ -2340,9 +2334,9 @@ pub struct ComponentLayer {
 #[derive(Debug, Clone, Serialize)]
 enum ComponentLayerPropertiesKind {
     Empty,
-    Common(Box<ComponentLayerProperties>),
+    Common(Box<ComponentLayerInput>),
     Presets {
-        presets: IndexMap<String, ComponentLayerProperties>,
+        presets: IndexMap<String, ComponentLayerInput>,
         default_preset: String,
     },
 }
@@ -2523,7 +2517,7 @@ impl minijinja::value::Object for ComponentLayerTemplateContext {
 
 impl Layer for ComponentLayer {
     type Id = ComponentLayerId;
-    type Value = ComponentLayerProperties;
+    type Value = ResolvedComponentLayers;
     type Selector = ComponentPresetSelector;
     type AppliedSelection = String;
     type ApplyContext = ComponentLayerApplyContext;
@@ -2543,6 +2537,12 @@ impl Layer for ComponentLayer {
         selector: &Self::Selector,
         value: &mut Self::Value,
     ) -> Result<(), Self::ApplyError> {
+        let ResolvedComponentLayers {
+            properties: value,
+            config_layers,
+            node_http_routers_origin,
+            file_sources,
+        } = value;
         let (property_layers_to_apply, selection) = match &self.properties {
             ComponentLayerPropertiesKind::Empty => (vec![], None),
             ComponentLayerPropertiesKind::Common(properties) => {
@@ -2610,7 +2610,8 @@ impl Layer for ComponentLayer {
             value.applied_layers.push((id.clone(), selection.cloned()))
         }
 
-        for (properties, preset) in property_layers_to_apply {
+        for (input, preset) in property_layers_to_apply {
+            let properties = &input.properties;
             let template_env = ctx.template_env();
             let template_ctx = self.id.is_template().then(|| ctx.template_context());
             let template_ctx = template_ctx.as_ref();
@@ -2717,11 +2718,6 @@ impl Layer for ComponentLayer {
                 ),
             );
 
-            value.config_schema.apply_layer(
-                id,
-                selection,
-                properties.config_schema.value().clone(),
-            );
             let owner_path = [
                 if id.is_template() {
                     "componentTemplates"
@@ -2731,23 +2727,13 @@ impl Layer for ComponentLayer {
                 .into(),
                 id.name().to_owned(),
             ];
-            if properties.config_schema.value().is_some() {
-                value.config_schema_origin = Some(manifest_property_origin(
-                    &self.source,
-                    &owner_path,
-                    preset.as_deref(),
-                    CONFIG_SCHEMA_FIELD,
-                    id,
-                ));
-            }
-
             value.node_http_routers.apply_layer(
                 id,
                 selection,
                 properties.node_http_routers.value().clone(),
             );
             if let Some(config) = properties.config.value() {
-                value.config_layers.push(ConfigLayer {
+                config_layers.push(ConfigLayer {
                     origin: manifest_property_origin(
                         &self.source,
                         &owner_path,
@@ -2759,15 +2745,12 @@ impl Layer for ComponentLayer {
                 });
             }
             if properties.node_http_routers.value().is_some() {
-                value.node_http_routers_origin = Some((self.source.clone(), id.clone(), preset));
+                *node_http_routers_origin = Some((self.source.clone(), id.clone(), preset));
             }
 
-            value.config.apply_sourced(
-                id,
-                selection,
-                properties.config.value().clone(),
-                &self.source,
-            );
+            value
+                .config
+                .apply_layer(id, selection, properties.config.value().clone());
 
             value
                 .initial_card
@@ -2799,12 +2782,12 @@ impl Layer for ComponentLayer {
                     properties.files.value().clone(),
                 ),
             );
-            if let Some(layer) = &properties.tool_bindings_layer {
+            if let Some(layer) = &input.tool_bindings_layer {
                 value
                     .tool_bindings
                     .apply_layer(id, selection, layer.clone());
             }
-            value.file_sources.apply_layer(
+            file_sources.apply_layer(
                 id,
                 selection,
                 (
@@ -2823,7 +2806,7 @@ struct ResolvedAgent {
     component_name: ComponentName,
     source: PathBuf,
     properties: AgentProperties,
-    layer_properties: AgentLayerProperties,
+    layer_properties: ResolvedAgentLayers,
 }
 
 #[derive(Clone, Debug)]
@@ -2850,7 +2833,7 @@ impl<'a> Agent<'a> {
     }
 
     pub fn layer_properties(&self) -> &AgentLayerProperties {
-        &self.resolved.layer_properties
+        &self.resolved.layer_properties.properties
     }
 
     pub fn applied_layers(&self) -> &[(AgentLayerId, Option<String>)] {
@@ -2866,7 +2849,37 @@ impl<'a> Agent<'a> {
     }
 
     pub fn config_source_at(&self, path: &[String]) -> Option<&Path> {
-        self.resolved.layer_properties.config.source_at(path)
+        fn overlay<'a>(
+            sources: &mut BTreeMap<Vec<String>, &'a Path>,
+            value: &JsonValue,
+            path: &mut Vec<String>,
+            source: &'a Path,
+        ) {
+            if let JsonValue::Object(fields) = value {
+                sources.remove(path.as_slice());
+                for (key, child) in fields {
+                    path.push(key.clone());
+                    overlay(sources, child, path, source);
+                    path.pop();
+                }
+            } else {
+                sources.retain(|key, _| !key.starts_with(path));
+                sources.insert(path.clone(), source);
+            }
+        }
+
+        let mut sources = BTreeMap::new();
+        for layer in self.config_layers() {
+            overlay(
+                &mut sources,
+                &layer.value,
+                &mut Vec::new(),
+                &layer.origin.file,
+            );
+        }
+        (0..=path.len())
+            .rev()
+            .find_map(|len| sources.get(&path[..len]).copied())
     }
 
     pub fn initial_card(&self) -> Option<&app_raw::ManifestInitialCard> {
@@ -2910,7 +2923,7 @@ impl Agents {
 pub struct Component<'a> {
     component_name: &'a ComponentName,
     temp_dir: &'a Path,
-    properties: &'a WithSource<(ComponentProperties, ComponentLayerProperties)>,
+    properties: &'a WithSource<(ComponentProperties, ResolvedComponentLayers)>,
 }
 
 impl<'a> Component<'a> {
@@ -2950,6 +2963,14 @@ impl<'a> Component<'a> {
     }
 
     pub fn layer_properties(&self) -> &ComponentLayerProperties {
+        &self.resolved_layers().properties
+    }
+
+    pub fn config_layers(&self) -> &[ConfigLayer] {
+        &self.resolved_layers().config_layers
+    }
+
+    fn resolved_layers(&self) -> &ResolvedComponentLayers {
         &self.properties.value.1
     }
 
@@ -2999,10 +3020,6 @@ impl<'a> Component<'a> {
         &self.properties().config
     }
 
-    pub fn config_schema(&self) -> &ComponentConfigSchema {
-        &self.properties().config_schema
-    }
-
     pub fn files(&self) -> &Vec<InitialComponentFile> {
         &self.properties().files
     }
@@ -3039,7 +3056,7 @@ impl<'a> Component<'a> {
     }
 
     fn tool_base_layer(&self) -> ToolLayerInput {
-        ToolLayerInput::from_component_properties(self.layer_properties())
+        ToolLayerInput::from_component_properties(self.resolved_layers())
     }
 }
 
@@ -3076,19 +3093,9 @@ pub struct ComponentLayerProperties {
     pub build: VecProperty<ComponentLayer, app_raw::BuildCommand>,
     pub custom_commands: MapProperty<ComponentLayer, String, Vec<app_raw::ExternalCommand>>,
     pub clean: VecProperty<ComponentLayer, String>,
-    pub config_schema: OptionalProperty<ComponentLayer, ComponentConfigSchema>,
-    // Resolver bookkeeping; field inspection reports the effective origins.
-    #[serde(skip)]
-    pub config_schema_origin: Option<ConfigOrigin>,
     pub node_http_routers:
         OptionalProperty<ComponentLayer, IndexMap<String, app_raw::NodeHttpRouter>>,
-    #[serde(skip)]
-    node_http_routers_origin: Option<(PathBuf, ComponentLayerId, Option<String>)>,
-    // The schema-aware resolver consumes configInputs, not this alternate merged view.
-    #[serde(skip)]
     pub config: JsonProperty<ComponentLayer>,
-    #[serde(rename = "configInputs")]
-    pub config_layers: Vec<ConfigLayer>,
     pub initial_card: OptionalProperty<ComponentLayer, app_raw::ManifestInitialCard>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub env_merge_mode: Option<MapMergeMode>,
@@ -3100,13 +3107,24 @@ pub struct ComponentLayerProperties {
     pub files_merge_mode: Option<VecMergeMode>,
     pub files: VecProperty<ComponentLayer, app_raw::InitialComponentFile>,
     pub tool_bindings: ToolBindingsProperty<ComponentLayer>,
-    #[serde(skip)]
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ComponentLayerInput {
+    properties: ComponentLayerProperties,
     tool_bindings_layer: Option<(MapMergeMode, IndexMap<String, app_raw::ToolBinding>)>,
-    #[serde(skip)]
+}
+
+#[derive(Clone, Debug, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedComponentLayers {
+    pub properties: ComponentLayerProperties,
+    pub config_layers: Vec<ConfigLayer>,
+    node_http_routers_origin: Option<(PathBuf, ComponentLayerId, Option<String>)>,
     file_sources: VecProperty<ComponentLayer, PathBuf>,
 }
 
-impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
+impl From<app_raw::ComponentLayerProperties> for ComponentLayerInput {
     fn from(value: app_raw::ComponentLayerProperties) -> Self {
         let tool_bindings_layer = (value.agent_properties.tools.is_some()
             || value.agent_properties.tools_merge_mode.is_some())
@@ -3116,7 +3134,7 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
                 value.agent_properties.tools.unwrap_or_default(),
             )
         });
-        Self {
+        let properties = ComponentLayerProperties {
             applied_layers: vec![],
             guest_language: value.guest_language.into(),
             component_wasm: value.component_wasm.into(),
@@ -3126,12 +3144,8 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             build: value.build.into(),
             custom_commands: value.custom_commands.into(),
             clean: value.clean.into(),
-            config_schema: value.config_schema.into(),
-            config_schema_origin: None,
             node_http_routers: value.node_http_routers.into(),
-            node_http_routers_origin: None,
             config: value.agent_properties.config.into(),
-            config_layers: Vec::new(),
             initial_card: value.agent_properties.initial_card.into(),
             env_merge_mode: value.agent_properties.env_merge_mode,
             env: value.agent_properties.env.unwrap_or_default().into(),
@@ -3140,18 +3154,20 @@ impl From<app_raw::ComponentLayerProperties> for ComponentLayerProperties {
             files_merge_mode: value.agent_properties.files_merge_mode,
             files: value.agent_properties.files.unwrap_or_default().into(),
             tool_bindings: ToolBindingsProperty::default(),
+        };
+        Self {
+            properties,
             tool_bindings_layer,
-            file_sources: Vec::new().into(),
         }
     }
 }
 
-impl ComponentLayerProperties {
+impl ResolvedComponentLayers {
     fn validated_node_http_routers(
         &self,
         validation: &mut ValidationBuilder,
     ) -> Option<IndexMap<String, NodeHttpRouter>> {
-        let routers = self.node_http_routers.value().as_ref()?;
+        let routers = self.properties.node_http_routers.value().as_ref()?;
         let (source, layer, preset) = self
             .node_http_routers_origin
             .as_ref()
@@ -3193,7 +3209,9 @@ impl ComponentLayerProperties {
                 .collect()
         }).0)
     }
+}
 
+impl ComponentLayerProperties {
     pub fn compact_traces(&mut self) {
         self.guest_language.compact_trace();
         self.component_wasm.compact_trace();
@@ -3202,7 +3220,6 @@ impl ComponentLayerProperties {
         self.build.compact_trace();
         self.custom_commands.compact_trace();
         self.clean.compact_trace();
-        self.config_schema.compact_trace();
         self.node_http_routers.compact_trace();
         self.config.compact_trace();
         self.initial_card.compact_trace();
@@ -3210,7 +3227,6 @@ impl ComponentLayerProperties {
         self.plugins.compact_trace();
         self.files.compact_trace();
         self.tool_bindings.compact_trace();
-        self.file_sources.compact_trace();
     }
 
     pub fn with_compacted_traces(&self) -> Self {
@@ -3294,7 +3310,6 @@ enum ToolLayerPropertiesKind {
 struct ToolLayerInput {
     properties: app_raw::ToolLayerProperties,
     files: Vec<ProvisionFile>,
-    #[serde(skip)]
     config_layers: Vec<ConfigLayer>,
 }
 
@@ -3346,9 +3361,10 @@ impl ToolLayerInput {
             .collect()
     }
 
-    fn from_component_properties(properties: &ComponentLayerProperties) -> Self {
+    fn from_component_properties(resolved: &ResolvedComponentLayers) -> Self {
+        let properties = &resolved.properties;
         Self {
-            config_layers: properties.config_layers.clone(),
+            config_layers: resolved.config_layers.clone(),
             properties: app_raw::ToolLayerProperties {
                 config: properties.config.value().clone(),
                 env_merge_mode: None,
@@ -3358,15 +3374,19 @@ impl ToolLayerInput {
                 files_merge_mode: None,
                 files: None,
             },
-            files: properties.provision_files(),
+            files: resolved.provision_files(),
         }
     }
 }
 
-impl ComponentLayerProperties {
+impl ResolvedComponentLayers {
     fn provision_files(&self) -> Vec<ProvisionFile> {
-        debug_assert_eq!(self.files.value().len(), self.file_sources.value().len());
-        self.files
+        debug_assert_eq!(
+            self.properties.files.value().len(),
+            self.file_sources.value().len()
+        );
+        self.properties
+            .files
             .value()
             .iter()
             .cloned()
@@ -3378,7 +3398,7 @@ impl ComponentLayerProperties {
 
 impl Layer for ToolLayer {
     type Id = ToolLayerId;
-    type Value = ToolLayerProperties;
+    type Value = ResolvedToolLayers;
     type Selector = ComponentPresetSelector;
     type AppliedSelection = String;
     type ApplyContext = ();
@@ -3398,6 +3418,10 @@ impl Layer for ToolLayer {
         selector: &Self::Selector,
         value: &mut Self::Value,
     ) -> Result<(), Self::ApplyError> {
+        let ResolvedToolLayers {
+            properties: value,
+            config_layers,
+        } = value;
         let (property_layers_to_apply, selection) = match &self.properties {
             ToolLayerPropertiesKind::Empty => (Vec::new(), None),
             ToolLayerPropertiesKind::Common(properties) => (vec![properties.as_ref()], None),
@@ -3451,7 +3475,7 @@ impl Layer for ToolLayer {
                 if config.origin.layer.is_empty() {
                     config.origin.layer = id.to_string();
                 }
-                value.config_layers.push(config);
+                config_layers.push(config);
             }
             value
                 .config
@@ -3494,11 +3518,16 @@ pub struct ToolLayerProperties {
     )]
     pub applied_layers: Vec<(ToolLayerId, Option<String>)>,
     config: JsonProperty<ToolLayer>,
-    #[serde(skip)]
-    pub config_layers: Vec<ConfigLayer>,
     env: MapProperty<ToolLayer, String, String>,
     plugins: VecProperty<ToolLayer, app_raw::PluginInstallation>,
     files: VecProperty<ToolLayer, ProvisionFile>,
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedToolLayers {
+    pub properties: ToolLayerProperties,
+    pub config_layers: Vec<ConfigLayer>,
 }
 
 impl ToolLayerProperties {
@@ -3568,7 +3597,7 @@ impl ToolProvisionProperties {
 pub struct ResolvedToolProvision {
     pub source: PathBuf,
     pub properties: ToolProvisionProperties,
-    pub layer_properties: ToolLayerProperties,
+    pub layer_properties: ResolvedToolLayers,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
@@ -3621,7 +3650,6 @@ impl AgentLayerId {
 pub struct AgentLayer {
     id: AgentLayerId,
     parents: Vec<AgentLayerId>,
-    #[serde(skip)]
     source: PathBuf,
     properties: AgentLayerPropertiesKind,
 }
@@ -3632,7 +3660,6 @@ enum AgentLayerPropertiesKind {
     ComponentBase {
         properties: Box<app_raw::AgentLayerProperties>,
         tool_bindings: ToolBindingsProperty<AgentLayer>,
-        #[serde(skip)]
         config_layers: Vec<ConfigLayer>,
         config: JsonProperty<ComponentLayer>,
         files: Vec<ProvisionFile>,
@@ -3640,7 +3667,6 @@ enum AgentLayerPropertiesKind {
     ComponentTemplate {
         properties: Box<app_raw::AgentLayerProperties>,
         tool_bindings: ToolBindingsProperty<ComponentLayer>,
-        #[serde(skip)]
         config_layers: Vec<ConfigLayer>,
         config: JsonProperty<ComponentLayer>,
         files: Vec<ProvisionFile>,
@@ -3654,7 +3680,7 @@ enum AgentLayerPropertiesKind {
 
 impl Layer for AgentLayer {
     type Id = AgentLayerId;
-    type Value = AgentLayerProperties;
+    type Value = ResolvedAgentLayers;
     type Selector = ComponentPresetSelector;
     type AppliedSelection = String;
     type ApplyContext = ();
@@ -3674,6 +3700,10 @@ impl Layer for AgentLayer {
         selector: &Self::Selector,
         value: &mut Self::Value,
     ) -> Result<(), Self::ApplyError> {
+        let ResolvedAgentLayers {
+            properties: value,
+            config_layers: resolved_config_layers,
+        } = value;
         let (property_layers_to_apply, selection) = match &self.properties {
             AgentLayerPropertiesKind::ComponentBase {
                 properties,
@@ -3682,7 +3712,7 @@ impl Layer for AgentLayer {
                 ..
             } => {
                 value.tool_bindings = tool_bindings.clone();
-                value.config_layers.extend(config_layers.clone());
+                resolved_config_layers.extend(config_layers.clone());
                 (vec![(properties.as_ref(), None)], None)
             }
             AgentLayerPropertiesKind::ComponentTemplate {
@@ -3692,7 +3722,7 @@ impl Layer for AgentLayer {
                 ..
             } => {
                 value.tool_bindings.apply_template(&self.id, tool_bindings);
-                value.config_layers.extend(config_layers.clone());
+                resolved_config_layers.extend(config_layers.clone());
                 (vec![(properties.as_ref(), None)], None)
             }
             AgentLayerPropertiesKind::Empty => (vec![], None),
@@ -3766,7 +3796,7 @@ impl Layer for AgentLayer {
             | AgentLayerId::AgentCustomPresets(name) = id
                 && let Some(config) = &properties.config
             {
-                value.config_layers.push(ConfigLayer {
+                resolved_config_layers.push(ConfigLayer {
                     origin: manifest_property_origin(
                         &self.source,
                         &["agents".into(), name.0.clone()],
@@ -3780,14 +3810,13 @@ impl Layer for AgentLayer {
             match &self.properties {
                 AgentLayerPropertiesKind::ComponentBase { config, .. }
                 | AgentLayerPropertiesKind::ComponentTemplate { config, .. } => {
-                    value.config.apply_inherited(id, selection, config);
+                    value
+                        .config
+                        .apply_layer(id, selection, config.value().clone());
                 }
-                _ => value.config.apply_sourced(
-                    id,
-                    selection,
-                    properties.config.clone(),
-                    &self.source,
-                ),
+                _ => value
+                    .config
+                    .apply_layer(id, selection, properties.config.clone()),
             }
             value
                 .initial_card
@@ -3854,9 +3883,6 @@ pub struct AgentLayerProperties {
     )]
     pub applied_layers: Vec<(AgentLayerId, Option<String>)>,
     pub config: JsonProperty<AgentLayer>,
-    // Ordered resolver inputs duplicate the public config trace.
-    #[serde(skip)]
-    config_layers: Vec<ConfigLayer>,
     pub initial_card: OptionalProperty<AgentLayer, app_raw::ManifestInitialCard>,
     pub env: MapProperty<AgentLayer, String, String>,
     pub plugins: VecProperty<AgentLayer, app_raw::PluginInstallation>,
@@ -3864,7 +3890,14 @@ pub struct AgentLayerProperties {
     pub tool_bindings: ToolBindingsProperty<AgentLayer>,
 }
 
-impl AgentLayerProperties {
+#[derive(Debug, Clone, Default, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedAgentLayers {
+    pub properties: AgentLayerProperties,
+    config_layers: Vec<ConfigLayer>,
+}
+
+impl ResolvedAgentLayers {
     fn from_store(
         id: &AgentLayerId,
         selector: &ComponentPresetSelector,
@@ -3874,7 +3907,9 @@ impl AgentLayerProperties {
             .value(id, selector, &())
             .map_err(|err| err.to_string())
     }
+}
 
+impl AgentLayerProperties {
     pub fn compact_traces(&mut self) {
         self.config.compact_trace();
         self.initial_card.compact_trace();
@@ -4001,7 +4036,6 @@ pub struct ComponentProperties {
     pub build: Vec<app_raw::BuildCommand>,
     pub custom_commands: BTreeMap<String, Vec<app_raw::ExternalCommand>>,
     pub clean: Vec<String>,
-    pub config_schema: ComponentConfigSchema,
     pub files: Vec<InitialComponentFile>,
     pub plugins: Vec<PluginInstallation>,
     pub env: BTreeMap<String, String>,
@@ -4053,7 +4087,6 @@ impl ComponentProperties {
                 .map(|(k, v)| (k.clone(), v.clone()))
                 .collect(),
             clean: merged.clean.value().clone(),
-            config_schema: merged.config_schema.value().clone().unwrap_or_default(),
             files,
             plugins,
             env: Self::validate_and_normalize_env(validation, merged.env.value().iter()),
@@ -4405,9 +4438,9 @@ mod app_builder {
     use crate::log::LogColorize;
     use crate::model::app::{
         APP_ENV_PRESET_PREFIX, Application, ApplicationPreload, BridgeSdks, ComponentDependency,
-        ComponentLayer, ComponentLayerApplyContext, ComponentLayerId, ComponentLayerProperties,
-        ComponentLayerPropertiesKind, ComponentPresetSelector, ComponentProperties,
-        PartitionedComponentPresets, SubjectSource, TEMP_DIR, WithSource,
+        ComponentLayer, ComponentLayerApplyContext, ComponentLayerId, ComponentLayerPropertiesKind,
+        ComponentPresetSelector, ComponentProperties, PartitionedComponentPresets,
+        ResolvedComponentLayers, SubjectSource, TEMP_DIR, WithSource,
     };
     use crate::model::app_raw;
     use crate::model::cascade::error::StoreGetValueError;
@@ -4826,7 +4859,7 @@ mod app_builder {
         component_layer_store: Store<ComponentLayer>,
 
         components:
-            BTreeMap<ComponentName, WithSource<(ComponentProperties, ComponentLayerProperties)>>,
+            BTreeMap<ComponentName, WithSource<(ComponentProperties, ResolvedComponentLayers)>>,
         agents: BTreeMap<AgentTypeName, WithSource<app_raw::Agent>>,
         tool_declarations: BTreeMap<ToolName, WithSource<app_raw::ToolDeclaration>>,
         default_tools: BTreeMap<ToolName, DefaultTool>,
@@ -6210,10 +6243,11 @@ mod app_builder {
             ) {
                 Ok(component_layer_properties) => {
                     if component_layer_properties
+                        .properties
                         .node_http_routers
                         .value()
                         .is_some()
-                        && *component_layer_properties.guest_language.value()
+                        && *component_layer_properties.properties.guest_language.value()
                             != Some(GuestLanguage::TypeScript)
                     {
                         validation.add_error(format!(
@@ -6227,7 +6261,7 @@ mod app_builder {
                         &source,
                         dir,
                         component_dir,
-                        &component_layer_properties,
+                        &component_layer_properties.properties,
                         node_http_routers,
                     );
                     Self::validate_unique_file_targets(validation, &component_properties);
@@ -6758,8 +6792,18 @@ mod test {
                 assert_eq!(origin.file, package_source);
                 assert_eq!(origin.layer, "agent:test-agent:package");
                 assert_eq!(
+                    agent.config_source_at(&["settings".into(), field.into()]),
+                    Some(package_source.as_path())
+                );
+                assert_eq!(
                     origin.path,
                     vec!["agents", "test-agent", "config", "settings", field]
+                );
+            }
+            for field in ["componentOnly", "templated", "localOnly"] {
+                assert_eq!(
+                    agent.config_source_at(&["settings".into(), field.into()]),
+                    Some(tmp.path().join("golem.yaml").as_path())
                 );
             }
             let origin = |field: &str| &plan[0].origins[&vec!["settings".into(), field.into()]];
@@ -6987,7 +7031,7 @@ mod test {
                 let component_name = parse_component_name("app:main");
                 let component = app.component(&component_name);
                 let plan = app
-                    .resolve_config(&schema, &component.layer_properties().config_layers, &code)
+                    .resolve_config(&schema, component.config_layers(), &code)
                     .unwrap();
                 assert_eq!(
                     plan[0].source,
@@ -7505,7 +7549,7 @@ mod test {
     }
 
     #[test]
-    fn component_config_schema_follows_template_environment_and_custom_preset_order() {
+    fn component_config_follows_template_environment_and_custom_preset_order() {
         let source = indoc! { r#"
             app: hello-app
 
@@ -7516,24 +7560,16 @@ mod test {
 
             componentTemplates:
               base:
-                configSchema:
-                  declarations:
-                    - source: Local
-                      path: [template]
-                      value_type: { kind: bool, value: {} }
+                config:
+                  timeout: 10
+                  attempts: 2
                 presets:
                   app-env:local:
-                    configSchema:
-                      declarations:
-                        - source: Local
-                          path: [environment]
-                          value_type: { kind: bool, value: {} }
+                    config:
+                      timeout: 20
                   debug:
-                    configSchema:
-                      declarations:
-                        - source: Local
-                          path: [custom]
-                          value_type: { kind: bool, value: {} }
+                    config:
+                      timeout: 30
 
             components:
               app:main:
@@ -7545,10 +7581,9 @@ mod test {
         let component_name = parse_component_name("app:main");
         let component = app.component(&component_name);
 
-        assert_eq!(component.config_schema().declarations.len(), 1);
         assert_eq!(
-            component.config_schema().declarations[0].path,
-            vec!["custom".to_string()]
+            component.config().as_ref(),
+            Some(&serde_json::json!({"timeout": 30, "attempts": 2}))
         );
     }
 
@@ -7672,6 +7707,7 @@ mod test {
         assert_eq!(
             resolved
                 .layer_properties
+                .properties
                 .applied_layers
                 .iter()
                 .map(|(id, selection)| match selection {

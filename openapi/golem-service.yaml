@@ -26418,15 +26418,6 @@ components:
           format: uint32
       required:
       - declaration
-    ComponentConfigSchema:
-      type: object
-      properties:
-        schema:
-          $ref: '#/components/schemas/SchemaGraph'
-        declarations:
-          type: array
-          items:
-            $ref: '#/components/schemas/AgentConfigDeclarationSchema'
     ComponentCreation:
       title: ComponentCreation
       type: object
@@ -26435,24 +26426,8 @@ components:
           type: string
         packageMetadata:
           $ref: '#/components/schemas/ComponentPackageMetadata'
-        configSchema:
-          default:
-            schema:
-              root:
-                kind: record
-                value:
-                  fields: []
-          allOf:
-          - $ref: '#/components/schemas/ComponentConfigSchema'
-          - default:
-              schema:
-                root:
-                  kind: record
-                  value:
-                    fields: []
         componentProvisionConfig:
           default:
-            config: []
             env: {}
             files: {}
             initialPermissions:
@@ -26466,7 +26441,6 @@ components:
           allOf:
           - $ref: '#/components/schemas/ComponentProvisionConfigCreation'
           - default:
-              config: []
               env: {}
               files: {}
               initialPermissions:
@@ -26573,21 +26547,6 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/LinearMemory'
-        configSchema:
-          default:
-            schema:
-              root:
-                kind: record
-                value:
-                  fields: []
-          allOf:
-          - $ref: '#/components/schemas/ComponentConfigSchema'
-          - default:
-              schema:
-                root:
-                  kind: record
-                  value:
-                    fields: []
         componentProvisionConfig:
           $ref: '#/components/schemas/ComponentProvisionConfig'
         agentTypes:
@@ -26647,10 +26606,6 @@ components:
           type: object
           additionalProperties:
             type: string
-        config:
-          type: array
-          items:
-            $ref: '#/components/schemas/ConfigBinding'
         plugins:
           type: array
           items:
@@ -26662,7 +26617,6 @@ components:
       required:
       - initialPermissions
       - env
-      - config
       - plugins
       - files
     ComponentProvisionConfigCreation:
@@ -26676,11 +26630,6 @@ components:
           type: object
           additionalProperties:
             type: string
-        config:
-          default: []
-          type: array
-          items:
-            $ref: '#/components/schemas/ConfigBindingDto'
         pluginInstallations:
           default: []
           type: array
@@ -26720,8 +26669,6 @@ components:
           allOf:
           - $ref: '#/components/schemas/ComponentPackageMetadata'
           - description: Only valid with a Wasm upload. A new Wasm upload without this field clears the origin.
-        configSchema:
-          $ref: '#/components/schemas/ComponentConfigSchema'
         componentProvisionConfig:
           $ref: '#/components/schemas/ComponentProvisionConfigCreation'
         agentTypes:
