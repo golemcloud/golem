@@ -23,6 +23,7 @@ pub mod callers;
 pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
+pub mod emulated_registry_service;
 pub mod emulated_worker_service;
 pub mod invocation_error;
 pub mod oplog_shape;
@@ -33,6 +34,7 @@ pub mod standalone_tool;
 pub use blob_storage_decorator::{
     BlobStorageDecorator, BlobStorageInner, DecoratedBlobStorage, WrappedBlobStorage,
 };
+pub use emulated_registry_service::EmulatedRegistryService;
 pub use emulated_worker_service::{
     EmulatedWorkerService, RecordedCardTransfer, WorkerServiceOptions,
 };
@@ -139,7 +141,7 @@ use golem_worker_executor::services::blob_store::{
     BlobStoreError, BlobStoreMutation, BlobStoreService, DefaultBlobStoreService,
 };
 use golem_worker_executor::services::card::{
-    CardService, CardState, NoopCardService, RuntimeCardCreation,
+    CardService, CardServiceDefault, CardState, NoopCardService, RuntimeCardCreation,
 };
 use golem_worker_executor::services::card_interest::CardInterestIndex;
 use golem_worker_executor::services::component::ComponentService;
@@ -3111,6 +3113,19 @@ impl TestExecutorOverrides {
                 config.public_worker_api.port = port;
             })),
             worker_service: Some(worker_service.clone()),
+            ..self
+        }
+    }
+
+    /// Gives the executor the production card service, `CardServiceDefault`, over a registry
+    /// client that calls `registry`. Each start, including `restart`, builds a new card service
+    /// with an empty cache over the same `registry`.
+    pub fn with_registry(self, registry: &EmulatedRegistryService) -> Self {
+        let registry = registry.clone();
+        Self {
+            create_card_service: Some(Arc::new(move || {
+                Arc::new(CardServiceDefault::new(Arc::new(registry.client())))
+            })),
             ..self
         }
     }

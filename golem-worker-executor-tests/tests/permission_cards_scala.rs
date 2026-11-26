@@ -15,25 +15,18 @@
 //! Runs the shared permission-card scenario through the typed Scala SDK API.
 
 use crate::Tracing;
-use async_trait::async_trait;
-
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::card::{
-    CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, StoredCard,
-    parse_polymorphic_permission,
+    PolymorphicPermissionPattern, StoredCard, parse_polymorphic_permission,
 };
 use golem_common::schema::SchemaType;
 use golem_common::{agent_key, data_value};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::card::{
-    CardRevokeResult, CardService, CardState, RuntimeCardCreation,
-};
 use golem_worker_executor_test_utils::{
-    EmulatedWorkerService, LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies, WorkerServiceOptions, start_with_overrides,
+    EmulatedRegistryService, EmulatedWorkerService, LastUniqueId, PrecompiledComponent,
+    TestContext, TestExecutorOverrides, WorkerExecutorTestDependencies, WorkerServiceOptions,
+    start_with_overrides,
 };
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -43,110 +36,6 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
-
-/// A card store that knows the agent's initial card and every derived card, and
-/// revokes a card together with its descendants that are not revoked yet.
-#[derive(Default)]
-struct CardStore {
-    cards: RwLock<HashMap<CardId, StoredCard>>,
-    revoked: RwLock<HashSet<CardId>>,
-}
-
-impl CardStore {
-    fn add(&self, card: StoredCard) {
-        self.cards
-            .write()
-            .expect("card store lock poisoned")
-            .insert(card.card_id(), card);
-    }
-
-    fn descendants_including_self(&self, card_id: CardId) -> Vec<CardId> {
-        let cards = self.cards.read().expect("card store lock poisoned");
-        let mut result = vec![card_id];
-        let mut index = 0;
-        while index < result.len() {
-            let parent = result[index];
-            for card in cards.values() {
-                if card.parent_ids().contains(&parent) && !result.contains(&card.card_id()) {
-                    result.push(card.card_id());
-                }
-            }
-            index += 1;
-        }
-        result
-    }
-}
-
-struct CardStoreService {
-    store: Arc<CardStore>,
-}
-
-#[async_trait]
-impl CardService for CardStoreService {
-    async fn record_revoked_cards(&self, card_ids: &[CardId]) {
-        self.store
-            .revoked
-            .write()
-            .expect("card store lock poisoned")
-            .extend(card_ids.iter().copied());
-    }
-
-    async fn create_runtime_card(
-        &self,
-        card: StoredCard,
-        _provenance: CardManagedByRuntimeDerived,
-    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
-        self.store.add(card.clone());
-        Ok(RuntimeCardCreation::Created(Box::new(card)))
-    }
-
-    async fn revoke_card(&self, card_id: CardId) -> Result<CardRevokeResult, WorkerExecutorError> {
-        // Read the card graph before taking the revoked-set lock; `check_cards`
-        // takes the two locks in the opposite order.
-        let descendants = self.store.descendants_including_self(card_id);
-        let mut already_revoked = self
-            .store
-            .revoked
-            .write()
-            .expect("card store lock poisoned");
-        let revoked: Vec<CardId> = descendants
-            .into_iter()
-            .filter(|card_id| !already_revoked.contains(card_id))
-            .collect();
-        already_revoked.extend(revoked.iter().copied());
-        Ok(CardRevokeResult::Revoked(revoked))
-    }
-
-    async fn live_ancestor_ids_including_self(
-        &self,
-        card: &StoredCard,
-    ) -> Result<Vec<CardId>, WorkerExecutorError> {
-        Ok(std::iter::once(card.card_id())
-            .chain(card.parent_ids().iter().copied())
-            .collect())
-    }
-
-    async fn check_cards(
-        &self,
-        card_ids: Vec<CardId>,
-    ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
-        let cards = self.store.cards.read().expect("card store lock poisoned");
-        let revoked = self.store.revoked.read().expect("card store lock poisoned");
-        Ok(card_ids
-            .into_iter()
-            .map(|card_id| {
-                let state = if revoked.contains(&card_id) {
-                    CardState::Revoked
-                } else if let Some(card) = cards.get(&card_id) {
-                    CardState::Live(Box::new(card.clone()))
-                } else {
-                    CardState::Unknown
-                };
-                (card_id, state)
-            })
-            .collect())
-    }
-}
 
 fn card_management_permissions() -> Vec<PolymorphicPermissionPattern> {
     ["derive", "inspect", "install", "revoke"]
@@ -168,23 +57,14 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let store = Arc::new(CardStore::default());
+    let registry = EmulatedRegistryService::start().await?;
     let worker_service = EmulatedWorkerService::start(WorkerServiceOptions::default()).await?;
     let executor = start_with_overrides(
         deps,
         &context,
-        TestExecutorOverrides {
-            create_card_service: Some(Arc::new({
-                let store = store.clone();
-                move || {
-                    Arc::new(CardStoreService {
-                        store: store.clone(),
-                    })
-                }
-            })),
-            ..Default::default()
-        }
-        .with_worker_service(&worker_service),
+        TestExecutorOverrides::default()
+            .with_registry(&registry)
+            .with_worker_service(&worker_service),
     )
     .await?;
     let component = executor
@@ -231,15 +111,20 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
     assert_eq!(card_parameter_polymorphism("receiveTemplate"), Some(true));
     assert_eq!(card_parameter_polymorphism("receiveConcrete"), Some(false));
 
+    // The registry knows the initial card of every agent type, as in production: the card
+    // service treats a card that the registry does not have as revoked.
+    for agent_type in ["ScalaPermissionCardAgent", "ScalaPermissionCardTarget"] {
+        let card = component
+            .metadata
+            .agent_type_provision_configs
+            .get(&AgentTypeName(agent_type.to_string()))
+            .map(|config| &config.initial_permissions)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing initial card for {agent_type}"))?;
+        registry.add_card(StoredCard::Polymorphic(card));
+    }
+
     let caller = agent_key!("ScalaPermissionCardAgent", "scenario");
-    let root = component
-        .metadata
-        .agent_type_provision_configs
-        .get(&caller.agent_type)
-        .map(|config| &config.initial_permissions)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("missing initial card for ScalaPermissionCardAgent"))?;
-    store.add(StoredCard::Polymorphic(root));
     executor.start_agent(&component.id, caller.clone()).await?;
 
     let observations = executor
@@ -272,11 +157,11 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
             "after=false",
             "scope-usable=true",
             "denied-derive=NotPermitted",
-            // The target's wallet is empty; during a call with a scope card it
-            // lists that card as a scope entry, with the expiry of the
-            // caller's scope card.
-            "kinds-plain=",
-            "kinds-lent=scope",
+            // The target's wallet holds its initial template card; during a
+            // call with a scope card it also lists that card as a scope entry,
+            // with the expiry of the caller's scope card.
+            "kinds-plain=template",
+            "kinds-lent=scope,template",
             "lent-expiry=true",
             "lent-no-expiry=None",
             "installed=true",
@@ -319,8 +204,9 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
 
     // Sending the template card moves the caller's handle, and the callee
     // decodes it as the declared template card type. An argument carries the
-    // card but does not install it: the callee's wallet stays empty, and
-    // without card:inspect of its own the callee cannot inspect the card.
+    // card but does not install it: the callee's wallet holds only its own
+    // initial template card, and without card:inspect of its own the callee
+    // cannot inspect the card.
     let sent = executor
         .invoke_and_await_agent(
             &component,
@@ -336,7 +222,7 @@ async fn scala_sdk_runs_the_shared_permission_card_scenario(
             "received-parents=0",
             "received-inspect=false",
             "sent-moved=true",
-            "receiver-kinds=",
+            "receiver-kinds=template",
         ]
     );
     Ok(())

@@ -13,26 +13,18 @@
 // limitations under the License.
 
 use crate::Tracing;
-use async_trait::async_trait;
-
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::card::{
-    CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, StoredCard,
-    parse_polymorphic_permission,
+    PolymorphicPermissionPattern, StoredCard, parse_polymorphic_permission,
 };
 use golem_common::{agent_key, data_value};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::card::{
-    CardRevokeResult, CardService, CardState, RuntimeCardCreation,
-};
 use golem_worker_executor_test_utils::{
-    EmulatedWorkerService, LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies, WorkerServiceOptions, start_with_overrides,
+    EmulatedRegistryService, EmulatedWorkerService, LastUniqueId, PrecompiledComponent,
+    TestContext, TestExecutorOverrides, WorkerExecutorTestDependencies, WorkerServiceOptions,
+    start_with_overrides,
 };
 use serde_json::{Value, json};
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -42,100 +34,6 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 inherit_test_dep!(Tracing);
-
-/// Card registry for the test: initial cards and runtime-derived cards are live until revoked,
-/// and revoking a card revokes every stored descendant.
-#[derive(Default)]
-struct CardRegistry {
-    cards: RwLock<HashMap<CardId, StoredCard>>,
-    revoked: RwLock<HashSet<CardId>>,
-}
-
-impl CardRegistry {
-    fn add(&self, card: StoredCard) {
-        self.cards.write().unwrap().insert(card.card_id(), card);
-    }
-
-    fn subtree(&self, root: CardId) -> Vec<CardId> {
-        let cards = self.cards.read().unwrap();
-        let mut subtree = vec![root];
-        let mut index = 0;
-        while index < subtree.len() {
-            let parent = subtree[index];
-            for card in cards.values() {
-                if card.parent_ids().contains(&parent) && !subtree.contains(&card.card_id()) {
-                    subtree.push(card.card_id());
-                }
-            }
-            index += 1;
-        }
-        subtree
-    }
-}
-
-struct RegistryCardService {
-    registry: Arc<CardRegistry>,
-}
-
-#[async_trait]
-impl CardService for RegistryCardService {
-    async fn record_revoked_cards(&self, card_ids: &[CardId]) {
-        self.registry
-            .revoked
-            .write()
-            .unwrap()
-            .extend(card_ids.iter().copied());
-    }
-
-    async fn check_cards(
-        &self,
-        card_ids: Vec<CardId>,
-    ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
-        let cards = self.registry.cards.read().unwrap();
-        let revoked = self.registry.revoked.read().unwrap();
-        Ok(card_ids
-            .into_iter()
-            .map(|card_id| {
-                let state = if revoked.contains(&card_id) {
-                    CardState::Revoked
-                } else if let Some(card) = cards.get(&card_id) {
-                    CardState::Live(Box::new(card.clone()))
-                } else {
-                    CardState::Unknown
-                };
-                (card_id, state)
-            })
-            .collect())
-    }
-
-    async fn create_runtime_card(
-        &self,
-        card: StoredCard,
-        _provenance: CardManagedByRuntimeDerived,
-    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
-        self.registry.add(card.clone());
-        Ok(RuntimeCardCreation::Created(Box::new(card)))
-    }
-
-    async fn revoke_card(&self, card_id: CardId) -> Result<CardRevokeResult, WorkerExecutorError> {
-        let subtree = self.registry.subtree(card_id);
-        self.registry
-            .revoked
-            .write()
-            .unwrap()
-            .extend(subtree.iter().copied());
-        Ok(CardRevokeResult::Revoked(subtree))
-    }
-
-    async fn live_ancestor_ids_including_self(
-        &self,
-        card: &StoredCard,
-    ) -> Result<Vec<CardId>, WorkerExecutorError> {
-        Ok(std::iter::once(card.card_id())
-            .chain(card.parent_ids().iter().copied())
-            .collect())
-    }
-}
 
 fn permission(pattern: &str) -> PolymorphicPermissionPattern {
     parse_polymorphic_permission(pattern).expect("valid test permission")
@@ -155,23 +53,14 @@ async fn effect_sdk_manages_permission_cards_end_to_end(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let registry = Arc::new(CardRegistry::default());
+    let registry = EmulatedRegistryService::start().await?;
     let worker_service = EmulatedWorkerService::start(WorkerServiceOptions::default()).await?;
     let executor = start_with_overrides(
         deps,
         &context,
-        TestExecutorOverrides {
-            create_card_service: Some(Arc::new({
-                let registry = registry.clone();
-                move || {
-                    Arc::new(RegistryCardService {
-                        registry: registry.clone(),
-                    })
-                }
-            })),
-            ..Default::default()
-        }
-        .with_worker_service(&worker_service),
+        TestExecutorOverrides::default()
+            .with_registry(&registry)
+            .with_worker_service(&worker_service),
     )
     .await?;
     let component = executor
@@ -196,7 +85,7 @@ async fn effect_sdk_manages_permission_cards_end_to_end(
             .map(|config| &config.initial_permissions)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("missing initial card for {agent_type}"))?;
-        registry.add(StoredCard::Polymorphic(card));
+        registry.add_card(StoredCard::Polymorphic(card));
     }
 
     let caller = agent_key!("EffectPermissionCaller", "caller");

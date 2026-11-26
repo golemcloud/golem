@@ -16,28 +16,18 @@
 //! `permissions` API in `test-components/agent-sdk-ts/src/permissions.ts`.
 
 use crate::Tracing;
-use async_trait::async_trait;
-
-use golem_common::model::agent::ParsedAgentKey;
-use golem_common::model::card::{
-    CardId, CardManagedByRuntimeDerived, StoredCard, parse_polymorphic_permission,
-};
+use golem_common::model::agent::{AgentTypeName, ParsedAgentKey};
+use golem_common::model::card::{StoredCard, parse_polymorphic_permission};
 use golem_common::model::component::ComponentDto;
 use golem_common::schema::FromSchema;
 use golem_common::{agent_key, data_value};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::card::{
-    CardRevokeResult, CardService, CardState, RuntimeCardCreation,
-};
 use golem_worker_executor_test_utils::{
-    EmulatedWorkerService, LastUniqueId, PrecompiledComponent, TestCardService, TestContext,
-    TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
+    EmulatedRegistryService, EmulatedWorkerService, LastUniqueId, PrecompiledComponent,
+    TestContext, TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies,
     WorkerServiceOptions, start_with_overrides,
 };
 use pretty_assertions::assert_eq;
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex};
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -52,106 +42,6 @@ const CALLER: &str = "PermissionCaller";
 const CALLEE: &str = "PermissionCallee";
 const NO_AUTHORITY: &str = "PermissionNoAuthority";
 
-/// Runtime-created cards and revocations. Other cards are live as in [`TestCardService`].
-#[derive(Default)]
-struct ScenarioCards {
-    cards: Mutex<HashMap<CardId, StoredCard>>,
-    revoked: Mutex<HashSet<CardId>>,
-}
-
-impl ScenarioCards {
-    fn register(&self, card: StoredCard) {
-        self.cards.lock().unwrap().insert(card.card_id(), card);
-    }
-
-    fn descendants_including_self(&self, card_id: CardId) -> Vec<CardId> {
-        let cards = self.cards.lock().unwrap();
-        let mut result = vec![card_id];
-        let mut index = 0;
-        while index < result.len() {
-            let parent = result[index];
-            for card in cards.values() {
-                if card.parent_ids().contains(&parent) && !result.contains(&card.card_id()) {
-                    result.push(card.card_id());
-                }
-            }
-            index += 1;
-        }
-        result
-    }
-}
-
-struct ScenarioCardService {
-    cards: Arc<ScenarioCards>,
-}
-
-#[async_trait]
-impl CardService for ScenarioCardService {
-    async fn record_revoked_cards(&self, card_ids: &[CardId]) {
-        self.cards
-            .revoked
-            .lock()
-            .unwrap()
-            .extend(card_ids.iter().copied());
-    }
-
-    async fn check_cards(
-        &self,
-        card_ids: Vec<CardId>,
-    ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
-        let mut states = TestCardService.check_cards(card_ids).await?;
-        let cards = self.cards.cards.lock().unwrap();
-        let revoked = self.cards.revoked.lock().unwrap();
-        for (card_id, state) in states.iter_mut() {
-            if revoked.contains(card_id) {
-                *state = CardState::Revoked;
-            } else if let Some(card) = cards.get(card_id) {
-                *state = CardState::Live(Box::new(card.clone()));
-            }
-        }
-        Ok(states)
-    }
-
-    async fn create_runtime_card(
-        &self,
-        card: StoredCard,
-        _provenance: CardManagedByRuntimeDerived,
-    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
-        self.cards.register(card.clone());
-        Ok(RuntimeCardCreation::Created(Box::new(card)))
-    }
-
-    async fn revoke_card(&self, card_id: CardId) -> Result<CardRevokeResult, WorkerExecutorError> {
-        let revoked = self.cards.descendants_including_self(card_id);
-        self.cards
-            .revoked
-            .lock()
-            .unwrap()
-            .extend(revoked.iter().copied());
-        Ok(CardRevokeResult::Revoked(revoked))
-    }
-
-    async fn live_ancestor_ids_including_self(
-        &self,
-        card: &StoredCard,
-    ) -> Result<Vec<CardId>, WorkerExecutorError> {
-        let cards = self.cards.cards.lock().unwrap();
-        let revoked = self.cards.revoked.lock().unwrap();
-        let mut result = vec![card.card_id()];
-        let mut pending = card.parent_ids().to_vec();
-        while let Some(parent) = pending.pop() {
-            if result.contains(&parent) || revoked.contains(&parent) {
-                continue;
-            }
-            result.push(parent);
-            if let Some(parent_card) = cards.get(&parent) {
-                pending.extend(parent_card.parent_ids().iter().copied());
-            }
-        }
-        Ok(result)
-    }
-}
-
 struct Scenario {
     executor: TestWorkerExecutor,
     component: ComponentDto,
@@ -164,20 +54,11 @@ async fn start_scenario(
     agent_sdk_ts: &PrecompiledComponent,
     caller_name: &str,
 ) -> anyhow::Result<Scenario> {
-    let cards = Arc::new(ScenarioCards::default());
+    let registry = EmulatedRegistryService::start().await?;
     let worker_service = EmulatedWorkerService::start(WorkerServiceOptions::default()).await?;
-    let overrides = TestExecutorOverrides {
-        create_card_service: Some(Arc::new({
-            let cards = cards.clone();
-            move || {
-                Arc::new(ScenarioCardService {
-                    cards: cards.clone(),
-                })
-            }
-        })),
-        ..Default::default()
-    }
-    .with_worker_service(&worker_service);
+    let overrides = TestExecutorOverrides::default()
+        .with_registry(&registry)
+        .with_worker_service(&worker_service);
     let executor = start_with_overrides(deps, context, overrides).await?;
 
     let caller_grants = [
@@ -206,15 +87,18 @@ async fn start_scenario(
         .store()
         .await?;
 
+    for agent_type in [CALLER, CALLEE, NO_AUTHORITY] {
+        let card = component
+            .metadata
+            .agent_type_provision_configs
+            .get(&AgentTypeName(agent_type.to_string()))
+            .map(|config| &config.initial_permissions)
+            .cloned()
+            .ok_or_else(|| anyhow::anyhow!("missing {agent_type} initial permission card"))?;
+        registry.add_card(StoredCard::Polymorphic(card));
+    }
+
     let caller = agent_key!(CALLER, caller_name);
-    let caller_card = component
-        .metadata
-        .agent_type_provision_configs
-        .get(&caller.agent_type)
-        .map(|config| &config.initial_permissions)
-        .cloned()
-        .ok_or_else(|| anyhow::anyhow!("missing {CALLER} initial permission card"))?;
-    cards.register(StoredCard::Polymorphic(caller_card));
     executor.start_agent(&component.id, caller.clone()).await?;
 
     Ok(Scenario {

@@ -32,6 +32,15 @@ the test waited for, and use `GATE_TIMEOUT`, `SETTLE_TIMEOUT` or a named constan
 Wait for a stdout line with `WorkerLogEventStream::wait_for_stdout`. Check a rejected or failed
 invocation by its worker error with `assert_worker_error!`, not by the text of the error.
 
+Put a test double at the boundary where the executor leaves its process, and keep the
+production code on the executor's side. To change some blob-storage operations, implement
+`BlobStorageDecorator` and pass `wrap_blob_storage()`. For calls the executor makes to the worker
+service, such as card transfers, start an `EmulatedWorkerService` and pass it with
+`TestExecutorOverrides::with_worker_service`. For permission cards that the registry keeps,
+start an `EmulatedRegistryService`, add the initial cards, and pass it with `with_registry`.
+Do not write another wrapper of `BlobStorageBackend`, `WorkerProxy` or `CardService` for these
+cases.
+
 ## Rules for durability, replay and RPC tests
 
 - **Count effects, not echoes.** Equal deterministic return values do not prove deduplication.

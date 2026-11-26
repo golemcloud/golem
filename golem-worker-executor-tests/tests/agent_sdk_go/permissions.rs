@@ -18,25 +18,17 @@
 //! the authority it holds, and the kinds of its wallet cards, after each step.
 
 use crate::Tracing;
-use async_trait::async_trait;
-
 use golem_common::model::agent::AgentTypeName;
 use golem_common::model::card::{
-    CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, StoredCard,
-    parse_polymorphic_permission,
+    PolymorphicPermissionPattern, StoredCard, parse_polymorphic_permission,
 };
 use golem_common::{agent_key, data_value};
-use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_test_framework::dsl::TestDsl;
-use golem_worker_executor::services::card::{
-    CardRevokeResult, CardService, CardState, RuntimeCardCreation,
-};
 use golem_worker_executor_test_utils::{
-    EmulatedWorkerService, LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies, WorkerServiceOptions, start_with_overrides,
+    EmulatedRegistryService, EmulatedWorkerService, LastUniqueId, PrecompiledComponent,
+    TestContext, TestExecutorOverrides, WorkerExecutorTestDependencies, WorkerServiceOptions,
+    start_with_overrides,
 };
-use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, RwLock};
 use test_r::{inherit_test_dep, test, timeout};
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
@@ -46,119 +38,6 @@ inherit_test_dep!(
     #[tagged_as("agent_sdk_go")]
     PrecompiledComponent
 );
-
-/// The cards the registry knows, and the ones it revoked.
-#[derive(Default)]
-struct CardRegistry {
-    cards: RwLock<HashMap<CardId, StoredCard>>,
-    revoked: RwLock<HashSet<CardId>>,
-}
-
-impl CardRegistry {
-    fn add(&self, card: StoredCard) {
-        self.cards.write().unwrap().insert(card.card_id(), card);
-    }
-
-    fn ancestors_including_self(&self, card_id: CardId) -> Vec<CardId> {
-        let cards = self.cards.read().unwrap();
-        let mut out = Vec::new();
-        let mut pending = vec![card_id];
-        while let Some(id) = pending.pop() {
-            if out.contains(&id) {
-                continue;
-            }
-            out.push(id);
-            if let Some(card) = cards.get(&id) {
-                pending.extend(card.parent_ids().iter().copied());
-            }
-        }
-        out
-    }
-}
-
-/// A card service over [`CardRegistry`] whose revocation cascades to every
-/// card derived from the revoked one, as the registry service's does.
-struct RegistryCardService(Arc<CardRegistry>);
-
-#[async_trait]
-impl CardService for RegistryCardService {
-    async fn record_revoked_cards(&self, card_ids: &[CardId]) {
-        self.0
-            .revoked
-            .write()
-            .unwrap()
-            .extend(card_ids.iter().copied());
-    }
-
-    async fn check_cards(
-        &self,
-        card_ids: Vec<CardId>,
-    ) -> Result<HashMap<CardId, CardState>, WorkerExecutorError> {
-        let cards = self.0.cards.read().unwrap();
-        let revoked = self.0.revoked.read().unwrap();
-        Ok(card_ids
-            .into_iter()
-            .map(|card_id| {
-                let state = if revoked.contains(&card_id) {
-                    CardState::Revoked
-                } else if let Some(card) = cards.get(&card_id) {
-                    CardState::Live(Box::new(card.clone()))
-                } else {
-                    CardState::Unknown
-                };
-                (card_id, state)
-            })
-            .collect())
-    }
-
-    async fn create_runtime_card(
-        &self,
-        card: StoredCard,
-        _provenance: CardManagedByRuntimeDerived,
-    ) -> Result<RuntimeCardCreation, WorkerExecutorError> {
-        self.0.add(card.clone());
-        Ok(RuntimeCardCreation::Created(Box::new(card)))
-    }
-
-    async fn revoke_card(&self, card_id: CardId) -> Result<CardRevokeResult, WorkerExecutorError> {
-        if self.0.revoked.read().unwrap().contains(&card_id) {
-            return Ok(CardRevokeResult::AlreadyRevoked(format!(
-                "card {card_id} is already revoked"
-            )));
-        }
-        let known = self
-            .0
-            .cards
-            .read()
-            .unwrap()
-            .keys()
-            .copied()
-            .collect::<Vec<_>>();
-        let cascade = known
-            .into_iter()
-            .filter(|id| self.0.ancestors_including_self(*id).contains(&card_id))
-            .collect::<Vec<_>>();
-        self.0
-            .revoked
-            .write()
-            .unwrap()
-            .extend(cascade.iter().copied());
-        Ok(CardRevokeResult::Revoked(cascade))
-    }
-
-    async fn live_ancestor_ids_including_self(
-        &self,
-        card: &StoredCard,
-    ) -> Result<Vec<CardId>, WorkerExecutorError> {
-        let revoked = self.0.revoked.read().unwrap().clone();
-        Ok(self
-            .0
-            .ancestors_including_self(card.card_id())
-            .into_iter()
-            .filter(|id| !revoked.contains(id))
-            .collect())
-    }
-}
 
 fn card_grant(verb: &str) -> PolymorphicPermissionPattern {
     parse_polymorphic_permission(&format!("card(*) @ * : {verb} : *"))
@@ -178,19 +57,14 @@ async fn go_permission_cards_derive_lend_install_and_revoke(
     #[tagged_as("agent_sdk_go")] agent_sdk_go: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let registry = Arc::new(CardRegistry::default());
+    let registry = EmulatedRegistryService::start().await?;
     let worker_service = EmulatedWorkerService::start(WorkerServiceOptions::default()).await?;
     let executor = start_with_overrides(
         deps,
         &context,
-        TestExecutorOverrides {
-            create_card_service: Some(Arc::new({
-                let registry = registry.clone();
-                move || Arc::new(RegistryCardService(registry.clone()))
-            })),
-            ..Default::default()
-        }
-        .with_worker_service(&worker_service),
+        TestExecutorOverrides::default()
+            .with_registry(&registry)
+            .with_worker_service(&worker_service),
     )
     .await?;
 
@@ -221,7 +95,7 @@ async fn go_permission_cards_derive_lend_install_and_revoke(
             .map(|config| &config.initial_permissions)
             .cloned()
             .ok_or_else(|| anyhow::anyhow!("{agent_type} has no initial card"))?;
-        registry.add(StoredCard::Polymorphic(card));
+        registry.add_card(StoredCard::Polymorphic(card));
     }
 
     let issuer = agent_key!("CardIssuer", "go-card-issuer");
