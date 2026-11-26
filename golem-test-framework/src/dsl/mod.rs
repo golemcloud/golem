@@ -56,6 +56,7 @@ use golem_common::model::tool::{ToolBindingInput, ToolName};
 use golem_common::model::{AgentFilter, AgentStatus, IdempotencyKey, OplogIndex, ScanCursor};
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use std::collections::{BTreeMap, HashMap};
+use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -1249,6 +1250,25 @@ pub fn stdout_events(events: impl Iterator<Item = LogEvent>) -> Vec<String> {
         .collect()
 }
 
+/// How long a test waits for a gate or signal it armed itself; such a wait ends almost at once.
+pub const GATE_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// How long a test waits for an agent or oplog state that needs a reconstruction or a full
+/// invocation to reach.
+pub const SETTLE_TIMEOUT: Duration = Duration::from_secs(30);
+
+/// Awaits `future` for at most `timeout`. On a timeout the error names `what` the test waited
+/// for, as in `timed out after 10s waiting for the receive End gate`.
+pub async fn within<F: Future>(
+    timeout: Duration,
+    what: impl Display,
+    future: F,
+) -> anyhow::Result<F::Output> {
+    tokio::time::timeout(timeout, future)
+        .await
+        .map_err(|_| anyhow!("timed out after {timeout:?} waiting for {what}"))
+}
+
 pub fn stdout_event_matching(event: &LogEvent, s: &str) -> bool {
     if let LogEvent {
         event: Some(log_event::Event::Stdout(StdOutLog { message, .. })),
@@ -1566,6 +1586,23 @@ pub async fn build_ifs_archive(
 #[async_trait]
 pub trait WorkerLogEventStream: 'static + Send {
     async fn message(&mut self) -> anyhow::Result<Option<LogEvent>>;
+
+    /// Reads events until one is the stdout line `line`, as [`stdout_event_matching`] decides,
+    /// for at most `timeout`. The events before it are consumed. Fails when the stream ends
+    /// first or the timeout elapses.
+    async fn wait_for_stdout(&mut self, line: &str, timeout: Duration) -> anyhow::Result<()> {
+        within(timeout, format!("the stdout line {line:?}"), async {
+            while let Some(event) = self.message().await? {
+                if stdout_event_matching(&event, line) {
+                    return Ok(());
+                }
+            }
+            Err(anyhow!(
+                "the output stream ended before the stdout line {line:?}"
+            ))
+        })
+        .await?
+    }
 }
 
 #[cfg(test)]

@@ -105,13 +105,12 @@ use golem_worker_executor::services::environment_state::{
 use golem_worker_executor::worker::owner_lane::OwnerInvocationId;
 use golem_worker_executor_test_utils::agent_deployments_service::TestEnvironmentStateService;
 use golem_worker_executor_test_utils::callers;
-use golem_worker_executor_test_utils::dsl_impl::InvocationSessionRejection;
 use golem_worker_executor_test_utils::standalone_tool::StandaloneToolCall;
 use golem_worker_executor_test_utils::{
-    AgentInvocationSuccessGateHandle, LastUniqueId, OplogShape, PrecompiledComponent,
-    ReplayAdmissionStage, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, native_streaming_tool_metadata, native_test_tool_metadata,
-    start_with_overrides,
+    AgentInvocationSuccessGateHandle, InvocationErrorExt, LastUniqueId, OplogShape,
+    PrecompiledComponent, ReplayAdmissionStage, TestContext, TestExecutorOverrides,
+    TestWorkerExecutor, WorkerExecutorTestDependencies, native_streaming_tool_metadata,
+    native_test_tool_metadata, start_with_overrides,
 };
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::convert::Infallible;
@@ -24055,10 +24054,10 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
     let error = executor.invoke_agent_session(conflict).await.unwrap_err();
     assert_eq!(
         error
-            .downcast_ref::<InvocationSessionRejection>()
+            .invocation_error()
             .expect("typed rejection")
-            .reason,
-        InvocationRejectionReason::IdempotencyConflict
+            .rejection_reason(),
+        Some(InvocationRejectionReason::IdempotencyConflict)
     );
     assert_eq!(
         before,
@@ -24074,10 +24073,10 @@ async fn standalone_tool_owner_converges_and_recovers_without_repeating_effects(
     let error = executor.invoke_agent_session(conflict).await.unwrap_err();
     assert_eq!(
         error
-            .downcast_ref::<InvocationSessionRejection>()
+            .invocation_error()
             .expect("typed rejection")
-            .reason,
-        InvocationRejectionReason::IdempotencyConflict
+            .rejection_reason(),
+        Some(InvocationRejectionReason::IdempotencyConflict)
     );
     for error in [
         executor
@@ -24411,7 +24410,7 @@ async fn standalone_unaccepted_owner_rechecks_the_component_tool_activation(
     let rejected = executor.invoke_agent_session(unaccepted).await.unwrap_err();
     assert!(
         matches!(
-            &rejected.downcast_ref::<InvocationSessionRejection>().expect("typed rejection").worker_error,
+            rejected.invocation_error().expect("typed rejection").worker_error(),
             Some(WorkerExecutorError::InvalidRequest { details }) if details == "standalone durable owners require a component tool"
         ),
         "{rejected:#}"
@@ -25130,8 +25129,7 @@ async fn verify_retained_startup_failure_after_restart(
     .await
     .expect("a retained primary startup failure must answer a same-key caller");
     let failure = failure.expect_err("a terminal startup failure became a success");
-    let Some(WorkerExecutorError::FailedToResumeAgent { reason, .. }) =
-        failure.downcast_ref::<WorkerExecutorError>()
+    let Some(WorkerExecutorError::FailedToResumeAgent { reason, .. }) = failure.worker_error()
     else {
         anyhow::bail!("expected FailedToResumeAgent: {failure:#}");
     };

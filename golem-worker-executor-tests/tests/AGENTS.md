@@ -26,7 +26,11 @@ precedent for adding more.
 This is a preference, not an absolute ban. An unavoidable hook needs a concrete explanation of the
 otherwise untestable guarantee and must have the smallest practical scope. Do not replace causal
 synchronization with sleeps, retries, weaker assertions, reduced concurrency, or a copied state
-machine. Timeouts bound failures; they do not establish ordering.
+machine. Timeouts bound failures; they do not establish ordering. Bound a wait with
+`within(timeout, what, future)` from `golem_test_framework::dsl`, so that a timeout names what
+the test waited for, and use `GATE_TIMEOUT`, `SETTLE_TIMEOUT` or a named constant of the file.
+Wait for a stdout line with `WorkerLogEventStream::wait_for_stdout`. Check a rejected or failed
+invocation by its worker error with `assert_worker_error!`, not by the text of the error.
 
 ## Rules for durability, replay and RPC tests
 
@@ -40,9 +44,10 @@ machine. Timeouts bound failures; they do not establish ordering.
   after `End` before delivery, after `AgentInvocationFinished`, during the drain before
   `AgentInvocationSettled`, during snapshot load, and during an update, using `simulated_crash`,
   wrapped services, or a guest method that effects-then-traps.
-- **Restart for real.** Drop the executor and `start_with_overrides` again (in-process executor
-  teardown and recreation over the same storage — a genuine reconstruction, not OS process
-  death), or `simulated_crash`; a cursor reset or `resume` on a resident worker is not a restart.
+- **Restart for real.** `executor.restart(Teardown::Drop | Shutdown | Release)` (in-process
+  executor teardown and recreation over the same storage with the same start function — a
+  genuine reconstruction, not OS process death; `restart_with` changes the overrides on purpose),
+  or `simulated_crash`; a cursor reset or `resume` on a resident worker is not a restart.
   Then check both guest-visible state and oplog shape (`get_oplog`, `search_oplog`): one
   `Finished` per key; every `Start` in successfully settled history has a terminal, except a
   `LeaveIncompleteOnDrop` call that was in flight when its entity body was cancelled; any other

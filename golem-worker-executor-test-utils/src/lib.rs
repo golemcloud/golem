@@ -22,12 +22,16 @@ pub mod callers;
 pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
+pub mod invocation_error;
 pub mod oplog_shape;
 pub mod oplog_view;
+pub mod restart;
 pub mod standalone_tool;
 
+pub use invocation_error::{InvocationError, InvocationErrorExt};
 pub use oplog_shape::OplogShape;
 pub use oplog_view::{CallRecord, InvocationRecord, OplogView};
+pub use restart::Teardown;
 
 use self::agent_deployments_service::{
     ConfiguredRetryPoliciesEnvironmentStateService, DisabledEnvironmentStateService,
@@ -640,6 +644,8 @@ pub struct TestWorkerExecutor {
     concurrent_resource_entry: Option<Arc<AtomicResourceEntry>>,
     leak_detector: std::sync::Weak<()>,
     caller: Option<AuthCtx>,
+    /// The start function that created this executor, which `restart` calls again.
+    started_with: Option<restart::StartedWith>,
 }
 
 impl TestWorkerExecutor {
@@ -2977,11 +2983,14 @@ pub async fn start_with_redis_oplog_config(
 
     let mut config = make_base_test_config(deps);
     apply_redis_storage_config(&mut config, deps, context);
-    if let Some(oplog_config) = oplog_config_override {
+    if let Some(oplog_config) = oplog_config_override.clone() {
         config.oplog = oplog_config;
     }
 
-    start_executor_with_config(deps, context, config, TestExecutorOverrides::default()).await
+    let mut executor =
+        start_executor_with_config(deps, context, config, TestExecutorOverrides::default()).await?;
+    executor.started_with = Some(restart::StartedWith::RedisOplog(oplog_config_override));
+    Ok(executor)
 }
 
 /// Overrides for customizing the test executor. Allows wrapping services with
@@ -3536,6 +3545,7 @@ async fn start_executor_with_config(
                 concurrent_resource_entry: None,
                 leak_detector,
                 caller: None,
+                started_with: None,
             });
         } else if start.elapsed().as_secs() > 10 {
             break Err(anyhow::anyhow!("Timeout waiting for server to start"));
@@ -3558,7 +3568,9 @@ pub async fn start_with_overrides(
         configure(&mut config);
     }
 
-    start_executor_with_config(deps, context, config, overrides).await
+    let mut executor = start_executor_with_config(deps, context, config, overrides.clone()).await?;
+    executor.started_with = Some(restart::StartedWith::Overrides(Box::new(overrides)));
+    Ok(executor)
 }
 
 pub async fn start_customized(
@@ -3576,20 +3588,29 @@ pub async fn start_customized(
         system_memory_override,
         ..Default::default()
     };
-    if let Some(retry) = retry_override {
+    if let Some(retry) = retry_override.clone() {
         config.retry = retry;
     }
-    if let Some(snapshot_policy) = snapshot_policy_override {
+    if let Some(snapshot_policy) = snapshot_policy_override.clone() {
         config.oplog.default_snapshotting = snapshot_policy;
     }
-    if let Some(http_client) = http_client_override {
+    if let Some(http_client) = http_client_override.clone() {
         config.http_client = http_client;
     }
-    if let Some(oplog_config) = oplog_config_override {
+    if let Some(oplog_config) = oplog_config_override.clone() {
         config.oplog = oplog_config;
     }
 
-    start_executor_with_config(deps, context, config, TestExecutorOverrides::default()).await
+    let mut executor =
+        start_executor_with_config(deps, context, config, TestExecutorOverrides::default()).await?;
+    executor.started_with = Some(restart::StartedWith::Customized {
+        system_memory_override,
+        retry_override,
+        snapshot_policy_override,
+        http_client_override,
+        oplog_config_override,
+    });
+    Ok(executor)
 }
 
 async fn run(
@@ -5379,6 +5400,7 @@ async fn run_production_context_bootstrap(
                 concurrent_resource_entry,
                 leak_detector,
                 caller: None,
+                started_with: None,
             });
         } else if start.elapsed().as_secs() > 10 {
             return Err(anyhow::anyhow!(timeout_msg));

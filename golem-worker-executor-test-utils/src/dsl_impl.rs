@@ -14,6 +14,7 @@
 
 use super::TestWorkerExecutor;
 use crate::component_writer::CachedAnalysis;
+use crate::invocation_error::InvocationError;
 use anyhow::anyhow;
 use applying::Apply;
 use bytes::Bytes;
@@ -76,27 +77,6 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
 use uuid::Uuid;
-
-#[derive(Debug)]
-pub struct InvocationSessionRejection {
-    pub reason: golem_api_grpc::proto::golem::worker::InvocationRejectionReason,
-    pub message: String,
-    pub worker_error: Option<WorkerExecutorError>,
-}
-
-impl std::fmt::Display for InvocationSessionRejection {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "Agent invocation rejected ({}): {} ({:?})",
-            self.reason.as_str_name(),
-            self.message,
-            self.worker_error
-        )
-    }
-}
-
-impl std::error::Error for InvocationSessionRejection {}
 
 fn proto_agent_key(key: &ParsedAgentKey) -> anyhow::Result<ProtoAgentKey> {
     AgentKey::new(key.agent_type.clone(), key.parameters.clone())
@@ -382,16 +362,7 @@ impl TestWorkerExecutor {
                     | invocation_response::Response::Ready(_),
                 ) => {}
                 Some(invocation_response::Response::Rejected(rejected)) => {
-                    terminal = Some(Err(InvocationSessionRejection {
-                        reason: rejected.reason.try_into()?,
-                        message: rejected.error,
-                        worker_error: rejected
-                            .worker_error
-                            .map(WorkerExecutorError::try_from)
-                            .transpose()
-                            .map_err(anyhow::Error::msg)?,
-                    }
-                    .into()));
+                    terminal = Some(Err(InvocationError::rejected(rejected).into()));
                 }
                 Some(invocation_response::Response::Result(invocation_result)) => {
                     result = Some(invocation_result);
@@ -402,15 +373,7 @@ impl TestWorkerExecutor {
                             .take()
                             .ok_or_else(|| anyhow!("invocation completed without a result")),
                         Some(Outcome::Failure(failure)) => {
-                            let message = format!("Agent invocation failed: {failure:?}");
-                            Err(match failure.worker_error {
-                                Some(error) => anyhow::Error::new(
-                                    WorkerExecutorError::try_from(error)
-                                        .map_err(anyhow::Error::msg)?,
-                                )
-                                .context(message),
-                                None => anyhow!(message),
-                            })
+                            Err(InvocationError::failed(failure).into())
                         }
                         None => Err(anyhow!("invocation completion has no outcome")),
                     });

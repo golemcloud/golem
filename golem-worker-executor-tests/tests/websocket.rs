@@ -23,9 +23,11 @@ use golem_common::model::{AgentStatus, IdempotencyKey, PromiseId};
 use golem_common::schema::schema_value::ResultValuePayload;
 use golem_common::schema::{FromSchema, SchemaValue};
 use golem_common::{agent_key, data_value};
-use golem_test_framework::dsl::{TestDsl, WorkerLogEventStream, stdout_event_matching};
+use golem_test_framework::dsl::{
+    GATE_TIMEOUT, SETTLE_TIMEOUT, TestDsl, WorkerLogEventStream, within,
+};
 use golem_worker_executor_test_utils::{
-    LastUniqueId, OplogView, PrecompiledComponent, ReplayAdmissionStage, TestContext,
+    LastUniqueId, OplogView, PrecompiledComponent, ReplayAdmissionStage, Teardown, TestContext,
     TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies, start,
     start_with_overrides,
 };
@@ -58,6 +60,22 @@ inherit_test_dep!(
     #[tagged_as("tool_streaming_effect_caller")]
     PrecompiledComponent
 );
+
+/// How long a test waits for a websocket pool permit that no call is expected to hold.
+const POOL_PERMIT_TIMEOUT: Duration = Duration::from_secs(5);
+/// How long a test polls the oplog for the calls of an invocation it started.
+const OPLOG_PROGRESS_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long an invocation may take that must not wait for the pool permit the test holds.
+const UNBLOCKED_INVOCATION_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a test waits for a test peer to accept connections or observe frames.
+const PEER_STATE_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a test waits for an agent to reach the status that an interrupt or a parked call
+/// leads to.
+const STATUS_TIMEOUT: Duration = Duration::from_secs(10);
+/// How long a test waits for an agent to finish its invocations and become idle.
+const IDLE_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a test waits for the echo server to reach a connection and message count.
+const SERVER_STATE_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct ServerEvent {
@@ -102,9 +120,7 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
         .into_return_value()
         .ok_or_else(|| anyhow!("expected promise return value"))?;
     let cancel = promise_id_from_value(&cancel_value);
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    executor = start(deps, &context).await?;
+    executor = executor.restart(Teardown::Shutdown).await?;
     executor
         .invoke_and_await_agent(&component, &agent_id, "noop", data_value!())
         .await?;
@@ -120,7 +136,12 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
             crate::raw_params(vec![cancel_value.clone()]),
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(10), end.entered()).await?;
+    within(
+        GATE_TIMEOUT,
+        "the End gate of the discarded receive",
+        end.entered(),
+    )
+    .await?;
     let discarded_start = end.start_index();
     let prefix = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert!(
@@ -136,15 +157,9 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
     executor
         .complete_promise(&context.default_environment_id, &cancel, vec![1])
         .await?;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        while let Some(event) = output.message().await? {
-            if stdout_event_matching(&event, "report-loss receive discarded\n") {
-                return Ok::<_, anyhow::Error>(());
-            }
-        }
-        Err(anyhow!("guest output ended before receive discard"))
-    })
-    .await??;
+    output
+        .wait_for_stdout("report-loss receive discarded\n", GATE_TIMEOUT)
+        .await?;
     drop(end);
     assert!(
         executor
@@ -161,9 +176,7 @@ async fn websocket_report_loss_guest_discards_completion_and_replay_stays_termin
     let mut original_discard = None;
     for replay in [false, true] {
         if replay {
-            executor.shutdown_and_wait_for_invocation_loops().await?;
-            drop(executor);
-            executor = start(deps, &context).await?;
+            executor = executor.restart(Teardown::Shutdown).await?;
         }
         assert_eq!(
             executor
@@ -248,9 +261,7 @@ async fn websocket_report_loss_replacement_connect_and_initialization_crashes(
                 data_value!(original.url()),
             )
             .await?;
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        drop(executor);
-        executor = start(deps, &context).await?;
+        executor = executor.restart(Teardown::Shutdown).await?;
         assert_eq!(
             executor
                 .invoke_and_await_agent(&component, &agent_id, "probe_report_loss", data_value!())
@@ -271,14 +282,14 @@ async fn websocket_report_loss_replacement_connect_and_initialization_crashes(
                 data_value!(replacement.url()),
             )
             .await?;
-        tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
+        within(GATE_TIMEOUT, "the gated call End", gate.entered()).await?;
         if initialization {
             let next = executor
                 .gate_next_call_end(&worker_id.agent_id, after_end)
                 .await;
             drop(gate);
             gate = next;
-            tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
+            within(GATE_TIMEOUT, "the gated call End", gate.entered()).await?;
         }
         let target = gate.start_index();
         gate.abort();
@@ -292,11 +303,10 @@ async fn websocket_report_loss_replacement_connect_and_initialization_crashes(
         assert!(oplog.iter().any(|entry| entry.oplog_index == target && matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.ends_with(function))), "{}", oplog.describe());
         assert_call_terminal_counts(&oplog, target, usize::from(after_end), 0);
         drop(gate);
-        drop(executor);
 
         // Crash a fresh connect a second time while its original Start is still incomplete.
         if !initialization && !after_end {
-            executor = start(deps, &context).await?;
+            executor = executor.restart(Teardown::Drop).await?;
             let mut gate = executor
                 .gate_next_call_end(&worker_id.agent_id, false)
                 .await;
@@ -309,16 +319,15 @@ async fn websocket_report_loss_replacement_connect_and_initialization_crashes(
                     data_value!(replacement.url()),
                 )
                 .await?;
-            tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
+            within(GATE_TIMEOUT, "the gated call End", gate.entered()).await?;
             assert_eq!(gate.start_index(), target);
             gate.abort();
             executor.shutdown_and_wait_for_invocation_loops().await?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
             assert!(oplog.call(target).ends.is_empty(), "{}", oplog.describe());
             drop(gate);
-            drop(executor);
         }
-        executor = start(deps, &context).await?;
+        executor = executor.restart(Teardown::Drop).await?;
         let result = executor
             .invoke_and_await_agent_with_key(
                 &component,
@@ -358,9 +367,7 @@ async fn websocket_report_loss_replacement_connect_and_initialization_crashes(
                 .into_typed::<Result<String, String>>()?,
             Ok(RECONNECT_FIRST_MESSAGE.to_string())
         );
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        drop(executor);
-        executor = start(deps, &context).await?;
+        executor = executor.restart(Teardown::Shutdown).await?;
         assert_eq!(
             executor
                 .invoke_and_await_agent(&component, &agent_id, "probe_report_loss", data_value!())
@@ -392,8 +399,7 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
         configure: Some(Arc::new(|config| config.max_websocket_connections = 1)),
         ..Default::default()
     };
-    let start_executor = || start_with_overrides(deps, &context, overrides.clone());
-    let mut executor = start_executor().await?;
+    let mut executor = start_with_overrides(deps, &context, overrides).await?;
     let mut peer = ReconnectTestServer::start().await;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -430,7 +436,7 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
             data_value!("ambiguous-send".to_string()),
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
+    within(GATE_TIMEOUT, "the gated call End", gate.entered()).await?;
     gate.abort();
     executor.shutdown_and_wait_for_invocation_loops().await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -468,12 +474,11 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
         "observe the historical completed send",
     ).await?;
     drop(gate);
-    drop(executor);
 
     // Repeatedly reconstruct the same unfinished send, first before its loss End,
     // then with that End durable but before guest completion delivery.
     for after_end in [false, true] {
-        executor = start_executor().await?;
+        executor = executor.restart(Teardown::Drop).await?;
         let mut admission = executor.gate_next_replay_access_admission(
             &worker_id.agent_id,
             "client::connect",
@@ -491,11 +496,21 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
                 data_value!("ambiguous-send".to_string()),
             )
             .await?;
-        tokio::time::timeout(Duration::from_secs(10), admission.entered()).await?;
+        within(
+            GATE_TIMEOUT,
+            "the replay admission of the reconstructed connect",
+            admission.entered(),
+        )
+        .await?;
         let pool = executor.websocket_connection_pool().expect("captured pool");
-        let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
+        let permit = within(
+            POOL_PERMIT_TIMEOUT,
+            "a websocket pool permit",
+            pool.acquire(),
+        )
+        .await??;
         admission.release();
-        tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
+        within(GATE_TIMEOUT, "the gated call End", gate.entered()).await?;
         gate.abort();
         executor.shutdown_and_wait_for_invocation_loops().await?;
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -503,9 +518,8 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
         assert_eq!(peer.completed_handshakes(), 1);
         drop(gate);
         drop(permit);
-        drop(executor);
     }
-    executor = start_executor().await?;
+    executor = executor.restart(Teardown::Drop).await?;
     let result = executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -517,17 +531,20 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
         .await?
         .into_typed::<Result<(), String>>()?;
     assert_eq!(result, Err("Send error: Error::SessionLost".into()));
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
 
     // Async receives on the lost handle must retain the End/delivery split too.
     for after_end in [false, true] {
-        executor = start_executor().await?;
+        executor = executor.restart(Teardown::Shutdown).await?;
         executor
             .invoke_and_await_agent(&component, &agent_id, "noop", data_value!())
             .await?;
         let pool = executor.websocket_connection_pool().expect("captured pool");
-        let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
+        let permit = within(
+            POOL_PERMIT_TIMEOUT,
+            "a websocket pool permit",
+            pool.acquire(),
+        )
+        .await??;
         let key = IdempotencyKey::fresh();
         let mut gate = executor
             .gate_next_call_end(&worker_id.agent_id, after_end)
@@ -541,7 +558,7 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
                 data_value!(CONTENTION_TIMEOUT_MS),
             )
             .await?;
-        tokio::time::timeout(Duration::from_secs(10), gate.entered()).await?;
+        within(GATE_TIMEOUT, "the gated call End", gate.entered()).await?;
         gate.abort();
         executor.shutdown_and_wait_for_invocation_loops().await?;
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -550,8 +567,7 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
         assert!(oplog.iter().any(|entry| entry.oplog_index == start && matches!(&entry.entry, PublicOplogEntry::Start(params) if params.function_name.ends_with("::receive") || params.function_name.ends_with("::receive-with-timeout"))), "{}", oplog.describe());
         drop(gate);
         drop(permit);
-        drop(executor);
-        executor = start_executor().await?;
+        executor = executor.restart(Teardown::Drop).await?;
         assert_eq!(
             executor
                 .invoke_and_await_agent_with_key(
@@ -567,10 +583,8 @@ async fn websocket_report_loss_exact_send_and_receive_crash_prefixes(
         );
         let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
         assert_call_terminal_counts(&oplog, start, 1, 1);
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        drop(executor);
     }
-    executor = start_executor().await?;
+    executor = executor.restart(Teardown::Shutdown).await?;
     assert_eq!(
         executor
             .invoke_and_await_agent(&component, &agent_id, "probe_report_loss", data_value!())
@@ -613,10 +627,9 @@ async fn websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start(
         configure: Some(Arc::new(|config| config.max_websocket_connections = 1)),
         ..Default::default()
     };
-    let start_executor = || start_with_overrides(deps, &context, overrides.clone());
     for (recorded, missing) in [(RECEIVE, TIMED), (TIMED, RECEIVE)] {
         for after_end in [false, true] {
-            let mut executor = start_executor().await?;
+            let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
             let mut peer = ReconnectTestServer::start().await;
             let component = executor
                 .component_dep(&context.default_environment_id, host_api_tests)
@@ -640,17 +653,20 @@ async fn websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start(
                     data_value!(peer.url()),
                 )
                 .await?;
-            executor.shutdown_and_wait_for_invocation_loops().await?;
-            drop(executor);
 
             // Live: the missing sibling stops before appending its Start while the recorded
             // sibling reaches its End, then the executor crashes.
-            executor = start_executor().await?;
+            executor = executor.restart(Teardown::Shutdown).await?;
             executor
                 .invoke_and_await_agent(&component, &agent_id, "noop", data_value!())
                 .await?;
             let pool = executor.websocket_connection_pool().expect("captured pool");
-            let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
+            let permit = within(
+                POOL_PERMIT_TIMEOUT,
+                "a websocket pool permit",
+                pool.acquire(),
+            )
+            .await??;
             let mut live_hold = executor.gate_next_replay_access_admission(
                 &worker_id.agent_id,
                 missing,
@@ -669,8 +685,18 @@ async fn websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start(
                     data_value!(CONTENTION_TIMEOUT_MS),
                 )
                 .await?;
-            tokio::time::timeout(Duration::from_secs(10), live_hold.entered()).await?;
-            tokio::time::timeout(Duration::from_secs(10), end_gate.entered()).await?;
+            within(
+                GATE_TIMEOUT,
+                "the missing sibling to stop before its live Start",
+                live_hold.entered(),
+            )
+            .await?;
+            within(
+                GATE_TIMEOUT,
+                "the End gate of the recorded sibling",
+                end_gate.entered(),
+            )
+            .await?;
             end_gate.abort();
             executor.shutdown_and_wait_for_invocation_loops().await?;
             let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -693,11 +719,10 @@ async fn websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start(
             drop(live_hold);
             drop(end_gate);
             drop(permit);
-            drop(executor);
 
             // Replay: the recorded sibling is held before its claim, and the missing sibling must
             // continue live while the recorded Start is still unclaimed.
-            executor = start_executor().await?;
+            executor = executor.restart(Teardown::Drop).await?;
             // The earlier `connect_report_loss` invocation replays the same function first.
             let mut earlier_occurrence = executor.gate_next_replay_access_admission(
                 &worker_id.agent_id,
@@ -723,10 +748,25 @@ async fn websocket_report_loss_recovers_a_crash_prefix_with_one_sibling_start(
                     data_value!(CONTENTION_TIMEOUT_MS),
                 )
                 .await?;
-            tokio::time::timeout(Duration::from_secs(10), earlier_occurrence.entered()).await?;
+            within(
+                GATE_TIMEOUT,
+                "the replay admission of the earlier connect_report_loss occurrence",
+                earlier_occurrence.entered(),
+            )
+            .await?;
             earlier_occurrence.release();
-            tokio::time::timeout(Duration::from_secs(10), recorded_hold.entered()).await?;
-            tokio::time::timeout(Duration::from_secs(10), missing_live.entered()).await?;
+            within(
+                GATE_TIMEOUT,
+                "the recorded sibling to reach its replay claim",
+                recorded_hold.entered(),
+            )
+            .await?;
+            within(
+                GATE_TIMEOUT,
+                "the missing sibling to reach its live Start",
+                missing_live.entered(),
+            )
+            .await?;
             missing_live.release();
             recorded_hold.release();
             assert_eq!(
@@ -831,9 +871,7 @@ async fn websocket_report_loss_preserves_live_disconnect_and_recorded_close(
                     .into_typed::<Result<(), String>>()?,
                 Ok(())
             );
-            executor.shutdown_and_wait_for_invocation_loops().await?;
-            drop(executor);
-            executor = start(deps, &context).await?;
+            executor = executor.restart(Teardown::Shutdown).await?;
             "receive_is_closed"
         } else {
             peer.stop().await?;
@@ -891,9 +929,7 @@ async fn websocket_default_policy_reports_session_loss_after_restart(
                 .into_typed::<String>()?,
             RECONNECT_FIRST_MESSAGE
         );
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        drop(executor);
-        executor = start(deps, &context).await?;
+        executor = executor.restart(Teardown::Shutdown).await?;
 
         let first = if first_access == "send_persisted_result" {
             executor
@@ -971,9 +1007,7 @@ async fn websocket_reconstruction_policies_are_independent_in_one_worker(
         )
     );
     report_peer.wait_for_count(1, |event| matches!(event, ReconnectServerEvent::FrameReceived(text) if text == "completed-before-crash"), "receive completed report-policy send").await?;
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    let executor = start(deps, &context).await?;
+    let executor = executor.restart(Teardown::Shutdown).await?;
     assert_eq!(
         executor
             .invoke_and_await_agent(&component, &agent_id, "probe_both_policies", data_value!())
@@ -1026,16 +1060,22 @@ async fn websocket_report_loss_effect_joins_initialization_before_replacement(
         )
         .await?;
     old_peer.wait_for_count(1, |event| matches!(event, ReconnectServerEvent::FrameReceived(text) if text == "initialize-old"), "receive old initialization").await?;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            executor.commit_oplog(&worker_id.agent_id).await?;
-            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            if starts_of_websocket_function(&oplog, "golem:websocket/client::receive").len() == 2 {
-                return Ok::<_, anyhow::Error>(());
+    within(
+        OPLOG_PROGRESS_TIMEOUT,
+        "the pending read's receive Start",
+        async {
+            loop {
+                executor.commit_oplog(&worker_id.agent_id).await?;
+                let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                if starts_of_websocket_function(&oplog, "golem:websocket/client::receive").len()
+                    == 2
+                {
+                    return Ok::<_, anyhow::Error>(());
+                }
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
-        }
-    })
+        },
+    )
     .await??;
     executor.shutdown_and_wait_for_invocation_loops().await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -1050,8 +1090,7 @@ async fn websocket_report_loss_effect_joins_initialization_before_replacement(
         "the pending read has no End: {}",
         oplog.describe()
     );
-    drop(executor);
-    let executor = start(deps, &context).await?;
+    let executor = executor.restart(Teardown::Drop).await?;
     let result = executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -1113,9 +1152,7 @@ async fn websocket_report_loss_ts_public_wrapper_replacement(
             .into_typed::<String>()?,
         RECONNECT_FIRST_MESSAGE
     );
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    let executor = start(deps, &context).await?;
+    let executor = executor.restart(Teardown::Shutdown).await?;
     assert_eq!(
         executor
             .invoke_and_await_agent(&component, &agent_id, "probeReportLoss", data_value!())
@@ -1162,7 +1199,7 @@ async fn websocket_report_loss_absorbs_repeated_restart_without_pool_io(
         ..Default::default()
     };
     let context = TestContext::new(last_unique_id);
-    let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let mut executor = start_with_overrides(deps, &context, overrides).await?;
     let mut peer = ReconnectTestServer::start().await;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
@@ -1193,9 +1230,7 @@ async fn websocket_report_loss_absorbs_repeated_restart_without_pool_io(
     )
     .await?;
     for _ in 0..3 {
-        executor.shutdown_and_wait_for_invocation_loops().await?;
-        drop(executor);
-        executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        executor = executor.restart(Teardown::Shutdown).await?;
         // Activating first reconstructs completed receive and timeout calls.
         assert_eq!(
             executor
@@ -1207,10 +1242,16 @@ async fn websocket_report_loss_absorbs_repeated_restart_without_pool_io(
         let pool = executor
             .websocket_connection_pool()
             .expect("captured websocket pool");
-        let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
+        let permit = within(
+            POOL_PERMIT_TIMEOUT,
+            "a websocket pool permit",
+            pool.acquire(),
+        )
+        .await??;
         // Loss must not wait for even the only permit, including close.
-        let result = tokio::time::timeout(
-            Duration::from_secs(10),
+        let result = within(
+            UNBLOCKED_INVOCATION_TIMEOUT,
+            "probe_report_loss while the test holds the only pool permit",
             executor.invoke_and_await_agent(
                 &component,
                 &agent_id,
@@ -1236,9 +1277,15 @@ async fn websocket_report_loss_absorbs_repeated_restart_without_pool_io(
     let pool = executor
         .websocket_connection_pool()
         .expect("captured websocket pool");
-    let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire()).await??;
-    tokio::time::timeout(
-        Duration::from_secs(10),
+    let permit = within(
+        POOL_PERMIT_TIMEOUT,
+        "a websocket pool permit",
+        pool.acquire(),
+    )
+    .await??;
+    within(
+        UNBLOCKED_INVOCATION_TIMEOUT,
+        "drop_persisted while the test holds the only pool permit",
         executor.invoke_and_await_agent(&component, &agent_id, "drop_persisted", data_value!()),
     )
     .await??;
@@ -1287,17 +1334,21 @@ async fn websocket_report_loss_pending_receives_after_restart(
             data_value!(CONTENTION_TIMEOUT_MS),
         )
         .await?;
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            executor.commit_oplog(&worker_id.agent_id).await?;
-            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            if contention_receive_starts(&oplog).len() == 2 {
-                assert_contention_receives_incomplete(&oplog);
-                return Ok::<_, anyhow::Error>(());
+    within(
+        OPLOG_PROGRESS_TIMEOUT,
+        "both contention receive Starts",
+        async {
+            loop {
+                executor.commit_oplog(&worker_id.agent_id).await?;
+                let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                if contention_receive_starts(&oplog).len() == 2 {
+                    assert_contention_receives_incomplete(&oplog);
+                    return Ok::<_, anyhow::Error>(());
+                }
+                tokio::task::yield_now().await;
             }
-            tokio::task::yield_now().await;
-        }
-    })
+        },
+    )
     .await??;
     peer.wait_for_count(
         1,
@@ -1311,8 +1362,7 @@ async fn websocket_report_loss_pending_receives_after_restart(
     executor.shutdown_and_wait_for_invocation_loops().await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_contention_receives_incomplete(&oplog);
-    drop(executor);
-    let executor = start(deps, &context).await?;
+    let executor = executor.restart(Teardown::Drop).await?;
     let result = executor
         .invoke_and_await_agent_with_key(
             &component,
@@ -1440,13 +1490,16 @@ impl TwoPathPeer {
     }
 
     async fn wait_for_second_connections(&self, count: usize) -> anyhow::Result<()> {
-        tokio::time::timeout(Duration::from_secs(10), async {
-            while self.second_connections.load(Ordering::SeqCst) < count {
-                tokio::time::sleep(Duration::from_millis(10)).await;
-            }
-        })
+        within(
+            PEER_STATE_TIMEOUT,
+            format!("the peer to accept {count} connection(s) on /second"),
+            async {
+                while self.second_connections.load(Ordering::SeqCst) < count {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+            },
+        )
         .await
-        .map_err(|_| anyhow!("the peer did not accept {count} connection(s) on /second"))
     }
 }
 
@@ -1487,29 +1540,32 @@ async fn receive_from_two_sockets_after_crash(
     let delivered = |oplog: &[PublicOplogEntryWithIndex], start: OplogIndex| {
         !oplog.call(start).deliveries.is_empty()
     };
-    tokio::time::timeout(Duration::from_secs(10), async {
-        loop {
-            executor.commit_oplog(&worker_id.agent_id).await?;
-            let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
-            let starts = receive_starts(&oplog);
-            if starts.len() == 2 {
-                let completed = starts
-                    .iter()
-                    .filter(|start| has_end(&oplog, **start) && delivered(&oplog, **start))
-                    .count();
-                let open = starts
-                    .iter()
-                    .filter(|start| !has_end(&oplog, **start))
-                    .count();
-                if completed == 1 && open == 1 {
-                    return Ok::<_, anyhow::Error>(());
+    within(
+        OPLOG_PROGRESS_TIMEOUT,
+        "the first receive to complete while the second stays open",
+        async {
+            loop {
+                executor.commit_oplog(&worker_id.agent_id).await?;
+                let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                let starts = receive_starts(&oplog);
+                if starts.len() == 2 {
+                    let completed = starts
+                        .iter()
+                        .filter(|start| has_end(&oplog, **start) && delivered(&oplog, **start))
+                        .count();
+                    let open = starts
+                        .iter()
+                        .filter(|start| !has_end(&oplog, **start))
+                        .count();
+                    if completed == 1 && open == 1 {
+                        return Ok::<_, anyhow::Error>(());
+                    }
                 }
+                tokio::time::sleep(Duration::from_millis(10)).await;
             }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-    })
-    .await
-    .map_err(|_| anyhow!("the first receive did not complete while the second stayed open"))??;
+        },
+    )
+    .await??;
 
     let gates = match claim_order {
         TwoSocketClaimOrder::Natural => None,
@@ -1530,17 +1586,25 @@ async fn receive_from_two_sockets_after_crash(
     };
     executor.simulated_crash(&worker_id).await?;
     if let Some((mut held, mut other, mut other_claimed)) = gates {
-        let gate_timeout = Duration::from_secs(10);
-        tokio::time::timeout(gate_timeout, held.entered())
-            .await
-            .map_err(|_| anyhow!("the first replayed receive did not reach its claim"))?;
-        tokio::time::timeout(gate_timeout, other.entered())
-            .await
-            .map_err(|_| anyhow!("the second replayed receive did not reach its claim"))?;
+        within(
+            GATE_TIMEOUT,
+            "the first replayed receive to reach its claim",
+            held.entered(),
+        )
+        .await?;
+        within(
+            GATE_TIMEOUT,
+            "the second replayed receive to reach its claim",
+            other.entered(),
+        )
+        .await?;
         other.release();
-        tokio::time::timeout(gate_timeout, other_claimed.entered())
-            .await
-            .map_err(|_| anyhow!("the second replayed receive did not claim a Start"))?;
+        within(
+            GATE_TIMEOUT,
+            "the second replayed receive to claim a Start",
+            other_claimed.entered(),
+        )
+        .await?;
         held.release();
         other_claimed.release();
     }
@@ -1550,8 +1614,9 @@ async fn receive_from_two_sockets_after_crash(
     peer.wait_for_second_connections(2).await?;
     peer.release_second.send_replace(true);
 
-    let result = tokio::time::timeout(
-        Duration::from_secs(30),
+    let result = within(
+        SETTLE_TIMEOUT,
+        "the replayed invocation to complete",
         executor.invoke_and_await_agent_with_key(
             component,
             &agent_id,
@@ -1560,8 +1625,7 @@ async fn receive_from_two_sockets_after_crash(
             data_value!(peer.url("/first"), peer.url("/second")),
         ),
     )
-    .await
-    .map_err(|_| anyhow!("the replayed invocation did not complete"))??
+    .await??
     .into_typed::<(String, String)>()?;
     assert_eq!(
         result,
@@ -1766,13 +1830,11 @@ async fn websocket_echo_rust_oplog_replay(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    // Drop the executor to force replay on next activation. Keep server running
-    // so the second invocation can still do live websocket I/O.
-    drop(executor);
-
-    // Restarting does not directly invoke guest functions; replay is performed
-    // when this worker is activated by the next invocation.
-    let executor = start(deps, &context).await?;
+    // Restart the executor to force replay on next activation. Keep server running
+    // so the second invocation can still do live websocket I/O. Restarting does not
+    // directly invoke guest functions; replay is performed when this worker is
+    // activated by the next invocation.
+    let executor = executor.restart(Teardown::Drop).await?;
 
     // Second invocation: replay reconstructs agent state from the first invoke.
     // We append another message and assert we now observe "m1|m2".
@@ -1889,7 +1951,7 @@ async fn websocket_reconnect_replays_completed_steps_and_continues_live(
         )
         .await?;
     executor
-        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Suspended, STATUS_TIMEOUT)
         .await?;
     wait_for_server_state(&accepted_connections, &transcript, 1, 2).await?;
     assert_eq!(
@@ -1907,9 +1969,7 @@ async fn websocket_reconnect_replays_completed_steps_and_continues_live(
     );
 
     executor.check_oplog_is_queryable(&worker_id).await?;
-    drop(executor);
-
-    let executor = start(deps, &context).await?;
+    let executor = executor.restart(Teardown::Drop).await?;
     tokio::time::sleep(Duration::from_millis(100)).await;
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
     assert_eq!(transcript.lock().unwrap().len(), 2);
@@ -2063,15 +2123,13 @@ async fn websocket_reconnect_failure_returns_guest_error(
         )
         .await?;
     executor
-        .wait_for_status(&worker_id, AgentStatus::Suspended, Duration::from_secs(10))
+        .wait_for_status(&worker_id, AgentStatus::Suspended, STATUS_TIMEOUT)
         .await?;
     wait_for_server_state(&accepted_connections, &transcript, 1, 2).await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
     ws_server.abort();
-    drop(executor);
-
-    let executor = start(deps, &context).await?;
+    let executor = executor.restart(Teardown::Drop).await?;
 
     executor
         .complete_promise(
@@ -2193,9 +2251,7 @@ async fn websocket_closed_connection_stays_terminal_after_replay(
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
-    drop(executor);
-
-    let executor = start(deps, &context).await?;
+    let executor = executor.restart(Teardown::Drop).await?;
     let replayed_result = executor
         .invoke_and_await_agent(
             &component,
@@ -2327,9 +2383,7 @@ async fn websocket_successful_close_terminalizes_handle_and_prevents_reconnect(
     assert_eq!(accepted_connections.load(Ordering::SeqCst), 1);
 
     executor.check_oplog_is_queryable(&worker_id).await?;
-    drop(executor);
-
-    let executor = start(deps, &context).await?;
+    let executor = executor.restart(Teardown::Drop).await?;
     let replayed_result = executor
         .invoke_and_await_agent(
             &component,
@@ -2389,7 +2443,10 @@ async fn wait_for_server_state(
     expected_connections: usize,
     expected_messages: usize,
 ) -> anyhow::Result<()> {
-    tokio::time::timeout(Duration::from_secs(5), async {
+    let what = format!(
+        "the websocket server to reach {expected_connections} connections and {expected_messages} messages"
+    );
+    within(SERVER_STATE_TIMEOUT, what, async {
         loop {
             let actual_connections = accepted_connections.load(Ordering::SeqCst);
             let actual_messages = transcript.lock().unwrap().len();
@@ -2408,11 +2465,6 @@ async fn wait_for_server_state(
         }
     })
     .await
-    .map_err(|_| {
-        anyhow!(
-            "Timed out waiting for websocket server state: expected {expected_connections} connections and {expected_messages} messages"
-        )
-    })
 }
 
 #[test]
@@ -2773,9 +2825,7 @@ async fn websocket_async_bidirectional_test_oplog_replay(
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
-    drop(executor);
-
-    let executor = start(deps, &context).await?;
+    let executor = executor.restart(Teardown::Drop).await?;
 
     let second_result = executor
         .invoke_and_await_agent(
@@ -3129,7 +3179,7 @@ impl ReconnectTestServer {
         predicate: impl Fn(&ReconnectServerEvent) -> bool,
         description: &str,
     ) -> anyhow::Result<()> {
-        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let deadline = std::time::Instant::now() + PEER_STATE_TIMEOUT;
         loop {
             // The notified future is created before the condition check so no
             // wake-up between the check and the await is missed.
@@ -3663,14 +3713,14 @@ async fn wait_for_contention_receives_to_park(
     worker_id: &golem_common::model::OwnedAgentId,
 ) -> anyhow::Result<()> {
     executor
-        .wait_for_status(worker_id, AgentStatus::Running, Duration::from_secs(10))
+        .wait_for_status(worker_id, AgentStatus::Running, STATUS_TIMEOUT)
         .await?;
     wait_for_oplog(
         executor,
         worker_id,
         |oplog| contention_invocation_started(oplog).is_some(),
         "commit the contention invocation's AgentInvocationStarted entry",
-        Duration::from_secs(10),
+        OPLOG_PROGRESS_TIMEOUT,
     )
     .await?;
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -3754,11 +3804,7 @@ async fn websocket_reconnect_concurrent_receives_complete_after_reconstruction(
     // Interrupting abandons both receives with their `Start`s left incomplete.
     executor.interrupt(&worker_id).await?;
     executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, STATUS_TIMEOUT)
         .await?;
 
     // The interrupt commits the oplog, so both abandoned receive-family
@@ -3774,7 +3820,7 @@ async fn websocket_reconnect_concurrent_receives_complete_after_reconstruction(
     // follower parks on the pool and the worker never returns to idle.
     executor.resume(&worker_id, false).await?;
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
 
     // The retained invocation finished exactly once; its recorded result holds
@@ -3916,11 +3962,7 @@ async fn websocket_reconnect_coordination_admits_one_accessor_reconnect(
 
     executor.interrupt(&worker_id).await?;
     executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, STATUS_TIMEOUT)
         .await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_contention_receives_incomplete(&oplog);
@@ -3962,7 +4004,7 @@ async fn websocket_reconnect_coordination_admits_one_accessor_reconnect(
     // connection and the queued call reuse it; both receives complete.
     ws_server.release_hold();
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
 
     let result = executor
@@ -4038,7 +4080,7 @@ async fn websocket_reconnect_coordination_after_executor_restart(
         ..Default::default()
     };
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
 
     let mut ws_server = ReconnectTestServer::start().await;
     let url = ws_server.url();
@@ -4079,9 +4121,7 @@ async fn websocket_reconnect_coordination_after_executor_restart(
 
     // Crashing the executor while both receives are parked abandons the
     // retained invocation with its durable calls left incomplete.
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let executor = executor.restart(Teardown::Shutdown).await?;
 
     // The same-key invocation on the fresh executor recovers the worker; the
     // recovered handle is a `Replay` entry, and withhold its reconnect
@@ -4123,7 +4163,7 @@ async fn websocket_reconnect_coordination_after_executor_restart(
 
     ws_server.release_hold();
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
 
     let result = executor
@@ -4225,11 +4265,7 @@ async fn websocket_reconnect_coordination_with_spare_pool_permits(
 
     executor.interrupt(&worker_id).await?;
     executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, STATUS_TIMEOUT)
         .await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_contention_receives_incomplete(&oplog);
@@ -4258,7 +4294,7 @@ async fn websocket_reconnect_coordination_with_spare_pool_permits(
 
     ws_server.release_hold();
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
 
     let result = executor
@@ -4362,11 +4398,7 @@ async fn websocket_reconnect_failure_publishes_terminal_outcome(
 
     executor.interrupt(&worker_id).await?;
     executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, STATUS_TIMEOUT)
         .await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_contention_receives_incomplete(&oplog);
@@ -4389,7 +4421,7 @@ async fn websocket_reconnect_failure_publishes_terminal_outcome(
     ws_server.reject_hold();
 
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
 
     assert_eq!(ws_server.handshakes_rejected(), 1);
@@ -4423,9 +4455,12 @@ async fn websocket_reconnect_failure_publishes_terminal_outcome(
     let pool = executor
         .websocket_connection_pool()
         .expect("the executor's websocket connection pool is captured");
-    let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
-        .await
-        .expect("the failed reconnect must not leak its pool permit")?;
+    let permit = within(
+        POOL_PERMIT_TIMEOUT,
+        "the pool permit that the failed reconnect must not leak",
+        pool.acquire(),
+    )
+    .await??;
     drop(permit);
 
     // A fresh connection to the same peer completes normally after the
@@ -4560,18 +4595,10 @@ async fn websocket_reconnect_coordination_is_per_handle(
     executor.interrupt(&worker_id_a).await?;
     executor.interrupt(&worker_id_b).await?;
     executor
-        .wait_for_status(
-            &worker_id_a,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
+        .wait_for_status(&worker_id_a, AgentStatus::Interrupted, STATUS_TIMEOUT)
         .await?;
     executor
-        .wait_for_status(
-            &worker_id_b,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
+        .wait_for_status(&worker_id_b, AgentStatus::Interrupted, STATUS_TIMEOUT)
         .await?;
     let oplog_a = executor
         .get_oplog(&worker_id_a, OplogIndex::INITIAL)
@@ -4624,10 +4651,10 @@ async fn websocket_reconnect_coordination_is_per_handle(
     ws_server_a.release_hold();
     ws_server_b.release_hold();
     executor
-        .wait_for_status(&worker_id_a, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&worker_id_a, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
     executor
-        .wait_for_status(&worker_id_b, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&worker_id_b, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
 
     let result_a = executor
@@ -4752,11 +4779,7 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_pool
 
     executor.interrupt(&worker_id).await?;
     executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, STATUS_TIMEOUT)
         .await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_contention_receives_incomplete(&oplog);
@@ -4768,9 +4791,12 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_pool
     let pool = executor
         .websocket_connection_pool()
         .expect("the executor's websocket connection pool is captured");
-    let held_permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
-        .await
-        .expect("the initial connection's permit must be back in the pool after the interrupt")?;
+    let held_permit = within(
+        POOL_PERMIT_TIMEOUT,
+        "the initial connection's permit, back in the pool after the interrupt",
+        pool.acquire(),
+    )
+    .await??;
 
     executor.resume(&worker_id, false).await?;
 
@@ -4791,11 +4817,7 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_pool
 
     executor.interrupt(&worker_id).await?;
     executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, STATUS_TIMEOUT)
         .await?;
 
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
@@ -4817,7 +4839,7 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_pool
     drop(held_permit);
     executor.resume(&worker_id, false).await?;
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
 
     let result = executor
@@ -4921,11 +4943,7 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_hand
 
     executor.interrupt(&worker_id).await?;
     executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, STATUS_TIMEOUT)
         .await?;
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_contention_receives_incomplete(&oplog);
@@ -4952,11 +4970,7 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_hand
     // Interrupting abandons both parked calls without resolving the hold.
     executor.interrupt(&worker_id).await?;
     executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, STATUS_TIMEOUT)
         .await?;
 
     // The abandoned client of the withheld handshake is observed at the peer.
@@ -4982,9 +4996,12 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_hand
     let pool = executor
         .websocket_connection_pool()
         .expect("the executor's websocket connection pool is captured");
-    let permit = tokio::time::timeout(Duration::from_secs(5), pool.acquire())
-        .await
-        .expect("the interrupted reconnect must not leak its pool permit")?;
+    let permit = within(
+        POOL_PERMIT_TIMEOUT,
+        "the pool permit that the interrupted reconnect must not leak",
+        pool.acquire(),
+    )
+    .await??;
     drop(permit);
 
     // Resolve the abandoned hold and resume: the same retained invocation
@@ -4993,7 +5010,7 @@ async fn websocket_reconnect_coordination_is_interruptible_while_pending_on_hand
     ws_server.release_hold();
     executor.resume(&worker_id, false).await?;
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
 
     let result = executor
@@ -5071,7 +5088,7 @@ async fn websocket_reconnect_direct_send_is_interruptible_and_continues(
         ..Default::default()
     };
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
 
     let mut ws_server = ReconnectTestServer::start().await;
     let url = ws_server.url();
@@ -5101,9 +5118,7 @@ async fn websocket_reconnect_direct_send_is_interruptible_and_continues(
     // Crash the executor while the worker is idle: the persisted handle's
     // connection is lost, so the send below reconnects it on the fresh
     // executor.
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let executor = executor.restart(Teardown::Shutdown).await?;
 
     // Withhold the send's reconnect handshake at the real peer: the send parks
     // inside its real `connect_async` handshake.
@@ -5133,11 +5148,7 @@ async fn websocket_reconnect_direct_send_is_interruptible_and_continues(
 
     executor.interrupt(&worker_id).await?;
     executor
-        .wait_for_status(
-            &worker_id,
-            AgentStatus::Interrupted,
-            Duration::from_secs(10),
-        )
+        .wait_for_status(&worker_id, AgentStatus::Interrupted, STATUS_TIMEOUT)
         .await?;
 
     // The abandoned client of the withheld handshake is observed at the peer.
@@ -5169,7 +5180,7 @@ async fn websocket_reconnect_direct_send_is_interruptible_and_continues(
     ws_server.release_hold();
     executor.resume(&worker_id, false).await?;
     executor
-        .wait_for_status(&worker_id, AgentStatus::Idle, Duration::from_secs(20))
+        .wait_for_status(&worker_id, AgentStatus::Idle, IDLE_TIMEOUT)
         .await?;
 
     let send_result = executor
@@ -5256,7 +5267,7 @@ async fn websocket_reconnect_direct_close_reconnects_and_terminalizes(
         ..Default::default()
     };
     let context = TestContext::new(last_unique_id);
-    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
 
     // Close does not read unsolicited greetings on the reconnected transport.
     let mut ws_server = ReconnectTestServer::start_with_reconnect_messages(&[]).await;
@@ -5287,9 +5298,7 @@ async fn websocket_reconnect_direct_close_reconnects_and_terminalizes(
     // Crash the executor while the worker is idle: the persisted handle's
     // connection is lost, so the close below reconnects it on the fresh
     // executor.
-    executor.shutdown_and_wait_for_invocation_loops().await?;
-    drop(executor);
-    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let executor = executor.restart(Teardown::Shutdown).await?;
 
     let close_key = IdempotencyKey::fresh();
     let close_result = executor
