@@ -81,41 +81,35 @@ pub(crate) async fn find_initialization_key(
     oplog: &dyn crate::services::oplog::Oplog,
     status: &golem_common::model::AgentStatusRecord,
 ) -> Result<Option<InvocationId>, crate::services::oplog::UnreadableOplog> {
-    use futures::TryStreamExt;
     use golem_common::model::InvocationRequestOperation;
     use golem_common::model::oplog::OplogEntry;
 
     let retention = oplog.retention();
-    let last = status.oplog_idx;
-    let keys = futures::stream::try_unfold(OplogIndex::INITIAL, move |next| async move {
-        let Some(chunk) = retention.chunk(next, last, 256) else {
-            return Ok(None);
-        };
-        let key = oplog
-            .read_exact(chunk.start, chunk.count)
-            .await?
-            .into_iter()
-            .find_map(|(index, entry)| match entry {
-                OplogEntry::PendingAgentInvocation {
-                    invocation_id,
-                    operation,
-                    ..
-                }
-                | OplogEntry::AgentInvocationStarted {
-                    invocation_id,
-                    operation,
-                    ..
-                } if *operation == InvocationRequestOperation::AgentInitialization
-                    && !status.deleted_regions.is_in_deleted_region(index) =>
-                {
-                    Some(invocation_id)
-                }
-                _ => None,
-            });
-        Ok(Some((key, chunk.end())))
-    })
-    .try_filter_map(|key| futures::future::ready(Ok(key)));
-    std::pin::pin!(keys).try_next().await
+    let mut first = OplogIndex::INITIAL;
+    while let Some(chunk) = retention.chunk(first, status.oplog_idx, 256) {
+        let entries = oplog.read_exact(chunk.start, chunk.count).await?;
+        for (index, entry) in entries {
+            if status.deleted_regions.is_in_deleted_region(index) {
+                continue;
+            }
+            if let OplogEntry::PendingAgentInvocation {
+                invocation_id,
+                operation,
+                ..
+            }
+            | OplogEntry::AgentInvocationStarted {
+                invocation_id,
+                operation,
+                ..
+            } = entry
+                && *operation == InvocationRequestOperation::AgentInitialization
+            {
+                return Ok(Some(invocation_id));
+            }
+        }
+        first = chunk.end();
+    }
+    Ok(None)
 }
 
 /// The key of the initialization below the retained start of `retention`, from the invocation
