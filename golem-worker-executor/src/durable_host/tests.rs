@@ -461,6 +461,38 @@ fn ephemeral_restart_interrupts_become_invocation_failures() {
 }
 
 #[test]
+fn recovery_interrupt_selects_typed_session_failure() {
+    use super::invocation::stream_session_interruption;
+    use golem_common::model::durable_stream::SessionFailure;
+
+    let timestamp: Timestamp = "2026-11-26T19:23:41.123456789Z".parse().unwrap();
+    for kind in [
+        InterruptKind::Interrupt(timestamp),
+        InterruptKind::Suspend(timestamp),
+        InterruptKind::Restart,
+        InterruptKind::Jump,
+        InterruptKind::EntityCancellation,
+        InterruptKind::ShardLost,
+    ] {
+        assert_eq!(
+            stream_session_interruption(&TrapType::Interrupt(kind)),
+            Some(SessionFailure::Interrupted(kind))
+        );
+    }
+    for trap in [
+        TrapType::Exit,
+        TrapType::Error {
+            error: AgentError::OutOfMemory,
+            retry_from: OplogIndex::from_u64(37),
+            semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Host,
+        },
+    ] {
+        assert_eq!(stream_session_interruption(&trap), None);
+    }
+}
+
+#[test]
 fn a_rejection_after_the_result_is_an_ordinary_trap_of_the_agent() {
     let current = Some(golem_common::model::InvocationId::new());
     let retry_from = OplogIndex::from_u64(11);

@@ -4,7 +4,6 @@ use crate::durable_host::durability::DurabilityHost;
 use crate::worker::MethodFailureSettlementError;
 use crate::worker::invocation::{ReturnRecorded, ReturnRecorder, record_result_at_return};
 use golem_common::model::InvocationId;
-use golem_common::model::durable_stream::SessionFailure;
 use std::future::Future;
 use std::pin::Pin;
 use wasmtime::StoreContextMut;
@@ -102,7 +101,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
             .lock()
             .await
             .data_mut()
-            .on_invocation_failure("interrupted during retry", &TrapType::Interrupt(kind))
+            .on_invocation_failure("interrupted during retry", &TrapType::Interrupt(kind), None)
             .await;
     }
 }
@@ -375,6 +374,8 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 Some(LoopRecorded::Recorded(ReturnRecorded::MethodFailed(Ok(())))),
                 Ok(InvokeResult::MethodFailed { .. }),
             ) => {
+                // The drain already finished the session for this recorded method failure.
+                // Do not route it through the trap give-up path in on_invocation_failure.
                 self.agent_method_failure_recorded(
                     &display_name,
                     &invocation_idempotency_key,
@@ -627,20 +628,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         match self
             .store
             .data_mut()
-            .on_invocation_failure(function, &trap)
+            .on_invocation_failure(function, &trap, self.uses_streams.then_some((id, details)))
             .await
         {
-            InvocationFailureDecision::Rejected => {
-                if self.uses_streams
-                    && let Err(error) = self
-                        .parent
-                        .fail_durable_streaming_session(id, details)
-                        .await
-                {
-                    return self.invocation_failure_recovery(&error);
-                }
-                CommandOutcome::Continue
-            }
+            InvocationFailureDecision::Rejected => CommandOutcome::Continue,
             InvocationFailureDecision::Infrastructure(error) => {
                 self.invocation_failure_recovery(&error)
             }
@@ -729,6 +720,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                                 .on_invocation_failure(
                                     &full_function_name,
                                     &TrapType::Interrupt(InterruptKind::ShardLost),
+                                    None,
                                 )
                                 .await;
                             return CommandOutcome::BreakInnerLoop(RetryDecision::None);
@@ -755,7 +747,12 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 let decision = match self
                     .store
                     .data_mut()
-                    .on_invocation_failure(&full_function_name, &TrapType::Interrupt(kind))
+                    .on_invocation_failure(
+                        &full_function_name,
+                        &TrapType::Interrupt(kind),
+                        self.uses_streams
+                            .then_some((idempotency_key, kind.to_string())),
+                    )
                     .await
                 {
                     InvocationFailureDecision::Retry(decision) => decision,
@@ -769,24 +766,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 if matches!(kind, InterruptKind::ShardLost) {
                     return CommandOutcome::BreakInnerLoop(RetryDecision::None);
                 }
-                if self.uses_streams
-                    && !matches!(kind, InterruptKind::Jump)
-                    && let Err(error) = self
-                        .parent
-                        .finish_durable_streaming_session(
-                            idempotency_key,
-                            Err((SessionFailure::Interrupted(kind), kind.to_string())),
-                        )
-                        .await
-                {
-                    if self.parent.retire_if_shard_lost(&error) {
-                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
-                    }
-                    self.parent
-                        .durable_stream_producer
-                        .changed()
-                        .notify_waiters();
-                }
                 failed_agent_invocation_outcome(self.parent.agent_mode(), decision, None)
             }
             // Intercepted before the arm below, which would flatten it into an
@@ -798,6 +777,7 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     .on_invocation_failure(
                         &full_function_name,
                         &TrapType::Interrupt(InterruptKind::ShardLost),
+                        None,
                     )
                     .await;
                 CommandOutcome::BreakInnerLoop(RetryDecision::None)
@@ -832,24 +812,15 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                 if let InvocationFailureDecision::Infrastructure(error) = self
                     .store
                     .data_mut()
-                    .on_invocation_failure(&full_function_name, &trap_type)
+                    .on_invocation_failure(
+                        &full_function_name,
+                        &trap_type,
+                        self.uses_streams
+                            .then_some((idempotency_key, error.to_string())),
+                    )
                     .await
                 {
                     return self.invocation_failure_recovery(&error);
-                }
-                if self.uses_streams
-                    && let Err(error) = self
-                        .parent
-                        .fail_durable_streaming_session(idempotency_key, error.to_string())
-                        .await
-                {
-                    if self.parent.retire_if_shard_lost(&error) {
-                        return CommandOutcome::BreakInnerLoop(RetryDecision::None);
-                    }
-                    self.parent
-                        .durable_stream_producer
-                        .changed()
-                        .notify_waiters();
                 }
                 failed_agent_invocation_outcome(
                     self.parent.agent_mode(),
@@ -977,15 +948,23 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             trap_type,
             Some(TrapType::Interrupt(InterruptKind::ShardLost))
         );
-        let interrupt = match &trap_type {
-            Some(TrapType::Interrupt(kind)) => Some(*kind),
-            _ => None,
-        };
         let (decision, rejection_persisted) = match trap_type {
             Some(trap_type) => match self
                 .store
                 .data_mut()
-                .on_invocation_failure(full_function_name, &trap_type)
+                .on_invocation_failure(
+                    full_function_name,
+                    &trap_type,
+                    (self.uses_streams
+                        && (self.parent.agent_mode() == AgentMode::Ephemeral
+                            || !matches!(
+                                trap_type,
+                                TrapType::Interrupt(
+                                    InterruptKind::Suspend(_) | InterruptKind::Restart
+                                )
+                            )))
+                    .then_some((idempotency_key, details)),
+                )
                 .await
             {
                 InvocationFailureDecision::Retry(decision) => (decision, false),
@@ -1000,33 +979,6 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
         // invocation the shard's new owner resumes.
         if shard_lost {
             return CommandOutcome::BreakInnerLoop(RetryDecision::None);
-        }
-
-        if self.uses_streams
-            && decision == RetryDecision::None
-            && let Err(error) = match interrupt {
-                Some(kind) => {
-                    self.parent
-                        .finish_durable_streaming_session(
-                            idempotency_key,
-                            Err((SessionFailure::Interrupted(kind), details)),
-                        )
-                        .await
-                }
-                None => {
-                    self.parent
-                        .fail_durable_streaming_session(idempotency_key, details)
-                        .await
-                }
-            }
-        {
-            if self.parent.retire_if_shard_lost(&error) {
-                return CommandOutcome::BreakInnerLoop(RetryDecision::None);
-            }
-            self.parent
-                .durable_stream_producer
-                .changed()
-                .notify_waiters();
         }
 
         // Failure teardown closes this Store's stream runtime. Reconstruct only after the

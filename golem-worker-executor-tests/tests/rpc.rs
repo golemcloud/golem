@@ -5626,6 +5626,330 @@ async fn open_raw_session(
 }
 
 #[test]
+#[timeout("3 minutes")]
+async fn session_failure_causes_survive_executor_restart(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::InterruptKind;
+    use golem_common::model::durable_stream::SessionFailure;
+    use golem_common::model::{NamedRetryPolicy, Predicate, RetryPolicy};
+
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let port = listener.local_addr()?.port();
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let server_attempts = attempts.clone();
+    let _server = tokio_util::task::AbortOnDropHandle::new(tokio::spawn(async move {
+        while let Ok((connection, _)) = listener.accept().await {
+            server_attempts.fetch_add(1, Ordering::SeqCst);
+            drop(connection);
+        }
+    }));
+
+    for cause in ["invocation", "interrupt", "protocol", "recovery-exit"] {
+        let context = TestContext::new(last_unique_id);
+        let overrides = TestExecutorOverrides {
+            configure: Some(Arc::new(move |config| {
+                config.max_in_function_retry_delay = Duration::from_millis(1);
+            })),
+            retry_policies: Some(vec![NamedRetryPolicy {
+                name: "session-failure".into(),
+                priority: 100,
+                predicate: Predicate::True,
+                policy: RetryPolicy::CountBox {
+                    max_retries: 2,
+                    inner: Box::new(RetryPolicy::Periodic(Duration::from_millis(10))),
+                },
+            }]),
+            ..Default::default()
+        };
+        let mut executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let component = executor
+            .component_dep(&context.default_environment_id, agent_rpc_rust)
+            .store()
+            .await?;
+        let target = executor
+            .start_agent_with(
+                &component.id,
+                agent_key!("StreamingRpcTarget", cause),
+                std::collections::HashMap::from([(
+                    "SESSION_FAILURE_RETRY_PORT".into(),
+                    port.to_string(),
+                )]),
+                Vec::new(),
+            )
+            .await?;
+        let metadata = executor.get_worker_metadata(&target).await?;
+        let method = if cause == "recovery-exit" {
+            "exit_after_input"
+        } else if cause == "invocation" {
+            "fail_with_retries"
+        } else {
+            "consume"
+        };
+        let mut start = origin_observer_start(
+            &executor,
+            &component,
+            &target,
+            &target,
+            metadata.fingerprint.0,
+            &IdempotencyKey::fresh(),
+            method,
+        );
+        start.origin_invocation = None;
+        start.context = None;
+        start.caller = Some(callers::anonymous().into());
+        let mut failure_gate = matches!(cause, "invocation" | "interrupt")
+            .then(|| executor.gate_next_invocation_failure_return(&target.agent_id));
+        let (mut requests, mut responses, mut accepted) =
+            open_raw_session(&executor, start.clone()).await?;
+        tokio::time::timeout(Duration::from_secs(10), async {
+            loop {
+                if executor.get_oplog(&target, OplogIndex::INITIAL).await?.iter().any(|entry| {
+                    matches!(&entry.entry, PublicOplogEntry::AgentInvocationStarted(started)
+                        if matches!(&started.invocation, PublicAgentInvocation::AgentMethodInvocation(invocation)
+                            if invocation.method_name == method))
+                }) {
+                    break Ok::<(), anyhow::Error>(());
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        }).await??;
+        let resume_request =
+            |accepted: &InvocationAccepted, operation: ResumeOperation| InvocationRequest {
+                request: Some(invocation_request::Request::ResumeAttach(ResumeAttach {
+                    idempotency_key: accepted.idempotency_key,
+                    agent_id: crate::agent::start_target_id(&start),
+                    environment_id: start.environment_id,
+                    attachment_id: accepted.attachment_id,
+                    attempt_id: Some(uuid::Uuid::new_v4().into()),
+                    expected_callee_fingerprint: start.expected_callee_fingerprint,
+                    expected_epoch: accepted.epoch,
+                    operation: operation as i32,
+                    cursors: Vec::new(),
+                    auth_ctx: start.auth_ctx.clone(),
+                    caller: start.caller.clone(),
+                })),
+            };
+        match cause {
+            "invocation" => {} // The failed HTTP call exhausts its named retry policy.
+            "interrupt" => {
+                executor
+                    .interrupt_loaded_worker(
+                        &target.agent_id,
+                        InterruptKind::Interrupt(golem_common::model::Timestamp::now_utc()),
+                    )
+                    .await?
+            }
+            "protocol" => {
+                requests
+                    .send(InvocationRequest {
+                        request: Some(invocation_request::Request::Start(start.clone())),
+                    })
+                    .await?
+            }
+            "recovery-exit" => {
+                drop(requests);
+                drop(responses);
+                drop(executor);
+                executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+                let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+                let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+                executor.probe_next_instance_preparation(
+                    &target.agent_id,
+                    move |_| {
+                        Box::pin(async move {
+                            let _ = entered_tx.send(());
+                            let _ = release_rx.await;
+                            Ok(())
+                        })
+                    },
+                    |_| {
+                        Box::pin(async {
+                            panic!("recovery should give up, not finish preparation")
+                        })
+                    },
+                );
+                let (tx, receiver) = mpsc::channel(8);
+                tx.send(resume_request(&accepted, ResumeOperation::Takeover))
+                    .await?;
+                requests = tx;
+                responses = executor
+                    .client
+                    .clone()
+                    .invoke_agent_session(ReceiverStream::new(receiver))
+                    .await?
+                    .into_inner();
+                let first = responses.message().await?.expect("resumed acceptance");
+                let Some(invocation_response::Response::Accepted(resumed)) = first.response else {
+                    anyhow::bail!("expected resumed acceptance: {first:?}");
+                };
+                accepted = resumed;
+                let recovery_executor = executor.clone();
+                let recovery_target = target.clone();
+                let recovery =
+                    tokio::spawn(
+                        async move { recovery_executor.resume(&recovery_target, false).await },
+                    );
+                tokio::time::timeout(Duration::from_secs(10), entered_rx).await??;
+                requests
+                    .send(InvocationRequest {
+                        request: Some(invocation_request::Request::StreamEnd(StreamEnd {
+                            transport_stream_id: 1,
+                            producer_sequence: 0,
+                            direction: StreamDirection::Input as i32,
+                            authored_by: StreamTerminalAuthor::Guest as i32,
+                            outcome: Some(StreamTerminal::Finished.try_into().unwrap()),
+                            durable_stream_id: accepted.stream_mappings[0]
+                                .handle
+                                .as_ref()
+                                .unwrap()
+                                .stream_id,
+                            epoch: accepted.epoch,
+                            ..Default::default()
+                        })),
+                    })
+                    .await?;
+                let _ = release_tx.send(());
+                let _ = recovery.await?;
+            }
+            _ => unreachable!(),
+        }
+        let live_failure = loop {
+            let response = responses.message().await?.expect("session completion");
+            if let Some(invocation_response::Response::Finished(finished)) = response.response {
+                let Some(invocation_session_completion::Outcome::Failure(failure)) =
+                    finished.outcome
+                else {
+                    anyhow::bail!("expected {cause} failure: {finished:?}");
+                };
+                break failure;
+            }
+        };
+        let oplog = executor.get_oplog(&target, OplogIndex::INITIAL).await?;
+        if let Some((entered, _)) = &mut failure_gate {
+            let details = tokio::time::timeout(Duration::from_secs(10), entered).await??;
+            if cause == "interrupt" {
+                assert_eq!(
+                    live_failure.message,
+                    "Runtime error: Interrupted via the Golem API"
+                );
+            }
+            assert!(
+                selected_stream_terminals(&oplog)
+                    .iter()
+                    .any(|record| record.terminal
+                        == StreamTerminal::Failed(StreamError::Trapped(details.clone()))),
+                "{cause}: the stream-terminal message changed from {details:?}"
+            );
+        }
+        let finished = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::StreamSession(session) => {
+                    match StreamSessionRecord::from_value(session.record.value()).unwrap() {
+                        StreamSessionRecord::Finished(record) => Some(record.result),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(finished.len(), 1, "{cause}");
+        match (cause, &finished[0]) {
+            ("invocation", Err(SessionFailure::Invocation)) => {
+                assert!(
+                    oplog
+                        .iter()
+                        .filter(|entry| matches!(entry.entry, PublicOplogEntry::Error(_)))
+                        .count()
+                        >= 2,
+                    "the retry policy did not exhaust its attempts"
+                );
+                assert!(
+                    attempts.load(Ordering::SeqCst) >= 2,
+                    "the HTTP call was not retried"
+                );
+                assert!(
+                    live_failure
+                        .message
+                        .contains("session failure after exhausted HTTP retry policy"),
+                    "{live_failure:?}"
+                );
+            }
+            ("interrupt", Err(SessionFailure::Interrupted(InterruptKind::Interrupt(_)))) => {}
+            ("recovery-exit", Err(SessionFailure::Invocation)) => {
+                assert!(
+                    oplog
+                        .iter()
+                        .any(|entry| matches!(entry.entry, PublicOplogEntry::Exited(_)))
+                );
+                assert!(live_failure.message.contains("exited"), "{live_failure:?}");
+            }
+            ("protocol", Err(SessionFailure::Protocol(message))) => {
+                assert_eq!(
+                    message,
+                    "invocation start or resume-attach may only appear as the first request"
+                );
+                assert_eq!(message, &live_failure.message);
+            }
+            _ => anyhow::bail!("wrong persisted {cause} cause: {finished:?}"),
+        }
+        // The start observer has sent its failure while the loop is still held after the callback.
+        // Its fallback write must not replace the cause or the caller's stream-terminal message.
+        if let Some((_, release)) = failure_gate.take() {
+            let _ = release.send(());
+        }
+        let expected_message = match &finished[0] {
+            Err(SessionFailure::Invocation) if cause == "recovery-exit" => {
+                "Runtime error: Process exited".to_string()
+            }
+            Err(SessionFailure::Invocation) => live_failure.message,
+            Err(SessionFailure::Interrupted(kind)) => kind.to_string(),
+            Err(SessionFailure::Protocol(message)) => message.clone(),
+            Ok(()) => unreachable!(),
+        };
+        drop(requests);
+        drop(responses);
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides).await?;
+        let (requests, receiver) = mpsc::channel(1);
+        requests
+            .send(resume_request(&accepted, ResumeOperation::Resume))
+            .await?;
+        let mut responses = executor
+            .client
+            .clone()
+            .invoke_agent_session(ReceiverStream::new(receiver))
+            .await?
+            .into_inner();
+        loop {
+            let response = responses.message().await?.expect("resumed completion");
+            if let Some(invocation_response::Response::Finished(finished)) = response.response {
+                let Some(invocation_session_completion::Outcome::Failure(failure)) =
+                    finished.outcome
+                else {
+                    anyhow::bail!("expected resumed {cause} failure: {finished:?}");
+                };
+                assert_eq!(failure.message, expected_message, "{cause}");
+                assert_eq!(
+                    failure.kind,
+                    if cause == "protocol" {
+                        InvocationFailureKind::Protocol
+                    } else {
+                        InvocationFailureKind::Execution
+                    } as i32
+                );
+                break;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[test]
 #[timeout("2 minutes")]
 async fn queued_stream_sessions_accept_before_preparation_and_deliver_selected_outcomes(
     last_unique_id: &LastUniqueId,

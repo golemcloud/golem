@@ -519,6 +519,7 @@ pub trait InvocationHooks {
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
+        streaming_session: Option<(&InvocationId, String)>,
     ) -> impl Future<Output = InvocationFailureDecision> + Send;
 
     /// Validates a replayed method failure or commits its live terminal without failing the agent.

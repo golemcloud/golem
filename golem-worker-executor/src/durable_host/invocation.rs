@@ -13,7 +13,15 @@
 // limitations under the License.
 
 use super::*;
+use golem_common::model::durable_stream::SessionFailure;
 use golem_common::schema::SchemaValue;
+
+pub(super) fn stream_session_interruption(trap_type: &TrapType) -> Option<SessionFailure> {
+    match trap_type {
+        TrapType::Interrupt(kind) => Some(SessionFailure::Interrupted(*kind)),
+        TrapType::Exit | TrapType::Error { .. } => None,
+    }
+}
 
 /// Reads the recorded terminal of the invocation the loop replays from its open invocation
 /// anchor, while the background work of the invocation replays.
@@ -987,8 +995,10 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
+        streaming_session: Option<(&golem_common::model::InvocationId, String)>,
     ) -> InvocationFailureDecision {
         let current_idempotency_key = self.get_current_idempotency_key().await;
+        let session_interrupt = stream_session_interruption(trap_type);
 
         // Deliberately above the dropped-call drain: that drain appends `Cancelled` entries, and a
         // lost shard's oplog belongs to another executor now. Like a durable `Restart` or `Jump`, a
@@ -1238,6 +1248,30 @@ impl<Ctx: WorkerCtx> InvocationHooks for DurableWorkerCtx<Ctx> {
                 .reach_final_outcome();
             self.rederive_agent_effective_surface_from_wallet();
             self.clear_invocation_scope_card().await;
+        }
+        // The durable failure precedes the session terminal, and both precede notification:
+        // a start-side observer must not select a different cause for the same failure.
+        if !matches!(
+            session_interrupt,
+            Some(SessionFailure::Interrupted(InterruptKind::Jump))
+        ) && (giving_up || session_interrupt.is_some())
+            && let Some((key, details)) = streaming_session
+        {
+            let worker = self.public_state.worker();
+            let finished = match session_interrupt {
+                Some(cause) => {
+                    worker
+                        .finish_durable_streaming_session(key, Err((cause, details)))
+                        .await
+                }
+                None => worker.fail_durable_streaming_session(key, details).await,
+            };
+            if let Err(error) = finished {
+                worker.retire_if_shard_lost(&error);
+                return InvocationFailureDecision::Infrastructure(error);
+            }
+        }
+        if giving_up {
             // Terminal worker failures also fail queued invocations. A rejected request completes
             // only its own idempotency key so later queued work remains available. An invocation
             // that recorded its result keeps it.

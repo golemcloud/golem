@@ -708,9 +708,10 @@ impl InvocationHooks for Context {
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
+        streaming_session: Option<(&InvocationId, String)>,
     ) -> InvocationFailureDecision {
         self.durable_ctx
-            .on_invocation_failure(full_function_name, trap_type)
+            .on_invocation_failure(full_function_name, trap_type, streaming_session)
             .await
     }
 

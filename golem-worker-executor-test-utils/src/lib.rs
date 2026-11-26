@@ -1488,6 +1488,28 @@ impl TestWorkerExecutor {
         receive
     }
 
+    /// Pauses after a terminal failure callback returns, before the invocation loop continues.
+    /// The receiver reports the caller's stream-terminal details, unchanged by the callback.
+    pub fn gate_next_invocation_failure_return(
+        &self,
+        agent_id: &AgentId,
+    ) -> (
+        tokio::sync::oneshot::Receiver<String>,
+        tokio::sync::oneshot::Sender<()>,
+    ) {
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        assert!(
+            self.additional_test_deps
+                .invocation_failure_return_gates
+                .lock()
+                .unwrap()
+                .insert(*agent_id, (entered_tx, release_rx))
+                .is_none()
+        );
+        (entered_rx, release_tx)
+    }
+
     /// Runs once around the next primary instance preparation. The first probe owns the Store
     /// before recovery; the second observes it only after successful preparation. Both probes
     /// are consumed by that attempt, including when preparation fails or requests a retry.
@@ -4116,10 +4138,33 @@ impl InvocationHooks for TestWorkerCtx {
         &mut self,
         full_function_name: &str,
         trap_type: &TrapType,
+        streaming_session: Option<(&golem_common::model::InvocationId, String)>,
     ) -> InvocationFailureDecision {
-        self.durable_ctx
-            .on_invocation_failure(full_function_name, trap_type)
-            .await
+        let details = streaming_session
+            .as_ref()
+            .map(|(_, details)| details.clone());
+        let decision = self
+            .durable_ctx
+            .on_invocation_failure(full_function_name, trap_type, streaming_session)
+            .await;
+        if matches!(
+            decision,
+            InvocationFailureDecision::Rejected
+                | InvocationFailureDecision::Retry(RetryDecision::None)
+        ) && let Some(details) = details
+        {
+            let gate = self
+                .additional_test_deps
+                .invocation_failure_return_gates
+                .lock()
+                .unwrap()
+                .remove(self.durable_ctx.agent_id());
+            if let Some((entered, release)) = gate {
+                let _ = entered.send(details);
+                let _ = release.await;
+            }
+        }
+        decision
     }
 
     async fn record_agent_method_failure(
@@ -7191,10 +7236,18 @@ struct RuntimeCardAuditGate {
 type OplogEndGates = HashMap<AgentId, (HostFunctionName, Option<OplogIndex>, bool, OplogReadGate)>;
 type EntitySettlementAccess =
     HashMap<(AgentId, Option<OplogIndex>), (bool, tokio::sync::oneshot::Sender<()>)>;
+type InvocationFailureReturnGates = HashMap<
+    AgentId,
+    (
+        tokio::sync::oneshot::Sender<String>,
+        tokio::sync::oneshot::Receiver<()>,
+    ),
+>;
 
 #[derive(Clone)]
 pub struct AdditionalTestDeps {
     primary_context_probes: Arc<std::sync::Mutex<HashMap<AgentId, PrimaryContextProbe>>>,
+    invocation_failure_return_gates: Arc<std::sync::Mutex<InvocationFailureReturnGates>>,
     instance_preparation_probes: Arc<
         std::sync::Mutex<HashMap<AgentId, (InstancePreparationProbe, InstancePreparationProbe)>>,
     >,
@@ -7290,6 +7343,7 @@ impl AdditionalTestDeps {
         let rdbms_tx_failures = Arc::new(scc::HashMap::new());
         Self {
             primary_context_probes: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            invocation_failure_return_gates: Arc::default(),
             instance_preparation_probes: Arc::default(),
             native_test_effects: Arc::new(AtomicUsize::new(0)),
             native_test_helper_effects: Arc::new(AtomicUsize::new(0)),
