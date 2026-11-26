@@ -11799,6 +11799,139 @@ mod tests {
 
             assert!(sink.records().is_empty());
         }
+
+        /// The agent that calls the worker service through the executor, as a request names it.
+        fn calling_agent() -> Caller {
+            use golem_common::model::caller::{AgentPrincipal, Principal};
+            Caller::entry(Principal::Agent(AgentPrincipal {
+                issuer: "golem".to_string(),
+                agent_id: Uuid::from_u128(0xa1),
+                address: AgentId::from_parts(0, 10),
+                fingerprint: AgentFingerprint(Uuid::from_u128(0xf2)),
+                agent_type: AgentTypeName("Caller".to_string()),
+                environment_id: EnvironmentId(Uuid::from_u128(1)),
+            }))
+        }
+
+        #[test]
+        async fn a_fork_or_an_update_for_a_named_calling_agent_is_recorded_for_that_agent() {
+            use golem_service_base::model::auth::audit::AuditPrincipal;
+
+            let caller = calling_agent();
+            let agent = AuditPrincipal::from(&caller.immediate);
+            for (operation, verb) in [
+                (CatalogOperation::ForkAgent, AgentVerb::Fork),
+                (
+                    CatalogOperation::UpdateAgentRevision,
+                    AgentVerb::UpdateRevision,
+                ),
+            ] {
+                let sink = TestAuditSink::keeping();
+                let mut harness = RestHarness::new(AgentMode::Durable);
+                harness.worker_service.audit = audit_into(sink.clone());
+                harness
+                    .worker_client
+                    .set_metadata_component_revision(ComponentRevision::INITIAL);
+                let agent_id = harness.keyed_agent_id();
+                let owned = harness.owned(&agent_id);
+                let auth_ctx = auth_ctx_with_permissions(vec![agent_target(
+                    &agent_id,
+                    verb,
+                    AgentResourcePattern::Empty,
+                )]);
+
+                // The record is written when the call is decided, before the executor is asked,
+                // so the answer of the executor double does not matter here.
+                if operation == CatalogOperation::ForkAgent {
+                    let _ = harness
+                        .worker_service
+                        .fork_worker(
+                            &owned,
+                            None,
+                            OplogIndex::from_u64(1),
+                            Some(caller.clone()),
+                            None,
+                            auth_ctx,
+                            Surface::Internal,
+                        )
+                        .await;
+                } else {
+                    let _ = harness
+                        .worker_service
+                        .update(
+                            &owned,
+                            AgentUpdateMode::Automatic,
+                            ComponentRevision::INITIAL,
+                            false,
+                            None,
+                            Some(caller.clone()),
+                            auth_ctx,
+                            Surface::Internal,
+                        )
+                        .await;
+                }
+
+                let records = sink.records();
+                let record = records
+                    .iter()
+                    .find(|record| record.operation == operation.name())
+                    .unwrap_or_else(|| panic!("no {operation} record in {records:?}"));
+                assert_eq!(record.outcome, AuditOutcome::Allowed, "{operation}");
+                assert_eq!(record.surface, "internal", "{operation}");
+                assert_eq!(record.caller.original, agent, "{operation}");
+                assert_eq!(record.caller.immediate, agent, "{operation}");
+                assert_eq!(record.principal, agent, "{operation}");
+            }
+        }
+
+        #[test]
+        async fn an_impersonated_read_is_recorded_for_the_admin_on_the_target_accounts_authority() {
+            use golem_common::model::caller::{AccountAuthentication, AccountPrincipal, Principal};
+            use golem_common::model::plan::PlanId;
+            use golem_service_base::model::auth::audit::AuditPrincipal;
+
+            let sink = TestAuditSink::keeping();
+            let mut harness = RestHarness::new(AgentMode::Durable);
+            harness.worker_service.audit = audit_into(sink.clone());
+            let (owned, _) = oplog_reader(&harness);
+            let admin = AccountId(Uuid::from_u128(0xad));
+            let target = AccountId(Uuid::from_u128(0x7a));
+            // The admin acts on the target account, whose cards allow the read.
+            let auth_ctx = AuthCtx::admin_impersonation(
+                admin,
+                target,
+                AccountEmail::new("target@golem"),
+                BTreeSet::new(),
+                PlanId(Uuid::from_u128(0x91)),
+                EffectiveSurface {
+                    source_card_ids: Vec::new(),
+                    lower: vec![GrantSurface {
+                        positive: vec![oplog_target(
+                            &owned.agent_id,
+                            OplogResourcePattern::range(Some(5), Some(7)),
+                        )],
+                        negative: Vec::new(),
+                    }],
+                    upper: Vec::new(),
+                },
+            );
+
+            read_oplog(&harness, &owned, auth_ctx).await.unwrap();
+
+            let account = |account_id| {
+                AuditPrincipal::from(&Principal::Account(AccountPrincipal {
+                    issuer: harness.worker_service.golem_issuer.to_string(),
+                    account_id,
+                    authentication: AccountAuthentication::ApiToken,
+                }))
+            };
+            let records = sink.records();
+            assert_eq!(records.len(), 1);
+            assert_eq!(records[0].outcome, AuditOutcome::Allowed);
+            assert_eq!(records[0].caller.original, account(admin));
+            assert_eq!(records[0].caller.immediate, account(admin));
+            assert_eq!(records[0].principal, account(target));
+        }
     }
 
     /// Each access that a call site of this service decides, named by its call sites. A call
