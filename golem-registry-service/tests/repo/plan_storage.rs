@@ -39,7 +39,7 @@ use uuid::Uuid;
 
 const DIMENSION: PlanDimension = PlanDimension::MaxTableElementsPerAgent;
 
-fn range(min: Option<u64>, max: u64) -> PlanPolicy {
+pub fn range(min: Option<u64>, max: u64) -> PlanPolicy {
     PlanPolicy::from([(
         DIMENSION,
         DimensionDeclaration {
@@ -60,7 +60,7 @@ fn actor() -> Uuid {
     Uuid::new_v4()
 }
 
-async fn define(deps: &Deps, owner: Uuid, policy: PlanPolicy) -> Uuid {
+pub async fn define(deps: &Deps, owner: Uuid, policy: PlanPolicy) -> Uuid {
     let plan_id = Uuid::new_v4();
     deps.plan_storage_repo
         .create_definition(owner, plan_id, name(), policy, actor())
@@ -82,7 +82,7 @@ async fn assign(deps: &Deps, account: Uuid, plan_id: Uuid) {
         .unwrap();
 }
 
-async fn edit(
+pub async fn edit(
     repo: &dyn PlanStorageRepo,
     plan_id: Uuid,
     policy: PlanPolicy,
@@ -99,7 +99,10 @@ async fn edit(
     .map(|definition| definition.record.current_revision as u64)
 }
 
-async fn table_bounds(deps: &Deps, account: Uuid) -> Result<EffectiveBounds, DimensionBoundsError> {
+pub async fn table_bounds(
+    deps: &Deps,
+    account: Uuid,
+) -> Result<EffectiveBounds, DimensionBoundsError> {
     deps.plan_storage_repo
         .effective_bounds(account, InstallationAvailability::Available)
         .await
@@ -817,7 +820,7 @@ pub async fn test_tree_purge_releases_plan_records(deps: &Deps) {
 
 // Opposing PostgreSQL transactions -----------------------------------------------------------
 
-fn postgres(deps: &Deps) -> &PostgresPool {
+pub fn postgres(deps: &Deps) -> &PostgresPool {
     match &deps.test_db {
         TestDb::Postgres(pool) => pool,
         TestDb::Sqlite(_) => panic!("PostgreSQL only"),
@@ -828,7 +831,7 @@ fn short_repo(deps: &Deps, timeout: Duration, attempts: usize) -> DbPlanStorageR
     DbPlanStorageRepo::with_limits(postgres(deps).clone(), timeout, attempts)
 }
 
-async fn hold_guard(
+pub async fn hold_guard(
     deps: &Deps,
     guards: GuardSet,
 ) -> <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction {

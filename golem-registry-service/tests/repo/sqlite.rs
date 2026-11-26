@@ -751,3 +751,48 @@ async fn test_account_tree_cache_keeps_newer_install_over_delayed_load(deps: &De
     crate::repo::account_tree::test_account_tree_cache_keeps_newer_install_over_delayed_load(deps)
         .await;
 }
+
+#[test]
+async fn test_account_creation_commits_every_participant(deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_commits_every_participant(deps).await;
+}
+
+#[test]
+async fn test_account_creation_failures_leave_nothing(deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_failures_leave_nothing(deps).await;
+}
+
+#[test]
+async fn test_account_creation_sibling_race(deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_sibling_race(deps).await;
+}
+
+#[test]
+async fn test_account_creation_revalidates_plan_after_wait(deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_revalidates_plan_after_wait(deps).await;
+}
+
+#[test]
+async fn test_account_creation_parent_disappears(deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_parent_disappears(deps).await;
+}
+
+#[test]
+async fn test_account_creation_orders_ancestor_plan_edits(deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_orders_ancestor_plan_edits(deps).await;
+}
+
+#[test]
+async fn test_account_creation_is_invisible_until_commit(deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_is_invisible_until_commit(deps).await;
+}
+
+#[test]
+async fn test_account_creation_cancellation_rolls_back(deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_cancellation_rolls_back(deps).await;
+}
+
+#[test]
+async fn test_account_creation_sqlite_signals_after_commit(deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_sqlite_signals_after_commit(deps).await;
+}

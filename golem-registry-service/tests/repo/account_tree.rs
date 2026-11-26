@@ -103,7 +103,7 @@ pub async fn update(
         })
 }
 
-async fn latest_event_id(deps: &Deps) -> ChangeEventId {
+pub async fn latest_event_id(deps: &Deps) -> ChangeEventId {
     deps.registry_change_repo
         .get_latest_event_id()
         .await
@@ -111,7 +111,7 @@ async fn latest_event_id(deps: &Deps) -> ChangeEventId {
         .unwrap_or(ChangeEventId(0))
 }
 
-async fn account_events_since(deps: &Deps, since: ChangeEventId) -> Vec<Uuid> {
+pub async fn account_events_since(deps: &Deps, since: ChangeEventId) -> Vec<Uuid> {
     deps.registry_change_repo
         .get_events_since(since)
         .await

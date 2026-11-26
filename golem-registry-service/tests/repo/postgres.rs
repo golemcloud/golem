@@ -1597,6 +1597,70 @@ async fn test_account_tree_cache_keeps_newer_install_over_delayed_load(
 }
 
 #[test]
+async fn test_account_creation_commits_every_participant(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::account_creation::test_account_creation_commits_every_participant(deps).await;
+}
+
+#[test]
+async fn test_account_creation_failures_leave_nothing(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_failures_leave_nothing(deps).await;
+}
+
+#[test]
+async fn test_account_creation_sibling_race(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_sibling_race(deps).await;
+}
+
+#[test]
+async fn test_account_creation_revalidates_plan_after_wait(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::account_creation::test_account_creation_revalidates_plan_after_wait(deps).await;
+}
+
+#[test]
+async fn test_account_creation_parent_disappears(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_parent_disappears(deps).await;
+}
+
+#[test]
+async fn test_account_creation_orders_ancestor_plan_edits(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::account_creation::test_account_creation_orders_ancestor_plan_edits(deps).await;
+}
+
+#[test]
+async fn test_account_creation_is_invisible_until_commit(
+    #[dimension(postgres_variant)] deps: &Deps,
+) {
+    crate::repo::account_creation::test_account_creation_is_invisible_until_commit(deps).await;
+}
+
+#[test]
+async fn test_account_creation_cancellation_rolls_back(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_cancellation_rolls_back(deps).await;
+}
+
+#[test]
+async fn test_account_creation_guard_timeout_retries(#[dimension(postgres_variant)] deps: &Deps) {
+    crate::repo::account_creation::test_account_creation_guard_timeout_retries(deps).await;
+}
+
+#[test]
+async fn test_account_creation_postgres_notifies_at_commit(
+    db: &PostgresDb,
+    #[tagged_as("postgres")] deps: &Deps,
+) {
+    crate::repo::account_creation::test_account_creation_postgres_notifies_at_commit(
+        deps, &db.config,
+    )
+    .await;
+}
+
+#[test]
 async fn test_notifier_replays_after_listener_reconnect(db: &PostgresDb) {
     crate::repo::notifier_reconnect::test_notifier_replays_after_listener_reconnect(db).await;
 }
