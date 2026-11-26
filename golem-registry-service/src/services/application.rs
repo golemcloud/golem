@@ -19,11 +19,13 @@ use super::registry_change_notifier::{RegistryChangeNotifier, RequiresNotificati
 use crate::repo::application::ApplicationRepo;
 use crate::repo::model::application::{ApplicationRepoError, ApplicationRevisionRecord};
 use crate::repo::model::audit::DeletableRevisionAuditFields;
+use crate::services::decision::{Decisions, account_target};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{
     Application, ApplicationCreation, ApplicationId, ApplicationName, ApplicationRevision,
     ApplicationUpdate,
 };
+use golem_common::model::authority::{CatalogOperation, Operation, Resource};
 use golem_common::model::card::owner::ApplicationOwnerPattern;
 use golem_common::model::card::{
     ApplicationResourcePattern, ApplicationVerb, ClassPermissionTarget, PermissionTarget,
@@ -84,6 +86,7 @@ pub struct ApplicationService {
     account_service: Arc<AccountService>,
     account_usage_service: Arc<AccountUsageService>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    decisions: Decisions,
 }
 
 impl ApplicationService {
@@ -92,12 +95,14 @@ impl ApplicationService {
         account_service: Arc<AccountService>,
         account_usage_service: Arc<AccountUsageService>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+        decisions: Decisions,
     ) -> Self {
         Self {
             application_repo,
             account_service,
             account_usage_service,
             registry_change_notifier,
+            decisions,
         }
     }
 
@@ -118,12 +123,17 @@ impl ApplicationService {
                     other => other.into(),
                 })?;
 
-        authorize_application_permission(
-            auth,
-            &account.email,
-            &data.name,
-            ApplicationVerb::Create,
-        )?;
+        self.decisions
+            .decide(
+                auth,
+                Operation::single(
+                    CatalogOperation::CreateApplication,
+                    Resource::None,
+                    account_target(account.id),
+                ),
+                application_permission_target(&account.email, &data.name, ApplicationVerb::Create),
+            )
+            .await?;
 
         self.account_usage_service
             .ensure_application_within_limits(account_id)
@@ -344,7 +354,7 @@ fn authorize_application_permission(
     ))
 }
 
-fn application_permission_target(
+pub(crate) fn application_permission_target(
     account_email: &AccountEmail,
     application_name: &ApplicationName,
     verb: ApplicationVerb,

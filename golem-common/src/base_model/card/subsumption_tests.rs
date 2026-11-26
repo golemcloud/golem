@@ -29,7 +29,11 @@ use test_r::core::{DynamicTestRegistration, TestProperties};
 use test_r::{add_test, test, test_gen};
 use uuid::Uuid;
 
-fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> PermissionPattern {
+pub(super) fn fs(
+    owner: &str,
+    recipient: &str,
+    resource: FilesystemResourcePattern,
+) -> PermissionPattern {
     PermissionPattern::Filesystem(ClassPermissionPattern::<FilesystemClass> {
         verb: Some(FilesystemVerb::Read),
         owner: AgentOwnerPattern::parse(owner).unwrap(),
@@ -38,7 +42,7 @@ fn fs(owner: &str, recipient: &str, resource: FilesystemResourcePattern) -> Perm
     })
 }
 
-fn fs_target(owner: &str, resource: FilesystemResourcePattern) -> PermissionTarget {
+pub(super) fn fs_target(owner: &str, resource: FilesystemResourcePattern) -> PermissionTarget {
     PermissionTarget::Filesystem(ClassPermissionTarget::<FilesystemClass> {
         verb: Some(FilesystemVerb::Read),
         owner: AgentOwnerPattern::parse(owner).unwrap(),
@@ -113,7 +117,7 @@ fn owner_wildcards_subsume_segments() {
 
 /// Parses owner text whose concrete agent leaf may be written `Type#n`: agent `n` of type tag 7
 /// with the trusted type name `Type`, as Golem builds the owner of a running agent.
-fn owner(text: &str) -> AgentOwnerPattern {
+pub(super) fn owner(text: &str) -> AgentOwnerPattern {
     match text.rsplit_once('/') {
         Some((prefix, leaf)) if leaf.contains('#') => {
             let (agent_type, n) = leaf.split_once('#').unwrap();
@@ -131,9 +135,10 @@ fn owner(text: &str) -> AgentOwnerPattern {
     }
 }
 
-#[test_gen]
-fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
-    let cases = [
+/// The owner cases: the owner of a grant, the owner of a request, and whether the first covers
+/// the second. The compatibility tests decide the same cases.
+pub(super) fn owner_subsumption_cases() -> Vec<(&'static str, &'static str, bool)> {
+    vec![
         ("acme/shop/prod/*/*", "acme/shop/prod/cart/Agent#1", true),
         ("acme/shop/*/*/*", "acme/shop/prod/cart/Agent#1", true),
         ("*/*/*/*/*", "acme/shop/prod/cart/Agent#1", true),
@@ -193,9 +198,12 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
             false,
         ),
         ("acme/*/*/*/*", "other/shop/prod/cart/Agent#1", false),
-    ];
+    ]
+}
 
-    for (left, right, expected) in cases {
+#[test_gen]
+fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
+    for (left, right, expected) in owner_subsumption_cases() {
         add_test!(
             r,
             format!(
@@ -219,7 +227,10 @@ fn generate_owner_subsumption_tests(r: &mut DynamicTestRegistration) {
 /// The agents of one type as Golem builds their owners: each has an ID from one of the
 /// derivations Golem issues and the trusted type name. Keyed, unkeyed, ephemeral and forked
 /// agents, and an imported 1.6 phantom agent, are all agents of the type.
-fn agents_of_type(agent_type: &str, type_tag: u32) -> Vec<(&'static str, AgentOwnerLeafPattern)> {
+pub(super) fn agents_of_type(
+    agent_type: &str,
+    type_tag: u32,
+) -> Vec<(&'static str, AgentOwnerLeafPattern)> {
     use crate::base_model::environment::EnvironmentId;
     use crate::base_model::type_id::TypeId;
     use crate::base_model::{AgentFingerprint, AgentId, IdempotencyKey};
@@ -284,7 +295,10 @@ fn agents_of_type(agent_type: &str, type_tag: u32) -> Vec<(&'static str, AgentOw
 }
 
 /// Replaces the leaf of the agent owner of `target`.
-fn with_agent_leaf(mut target: PermissionTarget, leaf: &AgentOwnerLeafPattern) -> PermissionTarget {
+pub(super) fn with_agent_leaf(
+    mut target: PermissionTarget,
+    leaf: &AgentOwnerLeafPattern,
+) -> PermissionTarget {
     let owner = match &mut target {
         PermissionTarget::Filesystem(target) => &mut target.owner,
         PermissionTarget::Env(target) => &mut target.owner,
@@ -300,20 +314,23 @@ fn with_agent_leaf(mut target: PermissionTarget, leaf: &AgentOwnerLeafPattern) -
     target
 }
 
+/// The classes that an agent owns, each with a verb and a resource of the class. The
+/// compatibility tests decide the same classes.
+pub(super) const AGENT_OWNED_CLASSES: [(&str, &str, &str); 5] = [
+    ("agent", "invoke", "add-item"),
+    ("env", "read", "GOLEM_AGENT_ID"),
+    ("filesystem", "read", "/data/a.txt"),
+    ("oplog", "read", "*"),
+    ("config", "read", "model.retry-count"),
+];
+
 /// These tests guard the type-name match of `Type(*)` owners for every kind of agent of the type.
 #[test]
 fn type_wildcard_grants_cover_every_agent_of_the_type_in_every_agent_owned_class() {
     let holder = RecipientPattern::parse("acme/shop/prod/cart/Caller").unwrap();
-    let classes = [
-        ("agent", "invoke", "add-item"),
-        ("env", "read", "GOLEM_AGENT_ID"),
-        ("filesystem", "read", "/data/a.txt"),
-        ("oplog", "read", "*"),
-        ("config", "read", "model.retry-count"),
-    ];
     let untyped = AgentOwnerLeafPattern::agent(crate::base_model::AgentId::from_parts(7, 1), None);
 
-    for (class, verb, resource) in classes {
+    for (class, verb, resource) in AGENT_OWNED_CLASSES {
         let grant = |owner: &str| {
             parse_permission(&format!(
                 "{class}(acme/shop/prod/cart/{owner}) @ * : {verb} : {resource}"
@@ -527,9 +544,13 @@ fn generate_recipient_subsumption_scope_tests(r: &mut DynamicTestRegistration) {
     }
 }
 
-#[test_gen]
-fn generate_recipient_matching_tests(r: &mut DynamicTestRegistration) {
-    let cases = [
+/// The holder of the recipient matching cases.
+pub(super) const RECIPIENT_HOLDER: &str = "acme/shop/prod/cart-svc/ShoppingCart(\"42\")";
+
+/// The recipient matching cases: the recipient of a grant, and whether it covers
+/// `RECIPIENT_HOLDER`. The compatibility tests decide the same cases.
+pub(super) fn recipient_matching_cases() -> Vec<(&'static str, bool)> {
+    vec![
         ("*", true),
         ("acme", true),
         ("acme/*/*", true),
@@ -540,9 +561,12 @@ fn generate_recipient_matching_tests(r: &mut DynamicTestRegistration) {
         ("acme/shop/prod/cart-svc/*", true),
         ("acme/shop/prod/other-svc/*", false),
         ("other", false),
-    ];
+    ]
+}
 
-    for (recipient, expected) in cases {
+#[test_gen]
+fn generate_recipient_matching_tests(r: &mut DynamicTestRegistration) {
+    for (recipient, expected) in recipient_matching_cases() {
         add_test!(
             r,
             format!(
@@ -556,9 +580,10 @@ fn generate_recipient_matching_tests(r: &mut DynamicTestRegistration) {
             ),
             TestProperties::unit_test(),
             || {
-                let holder = "acme/shop/prod/cart-svc/ShoppingCart(\"42\")";
-
-                assert_eq!(recipient_subsumes_holder(recipient, holder), expected);
+                assert_eq!(
+                    recipient_subsumes_holder(recipient, RECIPIENT_HOLDER),
+                    expected
+                );
             }
         );
     }
@@ -568,7 +593,7 @@ fn recipient_subsumes_holder(recipient: &str, holder: &str) -> bool {
     parse_recipient(recipient).subsumes(&parse_recipient(holder))
 }
 
-fn parse_recipient(value: &str) -> RecipientPattern {
+pub(super) fn parse_recipient(value: &str) -> RecipientPattern {
     AgentRecipientPattern::parse(value)
         .or_else(|_| EnvironmentRecipientPattern::parse(value))
         .or_else(|_| AccountRecipientPattern::parse(value))
@@ -592,9 +617,15 @@ fn glob_resource_subsumes_concrete_resource() {
     assert!(!narrow.subsumes(&broad));
 }
 
-#[test_gen]
-fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
-    let cases = [
+/// The path glob cases: a name, the path of a grant, the path of a request, and whether the first
+/// covers the second. The compatibility tests decide the same cases.
+pub(super) fn glob_resource_cases() -> Vec<(
+    &'static str,
+    FilesystemResourcePattern,
+    FilesystemResourcePattern,
+    bool,
+)> {
+    vec![
         (
             "any_subsumes_exact",
             FilesystemResourcePattern::any(),
@@ -667,9 +698,12 @@ fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
             fs_path(vec![fs_lit("data"), fs_lit("file.txt")]),
             false,
         ),
-    ];
+    ]
+}
 
-    for (name, left, right, expected) in cases {
+#[test_gen]
+fn generate_glob_resource_subsumption_tests(r: &mut DynamicTestRegistration) {
+    for (name, left, right, expected) in glob_resource_cases() {
         let left = std::sync::Arc::new(left);
         let right = std::sync::Arc::new(right);
         add_test!(
@@ -2866,7 +2900,7 @@ fn wildcard_network_denials_cover_internal_socket_destinations() {
     );
 }
 
-fn test_name(value: &str) -> String {
+pub(super) fn test_name(value: &str) -> String {
     value
         .chars()
         .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })

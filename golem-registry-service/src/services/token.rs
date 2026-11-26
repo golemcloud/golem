@@ -15,6 +15,7 @@
 use super::account::{AccountError, AccountService};
 use crate::repo::model::token::TokenRecord;
 use crate::repo::token::TokenRepo;
+use crate::services::decision::{Decisions, account_target};
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
@@ -22,6 +23,7 @@ use chrono::{DateTime, Utc};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::auth::TokenId;
 use golem_common::model::auth::{TokenSecret, TokenWithSecret};
+use golem_common::model::authority::{CatalogOperation, Operation, Resource};
 use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
 use golem_common::model::card::{
     AccountTokenResourcePattern, AccountTokenVerb, ClassPermissionTarget, PermissionTarget,
@@ -68,6 +70,7 @@ pub struct TokenService {
     token_repo: Arc<dyn TokenRepo>,
     account_service: Arc<AccountService>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    decisions: Decisions,
 }
 
 impl TokenService {
@@ -75,11 +78,13 @@ impl TokenService {
         token_repo: Arc<dyn TokenRepo>,
         account_service: Arc<AccountService>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+        decisions: Decisions,
     ) -> Self {
         Self {
             token_repo,
             account_service,
             registry_change_notifier,
+            decisions,
         }
     }
 
@@ -94,17 +99,49 @@ impl TokenService {
             .await?
             .ok_or(TokenError::TokenNotFound(token_id))?;
         let account_email = record.account_email();
+        let account_id = AccountId(record.token.account_id);
         let token: TokenWithSecret = record.token.into();
 
-        authorize_account_token_permission(
+        self.authorize_token(
             auth,
+            account_id,
             &account_email,
+            CatalogOperation::ViewApiToken,
             AccountTokenVerb::View,
-            AccountTokenResourcePattern::Token(token_id),
+            Some(token_id),
         )
+        .await
         .map_err(|_| TokenError::TokenNotFound(token_id))?;
 
         Ok(token)
+    }
+
+    /// Decides `operation` on the API tokens of `account_id`, from today's check of `verb` on the
+    /// token (or on every token of the account).
+    async fn authorize_token(
+        &self,
+        auth: &AuthCtx,
+        account_id: AccountId,
+        account_email: &AccountEmail,
+        operation: CatalogOperation,
+        verb: AccountTokenVerb,
+        token: Option<TokenId>,
+    ) -> Result<(), AuthorizationError> {
+        let (resource, token_resource) = match token {
+            Some(token_id) => (
+                Resource::ApiToken(token_id),
+                AccountTokenResourcePattern::Token(token_id),
+            ),
+            None => (Resource::None, AccountTokenResourcePattern::Any),
+        };
+        self.decisions
+            .decide(
+                auth,
+                Operation::single(operation, resource, account_target(account_id)),
+                account_token_permission_target(account_email, verb, token_resource),
+            )
+            .await
+            .map(|_| ())
     }
 
     pub async fn get_by_secret(
@@ -118,14 +155,18 @@ impl TokenService {
             .await?
             .ok_or(TokenError::TokenBySecretNotFound)?;
         let account_email = record.account_email();
+        let account_id = AccountId(record.token.account_id);
         let token: TokenWithSecret = record.token.into();
 
-        authorize_account_token_permission(
+        self.authorize_token(
             auth,
+            account_id,
             &account_email,
+            CatalogOperation::ViewApiToken,
             AccountTokenVerb::View,
-            AccountTokenResourcePattern::Token(token.id),
+            Some(token.id),
         )
+        .await
         .map_err(|_| TokenError::TokenBySecretNotFound)?;
 
         Ok(token)
@@ -169,18 +210,24 @@ impl TokenService {
             .map(|r| r.into())
             .collect();
 
-        Ok(tokens
-            .into_iter()
-            .filter(|token| {
-                authorize_account_token_permission(
+        let mut visible = Vec::with_capacity(tokens.len());
+        for token in tokens {
+            if self
+                .authorize_token(
                     auth,
+                    account.id,
                     &account.email,
+                    CatalogOperation::ViewApiToken,
                     AccountTokenVerb::View,
-                    AccountTokenResourcePattern::Token(token.id),
+                    Some(token.id),
                 )
+                .await
                 .is_ok()
-            })
-            .collect())
+            {
+                visible.push(token);
+            }
+        }
+        Ok(visible)
     }
 
     pub async fn create(
@@ -200,12 +247,15 @@ impl TokenService {
                     other => other.into(),
                 })?;
 
-        authorize_account_token_permission(
+        self.authorize_token(
             auth,
+            account.id,
             &account.email,
+            CatalogOperation::CreateApiTokens,
             AccountTokenVerb::Create,
-            AccountTokenResourcePattern::Any,
-        )?;
+            None,
+        )
+        .await?;
 
         let secret = TokenSecret::new();
         self.create_known_secret(account_id, secret, expires_at, None)
@@ -302,21 +352,9 @@ impl TokenService {
             .await?
             .ok_or(TokenError::TokenNotFound(token_id))?;
         let account_email = record.account_email();
+        let account_id = AccountId(record.token.account_id);
 
-        authorize_account_token_permission(
-            auth,
-            &account_email,
-            AccountTokenVerb::View,
-            AccountTokenResourcePattern::Token(token_id),
-        )
-        .map_err(|_| TokenError::TokenNotFound(token_id))?;
-
-        authorize_account_token_permission(
-            auth,
-            &account_email,
-            AccountTokenVerb::Delete,
-            AccountTokenResourcePattern::Token(token_id),
-        )?;
+        decide_revoke(&self.decisions, auth, account_id, &account_email, token_id).await?;
 
         if let Some(account_id) = self.token_repo.delete(token_id.0).await? {
             let _ = account_id.signal_new_events_available(&self.registry_change_notifier);
@@ -326,17 +364,50 @@ impl TokenService {
     }
 }
 
-fn authorize_account_token_permission(
+/// Decides the revoke of `token_id` of `account_id` in one decision, `revoke-api-token`, with
+/// today's two checks: view, then delete.
+pub(crate) async fn decide_revoke(
+    decisions: &Decisions,
     auth: &AuthCtx,
+    account_id: AccountId,
     account_email: &AccountEmail,
-    verb: AccountTokenVerb,
-    resource: AccountTokenResourcePattern,
-) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&account_token_permission_target(
-        account_email,
-        verb,
-        resource,
-    ))
+    token_id: TokenId,
+) -> Result<(), TokenError> {
+    let token = AccountTokenResourcePattern::Token(token_id);
+    let view =
+        account_token_permission_target(account_email, AccountTokenVerb::View, token.clone());
+    let revoke = account_token_permission_target(account_email, AccountTokenVerb::Delete, token);
+    decisions
+        .decide_checks(
+            auth,
+            Operation::single(
+                CatalogOperation::RevokeApiToken,
+                Resource::ApiToken(token_id),
+                account_target(account_id),
+            ),
+            vec![view, revoke.clone()],
+        )
+        .await
+        .map(|_| ())
+        .map_err(|error| revoke_refusal(error, &revoke, token_id))
+}
+
+/// The error of a refused revoke: a `403` when the delete check `revoke` refused, so the caller
+/// may see the token; otherwise "token not found", as for an unknown token.
+fn revoke_refusal(
+    error: AuthorizationError,
+    revoke: &PermissionTarget,
+    token_id: TokenId,
+) -> TokenError {
+    match &error {
+        AuthorizationError::PermissionNotAllowed(check)
+        | AuthorizationError::PermissionEvaluationFailed { target: check, .. }
+            if **check == *revoke =>
+        {
+            TokenError::Unauthorized(error)
+        }
+        _ => TokenError::TokenNotFound(token_id),
+    }
 }
 
 fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), AuthorizationError> {
@@ -347,7 +418,7 @@ fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), A
     }))
 }
 
-fn account_token_permission_target(
+pub(crate) fn account_token_permission_target(
     account_email: &AccountEmail,
     verb: AccountTokenVerb,
     resource: AccountTokenResourcePattern,

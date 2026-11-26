@@ -26,8 +26,10 @@ use crate::repo::model::environment::EnvironmentRepoError;
 use crate::repo::model::environment_plugin_grant::EnvironmentPluginGrantRecord;
 use crate::repo::plugin::PluginRepo;
 use crate::services::application::ApplicationError;
+use crate::services::decision::{Decisions, application_target};
 use golem_common::model::account::{AccountEmail, AccountId};
 use golem_common::model::application::{ApplicationId, ApplicationName};
+use golem_common::model::authority::{CatalogOperation, Operation, Resource};
 use golem_common::model::card::owner::{ComponentOwnerPattern, EnvironmentOwnerPattern};
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
@@ -108,6 +110,7 @@ pub struct EnvironmentService {
     plugin_repo: Arc<dyn PluginRepo>,
     builtin_plugin_owner_account_id: AccountId,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    decisions: Decisions,
 }
 
 impl EnvironmentService {
@@ -118,6 +121,7 @@ impl EnvironmentService {
         plugin_repo: Arc<dyn PluginRepo>,
         builtin_plugin_owner_account_id: AccountId,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+        decisions: Decisions,
     ) -> Self {
         Self {
             environment_repo,
@@ -126,6 +130,7 @@ impl EnvironmentService {
             plugin_repo,
             builtin_plugin_owner_account_id,
             registry_change_notifier,
+            decisions,
         }
     }
 
@@ -146,13 +151,22 @@ impl EnvironmentService {
                 other => other.into(),
             })?;
 
-        authorize_environment_permission(
-            auth,
-            &application.account_email,
-            &application.name,
-            &data.name,
-            EnvironmentVerb::Create,
-        )?;
+        self.decisions
+            .decide(
+                auth,
+                Operation::single(
+                    CatalogOperation::CreateEnvironment,
+                    Resource::None,
+                    application_target(application.account_id, application.id),
+                ),
+                environment_permission_target(
+                    &application.account_email,
+                    &application.name,
+                    &data.name,
+                    EnvironmentVerb::Create,
+                ),
+            )
+            .await?;
 
         self.account_usage_service
             .ensure_environment_within_limits(application.account_id)
@@ -340,16 +354,24 @@ impl EnvironmentService {
     /// authorized against the resource directly — matching the behaviour of the ID-based
     /// lookups. The returned owner is always passed to a subsequent resource authorization
     /// check; never return the `Environment` itself (or any non-ownership data) from here.
-    pub async fn get_owner_unchecked(
+    /// The environment, without an access check.
+    pub async fn get_unchecked(
         &self,
         environment_id: EnvironmentId,
-    ) -> Result<EnvironmentOwnerPattern, EnvironmentError> {
-        let environment: Environment = self
+    ) -> Result<Environment, EnvironmentError> {
+        Ok(self
             .environment_repo
             .get_by_id(environment_id.0, false)
             .await?
             .ok_or(EnvironmentError::EnvironmentNotFound(environment_id))?
-            .try_into()?;
+            .try_into()?)
+    }
+
+    pub async fn get_owner_unchecked(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<EnvironmentOwnerPattern, EnvironmentError> {
+        let environment = self.get_unchecked(environment_id).await?;
 
         Ok(EnvironmentOwnerPattern::Environment {
             account: environment.owner_account_email,
@@ -590,7 +612,21 @@ fn authorize_environment_permission(
     environment_name: &EnvironmentName,
     verb: EnvironmentVerb,
 ) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&PermissionTarget::Environment(ClassPermissionTarget {
+    auth.authorize_permission(&environment_permission_target(
+        account_email,
+        application_name,
+        environment_name,
+        verb,
+    ))
+}
+
+pub(crate) fn environment_permission_target(
+    account_email: &AccountEmail,
+    application_name: &ApplicationName,
+    environment_name: &EnvironmentName,
+    verb: EnvironmentVerb,
+) -> PermissionTarget {
+    PermissionTarget::Environment(ClassPermissionTarget {
         verb: Some(verb),
         owner: EnvironmentOwnerPattern::Environment {
             account: account_email.clone(),
@@ -598,7 +634,7 @@ fn authorize_environment_permission(
             environment: environment_name.clone(),
         },
         resource: EnvironmentResourcePattern::Any,
-    }))
+    })
 }
 
 fn authorize_environment_model(

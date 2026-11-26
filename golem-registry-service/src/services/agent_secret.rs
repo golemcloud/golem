@@ -20,12 +20,16 @@ use crate::repo::model::agent_secrets::{
     AgentSecretRevisionRecord,
 };
 use crate::repo::model::audit::DeletableRevisionAuditFields;
+use crate::services::decision::{Decisions, environment_target};
 use golem_common::model::account::AccountEmail;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent_secret::{
     AgentSecretCreation, AgentSecretId, AgentSecretRevision, AgentSecretUpdate,
     CanonicalAgentSecretPath,
 };
+use golem_common::model::application::ApplicationId;
 use golem_common::model::application::ApplicationName;
+use golem_common::model::authority::{CatalogOperation, Operation, Resource, Target};
 use golem_common::model::card::owner::EnvironmentOwnerPattern;
 use golem_common::model::card::{
     ClassPermissionTarget, EnvironmentAgentSecretKeyPathPattern,
@@ -68,60 +72,77 @@ pub enum AgentSecretError {
     InternalError(#[from] anyhow::Error),
 }
 
-fn authorize_agent_secret_permission(
-    auth: &AuthCtx,
-    environment: &Environment,
-    key: Option<&CanonicalAgentSecretPath>,
-    verb: EnvironmentAgentSecretVerb,
-) -> Result<(), AuthorizationError> {
-    authorize_agent_secret_permission_for_owner(
-        auth,
-        EnvironmentOwnerPattern::Environment {
-            account: environment.owner_account_email.clone(),
-            application: environment.application_name.clone(),
-            environment: environment.name.clone(),
-        },
-        key,
-        verb,
-    )
+/// The environment of a secret, as today's card check and the decision request name it.
+#[derive(Clone, Debug)]
+struct SecretOwner {
+    pattern: EnvironmentOwnerPattern,
+    target: Target,
 }
 
-fn authorize_agent_secret_permission_for_owner(
-    auth: &AuthCtx,
-    owner: EnvironmentOwnerPattern,
-    key: Option<&CanonicalAgentSecretPath>,
-    verb: EnvironmentAgentSecretVerb,
-) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&PermissionTarget::EnvironmentAgentSecret(
-        ClassPermissionTarget {
-            verb: Some(verb),
-            owner,
-            resource: key
-                .map(|key| {
-                    EnvironmentAgentSecretResourcePattern::Key(
-                        EnvironmentAgentSecretKeyPathPattern {
-                            segments: key
-                                .0
-                                .iter()
-                                .cloned()
-                                .map(EnvironmentAgentSecretKeySegmentPattern::Literal)
-                                .collect(),
-                        },
-                    )
-                })
-                .unwrap_or(EnvironmentAgentSecretResourcePattern::Any),
-        },
-    ))
-}
-
-fn environment_owner_from_agent_secret(
-    agent_secret: &AgentSecretAuthExtRevisionRecord,
-) -> EnvironmentOwnerPattern {
-    EnvironmentOwnerPattern::Environment {
-        account: AccountEmail::new(agent_secret.owner_account_email.clone()),
-        application: ApplicationName(agent_secret.application_name.clone()),
-        environment: EnvironmentName(agent_secret.environment_name.clone()),
+impl SecretOwner {
+    fn of_environment(environment: &Environment) -> Self {
+        Self {
+            pattern: EnvironmentOwnerPattern::Environment {
+                account: environment.owner_account_email.clone(),
+                application: environment.application_name.clone(),
+                environment: environment.name.clone(),
+            },
+            target: environment_target(
+                environment.owner_account_id,
+                environment.application_id,
+                environment.id,
+            ),
+        }
     }
+
+    fn of_record(agent_secret: &AgentSecretAuthExtRevisionRecord) -> Self {
+        Self {
+            pattern: EnvironmentOwnerPattern::Environment {
+                account: AccountEmail::new(agent_secret.owner_account_email.clone()),
+                application: ApplicationName(agent_secret.application_name.clone()),
+                environment: EnvironmentName(agent_secret.environment_name.clone()),
+            },
+            target: environment_target(
+                AccountId(agent_secret.owner_account_id),
+                ApplicationId(agent_secret.application_id),
+                EnvironmentId(agent_secret.agent_secret.environment_id),
+            ),
+        }
+    }
+}
+
+/// The decision's operation for today's check of `verb` on a secret.
+pub(crate) fn secret_operation(verb: EnvironmentAgentSecretVerb) -> CatalogOperation {
+    match verb {
+        EnvironmentAgentSecretVerb::Create => CatalogOperation::CreateSecret,
+        EnvironmentAgentSecretVerb::Update => CatalogOperation::UpdateSecret,
+        EnvironmentAgentSecretVerb::Delete => CatalogOperation::DeleteSecret,
+        EnvironmentAgentSecretVerb::View | EnvironmentAgentSecretVerb::Restore => {
+            CatalogOperation::ViewSecret
+        }
+    }
+}
+
+/// Today's card check of `verb` on the secret at `key`.
+pub(crate) fn agent_secret_check(
+    owner: EnvironmentOwnerPattern,
+    key: &CanonicalAgentSecretPath,
+    verb: EnvironmentAgentSecretVerb,
+) -> PermissionTarget {
+    PermissionTarget::EnvironmentAgentSecret(ClassPermissionTarget {
+        verb: Some(verb),
+        owner,
+        resource: EnvironmentAgentSecretResourcePattern::Key(
+            EnvironmentAgentSecretKeyPathPattern {
+                segments: key
+                    .0
+                    .iter()
+                    .cloned()
+                    .map(EnvironmentAgentSecretKeySegmentPattern::Literal)
+                    .collect(),
+            },
+        ),
+    })
 }
 
 fn resolve_schema_ref<'a>(graph: &'a SchemaGraph, mut ty: &'a SchemaType) -> &'a SchemaType {
@@ -364,6 +385,7 @@ pub struct AgentSecretService {
     agent_secret_repo: Arc<dyn AgentSecretRepo>,
     environment_service: Arc<EnvironmentService>,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    decisions: Decisions,
 }
 
 impl AgentSecretService {
@@ -371,12 +393,36 @@ impl AgentSecretService {
         agent_secret_repo: Arc<dyn AgentSecretRepo>,
         environment_service: Arc<EnvironmentService>,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+        decisions: Decisions,
     ) -> Self {
         Self {
             agent_secret_repo,
             environment_service,
             registry_change_notifier,
+            decisions,
         }
+    }
+
+    /// Decides `verb` on the secret at `key`, from today's card check.
+    async fn authorize_secret(
+        &self,
+        auth: &AuthCtx,
+        owner: &SecretOwner,
+        key: &CanonicalAgentSecretPath,
+        verb: EnvironmentAgentSecretVerb,
+    ) -> Result<(), AuthorizationError> {
+        self.decisions
+            .decide(
+                auth,
+                Operation::single(
+                    secret_operation(verb),
+                    Resource::Path(key.0.join("/")),
+                    owner.target.clone(),
+                ),
+                agent_secret_check(owner.pattern.clone(), key, verb),
+            )
+            .await
+            .map(|_| ())
     }
 
     pub async fn create(
@@ -398,12 +444,13 @@ impl AgentSecretService {
 
         let agent_secret_path: CanonicalAgentSecretPath = data.path.into();
 
-        authorize_agent_secret_permission(
+        self.authorize_secret(
             auth,
-            &environment,
-            Some(&agent_secret_path),
+            &SecretOwner::of_environment(&environment),
+            &agent_secret_path,
             EnvironmentAgentSecretVerb::Create,
-        )?;
+        )
+        .await?;
 
         // The REST DTO is schema-native: the secret type arrives as a
         // `SchemaGraph` and the value (if any) as a `SchemaValue`. Validate
@@ -471,12 +518,13 @@ impl AgentSecretService {
     ) -> Result<AgentSecret, AgentSecretError> {
         let (mut agent_secret, owner) = self.get_with_environment(agent_secret_id, auth).await?;
 
-        authorize_agent_secret_permission_for_owner(
+        self.authorize_secret(
             auth,
-            owner,
-            Some(&agent_secret.path),
+            &owner,
+            &agent_secret.path,
             EnvironmentAgentSecretVerb::Update,
-        )?;
+        )
+        .await?;
 
         if update.current_revision != agent_secret.revision {
             return Err(AgentSecretError::ConcurrentModification);
@@ -523,12 +571,13 @@ impl AgentSecretService {
     ) -> Result<AgentSecret, AgentSecretError> {
         let (mut agent_secret, owner) = self.get_with_environment(agent_secret_id, auth).await?;
 
-        authorize_agent_secret_permission_for_owner(
+        self.authorize_secret(
             auth,
-            owner,
-            Some(&agent_secret.path),
+            &owner,
+            &agent_secret.path,
             EnvironmentAgentSecretVerb::Delete,
-        )?;
+        )
+        .await?;
 
         if agent_secret.revision != current_revision {
             return Err(AgentSecretError::ConcurrentModification);
@@ -572,24 +621,21 @@ impl AgentSecretService {
     ) -> Result<AgentSecret, AgentSecretError> {
         let owner = self
             .environment_service
-            .get_owner_unchecked(environment_id)
+            .get_unchecked(environment_id)
             .await
+            .map(|environment| SecretOwner::of_environment(&environment))
             .map_err(|err| match err {
                 EnvironmentError::EnvironmentNotFound(_) => {
                     AgentSecretError::ParentEnvironmentNotFound(environment_id)
                 }
                 other => other.into(),
             })?;
-        authorize_agent_secret_permission_for_owner(
-            auth,
-            owner,
-            Some(&path),
-            EnvironmentAgentSecretVerb::View,
-        )
-        .map_err(|_| AgentSecretError::AgentSecretByPathNotFound {
-            environment_id,
-            path: path.clone(),
-        })?;
+        self.authorize_secret(auth, &owner, &path, EnvironmentAgentSecretVerb::View)
+            .await
+            .map_err(|_| AgentSecretError::AgentSecretByPathNotFound {
+                environment_id,
+                path: path.clone(),
+            })?;
         self.agent_secret_repo
             .get_for_environment_and_path(environment_id.0, path.0.clone())
             .await?
@@ -626,19 +672,24 @@ impl AgentSecretService {
         auth: &AuthCtx,
     ) -> Result<Vec<AgentSecret>, AgentSecretError> {
         let result = self.list_in_environment_unchecked(environment.id).await?;
+        let owner = SecretOwner::of_environment(environment);
 
-        Ok(result
-            .into_iter()
-            .filter(|agent_secret| {
-                authorize_agent_secret_permission(
+        let mut visible = Vec::with_capacity(result.len());
+        for agent_secret in result {
+            if self
+                .authorize_secret(
                     auth,
-                    environment,
-                    Some(&agent_secret.path),
+                    &owner,
+                    &agent_secret.path,
                     EnvironmentAgentSecretVerb::View,
                 )
+                .await
                 .is_ok()
-            })
-            .collect())
+            {
+                visible.push(agent_secret);
+            }
+        }
+        Ok(visible)
     }
 
     // list in environment without checking auth / confirming the environment is not deleted.
@@ -678,22 +729,23 @@ impl AgentSecretService {
         &self,
         agent_secret_id: AgentSecretId,
         auth: &AuthCtx,
-    ) -> Result<(AgentSecret, EnvironmentOwnerPattern), AgentSecretError> {
+    ) -> Result<(AgentSecret, SecretOwner), AgentSecretError> {
         let record = self
             .agent_secret_repo
             .get_by_id(agent_secret_id.0)
             .await?
             .ok_or(AgentSecretError::AgentSecretNotFound(agent_secret_id))?;
 
-        let owner = environment_owner_from_agent_secret(&record);
+        let owner = SecretOwner::of_record(&record);
         let agent_secret: AgentSecret = record.agent_secret.try_into()?;
 
-        authorize_agent_secret_permission_for_owner(
+        self.authorize_secret(
             auth,
-            owner.clone(),
-            Some(&agent_secret.path),
+            &owner,
+            &agent_secret.path,
             EnvironmentAgentSecretVerb::View,
         )
+        .await
         .map_err(|_| AgentSecretError::AgentSecretNotFound(agent_secret_id))?;
 
         Ok((agent_secret, owner))

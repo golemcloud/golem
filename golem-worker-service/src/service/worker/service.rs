@@ -57,14 +57,18 @@ use golem_common::model::agent::{
     AgentMetadataDto, AgentTarget, ResolvedRevert, RevertWorkerTarget, ScheduleId,
 };
 use golem_common::model::application::ApplicationName;
-use golem_common::model::caller::{
-    AccountAuthentication, AccountPrincipal, Caller, ClaimVisibility, Principal,
+use golem_common::model::authority::{
+    AgentTarget as DecisionAgentTarget, AuthorizationRequest, CatalogOperation, EntityIdText,
+    EnvironmentTarget, Grantors, InvocationOwner, InvocationTarget, Operation, OperationShapeError,
+    PromiseOwner, PromiseTarget, Resource, Target as DecisionTarget, ToolTarget,
 };
+use golem_common::model::caller::{Caller, ClaimVisibility};
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
 use golem_common::model::card::{
     AgentInvocationIdPattern, AgentMethodName, AgentPluginName, AgentResourcePattern, AgentVerb,
     CardId, ClassPermissionTarget, FilesystemPathPattern, FilesystemResourcePattern,
-    FilesystemVerb, OplogResourcePattern, OplogVerb, PermissionTarget, StoredCard,
+    FilesystemVerb, OplogResourcePattern, OplogVerb, PartChecks, PermissionTarget, StoredCard,
+    exec_check,
 };
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -100,7 +104,9 @@ use golem_common::schema::{
 };
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::model::auth::{
+    AuthCtx, AuthorizationError, Authorizer, CompatibilityAuthorizer, decide_with_todays_checks,
+};
 use golem_service_base::model::component::Component;
 use golem_service_base::model::{ComponentFileSystemNode, FileReadResponse, GetOplogResponse};
 use std::pin::Pin;
@@ -418,58 +424,33 @@ pub(crate) fn agent_owner(
     }
 }
 
-fn authorize_permissions(
-    auth_ctx: &AuthCtx,
-    owner: &AgentOwnerPattern,
-    permissions: &[AgentPermission],
-) -> WorkerResult<()> {
-    for permission in permissions {
-        auth_ctx
-            .authorize_permission(&permission.target(owner.clone()))
-            .map_err(AuthServiceError::Unauthorized)?;
-    }
-    Ok(())
+/// Today's check for a request to every agent of a type, such as a listing.
+fn agent_type_check(component: &Component, agent_type: &AgentTypeName) -> PermissionTarget {
+    PermissionTarget::Agent(ClassPermissionTarget {
+        owner: AgentOwnerPattern::Agent {
+            account: component.account_email.clone(),
+            application: component.application_name.clone(),
+            environment: component.environment_name.clone(),
+            component: component.component_name.clone(),
+            agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent_type.clone()),
+        },
+        verb: Some(AgentVerb::View),
+        resource: AgentResourcePattern::Empty,
+    })
 }
 
-/// Authorizes a request that names the agent by its key or creates it, against the
-/// component that implements its type.
-fn authorize_target(
-    auth_ctx: &AuthCtx,
-    component: &Component,
-    target: &RoutedTarget,
-    verb: AgentVerb,
-    resource: AgentResourcePattern,
-) -> WorkerResult<()> {
-    authorize_permissions(
-        auth_ctx,
-        &agent_owner(component, target.agent_id, target.agent_type.clone()),
-        &[AgentPermission::Agent(verb, resource)],
+/// The decision's operation for listing the agents of `component`'s environment.
+fn list_agents(component: &Component) -> WorkerResult<Operation> {
+    Operation::single(
+        CatalogOperation::ListAgents,
+        Resource::None,
+        DecisionTarget::Environment(EnvironmentTarget {
+            account_id: component.account_id,
+            application_id: component.application_id,
+            environment_id: component.environment_id,
+        }),
     )
-}
-
-/// Authorizes a request to every agent of a type, such as a listing.
-fn authorize_agent_type(
-    auth_ctx: &AuthCtx,
-    component: &Component,
-    agent_type: &AgentTypeName,
-    verb: AgentVerb,
-    resource: AgentResourcePattern,
-) -> WorkerResult<()> {
-    auth_ctx
-        .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
-            owner: AgentOwnerPattern::Agent {
-                account: component.account_email.clone(),
-                application: component.application_name.clone(),
-                environment: component.environment_name.clone(),
-                component: component.component_name.clone(),
-                agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent_type.clone()),
-            },
-            verb: Some(verb),
-            resource,
-        }))
-        .map_err(AuthServiceError::Unauthorized)?;
-
-    Ok(())
+    .map_err(|error| WorkerServiceError::Internal(error.to_string()))
 }
 
 /// Authorizes a request to every agent of a component, such as describing its baseline tools.
@@ -493,6 +474,331 @@ fn authorize_component_agents(
         .map_err(AuthServiceError::Unauthorized)?;
 
     Ok(())
+}
+
+/// An agent operation as the decision request names it, with the card checks that today's code
+/// makes for it on the agent.
+#[derive(Clone, Debug)]
+pub(crate) struct AgentAccess {
+    operation: CatalogOperation,
+    resource: Resource,
+    /// The part of the operation that is not the agent: the agent's promise, its invocation, or
+    /// the tool of a hosted exec.
+    other: AccessTarget,
+    permissions: Vec<AgentPermission>,
+    /// The caller that the request names, such as the calling agent of a fork or an update that
+    /// an agent asks for. Without it, the decision names the account of the request's token.
+    caller: Option<Caller>,
+}
+
+#[derive(Clone, Debug)]
+enum AccessTarget {
+    Agent,
+    Promise(PromiseId),
+    Invocation(golem_common::model::InvocationId),
+    /// The tool part of a hosted exec. It has no card check today.
+    HostedExec {
+        tool: ToolName,
+        command: String,
+    },
+    /// No decision yet; see `AgentAccess::unclassified`.
+    Unclassified,
+}
+
+impl AgentAccess {
+    pub(crate) fn new(
+        operation: CatalogOperation,
+        resource: Resource,
+        permissions: impl IntoIterator<Item = AgentPermission>,
+    ) -> Self {
+        Self {
+            operation,
+            resource,
+            other: AccessTarget::Agent,
+            permissions: permissions.into_iter().collect(),
+            caller: None,
+        }
+    }
+
+    /// The same access, decided for `caller` when the request names one.
+    fn called_by(self, caller: Option<Caller>) -> Self {
+        Self { caller, ..self }
+    }
+
+    /// The decision request of `operation`: the caller that the request names asks on its own
+    /// authority, else `entry` gives the request of the account of the request's token.
+    fn decision_request(
+        &self,
+        operation: Operation,
+        entry: impl FnOnce(Operation) -> AuthorizationRequest,
+    ) -> AuthorizationRequest {
+        match &self.caller {
+            Some(caller) => AuthorizationRequest::new(caller.clone(), operation),
+            None => entry(operation),
+        }
+    }
+
+    /// A creation of the agent, which a caller that may invoke `resource` on it may make.
+    fn create_agent(resource: AgentResourcePattern) -> Self {
+        Self::new(
+            CatalogOperation::CreateAgent,
+            Resource::None,
+            [AgentPermission::Agent(AgentVerb::Invoke, resource)],
+        )
+    }
+
+    /// A methodless upsert: `invoke` on any one method of the selected agent, or of the keyed
+    /// agent if it does not exist yet. Today's check is `invoke : *`.
+    fn upsert_agent() -> Self {
+        Self::new(
+            CatalogOperation::UpsertAgent,
+            Resource::AnyOneMethod,
+            [AgentPermission::Agent(
+                AgentVerb::Invoke,
+                AgentResourcePattern::Any,
+            )],
+        )
+    }
+
+    /// A lookup of an invocation's result: `read-invocation` on the invocation that `key` names,
+    /// with today's `view` check. A key that is not an invocation ID names no invocation, so the
+    /// lookup keeps today's view of the agent, and the executor refuses the key as today.
+    fn lookup(key: Option<&str>, permission: AgentPermission) -> Self {
+        match key.and_then(|key| key.parse::<golem_common::model::InvocationId>().ok()) {
+            Some(invocation_id) => {
+                Self::on_invocation(CatalogOperation::ReadInvocation, invocation_id, permission)
+            }
+            None => Self::new(CatalogOperation::ViewAgent, Resource::None, [permission]),
+        }
+    }
+
+    /// Whether this access looks up an invocation's result.
+    fn is_lookup(&self) -> bool {
+        matches!(
+            self.operation,
+            CatalogOperation::ReadInvocation | CatalogOperation::ViewAgent
+        )
+    }
+
+    /// A fork of the agent, decided for the caller that the request names.
+    fn fork(caller: Option<Caller>) -> Self {
+        Self::agent(
+            CatalogOperation::ForkAgent,
+            AgentVerb::Fork,
+            AgentResourcePattern::Empty,
+        )
+        .called_by(caller)
+    }
+
+    /// An update of the agent's revision, decided for the requester that the request names.
+    fn update_revision(requester: Option<Caller>) -> Self {
+        Self::agent(
+            CatalogOperation::UpdateAgentRevision,
+            AgentVerb::UpdateRevision,
+            AgentResourcePattern::Empty,
+        )
+        .called_by(requester)
+    }
+
+    /// An invocation in `mode`: a lookup reads the invocation that its key `key` names, a method
+    /// call invokes the agent, and a start without a method creates it.
+    fn invocation(mode: i32, method_name: Option<&String>, key: Option<&str>) -> Self {
+        let verb = agent_verb_for_invocation_mode(mode);
+        let resource = method_name
+            .map(|method_name| AgentResourcePattern::Method(AgentMethodName(method_name.clone())))
+            .unwrap_or(AgentResourcePattern::Any);
+        let permission = AgentPermission::Agent(verb, resource);
+        match (verb, method_name) {
+            (AgentVerb::View, _) => Self::lookup(key, permission),
+            (_, Some(method_name)) => Self::new(
+                CatalogOperation::InvokeAgent,
+                Resource::Method(method_name.clone()),
+                [permission],
+            ),
+            (_, None) => Self::new(CatalogOperation::CreateAgent, Resource::None, [permission]),
+        }
+    }
+
+    fn agent(operation: CatalogOperation, verb: AgentVerb, resource: AgentResourcePattern) -> Self {
+        Self::new(
+            operation,
+            Resource::None,
+            [AgentPermission::Agent(verb, resource)],
+        )
+    }
+
+    /// A call of `method_name`.
+    fn invoke(method_name: &str) -> Self {
+        Self::new(
+            CatalogOperation::InvokeAgent,
+            Resource::Method(method_name.to_string()),
+            [AgentPermission::Agent(
+                AgentVerb::Invoke,
+                AgentResourcePattern::Method(AgentMethodName(method_name.to_string())),
+            )],
+        )
+    }
+
+    fn promise(promise_id: PromiseId, permission: AgentPermission) -> Self {
+        Self {
+            other: AccessTarget::Promise(promise_id),
+            ..Self::new(
+                CatalogOperation::SendToPromise,
+                Resource::None,
+                [permission],
+            )
+        }
+    }
+
+    /// An operation on one invocation of the agent.
+    fn on_invocation(
+        operation: CatalogOperation,
+        invocation_id: golem_common::model::InvocationId,
+        permission: AgentPermission,
+    ) -> Self {
+        Self {
+            other: AccessTarget::Invocation(invocation_id),
+            ..Self::new(operation, Resource::None, [permission])
+        }
+    }
+
+    /// An access of an entry point whose owner names its operation later: the session and Durable
+    /// Streams protocols. It keeps today's checks, outside `decide`.
+    fn unclassified(permissions: impl IntoIterator<Item = AgentPermission>) -> Self {
+        Self {
+            other: AccessTarget::Unclassified,
+            ..Self::new(CatalogOperation::ViewAgent, Resource::None, permissions)
+        }
+    }
+
+    /// A hosted exec: `agent : exec` on the agent, which today's `invoke : *` answers, and
+    /// `tool : invoke`, which today's REST path does not check.
+    fn hosted_exec(tool: ToolName, command: String) -> Self {
+        Self {
+            other: AccessTarget::HostedExec { tool, command },
+            ..Self::agent(
+                CatalogOperation::HostedExec,
+                AgentVerb::Invoke,
+                AgentResourcePattern::Any,
+            )
+        }
+    }
+
+    /// The decision's operation on `agent`, and today's checks for each of its parts.
+    fn decision(
+        &self,
+        agent: DecisionAgentTarget,
+        owner: &AgentOwnerPattern,
+    ) -> Result<(Operation, Vec<PartChecks>), OperationShapeError> {
+        let checks = self
+            .permissions
+            .iter()
+            .map(|permission| permission.target(owner.clone()))
+            .collect::<Vec<_>>();
+        match &self.other {
+            AccessTarget::Agent | AccessTarget::Unclassified => Ok((
+                Operation::single(
+                    self.operation,
+                    self.resource.clone(),
+                    DecisionTarget::Agent(agent),
+                )?,
+                vec![checks.into()],
+            )),
+            AccessTarget::Promise(promise_id) => Ok((
+                Operation::single(
+                    self.operation,
+                    self.resource.clone(),
+                    DecisionTarget::Promise(PromiseTarget {
+                        id: EntityIdText(promise_id.to_string()),
+                        owner: PromiseOwner::Agent(agent),
+                    }),
+                )?,
+                vec![checks.into()],
+            )),
+            AccessTarget::Invocation(invocation_id) => Ok((
+                Operation::single(
+                    self.operation,
+                    self.resource.clone(),
+                    DecisionTarget::Invocation(InvocationTarget {
+                        invocation_id: *invocation_id,
+                        owner: InvocationOwner::Agent(agent),
+                    }),
+                )?,
+                vec![checks.into()],
+            )),
+            AccessTarget::HostedExec { tool, command } => {
+                let tool = ToolTarget {
+                    environment_id: agent.environment_id,
+                    tool_name: tool.clone(),
+                };
+                Ok((
+                    Operation::hosted_exec(agent, tool, command.clone())?,
+                    vec![
+                        vec![exec_check(owner.clone())].into(),
+                        PartChecks::NotCheckedToday,
+                    ],
+                ))
+            }
+        }
+    }
+}
+
+/// The text of a request's key, which a lookup's final key holds as an invocation ID.
+fn request_key_text(request_key: &InvocationRequestKey) -> Option<&str> {
+    match request_key {
+        InvocationRequestKey::External { key, .. }
+        | InvocationRequestKey::Internal(key)
+        | InvocationRequestKey::RouteSession { key, .. } => Some(key.value.as_str()),
+        InvocationRequestKey::Unkeyed(_) => None,
+    }
+}
+
+/// The access of a tool call on an existing agent: a lookup reads the invocation that its key
+/// `key` names, and a call is a hosted exec on the agent. A tool name that is not valid keeps
+/// today's check, so the answer and its order stay as today.
+fn tool_access(
+    lookup: bool,
+    key: Option<&str>,
+    verb: AgentVerb,
+    tool_name: &str,
+    command_path: &[String],
+) -> AgentAccess {
+    let permission = AgentPermission::Agent(verb, AgentResourcePattern::Any);
+    if lookup {
+        return AgentAccess::lookup(key, permission);
+    }
+    match ToolName::try_from(tool_name) {
+        Ok(tool) => AgentAccess::hosted_exec(tool, command_path.join(" ")),
+        Err(_) => AgentAccess::unclassified([permission]),
+    }
+}
+
+/// An agent owner without an agent type has no decision target yet. Its requests keep the 1.6
+/// card check, outside `decide`, and so write no audit record: the owner of a standalone tool call
+/// until standalone tool invocations get a decision target of their own, and an oplog processor
+/// until processor installations become a caller kind of their own.
+fn authorize_typeless_owner_with_1_6_check(
+    auth: &AuthCtx,
+    owner: &AgentOwnerPattern,
+    access: &AgentAccess,
+) -> Result<(), AuthorizationError> {
+    access
+        .permissions
+        .iter()
+        .try_for_each(|permission| auth.authorize_permission(&permission.target(owner.clone())))
+}
+
+/// The agent that a decision is about, with its owner in today's card checks.
+struct DecidedAgent<'a> {
+    environment_id: EnvironmentId,
+    agent_id: AgentId,
+    /// `None` for an owner without an agent type: the owner of a standalone tool call, or an
+    /// oplog processor.
+    agent_type: Option<&'a AgentTypeName>,
+    /// `None` when the request makes a new lifetime, or reaches the agent by its key without its
+    /// metadata.
+    fingerprint: Option<AgentFingerprint>,
+    owner: AgentOwnerPattern,
 }
 
 fn is_agent_not_found(error: &WorkerServiceError) -> bool {
@@ -537,11 +843,15 @@ impl ManagedAgent {
         )
     }
 
-    /// Authorizes a request to the agent. A denial has the same text as the denial of a
-    /// missing agent.
-    fn authorize(&self, auth_ctx: &AuthCtx, permissions: &[AgentPermission]) -> WorkerResult<()> {
-        authorize_permissions(auth_ctx, &self.owner(), permissions)
-            .map_err(|_| WorkerServiceError::AgentAccessDenied(self.agent_id.agent_id))
+    /// The agent as a decision names it.
+    fn decided(&self) -> DecidedAgent<'_> {
+        DecidedAgent {
+            environment_id: self.agent_id.environment_id,
+            agent_id: self.agent_id.agent_id,
+            agent_type: self.metadata.agent_type_name.as_ref(),
+            fingerprint: Some(self.metadata.fingerprint),
+            owner: self.owner(),
+        }
     }
 
     fn routed(&self) -> RoutedTarget {
@@ -560,6 +870,10 @@ pub struct WorkerService {
     agent_resolution_cache: Arc<AgentResolutionCache>,
     agent_types: Arc<AgentTypeResolver>,
     golem_issuer: GolemIssuer,
+    /// The decision requests that this service made. Only its unit tests count them; production
+    /// builds do not compile this field.
+    #[cfg(test)]
+    decisions: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 pub struct PublicAgentSessionStart {
@@ -645,16 +959,191 @@ impl WorkerService {
             agent_resolution_cache,
             agent_types,
             golem_issuer,
+            #[cfg(test)]
+            decisions: Arc::default(),
         }
+    }
+
+    /// Whether the caller may list the agents of `agent_type`, which `component` implements, as
+    /// today's type-wide `agent : view` check answers. A listing asks it before it scans.
+    async fn may_list_agent_type(
+        &self,
+        auth: &AuthCtx,
+        component: &Component,
+        agent_type: &AgentTypeName,
+    ) -> bool {
+        if auth.is_system() {
+            return true;
+        }
+        let Ok(listing) = list_agents(component) else {
+            return false;
+        };
+        let authorizer =
+            CompatibilityAuthorizer::new(auth.clone(), Vec::new()).with_type_checks([(
+                agent_type.clone(),
+                vec![agent_type_check(component, agent_type)],
+            )]);
+        let request = self.entry_request(auth, listing);
+        authorizer
+            .scope(&request)
+            .await
+            .agent_types
+            .contains(agent_type)
     }
 
     /// The caller of a request that an account token authenticated: the account in both roles.
     pub fn rest_caller(&self, auth: &AuthCtx) -> Caller {
-        Caller::entry(Principal::Account(AccountPrincipal {
-            issuer: self.golem_issuer.to_string(),
-            account_id: auth.account_id(),
-            authentication: AccountAuthentication::ApiToken,
-        }))
+        auth.entry_caller(self.golem_issuer.to_string())
+    }
+
+    /// The decision request of `operation` for a request that an account token authenticated:
+    /// the acting account asks, which under admin impersonation is the admin, on the authority of
+    /// the access account.
+    fn entry_request(&self, auth: &AuthCtx, operation: Operation) -> AuthorizationRequest {
+        auth.entry_request(self.golem_issuer.to_string(), operation)
+    }
+
+    /// Decides `operation` of `access` from the card checks that the call site makes today, one
+    /// list for each part, for the caller that the access names, else for the account of `auth`.
+    /// A denial is the error that today's checks give. `AuthCtx::System` skips the decision, as
+    /// today.
+    async fn decide(
+        &self,
+        auth: &AuthCtx,
+        access: &AgentAccess,
+        operation: Operation,
+        checks: Vec<PartChecks>,
+    ) -> Result<Grantors, AuthorizationError> {
+        let request =
+            access.decision_request(operation, |operation| self.entry_request(auth, operation));
+        #[cfg(test)]
+        self.decisions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        decide_with_todays_checks(auth, request, checks).await
+    }
+
+    /// Decides `access` on one agent. An owner without an agent type has no decision target, so
+    /// it keeps today's checks.
+    async fn decide_on_agent(
+        &self,
+        auth: &AuthCtx,
+        agent: DecidedAgent<'_>,
+        access: &AgentAccess,
+    ) -> Result<(), AuthorizationError> {
+        let todays_checks = || {
+            access.permissions.iter().try_for_each(|permission| {
+                auth.authorize_permission(&permission.target(agent.owner.clone()))
+            })
+        };
+        let Some(agent_type) = agent.agent_type else {
+            return authorize_typeless_owner_with_1_6_check(auth, &agent.owner, access);
+        };
+        if matches!(access.other, AccessTarget::Unclassified) {
+            return todays_checks();
+        }
+        let target = DecisionAgentTarget {
+            environment_id: agent.environment_id,
+            agent_type: agent_type.clone(),
+            agent_id: agent.agent_id,
+            fingerprint: agent.fingerprint,
+        };
+        match access.decision(target, &agent.owner) {
+            Ok((operation, checks)) => self
+                .decide(auth, access, operation, checks)
+                .await
+                .map(|_| ()),
+            Err(error) => {
+                tracing::error!(
+                    "Agent access {:?} has no valid decision request: {error}",
+                    access.operation
+                );
+                todays_checks()
+            }
+        }
+    }
+
+    /// Decides `access` on an agent that a request names by its ID. A denial has the same text
+    /// as the denial of a missing agent.
+    async fn authorize_managed(
+        &self,
+        agent: &ManagedAgent,
+        auth_ctx: &AuthCtx,
+        access: &AgentAccess,
+    ) -> WorkerResult<()> {
+        self.decide_on_agent(auth_ctx, agent.decided(), access)
+            .await
+            .map_err(|_| WorkerServiceError::AgentAccessDenied(agent.agent_id.agent_id))
+    }
+
+    /// Decides `access` on the agent of a request that names it by its key or creates it, against
+    /// the component that implements its type.
+    async fn authorize_routed(
+        &self,
+        auth_ctx: &AuthCtx,
+        component: &Component,
+        target: &RoutedTarget,
+        access: &AgentAccess,
+    ) -> WorkerResult<()> {
+        let agent = DecidedAgent {
+            environment_id: component.environment_id,
+            agent_id: target.agent_id,
+            agent_type: target.agent_type.as_ref(),
+            fingerprint: None,
+            owner: agent_owner(component, target.agent_id, target.agent_type.clone()),
+        };
+        self.decide_on_agent(auth_ctx, agent, access)
+            .await
+            .map_err(AuthServiceError::Unauthorized)?;
+        Ok(())
+    }
+
+    /// Decides a standalone tool call that runs on a fresh owner agent: `tool : invoke` on the
+    /// tool, which today's check on the fresh owner answers.
+    #[allow(clippy::too_many_arguments)]
+    async fn authorize_fresh_tool_owner(
+        &self,
+        auth_ctx: &AuthCtx,
+        component: &Component,
+        owner_agent: AgentId,
+        tool_name: &str,
+        command_path: &[String],
+        access: &AgentAccess,
+    ) -> WorkerResult<()> {
+        let owner = agent_owner(component, owner_agent, None);
+        let checks = access
+            .permissions
+            .iter()
+            .map(|permission| permission.target(owner.clone()))
+            .collect::<Vec<_>>();
+        let operation = ToolName::try_from(tool_name)
+            .map_err(|error| error.to_string())
+            .and_then(|tool_name| {
+                Operation::single(
+                    CatalogOperation::InvokeTool,
+                    Resource::Command(command_path.join(" ")),
+                    DecisionTarget::Tool(ToolTarget {
+                        environment_id: component.environment_id,
+                        tool_name,
+                    }),
+                )
+                .map_err(|error| error.to_string())
+            });
+        let result = match operation {
+            Ok(operation) if !access.is_lookup() => self
+                .decide(auth_ctx, access, operation, vec![checks.into()])
+                .await
+                .map(|_| ()),
+            other => {
+                if let Err(error) = other {
+                    tracing::error!("Tool call {tool_name} has no valid decision request: {error}");
+                }
+                checks
+                    .iter()
+                    .try_for_each(|check| auth_ctx.authorize_permission(check))
+            }
+        };
+        result.map_err(AuthServiceError::Unauthorized)?;
+        Ok(())
     }
 
     /// Reads the agent that a request names by its ID; this never creates the agent. When it
@@ -667,7 +1156,7 @@ impl WorkerService {
         agent_id: &OwnedAgentId,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: &AuthCtx,
-        permissions: &[AgentPermission],
+        access: &AgentAccess,
     ) -> WorkerResult<ManagedAgent> {
         match self
             .worker_client
@@ -691,14 +1180,13 @@ impl WorkerService {
                 if expected_fingerprint
                     .is_some_and(|expected| expected != agent.metadata.fingerprint)
                 {
-                    agent.authorize(auth_ctx, permissions)?;
+                    self.authorize_managed(&agent, auth_ctx, access).await?;
                     return Err(WorkerServiceError::AgentNotFound(agent_id.agent_id));
                 }
                 Ok(agent)
             }
             Err(error) if is_agent_not_found(&error) => {
-                self.authorize_missing(agent_id, auth_ctx, permissions)
-                    .await?;
+                self.authorize_missing(agent_id, auth_ctx, access).await?;
                 Err(WorkerServiceError::AgentNotFound(agent_id.agent_id))
             }
             Err(error) => Err(error),
@@ -711,12 +1199,12 @@ impl WorkerService {
         agent_id: &OwnedAgentId,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: &AuthCtx,
-        permissions: &[AgentPermission],
+        access: &AgentAccess,
     ) -> WorkerResult<ManagedAgent> {
         let agent = self
-            .read_agent(agent_id, expected_fingerprint, auth_ctx, permissions)
+            .read_agent(agent_id, expected_fingerprint, auth_ctx, access)
             .await?;
-        agent.authorize(auth_ctx, permissions)?;
+        self.authorize_managed(&agent, auth_ctx, access).await?;
         Ok(agent)
     }
 
@@ -724,7 +1212,7 @@ impl WorkerService {
         &self,
         agent_id: &OwnedAgentId,
         auth_ctx: &AuthCtx,
-        permissions: &[AgentPermission],
+        access: &AgentAccess,
     ) -> WorkerResult<()> {
         if auth_ctx.is_system() {
             return Ok(());
@@ -756,12 +1244,16 @@ impl WorkerService {
         if component.environment_id != agent_id.environment_id {
             return Err(denied());
         }
-        authorize_permissions(
-            auth_ctx,
-            &agent_owner(&component, agent_id.agent_id, Some(tagged.name)),
-            permissions,
-        )
-        .map_err(|_| denied())
+        let agent = DecidedAgent {
+            environment_id: agent_id.environment_id,
+            agent_id: agent_id.agent_id,
+            agent_type: Some(&tagged.name),
+            fingerprint: None,
+            owner: agent_owner(&component, agent_id.agent_id, Some(tagged.name.clone())),
+        };
+        self.decide_on_agent(auth_ctx, agent, access)
+            .await
+            .map_err(|_| denied())
     }
 
     /// The agent type of the environment's current deployment that has the name, with the
@@ -793,14 +1285,12 @@ impl WorkerService {
         if component.environment_id != environment_id {
             return Err(not_found());
         }
-        authorize_agent_type(
-            auth_ctx,
-            &component,
-            agent_type_name,
-            AgentVerb::View,
-            AgentResourcePattern::Empty,
-        )
-        .map_err(|_| not_found())?;
+        if !self
+            .may_list_agent_type(auth_ctx, &component, agent_type_name)
+            .await
+        {
+            return Err(not_found());
+        }
         Ok((registered, component))
     }
 
@@ -821,15 +1311,7 @@ impl WorkerService {
                     registered.implemented_by.component_revision,
                 )
                 .await?;
-            if authorize_agent_type(
-                auth,
-                &component,
-                name,
-                AgentVerb::View,
-                AgentResourcePattern::Empty,
-            )
-            .is_ok()
-            {
+            if self.may_list_agent_type(auth, &component, name).await {
                 allowed.push((registered, component));
             }
         }
@@ -895,10 +1377,10 @@ impl WorkerService {
     }
 
     /// Creates the agent of `target`, which `component` implements, or joins it when
-    /// `ignore_already_existing` is set. The caller needs to be allowed to invoke `resource`
-    /// on the agent.
+    /// `ignore_already_existing` is set. `access` is what the request decides: a creation, or a
+    /// methodless upsert.
     #[allow(clippy::too_many_arguments)]
-    pub async fn create(
+    pub(crate) async fn create(
         &self,
         target: &RoutedTarget,
         component: &Component,
@@ -909,9 +1391,10 @@ impl WorkerService {
         invocation_context: Option<golem_api_grpc::proto::golem::worker::InvocationContext>,
         caller: golem_api_grpc::proto::golem::component::Caller,
         idempotency_key: Option<IdempotencyKey>,
-        resource: AgentResourcePattern,
+        access: AgentAccess,
     ) -> WorkerResult<(AgentId, ComponentRevision, AgentFingerprint)> {
-        authorize_target(&auth_ctx, component, target, AgentVerb::Invoke, resource)?;
+        self.authorize_routed(&auth_ctx, component, target, &access)
+            .await?;
 
         let (agent_id, fingerprint) = self
             .worker_client
@@ -983,7 +1466,11 @@ impl WorkerService {
                 trusted_internal_caller,
                 None,
                 &auth_ctx,
-                AgentPermission::Agent(AgentVerb::Invoke, resource.clone()),
+                AgentAccess::new(
+                    CatalogOperation::CreateAgent,
+                    Resource::None,
+                    [AgentPermission::Agent(AgentVerb::Invoke, resource.clone())],
+                ),
             )
             .await?;
         if prepare {
@@ -1016,7 +1503,7 @@ impl WorkerService {
                 invocation_context,
                 caller,
                 idempotency_key,
-                resource,
+                AgentAccess::create_agent(resource),
             )
             .await
         }
@@ -1047,13 +1534,13 @@ impl WorkerService {
                 "creation context does not match the prepared method".into(),
             ));
         }
-        authorize_target(
+        self.authorize_routed(
             &auth_ctx,
             component,
             target,
-            AgentVerb::Invoke,
-            AgentResourcePattern::Method(AgentMethodName(method_name)),
-        )?;
+            &AgentAccess::invoke(&method_name),
+        )
+        .await?;
 
         let (agent_id, fingerprint) = self
             .worker_client
@@ -1087,10 +1574,11 @@ impl WorkerService {
                 agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &[AgentPermission::Agent(
+                &AgentAccess::agent(
+                    CatalogOperation::ViewAgent,
                     AgentVerb::View,
                     AgentResourcePattern::Empty,
-                )],
+                ),
             )
             .await?;
         let account_id = agent.component.account_id;
@@ -1132,10 +1620,11 @@ impl WorkerService {
                 agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &[AgentPermission::Agent(
+                &AgentAccess::agent(
+                    CatalogOperation::DeleteAgent,
                     AgentVerb::Delete,
                     AgentResourcePattern::Empty,
-                )],
+                ),
             )
             .await?;
 
@@ -1163,10 +1652,10 @@ impl WorkerService {
             &agent_id,
             None,
             &auth_ctx,
-            &[AgentPermission::Agent(
-                AgentVerb::Invoke,
-                AgentResourcePattern::Any,
-            )],
+            &AgentAccess::promise(
+                promise_id.clone(),
+                AgentPermission::Agent(AgentVerb::Invoke, AgentResourcePattern::Any),
+            ),
         )
         .await?;
 
@@ -1190,10 +1679,11 @@ impl WorkerService {
                 agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &[AgentPermission::Agent(
+                &AgentAccess::agent(
+                    CatalogOperation::InterruptAgent,
                     AgentVerb::Interrupt,
                     AgentResourcePattern::Empty,
-                )],
+                ),
             )
             .await?;
 
@@ -1221,10 +1711,11 @@ impl WorkerService {
                 agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &[AgentPermission::Agent(
+                &AgentAccess::agent(
+                    CatalogOperation::ViewAgent,
                     AgentVerb::View,
                     AgentResourcePattern::Empty,
-                )],
+                ),
             )
             .await?;
         Ok(agent.metadata)
@@ -1259,7 +1750,7 @@ impl WorkerService {
                 auth_ctx.clone(),
             )
             .await?;
-        let mut metadata = Vec::with_capacity(agents.len());
+        let mut rows = Vec::with_capacity(agents.len());
         for agent in agents {
             let component = self
                 .component_service
@@ -1268,19 +1759,39 @@ impl WorkerService {
             if component_name.is_some_and(|name| name != component.component_name.0) {
                 continue;
             }
-            if authorize_agent_type(
-                &auth_ctx,
-                &component,
-                agent_type_name,
-                AgentVerb::View,
-                AgentResourcePattern::Empty,
-            )
-            .is_err()
-            {
-                continue;
-            }
-            metadata.push(agent.metadata);
+            let target = DecisionTarget::Agent(DecisionAgentTarget {
+                environment_id,
+                agent_type: agent_type_name.clone(),
+                agent_id: agent.metadata.agent_id,
+                fingerprint: Some(agent.metadata.fingerprint),
+            });
+            let check = agent_type_check(&component, agent_type_name);
+            rows.push((target, check, agent.metadata));
         }
+        let listing = list_agents(&registered[0].1)?;
+        let visible = if auth_ctx.is_system() {
+            rows.iter()
+                .map(|(target, ..)| target.clone())
+                .collect::<Vec<_>>()
+        } else {
+            let authorizer = CompatibilityAuthorizer::new(auth_ctx.clone(), Vec::new())
+                .with_row_checks(
+                    rows.iter()
+                        .map(|(target, check, ..)| (target.clone(), vec![check.clone()])),
+                );
+            let request = self.entry_request(&auth_ctx, listing);
+            authorizer
+                .filter(
+                    &request,
+                    rows.iter().map(|(target, ..)| target.clone()).collect(),
+                )
+                .await
+        };
+        let metadata = rows
+            .into_iter()
+            .filter(|(target, ..)| visible.contains(target))
+            .map(|(_, _, metadata)| metadata)
+            .collect();
         Ok((cursor, metadata))
     }
 
@@ -1296,10 +1807,11 @@ impl WorkerService {
                 agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &[AgentPermission::Agent(
+                &AgentAccess::agent(
+                    CatalogOperation::ResumeAgent,
                     AgentVerb::Resume,
                     AgentResourcePattern::Empty,
-                )],
+                ),
             )
             .await?;
 
@@ -1334,10 +1846,7 @@ impl WorkerService {
                 agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &[AgentPermission::Agent(
-                    AgentVerb::UpdateRevision,
-                    AgentResourcePattern::Empty,
-                )],
+                &AgentAccess::update_revision(requester.clone()),
             )
             .await?;
 
@@ -1384,10 +1893,14 @@ impl WorkerService {
             agent_id,
             expected_fingerprint,
             &auth_ctx,
-            &[AgentPermission::Oplog(OplogResourcePattern::range(
-                Some(start),
-                end,
-            ))],
+            &AgentAccess::new(
+                CatalogOperation::ReadAgentOplog,
+                Resource::None,
+                [AgentPermission::Oplog(OplogResourcePattern::range(
+                    Some(start),
+                    end,
+                ))],
+            ),
         )
         .await?;
 
@@ -1422,10 +1935,14 @@ impl WorkerService {
             agent_id,
             expected_fingerprint,
             &auth_ctx,
-            &[AgentPermission::Oplog(OplogResourcePattern::range(
-                Some(oplog_index.into()),
-                Some(oplog_index.into()),
-            ))],
+            &AgentAccess::new(
+                CatalogOperation::ReadAgentOplog,
+                Resource::None,
+                [AgentPermission::Oplog(OplogResourcePattern::range(
+                    Some(oplog_index.into()),
+                    Some(oplog_index.into()),
+                ))],
+            ),
         )
         .await?;
 
@@ -1457,7 +1974,11 @@ impl WorkerService {
             agent_id,
             expected_fingerprint,
             &auth_ctx,
-            &[AgentPermission::Oplog(OplogResourcePattern::Any)],
+            &AgentAccess::new(
+                CatalogOperation::ReadAgentOplog,
+                Resource::None,
+                [AgentPermission::Oplog(OplogResourcePattern::Any)],
+            ),
         )
         .await?;
 
@@ -1486,10 +2007,14 @@ impl WorkerService {
                 agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &[
-                    AgentPermission::filesystem(FilesystemVerb::Stat, &path)?,
-                    AgentPermission::filesystem(FilesystemVerb::List, &path)?,
-                ],
+                &AgentAccess::new(
+                    CatalogOperation::ListFiles,
+                    Resource::Path(path.as_abs_str().to_string()),
+                    [
+                        AgentPermission::filesystem(FilesystemVerb::Stat, &path)?,
+                        AgentPermission::filesystem(FilesystemVerb::List, &path)?,
+                    ],
+                ),
             )
             .await?;
 
@@ -1515,10 +2040,11 @@ impl WorkerService {
                 agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &[AgentPermission::Agent(
+                &AgentAccess::agent(
+                    CatalogOperation::ViewAgent,
                     AgentVerb::View,
                     AgentResourcePattern::Empty,
-                )],
+                ),
             )
             .await?;
 
@@ -1590,7 +2116,11 @@ impl WorkerService {
                 &OwnedAgentId::new(environment_id, &agent_id),
                 None,
                 &AuthCtx::System,
-                &[AgentPermission::filesystem(FilesystemVerb::Read, &path)?],
+                &AgentAccess::new(
+                    CatalogOperation::ReadFile,
+                    Resource::Path(path.as_abs_str().to_string()),
+                    [AgentPermission::filesystem(FilesystemVerb::Read, &path)?],
+                ),
             )
             .await
             .map_err(|error| {
@@ -1643,7 +2173,11 @@ impl WorkerService {
                 agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &[AgentPermission::filesystem(FilesystemVerb::Read, &path)?],
+                &AgentAccess::new(
+                    CatalogOperation::ReadFile,
+                    Resource::Path(path.as_abs_str().to_string()),
+                    [AgentPermission::filesystem(FilesystemVerb::Read, &path)?],
+                ),
             )
             .await?;
 
@@ -1709,32 +2243,37 @@ impl WorkerService {
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: &AuthCtx,
     ) -> WorkerResult<AgentFingerprint> {
+        let operation = if verb == AgentVerb::DeactivatePlugin {
+            CatalogOperation::DeactivateProcessor
+        } else {
+            CatalogOperation::ActivateProcessor
+        };
+        let access = |resource| AgentAccess::agent(operation, verb, resource);
         let agent = self
             .read_agent(
                 agent_id,
                 expected_fingerprint,
                 auth_ctx,
-                &[AgentPermission::Agent(verb, AgentResourcePattern::Any)],
+                &access(AgentResourcePattern::Any),
             )
             .await?;
         let plugin_name = Self::agent_plugin_name(&agent, plugin_priority);
         let plugin_name = match plugin_name {
             Ok(plugin_name) => plugin_name,
             Err(error) => {
-                agent.authorize(
-                    auth_ctx,
-                    &[AgentPermission::Agent(verb, AgentResourcePattern::Any)],
-                )?;
+                self.authorize_managed(&agent, auth_ctx, &access(AgentResourcePattern::Any))
+                    .await?;
                 return Err(error);
             }
         };
-        agent.authorize(
+        self.authorize_managed(
+            &agent,
             auth_ctx,
-            &[AgentPermission::Agent(
-                verb,
-                AgentResourcePattern::PluginName(AgentPluginName(plugin_name)),
-            )],
-        )?;
+            &access(AgentResourcePattern::PluginName(AgentPluginName(
+                plugin_name,
+            ))),
+        )
+        .await?;
         Ok(agent.metadata.fingerprint)
     }
 
@@ -1811,10 +2350,7 @@ impl WorkerService {
                 source_agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &[AgentPermission::Agent(
-                    AgentVerb::Fork,
-                    AgentResourcePattern::Empty,
-                )],
+                &AgentAccess::fork(caller.clone()),
             )
             .await?;
 
@@ -1871,10 +2407,11 @@ impl WorkerService {
                 agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &[AgentPermission::Agent(
+                &AgentAccess::agent(
+                    CatalogOperation::RevertAgent,
                     AgentVerb::Revert,
                     AgentResourcePattern::Any,
-                )],
+                ),
             )
             .await?;
 
@@ -1904,13 +2441,16 @@ impl WorkerService {
                     // The resolution failure describes the agent's history, so only a caller
                     // that may revert the agent at any cutoff sees it.
                     Err(error) => {
-                        agent.authorize(
+                        self.authorize_managed(
+                            &agent,
                             &auth_ctx,
-                            &[AgentPermission::Agent(
+                            &AgentAccess::agent(
+                                CatalogOperation::RevertAgent,
                                 AgentVerb::Revert,
                                 AgentResourcePattern::Any,
-                            )],
-                        )?;
+                            ),
+                        )
+                        .await?;
                         return Err(error);
                     }
                 },
@@ -1923,13 +2463,16 @@ impl WorkerService {
                 RevertWorkerTarget::RevertToOplogIndex(target) => target.last_oplog_index,
                 RevertWorkerTarget::RevertLastInvocations(_) => unreachable!(),
             });
-        agent.authorize(
+        self.authorize_managed(
+            &agent,
             &auth_ctx,
-            &[AgentPermission::Agent(
+            &AgentAccess::agent(
+                CatalogOperation::RevertAgent,
                 AgentVerb::Revert,
                 AgentResourcePattern::OplogIndex(last_oplog_index.into()),
-            )],
-        )?;
+            ),
+        )
+        .await?;
 
         self.worker_client
             .revert_worker(
@@ -1959,10 +2502,14 @@ impl WorkerService {
                 agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &[AgentPermission::Agent(
-                    AgentVerb::CancelInvocation,
-                    AgentResourcePattern::InvocationId(invocation_id),
-                )],
+                &AgentAccess::on_invocation(
+                    CatalogOperation::CancelInvocation,
+                    accepted_id,
+                    AgentPermission::Agent(
+                        AgentVerb::CancelInvocation,
+                        AgentResourcePattern::InvocationId(invocation_id),
+                    ),
+                ),
             )
             .await?;
 
@@ -2068,10 +2615,10 @@ impl WorkerService {
             &OwnedAgentId::new(producer_environment_id, producer_agent_id),
             None,
             &auth_ctx,
-            &[AgentPermission::Agent(
+            &AgentAccess::unclassified([AgentPermission::Agent(
                 AgentVerb::Invoke,
                 AgentResourcePattern::Any,
-            )],
+            )]),
         )
         .await?;
         self.worker_client
@@ -2106,10 +2653,10 @@ impl WorkerService {
                     &OwnedAgentId::new(producer_environment_id, producer_agent_id),
                     None,
                     &auth_ctx,
-                    &[AgentPermission::Agent(
+                    &AgentAccess::unclassified([AgentPermission::Agent(
                         AgentVerb::View,
                         AgentResourcePattern::Any,
-                    )],
+                    )]),
                 )
                 .await?;
             }
@@ -2171,7 +2718,7 @@ impl WorkerService {
         trusted_internal_caller: bool,
         expected_fingerprint: Option<AgentFingerprint>,
         auth_ctx: &AuthCtx,
-        permission: AgentPermission,
+        access: AgentAccess,
     ) -> WorkerResult<(RoutedTarget, Component)> {
         match (target, constructor) {
             (AgentTarget::Key(key), None) => {
@@ -2194,11 +2741,8 @@ impl WorkerService {
                     &component,
                     &ParsedAgentKey::from(key),
                 )?;
-                authorize_permissions(
-                    auth_ctx,
-                    &agent_owner(&component, target.agent_id, target.agent_type.clone()),
-                    &[permission],
-                )?;
+                self.authorize_routed(auth_ctx, &component, &target, &access)
+                    .await?;
                 Ok((target, component))
             }
             (AgentTarget::Id(agent_id), Some(constructor)) => {
@@ -2211,11 +2755,8 @@ impl WorkerService {
                     .creating_component(environment_id, component_id)
                     .await?;
                 let target = RoutedTarget::unkeyed(agent_id, &component, &constructor)?;
-                authorize_permissions(
-                    auth_ctx,
-                    &agent_owner(&component, target.agent_id, target.agent_type.clone()),
-                    &[permission],
-                )?;
+                self.authorize_routed(auth_ctx, &component, &target, &access)
+                    .await?;
                 Ok((target, component))
             }
             (AgentTarget::Id(agent_id), None) => {
@@ -2224,7 +2765,7 @@ impl WorkerService {
                         &OwnedAgentId::new(environment_id, &agent_id),
                         expected_fingerprint,
                         auth_ctx,
-                        &[permission],
+                        &access,
                     )
                     .await?;
                 Ok((agent.routed(), agent.component))
@@ -2406,13 +2947,13 @@ impl WorkerService {
                 ));
             }
         };
-        authorize_target(
+        self.authorize_routed(
             auth_ctx,
             &component,
             &target,
-            AgentVerb::Invoke,
-            AgentResourcePattern::Method(AgentMethodName(operation.to_string())),
-        )?;
+            &AgentAccess::invoke(operation),
+        )
+        .await?;
         Ok((target, component, freshness_disposition))
     }
 
@@ -2438,10 +2979,6 @@ impl WorkerService {
         scope_card: Option<golem_api_grpc::proto::golem::worker::EncodedScopeCard>,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> WorkerResult<AgentInvocationOutput> {
-        let resource = method_name
-            .as_ref()
-            .map(|method_name| AgentResourcePattern::Method(AgentMethodName(method_name.clone())))
-            .unwrap_or(AgentResourcePattern::Any);
         let (target, component) = self
             .resolve_requested_target(
                 environment_id,
@@ -2451,7 +2988,7 @@ impl WorkerService {
                 trusted_internal_caller,
                 expected_fingerprint,
                 &auth_ctx,
-                AgentPermission::Agent(agent_verb_for_invocation_mode(mode), resource),
+                AgentAccess::invocation(mode, method_name.as_ref(), request_key_text(&request_key)),
             )
             .await?;
         let freshness_disposition = if trusted_internal_caller {
@@ -2504,16 +3041,18 @@ impl WorkerService {
                 "lookup requires a final invocation key".to_string(),
             ));
         }
-        parse_final_invocation_id(&start.idempotency_key.as_ref().unwrap().value)?;
+        let invocation_id =
+            parse_final_invocation_id(&start.idempotency_key.as_ref().unwrap().value)?;
         let agent = self
             .managed_agent(
                 &OwnedAgentId::new(environment_id, &agent_id),
                 None,
                 &auth_ctx,
-                &[AgentPermission::Agent(
-                    AgentVerb::View,
-                    AgentResourcePattern::Any,
-                )],
+                &AgentAccess::on_invocation(
+                    CatalogOperation::ReadInvocation,
+                    invocation_id,
+                    AgentPermission::Agent(AgentVerb::View, AgentResourcePattern::Any),
+                ),
             )
             .await?;
         agent.routed().apply(&mut start);
@@ -2564,13 +3103,11 @@ impl WorkerService {
             .external_tool
             .as_ref()
             .is_some_and(|tool| tool.fresh_owner);
-        let resource = start
-            .method_name
-            .as_ref()
-            .map(|method_name| AgentResourcePattern::Method(AgentMethodName(method_name.clone())))
-            .unwrap_or(AgentResourcePattern::Any);
-        let permission =
-            AgentPermission::Agent(agent_verb_for_invocation_mode(start.mode), resource);
+        let access = AgentAccess::invocation(
+            start.mode,
+            start.method_name.as_ref(),
+            start.idempotency_key.as_ref().map(|key| key.value.as_str()),
+        );
         let (target, component) = if fresh_tool_owner {
             let Some(tool) = start.external_tool.as_ref() else {
                 unreachable!("a fresh owner is an external tool's");
@@ -2597,11 +3134,15 @@ impl WorkerService {
                 AgentId::external_tool_owner(environment_id, component.id, &owner_key),
                 component.id,
             );
-            authorize_permissions(
+            self.authorize_fresh_tool_owner(
                 &auth_ctx,
-                &agent_owner(&component, target.agent_id, None),
-                &[permission],
-            )?;
+                &component,
+                target.agent_id,
+                &tool.tool_name,
+                &command_path,
+                &access,
+            )
+            .await?;
             if let Some(tool) = start.external_tool.as_mut() {
                 tool.command_path = command_path;
             }
@@ -2621,7 +3162,7 @@ impl WorkerService {
                 trusted_internal_caller,
                 expected_fingerprint,
                 &auth_ctx,
-                permission,
+                access,
             )
             .await?
         };
@@ -2874,8 +3415,16 @@ impl WorkerService {
                     &request_key,
                     &method_name,
                 )?;
+                self.authorize_routed(
+                    &auth,
+                    &component,
+                    &target,
+                    &AgentAccess::invoke(&method_name),
+                )
+                .await?;
                 (target, component, None)
             }
+            // `resolve_requested_target` decides `invoke-agent` on the agent that the ID names.
             PublicAgentTarget::Id {
                 agent_id,
                 expected_fingerprint,
@@ -2892,10 +3441,7 @@ impl WorkerService {
                         false,
                         expected_fingerprint,
                         &auth,
-                        AgentPermission::Agent(
-                            AgentVerb::Invoke,
-                            AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
-                        ),
+                        AgentAccess::invoke(&method_name),
                     )
                     .await?;
                 if target.agent_type.as_ref() != Some(&agent_type_name) {
@@ -2904,13 +3450,6 @@ impl WorkerService {
                 (target, component, expected_fingerprint)
             }
         };
-        authorize_target(
-            &auth,
-            &component,
-            &target,
-            AgentVerb::Invoke,
-            AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
-        )?;
         let invocation_component = component;
         let caller: golem_api_grpc::proto::golem::component::Caller =
             self.rest_caller(&auth).into();
@@ -3127,10 +3666,14 @@ impl WorkerService {
             &OwnedAgentId::new(environment_id, &agent_id),
             None,
             &auth,
-            &[AgentPermission::Agent(
-                AgentVerb::Invoke,
-                AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
-            )],
+            &AgentAccess::new(
+                CatalogOperation::InvokeAgent,
+                Resource::Method(method_name.clone()),
+                [AgentPermission::Agent(
+                    AgentVerb::Invoke,
+                    AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
+                )],
+            ),
         )
         .await?;
         let output_schema = None;
@@ -3382,10 +3925,10 @@ impl WorkerService {
             &OwnedAgentId::new(component.environment_id, &agent_id),
             None,
             &auth,
-            &[AgentPermission::Agent(
+            &AgentAccess::unclassified([AgentPermission::Agent(
                 AgentVerb::Invoke,
                 AgentResourcePattern::Any,
-            )],
+            )]),
         )
         .await?;
         let caller: golem_api_grpc::proto::golem::component::Caller =
@@ -3454,10 +3997,10 @@ impl WorkerService {
             &OwnedAgentId::new(environment_id, &agent_id),
             None,
             &auth,
-            &[AgentPermission::Agent(
+            &AgentAccess::unclassified([AgentPermission::Agent(
                 AgentVerb::Invoke,
                 AgentResourcePattern::Any,
-            )],
+            )]),
         )
         .await?;
         resume.auth_ctx = Some(auth.into());
@@ -3669,7 +4212,7 @@ impl WorkerService {
                 None,
                 caller.into(),
                 Some(request_key.owner_key("create")),
-                AgentResourcePattern::Any,
+                AgentAccess::create_agent(AgentResourcePattern::Any),
             )
             .await?;
 
@@ -3711,7 +4254,7 @@ impl WorkerService {
                 None,
                 caller,
                 None,
-                AgentResourcePattern::Any,
+                AgentAccess::upsert_agent(),
             )
             .await?;
 
@@ -3765,10 +4308,11 @@ impl WorkerService {
                 &OwnedAgentId::new(environment_id, &agent_id),
                 None,
                 &auth,
-                &[AgentPermission::Agent(
+                &AgentAccess::agent(
+                    CatalogOperation::ViewAgent,
                     AgentVerb::View,
                     AgentResourcePattern::Empty,
-                )],
+                ),
             )
             .await?;
         if agent.metadata.canonical_key.as_deref() != Some(key.to_string().as_str()) {
@@ -3814,7 +4358,13 @@ impl WorkerService {
                         &OwnedAgentId::new(environment_id, &agent_id),
                         None,
                         auth,
-                        &[AgentPermission::Agent(verb, AgentResourcePattern::Any)],
+                        &tool_access(
+                            lookup,
+                            request_key_text(request_key),
+                            verb,
+                            tool_name,
+                            command_path,
+                        ),
                     )
                     .await?;
                 if !lookup && agent.metadata.owner_kind != OwnerKind::ComponentAgent {
@@ -3867,11 +4417,19 @@ impl WorkerService {
                     ),
                     component_id,
                 );
-                authorize_permissions(
+                self.authorize_fresh_tool_owner(
                     auth,
-                    &agent_owner(&component, target.agent_id, None),
-                    &[AgentPermission::Agent(verb, AgentResourcePattern::Any)],
-                )?;
+                    &component,
+                    target.agent_id,
+                    tool_name,
+                    &command_path,
+                    &AgentAccess::new(
+                        CatalogOperation::InvokeTool,
+                        Resource::None,
+                        [AgentPermission::Agent(verb, AgentResourcePattern::Any)],
+                    ),
+                )
+                .await?;
                 Ok((target, component, None, true, command_path))
             }
             _ => Err(WorkerServiceError::TypeChecker(
@@ -4047,10 +4605,11 @@ impl WorkerService {
                         &OwnedAgentId::new(environment_id, &agent_id),
                         None,
                         &auth,
-                        &[AgentPermission::Agent(
+                        &AgentAccess::agent(
+                            CatalogOperation::ViewAgent,
                             AgentVerb::View,
                             AgentResourcePattern::Any,
-                        )],
+                        ),
                     )
                     .await?;
                 let agent_type_name =
@@ -4184,10 +4743,7 @@ impl WorkerService {
         };
         let request_key =
             InvocationRequestKey::external(auth.idempotency_scope(), idempotency_key.as_ref());
-        let permission = AgentPermission::Agent(
-            AgentVerb::Invoke,
-            AgentResourcePattern::Method(AgentMethodName(method_name.clone())),
-        );
+        let access = AgentAccess::invoke(&method_name);
         let expected_fingerprint = request.expected_fingerprint;
         let (target, component, freshness_disposition) =
             match (request.agent_id, request.parameters) {
@@ -4212,7 +4768,7 @@ impl WorkerService {
                             &OwnedAgentId::new(environment_id, &agent_id),
                             expected_fingerprint,
                             &auth,
-                            &[permission],
+                            &access,
                         )
                         .await?;
                     if agent.metadata.agent_type_name.as_ref() != Some(agent_type_name) {
@@ -4237,11 +4793,8 @@ impl WorkerService {
                         &request_key,
                         &method_name,
                     )?;
-                    authorize_permissions(
-                        &auth,
-                        &agent_owner(&component, target.agent_id, target.agent_type.clone()),
-                        &[permission],
-                    )?;
+                    self.authorize_routed(&auth, &component, &target, &access)
+                        .await?;
                     let freshness_disposition = if expected_fingerprint.is_some() {
                         InvocationFreshnessDisposition::MayExist
                     } else {
@@ -4485,7 +5038,7 @@ mod tests {
         AgentInvocationIdPattern, AgentMethodName, AgentPluginName, AgentResourcePattern,
         AgentVerb, Card, CardId, ClassPermissionTarget, EffectiveSurface, FilesystemPathPattern,
         FilesystemResourcePattern, FilesystemVerb, GrantSurface, OplogResourcePattern, OplogVerb,
-        PermissionPattern, PermissionTarget, PolymorphicCard, StoredCard,
+        PartChecks, PermissionPattern, PermissionTarget, PolymorphicCard, StoredCard,
     };
     use golem_common::model::component::{
         CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, InstalledPlugin,
@@ -10551,5 +11104,461 @@ mod tests {
             panic!("get of a completed invocation with unknown operation failed: {error}")
         });
         assert!(got.result.is_none());
+    }
+
+    #[test]
+    fn a_typeless_owner_keeps_the_1_6_check() {
+        use golem_common::model::card::recipient::RecipientPattern;
+        use golem_common::model::card::{AgentResourcePattern, parse_permission};
+
+        let owner = golem_common::model::card::owner::AgentOwnerPattern::parse(&format!(
+            "acme/shop/prod/cart/{}",
+            golem_common::base_model::AgentId::from_parts(0, 9)
+        ))
+        .unwrap();
+        let access = super::AgentAccess::agent(
+            golem_common::model::authority::CatalogOperation::InterruptAgent,
+            AgentVerb::Interrupt,
+            AgentResourcePattern::Empty,
+        );
+        for grant in [
+            "agent(acme/shop/prod/cart/*) @ acme : interrupt :",
+            "agent(acme/shop/prod/cart/*) @ acme : view :",
+            "agent(acme/shop/prod/billing/*) @ acme : interrupt :",
+        ] {
+            let surface = EffectiveSurface::from_grants(
+                &[parse_permission(grant).unwrap()],
+                &[],
+                &[],
+                &[],
+                &RecipientPattern::parse("acme").unwrap(),
+            )
+            .unwrap();
+            let auth = AuthCtx::agent_with_effective_surface(
+                AccountId(uuid::Uuid::from_u128(1)),
+                AccountEmail::new("acme@example.com".to_string()),
+                surface,
+            );
+            let today = auth.authorize_permission(
+                &super::AgentPermission::Agent(AgentVerb::Interrupt, AgentResourcePattern::Empty)
+                    .target(owner.clone()),
+            );
+            let typeless = super::authorize_typeless_owner_with_1_6_check(&auth, &owner, &access);
+            assert_eq!(typeless.is_ok(), today.is_ok(), "{grant}");
+        }
+    }
+
+    /// Each access that a call site of this service decides, named by its call sites. A call
+    /// site that builds a new access adds it here.
+    fn call_site_accesses() -> Vec<(&'static str, super::AgentAccess)> {
+        use super::{AgentAccess, AgentPermission, tool_access};
+        use golem_api_grpc::proto::golem::worker::AgentInvocationMode;
+        use golem_common::model::InvocationId;
+        use golem_common::model::authority::{CatalogOperation as Op, Resource};
+        use golem_common::model::card::AgentResourcePattern as R;
+
+        let lookup = AgentInvocationMode::Lookup as i32;
+        let call = AgentInvocationMode::Await as i32;
+        let method = "increment".to_string();
+        let invocation = Uuid::from_u128(0x11);
+        let key = invocation.to_string();
+        let path = CanonicalFilePath::from_abs_str("/data/a.txt").unwrap();
+        let file_path = Resource::Path(path.as_abs_str().to_string());
+        let file = |verb| AgentPermission::filesystem(verb, &path).unwrap();
+        let promise_id = golem_common::model::PromiseId {
+            agent_id: AgentId::from_parts(0, 9),
+            fingerprint: AgentFingerprint(Uuid::from_u128(0xf1)),
+            oplog_idx: OplogIndex::from_u64(3),
+        };
+        let agent = |operation, verb, resource| AgentAccess::agent(operation, verb, resource);
+        vec![
+            ("create, launch", AgentAccess::create_agent(R::Any)),
+            ("upsert", AgentAccess::upsert_agent()),
+            (
+                "lookup of a method",
+                AgentAccess::invocation(lookup, Some(&method), Some(&key)),
+            ),
+            (
+                "lookup without a method",
+                AgentAccess::invocation(lookup, None, Some(&key)),
+            ),
+            (
+                "lookup with a key that is not an invocation ID",
+                AgentAccess::invocation(lookup, None, Some("not-an-invocation-id")),
+            ),
+            (
+                "invocation of a method",
+                AgentAccess::invocation(call, Some(&method), None),
+            ),
+            (
+                "start without a method",
+                AgentAccess::invocation(call, None, None),
+            ),
+            ("invoke, session resume", AgentAccess::invoke(&method)),
+            (
+                "connect, metadata, wallet, REST lookup",
+                agent(Op::ViewAgent, AgentVerb::View, R::Empty),
+            ),
+            (
+                "describe a tool of an agent",
+                agent(Op::ViewAgent, AgentVerb::View, R::Any),
+            ),
+            (
+                "delete",
+                agent(Op::DeleteAgent, AgentVerb::Delete, R::Empty),
+            ),
+            (
+                "interrupt",
+                agent(Op::InterruptAgent, AgentVerb::Interrupt, R::Empty),
+            ),
+            (
+                "resume",
+                agent(Op::ResumeAgent, AgentVerb::Resume, R::Empty),
+            ),
+            ("update the revision", AgentAccess::update_revision(None)),
+            ("fork", AgentAccess::fork(None)),
+            ("revert", agent(Op::RevertAgent, AgentVerb::Revert, R::Any)),
+            (
+                "revert to an oplog index",
+                agent(Op::RevertAgent, AgentVerb::Revert, R::OplogIndex(5)),
+            ),
+            (
+                "activate a plugin",
+                agent(Op::ActivateProcessor, AgentVerb::ActivatePlugin, R::Any),
+            ),
+            (
+                "deactivate a plugin",
+                agent(Op::DeactivateProcessor, AgentVerb::DeactivatePlugin, R::Any),
+            ),
+            (
+                "complete a promise",
+                AgentAccess::promise(
+                    promise_id,
+                    AgentPermission::Agent(AgentVerb::Invoke, R::Any),
+                ),
+            ),
+            (
+                "read the oplog, read one oplog entry",
+                AgentAccess::new(
+                    Op::ReadAgentOplog,
+                    Resource::None,
+                    [AgentPermission::Oplog(OplogResourcePattern::range(
+                        Some(1),
+                        Some(10),
+                    ))],
+                ),
+            ),
+            (
+                "search the oplog",
+                AgentAccess::new(
+                    Op::ReadAgentOplog,
+                    Resource::None,
+                    [AgentPermission::Oplog(OplogResourcePattern::Any)],
+                ),
+            ),
+            (
+                "list files",
+                AgentAccess::new(
+                    Op::ListFiles,
+                    file_path.clone(),
+                    [file(FilesystemVerb::Stat), file(FilesystemVerb::List)],
+                ),
+            ),
+            (
+                "read a file",
+                AgentAccess::new(Op::ReadFile, file_path, [file(FilesystemVerb::Read)]),
+            ),
+            (
+                "read an invocation",
+                AgentAccess::on_invocation(
+                    Op::ReadInvocation,
+                    InvocationId(invocation),
+                    AgentPermission::Agent(AgentVerb::View, R::Any),
+                ),
+            ),
+            (
+                "list invocations",
+                AgentAccess::new(
+                    Op::ListInvocations,
+                    Resource::None,
+                    [AgentPermission::Agent(AgentVerb::View, R::Any)],
+                ),
+            ),
+            (
+                "cancel an invocation",
+                AgentAccess::on_invocation(
+                    Op::CancelInvocation,
+                    InvocationId(invocation),
+                    AgentPermission::Agent(
+                        AgentVerb::CancelInvocation,
+                        R::InvocationId(AgentInvocationIdPattern::Uuid(invocation)),
+                    ),
+                ),
+            ),
+            (
+                "tool lookup on an agent",
+                tool_access(true, Some(&key), AgentVerb::View, "bash", &[]),
+            ),
+            (
+                "tool call on an agent",
+                tool_access(false, None, AgentVerb::Invoke, "bash", &["ls".to_string()]),
+            ),
+        ]
+    }
+
+    /// Asserts that each part of `operation` has checks, and that each check is a check of its
+    /// part. A part without a check, or with a check of another part, would deny every caller of
+    /// its call site. Only the tool part of a hosted exec is not checked today.
+    fn assert_checks_belong_to_parts(
+        site: &str,
+        operation: &golem_common::model::authority::Operation,
+        checks: &[PartChecks],
+    ) {
+        use golem_common::model::authority::{CatalogOperation, ToolVerb, Verb};
+
+        let parts = operation.parts();
+        assert_eq!(parts.len(), checks.len(), "{site}");
+        for (part, part_checks) in parts.iter().zip(checks) {
+            let PartChecks::Checks(part_checks) = part_checks else {
+                assert!(
+                    operation.name() == CatalogOperation::HostedExec
+                        && part.verb == Verb::Tool(ToolVerb::Invoke),
+                    "{site}: only the tool part of a hosted exec is not checked today"
+                );
+                continue;
+            };
+            assert!(!part_checks.is_empty(), "{site}: a part without a check");
+            for check in part_checks {
+                assert!(
+                    golem_common::model::card::check_belongs_to_part(part.verb, check),
+                    "{site}: {check:?} is not a check of {:?}",
+                    part.verb
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_call_site_check_belongs_to_its_part() {
+        let agent_id = AgentId::from_parts(0, 9);
+        let agent = super::DecisionAgentTarget {
+            environment_id: EnvironmentId(Uuid::from_u128(1)),
+            agent_type: AgentTypeName("Counter".to_string()),
+            agent_id,
+            fingerprint: Some(AgentFingerprint(Uuid::from_u128(0xf1))),
+        };
+        let owner = AgentOwnerPattern::parse(&format!("acme/shop/prod/cart/{agent_id}")).unwrap();
+        for (site, access) in call_site_accesses() {
+            let (operation, checks) = access
+                .decision(agent.clone(), &owner)
+                .unwrap_or_else(|error| panic!("{site}: {error}"));
+            assert_checks_belong_to_parts(site, &operation, &checks);
+        }
+    }
+
+    /// A fork or an update that an agent asks for over gRPC names the calling agent, which asks
+    /// on its own authority. Without a named caller, the account of the request's token asks.
+    #[test]
+    fn a_fork_or_an_update_is_decided_for_the_caller_that_the_request_names() {
+        use golem_common::model::authority::{CatalogOperation, Operation, Resource, Target};
+        use golem_common::model::caller::{AgentPrincipal, Principal};
+
+        let target = super::DecisionAgentTarget {
+            environment_id: EnvironmentId(Uuid::from_u128(1)),
+            agent_type: AgentTypeName("Counter".to_string()),
+            agent_id: AgentId::from_parts(0, 9),
+            fingerprint: Some(AgentFingerprint(Uuid::from_u128(0xf1))),
+        };
+        let calling_agent = Caller::entry(Principal::Agent(AgentPrincipal {
+            issuer: "golem".to_string(),
+            agent_id: Uuid::from_u128(0xa1),
+            address: AgentId::from_parts(0, 10),
+            fingerprint: AgentFingerprint(Uuid::from_u128(0xf2)),
+            agent_type: AgentTypeName("Caller".to_string()),
+            environment_id: EnvironmentId(Uuid::from_u128(1)),
+        }));
+        let auth = AuthCtx::agent_with_effective_surface(
+            AccountId(Uuid::from_u128(3)),
+            AccountEmail::new("acme@example.com".to_string()),
+            EffectiveSurface::default(),
+        );
+        let entry = |operation| auth.entry_request("golem", operation);
+        type AccessFor = fn(Option<Caller>) -> super::AgentAccess;
+        let accesses: [(CatalogOperation, AccessFor); 2] = [
+            (CatalogOperation::ForkAgent, super::AgentAccess::fork),
+            (
+                CatalogOperation::UpdateAgentRevision,
+                super::AgentAccess::update_revision,
+            ),
+        ];
+        for (operation, access) in accesses {
+            let operation =
+                Operation::single(operation, Resource::None, Target::Agent(target.clone()))
+                    .unwrap();
+
+            let named =
+                access(Some(calling_agent.clone())).decision_request(operation.clone(), entry);
+            assert_eq!(named.caller, calling_agent);
+            assert!(named.principal.same_record(&calling_agent.immediate));
+
+            let unnamed = access(None).decision_request(operation, entry);
+            assert_eq!(unnamed.caller, auth.entry_caller("golem"));
+        }
+    }
+
+    /// A lookup of an invocation's result reads the invocation that its final key names, with
+    /// today's `view` check. A key that is not an invocation ID keeps today's view of the agent.
+    #[test]
+    fn a_lookup_reads_the_invocation_that_its_key_names() {
+        use golem_api_grpc::proto::golem::worker::AgentInvocationMode;
+        use golem_common::model::InvocationId;
+        use golem_common::model::authority::{CatalogOperation, Target};
+
+        let agent_id = AgentId::from_parts(0, 9);
+        let target = super::DecisionAgentTarget {
+            environment_id: EnvironmentId(Uuid::from_u128(1)),
+            agent_type: AgentTypeName("Counter".to_string()),
+            agent_id,
+            fingerprint: Some(AgentFingerprint(Uuid::from_u128(0xf1))),
+        };
+        let owner = AgentOwnerPattern::parse(&format!("acme/shop/prod/cart/{agent_id}")).unwrap();
+        let lookup = AgentInvocationMode::Lookup as i32;
+        let method = "increment".to_string();
+        let invocation = Uuid::from_u128(0x42);
+        let key = invocation.to_string();
+        for (site, access) in [
+            (
+                "lookup of a method",
+                super::AgentAccess::invocation(lookup, Some(&method), Some(&key)),
+            ),
+            (
+                "lookup without a method",
+                super::AgentAccess::invocation(lookup, None, Some(&key)),
+            ),
+            (
+                "tool lookup on an agent",
+                super::tool_access(true, Some(&key), AgentVerb::View, "bash", &[]),
+            ),
+        ] {
+            let (operation, checks) = access.decision(target.clone(), &owner).unwrap();
+            assert_eq!(operation.name(), CatalogOperation::ReadInvocation, "{site}");
+            assert!(
+                matches!(
+                    &operation.parts()[0].target,
+                    Target::Invocation(read) if read.invocation_id == InvocationId(invocation)
+                ),
+                "{site}"
+            );
+            assert_eq!(access_view_checks(&checks), 1, "{site}");
+        }
+
+        let (operation, _) = super::AgentAccess::invocation(lookup, None, Some("not-an-id"))
+            .decision(target, &owner)
+            .unwrap();
+        assert_eq!(operation.name(), CatalogOperation::ViewAgent);
+    }
+
+    /// The number of today's `agent : view` checks in `checks`.
+    fn access_view_checks(checks: &[PartChecks]) -> usize {
+        checks
+            .iter()
+            .filter_map(|checks| match checks {
+                PartChecks::Checks(checks) => Some(checks),
+                PartChecks::NotCheckedToday => None,
+            })
+            .flatten()
+            .filter(|check| {
+                matches!(
+                    check,
+                    PermissionTarget::Agent(ClassPermissionTarget {
+                        verb: Some(AgentVerb::View),
+                        ..
+                    })
+                )
+            })
+            .count()
+    }
+
+    /// A public session decides `invoke-agent` once, by agent ID as by key.
+    #[test]
+    async fn a_public_session_decides_once_by_agent_id_and_by_key() {
+        use std::sync::atomic::Ordering;
+
+        let harness = RestHarness::new_with_output(
+            AgentMode::Durable,
+            OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u32())))),
+        );
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let decisions = || harness.worker_service.decisions.load(Ordering::SeqCst);
+
+        let mut by_id = harness.public_invocation_start(IdempotencyKey::fresh());
+        by_id.selector.target = PublicAgentTarget::Id {
+            agent_id: harness.keyed_agent_id(),
+            expected_fingerprint: Some(harness.worker_client.fingerprint),
+        };
+        for (target, start) in [
+            (
+                "by key",
+                harness.public_invocation_start(IdempotencyKey::fresh()),
+            ),
+            ("by agent ID", by_id),
+        ] {
+            let before = decisions();
+            harness
+                .worker_service
+                .invoke_public_agent_session_v1(
+                    start,
+                    Box::pin(stream::empty()),
+                    AuthCtx::system(),
+                    |_, _| panic!("stream-free input"),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+            assert_eq!(decisions() - before, 1, "{target}");
+        }
+    }
+
+    /// The checks that the service decides without an agent access: a tool call on a fresh owner
+    /// agent, and a listing of the agents of a type.
+    #[test]
+    fn the_fresh_owner_and_listing_checks_belong_to_their_parts() {
+        use golem_common::model::authority::{
+            CatalogOperation, Operation, Resource, Target, ToolTarget,
+        };
+
+        let environment_id = EnvironmentId(Uuid::from_u128(1));
+        let agent_type = AgentTypeName("Counter".to_string());
+        let component = test_component(
+            ComponentId(Uuid::from_u128(2)),
+            environment_id,
+            AccountId(Uuid::from_u128(3)),
+            ComponentRevision::INITIAL,
+            test_agent_type(agent_type.clone(), AgentMode::Durable),
+        );
+
+        let tool_call = Operation::single(
+            CatalogOperation::InvokeTool,
+            Resource::Command("ls".to_string()),
+            Target::Tool(ToolTarget {
+                environment_id,
+                tool_name: ToolName::try_from("bash").unwrap(),
+            }),
+        )
+        .unwrap();
+        let fresh_owner = super::agent_owner(&component, AgentId::from_parts(0, 9), None);
+        let fresh_owner_check =
+            super::AgentPermission::Agent(AgentVerb::Invoke, AgentResourcePattern::Any)
+                .target(fresh_owner);
+        assert_checks_belong_to_parts(
+            "tool call on a fresh owner",
+            &tool_call,
+            &[vec![fresh_owner_check].into()],
+        );
+
+        let listing = super::list_agents(&component).unwrap();
+        let type_check = super::agent_type_check(&component, &agent_type);
+        assert_checks_belong_to_parts("list agents", &listing, &[vec![type_check].into()]);
     }
 }

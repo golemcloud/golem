@@ -23,6 +23,7 @@ use crate::repo::model::account::{
 };
 use crate::repo::model::audit::DeletableRevisionAuditFields;
 use crate::repo::model::plan::PlanRecord;
+use crate::services::decision::{Decisions, account_target};
 use crate::services::registry_change_notifier::{
     RegistryChangeNotifier, RequiresNotificationSignalExt,
 };
@@ -31,6 +32,7 @@ use golem_common::model::account::{
     Account, AccountCreation, AccountEmail, AccountId, AccountRevision, AccountSetPlan,
     AccountUpdate,
 };
+use golem_common::model::authority::{CatalogOperation, Operation, Resource};
 use golem_common::model::card::owner::{AccountOwnerPattern, EmptyOwnerPattern};
 use golem_common::model::card::{
     AccountResourcePattern, AccountVerb, ClassPermissionTarget, PermissionTarget,
@@ -84,6 +86,7 @@ pub struct AccountService {
     plan_service: Arc<PlanService>,
     default_plan_id: PlanId,
     registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+    decisions: Decisions,
 }
 
 impl AccountService {
@@ -92,12 +95,14 @@ impl AccountService {
         plan_service: Arc<PlanService>,
         default_plan_id: PlanId,
         registry_change_notifier: Arc<dyn RegistryChangeNotifier>,
+        decisions: Decisions,
     ) -> Self {
         Self {
             account_repo,
             plan_service,
             default_plan_id,
             registry_change_notifier,
+            decisions,
         }
     }
 
@@ -133,9 +138,8 @@ impl AccountService {
         account: AccountCreation,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        authorize_system_permission(auth, SystemVerb::CreateAccount)?;
-
         let id = AccountId::new();
+        self.authorize_account_creation(auth, id).await?;
         info!("Creating account: {}", id);
         self.create_internal(id, account, self.default_plan_id, auth)
             .await
@@ -149,7 +153,17 @@ impl AccountService {
     ) -> Result<Account, AccountError> {
         let mut account = self.get(account_id, auth).await?;
 
-        authorize_account_permission(auth, &account.email, AccountVerb::Update)?;
+        self.decisions
+            .decide(
+                auth,
+                Operation::single(
+                    CatalogOperation::UpdateAccount,
+                    Resource::None,
+                    account_target(account.id),
+                ),
+                account_permission_target(&account.email, AccountVerb::Update),
+            )
+            .await?;
 
         if update.current_revision != account.revision {
             return Err(AccountError::ConcurrentUpdate);
@@ -327,6 +341,28 @@ impl AccountService {
         Ok(account.id)
     }
 
+    /// Decides the creation of the account `id`, from today's system check.
+    async fn authorize_account_creation(
+        &self,
+        auth: &AuthCtx,
+        id: AccountId,
+    ) -> Result<(), AuthorizationError> {
+        self.decisions
+            .decide(
+                auth,
+                Operation::single(
+                    CatalogOperation::CreateAccount,
+                    Resource::None,
+                    account_target(id),
+                ),
+                system_permission_target(SystemVerb::CreateAccount),
+            )
+            .await
+            .map(|_| ())
+    }
+
+    /// Creates the account. `create` decides the creation first; the initial accounts are created
+    /// by the system.
     async fn create_internal(
         &self,
         id: AccountId,
@@ -334,8 +370,6 @@ impl AccountService {
         plan_id: PlanId,
         auth: &AuthCtx,
     ) -> Result<Account, AccountError> {
-        authorize_system_permission(auth, SystemVerb::CreateAccount)?;
-
         if id == AccountId::SYSTEM {
             Err(anyhow!("Cannot create account with reserved account id"))?
         };
@@ -408,15 +442,18 @@ fn authorize_account_permission(
     auth.authorize_permission(&account_permission_target(account_email, verb))
 }
 
-fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), AuthorizationError> {
-    auth.authorize_permission(&PermissionTarget::System(ClassPermissionTarget {
+pub(crate) fn system_permission_target(verb: SystemVerb) -> PermissionTarget {
+    PermissionTarget::System(ClassPermissionTarget {
         verb: Some(verb),
         owner: EmptyOwnerPattern,
         resource: SystemResourcePattern,
-    }))
+    })
 }
 
-fn account_permission_target(account_email: &AccountEmail, verb: AccountVerb) -> PermissionTarget {
+pub(crate) fn account_permission_target(
+    account_email: &AccountEmail,
+    verb: AccountVerb,
+) -> PermissionTarget {
     PermissionTarget::Account(ClassPermissionTarget {
         verb: Some(verb),
         owner: AccountOwnerPattern::Account {
