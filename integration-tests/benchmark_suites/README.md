@@ -3,7 +3,9 @@
 The Rust harness runs each suite configuration for the number of `iterations` in its YAML
 entry. Each iteration has its own setup, warmup, measurement and cleanup. The CI suite uses
 three iterations. JSON retains every iteration, including failures and skipped positions,
-inside one schema-2 run record. Aggregate duration/count views remain available.
+inside one schema-2 run record. Raw duration/count samples are serialized only in
+`iteration_results`; aggregate duration/count summaries remain available. Lifecycle
+failure details are retained even when they occur outside a numbered iteration.
 
 Each entry declares a manual `version`. The harness declares `HARNESS_VERSION`. The series
 key combines those versions with the runner ID, hardware fingerprint, storage profile and
@@ -25,6 +27,9 @@ Recorded benchmark failures remain visible, are preserved as artifacts, and fail
 The workflow retains its daily 02:00 UTC schedule and publishes scheduled results. Manual
 runs default to `publish=false`. The workflow remains disabled in GitHub pending post-merge
 validation and rollout approval. Deploy the schema-2 reader before enabling publication.
+Every merged result also passes the reader-owned `append-results.mjs --validate-only`
+command, including non-publishing runs. Land that reader CLI mode before its workflow
+caller. This validation neither modifies results history nor needs the publisher token.
 Regression/history/waiver/Slack policy belongs to the results reader, not the measurement
 harness. See
 [CI analysis](ci-benchmark-analysis.md) and [paired comparisons](paired-benchmarks.md).
@@ -49,7 +54,19 @@ The Rust tool replaces the density Python merger:
 benchmark-results merge-iterations --output cell.json iteration-1.json iteration-2.json iteration-3.json
 ```
 
-Inputs must contain one matching entry/configuration and retained raw aggregate details.
+Inputs must contain one matching entry/configuration and raw `iteration_results`.
 The merger checks schema, harness, source, artifacts and entry identities. It keeps each
 iteration and failure, assigns consecutive iteration indexes, and recomputes aggregates.
-It does not combine different density cells or different source commits.
+It rejects repeated execution identities, different density cells and different source
+commits. Equal numeric samples from distinct executions are valid. Execution identity
+does not prove statistical independence.
+
+For remote workflows, `benchmark-results validate-environment` validates the explicit
+`GOLEM_BENCH_MEASUREMENT_ENVIRONMENT` JSON offline, before cluster preparation. It
+checks completeness, not whether the values match the actual deployment. The cloud
+workflow operator must verify those values against the measured deployment inventory.
+
+Throughput RPC targets keep the same route class across iterations. With multiple
+executors, size ≥ 2 measures local and remote paths in every iteration; size 1 measures
+local only. A single executor cannot measure remote RPC. If the routing table is
+unavailable, results remain unlabeled rather than claiming measured route coverage.

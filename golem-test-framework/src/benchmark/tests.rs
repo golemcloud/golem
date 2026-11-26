@@ -149,6 +149,7 @@ async fn benchmark_context_failure_is_a_result_and_deadlines_are_failures() {
         params.benchmark_config.mode(),
         Level::WARN,
         &item,
+        MeasurementEnvironment::for_mode(params.benchmark_config.mode()).unwrap(),
         true,
         true,
         true,
@@ -223,8 +224,8 @@ async fn three_iterations_preserve_failed_middle_position_and_cleanup() {
         vec![37.0]
     );
     assert_eq!(
-        parsed.duration_results[&key].all,
-        vec![Duration::from_millis(11), Duration::from_millis(37)]
+        parsed.duration_results[&key].median,
+        Duration::from_millis(24)
     );
     assert_eq!(parsed.failure_count(), 1);
 }

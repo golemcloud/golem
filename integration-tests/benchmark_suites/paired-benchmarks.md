@@ -27,7 +27,12 @@ against each side's services, configuration, built-ins and fixtures. Artifact ha
 the results identify the measured binaries; the source commit identifies the runtime
 checkout, not the harness source. There is no fallback for incompatible services.
 
-Execution alternates base, head, base, head in fresh suite processes. The normal harness
+Execution counterbalances adjacent pairs: base/head, head/base, base/head, head/base.
+Every side uses a fresh suite process. Pair indices and base/head labels stay fixed even
+when execution order reverses. The plan lists each pair's order; exit statuses record its
+position. An odd number of pairs gives base one extra first-position observation.
+Counterbalancing reduces systematic order effects; it does not eliminate arbitrary drift
+or make shared-context iterations independent. The normal harness
 owns service and database cleanup. One timeout covers the entire command, including
 preparation, not each process separately. A failed process stops execution without a retry.
 The tool terminates its unreaped child's process group on timeout or interruption. It

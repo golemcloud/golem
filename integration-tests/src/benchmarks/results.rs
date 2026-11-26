@@ -16,6 +16,8 @@ struct Args {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Check explicit remote deployment identity without contacting the deployment.
+    ValidateEnvironment,
     /// Compare saved base/head process results, in pair order, without measuring.
     Compare {
         #[arg(long, required = true)]
@@ -80,6 +82,10 @@ fn save(path: &Path, value: &impl serde::Serialize) -> Result<()> {
 #[tokio::main]
 async fn main() -> Result<()> {
     match Args::parse().command {
+        Command::ValidateEnvironment => {
+            golem_test_framework::benchmark::MeasurementEnvironment::remote_from_env()?;
+            println!("Remote measurement environment is complete.");
+        }
         Command::Compare { base, head, output } => {
             let read = |paths: Vec<PathBuf>| {
                 paths
@@ -198,17 +204,27 @@ async fn paired(
     let harness = head.join("target/benchmarks/benchmarks");
     let harness_hash = BenchmarkArtifact::from_path(&harness)?;
     let id = uuid::Uuid::new_v4();
+    let orders: Vec<_> = (0..pairs)
+        .map(|pair| {
+            if pair % 2 == 0 {
+                ["base", "head"]
+            } else {
+                ["head", "base"]
+            }
+        })
+        .collect();
     save(
         &output.join("plan.json"),
-        &serde_json::json!({ "base_source": base_source, "head_source": head_source, "harness": harness_hash, "suite": suite_hash, "pairs": pairs, "runner": runner, "order": "base, head", "run_id": id }),
+        &serde_json::json!({ "base_source": base_source, "head_source": head_source, "harness": harness_hash, "suite": suite_hash, "pairs": pairs, "runner": runner, "order": orders, "run_id": id }),
     )?;
     let mut bases = Vec::new();
     let mut heads = Vec::new();
-    for pair in 0..pairs {
-        for (side, root, source, results) in [
-            ("base", &base, base_source, &mut bases),
-            ("head", &head, head_source, &mut heads),
-        ] {
+    for (pair, order) in orders.iter().enumerate() {
+        for (position, side) in order.iter().enumerate() {
+            let (root, source, results) = match *side {
+                "base" => (&base, base_source, &mut bases),
+                _ => (&head, head_source, &mut heads),
+            };
             ensure!(
                 BenchmarkArtifact::from_path(&harness)? == harness_hash
                     && BenchmarkArtifact::from_path(&suite_path)? == suite_hash,
@@ -236,7 +252,6 @@ async fn paired(
                 .stderr(Stdio::from(log))
                 .args([
                     "--primary-only",
-                    "--retain-details",
                     "--retain-selected-zero-counts",
                     "suite",
                     "--run-id",
@@ -246,6 +261,8 @@ async fn paired(
                     "--source-repository",
                     "golemcloud/golem",
                     "--source-commit-sha",
+                    source,
+                    "--source-ref",
                     source,
                     "--save-to-json",
                 ])
@@ -278,7 +295,7 @@ async fn paired(
             let status = process.0.wait().await?;
             save(
                 &output.join(format!("{prefix}.status.json")),
-                &serde_json::json!({ "pair": pair, "side": side, "exit_code": status.code(), "success": status.success() }),
+                &serde_json::json!({ "pair": pair, "position": position, "side": side, "exit_code": status.code(), "success": status.success() }),
             )?;
             ensure!(
                 status.success(),

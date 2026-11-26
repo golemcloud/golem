@@ -255,19 +255,24 @@ pub trait BenchmarkApi {
         mode: &TestMode,
         verbosity: Level,
         item: &BenchmarkSuiteItem,
+        measurement_environment: MeasurementEnvironment,
         otlp: bool,
     ) -> BenchmarkResult;
 
+    #[allow(clippy::too_many_arguments)]
     async fn run_benchmark(
         mode: &TestMode,
         verbosity: Level,
         item: &BenchmarkSuiteItem,
+        measurement_environment: MeasurementEnvironment,
         primary_only: bool,
         retain_details: bool,
         retain_selected_zero_counts: bool,
         otlp: bool,
     ) -> BenchmarkResult {
-        let mut results = Self::run_benchmark_internal(mode, verbosity, item, otlp).await;
+        let mut results =
+            Self::run_benchmark_internal(mode, verbosity, item, measurement_environment, otlp)
+                .await;
         results.drop_zero_counts(retain_selected_zero_counts);
         if !retain_details {
             results.drop_details();
@@ -372,6 +377,7 @@ impl<B: Benchmark> BenchmarkApi for B {
         mode: &TestMode,
         verbosity: Level,
         item: &BenchmarkSuiteItem,
+        measurement_environment: MeasurementEnvironment,
         otlp: bool,
     ) -> BenchmarkResult {
         let span = tracing::info_span!("benchmark", name = B::name());
@@ -379,7 +385,6 @@ impl<B: Benchmark> BenchmarkApi for B {
         info!("Initializing benchmark {}", B::name());
 
         let runs = item.runs(mode);
-        let measurement_environment = MeasurementEnvironment::for_mode(mode);
 
         let runs_cnt = runs.len();
         let mut current_run = 0;

@@ -728,7 +728,11 @@ impl Default for CellOutcome {
 impl CellOutcome {
     /// Builds the cell's `BenchmarkResult` with the named ceiling counts and
     /// (for scenario 4) resume/create latency percentiles.
-    fn into_benchmark_result(self, config: &CellConfig) -> BenchmarkResult {
+    fn into_benchmark_result(
+        self,
+        config: &CellConfig,
+        measurement_environment: golem_test_framework::benchmark::MeasurementEnvironment,
+    ) -> BenchmarkResult {
         let recorder = BenchmarkRecorder::new();
 
         // `null` ceilings (never crossed) are recorded as the max reached so the
@@ -851,8 +855,6 @@ impl CellOutcome {
         };
         let mut run_result = BenchmarkRunResult::new(run_config.clone());
         run_result.add_iteration(0, recorder);
-        let measurement_environment =
-            golem_test_framework::benchmark::MeasurementEnvironment::remote_from_env();
 
         BenchmarkResult {
             entry_version: 1,
@@ -921,6 +923,7 @@ pub async fn run_cell(
     manifest: &PrepManifest,
     deps: &BenchmarkTestDependencies,
     probe: &ExecutorProbe,
+    measurement_environment: golem_test_framework::benchmark::MeasurementEnvironment,
 ) -> anyhow::Result<BenchmarkResult> {
     info!("Density-agent: running cell {}", config.cell_name());
 
@@ -948,7 +951,7 @@ pub async fn run_cell(
 
     log_cell_summary(config, &outcome);
 
-    Ok(outcome.into_benchmark_result(config))
+    Ok(outcome.into_benchmark_result(config, measurement_environment))
 }
 
 /// Emits a single human-readable summary line for the cell, so the raw

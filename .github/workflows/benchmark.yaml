@@ -143,7 +143,7 @@ jobs:
             exit 1
           fi
           target/benchmarks/benchmarks \
-            --primary-only --retain-details --retain-selected-zero-counts \
+            --primary-only --retain-selected-zero-counts \
             suite --partition "$PARTITION" \
             --run-id "$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT" \
             --timestamp "$LOGICAL_TIMESTAMP" \
@@ -203,6 +203,17 @@ jobs:
             integration-tests/benchmark_suites/ci.yaml spawned
       - name: Require a complete canonical result
         run: test -s "$RUNNER_TEMP/github-actions-benchmark-results.json"
+      - name: Check out the reader for read-only validation
+        uses: actions/checkout@v5
+        with:
+          repository: golemcloud/benchmark-results
+          path: .benchmark-results-reader
+          persist-credentials: false
+      - name: Validate with the reader even without publication
+        run: |
+          git -C .benchmark-results-reader rev-parse HEAD > "$RUNNER_TEMP/benchmark-reader-commit.txt"
+          node .benchmark-results-reader/scripts/append-results.mjs \
+            --validate-only "$RUNNER_TEMP/github-actions-benchmark-results.json"
       - name: Validate and publish results
         if: github.event_name == 'schedule' || inputs.publish
         env:
@@ -220,6 +231,7 @@ jobs:
           path: |
             ${{ runner.temp }}/github-actions-benchmark-results.json
             ${{ runner.temp }}/github-actions-benchmark-analysis.json
+            ${{ runner.temp }}/benchmark-reader-commit.txt
           if-no-files-found: warn
           retention-days: 7
       - name: Fail on recorded benchmark failures
