@@ -499,6 +499,74 @@ fn any_entry_moves_the_oplog_index() {
     assert_ne!(folded, baseline);
 }
 
+/// Only a settlement leaves the state index: a result's validator, the index of its
+/// `AgentInvocationFinished`, stays current when its background work ends, while work after the
+/// result, other hints and the next invocation move the index, in one fold or incremental folds.
+#[test]
+fn only_a_settlement_leaves_the_state_index() {
+    let retry = RetryConfig::default();
+    let idx = OplogIndex::from_u64;
+    let read = InvocationId(Uuid::new_v4());
+    let write = InvocationId(Uuid::new_v4());
+    let fold = |baseline: &AgentStatusRecord, entries: Vec<(u64, OplogEntry)>| {
+        update_status_with_new_entries(
+            AgentMode::Durable,
+            baseline.clone(),
+            entries.into_iter().map(|(i, e)| (idx(i), e)).collect(),
+            &retry,
+        )
+        .unwrap()
+    };
+    let baseline = AgentStatusRecord {
+        oplog_idx: idx(10),
+        state_oplog_idx: idx(10),
+        ..AgentStatusRecord::default()
+    };
+    let settled = || OplogEntry::agent_invocation_settled(read, 0);
+
+    let finished = fold(
+        &baseline,
+        vec![
+            (11, started_invocation(&read)),
+            (12, finished_awaiting(&read)),
+        ],
+    );
+    assert_eq!(finished.state_oplog_idx, idx(12));
+
+    let incremental = fold(&finished, vec![(13, settled())]);
+    let whole = fold(
+        &baseline,
+        vec![
+            (11, started_invocation(&read)),
+            (12, finished_awaiting(&read)),
+            (13, settled()),
+        ],
+    );
+    for status in [&incremental, &whole] {
+        assert_eq!(
+            (status.oplog_idx, status.state_oplog_idx),
+            (idx(13), idx(12))
+        );
+    }
+
+    let drained = fold(
+        &finished,
+        vec![(13, OplogEntry::grow_memory(8)), (14, settled())],
+    );
+    assert_eq!(
+        (drained.oplog_idx, drained.state_oplog_idx),
+        (idx(14), idx(13))
+    );
+
+    let next = fold(
+        &finished,
+        vec![(13, settled()), (14, started_invocation(&write))],
+    );
+    assert_eq!(next.state_oplog_idx, idx(14));
+    let after_settled = fold(&incremental, vec![(14, OplogEntry::interrupted())]);
+    assert_eq!(after_settled.state_oplog_idx, idx(14));
+}
+
 /// The execution-begun bit is set by a `Restart` and survives later folds without one.
 #[test]
 fn restart_sets_ephemeral_execution_begun_permanently() {
@@ -538,6 +606,7 @@ fn restart_sets_ephemeral_execution_begun_permanently() {
 fn create_with_mark(never_live: bool) -> OplogEntry {
     let component_id = ComponentId::new();
     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+        standalone_tool: None,
         agent_id: AgentId::from_parts(7, 1),
         component_id,
         agent_type_name: None,
@@ -1373,6 +1442,8 @@ async fn exhausted_semantic_retry_state_marks_status_failed() {
             ),
             move |mut status, timestamp| {
                 status.status = AgentStatus::Failed;
+                status.terminal_failure_at = Some(timestamp);
+                status.terminal_failure_index = Some(status.oplog_idx);
                 status.last_error_kind = Some(OplogErrorKind::Invocation);
                 status.current_retry_state.insert(retry_from, retry_state);
                 expect_ended(
@@ -1638,6 +1709,8 @@ fn recovery_success_in_deleted_region_must_not_clear_failure() {
         &DeletedRegions::default(),
         &deleted_regions,
         &entries,
+        &mut None,
+        &mut None,
     );
 
     assert_eq!(status, AgentStatus::Failed);
@@ -1698,6 +1771,8 @@ fn recovery_success_preserves_retry_state_from_skipped_region() {
         &skipped_regions,
         &DeletedRegions::default(),
         &entries,
+        &mut None,
+        &mut None,
     );
 
     assert_eq!(
@@ -1772,6 +1847,8 @@ fn retry_deadline_belongs_to_the_waiting_call_until_its_terminal() {
         &DeletedRegions::default(),
         &DeletedRegions::default(),
         &entries,
+        &mut None,
+        &mut None,
     );
 
     assert_eq!(
@@ -1812,6 +1889,8 @@ fn repeated_infrastructure_recovery_failures_do_not_consume_invocation_retry_sta
             &DeletedRegions::default(),
             &DeletedRegions::default(),
             &entries,
+            &mut None,
+            &mut None,
         );
 
         assert_eq!(status, AgentStatus::Retrying);
@@ -1830,7 +1909,7 @@ async fn invocation_failure_is_classified_separately_from_recovery_failure() {
     let idempotency_key = InvocationId(Uuid::new_v4());
     let retry_from = OplogIndex::from_u64(1);
     let test_case = TestCase::builder(0)
-        .add(
+        .add_at(
             OplogEntry::error(
                 None,
                 OplogErrorKind::Invocation,
@@ -1841,8 +1920,10 @@ async fn invocation_failure_is_classified_separately_from_recovery_failure() {
                 None,
                 None,
             ),
-            move |mut status| {
+            move |mut status, timestamp| {
                 status.status = AgentStatus::Failed;
+                status.terminal_failure_at = Some(timestamp);
+                status.terminal_failure_index = Some(status.oplog_idx);
                 status.last_error_kind = Some(OplogErrorKind::Invocation);
                 status
                     .current_retry_state
@@ -1863,7 +1944,7 @@ async fn recovery_errors_are_not_treated_as_invocation_rejections() {
         AgentError::InvalidRequest("invalid startup".to_string()),
     ] {
         let test_case = TestCase::builder(0)
-            .add(
+            .add_at(
                 OplogEntry::error(
                     None,
                     OplogErrorKind::Recovery,
@@ -1874,8 +1955,10 @@ async fn recovery_errors_are_not_treated_as_invocation_rejections() {
                     None,
                     None,
                 ),
-                move |mut status| {
+                move |mut status, timestamp| {
                     status.status = AgentStatus::Failed;
+                    status.terminal_failure_at = Some(timestamp);
+                    status.terminal_failure_index = Some(status.oplog_idx);
                     status.last_error_kind = Some(OplogErrorKind::Recovery);
                     status
                         .current_retry_state
@@ -1973,6 +2056,8 @@ fn invocation_local_failure_does_not_hide_unresolved_recovery_or_preserve_retry_
             &DeletedRegions::default(),
             &DeletedRegions::default(),
             &entries,
+            &mut None,
+            &mut None,
         );
         if recovery {
             assert_eq!(status, AgentStatus::Retrying);
@@ -2066,6 +2151,8 @@ async fn background_work_after_invocation_result_runs_until_settled() {
             &DeletedRegions::default(),
             &DeletedRegions::default(),
             &entries,
+            &mut None,
+            &mut None,
         )
         .0
     };
@@ -2100,6 +2187,8 @@ fn an_unsettled_result_keeps_the_agent_running_through_lifecycle_hints_until_it_
             &DeletedRegions::default(),
             &DeletedRegions::default(),
             &entries,
+            &mut None,
+            &mut None,
         );
         (status, settling)
     };
@@ -2174,6 +2263,8 @@ fn settled_clears_an_invocation_retry_but_not_an_unresolved_recovery() {
             &DeletedRegions::default(),
             &DeletedRegions::default(),
             &entries,
+            &mut None,
+            &mut None,
         );
         if recovery {
             assert_eq!(status, AgentStatus::Retrying);
@@ -5808,6 +5899,7 @@ impl TestCaseBuilder {
             component_size: 100,
             total_linear_memory_size: 200,
             oplog_idx: OplogIndex::INITIAL,
+            state_oplog_idx: OplogIndex::INITIAL,
             export_fork_admissions: golem_common::model::ExportForkAdmissions {
                 owner_fingerprint: Some(AgentFingerprint(instance_id)),
                 ..Default::default()
@@ -5818,6 +5910,7 @@ impl TestCaseBuilder {
             entries: vec![TestEntry {
                 oplog_entry: OplogEntry::create(Box::new(
                     golem_common::model::oplog::CreateParameters {
+                        standalone_tool: None,
                         agent_id: owned_agent_id.agent_id(),
                         component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
                         agent_type_name: None,
@@ -5869,6 +5962,9 @@ impl TestCaseBuilder {
         update: impl FnOnce(AgentStatusRecord) -> AgentStatusRecord,
     ) -> Self {
         self.previous_status_record.oplog_idx = self.previous_status_record.oplog_idx.next();
+        if !matches!(entry, OplogEntry::AgentInvocationSettled { .. }) {
+            self.previous_status_record.state_oplog_idx = self.previous_status_record.oplog_idx;
+        }
         self.previous_status_record = update(self.previous_status_record);
         self.entries.push(TestEntry {
             oplog_entry: entry,
@@ -7761,7 +7857,7 @@ fn test_card(card_id: golem_common::model::card::CardId) -> golem_common::model:
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -10883,4 +10979,244 @@ fn a_pending_invocation_keeps_its_operation_in_the_status() {
         status.pending_invocations[0].operation,
         Some(InvocationOperation::Method("agent:method".to_string()))
     );
+}
+
+#[test]
+fn terminal_failure_time_survives_checkpoint_reconstruction_before_invocation_start() {
+    use std::time::Duration;
+
+    let key = InvocationId(Uuid::new_v4());
+    let mut pending = pending_invocation_entry(&key);
+    if let OplogEntry::PendingAgentInvocation { timestamp, .. } = &mut pending {
+        *timestamp = Timestamp::from(1_699_999_999_000u64);
+    }
+    let mut failure = OplogEntry::error(
+        None,
+        OplogErrorKind::Recovery,
+        None,
+        AgentError::InternalError("primary instantiation failed".into()),
+        OplogIndex::from_u64(1),
+        Some(RetryPolicyState::Terminal),
+        None,
+        None,
+    );
+    let failed_at = Timestamp::from(1_700_000_000_000u64);
+    if let OplogEntry::Error { timestamp, .. } = &mut failure {
+        *timestamp = failed_at;
+    }
+    let entries = BTreeMap::from([
+        (OplogIndex::from_u64(1), pending),
+        (OplogIndex::from_u64(2), failure),
+        (OplogIndex::from_u64(3), OplogEntry::restart()),
+    ]);
+    let fold = |status, entries| {
+        update_status_with_new_entries(AgentMode::Durable, status, entries, &RetryConfig::default())
+            .unwrap()
+    };
+    let full = fold(AgentStatusRecord::default(), entries.clone());
+    let prefix = fold(
+        AgentStatusRecord::default(),
+        entries
+            .range(..OplogIndex::from_u64(3))
+            .map(|(k, v)| (*k, v.clone()))
+            .collect(),
+    );
+    let checkpoint: AgentStatusRecord = golem_common::serialization::deserialize(
+        &golem_common::serialization::serialize(&prefix).unwrap(),
+    )
+    .unwrap();
+    let incremental = fold(
+        checkpoint,
+        BTreeMap::from([(OplogIndex::from_u64(3), OplogEntry::restart())]),
+    );
+    assert_eq!(full, incremental);
+    assert_eq!(full.status, AgentStatus::Failed);
+    assert_eq!(full.terminal_failure_at, Some(failed_at));
+    assert_eq!(full.terminal_failure_index, Some(OplogIndex::from_u64(2)));
+    assert!(full.invocation_results.position(&key).is_none());
+    let summary = super::super::invocations::merge_invocations(
+        &full,
+        HashMap::new(),
+        Timestamp::from(1_700_000_001_000u64),
+        Some(key),
+    );
+    assert_eq!(summary.len(), 1);
+    assert_eq!(
+        summary[0].state,
+        super::super::invocations::InvocationState::Failed
+    );
+    assert_eq!(summary[0].changed_at, failed_at);
+    assert_eq!(summary[0].last_change, OplogIndex::from_u64(2));
+    assert_eq!(
+        super::super::retention::deadline(Some(key), &full, Duration::from_secs(17)),
+        Some(
+            jiff::Timestamp::from_millisecond(failed_at.to_millis() as i64).unwrap()
+                + Duration::from_secs(17)
+        )
+    );
+    let repaired = fold(
+        full,
+        BTreeMap::from([(OplogIndex::from_u64(4), OplogEntry::recovery_succeeded())]),
+    );
+    assert_eq!(repaired.status, AgentStatus::Idle);
+    assert_eq!(repaired.terminal_failure_at, None);
+    assert_eq!(repaired.terminal_failure_index, None);
+}
+
+#[test]
+fn retention_skips_unrepresentable_persisted_deadlines() {
+    use std::time::Duration;
+
+    let key = InvocationId(Uuid::new_v4());
+    let mut status = AgentStatusRecord {
+        status: AgentStatus::Failed,
+        terminal_failure_at: Some(Timestamp::from(5_000u64)),
+        ..Default::default()
+    };
+    assert_eq!(
+        super::super::retention::deadline(Some(key), &status, Duration::from_secs(17)),
+        jiff::Timestamp::from_millisecond(22_000).ok()
+    );
+    for lifetime in [Duration::MAX, Duration::from_secs(10_000_000_000_000)] {
+        assert_eq!(
+            super::super::retention::deadline(Some(key), &status, lifetime),
+            None
+        );
+    }
+    status.terminal_failure_at =
+        Some(serde_json::from_str::<Timestamp>("\"1969-12-31T23:59:59.000Z\"").unwrap());
+    assert_eq!(
+        super::super::retention::deadline(Some(key), &status, Duration::ZERO),
+        None
+    );
+}
+
+#[test]
+fn retention_after_retry_uses_recovery_give_up_at_every_checkpoint_cut() {
+    let key = InvocationId(Uuid::new_v4());
+    let mut retry = invocation_error(&key);
+    if let OplogEntry::Error { timestamp, .. } = &mut retry {
+        *timestamp = Timestamp::from(3_000u64);
+    }
+    let mut failure = OplogEntry::error(
+        None,
+        OplogErrorKind::Recovery,
+        None,
+        AgentError::InternalError("primary instantiation failed".into()),
+        OplogIndex::from_u64(1),
+        Some(RetryPolicyState::Terminal),
+        None,
+        None,
+    );
+    if let OplogEntry::Error { timestamp, .. } = &mut failure {
+        *timestamp = Timestamp::from(5_000u64);
+    }
+    let entries = BTreeMap::from([
+        (OplogIndex::from_u64(1), pending_invocation_entry(&key)),
+        (OplogIndex::from_u64(2), started_invocation(&key)),
+        (OplogIndex::from_u64(3), retry),
+        (OplogIndex::from_u64(4), failure),
+        (OplogIndex::from_u64(5), OplogEntry::restart()),
+    ]);
+    let fold = |status, entries| {
+        update_status_with_new_entries(AgentMode::Durable, status, entries, &RetryConfig::default())
+            .unwrap()
+    };
+    let expected = jiff::Timestamp::from_millisecond(22_000).unwrap();
+    for cut in 0..=5 {
+        let prefix = fold(
+            AgentStatusRecord::default(),
+            entries
+                .range(..=OplogIndex::from_u64(cut))
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
+        );
+        let deadline = super::super::retention::deadline(
+            Some(key),
+            &prefix,
+            std::time::Duration::from_secs(17),
+        );
+        assert_eq!(deadline, (cut >= 4).then_some(expected), "cut {cut}");
+        let checkpoint: AgentStatusRecord = golem_common::serialization::deserialize(
+            &golem_common::serialization::serialize(&prefix).unwrap(),
+        )
+        .unwrap();
+        let rebuilt = fold(
+            checkpoint,
+            entries
+                .range(OplogIndex::from_u64(cut + 1)..)
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
+        );
+        assert_eq!(
+            super::super::retention::deadline(
+                Some(key),
+                &rebuilt,
+                std::time::Duration::from_secs(17)
+            ),
+            Some(expected),
+            "cut {cut}",
+        );
+    }
+}
+
+#[test]
+fn cancelled_standalone_retention_survives_every_checkpoint_cut() {
+    let key = InvocationId(Uuid::new_v4());
+    let mut pending = pending_invocation_entry(&key);
+    if let OplogEntry::PendingAgentInvocation { timestamp, .. } = &mut pending {
+        *timestamp = Timestamp::from(1_000u64);
+    }
+    let mut cancelled = OplogEntry::cancel_pending_invocation(key);
+    if let OplogEntry::CancelPendingInvocation { timestamp, .. } = &mut cancelled {
+        *timestamp = Timestamp::from(5_000u64);
+    }
+    let entries = BTreeMap::from([
+        (OplogIndex::from_u64(1), pending),
+        (OplogIndex::from_u64(2), cancelled),
+        (OplogIndex::from_u64(3), OplogEntry::restart()),
+    ]);
+    let fold = |status, entries| {
+        update_status_with_new_entries(AgentMode::Durable, status, entries, &RetryConfig::default())
+            .unwrap()
+    };
+    let expected = jiff::Timestamp::from_millisecond(22_000).unwrap();
+    for cut in 0..=3 {
+        let prefix = fold(
+            AgentStatusRecord::default(),
+            entries
+                .range(..=OplogIndex::from_u64(cut))
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
+        );
+        assert_eq!(
+            super::super::retention::deadline(
+                Some(key),
+                &prefix,
+                std::time::Duration::from_secs(17)
+            ),
+            (cut >= 2).then_some(expected),
+            "premature retention at cut {cut}",
+        );
+        let checkpoint: AgentStatusRecord = golem_common::serialization::deserialize(
+            &golem_common::serialization::serialize(&prefix).unwrap(),
+        )
+        .unwrap();
+        let rebuilt = fold(
+            checkpoint,
+            entries
+                .range(OplogIndex::from_u64(cut + 1)..)
+                .map(|(k, v)| (*k, v.clone()))
+                .collect(),
+        );
+        assert_eq!(
+            super::super::retention::deadline(
+                Some(key),
+                &rebuilt,
+                std::time::Duration::from_secs(17)
+            ),
+            Some(expected),
+            "lost or shifted cancellation deadline at cut {cut}",
+        );
+    }
 }

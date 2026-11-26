@@ -6500,9 +6500,10 @@
     },
     "PreinitializeJs": {
       "type": "object",
-      "required": ["preinitializeJs", "into"],
+      "required": ["preinitializeJs", "module", "into"],
       "properties": {
         "preinitializeJs": { "type": "string" },
+        "module": { "type": "string" },
         "into": { "type": "string" }
       },
       "additionalProperties": false
@@ -7512,6 +7513,7 @@
         "agentId",
         "agentType",
         "agentKey",
+        "origin",
         "fingerprint",
         "createdBy",
         "environmentId",
@@ -7534,6 +7536,7 @@
         "agentId": { "type": "string", "format": "uuid" },
         "agentType": { "type": ["string", "null"] },
         "agentKey": { "type": ["string", "null"] },
+        "origin": { "type": "string", "enum": ["keyed", "created", "forked"] },
         "fingerprint": { "type": "string", "format": "uuid" },
         "createdBy": { "type": "string" },
         "environmentId": { "type": "string" },
@@ -7805,13 +7808,13 @@
     },
     "PublicOplogEntryCreate": {
       "type": "object",
-      "required": ["type", "timestamp", "agentId", "agentTypeName", "ownerKind", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId", "neverLive"],
+      "required": ["type", "timestamp", "agentId", "agentTypeName", "ownerKind", "agentMode", "componentRevision", "env", "createdBy", "environmentId", "componentSize", "initialTotalLinearMemorySize", "initialActivePlugins", "localAgentConfig", "instanceId", "neverLive", "standaloneTool"],
       "properties": {
         "type": { "const": "Create" },
         "timestamp": { "type": "string" },
         "agentId": { "$ref": "#/definitions/AgentId" },
         "agentTypeName": { "type": ["string", "null"] },
-        "ownerKind": { "type": "string", "enum": ["component-agent", "ephemeral-external-tool", "oplog-processor"] },
+        "ownerKind": { "type": "string", "enum": ["component-agent", "ephemeral-external-tool", "oplog-processor", "standalone-tool"] },
         "agentMode": { "$ref": "#/definitions/AgentMode" },
         "componentRevision": { "type": "integer", "minimum": 0 },
         "env": { "type": "object", "additionalProperties": { "type": "string" } },
@@ -7823,7 +7826,19 @@
         "initialTotalLinearMemorySize": { "type": "integer", "minimum": 0 },
         "initialActivePlugins": { "type": "array", "items": { "$ref": "#/definitions/PluginInstallationDescription" } },
         "instanceId": { "type": "string" },
-        "neverLive": { "type": "boolean" }
+        "neverLive": { "type": "boolean" },
+        "standaloneTool": { "oneOf": [{ "$ref": "#/definitions/PublicStandaloneToolInvocation" }, { "type": "null" }] }
+      },
+      "additionalProperties": false
+    },
+    "PublicStandaloneToolInvocation": {
+      "type": "object",
+      "required": ["toolName", "commandPath", "invocationId", "caller"],
+      "properties": {
+        "toolName": { "type": "string" },
+        "commandPath": { "type": "array", "items": { "type": "string" } },
+        "invocationId": { "type": "string", "format": "uuid" },
+        "caller": { "$ref": "#/definitions/PublicCaller" }
       },
       "additionalProperties": false
     },
@@ -9813,8 +9828,9 @@
         "$type": { "const": "tool.invoke" },
         "response": {
           "type": "object",
-          "required": ["agentId", "idempotencyKey", "result", "status", "componentRevision", "agentFingerprint", "oplogIndex"],
+          "required": ["invocationId", "agentId", "idempotencyKey", "result", "status", "componentRevision", "agentFingerprint", "oplogIndex"],
           "properties": {
+            "invocationId": { "type": "string" },
             "agentId": { "type": "string", "format": "uuid" },
             "idempotencyKey": { "type": "string" },
             "result": { "type": ["object", "null"] },
@@ -9830,13 +9846,14 @@
     },
     "tool.invoke-session": {
       "type": "object",
-      "description": "Result of a live native external-tool invocation session, with its resolved target and idempotency key.",
+      "description": "Result of a live native external-tool invocation session, with its target, invocation ID and idempotency key.",
       "x-golem-output-mode": "single",
       "x-golem-command": "tool invoke",
-      "required": ["$type", "target", "idempotencyKey", "result"],
+      "required": ["$type", "target", "invocationId", "idempotencyKey", "result"],
       "properties": {
         "$type": { "const": "tool.invoke-session" },
         "target": { "$ref": "#/definitions/PublicNativeToolTarget" },
+        "invocationId": { "type": "string" },
         "idempotencyKey": { "type": "string" },
         "result": { "$ref": "#/definitions/PublicToolInvocationResult" }
       },

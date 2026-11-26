@@ -89,7 +89,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
 };
 use golem_api_grpc::proto::golem::registry::v1::{
     ResolveAgentTypeNameRequest, ResolveAgentTypeNameResponse, ResolveAgentTypeNameSuccessResponse,
-    resolve_agent_type_name_response,
+    ResolveToolTypeIdRequest, ResolveToolTypeIdResponse, ResolveToolTypeIdSuccessResponse,
+    resolve_agent_type_name_response, resolve_tool_type_id_response,
 };
 use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
@@ -334,7 +335,12 @@ impl RegistryServiceGrpcApi {
             .map(|u| {
                 let account_id = u.account_id.ok_or("missing account_id field")?.try_into()?;
                 let period = u.period.ok_or("missing period field")?;
-                if chrono::NaiveDate::from_ymd_opt(period.year, period.month, 1).is_none() {
+                if i16::try_from(period.year)
+                    .ok()
+                    .zip(i8::try_from(period.month).ok())
+                    .and_then(|(year, month)| jiff::civil::Date::new(year, month, 1).ok())
+                    .is_none()
+                {
                     return Err(GrpcApiError::from(format!(
                         "invalid account usage period: {:04}-{:02}",
                         period.year, period.month
@@ -888,6 +894,24 @@ impl RegistryServiceGrpcApi {
                 .into_iter()
                 .map(|agent_type| RegisteredAgentType::from(agent_type).into())
                 .collect(),
+        })
+    }
+
+    async fn resolve_tool_type_id_internal(
+        &self,
+        request: ResolveToolTypeIdRequest,
+    ) -> Result<ResolveToolTypeIdSuccessResponse, GrpcApiError> {
+        let environment_id = request
+            .environment_id
+            .ok_or("missing environment_id field")?
+            .try_into()?;
+        let tool_name = golem_common::model::tool::ToolName::try_from(request.tool_name)?;
+        let type_id = self
+            .deployment_service
+            .resolve_tool_type_id(environment_id, &tool_name)
+            .await?;
+        Ok(ResolveToolTypeIdSuccessResponse {
+            type_id: type_id.map(|id| id.get()),
         })
     }
 
@@ -1612,6 +1636,30 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(ResolveTypeIdResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn resolve_tool_type_id(
+        &self,
+        request: Request<ResolveToolTypeIdRequest>,
+    ) -> Result<Response<ResolveToolTypeIdResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "resolve_tool_type_id",
+            environment_id = EnvironmentId::render_proto(request.environment_id),
+            tool_name = request.tool_name,
+        );
+        let response = match self
+            .resolve_tool_type_id_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => resolve_tool_type_id_response::Result::Success(result),
+            Err(error) => resolve_tool_type_id_response::Result::Error(error.into()),
+        };
+        Ok(Response::new(ResolveToolTypeIdResponse {
             result: Some(response),
         }))
     }

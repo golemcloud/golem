@@ -598,6 +598,7 @@ fn handle_create(
             OwnerKind::ComponentAgent => "component-agent",
             OwnerKind::EphemeralExternalTool => "ephemeral-external-tool",
             OwnerKind::OplogProcessor => "oplog-processor",
+            OwnerKind::StandaloneTool => "standalone-tool",
         },
     });
 

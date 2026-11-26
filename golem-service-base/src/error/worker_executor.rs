@@ -48,6 +48,9 @@ pub enum WorkerExecutorError {
     AgentNotFound {
         agent_id: AgentId,
     },
+    NotAnAgent {
+        agent_id: AgentId,
+    },
     AgentCreationFailed {
         agent_id: AgentId,
         details: String,
@@ -408,6 +411,7 @@ impl Display for WorkerExecutorError {
             Self::AgentNotFound { agent_id } => {
                 write!(f, "Worker not found: {agent_id}")
             }
+            Self::NotAnAgent { agent_id } => write!(f, "Not an agent: {agent_id}"),
             Self::AgentCreationFailed { agent_id, details } => {
                 write!(f, "Failed to create worker: {agent_id}: {details}")
             }
@@ -596,6 +600,7 @@ impl Error for WorkerExecutorError {
             Self::CreateIdempotencyKeyConflict { .. } => "Create idempotency key conflict",
             Self::AgentKeyCollision { .. } => "Agent key collision",
             Self::AgentNotFound { .. } => "Worker not found",
+            Self::NotAnAgent { .. } => "Not an agent",
             Self::AgentCreationFailed { .. } => "Failed to create worker",
             Self::FailedToResumeAgent { .. } => "Failed to resume worker",
             Self::ComponentNotFound { .. } => "Component not found",
@@ -643,6 +648,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             Self::CreateIdempotencyKeyConflict { .. } => "CreateIdempotencyKeyConflict",
             Self::AgentKeyCollision { .. } => "AgentKeyCollision",
             Self::AgentNotFound { .. } => "AgentNotFound",
+            Self::NotAnAgent { .. } => "NotAnAgent",
             Self::AgentCreationFailed { .. } => "AgentCreationFailed",
             Self::FailedToResumeAgent { .. } => "FailedToResumeAgent",
             Self::ComponentNotFound { .. } => "ComponentNotFound",
@@ -685,6 +691,7 @@ impl ApiErrorDetails for WorkerExecutorError {
             | Self::CreateIdempotencyKeyConflict { .. }
             | Self::AgentKeyCollision { .. }
             | Self::AgentNotFound { .. }
+            | Self::NotAnAgent { .. }
             | Self::PromiseNotFound { .. }
             | Self::PromiseDropped { .. }
             | Self::PromiseAlreadyCompleted { .. }
@@ -777,6 +784,7 @@ impl From<WorkerExecutorError> for Status {
     fn from(value: WorkerExecutorError) -> Self {
         match value {
             error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
+            | WorkerExecutorError::NotAnAgent { .. }
             | WorkerExecutorError::CreateIdempotencyKeyConflict { .. }
             | WorkerExecutorError::InvocationCancelled
             | WorkerExecutorError::CannotCancelRunningInvocation
@@ -881,6 +889,11 @@ impl From<WorkerExecutorError> for golem::worker::v1::WorkerExecutionError {
                         },
                     ),
                 ),
+            },
+            WorkerExecutorError::NotAnAgent { agent_id } => Self {
+                error: Some(golem::worker::v1::worker_execution_error::Error::NotAnAgent(
+                    golem::worker::v1::NotAnAgent { agent_id: Some(agent_id.into()) },
+                )),
             },
             WorkerExecutorError::AgentKeyCollision {
                 agent_id,
@@ -1262,6 +1275,9 @@ impl TryFrom<golem::worker::v1::WorkerExecutionError> for WorkerExecutorError {
                 conflict,
             )) => Ok(Self::CreateIdempotencyKeyConflict {
                 agent_id: conflict.agent_id.ok_or("Missing agent_id")?.try_into()?,
+            }),
+            Some(golem::worker::v1::worker_execution_error::Error::NotAnAgent(error)) => Ok(Self::NotAnAgent {
+                agent_id: error.agent_id.ok_or("Missing agent_id")?.try_into()?,
             }),
             Some(golem::worker::v1::worker_execution_error::Error::AgentKeyCollision(
                 collision,

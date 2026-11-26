@@ -30,6 +30,40 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::fmt::{Display, Formatter};
 
+#[derive(Clone, Debug, Serialize, PartialEq, Deserialize)]
+#[cfg_attr(feature = "full", derive(poem_openapi::Object))]
+#[cfg_attr(feature = "full", oai(rename_all = "camelCase"))]
+#[serde(rename_all = "camelCase")]
+pub struct PublicStandaloneToolInvocation {
+    pub tool_name: crate::base_model::tool::ToolName,
+    pub command_path: Vec<String>,
+    pub invocation_id: InvocationId,
+    pub caller: PublicCaller,
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinarySerializer for PublicStandaloneToolInvocation {
+    fn serialize<Output: desert_rust::BinaryOutput>(
+        &self,
+        context: &mut desert_rust::SerializationContext<Output>,
+    ) -> desert_rust::Result<()> {
+        let json = serde_json::to_string(self)
+            .map_err(|error| desert_rust::Error::SerializationFailure(error.to_string()))?;
+        desert_rust::BinarySerializer::serialize(&json, context)
+    }
+}
+
+#[cfg(feature = "full")]
+impl desert_rust::BinaryDeserializer for PublicStandaloneToolInvocation {
+    fn deserialize(
+        context: &mut desert_rust::DeserializationContext<'_>,
+    ) -> desert_rust::Result<Self> {
+        let json: String = desert_rust::BinaryDeserializer::deserialize(context)?;
+        serde_json::from_str(&json)
+            .map_err(|error| desert_rust::Error::DeserializationFailure(error.to_string()))
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[cfg_attr(
     feature = "full",
@@ -262,7 +296,7 @@ mod host_managed_redaction_tests {
     use crate::schema::{
         SchemaGraph, SchemaType, SchemaValue, SecretValuePayload, find_host_managed_value,
     };
-    use chrono::{TimeZone, Utc};
+    use jiff::Timestamp as JiffTimestamp;
     use test_r::test;
 
     fn secret() -> TypedSchemaValue {
@@ -272,7 +306,7 @@ mod host_managed_redaction_tests {
                 secret_id: uuid::Uuid::nil(),
                 config_key: Some(vec!["credential".to_string()]),
                 version: 7,
-                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                resolved_at: JiffTimestamp::UNIX_EPOCH,
                 category: None,
             }),
         )

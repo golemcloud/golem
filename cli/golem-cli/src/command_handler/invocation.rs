@@ -26,10 +26,10 @@ use crate::model::invocation::{
     InvocationCancelView, InvocationGetMatchesView, InvocationGetView, InvocationListView,
 };
 use anyhow::{anyhow, bail};
-use chrono::{DateTime, Utc};
 use golem_client::api::InvocationClient;
 use golem_client::model::{InvocationKind, InvocationState};
 use golem_common::model::{AgentId, OwnedInvocationId};
+use jiff::Timestamp;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -105,8 +105,8 @@ impl InvocationCommandHandler {
         operation: Option<String>,
         status: Vec<InvocationStateArg>,
         kind: Option<InvocationKindArg>,
-        since: Option<DateTime<Utc>>,
-        until: Option<DateTime<Utc>>,
+        since: Option<Timestamp>,
+        until: Option<Timestamp>,
         page_size: Option<u32>,
         cursor: Option<String>,
     ) -> anyhow::Result<()> {
@@ -172,6 +172,8 @@ impl InvocationCommandHandler {
             agent,
             idempotency_key,
             method,
+            tool,
+            command,
         } = selector;
         if let Some(invocation_id) = invocation_id {
             invocation_id
@@ -184,16 +186,28 @@ impl InvocationCommandHandler {
                 .await?;
             return Ok((environment.environment_id.0, vec![invocation_id]));
         }
-        let (Some(agent), Some(idempotency_key)) = (agent, idempotency_key) else {
-            bail!("select an invocation by its ID, or by --agent and --idempotency-key");
+        let Some(idempotency_key) = idempotency_key else {
+            bail!("select an invocation by its ID, or by --agent or --tool and --idempotency-key");
         };
-        let (environment_id, agent_id) = self.resolve_agent(agent).await?;
+        let (environment_id, agent_id) = if let Some(agent) = agent {
+            let (environment_id, agent_id) = self.resolve_agent(agent).await?;
+            (environment_id, Some(agent_id))
+        } else {
+            let environment = self
+                .ctx
+                .environment_handler()
+                .resolve_environment(EnvironmentResolveMode::Any)
+                .await?;
+            (environment.environment_id.0, None)
+        };
         let clients = self.ctx.golem_clients().await?;
         let found = clients
             .invocation
             .lookup_invocations(
                 &environment_id,
-                &agent_id.0,
+                agent_id.as_ref().map(|id| &id.0),
+                tool.as_deref(),
+                command.as_deref(),
                 method.as_deref(),
                 &idempotency_key,
             )
@@ -203,7 +217,7 @@ impl InvocationCommandHandler {
             .unwrap_or_default();
         if found.is_empty() {
             log_error(format!(
-                "No invocation of agent {agent_id} has the idempotency key {idempotency_key}"
+                "No invocation matches the idempotency key {idempotency_key}"
             ));
             bail!(NonSuccessfulExit)
         }

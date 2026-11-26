@@ -212,7 +212,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 "live streams cannot be used in scheduled invocations"
             ));
         }
-        let scheduled_at = chrono::DateTime::from_timestamp(datetime.seconds, datetime.nanoseconds)
+        let scheduled_at = i32::try_from(datetime.nanoseconds)
+            .ok()
+            .and_then(|nanos| jiff::Timestamp::new(datetime.seconds, nanos).ok())
             .ok_or_else(|| {
                 anyhow::Error::from(WorkerExecutorError::runtime(format!(
                     "Received invalid datetime from wasi: seconds={}, nanoseconds={}",
@@ -255,7 +257,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     };
                     let remote_agent_id = OwnedAgentId::new(
                         self.owned_agent_id().environment_id,
-                        invocation_id.agent_id(),
+                        invocation_id.agent_id().ok_or_else(|| {
+                            WorkerExecutorError::runtime(
+                                "agent RPC schedule has a tool-owned invocation ID",
+                            )
+                        })?,
                     );
                     let schedule_id = serialize(&schedule_id).map_err(|err| {
                         anyhow::Error::from(WorkerExecutorError::runtime(format!(
@@ -267,7 +273,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         .table()
                         .push(CancellationTokenEntry {
                             schedule_id,
-                            metadata: invocation_metadata(&invocation_id),
+                            metadata: invocation_metadata(&invocation_id)?,
                             owner,
                             recipient: remote_agent_id,
                         })
@@ -429,7 +435,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         })?;
         let cancellation_token = CancellationTokenEntry {
             schedule_id: serialized_result,
-            metadata: invocation_metadata(&invocation_id),
+            metadata: invocation_metadata(&invocation_id)?,
             owner: self.owned_agent_id().clone(),
             recipient: remote_agent_id,
         };

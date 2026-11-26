@@ -18,7 +18,6 @@ use crate::sharding::etcd_retry::{ReadRetry, retry_retriable_until, send_again_w
 use crate::sharding::leader_election::LeaderFence;
 use crate::sharding::persistence::{ExternalRevision, NO_REVISION};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use conditional_trait_gen::trait_gen;
 use desert_rust::BinaryCodec;
 use etcd_client::{
@@ -35,6 +34,7 @@ use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use golem_service_base::model::quota_lease::PendingReservation;
 use golem_service_base::repo::{Blob, NumericU64, RepoError, SqlDateTime};
 use indoc::indoc;
+use jiff::Timestamp;
 use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -644,8 +644,8 @@ const READ_COMPACTED_RESTARTS: u32 = 3;
 struct QuotaResourceState {
     definition: ResourceDefinition,
     remaining: u64,
-    last_refilled_at: DateTime<Utc>,
-    last_refreshed_at: DateTime<Utc>,
+    last_refilled_at: Timestamp,
+    last_refreshed_at: Timestamp,
     deficit: u64,
 }
 
@@ -655,8 +655,8 @@ struct QuotaResourceState {
 struct QuotaLeaseState {
     epoch: u64,
     allocated: u64,
-    granted_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
+    granted_at: Timestamp,
+    expires_at: Timestamp,
     pending_reservations: Vec<PendingReservation>,
 }
 

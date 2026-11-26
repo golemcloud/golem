@@ -13,18 +13,18 @@
 // limitations under the License.
 
 use crate::custom_api::model::OidcSession;
-use chrono::{DateTime, TimeDelta, Utc};
 use golem_common::model::auth::TokenSecret;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::security_scheme::{SecuritySchemeId, SecuritySchemeRevision};
+use jiff::{SignedDuration, Timestamp};
 use openidconnect::{CsrfToken, Nonce};
 use std::str::FromStr;
 use url::Url;
 use uuid::Uuid;
 
-pub const AUTHORIZATION_CODE_LIFETIME: TimeDelta = TimeDelta::seconds(60);
-pub const BEARER_TOKEN_LIFETIME: TimeDelta = TimeDelta::hours(1);
-pub const PENDING_PKCE_LOGIN_LIFETIME: TimeDelta = TimeDelta::minutes(10);
+pub const AUTHORIZATION_CODE_LIFETIME: SignedDuration = SignedDuration::from_secs(60);
+pub const BEARER_TOKEN_LIFETIME: SignedDuration = SignedDuration::from_hours(1);
+pub const PENDING_PKCE_LOGIN_LIFETIME: SignedDuration = SignedDuration::from_mins(10);
 
 #[derive(Debug, Clone)]
 pub struct SessionId(pub Uuid);
@@ -51,7 +51,7 @@ pub struct PendingPkceLogin {
     pub frontend_state: String,
     pub code_challenge: String,
     pub upstream_nonce: Nonce,
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: Timestamp,
 }
 
 #[derive(Debug, Clone)]
@@ -60,14 +60,14 @@ pub struct PkceAuthorizationCode {
     pub principal: OidcSession,
     pub redirect_uri: String,
     pub code_challenge: String,
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: Timestamp,
 }
 
 #[derive(Debug, Clone)]
 pub struct PkceBearerCredential {
     pub binding: PkceBinding,
     pub principal: OidcSession,
-    pub expires_at: DateTime<Utc>,
+    pub expires_at: Timestamp,
 }
 
 macro_rules! opaque_credential {

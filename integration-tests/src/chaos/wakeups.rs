@@ -69,7 +69,7 @@
 use crate::chaos::history::{OperationRecord, Outcome, Stream, WaiterWakeupLog, WakeupRecord};
 use crate::chaos::split::{FaultWindow, PodSplit, Window};
 use crate::chaos::summary::LatencyStats;
-use chrono::{DateTime, Utc};
+
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -246,7 +246,7 @@ struct Round<'a> {
     token: &'a str,
     agent: &'a str,
     outcome: Outcome,
-    submitted_at: DateTime<Utc>,
+    submitted_at: jiff::Timestamp,
 }
 
 impl WakeupReport {
@@ -336,7 +336,7 @@ impl WakeupReport {
                         wakeups.len(),
                         wakeups
                             .iter()
-                            .map(|w| w.woken_at.to_rfc3339())
+                            .map(|w| w.woken_at.to_string())
                             .collect::<Vec<_>>()
                             .join(", ")
                     ),
@@ -352,7 +352,7 @@ impl WakeupReport {
                         window,
                         detail: format!(
                             "the completion was definitively refused, and the waiter woke at {}",
-                            wakeup.woken_at.to_rfc3339()
+                            wakeup.woken_at
                         ),
                     });
                 } else {
@@ -361,7 +361,7 @@ impl WakeupReport {
                     } else {
                         report.indeterminate_that_woke += 1;
                     }
-                    let delay_ms = (wakeup.woken_at - round.submitted_at).num_milliseconds();
+                    let delay_ms = (wakeup.woken_at - round.submitted_at).as_millis() as i64;
                     let cell = cells.entry((group, window)).or_default();
                     cell.push(delay_ms, wakeup.parked_ms(), budget_ms);
 
@@ -399,7 +399,7 @@ impl WakeupReport {
                             detail: format!(
                                 "the completion was accepted at {} and the waiter's whole wakeup \
                                  log has no entry for it",
-                                round.submitted_at.to_rfc3339()
+                                round.submitted_at
                             ),
                         });
                     } else if unreadable.contains(round.agent) && stood_down > 0 {
@@ -416,7 +416,7 @@ impl WakeupReport {
                                 "the completion was accepted at {} and the waiter has answered \
                                  nothing since, which is what a worker parked on a resolved \
                                  promise looks like from outside",
-                                round.submitted_at.to_rfc3339()
+                                round.submitted_at
                             ),
                         });
                         if !report.waiters_wedged.iter().any(|w| w == round.agent) {
@@ -677,12 +677,12 @@ mod tests {
     use crate::chaos::history::Phase;
     use test_r::test;
 
-    fn at(secs: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp(secs, 0).unwrap()
+    fn at(secs: i64) -> jiff::Timestamp {
+        jiff::Timestamp::new(secs, 0).unwrap()
     }
 
-    fn at_ms(millis: i64) -> DateTime<Utc> {
-        DateTime::from_timestamp_millis(millis).unwrap()
+    fn at_ms(millis: i64) -> jiff::Timestamp {
+        jiff::Timestamp::from_millisecond(millis).unwrap()
     }
 
     /// The fault: injected at 100s, cleared at 200s.
@@ -707,7 +707,7 @@ mod tests {
     fn completion(
         agent: &str,
         token: &str,
-        submitted: DateTime<Utc>,
+        submitted: jiff::Timestamp,
         outcome: Outcome,
     ) -> OperationRecord {
         OperationRecord {
@@ -741,7 +741,7 @@ mod tests {
         }
     }
 
-    fn wakeup(token: &str, armed: DateTime<Utc>, woken: DateTime<Utc>) -> WakeupRecord {
+    fn wakeup(token: &str, armed: jiff::Timestamp, woken: jiff::Timestamp) -> WakeupRecord {
         WakeupRecord {
             token: token.to_string(),
             armed_at: armed,

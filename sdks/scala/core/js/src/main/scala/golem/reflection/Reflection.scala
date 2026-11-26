@@ -97,7 +97,7 @@ final class AgentType private[reflection] (
    * ID, or the ID of an agent of another type, gives
    * [[golem.runtime.rpc.AgentRpcError.NotFound]].
    */
-  def getById(agentId: AgentId): Future[Either[GolemReflectError, ReflectedAgentClient]] =
+  def getById(agentId: AgentId): Either[GolemReflectError, ReflectedAgentClient] =
     client.getById(agentId)
 
   def packConfigJson(entries: List[ReflectedConfigJson]): Either[GolemReflectError, List[ConfigOverride]] =
@@ -282,11 +282,10 @@ final class ReflectedAgentClientFactory private[reflection] (agentType: AgentTyp
     }
 
   /** See [[AgentType.getById]]. */
-  def getById(agentId: AgentId): Future[Either[GolemReflectError, ReflectedAgentClient]] =
-    requireDurable("getById") match {
-      case Left(error) => Future.successful(Left(error))
-      case Right(_)    => Transport.getById(agentType.name, agentId).map(_.map(new ReflectedAgentClient(agentType, _)))
-    }
+  def getById(agentId: AgentId): Either[GolemReflectError, ReflectedAgentClient] =
+    requireDurable("getById")
+      .flatMap(_ => Transport.getById(agentType.name, agentId))
+      .map(new ReflectedAgentClient(agentType, _))
 
   private def pack(input: Json): Either[GolemReflectError, SchemaValue] =
     agentType.constructorInput.packJson(input).left.map(error => GolemReflectError.Validation(error.message))
@@ -410,11 +409,11 @@ object DynamicAgentClient {
    * A client of the existing agent with the given ID. The host registry
    * resolves the agent type from the type tag of the ID.
    */
-  def getById(agentId: AgentId): Future[Either[GolemReflectError, DynamicAgentClient]] =
-    Transport.typeNameOf(agentId) match {
-      case Left(error)     => Future.successful(Left(error))
-      case Right(typeName) => Transport.getById(typeName, agentId).map(_.map(new DynamicAgentClient(_)))
-    }
+  def getById(agentId: AgentId): Either[GolemReflectError, DynamicAgentClient] =
+    Transport
+      .typeNameOf(agentId)
+      .flatMap(Transport.getById(_, agentId))
+      .map(new DynamicAgentClient(_))
 }
 
 final class DynamicAgentMethod private[reflection] (val name: String, transport: Transport) {
@@ -561,15 +560,13 @@ private[reflection] object Transport {
         )
     }
 
-  def getById(typeName: String, agentId: AgentId): Future[Either[GolemReflectError, Transport]] =
-    guardedFuture(
-      Future.successful(
-        WasmRpcApi
-          .getById(typeName, JsAgentId.fromAgentId(agentId))
-          .left
-          .map(error => GolemReflectError.Remote(AgentRpcError.fromRpcError(error)))
-          .map(new Transport(_, Some(agentId)))
-      )
+  def getById(typeName: String, agentId: AgentId): Either[GolemReflectError, Transport] =
+    guarded(
+      WasmRpcApi
+        .getById(typeName, JsAgentId.fromAgentId(agentId))
+        .left
+        .map(error => GolemReflectError.Remote(AgentRpcError.fromRpcError(error)))
+        .map(new Transport(_, Some(agentId)))
     )
 
   /**

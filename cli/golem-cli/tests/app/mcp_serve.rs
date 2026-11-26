@@ -347,7 +347,14 @@ async fn mcp_serve_offers_one_tool_per_management_command() {
         ),
         (
             "agent_oplog",
-            &["agent_id", "cursor", "from", "omit_payloads", "query"],
+            &[
+                "agent_id",
+                "cursor",
+                "from",
+                "omit_payloads",
+                "query",
+                "show_claims",
+            ],
         ),
         (
             "agent_invoke",

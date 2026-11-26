@@ -18,10 +18,8 @@ components:
       - src
       targets:
       - .golem/scala.js
-    - injectToPrebuiltQuickjs: .generated/agent_guest.wasm
+    - preinitializeJs: .generated/agent_guest.wasm
       module: .golem/scala.js
-      into: .golem/agents/scala_examples.dynamic.wasm
-    - preinitializeJs: .golem/agents/scala_examples.dynamic.wasm
       into: .golem/agents/scala_examples.preinitialized.wasm
     componentWasm: .golem/agents/scala_examples.preinitialized.wasm
 

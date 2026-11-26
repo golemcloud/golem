@@ -56,7 +56,7 @@ import {
   type SchemaValue,
 } from './internal/schema-model';
 import { SchemaRef, type JsonValue } from './schema/ref';
-import type { AgentId } from './agentId';
+import { AgentId } from './agentId';
 import type { ScopeCard } from './host/permissions';
 import type { RemoteClientOptions } from './client';
 export {
@@ -261,13 +261,13 @@ export class ReflectedAgentClientFactory {
 
   /**
    * Address the existing durable agent with this ID. Never creates the agent: an unknown ID, or
-   * the ID of an agent of another type, rejects with a `not-found` `RemoteCallError`.
+   * the ID of an agent of another type, throws a `not-found` `RemoteCallError`.
    */
-  async getById(agentId: AgentId, options?: RemoteClientOptions): Promise<ReflectedAgentClient> {
+  getById(agentId: AgentId, options?: RemoteClientOptions): ReflectedAgentClient {
     this.requireMode('durable', 'getById');
     return new ReflectedAgentClient(
       this.agentType,
-      await getRemoteAgentById(this.agentType.name, agentId),
+      getRemoteAgentById(this.agentType.name, agentId),
       options?.scopeCard,
     );
   }
@@ -436,7 +436,7 @@ export function getAgentType(name: string): AgentType | undefined {
  * that the agent exists.
  */
 export function getAgentTypeByAgentId(agentId: AgentId): AgentType | undefined {
-  const registered = hostGetAgentTypeByAgentId(agentId);
+  const registered = hostGetAgentTypeByAgentId(AgentId.toWit(agentId));
   return registered?.agentType.kind === 'regular' ? new AgentType(registered) : undefined;
 }
 

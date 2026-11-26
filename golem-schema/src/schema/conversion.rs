@@ -42,8 +42,8 @@ mod bigdecimal;
 mod bit_vec;
 #[cfg(feature = "bytes")]
 mod bytes;
-#[cfg(feature = "chrono")]
-mod chrono;
+#[cfg(feature = "jiff")]
+mod jiff;
 #[cfg(feature = "mac_address")]
 mod mac_address;
 #[cfg(feature = "nonempty_collections")]
@@ -999,12 +999,12 @@ impl<T: FromSchema, E: FromSchema> FromSchema for Result<T, E> {
 }
 
 // =====================================================================
-// chrono::DateTime / std::time
+// jiff::Timestamp / std::time
 // =====================================================================
 
-impl IntoSchema for ::chrono::DateTime<::chrono::Utc> {
+impl IntoSchema for ::jiff::Timestamp {
     fn type_id() -> TypeId {
-        TypeId::new("chrono.DateTime<chrono.Utc>")
+        TypeId::new("jiff.Timestamp")
     }
     fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
         SchemaType::datetime()
@@ -1014,14 +1014,14 @@ impl IntoSchema for ::chrono::DateTime<::chrono::Utc> {
     }
 }
 
-impl FromSchema for ::chrono::DateTime<::chrono::Utc> {
+impl FromSchema for ::jiff::Timestamp {
     fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
         match v {
             SchemaValue::Datetime { value } => Ok(*value),
             other => Err(FromSchemaError::shape_mismatch(
                 "datetime",
                 value_kind(other),
-                "DateTime<Utc>",
+                "Timestamp",
             )),
         }
     }

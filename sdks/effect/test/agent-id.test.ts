@@ -7,16 +7,13 @@ import * as Package from "../src/index.js"
 import { hostAgentIdFor } from "./invocation-metadata.js"
 
 describe("AgentId", () => {
-  it.effect("parses and formats the UUID text form", () =>
+  it.effect("parses the UUID text form to the lower-case text", () =>
     Effect.gen(function* () {
       const text = uuidToString(hostAgentIdFor("parsed").uuid)
       const id = yield* AgentId.parse(text.toUpperCase())
-      expect(id.uuid).toBe(text)
-      expect(AgentId.format(id)).toBe(text)
-      expect(String(id)).toBe(text)
-      expect(Object.isFrozen(id)).toBe(true)
+      expect(id).toBe(text)
       expect(agentIdToWit(id)).toEqual(hostAgentIdFor("parsed"))
-      expect(agentIdFromWit(hostAgentIdFor("parsed"))).toEqual(id)
+      expect(agentIdFromWit(hostAgentIdFor("parsed"))).toBe(id)
       expect(Package.AgentId.parse).toBe(AgentId.parse)
     }),
   )

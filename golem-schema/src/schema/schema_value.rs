@@ -15,8 +15,8 @@
 use crate::model::EnvironmentId;
 use crate::schema::schema_type::QuantityValue;
 use crate::schema::stream::SchemaValueStream;
-use chrono::{DateTime, Utc};
 use golem_schema_derive::{FromSchema, IntoSchema};
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 
 /// The payload carried by [`SchemaValue::Secret`].
@@ -145,7 +145,7 @@ pub enum SchemaValue {
     },
     Uuid(uuid::Uuid),
     Datetime {
-        value: DateTime<Utc>,
+        value: Timestamp,
     },
     Duration(DurationValuePayload),
     Quantity(QuantityValue),
@@ -311,7 +311,7 @@ pub struct SecretValuePayload {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub config_key: Option<Vec<String>>,
     pub version: u64,
-    pub resolved_at: DateTime<Utc>,
+    pub resolved_at: Timestamp,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub category: Option<String>,
 }
@@ -333,7 +333,7 @@ pub struct QuotaTokenValuePayload {
     pub resource_name: String,
     pub expected_use: u64,
     pub last_credit: i64,
-    pub last_credit_at: DateTime<Utc>,
+    pub last_credit_at: Timestamp,
 }
 
 /// Capability value: the trusted internal/persistent representation of a
@@ -363,7 +363,7 @@ pub struct PermissionCardValuePayload {
     pub parent_ids: Vec<uuid::Uuid>,
     /// Absolute expiry of the card, if any. Trusted cache only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub expires_at: Option<DateTime<Utc>>,
+    pub expires_at: Option<Timestamp>,
     /// Whether the card is polymorphic (can spawn scoped child cards). Trusted
     /// cache only; the live card store is the source of truth.
     pub polymorphic: bool,

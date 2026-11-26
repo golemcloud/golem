@@ -17,7 +17,7 @@ use super::{
     millis_to_datetime,
 };
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use golem_common::model::{ScheduleId, ShardAssignment, ShardId};
 use golem_common::serialization::deserialize;
 use std::collections::HashMap;
@@ -52,7 +52,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
     async fn insert(
         &self,
         schedule_id: ScheduleId,
-        due_at: DateTime<Utc>,
+        due_at: jiff::Timestamp,
         shard_id: ShardId,
         action: &[u8],
     ) -> Result<(), SchedulerStorageError> {
@@ -76,9 +76,43 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         Ok(())
     }
 
+    async fn get_action(
+        &self,
+        schedule_id: &ScheduleId,
+    ) -> Result<Option<Vec<u8>>, SchedulerStorageError> {
+        Ok(self
+            .entries
+            .lock()
+            .unwrap()
+            .get(&schedule_id.id)
+            .map(|entry| entry.action.clone()))
+    }
+
+    async fn replace_action(
+        &self,
+        schedule_id: &ScheduleId,
+        expected_action: &[u8],
+        action: &[u8],
+        due_at: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        let mut entries = self.entries.lock().unwrap();
+        if let Some(entry) = entries.get_mut(&schedule_id.id)
+            && entry.action == expected_action
+        {
+            entry.action = action.to_vec();
+            entry.due_at_ms = datetime_to_millis(due_at);
+            entry.lease_owner = None;
+            entry.lease_until_ms = None;
+            entry.attempt_count = 0;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     async fn claim_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
         limit: u32,
         lease_ttl: Duration,
@@ -124,7 +158,7 @@ impl SchedulerStorage for InMemorySchedulerStorage {
 
     async fn count_due(
         &self,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
         assignment: &ShardAssignment,
     ) -> Result<u64, SchedulerStorageError> {
         let now_ms = datetime_to_millis(now);
@@ -141,8 +175,8 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
-        lease_until: DateTime<Utc>,
-        now: DateTime<Utc>,
+        lease_until: jiff::Timestamp,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         let now_ms = datetime_to_millis(now);
         let requested_until_ms = datetime_to_millis(lease_until);
@@ -160,11 +194,34 @@ impl SchedulerStorage for InMemorySchedulerStorage {
         }
     }
 
+    async fn reschedule(
+        &self,
+        schedule_id: &ScheduleId,
+        lease_owner: Uuid,
+        due_at: jiff::Timestamp,
+        now: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        let mut entries = self.entries.lock().unwrap();
+        if let Some(entry) = entries.get_mut(&schedule_id.id)
+            && entry.lease_owner == Some(lease_owner)
+            && entry
+                .lease_until_ms
+                .is_some_and(|until| until > datetime_to_millis(now))
+        {
+            entry.due_at_ms = datetime_to_millis(due_at);
+            entry.lease_owner = None;
+            entry.lease_until_ms = None;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
     async fn ack(
         &self,
         schedule_id: &ScheduleId,
         lease_owner: Uuid,
-        now: DateTime<Utc>,
+        now: jiff::Timestamp,
     ) -> Result<bool, SchedulerStorageError> {
         let mut entries = self.entries.lock().unwrap();
         if entries.get(&schedule_id.id).is_some_and(|entry| {

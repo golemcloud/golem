@@ -278,7 +278,7 @@ fn non_agent_component(component_id: ComponentId, environment_id: EnvironmentId)
             .unwrap(),
         component_size: 1,
         metadata: golem_common::model::component_metadata::ComponentMetadata::default(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
         package_metadata: None,
         object_store_key: "test-object".to_string(),
@@ -487,6 +487,7 @@ async fn get_recovers_non_agent_external_tool_owner() {
     let create = OplogEntry::Create {
         timestamp: Timestamp::now_utc(),
         parameters: Box::new(golem_common::model::oplog::CreateParameters {
+            standalone_tool: None,
             agent_id,
             component_id,
             agent_type_name: None,
@@ -885,7 +886,7 @@ fn stored_card(card_id: CardId) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+        created_at: jiff::Timestamp::new(1_700_000_000, 0).unwrap(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -1060,7 +1061,10 @@ fn apply_and_reassemble(
 
 #[test]
 fn split_status_round_trips_through_fields() {
-    let full = sample_status();
+    let mut full = sample_status();
+    full.status = AgentStatus::Failed;
+    full.terminal_failure_at = Some(Timestamp::from(1_700_000_000_000u64));
+    full.terminal_failure_index = Some(OplogIndex::from_u64(41));
 
     let mut core = full.clone();
     let parts = split_status(&mut core);
@@ -1076,7 +1080,10 @@ fn split_status_round_trips_through_fields() {
 
 #[test]
 fn borrowed_status_core_matches_split_status_encoding() {
-    let status = sample_status();
+    let mut status = sample_status();
+    status.status = AgentStatus::Failed;
+    status.terminal_failure_at = Some(Timestamp::from(1_700_000_000_000u64));
+    status.terminal_failure_index = Some(OplogIndex::from_u64(41));
     let mut split = status.clone();
     split_status(&mut split);
 
@@ -2799,6 +2806,7 @@ fn test_create_entry(
     fingerprint: AgentFingerprint,
 ) -> OplogEntry {
     OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+        standalone_tool: None,
         agent_id: owned_agent_id.agent_id,
         component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
         agent_type_name: None,

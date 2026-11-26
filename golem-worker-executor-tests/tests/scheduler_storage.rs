@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::{DateTime, Duration as ChronoDuration, Utc};
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_common::model::account::AccountId;
 use golem_common::model::environment::EnvironmentId;
@@ -65,6 +64,13 @@ fn scheduled_action_fingerprints_roundtrip() {
                 agent_created_by: account_id,
                 owned_agent_id: OwnedAgentId::new(environment_id, &agent_id),
                 target_worker_fingerprint: fingerprint,
+            },
+        ),
+        (
+            "scheduled_action_delete_finished_invocation.bin",
+            ScheduledAction::DeleteFinishedInvocation {
+                owned_agent_id: OwnedAgentId::new(environment_id, &agent_id),
+                fingerprint,
             },
         ),
     ];
@@ -165,7 +171,7 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
     };
     let schedule_id = ScheduleId::fresh();
     let shard_id = ShardId::new(0);
-    let due_at = Utc::now() - ChronoDuration::seconds(1);
+    let due_at = jiff::Timestamp::now() - jiff::SignedDuration::from_secs(1);
 
     storage
         .insert(schedule_id, due_at, shard_id, &serialize(&action).unwrap())
@@ -174,7 +180,7 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
     storage
         .insert(
             schedule_id,
-            due_at + ChronoDuration::minutes(1),
+            due_at + jiff::SignedDuration::from_mins(1),
             ShardId::new(1),
             &serialize(&conflicting_action).unwrap(),
         )
@@ -183,23 +189,31 @@ async fn postgres_scheduler_storage_preserves_serialized_payload_and_idempotency
 
     let assignment = ShardAssignment::unexpiring(2, [shard_id]);
     let claimed = storage
-        .claim_due(Utc::now(), &assignment, 10, Duration::from_secs(30))
+        .claim_due(
+            jiff::Timestamp::now(),
+            &assignment,
+            10,
+            Duration::from_secs(30),
+        )
         .await
         .unwrap();
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].schedule_id, schedule_id);
-    assert_eq!(
-        claimed[0].due_at.timestamp_millis(),
-        due_at.timestamp_millis()
-    );
+    assert_eq!(claimed[0].due_at.as_millisecond(), due_at.as_millisecond());
     assert_eq!(claimed[0].action, action);
     assert!(
         storage
-            .ack(&schedule_id, claimed[0].lease_owner, Utc::now())
+            .ack(&schedule_id, claimed[0].lease_owner, jiff::Timestamp::now())
             .await
             .unwrap()
     );
-    assert_eq!(storage.count_due(Utc::now(), &assignment).await.unwrap(), 0);
+    assert_eq!(
+        storage
+            .count_due(jiff::Timestamp::now(), &assignment)
+            .await
+            .unwrap(),
+        0
+    );
 }
 
 fn lease_action() -> ScheduledAction {
@@ -210,18 +224,107 @@ fn lease_action() -> ScheduledAction {
     }
 }
 
+async fn assert_replaced_action_invalidates_old_lease(
+    holder: &(dyn SchedulerStorage + Send + Sync),
+    contender: &(dyn SchedulerStorage + Send + Sync),
+    now: jiff::Timestamp,
+    assignment: &ShardAssignment,
+    action: &ScheduledAction,
+) {
+    const CLAIM_TTL: Duration = Duration::from_secs(30);
+    const STALE_RENEWAL: Duration = Duration::from_secs(90);
+    let id = ScheduleId::fresh();
+    let original = serialize(action).unwrap();
+    let replacement = serialize(&lease_action()).unwrap();
+    assert_ne!(original, replacement);
+
+    // Compare-and-replace → only the exact stored incarnation can be replaced.
+    assert_eq!(holder.get_action(&id).await.unwrap(), None);
+    holder
+        .insert(id, now, ShardId::new(0), &original)
+        .await
+        .unwrap();
+    assert_eq!(
+        contender.get_action(&id).await.unwrap(),
+        Some(original.clone())
+    );
+    let claim = holder
+        .claim_due(now, assignment, 1, CLAIM_TTL)
+        .await
+        .unwrap()
+        .remove(0);
+    assert!(
+        !contender
+            .replace_action(&id, &replacement, &original, now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        contender
+            .replace_action(&id, &original, &replacement, now)
+            .await
+            .unwrap()
+    );
+
+    // Replaced incarnation's lease → cannot remove, postpone, renew or replace the new timer.
+    assert!(!holder.ack(&id, claim.lease_owner, now).await.unwrap());
+    assert!(
+        !holder
+            .reschedule(
+                &id,
+                claim.lease_owner,
+                now + jiff::SignedDuration::from_hours(9 * 24),
+                now
+            )
+            .await
+            .unwrap()
+    );
+    assert!(
+        !holder
+            .extend_lease(&id, claim.lease_owner, now + STALE_RENEWAL, now)
+            .await
+            .unwrap()
+    );
+    assert!(
+        !holder
+            .replace_action(&id, &original, &original, now)
+            .await
+            .unwrap()
+    );
+    assert_eq!(
+        holder.get_action(&id).await.unwrap(),
+        Some(replacement.clone())
+    );
+
+    // Replacement → immediately claimable with a fresh token and a reset attempt count.
+    let new_claim = contender
+        .claim_due(now, assignment, 1, CLAIM_TTL)
+        .await
+        .unwrap()
+        .remove(0);
+    assert_ne!(claim.lease_owner, new_claim.lease_owner);
+    assert_eq!(serialize(&new_claim.action).unwrap(), replacement);
+    assert_eq!(new_claim.attempt_count, 1);
+    assert!(
+        contender
+            .ack(&id, new_claim.lease_owner, now)
+            .await
+            .unwrap()
+    );
+}
+
 async fn assert_scheduler_lease_contracts(
     holder: &(dyn SchedulerStorage + Send + Sync),
     contender: &(dyn SchedulerStorage + Send + Sync),
 ) {
     let action = lease_action();
     let schedule_id = ScheduleId::fresh();
-    let now = DateTime::from_timestamp_millis(1_700_000_000_000).unwrap();
+    let now = jiff::Timestamp::from_millisecond(1_700_000_000_000).unwrap();
     let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
     holder
         .insert(
             schedule_id,
-            now - ChronoDuration::seconds(2),
+            now - jiff::SignedDuration::from_secs(2),
             ShardId::new(0),
             &serialize(&action).unwrap(),
         )
@@ -232,7 +335,7 @@ async fn assert_scheduler_lease_contracts(
     // and wall-clock time; no sleep or backend-private state change is needed.
     let claimed = holder
         .claim_due(
-            now - ChronoDuration::seconds(1),
+            now - jiff::SignedDuration::from_secs(1),
             &assignment,
             1,
             Duration::from_millis(100),
@@ -268,15 +371,18 @@ async fn assert_scheduler_lease_contracts(
     );
     assert_eq!(holder.count_due(now, &assignment).await.unwrap(), 0);
 
+    assert_replaced_action_invalidates_old_lease(holder, contender, now, &assignment, &action)
+        .await;
+
     let ttl = Duration::from_secs(10);
     let expiry = now + ttl;
     // Compare on both sides of the millisecond boundary, including timestamps
     // whose nanoseconds would otherwise make the backends disagree.
     for ack_at in [
-        expiry - ChronoDuration::nanoseconds(1),
+        expiry - jiff::SignedDuration::from_nanos(1),
         expiry,
-        expiry + ChronoDuration::nanoseconds(1),
-        expiry + ChronoDuration::milliseconds(1),
+        expiry + jiff::SignedDuration::from_nanos(1),
+        expiry + jiff::SignedDuration::from_millis(1),
     ] {
         let id = ScheduleId::fresh();
         holder
@@ -288,7 +394,12 @@ async fn assert_scheduler_lease_contracts(
         assert_eq!(first[0].schedule_id, id);
         assert!(
             contender
-                .claim_due(expiry - ChronoDuration::nanoseconds(1), &assignment, 1, ttl)
+                .claim_due(
+                    expiry - jiff::SignedDuration::from_nanos(1),
+                    &assignment,
+                    1,
+                    ttl
+                )
                 .await
                 .unwrap()
                 .is_empty()
@@ -360,11 +471,11 @@ async fn assert_scheduler_lease_contracts(
         .unwrap();
     let first = holder.claim_due(now, &assignment, 1, ttl).await.unwrap();
     assert_eq!(first.len(), 1);
-    let renew_at = now + ChronoDuration::seconds(1);
+    let renew_at = now + jiff::SignedDuration::from_secs(1);
     for invalid_until in [
-        renew_at - ChronoDuration::milliseconds(1),
+        renew_at - jiff::SignedDuration::from_millis(1),
         renew_at,
-        renew_at + ChronoDuration::nanoseconds(1),
+        renew_at + jiff::SignedDuration::from_nanos(1),
     ] {
         assert!(
             !holder
@@ -373,7 +484,7 @@ async fn assert_scheduler_lease_contracts(
                 .unwrap()
         );
     }
-    let extended = now + ChronoDuration::seconds(37);
+    let extended = now + jiff::SignedDuration::from_secs(37);
     assert!(
         holder
             .extend_lease(&id, first[0].lease_owner, extended, renew_at)
@@ -396,7 +507,7 @@ async fn assert_scheduler_lease_contracts(
     assert!(
         contender
             .claim_due(
-                extended - ChronoDuration::nanoseconds(1),
+                extended - jiff::SignedDuration::from_nanos(1),
                 &assignment,
                 1,
                 ttl
@@ -553,7 +664,7 @@ async fn assert_persistent_scheduler_lease_contracts(backend: LeaseBackend) {
     let contender = backend.open().await;
     assert_scheduler_lease_contracts(holder.storage(), contender.storage()).await;
 
-    let now = DateTime::from_timestamp_millis(1_700_000_000_000).unwrap();
+    let now = jiff::Timestamp::from_millisecond(1_700_000_000_000).unwrap();
     let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
     let action = lease_action();
     let mut leases = Vec::new();
@@ -571,7 +682,7 @@ async fn assert_persistent_scheduler_lease_contracts(backend: LeaseBackend) {
             .unwrap();
         assert_eq!(claim.len(), 1);
         assert_eq!(claim[0].schedule_id, id);
-        let until = now + ChronoDuration::seconds(if extend { 41 } else { 10 });
+        let until = now + jiff::SignedDuration::from_secs(if extend { 41 } else { 10 });
         if extend {
             assert!(
                 holder
@@ -599,7 +710,7 @@ async fn assert_persistent_scheduler_lease_contracts(backend: LeaseBackend) {
         reopened
             .storage()
             .claim_due(
-                now + ChronoDuration::seconds(9),
+                now + jiff::SignedDuration::from_secs(9),
                 &assignment,
                 2,
                 Duration::from_secs(10)
@@ -609,7 +720,7 @@ async fn assert_persistent_scheduler_lease_contracts(backend: LeaseBackend) {
             .is_empty()
     );
     for (id, owner, until) in leases {
-        let before_expiry = until - ChronoDuration::nanoseconds(1);
+        let before_expiry = until - jiff::SignedDuration::from_nanos(1);
         assert!(
             reopened
                 .storage()
@@ -629,7 +740,12 @@ async fn assert_persistent_scheduler_lease_contracts(backend: LeaseBackend) {
         assert!(
             !reopened
                 .storage()
-                .extend_lease(&id, owner, until + ChronoDuration::seconds(60), until)
+                .extend_lease(
+                    &id,
+                    owner,
+                    until + jiff::SignedDuration::from_secs(60),
+                    until
+                )
                 .await
                 .unwrap()
         );

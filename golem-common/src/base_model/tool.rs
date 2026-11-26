@@ -28,13 +28,26 @@ use crate::model::entity::{
     ExecutableTarget, FilesystemCapability, ToolMiddlewareName,
 };
 use crate::model::tool_release::{ToolReleaseId, ToolReleaseReference};
+use crate::schema::conversion::{FromSchema, FromSchemaError};
+use crate::schema::schema_value::SchemaValue;
 use crate::schema::tool::Tool;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Debug,
+    Clone,
+    PartialEq,
+    Eq,
+    PartialOrd,
+    Ord,
+    Hash,
+    Serialize,
+    Deserialize,
+    golem_schema_derive::IntoSchema,
+)]
 #[cfg_attr(
     feature = "full",
     derive(desert_rust::BinaryCodec, poem_openapi::NewType)
@@ -45,7 +58,14 @@ use std::str::FromStr;
     oai(from_json = false, from_parameter = false, from_multipart = false)
 )]
 #[serde(try_from = "String", into = "String")]
+#[schema(transparent)]
 pub struct ToolName(String);
+
+impl FromSchema for ToolName {
+    fn from_value(value: &SchemaValue) -> Result<Self, FromSchemaError> {
+        Self::try_from(String::from_value(value)?).map_err(FromSchemaError::custom)
+    }
+}
 
 impl ToolName {
     pub fn as_str(&self) -> &str {
@@ -985,8 +1005,14 @@ mod tests {
 
     #[test]
     fn tool_name_uses_lower_kebab_case_identifier_grammar() {
+        use crate::schema::conversion::{FromSchema, IntoSchema};
+        use crate::schema::schema_value::SchemaValue;
+
         for valid in ["a", "grep", "git-client", "tool2", "a-2b"] {
-            assert_eq!(ToolName::try_from(valid).unwrap().as_str(), valid);
+            let name = ToolName::try_from(valid).unwrap();
+            assert_eq!(name.as_str(), valid);
+            assert_eq!(name.to_value(), SchemaValue::String(valid.to_string()));
+            assert_eq!(ToolName::from_value(&name.to_value()).unwrap(), name);
         }
 
         for invalid in ["", "Grep", "git_client", "2tool", "tool-", "tool--x"] {
@@ -994,7 +1020,9 @@ mod tests {
                 ToolName::try_from(invalid).is_err(),
                 "expected '{invalid}' to be rejected"
             );
+            assert!(ToolName::from_value(&SchemaValue::String(invalid.to_string())).is_err());
         }
+        assert!(ToolName::from_value(&SchemaValue::U32(1)).is_err());
     }
 
     #[test]

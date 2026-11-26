@@ -37,7 +37,6 @@ use crate::model::tool_invoke::{ToolInvocationSessionView, ToolInvokeHelpView, T
 use crate::model::tool_middleware::*;
 use crate::model::tool_release::{ToolReleaseListView, ToolReleaseView};
 use anyhow::{anyhow, bail};
-use chrono::{DateTime, Utc};
 use golem_client::api::{
     AgentClient, EnvironmentClient, EnvironmentToolGrantsClient,
     EnvironmentToolMiddlewareGrantsClient, ToolMiddlewareReleasesClient, ToolReleasesClient,
@@ -73,6 +72,7 @@ use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::tool::Tool;
 use golem_common::schema::{ExternalTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 use golem_schema::tool::argv as arguments;
+use jiff::Timestamp;
 use std::io::Read;
 use std::path::Path;
 use std::pin::Pin;
@@ -346,36 +346,14 @@ impl ToolCommandHandler {
         {
             bail!("--trigger and --schedule-at cannot be used with live streams");
         }
-        if args.lookup
-            && args
-                .idempotency_key
-                .as_ref()
-                .is_none_or(|key| key.value == "-")
-        {
-            bail!("--lookup requires an explicit --idempotency-key other than '-'");
-        }
         let environment = self
             .ctx
             .environment_handler()
             .resolve_environment(EnvironmentResolveMode::Any)
             .await?;
-        let owner = if args.lookup
-            && let Some(agent) = args.agent.as_ref()
-            && let Ok(agent_id) = agent.0.parse::<AgentId>()
-        {
-            ToolOwner {
-                application_name: environment.application_name.clone(),
-                environment_name: environment.environment_name.clone(),
-                agent_id: Some(agent_id),
-                component_id: None,
-                environment,
-            }
-        } else if let Some(raw) = args.agent {
+        let owner = if let Some(raw) = args.agent {
             self.resolve_tool_owner(raw).await?
         } else if let Some(name) = args.component {
-            if args.lookup {
-                bail!("--lookup requires --agent <agent-id> from the invocation receipt");
-            }
             let component = self
                 .ctx
                 .component_handler()
@@ -392,9 +370,7 @@ impl ToolCommandHandler {
         } else {
             unreachable!("clap requires exactly one native tool target")
         };
-        let (command_path, input) = if args.lookup {
-            (args.tool_args, None)
-        } else {
+        let (command_path, input) = {
             let definition = self
                 .describe_bound_tool(&owner, args.tool_name.as_str())
                 .await?;
@@ -514,10 +490,13 @@ impl ToolCommandHandler {
                 .accepted_invocation
                 .ok_or_else(|| anyhow!("the tool session ended without an acceptance"))?;
             let view = ToolInvocationSessionView {
-                target: PublicNativeToolTarget::Agent {
-                    agent_id: *accepted.agent_id(),
-                },
+                target: accepted.agent_id().map_or(public_target, |agent_id| {
+                    PublicNativeToolTarget::Agent {
+                        agent_id: *agent_id,
+                    }
+                }),
                 idempotency_key: accepted.id(),
+                invocation_id: accepted.to_string(),
                 result,
             };
             let failed = public_tool_failed(&view.result);
@@ -541,22 +520,16 @@ impl ToolCommandHandler {
             self.ctx.log_handler().log_output(view)?;
             return finish_tool_report(failed);
         }
-        let mode = if args.lookup {
-            NativeToolInvocationMode::Lookup
-        } else if args.trigger {
+        let mode = if args.trigger {
             NativeToolInvocationMode::Schedule
         } else {
             NativeToolInvocationMode::Await
         };
-        let input = if args.lookup {
-            input
-        } else {
-            Some(
-                tool_input_or_empty(input)
-                    .try_into()
-                    .map_err(anyhow::Error::msg)?,
-            )
-        };
+        let input = Some(
+            tool_input_or_empty(input)
+                .try_into()
+                .map_err(anyhow::Error::msg)?,
+        );
         let response = self
             .invoke_tool_scalar(
                 &owner,
@@ -650,7 +623,7 @@ impl ToolCommandHandler {
         input: Option<ExternalTypedSchemaValue>,
         key: &IdempotencyKey,
         mode: NativeToolInvocationMode,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<Timestamp>,
     ) -> anyhow::Result<NativeToolInvocationResponse> {
         Ok(self
             .ctx

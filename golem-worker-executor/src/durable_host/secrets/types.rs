@@ -12,7 +12,6 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::{DateTime, Utc};
 use golem_common::model::agent_secret::{AgentSecretId, AgentSecretRevision};
 use golem_common::schema::schema_value::SecretValuePayload;
 use golem_schema::schema::wit::SecretHandleRep;
@@ -27,7 +26,7 @@ pub struct SecretEntry {
     pub secret_id: AgentSecretId,
     pub pinned_revision: AgentSecretRevision,
     pub config_key: Option<Vec<String>>,
-    pub resolved_at: DateTime<Utc>,
+    pub resolved_at: jiff::Timestamp,
     pub category: Option<String>,
 }
 

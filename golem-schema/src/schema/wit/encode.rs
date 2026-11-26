@@ -1249,8 +1249,8 @@ impl ValueCtx {
             SchemaValue::Url { url } => wire::SchemaValueNode::UrlValue(url.clone()),
             SchemaValue::Uuid(value) => wire::SchemaValueNode::UuidValue((*value).into()),
             SchemaValue::Datetime { value } => {
-                let seconds = value.timestamp();
-                let nanoseconds = value.timestamp_subsec_nanos();
+                let seconds = value.as_nanosecond().div_euclid(1_000_000_000) as i64;
+                let nanoseconds = value.as_nanosecond().rem_euclid(1_000_000_000) as u32;
                 wire::SchemaValueNode::DatetimeValue(wire::Datetime {
                     seconds,
                     nanoseconds,

@@ -145,30 +145,7 @@ declare module 'golem:api/oplog@1.5.0' {
     path: string[];
     value: TypedSchemaValue;
   };
-  export type OwnerKind = "component-agent" | "ephemeral-external-tool" | "oplog-processor";
-  export type CreateParameters = {
-    timestamp: Datetime;
-    agentId: AgentId;
-    /** The name of the agent's type. Owners without an agent type have none. */
-    agentTypeName?: string;
-    ownerKind: OwnerKind;
-    agentMode: AgentMode;
-    componentRevision: ComponentRevision;
-    env: [string, string][];
-    createdBy: AccountId;
-    environmentId: EnvironmentId;
-    parent?: AgentId;
-    componentSize: bigint;
-    initialTotalLinearMemorySize: bigint;
-    initialActivePlugins: PluginInstallationDescription[];
-    localAgentConfig: LocalAgentConfigEntry[];
-    instanceId: Uuid;
-    /**
-     * Whether the agent is a never-live sandbox. A marked agent reports the
-     * `sandboxed` status.
-     */
-    neverLive: boolean;
-  };
+  export type OwnerKind = "component-agent" | "ephemeral-external-tool" | "oplog-processor" | "standalone-tool";
   /**
    * Identifies a durable call by its place in a call order.
    * `anchor` is the oplog index of the record that numbers the call: the agent invocation, the
@@ -556,6 +533,36 @@ declare module 'golem:api/oplog@1.5.0' {
     original: PublicPrincipal;
     immediate: PublicPrincipal;
     tokens: PublicTokenProvenance[];
+  };
+  export type StandaloneToolInvocation = {
+    toolName: string;
+    commandPath: string[];
+    invocationId: Uuid;
+    caller: PublicCaller;
+  };
+  export type CreateParameters = {
+    timestamp: Datetime;
+    agentId: AgentId;
+    /** The name of the agent's type. Owners without an agent type have none. */
+    agentTypeName?: string;
+    ownerKind: OwnerKind;
+    agentMode: AgentMode;
+    componentRevision: ComponentRevision;
+    env: [string, string][];
+    createdBy: AccountId;
+    environmentId: EnvironmentId;
+    parent?: AgentId;
+    componentSize: bigint;
+    initialTotalLinearMemorySize: bigint;
+    initialActivePlugins: PluginInstallationDescription[];
+    localAgentConfig: LocalAgentConfigEntry[];
+    instanceId: Uuid;
+    /**
+     * Whether the agent is a never-live sandbox. A marked agent reports the
+     * `sandboxed` status.
+     */
+    neverLive: boolean;
+    standaloneTool?: StandaloneToolInvocation;
   };
   export type AgentInitializationParameters = {
     invocationId: Uuid;
@@ -1045,6 +1052,12 @@ declare module 'golem:api/oplog@1.5.0' {
     tag: 'read-only-violation'
     val: ReadOnlyViolation
   };
+  export type RawStandaloneToolInvocation = {
+    toolName: string;
+    commandPath: string[];
+    invocationId: Uuid;
+    caller: Uint8Array;
+  };
   export type RawCreateParameters = {
     timestamp: Datetime;
     agentId: AgentId;
@@ -1067,6 +1080,7 @@ declare module 'golem:api/oplog@1.5.0' {
      * `sandboxed` status.
      */
     neverLive: boolean;
+    standaloneTool?: RawStandaloneToolInvocation;
   };
   export type RawStartParameters = {
     timestamp: Datetime;

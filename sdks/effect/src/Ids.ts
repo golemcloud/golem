@@ -59,15 +59,26 @@ export const ComponentId = Schema.Struct({
   uuid: Uuid,
 })
 
+const AgentIdString = Schema.String.check(
+  Schema.isGUID(),
+  Schema.isPattern(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/),
+).pipe(Schema.brand("AgentId"))
+
 /**
- * Schema for `golem:core/types@2.0.0`.AgentId. The decoded value is an `AgentId.AgentId`.
+ * Schema for `golem:core/types@2.0.0`.AgentId. The decoded value is an `AgentId.AgentId`, the
+ * branded UUID text; the encoded value is the WIT `agent-id` record.
  *
  * @since 1.5.1
  * @category codecs
  */
 export const AgentId = Schema.Struct({
   uuid: Uuid,
-})
+}).pipe(
+  Schema.decodeTo(AgentIdString, {
+    decode: SchemaGetter.transform(({ uuid }) => uuid),
+    encode: SchemaGetter.transform((agentId) => ({ uuid: agentId as string as Uuid })),
+  }),
+)
 
 /**
  * Schema for `golem:core/types@2.0.0`.AccountId.

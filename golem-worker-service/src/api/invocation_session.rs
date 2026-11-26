@@ -46,8 +46,9 @@ use golem_common::model::invocation_session_public::{
     MAX_STREAM_MAPPINGS, MAX_WEBSOCKET_MESSAGE_SIZE, PublicAttachmentRevokedReason,
     PublicByteStreamRole, PublicClientMessage, PublicErrorCode, PublicInputHighWater,
     PublicInvocationOutcome, PublicInvocationResult, PublicResumeOperation, PublicServerMessage,
-    PublicStreamDirection, PublicStreamMapping, PublicStreamOutcome, PublicTypedValue,
-    decode_binary_message, decode_client_text, encode_binary_message, encode_text,
+    PublicStreamDirection, PublicStreamError, PublicStreamMapping, PublicStreamOutcome,
+    PublicTypedValue, decode_binary_message, decode_client_text, encode_binary_message,
+    encode_text,
 };
 use golem_common::schema::agent::reachable_defs;
 use golem_common::schema::fingerprint::{
@@ -58,7 +59,7 @@ use golem_common::schema::public_json::{
     decode_public_schema_value_with_charge, encode_public_schema_value_with_charge,
 };
 use golem_common::schema::stream::SchemaValueStream;
-use golem_common::schema::validation::validate_value;
+use golem_common::schema::validation::{ValueError, validate_value};
 use golem_common::schema::{
     BinaryValuePayload, SchemaGraph, SchemaType, SchemaValue, schema_value_to_proto_with_streams,
 };
@@ -101,7 +102,7 @@ mod oversize_tests;
 
 struct AdmittedRequest {
     request: InvocationRequest,
-    _admission: InboundAdmission,
+    _admission: Option<InboundAdmission>,
 }
 
 struct AdmittedMessage {
@@ -439,6 +440,17 @@ struct ChannelState {
     pending_input: VecDeque<PendingInputAdmission>,
     exposed: bool,
     terminal: bool,
+    invalid_input: Option<InvalidInput>,
+}
+
+/// An input item of the channel failed validation. The client frames that follow on the
+/// channel are dropped, because the client sent them before it saw the end of the input.
+enum InvalidInput {
+    /// This service ended the input at the invalid item. The public `stream-end` replaces the
+    /// acknowledgement of that terminal.
+    Ended { message: String },
+    /// The input has a terminal already, or the client saw its `stream-end`.
+    Dropped,
 }
 
 struct TokenContext {
@@ -461,6 +473,7 @@ struct ProvisionalBinding {
 
 struct AdapterState {
     protocol_state: InvocationSessionState,
+    standalone_tool: bool,
     raw_input: Option<golem_common::model::agent::JsonMethodInput>,
     graph: Option<SchemaGraph>,
     output_schema: Option<SchemaType>,
@@ -494,6 +507,7 @@ impl AdapterState {
     fn with_first_channel(first_channel: u32) -> Self {
         Self {
             protocol_state: InvocationSessionState::default(),
+            standalone_tool: false,
             raw_input: None,
             graph: None,
             output_schema: None,
@@ -513,6 +527,7 @@ impl AdapterState {
     }
 
     fn initialize(&mut self, started: &StartedPublicAgentSession) -> Result<(), AdapterError> {
+        self.standalone_tool = started.standalone_tool;
         self.protocol_state
             .validate_trusted_request(&started.initial_request)
             .map_err(AdapterError::protocol)?;
@@ -636,6 +651,7 @@ impl AdapterState {
                 pending_input: VecDeque::new(),
                 exposed: false,
                 terminal: false,
+                invalid_input: None,
             },
         );
         Ok(SchemaValueStream::from_host_endpoint(transport_id))
@@ -700,6 +716,7 @@ impl AdapterState {
                 PublicInputHighWater {
                     sequence: DecimalU64(state.next_input_sequence),
                     terminal: state.terminal,
+                    outcome: public_server_outcome(mapping)?,
                 },
             ),
             provisional_ref: state.provisional_ref,
@@ -812,6 +829,7 @@ impl AdapterState {
                     pending_input: VecDeque::new(),
                     exposed: false,
                     terminal: false,
+                    invalid_input: None,
                 },
             );
             channel
@@ -860,6 +878,7 @@ impl AdapterState {
             Some(PublicInputHighWater {
                 sequence: DecimalU64(sequence),
                 terminal,
+                outcome: public_server_outcome(&private.mapping)?,
             })
         } else {
             None
@@ -1596,7 +1615,7 @@ async fn handle_client_messages<S>(
                     Ok(message) => translate_client_text(message, &state).await,
                     Err(error) => Err(AdapterError::from(error)),
                 }
-                .map(|request| (request, admission, text.len().max(1)))
+                .map(|request| (request.into_iter().collect(), admission, text.len().max(1)))
             }
             message @ Message::Binary(_) => {
                 if message_size(&message) > MAX_WEBSOCKET_MESSAGE_SIZE {
@@ -1614,10 +1633,16 @@ async fn handle_client_messages<S>(
                 .map(|request| (request, admission, size))
             }
         };
-        let (request, admission, _frame_size) = match request {
+        let (translated, admission, _frame_size): (Vec<TranslatedRequest>, _, _) = match request {
             Ok(request) => request,
             Err(error) => {
-                let safe_message = safe_rejection_message(error.code);
+                let safe_message = match error.code {
+                    // Value diagnostics carry the path and the restriction, not the value.
+                    PublicErrorCode::ValidationError | PublicErrorCode::UnsupportedValue => {
+                        error.message.clone()
+                    }
+                    code => safe_rejection_message(code),
+                };
                 send_rejection(
                     &outbound,
                     Some(attempt_id),
@@ -1629,66 +1654,77 @@ async fn handle_client_messages<S>(
                 return;
             }
         };
-        let TranslatedRequest {
-            request,
-            input,
-            cancelled_output,
-        } = request;
-        if let Some(channel) = cancelled_output {
-            outbound.cancel_output(channel).await;
-        }
-        if let Some(input) = input {
-            let admission = match acquire_input_admission(
-                &budgets,
-                input.terminal,
-                input.channel,
-                input.byte_charge,
-            )
-            .await
-            {
-                Ok(admission) => admission,
-                Err(error) => {
-                    let safe_message = safe_rejection_message(error.code);
-                    send_rejection(
+        // The frame admission is released with the last request that the frame produced.
+        let mut admission = Some(admission);
+        let count = translated.len();
+        for (index, translated) in translated.into_iter().enumerate() {
+            let TranslatedRequest {
+                request,
+                input,
+                cancelled_output,
+            } = translated;
+            if let Some(channel) = cancelled_output {
+                outbound.cancel_output(channel).await;
+            }
+            if let Some(input) = input {
+                let admission = match acquire_input_admission(
+                    &budgets,
+                    input.terminal,
+                    input.channel,
+                    input.byte_charge,
+                )
+                .await
+                {
+                    Ok(admission) => admission,
+                    Err(error) => {
+                        let safe_message = safe_rejection_message(error.code);
+                        send_rejection(
+                            &outbound,
+                            Some(attempt_id),
+                            error.code,
+                            safe_message.clone(),
+                        )
+                        .await;
+                        close_protocol(&outbound, &safe_message).await;
+                        return;
+                    }
+                };
+                let mut state = state.lock().await;
+                let Some(channel) = state.channels.get_mut(&input.channel) else {
+                    drop(state);
+                    close_protocol(
                         &outbound,
-                        Some(attempt_id),
-                        error.code,
-                        safe_message.clone(),
+                        "input channel disappeared while admitting a frame",
                     )
                     .await;
-                    close_protocol(&outbound, &safe_message).await;
                     return;
-                }
-            };
-            let mut state = state.lock().await;
-            let Some(channel) = state.channels.get_mut(&input.channel) else {
-                drop(state);
-                close_protocol(
-                    &outbound,
-                    "input channel disappeared while admitting a frame",
-                )
-                .await;
+                };
+                channel.pending_input.push_back(admission);
+            }
+            if requests
+                .send(AdmittedRequest {
+                    request,
+                    _admission: if index + 1 == count {
+                        admission.take()
+                    } else {
+                        None
+                    },
+                })
+                .await
+                .is_err()
+            {
                 return;
-            };
-            channel.pending_input.push_back(admission);
-        }
-        if requests
-            .send(AdmittedRequest {
-                request,
-                _admission: admission,
-            })
-            .await
-            .is_err()
-        {
-            return;
+            }
         }
     }
 }
 
+/// Translates a client text message into a private request. `None` means that the message is
+/// dropped: it is a frame of an input that ended at an invalid item.
 async fn translate_client_text(
     message: PublicClientMessage,
     state: &Arc<Mutex<AdapterState>>,
-) -> Result<TranslatedRequest, AdapterError> {
+) -> Result<Option<TranslatedRequest>, AdapterError> {
     let mut state = state.lock().await;
     match message {
         PublicClientMessage::InputStreamItem {
@@ -1698,6 +1734,9 @@ async fn translate_client_text(
             ..
         } => {
             let (transport_id, durable_stream_id, epoch, schema) = input_channel(&state, channel)?;
+            if state.channels[&channel].invalid_input.is_some() {
+                return Ok(None);
+            }
             let graph = state.graph.clone().unwrap();
             let provisional_refs = state
                 .provisional_refs
@@ -1730,7 +1769,12 @@ async fn translate_client_text(
                         next_channel,
                         next_transport_id,
                     );
-                    return Err(error.into());
+                    return end_input_at_invalid_item(
+                        &mut state,
+                        channel,
+                        sequence.0,
+                        error.into(),
+                    );
                 }
             };
             let value = match schema_value_to_proto_with_streams(decoded, |stream| {
@@ -1773,7 +1817,7 @@ async fn translate_client_text(
                     AdapterError::new(PublicErrorCode::InvalidSequence, "sequence overflow")
                 })?;
             }
-            Ok(TranslatedRequest {
+            Ok(Some(TranslatedRequest {
                 request,
                 input: Some(PendingInput {
                     channel,
@@ -1781,7 +1825,7 @@ async fn translate_client_text(
                     byte_charge,
                 }),
                 cancelled_output: None,
-            })
+            }))
         }
         PublicClientMessage::StreamEnd {
             channel,
@@ -1790,6 +1834,14 @@ async fn translate_client_text(
             outcome,
             ..
         } => {
+            if direction == PublicStreamDirection::Input
+                && state
+                    .channels
+                    .get(&channel)
+                    .is_some_and(|channel| channel.invalid_input.is_some())
+            {
+                return Ok(None);
+            }
             let request = translate_stream_end(&state, channel, direction, sequence, outcome)?;
             let byte_charge = request.encoded_len().max(1);
             if byte_charge > MAX_LOGICAL_VALUE_SIZE {
@@ -1808,7 +1860,7 @@ async fn translate_client_text(
                 channel_state.terminal = true;
                 channel_state.pending_input.clear();
             }
-            Ok(TranslatedRequest {
+            Ok(Some(TranslatedRequest {
                 request,
                 input: is_input.then_some(PendingInput {
                     channel,
@@ -1816,7 +1868,7 @@ async fn translate_client_text(
                     byte_charge,
                 }),
                 cancelled_output: (!is_input).then_some(channel),
-            })
+            }))
         }
         PublicClientMessage::InvocationStart { .. }
         | PublicClientMessage::ToolStart { .. }
@@ -1826,70 +1878,94 @@ async fn translate_client_text(
     }
 }
 
+/// Translates a client binary message into private requests. A packed `u8` frame with an invalid
+/// byte forwards the bytes before it and then ends the input at the invalid byte. No request means
+/// that the frame is dropped: it is a frame of an input that ended at an invalid item.
 async fn translate_client_binary(
     message: BinaryMessage,
     state: &Arc<Mutex<AdapterState>>,
-) -> Result<TranslatedRequest, AdapterError> {
+) -> Result<Vec<TranslatedRequest>, AdapterError> {
     let mut state = state.lock().await;
     let channel = message.metadata.channel;
+    let sequence = message.metadata.sequence.0;
+    let mut item_count = message.metadata.item_count.0;
+    let mut invalid_byte = None;
     let (transport_id, durable_stream_id, epoch, schema) = input_channel(&state, channel)?;
+    if state.channels[&channel].invalid_input.is_some() {
+        return Ok(Vec::new());
+    }
     let graph = state.graph.as_ref().unwrap();
     let lane = binary_lane(graph, &schema);
-    let (payload, byte_charge) = match (lane, message.metadata.kind) {
-        (Some(BinaryMessageKind::InputU8), BinaryMessageKind::InputU8) => {
-            if message.metadata.item_count.0 != message.payload.len() as u64 {
+    let translated = 'validated: {
+        Ok(match (lane, message.metadata.kind) {
+            (Some(BinaryMessageKind::InputU8), BinaryMessageKind::InputU8) => {
+                if message.metadata.item_count.0 != message.payload.len() as u64 {
+                    return Err(AdapterError::new(
+                        PublicErrorCode::InvalidSequence,
+                        "u8 binary item count does not match payload size",
+                    ));
+                }
+                let mut payload = message.payload;
+                match validate_packed_u8(graph, &schema, &payload, PublicErrorCode::ValidationError)
+                {
+                    Ok(()) => {}
+                    Err((0, error)) => break 'validated Err(error),
+                    Err((index, error)) => {
+                        payload.truncate(index);
+                        item_count = index as u64;
+                        invalid_byte = Some(error);
+                    }
+                }
+                let byte_charge = payload.len().checked_mul(2).ok_or_else(|| {
+                    AdapterError::new(
+                        PublicErrorCode::ResourceExhausted,
+                        "u8 byte charge overflow",
+                    )
+                })?;
+                (input_stream_item::Payload::PackedU8(payload), byte_charge)
+            }
+            (Some(BinaryMessageKind::InputBinary), BinaryMessageKind::InputBinary) => {
+                if message.metadata.item_count.0 != 1 {
+                    return Err(AdapterError::new(
+                        PublicErrorCode::InvalidSequence,
+                        "binary stream frames contain exactly one logical item",
+                    ));
+                }
+                let value = SchemaValue::Binary(BinaryValuePayload {
+                    bytes: message.payload,
+                    mime_type: message.metadata.mime_type,
+                });
+                if let Err(error) =
+                    validate_direct_value(graph, &schema, &value, PublicErrorCode::ValidationError)
+                {
+                    break 'validated Err(error);
+                }
+                let byte_charge = direct_binary_charge(&value)?;
+                let value: ProtoSchemaValue = value
+                    .try_into()
+                    .map_err(|_| AdapterError::protocol("failed to encode binary input item"))?;
+                (input_stream_item::Payload::Value(value), byte_charge)
+            }
+            _ => {
                 return Err(AdapterError::new(
-                    PublicErrorCode::InvalidSequence,
-                    "u8 binary item count does not match payload size",
+                    PublicErrorCode::InvalidChannel,
+                    "binary frame kind does not match the channel element schema",
                 ));
             }
-            validate_packed_u8(
-                graph,
-                &schema,
-                &message.payload,
-                PublicErrorCode::ValidationError,
-            )?;
-            let byte_charge = message.payload.len().checked_mul(2).ok_or_else(|| {
-                AdapterError::new(
-                    PublicErrorCode::ResourceExhausted,
-                    "u8 byte charge overflow",
-                )
-            })?;
-            (
-                input_stream_item::Payload::PackedU8(message.payload),
-                byte_charge,
-            )
-        }
-        (Some(BinaryMessageKind::InputBinary), BinaryMessageKind::InputBinary) => {
-            if message.metadata.item_count.0 != 1 {
-                return Err(AdapterError::new(
-                    PublicErrorCode::InvalidSequence,
-                    "binary stream frames contain exactly one logical item",
-                ));
-            }
-            let value = SchemaValue::Binary(BinaryValuePayload {
-                bytes: message.payload,
-                mime_type: message.metadata.mime_type,
-            });
-            validate_direct_value(graph, &schema, &value, PublicErrorCode::ValidationError)?;
-            let byte_charge = direct_binary_charge(&value)?;
-            let value: ProtoSchemaValue = value
-                .try_into()
-                .map_err(|_| AdapterError::protocol("failed to encode binary input item"))?;
-            (input_stream_item::Payload::Value(value), byte_charge)
-        }
-        _ => {
-            return Err(AdapterError::new(
-                PublicErrorCode::InvalidChannel,
-                "binary frame kind does not match the channel element schema",
-            ));
+        })
+    };
+    let (payload, byte_charge) = match translated {
+        Ok(translated) => translated,
+        Err(error) => {
+            return Ok(
+                end_input_at_invalid_item(&mut state, channel, sequence, error)?
+                    .into_iter()
+                    .collect(),
+            );
         }
     };
-    let next_input_sequence = message
-        .metadata
-        .sequence
-        .0
-        .checked_add(message.metadata.item_count.0)
+    let next_input_sequence = sequence
+        .checked_add(item_count)
         .ok_or_else(|| AdapterError::new(PublicErrorCode::InvalidSequence, "sequence overflow"))?;
     let request = request(invocation_request::Request::InputItem(InputStreamItem {
         transport_stream_id: transport_id,
@@ -1903,10 +1979,10 @@ async fn translate_client_binary(
         .validate_trusted_request(&request)
         .map_err(request_protocol_error)?;
     let channel_state = state.channels.get_mut(&channel).unwrap();
-    if message.metadata.sequence.0 == channel_state.next_input_sequence {
+    if sequence == channel_state.next_input_sequence {
         channel_state.next_input_sequence = next_input_sequence;
     }
-    Ok(TranslatedRequest {
+    let mut translated = vec![TranslatedRequest {
         request,
         input: Some(PendingInput {
             channel,
@@ -1914,7 +1990,16 @@ async fn translate_client_binary(
             byte_charge,
         }),
         cancelled_output: None,
-    })
+    }];
+    if let Some(error) = invalid_byte {
+        translated.extend(end_input_at_invalid_item(
+            &mut state,
+            channel,
+            next_input_sequence,
+            error,
+        )?);
+    }
+    Ok(translated)
 }
 
 async fn handle_private_responses<S>(
@@ -2160,6 +2245,7 @@ async fn translate_private_response(
                     mappings,
                     session_token,
                     version,
+                    ..
                 } = message
                 else {
                     unreachable!()
@@ -2251,6 +2337,23 @@ async fn translate_private_response(
             channel_state.next_input_sequence = highest_contiguous_sequence;
             if terminal {
                 channel_state.terminal = true;
+                if let Some(InvalidInput::Ended { message }) = channel_state
+                    .invalid_input
+                    .take_if(|invalid| matches!(invalid, InvalidInput::Ended { .. }))
+                {
+                    channel_state.invalid_input = Some(InvalidInput::Dropped);
+                    let message = text_message(&PublicServerMessage::StreamEnd {
+                        channel,
+                        direction: PublicStreamDirection::Input,
+                        cursor_token: None,
+                        outcome: PublicStreamOutcome::Failed {
+                            error: PublicStreamError::Interrupted { message },
+                        },
+                        sequence: DecimalU64(ack.highest_contiguous_sequence),
+                        version: 1,
+                    })?;
+                    return Ok(vec![cancel_frame(message, channel)]);
+                }
             }
             Ok(vec![frame(text_message(
                 &PublicServerMessage::InputStreamAck {
@@ -2451,6 +2554,16 @@ fn translate_accepted(
     }
     Ok(PublicServerMessage::InvocationAccepted {
         attempt_id,
+        invocation_id: golem_common::model::OwnedInvocationId::new(
+            match accepted.tool_name.filter(|_| state.standalone_tool) {
+                Some(name) => golem_common::model::InvocationOwner::Tool(
+                    golem_common::model::tool::ToolName::try_from(name)
+                        .map_err(AdapterError::protocol)?,
+                ),
+                None => golem_common::model::InvocationOwner::Agent(agent_id),
+            },
+            idempotency_key,
+        ),
         agent_id,
         idempotency_key,
         mappings,
@@ -2646,7 +2759,8 @@ fn translate_output_item(
             &schema,
             &item.packed_u8,
             PublicErrorCode::ProtocolError,
-        )?;
+        )
+        .map_err(|(_, error)| error)?;
         let byte_charge = item.packed_u8.len().checked_mul(2).ok_or_else(|| {
             AdapterError::new(
                 PublicErrorCode::ResourceExhausted,
@@ -2779,6 +2893,104 @@ fn translate_stream_terminal(
         let byte_charge = message_size(&message).max(1);
         Ok(vec![stream_terminal_frame(message, channel, byte_charge)])
     }
+}
+
+/// Ends an input stream at an item that fails validation, instead of failing the session.
+///
+/// Only a value error of the next expected item ends the input; every other error stays fatal.
+/// The private terminal is a `Protocol` `interrupted` failure. After a consumer cancellation of
+/// the input, the item and the frames after it are dropped like the other discarded frames.
+fn end_input_at_invalid_item(
+    state: &mut AdapterState,
+    channel: u32,
+    sequence: u64,
+    error: AdapterError,
+) -> Result<Option<TranslatedRequest>, AdapterError> {
+    use golem_common::model::durable_stream::{StreamError, StreamTerminal};
+    let reason = match error.code {
+        PublicErrorCode::ValidationError => "does not satisfy the element schema",
+        PublicErrorCode::UnsupportedValue => "contains an unsupported value",
+        _ => return Err(error),
+    };
+    let channel_state = &state.channels[&channel];
+    let transport_id = channel_state.transport_id;
+    if state.protocol_state.input_consumer_cancelled(transport_id) {
+        state.channels.get_mut(&channel).unwrap().invalid_input = Some(InvalidInput::Dropped);
+        return Ok(None);
+    }
+    match state.protocol_state.next_input_sequence(transport_id) {
+        Some(next) if next == sequence => {}
+        Some(next) if sequence > next => {
+            return Err(AdapterError::new(
+                PublicErrorCode::InputGap,
+                format!("input expected sequence {next}, got {sequence}"),
+            ));
+        }
+        Some(_) => {
+            return Err(AdapterError::new(
+                PublicErrorCode::InputConflict,
+                "input retry conflicts with a committed item",
+            ));
+        }
+        None => return Err(error),
+    }
+    let durable_stream_id = channel_state
+        .durable
+        .as_ref()
+        .ok_or_else(|| AdapterError::protocol("input channel has no durable mapping"))?
+        .durable_stream_id;
+    let message = format!("input item {sequence} {reason}: {}", error.message);
+    let outcome = StreamTerminal::Failed(StreamError::Interrupted(message.clone()))
+        .try_into()
+        .map_err(|_| AdapterError::protocol("invalid private stream terminal outcome"))?;
+    let request = request(invocation_request::Request::StreamEnd(StreamEnd {
+        transport_stream_id: transport_id,
+        producer_sequence: sequence,
+        direction: StreamDirection::Input as i32,
+        outcome: Some(outcome),
+        authored_by: StreamTerminalAuthor::Protocol as i32,
+        durable_stream_id: Some(durable_stream_id.into()),
+        epoch: state.attachment_epoch,
+        durable_offset: Vec::new(),
+    }));
+    state
+        .protocol_state
+        .validate_trusted_request(&request)
+        .map_err(request_protocol_error)?;
+    let byte_charge = request.encoded_len().max(1);
+    state.channels.get_mut(&channel).unwrap().invalid_input = Some(InvalidInput::Ended { message });
+    Ok(Some(TranslatedRequest {
+        request,
+        input: Some(PendingInput {
+            channel,
+            terminal: true,
+            byte_charge,
+        }),
+        cancelled_output: None,
+    }))
+}
+
+/// The public outcome of an input that the server ended, from its private high-water.
+fn public_server_outcome(
+    mapping: &DurableStreamMapping,
+) -> Result<Option<PublicStreamOutcome>, AdapterError> {
+    let Some(high_water) = &mapping.high_water else {
+        return Ok(None);
+    };
+    let Some(outcome) = high_water.server_outcome.clone() else {
+        return Ok(None);
+    };
+    if !high_water.terminal {
+        return Err(AdapterError::protocol(
+            "an open input high-water has a server outcome",
+        ));
+    }
+    let terminal: golem_common::model::durable_stream::StreamTerminal = outcome
+        .try_into()
+        .map_err(|_| AdapterError::protocol("invalid input server outcome"))?;
+    PublicStreamOutcome::try_from(terminal)
+        .map(Some)
+        .map_err(|_| AdapterError::protocol("invalid public input server outcome"))
 }
 
 fn input_channel(
@@ -3107,21 +3319,32 @@ fn validate_direct_value(
     value: &SchemaValue,
     code: PublicErrorCode,
 ) -> Result<(), AdapterError> {
-    validate_value(graph, schema, value)
-        .map_err(|_| AdapterError::new(code, "binary item does not satisfy its element schema"))
+    validate_value(graph, schema, value).map_err(|errors| {
+        AdapterError::new(
+            code,
+            errors
+                .iter()
+                .map(ValueError::diagnostic)
+                .collect::<Vec<_>>()
+                .join("; "),
+        )
+    })
 }
 
+/// Validates each byte of a packed `u8` payload. An error carries the index of the first invalid
+/// byte.
 fn validate_packed_u8(
     graph: &SchemaGraph,
     schema: &SchemaType,
     payload: &[u8],
     code: PublicErrorCode,
-) -> Result<(), AdapterError> {
+) -> Result<(), (usize, AdapterError)> {
     let mut validated = [false; 256];
-    for byte in payload {
+    for (position, byte) in payload.iter().enumerate() {
         let index = *byte as usize;
         if !validated[index] {
-            validate_direct_value(graph, schema, &SchemaValue::U8(*byte), code)?;
+            validate_direct_value(graph, schema, &SchemaValue::U8(*byte), code)
+                .map_err(|error| (position, error))?;
             validated[index] = true;
         }
     }
@@ -3597,6 +3820,7 @@ mod tests {
                     pending_input: VecDeque::new(),
                     exposed: true,
                     terminal: false,
+                    invalid_input: None,
                 },
             );
         }
@@ -3606,6 +3830,7 @@ mod tests {
             .collect();
         Arc::new(Mutex::new(AdapterState {
             protocol_state,
+            standalone_tool: false,
             graph: Some(graph),
             output_schema: None,
             identity: None,
@@ -3667,6 +3892,316 @@ mod tests {
             .unwrap()
             .pending_input
             .push_back(admission);
+    }
+
+    fn restricted_u8() -> SchemaType {
+        SchemaType::U8 {
+            restrictions: Some(NumericRestrictions {
+                min: Some(NumericBound::Unsigned(10)),
+                max: Some(NumericBound::Unsigned(20)),
+                unit: None,
+            }),
+            metadata: MetadataEnvelope::default(),
+        }
+    }
+
+    /// Asserts that `translated` ends the input at `sequence` with a terminal that carries
+    /// `diagnostic`, and returns the terminal message.
+    fn assert_ends_input_at_invalid_item(
+        translated: impl IntoIterator<Item = TranslatedRequest>,
+        sequence: u64,
+        diagnostic: &str,
+    ) -> String {
+        use golem_common::model::durable_stream::{StreamError, StreamTerminal};
+        let mut translated = translated.into_iter().collect::<Vec<_>>();
+        assert!(
+            translated.len() <= 1,
+            "the invalid item produced several requests"
+        );
+        let translated = translated
+            .pop()
+            .expect("the invalid item was dropped instead of ending the input");
+        assert!(translated.input.unwrap().terminal);
+        let Some(invocation_request::Request::StreamEnd(end)) = translated.request.request else {
+            panic!("the invalid item did not end the input")
+        };
+        assert_eq!(end.direction(), StreamDirection::Input);
+        assert_eq!(end.producer_sequence, sequence);
+        assert_eq!(end.authored_by(), StreamTerminalAuthor::Protocol);
+        let terminal = StreamTerminal::try_from(end.outcome.unwrap()).unwrap();
+        let StreamTerminal::Failed(StreamError::Interrupted(message)) = terminal else {
+            panic!("unexpected terminal {terminal:?}")
+        };
+        assert!(
+            message.starts_with(&format!("input item {sequence} ")) && message.contains(diagnostic),
+            "unexpected terminal message {message:?}"
+        );
+        message
+    }
+
+    fn decode_frame(frame: &TranslatedFrame) -> PublicServerMessage {
+        let Message::Text(text) = &frame.message else {
+            panic!("frame is not text")
+        };
+        golem_common::model::invocation_session_public::decode_server_text(text.as_bytes()).unwrap()
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn invalid_input_item_ends_only_its_input_stream() {
+        let state = active_input_state_with_stream_count(restricted_u8(), 2);
+        let keyring = keyring();
+        let bindings = token_bindings(&AuthCtx::system());
+        let ack = |sequence, offset| {
+            translate_private_response(
+                input_ack(sequence, durable_offset(offset)),
+                &state,
+                &keyring,
+                &bindings,
+                keyring.active_key_id(),
+                Uuid::from_u128(2),
+            )
+        };
+
+        translate_client_text(input_item(0, 11), &state)
+            .await
+            .unwrap()
+            .unwrap();
+        admit_input(&state, false).await;
+        ack(0, 1).await.unwrap();
+
+        let translated = translate_client_text(input_item(1, 9), &state)
+            .await
+            .unwrap();
+        assert_ends_input_at_invalid_item(translated, 1, "below minimum 10");
+        admit_input(&state, true).await;
+
+        // The client sent these frames before it saw the end of its input.
+        assert!(
+            translate_client_text(input_item(2, 12), &state)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            translate_client_text(
+                PublicClientMessage::StreamEnd {
+                    channel: 1,
+                    direction: PublicStreamDirection::Input,
+                    sequence: DecimalU64(3),
+                    outcome: PublicStreamOutcome::Finished,
+                    version: 1,
+                },
+                &state,
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+
+        // The other input stream continues.
+        let other = translate_client_text(
+            PublicClientMessage::InputStreamItem {
+                channel: 2,
+                sequence: DecimalU64(0),
+                value: serde_json::json!({"kind": "u8", "value": 12}),
+                version: 1,
+            },
+            &state,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        let Some(invocation_request::Request::InputItem(item)) = other.request.request else {
+            panic!("the item of the other stream was not forwarded")
+        };
+        assert_eq!(item.transport_stream_id, 8);
+
+        // The client gets a stream-local failure in place of the terminal ACK.
+        let frames = ack(1, 2).await.unwrap();
+        assert_eq!(frames.len(), 1);
+        let PublicServerMessage::StreamEnd {
+            channel,
+            direction,
+            outcome,
+            sequence,
+            cursor_token,
+            ..
+        } = decode_frame(&frames[0])
+        else {
+            panic!("the end of the invalid input is not a stream-end")
+        };
+        assert_eq!(channel, 1);
+        assert_eq!(direction, PublicStreamDirection::Input);
+        assert_eq!(sequence, DecimalU64(1));
+        assert!(cursor_token.is_none());
+        assert!(matches!(
+            outcome,
+            PublicStreamOutcome::Failed {
+                error: PublicStreamError::Interrupted { .. }
+            }
+        ));
+        assert!(state.lock().await.channels[&1].terminal);
+        assert!(
+            translate_client_text(input_item(2, 12), &state)
+                .await
+                .unwrap()
+                .is_none()
+        );
+
+        // An invalid item that is not the next expected item stays a fatal protocol error.
+        let state = active_input_state_with_schema(restricted_u8());
+        let Err(gap) = translate_client_text(input_item(1, 9), &state).await else {
+            panic!("an invalid item after a gap was accepted")
+        };
+        assert_eq!(gap.code, PublicErrorCode::InputGap);
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn packed_u8_frame_ends_the_input_at_its_invalid_byte() {
+        let state = active_input_state_with_schema(restricted_u8());
+        let keyring = keyring();
+        let bindings = token_bindings(&AuthCtx::system());
+        let mut translated = translate_client_binary(
+            BinaryMessage {
+                metadata: BinaryMessageMetadata {
+                    channel: 1,
+                    cursor_token: None,
+                    item_count: DecimalU64(4),
+                    kind: BinaryMessageKind::InputU8,
+                    mime_type: None,
+                    sequence: DecimalU64(0),
+                    version: 1,
+                },
+                // Items 0 and 1 are valid, item 2 is below the minimum, item 3 is valid again.
+                payload: vec![11, 12, 9, 13],
+            },
+            &state,
+        )
+        .await
+        .unwrap();
+        assert_eq!(translated.len(), 2);
+        let end = translated.pop();
+        let prefix = translated.pop().unwrap();
+        assert!(!prefix.input.unwrap().terminal);
+        let Some(invocation_request::Request::InputItem(item)) = prefix.request.request else {
+            panic!("the valid bytes before the invalid byte were not forwarded")
+        };
+        assert_eq!(item.sequence, 0);
+        assert_eq!(
+            item.payload,
+            Some(input_stream_item::Payload::PackedU8(vec![11, 12]))
+        );
+        assert_ends_input_at_invalid_item(end, 2, "below minimum 10");
+
+        admit_input(&state, false).await;
+        admit_input(&state, true).await;
+        let ack = |sequence, logical_item_count| {
+            let mut response = input_ack(sequence, durable_offset(sequence + 1));
+            if let Some(invocation_response::Response::InputAck(ack)) = &mut response.response {
+                ack.logical_item_count = logical_item_count;
+            }
+            translate_private_response(
+                response,
+                &state,
+                &keyring,
+                &bindings,
+                keyring.active_key_id(),
+                Uuid::from_u128(2),
+            )
+        };
+        let frames = ack(1, 2).await.unwrap();
+        let PublicServerMessage::InputStreamAck {
+            highest_contiguous_sequence,
+            terminal,
+            ..
+        } = decode_frame(&frames[0])
+        else {
+            panic!("the forwarded bytes were not acknowledged")
+        };
+        assert_eq!(highest_contiguous_sequence, DecimalU64(2));
+        assert!(!terminal);
+        let frames = ack(2, 1).await.unwrap();
+        let PublicServerMessage::StreamEnd {
+            sequence, outcome, ..
+        } = decode_frame(&frames[0])
+        else {
+            panic!("the end of the invalid input is not a stream-end")
+        };
+        assert_eq!(sequence, DecimalU64(2));
+        let PublicStreamOutcome::Failed {
+            error: PublicStreamError::Interrupted { message },
+        } = outcome
+        else {
+            panic!("unexpected outcome {outcome:?}")
+        };
+        assert!(message.starts_with("input item 2 "), "{message}");
+    }
+
+    #[test]
+    #[test_r::timeout("15s")]
+    async fn invalid_input_item_after_a_consumer_cancellation_is_dropped() {
+        use golem_common::model::durable_stream::StreamTerminal;
+        let keyring = keyring();
+        let bindings = token_bindings(&AuthCtx::system());
+        let state = active_input_state_with_schema(restricted_u8());
+        let respond = |response| {
+            translate_private_response(
+                response,
+                &state,
+                &keyring,
+                &bindings,
+                keyring.active_key_id(),
+                Uuid::from_u128(2),
+            )
+        };
+        translate_client_text(input_item(0, 11), &state)
+            .await
+            .unwrap()
+            .unwrap();
+        admit_input(&state, false).await;
+        respond(input_ack(0, durable_offset(1))).await.unwrap();
+        // The callee stops reading: the executor cancels the consumer side.
+        let frames = respond(InvocationResponse {
+            response: Some(invocation_response::Response::StreamEnd(StreamEnd {
+                transport_stream_id: 7,
+                producer_sequence: 1,
+                direction: StreamDirection::Input as i32,
+                outcome: Some(
+                    StreamTerminal::ConsumerCancelled { details: None }
+                        .try_into()
+                        .unwrap(),
+                ),
+                authored_by: StreamTerminalAuthor::Host as i32,
+                durable_stream_id: Some(proto_uuid(107)),
+                epoch: 1,
+                durable_offset: durable_offset(2),
+            })),
+        })
+        .await
+        .unwrap();
+        assert_eq!(frames.len(), 1);
+
+        // Frames that the client sent before it saw the cancellation.
+        for message in [
+            input_item(1, 9),
+            input_item(2, 12),
+            PublicClientMessage::StreamEnd {
+                channel: 1,
+                direction: PublicStreamDirection::Input,
+                sequence: DecimalU64(3),
+                outcome: PublicStreamOutcome::Finished,
+                version: 1,
+            },
+        ] {
+            assert!(
+                translate_client_text(message, &state)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
     }
 
     #[test]
@@ -4093,6 +4628,7 @@ mod tests {
                 &state,
             )
             .await
+            .unwrap()
             .unwrap();
             assert!(translated.cancelled_output.is_none());
             let pending = translated.input.unwrap();
@@ -4239,6 +4775,57 @@ mod tests {
     }
 
     #[test]
+    #[test_r::timeout("15s")]
+    async fn input_terminal_of_an_invalid_item_reaches_the_executor_when_the_client_closes() {
+        let state = active_input_state_with_schema(restricted_u8());
+        let budgets = SessionBudgets::new();
+        let mut messages = Vec::new();
+        for item in [input_item(0, 11), input_item(1, 9)] {
+            messages.push(Ok(AdmittedMessage {
+                message: Message::text(encode_client_text(&item).unwrap()),
+                admission: budgets.admit_inbound_frame(1).await.unwrap(),
+            }));
+        }
+        messages.push(Ok(AdmittedMessage {
+            message: Message::Close(None),
+            admission: budgets.admit_inbound_frame(1).await.unwrap(),
+        }));
+        // The executor has not acknowledged anything when the client closes.
+        let (requests, mut received) = mpsc::channel(4);
+        let (sender, mut outgoing) = mpsc::channel(4);
+        handle_client_messages(
+            futures::stream::iter(messages),
+            requests,
+            Outbound {
+                sender,
+                budgets: budgets.clone(),
+            },
+            state.clone(),
+            budgets,
+            Uuid::new_v4(),
+        )
+        .await;
+        let Some(invocation_request::Request::InputItem(item)) =
+            received.recv().await.unwrap().request.request
+        else {
+            panic!("the valid item was not forwarded")
+        };
+        assert_eq!(item.sequence, 0);
+        let Some(invocation_request::Request::StreamEnd(end)) =
+            received.recv().await.unwrap().request.request
+        else {
+            panic!("the input terminal was not forwarded before the request stream ended")
+        };
+        assert_eq!(end.producer_sequence, 1);
+        assert_eq!(end.authored_by(), StreamTerminalAuthor::Protocol);
+        assert!(received.recv().await.is_none());
+        assert!(
+            outgoing.recv().await.is_none(),
+            "the invalid item was rejected instead of ending its input"
+        );
+    }
+
+    #[test]
     fn connections_receive_fresh_channel_ranges() {
         let mut first = AdapterState::new_connection(Uuid::from_u128(0));
         let mut second = AdapterState::new_connection(Uuid::from_u128(1_u128 << 96));
@@ -4255,8 +4842,14 @@ mod tests {
     fn acceptance_pins_executor_revision_and_exposes_native_byte_roots() {
         let keyring = keyring();
         let bindings = token_bindings(&AuthCtx::system());
-        for (native, revision) in [(false, None), (false, Some(17)), (true, Some(9))] {
+        for (native, standalone, revision) in [
+            (false, false, None),
+            (false, false, Some(17)),
+            (true, false, Some(9)),
+            (true, true, Some(9)),
+        ] {
             let mut state = AdapterState::new();
+            state.standalone_tool = standalone;
             state.graph = Some(SchemaGraph::empty());
             state.identity = Some(SessionAgentIdentity {
                 component_id: Uuid::from_u128(20),
@@ -4317,9 +4910,23 @@ mod tests {
                 Uuid::from_u128(2),
             )
             .unwrap();
+            let wire = serde_json::to_value(&accepted).unwrap();
+            assert_eq!(
+                wire["invocationId"],
+                format!(
+                    "{}.{}",
+                    if standalone {
+                        "tool".to_string()
+                    } else {
+                        session_agent_id().to_string()
+                    },
+                    InvocationId(Uuid::from_u128(5)),
+                ),
+            );
             let PublicServerMessage::InvocationAccepted {
                 idempotency_key,
                 agent_id: accepted_agent_id,
+                invocation_id,
                 mappings,
                 session_token,
                 ..
@@ -4327,6 +4934,17 @@ mod tests {
             else {
                 panic!("expected acceptance")
             };
+            assert_eq!(
+                invocation_id.to_string(),
+                format!(
+                    "{}.{idempotency_key}",
+                    if standalone {
+                        "tool".to_string()
+                    } else {
+                        accepted_agent_id.to_string()
+                    }
+                ),
+            );
             let verified = keyring
                 .verify(
                     &session_token,
@@ -4373,6 +4991,87 @@ mod tests {
                     );
                 }
             }
+        }
+    }
+
+    #[test]
+    fn acceptance_carries_the_input_outcome_that_the_server_selected() {
+        use golem_common::model::durable_stream::{StreamError, StreamTerminal};
+        let keyring = keyring();
+        let bindings = token_bindings(&AuthCtx::system());
+        for terminal in [true, false] {
+            let mut state = AdapterState::new();
+            state.identity = Some(SessionAgentIdentity {
+                component_id: Uuid::from_u128(20),
+                component_revision: Some(12),
+                agent_id: session_agent_id(),
+                target: SessionInvocationTarget::ExternalTool {
+                    tool_name: "tool".to_string(),
+                    command_path: vec!["run".to_string()],
+                },
+            });
+            state.application = Some("app".to_string());
+            state.environment = Some("env".to_string());
+            let schema = SchemaType::u8();
+            let graph = SchemaGraph {
+                defs: Vec::new(),
+                root: SchemaType::stream(Some(schema.clone())),
+            };
+            state.graph = Some(graph.clone());
+            let fingerprint = schema_fingerprint_v1(&graph, Some(&schema)).unwrap().0;
+            let mut stdin = private_mapping(7, StreamMappingRole::Input, fingerprint);
+            stdin.tool_byte_stream_role = Some(ToolByteStreamRole::Stdin as i32);
+            stdin.high_water = Some(golem_api_grpc::proto::golem::worker::InputStreamHighWater {
+                highest_contiguous_sequence: 2,
+                resulting_offset: durable_offset(2),
+                terminal,
+                server_outcome: Some(
+                    StreamTerminal::Failed(StreamError::Interrupted(
+                        "input item 2 does not satisfy the element schema".to_string(),
+                    ))
+                    .try_into()
+                    .unwrap(),
+                ),
+            });
+            let accepted = translate_accepted(
+                &mut state,
+                InvocationAccepted {
+                    agent_id: Some(proto_agent_id()),
+                    idempotency_key: idempotency_key(),
+                    component_revision: Some(12),
+                    attachment_id: Some(proto_uuid(1)),
+                    attempt_id: Some(proto_uuid(2)),
+                    epoch: 1,
+                    callee_fingerprint: Some(proto_uuid(4)),
+                    tool_name: Some("tool".to_string()),
+                    command_path: vec!["run".to_string()],
+                    stream_mappings: vec![stdin],
+                    ..Default::default()
+                },
+                &keyring,
+                &bindings,
+                keyring.active_key_id(),
+                Uuid::from_u128(2),
+            );
+            if !terminal {
+                assert!(accepted.is_err(), "an open high-water carried an outcome");
+                continue;
+            }
+            let PublicServerMessage::InvocationAccepted { mappings, .. } = accepted.unwrap() else {
+                panic!("expected acceptance")
+            };
+            assert_eq!(
+                mappings[0].input_high_water,
+                Some(PublicInputHighWater {
+                    sequence: DecimalU64(2),
+                    terminal: true,
+                    outcome: Some(PublicStreamOutcome::Failed {
+                        error: PublicStreamError::Interrupted {
+                            message: "input item 2 does not satisfy the element schema".to_string(),
+                        },
+                    }),
+                })
+            );
         }
     }
 
@@ -4517,16 +5216,25 @@ mod tests {
             min_bytes: Some(2),
             max_bytes: Some(3),
         });
-        let restricted_binary = active_input_state_with_schema(binary_schema);
-        for (payload, mime_type) in [
-            (vec![1], Some("application/octet-stream".to_string())),
-            (vec![1, 2], Some("text/plain".to_string())),
+        let restricted_binary = active_input_state_with_schema(binary_schema.clone());
+        for (payload, mime_type, diagnostic) in [
+            (
+                vec![1],
+                Some("application/octet-stream".to_string()),
+                "below min-bytes 2",
+            ),
+            (
+                vec![1, 2],
+                Some("text/plain".to_string()),
+                "mime-type not in the allow-list",
+            ),
             (
                 vec![1, 2, 3, 4],
                 Some("application/octet-stream".to_string()),
+                "above max-bytes 3",
             ),
         ] {
-            let Err(error) = translate_client_binary(
+            let translated = translate_client_binary(
                 BinaryMessage {
                     metadata: BinaryMessageMetadata {
                         channel: 1,
@@ -4539,13 +5247,12 @@ mod tests {
                     },
                     payload,
                 },
-                &restricted_binary,
+                &active_input_state_with_schema(binary_schema.clone()),
             )
             .await
-            else {
-                panic!("binary value outside its schema restrictions was accepted")
-            };
-            assert_eq!(error.code, PublicErrorCode::ValidationError);
+            .unwrap();
+            let message = assert_ends_input_at_invalid_item(translated, 0, diagnostic);
+            assert!(!message.contains("text/plain"), "{message}");
         }
 
         translate_client_binary(
@@ -4566,15 +5273,7 @@ mod tests {
         .await
         .unwrap();
 
-        let restricted_u8 = SchemaType::U8 {
-            restrictions: Some(NumericRestrictions {
-                min: Some(NumericBound::Unsigned(10)),
-                max: Some(NumericBound::Unsigned(20)),
-                unit: None,
-            }),
-            metadata: MetadataEnvelope::default(),
-        };
-        let Err(error) = translate_client_binary(
+        let translated = translate_client_binary(
             BinaryMessage {
                 metadata: BinaryMessageMetadata {
                     channel: 1,
@@ -4587,13 +5286,11 @@ mod tests {
                 },
                 payload: vec![9],
             },
-            &active_input_state_with_schema(restricted_u8),
+            &active_input_state_with_schema(restricted_u8()),
         )
         .await
-        else {
-            panic!("packed u8 value outside its numeric restrictions was accepted")
-        };
-        assert_eq!(error.code, PublicErrorCode::ValidationError);
+        .unwrap();
+        assert_ends_input_at_invalid_item(translated, 0, "below minimum 10");
 
         let maximum_binary = translate_client_binary(
             BinaryMessage {
@@ -4611,6 +5308,8 @@ mod tests {
             &active_input_state_with_schema(SchemaType::binary(BinaryRestrictions::default())),
         )
         .await
+        .unwrap()
+        .pop()
         .unwrap();
         let pending = maximum_binary.input.unwrap();
         assert_eq!(pending.byte_charge, MAX_LOGICAL_VALUE_SIZE);
@@ -4727,6 +5426,7 @@ mod tests {
                     pending_input: VecDeque::new(),
                     exposed: true,
                     terminal: false,
+                    invalid_input: None,
                 },
             );
         }
@@ -4853,6 +5553,7 @@ mod tests {
         };
         let state = Arc::new(Mutex::new(AdapterState {
             protocol_state,
+            standalone_tool: false,
             graph: Some(graph),
             output_schema: None,
             identity: None,
@@ -4873,6 +5574,7 @@ mod tests {
                     pending_input: VecDeque::new(),
                     exposed: true,
                     terminal: true,
+                    invalid_input: None,
                 },
             )]),
             channel_by_transport: HashMap::from([(8, 1)]),

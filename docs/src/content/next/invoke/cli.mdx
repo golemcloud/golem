@@ -240,4 +240,4 @@ The completion report uses stdout when neither process output fd carries raw too
 
 Streams use the ordinary resumable invocation transport and are checkpointed independently.
 
-`--trigger`, `--schedule-at`, and `--idempotency-key` remain Golem options before `--`. Triggering and scheduling cannot attach live byte streams. To observe an existing invocation, use `--lookup --idempotency-key KEY` and supply only its tool command path after `--`, without input arguments. Lookup does not start a new invocation.
+`--trigger`, `--schedule-at`, and `--idempotency-key` remain Golem options before `--`. Triggering and scheduling cannot attach live byte streams. To observe an existing standalone component-tool invocation, use `golem invocation get --tool TOOL --idempotency-key KEY [--command 'COMMAND PATH']`. Add `--agent AGENT` for a hosted tool invocation. Without `--command`, lookup returns every matching command. You can also read an invocation by its full ID, including a host-tool receipt: `golem invocation get OWNER.UUID`. Lookup does not start a new invocation. Live completion reports include this ID as `invocationId`.

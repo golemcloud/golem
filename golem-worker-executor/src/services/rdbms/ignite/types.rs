@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use bigdecimal::BigDecimal;
-use chrono::{Duration, NaiveTime, TimeZone, Timelike, Utc};
+
 use golem_common::model::oplog::payload::types::SerializableDbValue;
 use golem_common::model::oplog::types::{
     SerializableDbColumn, SerializableDbColumnType, SerializableDbColumnTypeNode,
@@ -92,6 +92,11 @@ pub enum DbValue {
     Time(i64),
     Decimal(BigDecimal),
     ByteArray(Vec<u8>),
+}
+
+fn date_from_milliseconds(milliseconds: i64) -> Result<jiff::civil::Date, jiff::Error> {
+    let days = jiff::Span::new().try_days(milliseconds.div_euclid(86_400_000))?;
+    jiff::civil::date(1970, 1, 1).checked_add(days)
 }
 
 impl DbValue {
@@ -241,9 +246,7 @@ impl Display for DbValue {
             DbValue::String(v) => write!(f, "{v}"),
             DbValue::Uuid(v) => write!(f, "{v}"),
             DbValue::Date(ms) => {
-                let date = chrono::DateTime::from_timestamp_millis(*ms)
-                    .map(|dt| dt.date_naive())
-                    .unwrap_or_default();
+                let date = date_from_milliseconds(*ms).unwrap_or_default();
                 write!(f, "{date}")
             }
             DbValue::Timestamp(ms, ns) => write!(f, "{ms}ms+{ns}ns"),
@@ -274,15 +277,13 @@ impl From<DbValue> for SerializableDbValue {
             DbValue::String(v) => SerializableDbValueNode::Text(v),
             DbValue::Uuid(v) => SerializableDbValueNode::Uuid(v),
             DbValue::Date(ms) => {
-                let date = chrono::DateTime::from_timestamp_millis(ms)
-                    .map(|dt| dt.date_naive())
-                    .unwrap_or_default();
+                let date = date_from_milliseconds(ms).unwrap_or_default();
                 SerializableDbValueNode::Date(date)
             }
             DbValue::Timestamp(ms, nanos) => {
-                let dt = Utc.timestamp_millis_opt(ms).single().unwrap_or_default();
+                let dt = jiff::Timestamp::from_millisecond(ms).unwrap_or_default();
                 // Combine ms-level dt with sub-ms nanos
-                let dt_with_ns = dt + Duration::nanoseconds(nanos as i64);
+                let dt_with_ns = dt + jiff::SignedDuration::from_nanos(nanos as i64);
                 SerializableDbValueNode::Timestamptz(dt_with_ns)
             }
             DbValue::Time(ms) => {
@@ -292,7 +293,8 @@ impl From<DbValue> for SerializableDbValue {
                 let s = ((total_nanos % 60_000_000_000) / 1_000_000_000) as u32;
                 let ns = (total_nanos % 1_000_000_000) as u32;
                 SerializableDbValueNode::Time(
-                    NaiveTime::from_hms_nano_opt(h, m, s, ns).unwrap_or_default(),
+                    jiff::civil::Time::new((h) as i8, (m) as i8, (s) as i8, (ns) as i32)
+                        .unwrap_or_default(),
                 )
             }
             DbValue::Decimal(v) => SerializableDbValueNode::Decimal(v),
@@ -334,24 +336,28 @@ impl TryFrom<SerializableDbValue> for DbValue {
             | SerializableDbValueNode::Longtext(v) => DbValue::String(v),
             SerializableDbValueNode::Uuid(v) => DbValue::Uuid(v),
             SerializableDbValueNode::Date(v) => {
-                let ms = v
-                    .and_hms_opt(0, 0, 0)
-                    .map(|dt| dt.and_utc().timestamp_millis())
-                    .unwrap_or(0);
-                DbValue::Date(ms)
+                let days = (v - jiff::civil::date(1970, 1, 1)).get_days();
+                DbValue::Date(i64::from(days) * 86_400_000)
             }
             SerializableDbValueNode::Timestamp(v) => {
-                let ms = v.and_utc().timestamp_millis();
+                let ms = jiff::tz::TimeZone::UTC
+                    .to_timestamp(v)
+                    .expect("UTC civil timestamp must be representable")
+                    .as_nanosecond()
+                    .div_euclid(1_000_000) as i64;
                 DbValue::Timestamp(ms, 0)
             }
             SerializableDbValueNode::Timestamptz(v) => {
-                let ms = v.timestamp_millis();
-                let nanos = (v.timestamp_nanos_opt().unwrap_or_default() - ms * 1_000_000) as i32;
+                let ms = v.as_nanosecond().div_euclid(1_000_000) as i64;
+                let nanos = (v.as_nanosecond() - i128::from(ms) * 1_000_000) as i32;
                 DbValue::Timestamp(ms, nanos)
             }
             SerializableDbValueNode::Time(v) => {
-                let ns =
-                    v.num_seconds_from_midnight() as i64 * 1_000_000_000 + v.nanosecond() as i64;
+                let ns = (i64::from(v.hour()) * 3_600
+                    + i64::from(v.minute()) * 60
+                    + i64::from(v.second()))
+                    * 1_000_000_000
+                    + i64::from(v.subsec_nanosecond());
                 let ms = ns / 1_000_000;
                 DbValue::Time(ms)
             }
@@ -370,5 +376,42 @@ impl TryFrom<SerializableDbValue> for DbValue {
             }
         };
         Ok(v)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use test_r::test;
+
+    #[test]
+    fn date_serialization_preserves_civil_dates() {
+        for (date, milliseconds) in [
+            (jiff::civil::date(9999, 12, 31), 253_402_214_400_000),
+            (jiff::civil::date(2024, 2, 29), 1_709_164_800_000),
+            (jiff::civil::date(1970, 1, 1), 0),
+            (jiff::civil::date(1969, 12, 31), -86_400_000),
+        ] {
+            let value = DbValue::Date(milliseconds);
+            assert_eq!(value.to_string(), date.to_string());
+            let serialized = SerializableDbValue::from(value.clone());
+            assert_eq!(serialized.nodes, vec![SerializableDbValueNode::Date(date)]);
+            assert_eq!(DbValue::try_from(serialized).unwrap(), value);
+            assert_eq!(
+                DbValue::try_from(SerializableDbValue {
+                    nodes: vec![SerializableDbValueNode::Date(date)],
+                })
+                .unwrap(),
+                value
+            );
+        }
+
+        let serialized = SerializableDbValue::from(DbValue::Date(-1));
+        assert_eq!(
+            serialized.nodes,
+            vec![SerializableDbValueNode::Date(jiff::civil::date(
+                1969, 12, 31
+            ))]
+        );
     }
 }

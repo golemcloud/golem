@@ -290,7 +290,7 @@ use crate::chaos::summary::{
 };
 use crate::chaos::workload::{self, PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig, ScheduledConfig};
-use chrono::Utc;
+
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use std::collections::BTreeSet;
@@ -358,7 +358,7 @@ pub async fn run(
     signals: &FaultSignals,
     outputs: &OutputPaths,
 ) -> anyhow::Result<ChaosResult> {
-    let started_at = Utc::now();
+    let started_at = jiff::Timestamp::now();
     let workload_config = config.require_workload()?;
     let scheduled_config = config.require_scheduled()?;
     let storage_config = config.require_storage()?;
@@ -529,7 +529,7 @@ pub async fn run(
         targets.len(),
         config.phases.baseline()
     );
-    phases.baseline = Some(PhaseWindow::started(Utc::now()));
+    phases.baseline = Some(PhaseWindow::started(jiff::Timestamp::now()));
     let mixed = workload::start(ctx.clone(), workload_config);
     let schedules = scheduled::start(ctx.clone(), &targets, scheduled_config);
     tokio::time::sleep(config.phases.baseline()).await;
@@ -541,7 +541,7 @@ pub async fn run(
         ownership_samples.push(sample_ownership(deps, "before-fault", None, true).await);
     }
     if let Some(window) = phases.baseline.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
 
     // Both handles have to be stopped on every exit path, and forgetting one
@@ -650,7 +650,7 @@ pub async fn run(
     }
     signals.write_baseline_ready(&BaselineReady {
         scenario_code: code.as_str().to_string(),
-        ready_at: Utc::now(),
+        ready_at: jiff::Timestamp::now(),
         baseline_operations,
         fault_target,
     })?;
@@ -787,7 +787,7 @@ pub async fn run(
         config.phases.recovery()
     );
     ctx.phase.set(Phase::Recovery);
-    phases.recovery = Some(PhaseWindow::started(Utc::now()));
+    phases.recovery = Some(PhaseWindow::started(jiff::Timestamp::now()));
     // A composed run takes one more sample early in the recovery phase, and
     // MF1's first run is why. It left the fault window with 564 of 1024 shards
     // assigned to nobody and reached the end of a ten-minute recovery phase with
@@ -814,7 +814,7 @@ pub async fn run(
     stop_workloads!();
 
     if let Some(window) = phases.recovery.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
     if skipped > 0 {
         attention_extra.push(Note::attention(format!(
@@ -1037,17 +1037,15 @@ mod tests {
     use crate::chaos::OutageExpectation;
     use crate::chaos::history::{AttemptRecord, FireRecord, TargetFireLog};
     use crate::chaos::outage::{OutageFinding, OutageViolation};
-    use chrono::{DateTime, TimeDelta};
+
     use test_r::test;
 
     const TARGET: &str = "chaos-s16-schedule-target-0000";
     const LEAD: Duration = Duration::from_secs(10);
     const BUDGET: Duration = Duration::from_secs(240);
 
-    fn t0() -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-08-25T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
+    fn t0() -> jiff::Timestamp {
+        str::parse::<jiff::Timestamp>("2026-08-25T12:00:00Z").unwrap()
     }
 
     fn registration(token: &str, outcome: Outcome) -> OperationRecord {
@@ -1059,7 +1057,7 @@ mod tests {
             method: "schedule_fire_at".to_string(),
             idempotency_key: token.to_string(),
             submitted_at: t0(),
-            completed_at: Some(t0() + TimeDelta::milliseconds(20)),
+            completed_at: Some(t0() + jiff::SignedDuration::from_millis(20)),
             attempts: 1,
             outcome,
             duration_ms: 20,
@@ -1087,8 +1085,8 @@ mod tests {
                 .iter()
                 .map(|token| FireRecord {
                     token: (*token).to_string(),
-                    scheduled_at: t0() + TimeDelta::seconds(10),
-                    observed_at: t0() + TimeDelta::seconds(11),
+                    scheduled_at: t0() + jiff::SignedDuration::from_secs(10),
+                    observed_at: t0() + jiff::SignedDuration::from_secs(11),
                 })
                 .collect(),
             error: None,

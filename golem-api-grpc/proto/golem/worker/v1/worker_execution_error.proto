@@ -45,7 +45,12 @@ message WorkerExecutionError {
     AgentKeyCollision agent_key_collision = 33;
     InvocationCancelled invocation_cancelled = 34;
     CannotCancelRunningInvocation cannot_cancel_running_invocation = 35;
+    NotAnAgent not_an_agent = 36;
   }
+}
+
+message NotAnAgent {
+  AgentId agent_id = 1;
 }
 
 // An oplog read refuses its cursor: the cursor did not come from a page of this read.

@@ -753,6 +753,7 @@ mod tests {
         environment_id: EnvironmentId,
     ) -> AgentMetadata {
         AgentMetadata {
+            standalone_tool: None,
             component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
             agent_type_name: None,
             canonical_key: None,

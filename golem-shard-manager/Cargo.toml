@@ -30,7 +30,6 @@ golem-service-base = { workspace = true }
 anyhow = { workspace = true }
 arc-swap = { workspace = true }
 async-rwlock = { workspace = true }
-chrono = { workspace = true }
 async-trait = { workspace = true }
 conditional-trait-gen = { workspace = true }
 desert_rust = { workspace = true }
@@ -43,6 +42,7 @@ hyper = { workspace = true }
 include_dir = { workspace = true }
 indoc = { workspace = true }
 itertools = { workspace = true }
+jiff = { workspace = true }
 k8s-openapi = { workspace = true, optional = true }
 kube = { workspace = true, optional = true }
 prometheus = { workspace = true }

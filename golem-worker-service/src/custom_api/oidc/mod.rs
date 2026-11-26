@@ -20,9 +20,9 @@ mod open_id_client;
 pub mod pkce;
 pub mod session_store;
 
-use chrono::Duration;
 pub use identity_provider::*;
+use jiff::SignedDuration;
 pub use open_id_client::*;
 
 // FIXME: make this configurable as part of security scheme
-const OIDC_SESSION_EXPIRY: Duration = Duration::hours(8);
+const OIDC_SESSION_EXPIRY: SignedDuration = SignedDuration::from_hours(8);

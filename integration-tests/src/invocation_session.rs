@@ -20,17 +20,18 @@ use futures::{StreamExt, stream::BoxStream};
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem::worker::v1::worker_service_client::WorkerServiceClient;
 use golem_api_grpc::proto::golem::worker::{
-    AgentInvocationMode, DurableStreamHandle, DurableStreamMapping, InvocationAccepted,
-    InvocationRejectionReason, InvocationRequest, InvocationResponse, InvocationSessionCompletion,
-    InvocationSessionResult, InvocationStart, OutputStreamItem, ResumeAttach, ResumeOperation,
-    StreamConsumerCancelled, StreamCursor, StreamDirection, StreamEnd, StreamMappingRole,
-    StreamTerminal, StreamTerminalAuthor, invocation_request, invocation_response,
-    invocation_session_completion, stream_terminal,
+    AgentInvocationMode, DurableStreamHandle, DurableStreamMapping, ExternalToolInvocation,
+    InvocationAccepted, InvocationRejectionReason, InvocationRequest, InvocationResponse,
+    InvocationSessionCompletion, InvocationSessionResult, InvocationStart, OutputStreamItem,
+    ResumeAttach, ResumeOperation, StreamConsumerCancelled, StreamCursor, StreamDirection,
+    StreamEnd, StreamMappingRole, StreamTerminal, StreamTerminalAuthor, invocation_request,
+    invocation_response, invocation_session_completion, stream_terminal,
 };
 use golem_client::model::ComponentDto;
-use golem_common::model::IdempotencyKey;
 use golem_common::model::agent::{AgentKey, AgentTarget, ParsedAgentKey};
-use golem_common::schema::TypedSchemaValue;
+use golem_common::model::tool::ToolName;
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey};
+use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_schema::proto::golem::common::Uuid;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoValue;
 use golem_service_base::model::auth::AuthCtx;
@@ -78,6 +79,19 @@ impl OutputObservation {
         );
         self.cursor = Some(offset.to_vec());
         Ok(())
+    }
+
+    /// The bytes of a byte stream, such as tool stdout, in delivery order.
+    pub fn bytes(&self) -> anyhow::Result<Vec<u8>> {
+        let mut bytes = Vec::new();
+        for item in &self.items {
+            ensure!(
+                item.value.is_none(),
+                "expected packed bytes, received a typed value"
+            );
+            bytes.extend_from_slice(&item.packed_u8);
+        }
+        Ok(bytes)
     }
 
     pub fn values(&self) -> anyhow::Result<Vec<ProtoValue>> {
@@ -349,6 +363,89 @@ impl InvocationSession {
                 component_id: Some(component.id.into()),
                 method_name: Some(method.to_string()),
                 input: Some(value.try_into().map_err(anyhow::Error::msg)?),
+                allow_streams: true,
+                idempotency_key: Some(IdempotencyKey::fresh().into()),
+                auth_ctx: Some(AuthCtx::System.into()),
+                environment_id: Some(component.environment_id.into()),
+                mode: AgentInvocationMode::Await as i32,
+                attempt_id: Some(uuid::Uuid::new_v4().into()),
+                caller: Some(golem_common::model::caller::Caller::anonymous().into()),
+                ..Default::default()
+            })),
+        };
+        Self::connect(deps, request, SessionCheckpoint::default(), timeout).await
+    }
+
+    /// Starts the command `command_path` of the tool `tool_name` on the existing agent `agent` of
+    /// `component`, with its stdout as the only stream. The executor names the owner of an
+    /// external tool invocation by its ID and requires the fingerprint of its incarnation.
+    /// `input` gives the command's canonical input fields by name; a name matches a field
+    /// regardless of case and of `-` and `_`, so one call fits the naming of every SDK.
+    pub async fn start_tool(
+        deps: &impl TestDependencies,
+        component: &ComponentDto,
+        agent: AgentId,
+        fingerprint: AgentFingerprint,
+        tool_name: &str,
+        command_path: &[&str],
+        input: Vec<(&str, SchemaValue)>,
+        timeout: Duration,
+    ) -> anyhow::Result<Self> {
+        let tool = &component
+            .metadata
+            .tools
+            .get(&ToolName::try_from(tool_name).map_err(anyhow::Error::msg)?)
+            .with_context(|| format!("the component declares no tool {tool_name}"))?
+            .declaration
+            .definition;
+        let command_path = command_path
+            .iter()
+            .map(|name| name.to_string())
+            .collect::<Vec<_>>();
+        let command = tool
+            .command_index_by_path(&command_path)
+            .with_context(|| format!("tool {tool_name} has no command {command_path:?}"))?;
+        let model = tool
+            .canonical_input_model(command)
+            .map_err(|error| anyhow!("{error:?}"))?;
+        let normalize = |name: &str| name.replace(['-', '_'], "").to_lowercase();
+        let mut input = input
+            .into_iter()
+            .map(|(name, value)| (normalize(name), value))
+            .collect::<BTreeMap<_, _>>();
+        let fields = model
+            .fields
+            .iter()
+            .map(|field| {
+                input
+                    .remove(&normalize(&field.name))
+                    .with_context(|| format!("no input for field {}", field.name))
+            })
+            .collect::<anyhow::Result<Vec<_>>>()?;
+        ensure!(
+            input.is_empty(),
+            "the command has no fields {:?}",
+            input.keys()
+        );
+        let input = TypedSchemaValue::new(model.record_schema, SchemaValue::Record { fields });
+        let request = InvocationRequest {
+            request: Some(invocation_request::Request::Start(InvocationStart {
+                target: Some(
+                    AgentTarget::Id(agent)
+                        .try_into()
+                        .map_err(anyhow::Error::msg)?,
+                ),
+                expected_callee_fingerprint: Some(fingerprint.0.into()),
+                external_tool: Some(ExternalToolInvocation {
+                    tool_name: tool_name.to_string(),
+                    command_path,
+                    input: Some(input.try_into().map_err(anyhow::Error::msg)?),
+                    stdin: false,
+                    stdout: true,
+                    stderr: false,
+                    fresh_owner: false,
+                    expected_deployment_revision: None,
+                }),
                 idempotency_key: Some(IdempotencyKey::fresh().into()),
                 auth_ctx: Some(AuthCtx::System.into()),
                 environment_id: Some(component.environment_id.into()),

@@ -112,13 +112,22 @@ interface oplog {
         instance-id: uuid,
         /// Whether the agent is a never-live sandbox. A marked agent reports the
         /// `sandboxed` status.
-        never-live: bool
+        never-live: bool,
+        standalone-tool: option<standalone-tool-invocation>,
+    }
+
+    record standalone-tool-invocation {
+        tool-name: string,
+        command-path: list<string>,
+        invocation-id: uuid,
+        caller: public-caller,
     }
 
     enum owner-kind {
         component-agent,
         ephemeral-external-tool,
         oplog-processor,
+        standalone-tool,
     }
 
     /// Identifies a durable call by its place in a call order.
@@ -965,7 +974,15 @@ interface oplog {
         instance-id: uuid,
         /// Whether the agent is a never-live sandbox. A marked agent reports the
         /// `sandboxed` status.
-        never-live: bool
+        never-live: bool,
+        standalone-tool: option<raw-standalone-tool-invocation>,
+    }
+
+    record raw-standalone-tool-invocation {
+        tool-name: string,
+        command-path: list<string>,
+        invocation-id: uuid,
+        caller: list<u8>,
     }
 
     record raw-start-parameters {

@@ -397,6 +397,7 @@ impl ForwardingOplogState {
             fingerprint: self.initial_worker_metadata.fingerprint,
             agent_mode: self.initial_worker_metadata.agent_mode,
             create_request: self.initial_worker_metadata.create_request.clone(),
+            standalone_tool: self.initial_worker_metadata.standalone_tool.clone(),
         };
 
         let (plugin, metadata, delivery) = if is_retry {
