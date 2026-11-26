@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::running_workers::stale_reason;
-use super::status::SplitStatusHash;
 use super::*;
 
 #[async_trait]
@@ -363,10 +362,7 @@ impl WorkerService for DefaultWorkerService {
             .await?;
         self.remove_split_status(
             owned_agent_id,
-            SplitStatusHash::Baseline {
-                owned_agent_id,
-                fingerprint,
-            },
+            Self::checkpoint_namespace(owned_agent_id, fingerprint),
         )
         .await?;
         self.stream_session_index
@@ -443,10 +439,7 @@ impl WorkerService for DefaultWorkerService {
             .await?;
         self.remove_split_status(
             owned_agent_id,
-            SplitStatusHash::Cache {
-                owned_agent_id,
-                fingerprint,
-            },
+            Self::status_namespace(owned_agent_id, fingerprint),
         )
         .await?;
         self.remove_cached_agent_mode_if_fingerprint(owned_agent_id, fingerprint)
@@ -1027,10 +1020,7 @@ impl WorkerService for DefaultWorkerService {
         .await?;
         self.write_split_status(
             owned_agent_id,
-            SplitStatusHash::Cache {
-                owned_agent_id,
-                fingerprint,
-            },
+            Self::status_namespace(owned_agent_id, fingerprint),
             previous_status,
             status_value,
         )
@@ -1049,10 +1039,7 @@ impl WorkerService for DefaultWorkerService {
         let status = self
             .read_split_status(
                 owned_agent_id,
-                SplitStatusHash::Baseline {
-                    owned_agent_id,
-                    fingerprint,
-                },
+                Self::checkpoint_namespace(owned_agent_id, fingerprint),
             )
             .await?;
         // `agent_mode` is transient (not part of `core`); restore the authoritative value.
@@ -1089,10 +1076,7 @@ impl WorkerService for DefaultWorkerService {
         }
         self.write_split_status(
             owned_agent_id,
-            SplitStatusHash::Baseline {
-                owned_agent_id,
-                fingerprint,
-            },
+            Self::checkpoint_namespace(owned_agent_id, fingerprint),
             previous_checkpoint,
             checkpoint,
         )

@@ -671,11 +671,7 @@ async fn remembered_status_baseline_recovers_complete_hash_after_cache_loss() {
     let agent_id = AgentId::from_parts(7, 2);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
     let fingerprint = AgentFingerprint::new();
-    let hash = SplitStatusHash::Cache {
-        owned_agent_id: &owned_agent_id,
-        fingerprint,
-    };
-    let namespace = split_status_target(hash).namespace;
+    let namespace = DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint);
     let status = AgentStatusRecord {
         oplog_idx: OplogIndex::from_u64(10),
         skipped_regions: DeletedRegions::from_regions([OplogRegion {
@@ -686,7 +682,7 @@ async fn remembered_status_baseline_recovers_complete_hash_after_cache_loss() {
     };
 
     service
-        .write_split_status(&owned_agent_id, hash, None, status.clone())
+        .write_split_status(&owned_agent_id, namespace.clone(), None, status.clone())
         .await
         .unwrap();
     let fields = storage
@@ -699,13 +695,18 @@ async fn remembered_status_baseline_recovers_complete_hash_after_cache_loss() {
         .unwrap();
 
     service
-        .write_split_status(&owned_agent_id, hash, Some(&status), status.clone())
+        .write_split_status(
+            &owned_agent_id,
+            namespace.clone(),
+            Some(&status),
+            status.clone(),
+        )
         .await
         .unwrap();
 
     assert_eq!(
         service
-            .read_split_status(&owned_agent_id, hash)
+            .read_split_status(&owned_agent_id, namespace)
             .await
             .unwrap(),
         Some(status)
@@ -724,10 +725,8 @@ async fn stale_status_baseline_reconciles_without_mixed_auxiliary_fields() {
     );
     let agent_id = AgentId::from_parts(7, 3);
     let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent_id);
-    let hash = SplitStatusHash::Cache {
-        owned_agent_id: &owned_agent_id,
-        fingerprint: AgentFingerprint::new(),
-    };
+    let namespace =
+        DefaultWorkerService::status_namespace(&owned_agent_id, AgentFingerprint::new());
     let persisted = AgentStatusRecord {
         oplog_idx: OplogIndex::from_u64(20),
         skipped_regions: DeletedRegions::from_regions([OplogRegion {
@@ -746,13 +745,13 @@ async fn stale_status_baseline_reconciles_without_mixed_auxiliary_fields() {
     };
 
     service
-        .write_split_status(&owned_agent_id, hash, None, persisted)
+        .write_split_status(&owned_agent_id, namespace.clone(), None, persisted)
         .await
         .unwrap();
     service
         .write_split_status(
             &owned_agent_id,
-            hash,
+            namespace.clone(),
             Some(&remembered),
             replacement.clone(),
         )
@@ -761,7 +760,7 @@ async fn stale_status_baseline_reconciles_without_mixed_auxiliary_fields() {
 
     assert_eq!(
         service
-            .read_split_status(&owned_agent_id, hash)
+            .read_split_status(&owned_agent_id, namespace)
             .await
             .unwrap(),
         Some(replacement)
@@ -778,34 +777,24 @@ async fn cold_status_publication_removes_orphan_transfers_without_a_core() {
     let orphan_value = serialize(transfer).unwrap();
     source.received_card_transfers = ReceivedCardTransferIndex::default();
 
-    for hash in [
-        SplitStatusHash::Cache {
-            owned_agent_id: &owned_agent_id,
-            fingerprint,
-        },
-        SplitStatusHash::Baseline {
-            owned_agent_id: &owned_agent_id,
-            fingerprint,
-        },
+    for namespace in [
+        DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint),
+        DefaultWorkerService::checkpoint_namespace(&owned_agent_id, fingerprint),
     ] {
         storage
             .with_entity("test", "seed_orphan_transfer", "transfer")
-            .set_raw(
-                split_status_target(hash).namespace,
-                &orphan_field,
-                &orphan_value,
-            )
+            .set_raw(namespace.clone(), &orphan_field, &orphan_value)
             .await
             .unwrap();
 
         service
-            .write_split_status(&owned_agent_id, hash, None, source.clone())
+            .write_split_status(&owned_agent_id, namespace.clone(), None, source.clone())
             .await
             .unwrap();
 
         assert_eq!(
             service
-                .read_split_status(&owned_agent_id, hash)
+                .read_split_status(&owned_agent_id, namespace)
                 .await
                 .unwrap(),
             Some(source.clone())
@@ -827,20 +816,19 @@ fn split_status_test_service(
     (service, test_owned_agent_id("split-status"))
 }
 
-/// The fields that stay in the hash of `hash_of` after a removal whose guarded delete loses a race
-/// against a concurrent publication of a new core.
+/// The fields that stay in the hash of `namespace_of` after a removal whose guarded delete loses
+/// a race against a concurrent publication of a new core.
 async fn fields_after_a_removal_that_loses_a_race(
-    hash_of: fn(&OwnedAgentId, AgentFingerprint) -> SplitStatusHash<'_>,
+    namespace_of: fn(&OwnedAgentId, AgentFingerprint) -> KeyValueStorageNamespace,
 ) -> Vec<String> {
     let inner = Arc::new(InMemoryKeyValueStorage::new());
     let faults = KeyValueStorageFaults::default();
     let (service, owned_agent_id) = split_status_test_service(Arc::new(
         FaultInjectingKeyValueStorage::new(inner.clone(), faults.clone()),
     ));
-    let hash = hash_of(&owned_agent_id, AgentFingerprint::new());
-    let namespace = split_status_target(hash).namespace;
+    let namespace = namespace_of(&owned_agent_id, AgentFingerprint::new());
     service
-        .write_split_status(&owned_agent_id, hash, None, sample_status())
+        .write_split_status(&owned_agent_id, namespace.clone(), None, sample_status())
         .await
         .unwrap();
     // The first `remove` call is the read of the snapshot, the second is the guarded delete.
@@ -848,7 +836,8 @@ async fn fields_after_a_removal_that_loses_a_race(
     let delete = faults.pause_next("remove");
     read.release();
 
-    let (removed, ()) = tokio::join!(service.remove_split_status(&owned_agent_id, hash), async {
+    let removal = service.remove_split_status(&owned_agent_id, namespace.clone());
+    let (removed, ()) = tokio::join!(removal, async {
         delete.entered().await;
         inner
             .with_entity("test", "concurrent_publication", "agent_status")
@@ -867,23 +856,11 @@ async fn fields_after_a_removal_that_loses_a_race(
 #[test]
 async fn a_removal_that_loses_a_race_retries_and_removes_the_hash() {
     assert_eq!(
-        fields_after_a_removal_that_loses_a_race(|owned_agent_id, fingerprint| {
-            SplitStatusHash::Cache {
-                owned_agent_id,
-                fingerprint,
-            }
-        })
-        .await,
+        fields_after_a_removal_that_loses_a_race(DefaultWorkerService::status_namespace).await,
         Vec::<String>::new()
     );
     assert_eq!(
-        fields_after_a_removal_that_loses_a_race(|owned_agent_id, fingerprint| {
-            SplitStatusHash::Baseline {
-                owned_agent_id,
-                fingerprint,
-            }
-        })
-        .await,
+        fields_after_a_removal_that_loses_a_race(DefaultWorkerService::checkpoint_namespace).await,
         Vec::<String>::new()
     );
 }
@@ -894,13 +871,10 @@ async fn a_removal_that_loses_a_race_retries_and_removes_the_hash() {
 async fn a_matching_delta_base_deletes_dropped_transfer_fields() {
     let storage = Arc::new(InMemoryKeyValueStorage::new());
     let (service, owned_agent_id) = split_status_test_service(storage.clone());
-    let hash = SplitStatusHash::Cache {
-        owned_agent_id: &owned_agent_id,
-        fingerprint: AgentFingerprint::new(),
-    };
-    let namespace = split_status_target(hash).namespace;
+    let namespace =
+        DefaultWorkerService::status_namespace(&owned_agent_id, AgentFingerprint::new());
     let first = service
-        .write_split_status(&owned_agent_id, hash, None, sample_status())
+        .write_split_status(&owned_agent_id, namespace.clone(), None, sample_status())
         .await
         .unwrap();
     let second = AgentStatusRecord {
@@ -910,13 +884,18 @@ async fn a_matching_delta_base_deletes_dropped_transfer_fields() {
     };
 
     service
-        .write_split_status(&owned_agent_id, hash, Some(&first), second.clone())
+        .write_split_status(
+            &owned_agent_id,
+            namespace.clone(),
+            Some(&first),
+            second.clone(),
+        )
         .await
         .unwrap();
 
     assert_eq!(
         service
-            .read_split_status(&owned_agent_id, hash)
+            .read_split_status(&owned_agent_id, namespace.clone())
             .await
             .unwrap(),
         Some(second)
@@ -2163,10 +2142,7 @@ async fn deletion_without_current_oplog_cleans_only_the_requested_incarnation() 
         service
             .write_split_status(
                 &owned_agent_id,
-                SplitStatusHash::Cache {
-                    owned_agent_id: &owned_agent_id,
-                    fingerprint,
-                },
+                DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint),
                 None,
                 status.clone(),
             )
@@ -4227,47 +4203,37 @@ async fn writing_a_baseline_with_stream_history_catches_up_the_stream_session_in
     assert!(!index_fields().await.is_empty());
 }
 
+/// A write and a removal of the split status give the live status cache the expiry of a
+/// derived cache, and give the status baseline no expiry.
 #[test]
-fn the_status_cache_expires_and_the_status_baseline_does_not() {
-    let owned_agent_id = test_owned_agent_id("split-status-target");
+async fn the_status_cache_expires_and_the_status_baseline_does_not() {
+    let storage = Arc::new(ExpiryRecordingKeyValueStorage::default());
+    let (service, owned_agent_id) = split_status_test_service(storage.clone());
     let fingerprint = AgentFingerprint(Uuid::new_v4());
+    let cache = DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint);
+    let baseline = DefaultWorkerService::checkpoint_namespace(&owned_agent_id, fingerprint);
 
-    let targets = [
-        split_status_target(SplitStatusHash::Cache {
-            owned_agent_id: &owned_agent_id,
-            fingerprint,
-        }),
-        split_status_target(SplitStatusHash::Baseline {
-            owned_agent_id: &owned_agent_id,
-            fingerprint,
-        }),
-    ];
+    futures::future::try_join_all([cache.clone(), baseline.clone()].map(|namespace| {
+        service.write_split_status(&owned_agent_id, namespace, None, sample_status())
+    }))
+    .await
+    .unwrap();
+    futures::future::try_join_all(
+        [cache.clone(), baseline.clone()]
+            .map(|namespace| service.remove_split_status(&owned_agent_id, namespace)),
+    )
+    .await
+    .unwrap();
 
+    let week = Some(DERIVED_CACHE_EXPIRY);
     assert_eq!(
-        targets,
-        [
-            SplitStatusTarget {
-                namespace: KeyValueStorageNamespace::AgentStatus {
-                    owned_agent_id: owned_agent_id.clone(),
-                    fingerprint,
-                },
-                label: "status",
-            },
-            SplitStatusTarget {
-                namespace: KeyValueStorageNamespace::AgentStatusCheckpoint {
-                    owned_agent_id: owned_agent_id.clone(),
-                    fingerprint,
-                },
-                label: "checkpoint",
-            },
+        storage.writes(),
+        vec![
+            (cache.clone(), week),
+            (baseline.clone(), None),
+            (cache, week),
+            (baseline, None),
         ]
-    );
-    assert_eq!(
-        targets
-            .iter()
-            .map(|target| target.namespace.expiry())
-            .collect::<Vec<_>>(),
-        vec![Some(DERIVED_CACHE_EXPIRY), None]
     );
 }
 
@@ -4672,16 +4638,8 @@ async fn the_worker_service_writes_the_status_baseline_with_no_expiry() {
     let storage = Arc::new(ExpiryRecordingKeyValueStorage::default());
     let (service, owned_agent_id, current) = status_baseline_test_service(storage.clone());
     let fingerprint = AgentFingerprint(Uuid::new_v4());
-    let cache = split_status_target(SplitStatusHash::Cache {
-        owned_agent_id: &owned_agent_id,
-        fingerprint,
-    })
-    .namespace;
-    let baseline = split_status_target(SplitStatusHash::Baseline {
-        owned_agent_id: &owned_agent_id,
-        fingerprint,
-    })
-    .namespace;
+    let cache = DefaultWorkerService::status_namespace(&owned_agent_id, fingerprint);
+    let baseline = DefaultWorkerService::checkpoint_namespace(&owned_agent_id, fingerprint);
     let first = marked_status_baseline();
     let second = AgentStatusRecord {
         component_size: 8,
@@ -4793,11 +4751,7 @@ async fn a_failed_baseline_removal_keeps_the_oplog() {
         .await
         .unwrap();
     *storage.failing_compare_and_set.lock().unwrap() = Some(
-        split_status_target(SplitStatusHash::Baseline {
-            owned_agent_id: &owned_agent_id,
-            fingerprint,
-        })
-        .namespace,
+        DefaultWorkerService::checkpoint_namespace(&owned_agent_id, fingerprint),
     );
     let deleted = AtomicBool::new(false);
 
