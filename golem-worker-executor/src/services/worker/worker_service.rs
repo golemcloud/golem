@@ -87,10 +87,26 @@ impl WorkerService for DefaultWorkerService {
             .await
     }
 
-    #[tracing::instrument(name = "worker_metadata.get", level = "debug", skip_all)]
     async fn get(
         &self,
         owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
+        self.get_with_attempt(owned_agent_id, None).await
+    }
+
+    async fn get_for_acquisition(
+        &self,
+        id: &OwnedAgentId,
+        attempt: &crate::services::oplog::OplogReadAttempt,
+    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
+        self.get_with_attempt(id, Some(attempt)).await
+    }
+
+    #[tracing::instrument(name = "worker_metadata.get", level = "debug", skip_all)]
+    async fn get_with_attempt(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        attempt: Option<&crate::services::oplog::OplogReadAttempt>,
     ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
         let lifecycle_gate = self.lifecycle_gate(&owned_agent_id.agent_id);
         let _lifecycle_guard = lifecycle_gate.gate.read().await;
@@ -101,7 +117,14 @@ impl WorkerService for DefaultWorkerService {
             .filter(|seal| seal.enabled());
 
         let present = || async {
-            let Some(identity) = self.resolve_present_agent_identity(owned_agent_id).await? else {
+            let identity = match attempt {
+                Some(attempt) => {
+                    self.resolve_attempt_agent_identity(owned_agent_id, attempt)
+                        .await?
+                }
+                None => self.resolve_present_agent_identity(owned_agent_id).await?,
+            };
+            let Some(identity) = identity else {
                 return Ok(None);
             };
             let agent_mode = identity.agent_mode;
@@ -229,6 +252,14 @@ impl WorkerService for DefaultWorkerService {
                         // format) -> recompute from oplog, preferring to fold forward from the clean
                         // checkpoint (if any) over a full re-read.
                         None => {
+                            // Acquisition folds freshness separately and retains this persisted
+                            // baseline for publication. A recomputed status is not that baseline.
+                            if attempt.is_some() {
+                                return Ok(Some(GetWorkerMetadataResult {
+                                    initial_worker_metadata,
+                                    last_known_status: None,
+                                }));
+                            }
                             let last_known_status = calculate_last_known_status_with_checkpoint_reader(
                             self,
                             owned_agent_id,
@@ -298,6 +329,20 @@ impl WorkerService for DefaultWorkerService {
                 Some(_) => panic!("Encountered malformed oplog without create oplog entry"),
             }
         };
+        if let Some(attempt) = attempt {
+            attempt.assert_id(owned_agent_id);
+            if attempt.is_absent() {
+                return Ok(None);
+            }
+            if let Some(record) = attempt.record() {
+                let metadata = record.metadata.clone();
+                return Ok(Some(GetWorkerMetadataResult {
+                    last_known_status: Some(metadata.last_known_status.clone()),
+                    initial_worker_metadata: metadata,
+                }));
+            }
+            return present().await;
+        }
         if let Some(seal) = &seal {
             return seal
                 .read_with_authority(
@@ -556,6 +601,21 @@ impl WorkerService for DefaultWorkerService {
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
     ) -> Result<HashSet<OplogIndex>, WorkerExecutorError> {
+        let moved = if let Some(seal) = self.oplog_service.seal_service() {
+            seal.rejected_snapshots(owned_agent_id, fingerprint).await?
+        } else {
+            std::collections::BTreeSet::new()
+        };
+        self.get_rejected_periodic_snapshots_with_moved(owned_agent_id, fingerprint, &moved)
+            .await
+    }
+
+    async fn get_rejected_periodic_snapshots_with_moved(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+        moved: &std::collections::BTreeSet<OplogIndex>,
+    ) -> Result<HashSet<OplogIndex>, WorkerExecutorError> {
         let value: Option<Result<Vec<OplogIndex>, String>> = self
             .key_value_storage
             .with_entity("worker", "get_rejected_periodic_snapshots", "oplog_indexes")
@@ -569,9 +629,7 @@ impl WorkerService for DefaultWorkerService {
             .transpose()
             .map(|indexes| indexes.into_iter().flatten().collect())
             .map_err(WorkerExecutorError::runtime)?;
-        if let Some(seal) = self.oplog_service.seal_service() {
-            indexes.extend(seal.rejected_snapshots(owned_agent_id, fingerprint).await?);
-        }
+        indexes.extend(moved.iter().copied());
         Ok(indexes)
     }
 

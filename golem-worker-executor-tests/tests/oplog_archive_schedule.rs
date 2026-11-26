@@ -65,8 +65,11 @@ use golem_worker_executor::services::{HasOplog, HasOplogService, HasWorkerActiva
 use golem_worker_executor::storage::indexed::postgres::PostgresIndexedStorage;
 use golem_worker_executor::storage::indexed::sqlite::SqliteIndexedStorage;
 use golem_worker_executor::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
+use golem_worker_executor::storage::keyvalue::fault_injecting::{
+    FaultInjectingKeyValueStorage, KeyValueStorageFaults,
+};
 use golem_worker_executor::storage::keyvalue::{
-    KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
+    KeyValueStorage, KeyValueStorageError, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
 use golem_worker_executor::worker::{WorkerDeletionHook, WorkerDeletionStage};
 use golem_worker_executor_test_utils::{
@@ -76,7 +79,7 @@ use golem_worker_executor_test_utils::{
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 use test_r::{inherit_test_dep, test, timeout};
 
@@ -2494,6 +2497,294 @@ fn ephemeral_duplicate_stream_request(
     })
 }
 
+/// The first invocation has no metadata or indexed authority to reuse. Its known mode must
+/// survive session ingress and acquisition, without repeating the seal selection at startup.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn new_ephemeral_may_exist_session_lists_seal_once_in_its_known_mode(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let fault = Arc::new(SealWriteFault::default());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.oplog.indexed_storage_layers = 2;
+                config.oplog.blob_storage_layers = 1;
+                config.oplog.entry_count_limit = 1_000_000;
+            })),
+            wrap_blob_storage: Some(Arc::new({
+                let fault = fault.clone();
+                move |inner| {
+                    Arc::new(FailingSealStorage {
+                        inner,
+                        fault: fault.clone(),
+                    })
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let owned = crate::agent::ephemeral_agent_id(
+        &executor,
+        component.environment_id,
+        &agent_key!("EphemeralStreamAgent"),
+        &key,
+        "identity",
+    );
+    let request = ephemeral_duplicate_stream_request(
+        &executor,
+        &component,
+        &key,
+        uuid::Uuid::new_v4(),
+        false,
+    )?;
+    assert!(!executor.worker_is_cached(&owned).await);
+    fault.lists.lock().unwrap().clear();
+    let (prepared, release) = executor.gate_next_prepared_instance(&owned.agent_id);
+    let invocation = tokio::spawn({
+        let executor = executor.clone();
+        let component = component.clone();
+        let key = key.clone();
+        async move {
+            ephemeral_duplicate_result(&executor, &component, &key, Some(&request), false).await
+        }
+    });
+    tokio::time::timeout(Duration::from_secs(30), prepared).await??;
+    // Snapshot before guest execution and retirement. The default unexpiring shard grant also
+    // prevents a later retirement seal from contributing a different kind of LIST.
+    let lists = fault.lists.lock().unwrap().clone();
+    release.send(()).unwrap();
+    assert_eq!(
+        tokio::time::timeout(Duration::from_secs(30), invocation).await???,
+        EphemeralResponse::Items(vec![
+            "sealed-stream-label".to_string(),
+            owned.agent_id.as_uuid().to_string(),
+        ])
+    );
+    let prefix = std::path::Path::new("seals").join(agent_path_segment(&owned.agent_id));
+    let seal_lists: Vec<_> = lists
+        .iter()
+        .filter(|(_, _, _, namespace, path)| {
+            matches!(namespace, BlobStorageNamespace::SealRecords { environment_id, type_tag, .. }
+            if *environment_id == owned.environment_id() && *type_tag == owned.agent_id.type_tag())
+                && path == &prefix
+        })
+        .collect();
+    assert_eq!(seal_lists.len(), 1, "startup LISTs: {lists:#?}");
+    let (operation, svc, api, namespace, _) = seal_lists[0];
+    assert_eq!(
+        (*operation, *svc, *api),
+        ("list_page", "oplog_seal", "read_record")
+    );
+    assert!(
+        matches!(
+            namespace,
+            BlobStorageNamespace::SealRecords {
+                agent_mode: AgentMode::Ephemeral,
+                ..
+            }
+        ),
+        "startup LISTs: {lists:#?}"
+    );
+    assert!(
+        lists.iter().all(|(_, _, api, _, _)| *api != "moved_data"),
+        "startup must reuse its authority selection: {lists:#?}"
+    );
+    Ok(())
+}
+
+/// A lost shard takes priority over cold metadata and freshness reads. Validation that does
+/// not need storage must still reject an invalid request, including KnownFresh requests.
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn may_exist_session_refuses_lost_shard_before_failing_cold_storage(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::create_worker_response;
+
+    let context = TestContext::new(last_unique_id);
+    let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
+    let fault = Arc::new(SealWriteFault::default());
+    let kv_faults = KeyValueStorageFaults::default();
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.oplog.indexed_storage_layers = 2;
+                config.oplog.blob_storage_layers = 1;
+                config.oplog.entry_count_limit = 1_000_000;
+            })),
+            wrap_shard_service: Some(Arc::new({
+                let shard = shard.clone();
+                move |inner| {
+                    assert!(shard.set(inner.clone()).is_ok());
+                    inner
+                }
+            })),
+            wrap_key_value_storage: Some(Arc::new({
+                let faults = kv_faults.clone();
+                move |inner| Arc::new(FaultInjectingKeyValueStorage::new(inner, faults.clone()))
+            })),
+            wrap_blob_storage: Some(Arc::new({
+                let fault = fault.clone();
+                move |inner| {
+                    Arc::new(FailingSealStorage {
+                        inner,
+                        fault: fault.clone(),
+                    })
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let request = ephemeral_duplicate_stream_request(
+        &executor,
+        &component,
+        &IdempotencyKey::fresh(),
+        uuid::Uuid::new_v4(),
+        false,
+    )?;
+    kv_faults.fail_all(
+        usize::MAX,
+        KeyValueStorageError::other("injected cold storage lookup failure"),
+    );
+    fault.fail_lists.store(true, Ordering::Release);
+    // A healthy-shard control proves this exact cold request would encounter the outage.
+    let error = rejected_session(&executor, request.clone()).await?;
+    assert!(
+        error.contains("injected cold storage lookup failure"),
+        "{error}"
+    );
+
+    // Without an invocation key, creation must validate caller and local config eagerly,
+    // before acquiring an owner or consulting the failing cold storage.
+    let mut create = executor.create_keyed_worker_request(
+        &component.id,
+        &agent_key!("DurableStreamAgent", "no-key-create-validation"),
+    )?;
+    create.idempotency_key = None;
+    create.freshness_disposition =
+        golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist as i32;
+    create.caller = None;
+    create.config = vec![golem_api_grpc::proto::golem::worker::AgentConfigEntryDto {
+        path: vec!["invalid-local-config".to_string()],
+        value: "not-json".to_string(),
+    }];
+    let response = executor
+        .client
+        .clone()
+        .create_worker(create.clone())
+        .await?
+        .into_inner();
+    let Some(create_worker_response::Result::Failure(failure)) = response.result else {
+        anyhow::bail!("no-key creation without a caller must fail: {response:?}");
+    };
+    assert!(
+        format!("{failure:?}").contains("caller is missing"),
+        "unexpected no-key create failure: {failure:?}"
+    );
+
+    create.caller = Some(callers::anonymous().into());
+    let response = executor
+        .client
+        .clone()
+        .create_worker(create)
+        .await?
+        .into_inner();
+    let Some(create_worker_response::Result::Failure(failure)) = response.result else {
+        anyhow::bail!("no-key creation with malformed local config must fail: {response:?}");
+    };
+    assert!(
+        format!("{failure:?}").contains("Failed parsing local agent config"),
+        "unexpected no-key create failure: {failure:?}"
+    );
+
+    shard.get().unwrap().clear_assignment();
+    fault.lists.lock().unwrap().clear();
+    let error = rejected_session(&executor, request.clone()).await?;
+    assert!(error.contains("ShardingNotReady"), "{error}");
+    assert!(
+        fault.lists.lock().unwrap().is_empty(),
+        "a lost shard must not LIST storage"
+    );
+
+    let mut invalid = request.clone();
+    let Some(invocation_request::Request::Start(start)) = invalid.request.as_mut() else {
+        unreachable!()
+    };
+    start.component_owner_account_id = None;
+    let error = rejected_session(&executor, invalid).await?;
+    assert!(error.contains("account_id not found"), "{error}");
+
+    let mut known_fresh = request.clone();
+    let Some(invocation_request::Request::Start(start)) = known_fresh.request.as_mut() else {
+        unreachable!()
+    };
+    start.freshness_disposition =
+        golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32;
+    start.constructor = None;
+    let error = rejected_session(&executor, known_fresh).await?;
+    assert!(
+        error.contains("KnownFresh requires the constructor"),
+        "{error}"
+    );
+    let mut known_fresh = request;
+    let Some(invocation_request::Request::Start(start)) = known_fresh.request.as_mut() else {
+        unreachable!()
+    };
+    start.freshness_disposition =
+        golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::KnownFresh as i32;
+    start.caller = None;
+    let error = rejected_session(&executor, known_fresh).await?;
+    assert!(error.contains("caller is missing"), "{error}");
+    Ok(())
+}
+
+async fn rejected_session(
+    executor: &TestWorkerExecutor,
+    request: InvocationRequest,
+) -> anyhow::Result<String> {
+    let (frames, receiver) = tokio::sync::mpsc::channel(1);
+    frames.send(request).await?;
+    let mut responses = executor
+        .client
+        .clone()
+        .invoke_agent_session(tokio_stream::wrappers::ReceiverStream::new(receiver))
+        .await?
+        .into_inner();
+    if let Some(response) = responses.message().await? {
+        if let Some(invocation_response::Response::Rejected(rejected)) = &response.response {
+            return Ok(format!("{} {:?}", rejected.error, rejected.worker_error));
+        }
+        anyhow::bail!("request must be rejected before acceptance: {response:?}");
+    }
+    drop(frames);
+    anyhow::bail!("session ended without rejecting the invocation")
+}
+
 /// A startup restart after `Restart` is committed is terminal, but `Interrupted` is not sealable.
 /// Skipping the optional seal must not skip removal of the quiesced Worker shell.
 #[test]
@@ -3003,6 +3294,16 @@ async fn assert_no_seal_records(
 struct SealWriteFault {
     target: OnceLock<OwnedAgentId>,
     hits: AtomicUsize,
+    lists: Mutex<
+        Vec<(
+            &'static str,
+            &'static str,
+            &'static str,
+            BlobStorageNamespace,
+            PathBuf,
+        )>,
+    >,
+    fail_lists: AtomicBool,
 }
 
 #[derive(Debug)]
@@ -3022,6 +3323,16 @@ impl BlobStorageBackend for FailingSealStorage {
         after: Option<&NormalizedBlobPath<'_>>,
         max_keys: u32,
     ) -> anyhow::Result<Vec<BlobPageEntry>> {
+        self.fault.lists.lock().unwrap().push((
+            "list_page",
+            svc,
+            api,
+            namespace.clone(),
+            prefix.to_path_buf(),
+        ));
+        if self.fault.fail_lists.load(Ordering::Acquire) {
+            anyhow::bail!("injected cold storage lookup failure");
+        }
         self.inner
             .list_page(
                 svc,
@@ -3194,6 +3505,16 @@ impl BlobStorageBackend for FailingSealStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Vec<PathBuf>> {
+        self.fault.lists.lock().unwrap().push((
+            "list_dir",
+            svc,
+            api,
+            namespace.clone(),
+            path.to_path_buf(),
+        ));
+        if self.fault.fail_lists.load(Ordering::Acquire) {
+            anyhow::bail!("injected cold storage lookup failure");
+        }
         self.inner.list_dir(svc, api, namespace, path).await
     }
 
@@ -3204,6 +3525,16 @@ impl BlobStorageBackend for FailingSealStorage {
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Box<[ListedBlob]>> {
+        self.fault.lists.lock().unwrap().push((
+            "list_blobs_below",
+            svc,
+            api,
+            namespace.clone(),
+            path.to_path_buf(),
+        ));
+        if self.fault.fail_lists.load(Ordering::Acquire) {
+            anyhow::bail!("injected cold storage lookup failure");
+        }
         self.inner.list_blobs_below(svc, api, namespace, path).await
     }
 

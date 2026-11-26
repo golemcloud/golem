@@ -89,7 +89,41 @@ mod scan;
 pub(crate) mod seal;
 pub(crate) mod sealed_reader;
 
-pub use seal::SealService;
+pub use seal::{OplogReadAttempt, SealService};
+
+#[derive(Clone, Copy)]
+pub enum OplogReadContext<'a> {
+    Attempt(&'a OplogReadAttempt),
+    Opened(&'a dyn Oplog),
+}
+
+impl OplogReadContext<'_> {
+    pub async fn get_last_index(
+        self,
+        service: &dyn OplogService,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        match self {
+            Self::Attempt(attempt) => attempt.get_last_index(service, id, mode).await,
+            Self::Opened(oplog) => Ok(oplog.current_oplog_index().await),
+        }
+    }
+
+    pub async fn read_exact(
+        self,
+        service: &dyn OplogService,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        match self {
+            Self::Attempt(attempt) => attempt.read_exact(service, id, mode, idx, n).await,
+            Self::Opened(oplog) => oplog.read_exact(idx, n).await,
+        }
+    }
+}
 
 pub(crate) use epoch::{
     epoch_record_service, epoch_record_verdict, record_epoch_verdict, record_owning_epoch,
@@ -412,6 +446,37 @@ pub trait OplogService: Debug + Send + Sync {
         agent_mode: AgentMode,
         expected_epoch: ShardEpoch,
     ) -> Result<(), OplogError>;
+
+    /// Reads indexed/archive data under an authority selected by the caller, without selection.
+    async fn get_last_index_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        self.get_last_index(id, mode).await
+    }
+
+    async fn read_source_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        self.read_source(id, mode, idx, n).await
+    }
+
+    async fn read_exact_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        let entries = self.read_source_present(id, mode, idx, n).await?;
+        reader::exact_from_source(OplogReadSource::Other("selected present"), idx, n, entries)
+            .map_err(|error| UnreadableOplog::new(&id.agent_id, error))
+    }
 
     /// Reads exactly `n` contiguous entries starting at `idx`.
     async fn read_exact(

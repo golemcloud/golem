@@ -327,6 +327,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     owned_agent_id,
                     metadata.agent_mode,
                     &metadata.last_known_status,
+                    None,
                 )
                 .await;
                 if let Some(last_error) = error_and_retry_count {

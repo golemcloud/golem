@@ -723,8 +723,19 @@ impl<Ctx: WorkerCtx> ExternalOperations<Ctx> for DurableWorkerCtx<Ctx> {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
+        reader: Option<crate::services::oplog::OplogReadContext<'_>>,
     ) -> Option<LastError> {
-        last_error(this, owned_agent_id, agent_mode, latest_worker_status).await
+        if reader.is_none() {
+            return last_error(this, owned_agent_id, agent_mode, latest_worker_status).await;
+        }
+        super::error_history::last_error_with_reader(
+            this,
+            owned_agent_id,
+            agent_mode,
+            latest_worker_status,
+            reader,
+        )
+        .await
     }
 
     async fn prepare_instance(

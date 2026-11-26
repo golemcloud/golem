@@ -223,6 +223,26 @@ pub trait WorkerService: Send + Sync {
         owned_agent_id: &OwnedAgentId,
     ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError>;
 
+    async fn get_for_acquisition(
+        &self,
+        id: &OwnedAgentId,
+        _attempt: &crate::services::oplog::OplogReadAttempt,
+    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
+        self.get(id).await
+    }
+
+    #[doc(hidden)]
+    async fn get_with_attempt(
+        &self,
+        id: &OwnedAgentId,
+        attempt: Option<&crate::services::oplog::OplogReadAttempt>,
+    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
+        match attempt {
+            Some(attempt) => self.get_for_acquisition(id, attempt).await,
+            None => self.get(id).await,
+        }
+    }
+
     /// Enumerates the workers this executor must recover, per assigned shard.
     ///
     /// Returns `Err` when the recovery index or a worker behind it cannot be read. Each member
@@ -312,6 +332,19 @@ pub trait WorkerService: Send + Sync {
         _fingerprint: AgentFingerprint,
     ) -> Result<HashSet<OplogIndex>, WorkerExecutorError> {
         Ok(HashSet::new())
+    }
+
+    async fn get_rejected_periodic_snapshots_with_moved(
+        &self,
+        id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+        moved: &std::collections::BTreeSet<OplogIndex>,
+    ) -> Result<HashSet<OplogIndex>, WorkerExecutorError> {
+        let mut result = self
+            .get_rejected_periodic_snapshots(id, fingerprint)
+            .await?;
+        result.extend(moved.iter().copied());
+        Ok(result)
     }
 
     /// Adds `oplog_indexes` to the stored rejected automatic snapshot entries of the incarnation

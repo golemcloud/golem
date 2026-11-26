@@ -292,6 +292,112 @@ impl SealService {
         .await
     }
 
+    pub async fn begin_read_attempt(
+        &self,
+        id: &OwnedAgentId,
+        mode: Option<AgentMode>,
+    ) -> Result<OplogReadAttempt, OplogArchiveError> {
+        if !self.enabled() {
+            return Ok(OplogReadAttempt {
+                id: id.clone(),
+                mode,
+                observation: None,
+                source: AgentSealState::Present,
+                moved: None,
+                frozen_read_failed: Default::default(),
+            });
+        }
+        for _ in 0..self.indexed_retry.max_attempts.max(1) {
+            let before = self.observe(id).await?;
+            let record = self.select_attempt_record(id, mode, &before).await;
+            if self.observe(id).await? != before {
+                continue;
+            }
+            let record = record?;
+            let (source, moved) = if before.has_data {
+                (AgentSealState::Present, record)
+            } else {
+                (
+                    record.map_or(AgentSealState::Absent, AgentSealState::Sealed),
+                    None,
+                )
+            };
+            return Ok(OplogReadAttempt {
+                id: id.clone(),
+                mode,
+                observation: Some(before),
+                source,
+                moved,
+                frozen_read_failed: Default::default(),
+            });
+        }
+        Err(OplogArchiveError::Unavailable(format!(
+            "Oplog authority changed repeatedly while selecting {id}"
+        )))
+    }
+
+    pub async fn validate_read_attempt(
+        &self,
+        id: &OwnedAgentId,
+        attempt: &OplogReadAttempt,
+    ) -> Result<bool, OplogArchiveError> {
+        assert_eq!(id, &attempt.id);
+        match &attempt.observation {
+            Some(before) => Ok(self.observe(id).await? == *before),
+            None => Ok(true),
+        }
+    }
+
+    async fn select_attempt_record(
+        &self,
+        id: &OwnedAgentId,
+        mode: Option<AgentMode>,
+        observation: &AgentDataObservation,
+    ) -> Result<Option<Box<SealRecord>>, OplogArchiveError> {
+        if !observation.has_data {
+            return match mode {
+                Some(mode) => self.record_in_mode(id, mode).await,
+                None => self.record(id).await,
+            };
+        }
+        let identity = self
+            .indexed_identity(id)
+            .await
+            .map_err(|error| OplogArchiveError::Failed(error.to_string()))?;
+        let fingerprint = Self::pinned_fingerprint(identity, observation)?;
+        for candidate in [AgentMode::Durable, AgentMode::Ephemeral]
+            .into_iter()
+            .filter(|candidate| mode.is_none_or(|mode| mode == *candidate))
+        {
+            let records = list_records(self.blobs.as_ref(), id, candidate, "read_attempt").await?;
+            if let Some(fingerprint) = fingerprint {
+                if let Some(record) = self
+                    .record_for_fingerprint(id, candidate, fingerprint, &records)
+                    .await?
+                {
+                    return Ok(Some(record));
+                }
+            }
+        }
+        Ok(None)
+    }
+
+    pub async fn moved_rejections_for_attempt(
+        &self,
+        id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+        attempt: &OplogReadAttempt,
+    ) -> Result<BTreeSet<OplogIndex>, WorkerExecutorError> {
+        assert_eq!(id, &attempt.id);
+        Ok(attempt
+            .record()
+            .or(attempt.moved.as_deref())
+            .filter(|record| record.fingerprint == fingerprint)
+            .map_or_else(BTreeSet::new, |record| {
+                record.rejected_periodic_snapshots.clone()
+            }))
+    }
+
     pub(crate) async fn state(
         &self,
         id: &OwnedAgentId,
@@ -595,6 +701,7 @@ impl SealService {
         Ok(())
     }
 
+    #[cfg(test)]
     pub(crate) async fn unseal(
         &self,
         id: &OwnedAgentId,

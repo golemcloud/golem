@@ -31,16 +31,146 @@ mod service;
 pub(crate) use service::AgentSealState;
 pub use service::SealService;
 
+/// A selected authority for one cold construction attempt. Never retained by a live oplog.
+pub struct OplogReadAttempt {
+    pub(super) id: OwnedAgentId,
+    pub(super) mode: Option<AgentMode>,
+    pub(super) observation: Option<crate::storage::indexed::AgentDataObservation>,
+    pub(super) source: AgentSealState,
+    pub(super) moved: Option<Box<SealRecord>>,
+    pub(super) frozen_read_failed: std::sync::atomic::AtomicBool,
+}
+
+impl OplogReadAttempt {
+    pub(crate) fn frozen_read_failed(&self) -> bool {
+        self.frozen_read_failed
+            .load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    pub(crate) fn invalidated() -> golem_service_base::error::worker_executor::WorkerExecutorError {
+        golem_service_base::error::worker_executor::WorkerExecutorError::recovery_required(
+            "oplog read attempt invalidated",
+        )
+    }
+
+    pub fn is_invalidated_error(
+        error: &golem_service_base::error::worker_executor::WorkerExecutorError,
+    ) -> bool {
+        matches!(error, golem_service_base::error::worker_executor::WorkerExecutorError::RecoveryRequired { details, .. }
+            if details == "oplog read attempt invalidated")
+    }
+}
+
+impl OplogReadAttempt {
+    pub async fn get_last_index(
+        &self,
+        service: &dyn super::OplogService,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<OplogIndex, super::UnreadableOplog> {
+        self.assert_id(id);
+        if self.is_present() {
+            service.get_last_index_present(id, mode).await
+        } else {
+            Ok(self
+                .record()
+                .filter(|record| record.agent_mode == mode)
+                .map_or(OplogIndex::NONE, |record| record.last_index))
+        }
+    }
+
+    pub async fn read_source(
+        &self,
+        service: &dyn super::OplogService,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, golem_common::model::oplog::OplogEntry>, super::UnreadableOplog>
+    {
+        self.assert_id(id);
+        if self.is_present() {
+            return service.read_source_present(id, mode, idx, n).await;
+        }
+        let Some(record) = self.record().filter(|record| record.agent_mode == mode) else {
+            return Ok(BTreeMap::new());
+        };
+        let seal = service
+            .seal_service()
+            .expect("selected sealed reader needs seal service");
+        let result =
+            super::sealed_reader::read_sealed_source(seal.blobs.as_ref(), id, record, idx, n)
+                .await
+                .map_err(|error| super::UnreadableOplog::new(&id.agent_id, error));
+        if result.is_err() {
+            self.frozen_read_failed
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+        result
+    }
+
+    pub async fn read_exact(
+        &self,
+        service: &dyn super::OplogService,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, golem_common::model::oplog::OplogEntry>, super::UnreadableOplog>
+    {
+        if self.is_present() {
+            self.assert_id(id);
+            return service.read_exact_present(id, mode, idx, n).await;
+        }
+        let entries = self.read_source(service, id, mode, idx, n).await?;
+        let result = super::reader::exact_from_source(
+            super::OplogReadSource::Other("selected sealed"),
+            idx,
+            n,
+            entries,
+        )
+        .map_err(|error| super::UnreadableOplog::new(&id.agent_id, error));
+        if result.is_err() {
+            self.frozen_read_failed
+                .store(true, std::sync::atomic::Ordering::Release);
+        }
+        result
+    }
+
+    pub fn record(&self) -> Option<&SealRecord> {
+        match &self.source {
+            AgentSealState::Sealed(record) => Some(record),
+            _ => None,
+        }
+    }
+
+    pub fn is_absent(&self) -> bool {
+        matches!(self.source, AgentSealState::Absent)
+    }
+
+    pub fn is_present(&self) -> bool {
+        matches!(self.source, AgentSealState::Present)
+    }
+
+    pub fn mode(&self) -> Option<AgentMode> {
+        self.mode
+    }
+
+    pub(crate) fn assert_id(&self, id: &OwnedAgentId) {
+        assert_eq!(&self.id, id);
+    }
+}
+
 /// The manifest codec is shared with the PostgreSQL-backed blob archive.
 pub(crate) type SealManifest = BTreeMap<usize, BTreeMap<OplogIndex, BlobChunkRef>>;
 
 #[derive(Debug, Clone, PartialEq, BinaryCodec)]
-pub(crate) struct SealRecord {
+pub struct SealRecord {
     pub writer_nonce: Uuid,
     pub writer_epoch: ShardEpoch,
     pub fingerprint: AgentFingerprint,
     pub agent_mode: AgentMode,
-    pub manifest: SealManifest,
+    pub(crate) manifest: SealManifest,
     /// Includes the status folded at `last_index`.
     pub metadata: AgentMetadata,
     pub last_index: OplogIndex,

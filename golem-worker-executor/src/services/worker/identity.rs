@@ -15,6 +15,60 @@
 use super::*;
 
 impl DefaultWorkerService {
+    pub(super) async fn resolve_attempt_agent_identity(
+        &self,
+        id: &OwnedAgentId,
+        attempt: &crate::services::oplog::OplogReadAttempt,
+    ) -> Result<Option<ResolvedAgentIdentity>, WorkerExecutorError> {
+        attempt.assert_id(id);
+        let first = match attempt.mode() {
+            Some(mode) => mode,
+            None => self
+                .read_cached_agent_mode(id)
+                .await?
+                .map_or(AgentMode::Durable, |hint| hint.agent_mode),
+        };
+        for mode in [
+            first,
+            match first {
+                AgentMode::Durable => AgentMode::Ephemeral,
+                AgentMode::Ephemeral => AgentMode::Durable,
+            },
+        ]
+        .into_iter()
+        .filter(|mode| attempt.mode().is_none_or(|known| known == *mode))
+        {
+            let entry = attempt
+                .read_source(
+                    self.oplog_service.as_ref(),
+                    id,
+                    mode,
+                    OplogIndex::INITIAL,
+                    1,
+                )
+                .await?
+                .remove(&OplogIndex::INITIAL);
+            match entry {
+                None => {}
+                Some(ref entry @ OplogEntry::Create { ref parameters, .. })
+                    if parameters.agent_mode == mode =>
+                {
+                    return Ok(Some(ResolvedAgentIdentity {
+                        agent_mode: mode,
+                        fingerprint: AgentFingerprint(parameters.instance_id),
+                        create_entry: entry.clone(),
+                    }));
+                }
+                Some(_) => {
+                    return Err(WorkerExecutorError::runtime(format!(
+                        "agent {id} has an invalid initial Create entry"
+                    )));
+                }
+            }
+        }
+        Ok(None)
+    }
+
     pub(super) fn seal_read_error(
         owned_agent_id: &OwnedAgentId,
         error: crate::services::oplog::OplogArchiveError,

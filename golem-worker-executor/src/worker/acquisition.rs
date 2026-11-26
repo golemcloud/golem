@@ -26,6 +26,15 @@ pub(crate) enum ExistingWorkerAcquisitionError {
     Executor(WorkerExecutorError),
 }
 
+#[derive(Clone)]
+pub(crate) struct AcquisitionAdmission {
+    pub mode: Option<AgentMode>,
+    pub freshness_key: Option<IdempotencyKey>,
+    pub after_freshness: Result<(), WorkerExecutorError>,
+    pub check_health: bool,
+    pub observe_failed: bool,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum ConstructionError {
     RequestRejected(WorkerExecutorError),
@@ -130,11 +139,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         agent_mode: AgentMode,
         status: &AgentStatusRecord,
     ) -> Result<(), WorkerExecutorError> {
+        Self::ensure_not_failed_with_reader(deps, owned_agent_id, agent_mode, status, None).await
+    }
+
+    pub(crate) async fn ensure_not_failed_with_reader<T: HasAll<Ctx> + Send + Sync>(
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        agent_mode: AgentMode,
+        status: &AgentStatusRecord,
+        reader: Option<crate::services::oplog::OplogReadContext<'_>>,
+    ) -> Result<(), WorkerExecutorError> {
         match &status.status {
             AgentStatus::Failed => {
-                let error_and_retry_count =
-                    Ctx::get_last_error_and_retry_count(deps, owned_agent_id, agent_mode, status)
-                        .await;
+                let error_and_retry_count = Ctx::get_last_error_and_retry_count(
+                    deps,
+                    owned_agent_id,
+                    agent_mode,
+                    status,
+                    reader,
+                )
+                .await;
                 if let Some(last_error) = error_and_retry_count {
                     if status.last_error_kind == Some(OplogErrorKind::Recovery) {
                         Err(WorkerExecutorError::failed_to_resume_worker(
@@ -238,13 +262,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 deps,
                 owned_agent_id,
                 worker_env,
-                worker_agent_config,
+                Ok(worker_agent_config),
                 component_revision,
                 parent,
                 invocation_context_stack,
-                caller,
+                Ok(caller),
                 freshness_disposition,
                 create_intent,
+                None,
             )
             .await
     }
@@ -303,31 +328,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
-        worker_agent_config: Vec<AgentConfigEntryDto>,
+        worker_agent_config: Result<Vec<AgentConfigEntryDto>, WorkerExecutorError>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        caller: Caller,
+        caller: Result<Caller, WorkerExecutorError>,
         mut freshness_disposition: InvocationFreshnessDisposition,
         create_intent: CreateIntent,
+        admission: Option<AcquisitionAdmission>,
     ) -> Result<(Arc<Self>, Option<Arc<EphemeralResponseLease>>), WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
         loop {
-            let worker = Self::get_or_create_suspended_with_freshness(
-                deps,
-                owned_agent_id,
-                worker_env.clone(),
-                worker_agent_config.clone(),
-                component_revision,
-                parent,
-                invocation_context_stack,
-                caller.clone(),
-                freshness_disposition,
-                create_intent.clone(),
-            )
-            .await?;
+            let worker = deps
+                .active_agents()
+                .get_or_add_with_freshness(
+                    deps,
+                    owned_agent_id,
+                    worker_env.clone(),
+                    worker_agent_config.clone(),
+                    component_revision,
+                    parent,
+                    invocation_context_stack,
+                    caller.clone(),
+                    freshness_disposition,
+                    create_intent.clone(),
+                    admission.clone(),
+                )
+                .await?;
             if worker.agent_mode() != AgentMode::Ephemeral {
                 return Ok((worker, None));
             }
@@ -442,10 +471,35 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         freshness_disposition: InvocationFreshnessDisposition,
         new_owner: Option<&NewOwner>,
     ) -> Result<(), WorkerExecutorError> {
+        let metadata = if freshness_disposition == InvocationFreshnessDisposition::MayExist {
+            deps.worker_service().get(owned_agent_id).await?
+        } else {
+            None
+        };
+        Self::validate_freshness_from_metadata(
+            deps,
+            owned_agent_id,
+            idempotency_key,
+            freshness_disposition,
+            new_owner,
+            metadata
+                .as_ref()
+                .map(|metadata| &metadata.initial_worker_metadata),
+        )
+        .await
+    }
+
+    pub(crate) async fn validate_freshness_from_metadata<T: HasComponentService + Sync>(
+        deps: &T,
+        owned_agent_id: &OwnedAgentId,
+        idempotency_key: &IdempotencyKey,
+        freshness_disposition: InvocationFreshnessDisposition,
+        new_owner: Option<&NewOwner>,
+        metadata: Option<&AgentMetadata>,
+    ) -> Result<(), WorkerExecutorError> {
         if freshness_disposition == InvocationFreshnessDisposition::MayExist
-            && let Some(metadata) = deps.worker_service().get(owned_agent_id).await?
+            && let Some(metadata) = metadata
         {
-            let metadata = metadata.initial_worker_metadata;
             if metadata.agent_type_name.is_none() {
                 return Ok(());
             }
@@ -619,14 +673,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     pub(crate) async fn ensure_created(
         self: &Arc<Self>,
         worker_env: Option<Vec<(String, String)>>,
-        worker_agent_config: Vec<AgentConfigEntryDto>,
+        worker_agent_config: Result<Vec<AgentConfigEntryDto>, WorkerExecutorError>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: InvocationContextStack,
-        caller: Caller,
+        caller: Result<Caller, WorkerExecutorError>,
         freshness_disposition: InvocationFreshnessDisposition,
         creation_mode: WorkerCreationMode,
         create_intent: CreateIntent,
+        admission: Option<AcquisitionAdmission>,
     ) -> Result<(), WorkerExecutorError> {
         loop {
             let build = {
@@ -636,6 +691,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 let worker_agent_config = worker_agent_config.clone();
                 let invocation_context_stack = invocation_context_stack.clone();
                 let caller = caller.clone();
+                let admission = admission.clone();
                 async move {
                     let start = std::time::Instant::now();
                     let mut lifecycle = worker
@@ -651,21 +707,42 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     } else {
                         freshness_disposition
                     };
-                    let metadata = Self::get_or_create_worker_metadata(
-                        &worker.deps,
-                        &mut lifecycle,
-                        &worker.owned_agent_id,
-                        component_revision,
-                        worker_env,
-                        worker_agent_config,
-                        parent,
-                        &caller,
-                        &invocation_context_stack,
-                        freshness_disposition,
-                        creation_mode,
-                        &create_intent,
-                    )
-                    .await;
+                    let mut attempts_left =
+                        worker.config().indexed_storage_retry.max_attempts.max(1);
+                    let metadata = loop {
+                        let metadata = Self::get_or_create_worker_metadata(
+                            &worker.deps,
+                            &mut lifecycle,
+                            &worker.owned_agent_id,
+                            component_revision,
+                            worker_env.clone(),
+                            worker_agent_config.clone(),
+                            parent,
+                            &caller,
+                            &invocation_context_stack,
+                            freshness_disposition,
+                            creation_mode,
+                            &create_intent,
+                            admission.as_ref(),
+                        )
+                        .await;
+                        if let Err(error) = &metadata
+                            && crate::services::oplog::OplogReadAttempt::is_invalidated_error(
+                                error.error(),
+                            )
+                        {
+                            attempts_left -= 1;
+                            if attempts_left > 0 {
+                                lifecycle.set_read_attempt(None);
+                                continue;
+                            }
+                            break Err(WorkerExecutorError::runtime(
+                                "Oplog authority changed repeatedly during acquisition",
+                            )
+                            .into());
+                        }
+                        break metadata;
+                    };
                     worker
                         .finish_construction(start, metadata, OplogOpenPurpose::Activation)
                         .await
@@ -684,6 +761,20 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             };
             if self.retired_for_seal() {
                 return Err(self.retirement_error());
+            }
+            if !started && let Some(admission) = &admission {
+                if let Some(key) = &admission.freshness_key {
+                    Self::validate_freshness_from_metadata(
+                        &self.deps,
+                        &self.owned_agent_id,
+                        key,
+                        freshness_disposition,
+                        create_intent.owner(),
+                        Some(&self.initial_worker_metadata),
+                    )
+                    .await?;
+                }
+                admission.after_freshness.clone()?;
             }
             if self.initial_worker_metadata.owner_kind != creation_mode.owner_kind() {
                 return Err(WorkerExecutorError::invalid_request(
@@ -709,6 +800,26 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     agent_id: self.agent_id(),
                 });
             }
+            if let Some(admission) = &admission
+                && admission.check_health
+                && !admission.observe_failed
+                && self.agent_mode() != AgentMode::Ephemeral
+                && self.pending_startup_attempt().is_none()
+            {
+                let status = self.try_get_last_known_status().await?;
+                Self::ensure_not_failed_with_reader(
+                    &self.deps,
+                    &self.owned_agent_id,
+                    self.agent_mode(),
+                    &status,
+                    Some(crate::services::oplog::OplogReadContext::Opened(
+                        self.oplog.as_ref(),
+                    )),
+                )
+                .await?;
+            }
+            let worker_agent_config = worker_agent_config.clone()?;
+            let caller = caller.clone()?;
             // Construction success belongs to all waiters. Only the task's originating caller
             // may treat a newly written Create as its own, rather than an existing incarnation.
             let exclusive = matches!(
@@ -1103,6 +1214,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let GetOrCreateWorkerResult {
             initial_worker_metadata,
             current_status,
+            initial_moved_snapshot_rejections,
             mut persisted_status,
             execution_status,
             owner_context,
@@ -1338,6 +1450,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             status_checkpointer,
             last_resume_request: Mutex::new(Timestamp::now_utc()),
             snapshot_exclusions: StdMutex::new(SnapshotExclusions::default()),
+            initial_moved_snapshot_rejections: StdMutex::new(initial_moved_snapshot_rejections),
             startup_linear_memory_bytes: AtomicU64::new(0),
             memory_growth: StdMutex::new(Arc::new(PendingMemoryGrowth::default())),
             memory_accounting: residency::MemoryAccounting::default(),
@@ -1434,23 +1547,83 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         expected_fingerprint: Option<AgentFingerprint>,
         shard_epoch: Option<ShardEpoch>,
     ) -> Result<Option<GetOrCreateWorkerResult>, WorkerExecutorError> {
-        let Some(metadata) = this.worker_service().get(owned_agent_id).await? else {
-            return Ok(None);
-        };
-        if expected_fingerprint
-            .is_some_and(|expected| metadata.initial_worker_metadata.fingerprint != expected)
-        {
-            return Ok(None);
+        let seal = this
+            .oplog_service()
+            .seal_service()
+            .filter(|seal| seal.enabled());
+        let mut frozen_failure = None;
+        for _ in 0..this.config().indexed_storage_retry.max_attempts.max(1) {
+            lifecycle.set_read_attempt(None);
+            if let Some(seal) = &seal {
+                let attempt = seal
+                    .begin_read_attempt(owned_agent_id, None)
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                if let Some((nonce, error)) = frozen_failure.take()
+                    && attempt
+                        .record()
+                        .is_some_and(|record| record.writer_nonce == nonce)
+                {
+                    return Err(error);
+                }
+                lifecycle.set_read_attempt(Some(Arc::new(attempt)));
+            }
+            let attempt = lifecycle.read_attempt().cloned();
+            let result = async {
+                let metadata = match &attempt {
+                    Some(attempt) => {
+                        this.worker_service()
+                            .get_for_acquisition(owned_agent_id, attempt)
+                            .await?
+                    }
+                    None => this.worker_service().get(owned_agent_id).await?,
+                };
+                let Some(metadata) = metadata else {
+                    return Ok(None);
+                };
+                if expected_fingerprint.is_some_and(|expected| {
+                    metadata.initial_worker_metadata.fingerprint != expected
+                }) {
+                    return Ok(None);
+                }
+                Self::hydrate_existing_worker_metadata(
+                    this,
+                    lifecycle,
+                    owned_agent_id,
+                    metadata,
+                    shard_epoch,
+                )
+                .await
+                .map(Some)
+            }
+            .await;
+            if let Err(error) = &result
+                && crate::services::oplog::OplogReadAttempt::is_invalidated_error(error)
+            {
+                continue;
+            }
+            if !matches!(result, Ok(Some(_)))
+                && let (Some(seal), Some(attempt)) = (&seal, &attempt)
+            {
+                if !seal
+                    .validate_read_attempt(owned_agent_id, attempt)
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                {
+                    continue;
+                }
+                if let Err(error) = &result
+                    && let Some(record) = attempt.record()
+                {
+                    frozen_failure = Some((record.writer_nonce, error.clone()));
+                    continue;
+                }
+            }
+            return result;
         }
-        Self::hydrate_existing_worker_metadata(
-            this,
-            lifecycle,
-            owned_agent_id,
-            metadata,
-            shard_epoch,
-        )
-        .await
-        .map(Some)
+        Err(WorkerExecutorError::runtime(
+            "Oplog authority changed repeatedly during acquisition",
+        ))
     }
     pub(in crate::worker) async fn hydrate_existing_worker_metadata<
         T: HasWorkerService + HasComponentService + HasOplogService + HasConfig + Sync,
@@ -1477,16 +1650,43 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         let component_id = initial_worker_metadata.component_id;
         let persisted_status = last_known_status.clone();
         let agent_mode = initial_worker_metadata.agent_mode;
-        let current_status = calculate_last_known_status_with_checkpoint(
-            this,
-            owned_agent_id,
-            initial_worker_metadata.fingerprint,
-            agent_mode,
-            last_known_status,
-        )
-        .await
+        let current_status = if let Some(attempt) = lifecycle.read_attempt() {
+            crate::worker::status::calculate_last_known_status_with_checkpoint_attempt(
+                this,
+                owned_agent_id,
+                initial_worker_metadata.fingerprint,
+                agent_mode,
+                last_known_status,
+                attempt,
+            )
+            .await
+        } else {
+            calculate_last_known_status_with_checkpoint(
+                this,
+                owned_agent_id,
+                initial_worker_metadata.fingerprint,
+                agent_mode,
+                last_known_status,
+            )
+            .await
+        }
         .map_err(WorkerExecutorError::from)?
         .ok_or_else(|| WorkerExecutorError::worker_not_found(owned_agent_id.agent_id()))?;
+        let initial_moved_snapshot_rejections = if let Some(attempt) = lifecycle.read_attempt()
+            && let Some(seal) = this.oplog_service().seal_service()
+        {
+            Some(
+                seal.moved_rejections_for_attempt(
+                    owned_agent_id,
+                    initial_worker_metadata.fingerprint,
+                    attempt,
+                )
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+            )
+        } else {
+            None
+        };
 
         // Reconstruction is pinned to the revision and mode recorded by the Create entry.
         let initial_component = this
@@ -1556,6 +1756,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             agent_mode,
             timestamp: Timestamp::now_utc(),
         }));
+        if let Some(attempt) = lifecycle.read_attempt()
+            && let Some(seal) = this.oplog_service().seal_service()
+            && !seal
+                .validate_read_attempt(owned_agent_id, attempt)
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+        {
+            return Err(crate::services::oplog::OplogReadAttempt::invalidated());
+        }
         let oplog = this
             .oplog_service()
             .open(
@@ -1573,6 +1782,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         Ok(GetOrCreateWorkerResult {
             initial_worker_metadata,
             current_status,
+            initial_moved_snapshot_rejections,
             persisted_status,
             execution_status,
             owner_context,
@@ -1583,28 +1793,162 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             newly_created: false,
         })
     }
-    pub(in crate::worker) async fn get_or_create_worker_metadata<
-        T: HasWorkerService
-            + HasComponentService
-            + HasConfig
-            + HasOplogService
-            + HasEnvironmentStateService
-            + HasShardService
-            + HasSchedulerService
-            + Sync,
-    >(
+    async fn read_acquisition_metadata<T: HasAll<Ctx> + Send + Sync>(
+        this: &T,
+        lifecycle: &mut OplogLifecycleGuard,
+        owned_agent_id: &OwnedAgentId,
+        freshness: InvocationFreshnessDisposition,
+        create_intent: &CreateIntent,
+        admission: Option<&AcquisitionAdmission>,
+        shard_epoch: Option<ShardEpoch>,
+        before_hydration: Result<(), WorkerExecutorError>,
+    ) -> Result<Option<GetOrCreateWorkerResult>, ConstructionError> {
+        let seal = this
+            .oplog_service()
+            .seal_service()
+            .filter(|seal| seal.enabled());
+        let mut frozen_failure = None;
+        for _ in 0..this.config().indexed_storage_retry.max_attempts.max(1) {
+            lifecycle.set_read_attempt(None);
+            if freshness != InvocationFreshnessDisposition::KnownFresh
+                && let Some(seal) = &seal
+            {
+                let attempt = seal
+                    .begin_read_attempt(
+                        owned_agent_id,
+                        admission.and_then(|admission| admission.mode),
+                    )
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                if let Some((nonce, error)) = frozen_failure.take()
+                    && attempt
+                        .record()
+                        .is_some_and(|record| record.writer_nonce == nonce)
+                {
+                    return Err(error);
+                }
+                lifecycle.set_read_attempt(Some(Arc::new(attempt)));
+            }
+            let attempt = lifecycle.read_attempt().cloned();
+            let result = async {
+                let metadata = if freshness == InvocationFreshnessDisposition::KnownFresh {
+                    None
+                } else if let Some(attempt) = &attempt {
+                    this.worker_service().get_for_acquisition(owned_agent_id, attempt).await?
+                } else {
+                    this.worker_service().get(owned_agent_id).await?
+                };
+                if let Some(admission) = admission {
+                    if let Some(key) = &admission.freshness_key {
+                        Self::validate_freshness_from_metadata(
+                            this,
+                            owned_agent_id,
+                            key,
+                            freshness,
+                            create_intent.owner(),
+                            metadata.as_ref().map(|metadata| &metadata.initial_worker_metadata),
+                        )
+                        .await
+                        .map_err(ConstructionError::RequestRejected)?;
+                    }
+                    admission.after_freshness.clone().map_err(ConstructionError::RequestRejected)?;
+                    if let Some(metadata) = &metadata {
+                        let initial = &metadata.initial_worker_metadata;
+                        if let Some(owner) = create_intent.owner() {
+                            owner.ensure_owns_key(
+                                owned_agent_id.agent_id,
+                                initial.agent_mode,
+                                initial.canonical_key.as_deref(),
+                            ).map_err(ConstructionError::RequestRejected)?;
+                        }
+                        if admission.check_health && initial.agent_mode != AgentMode::Ephemeral {
+                            let status = if let Some(attempt) = &attempt {
+                                crate::worker::status::calculate_last_known_status_with_checkpoint_attempt(
+                                    this, owned_agent_id, initial.fingerprint, initial.agent_mode,
+                                    metadata.last_known_status.clone(), attempt,
+                                ).await
+                            } else {
+                                calculate_last_known_status_with_checkpoint(
+                                    this, owned_agent_id, initial.fingerprint, initial.agent_mode,
+                                    metadata.last_known_status.clone(),
+                                ).await
+                            }.map_err(WorkerExecutorError::from)?;
+                            if let Some(status) = status {
+                                let health = Self::ensure_not_failed_with_reader(
+                                    this, owned_agent_id, initial.agent_mode, &status,
+                                    attempt.as_deref().map(crate::services::oplog::OplogReadContext::Attempt),
+                                ).await;
+                                if attempt.as_ref().is_some_and(|attempt| attempt.frozen_read_failed()) {
+                                    health.map_err(ConstructionError::Failed)?;
+                                } else {
+                                match health {
+                                    Err(WorkerExecutorError::PreviousInvocationFailed { .. } | WorkerExecutorError::PreviousInvocationExited)
+                                        if admission.observe_failed => {}
+                                    health => health.map_err(ConstructionError::RequestRejected)?,
+                                }
+                                }
+                            }
+                        }
+                    }
+                }
+                before_hydration.clone().map_err(ConstructionError::RequestRejected)?;
+                if let (Some(seal), Some(attempt)) = (&seal, &attempt)
+                    && !seal.validate_read_attempt(owned_agent_id, attempt).await
+                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                {
+                    return Err(crate::services::oplog::OplogReadAttempt::invalidated().into());
+                }
+                match metadata {
+                    Some(metadata) => Self::hydrate_existing_worker_metadata(
+                        this, lifecycle, owned_agent_id, metadata, shard_epoch,
+                    ).await.map(Some).map_err(ConstructionError::from),
+                    None => Ok(None),
+                }
+            }.await;
+            if let Err(error) = &result
+                && crate::services::oplog::OplogReadAttempt::is_invalidated_error(error.error())
+            {
+                continue;
+            }
+            if result.is_err()
+                && let (Some(seal), Some(attempt)) = (&seal, &attempt)
+            {
+                if !seal
+                    .validate_read_attempt(owned_agent_id, attempt)
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                {
+                    continue;
+                }
+                if let Err(ConstructionError::Failed(_)) = &result
+                    && let Some(record) = attempt.record()
+                {
+                    frozen_failure = Some((record.writer_nonce, result.err().unwrap()));
+                    continue;
+                }
+            }
+            return result;
+        }
+        Err(
+            WorkerExecutorError::runtime("Oplog authority changed repeatedly during acquisition")
+                .into(),
+        )
+    }
+
+    pub(in crate::worker) async fn get_or_create_worker_metadata<T: HasAll<Ctx> + Send + Sync>(
         this: &T,
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         component_revision: Option<ComponentRevision>,
         worker_env: Option<Vec<(String, String)>>,
-        worker_agent_config: Vec<AgentConfigEntryDto>,
+        worker_agent_config: Result<Vec<AgentConfigEntryDto>, WorkerExecutorError>,
         parent: Option<AgentId>,
-        caller: &Caller,
+        caller: &Result<Caller, WorkerExecutorError>,
         invocation_context: &InvocationContextStack,
         freshness_disposition: InvocationFreshnessDisposition,
         creation_mode: WorkerCreationMode,
         create_intent: &CreateIntent,
+        admission: Option<&AcquisitionAdmission>,
     ) -> Result<GetOrCreateWorkerResult, ConstructionError> {
         // Captured once, here, and cached for the life of the oplog. One live oplog is one
         // ownership generation. Re-reading the epoch per write would only let a losing executor
@@ -1619,12 +1963,24 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
         // KnownFresh has already been validated against the ephemeral agent type, the agent ID
         // and the idempotency key at invocation ingress. All other paths retain the checked lookup.
-        let existing = if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
-            None
-        } else {
-            Self::get_existing_worker_metadata(this, lifecycle, owned_agent_id, None, shard_epoch)
-                .await?
-        };
+        let existing = Self::read_acquisition_metadata(
+            this,
+            lifecycle,
+            owned_agent_id,
+            freshness_disposition,
+            create_intent,
+            admission,
+            shard_epoch,
+            worker_agent_config
+                .as_ref()
+                .map(|_| ())
+                .map_err(Clone::clone)
+                .and_then(|()| caller.as_ref().map(|_| ()).map_err(Clone::clone)),
+        )
+        .await?;
+        let worker_agent_config =
+            worker_agent_config.map_err(ConstructionError::RequestRejected)?;
+        let caller = caller.clone().map_err(ConstructionError::RequestRejected)?;
 
         match existing {
             Some(existing) => {
@@ -1864,6 +2220,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Ok(GetOrCreateWorkerResult {
                     initial_worker_metadata,
                     current_status: initial_status,
+                    initial_moved_snapshot_rejections: Some(Default::default()),
                     persisted_status: None,
                     execution_status,
                     owner_context,

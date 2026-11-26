@@ -82,7 +82,20 @@ impl OplogConstructor for CreateOplogConstructor {
             {
                 let service = self.seal_service.as_ref().unwrap();
                 let result = async {
-                    if !service.claim(&self.owned_agent_id, shard_epoch).await? {
+                    let present = service.claim(&self.owned_agent_id, shard_epoch).await?;
+                    if let Some(attempt) = lifecycle.read_attempt() {
+                        attempt.assert_id(&self.owned_agent_id);
+                        if present != attempt.is_present()
+                            || attempt.is_absent()
+                            || !service
+                                .validate_read_attempt(&self.owned_agent_id, attempt)
+                                .await
+                                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                        {
+                            return Err(super::super::OplogReadAttempt::invalidated());
+                        }
+                    }
+                    if !present {
                         if lifecycle.open_purpose() == super::super::OplogOpenPurpose::Archive {
                             service
                                 .remove_claim(&self.owned_agent_id, shard_epoch)
@@ -91,7 +104,34 @@ impl OplogConstructor for CreateOplogConstructor {
                                 self.owned_agent_id.agent_id,
                             ));
                         }
-                        service.unseal(&self.owned_agent_id, shard_epoch).await?;
+                        let record = service
+                            .record_in_mode(&self.owned_agent_id, self.agent_mode)
+                            .await
+                            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
+                            .ok_or_else(|| {
+                                if lifecycle.read_attempt().is_some() {
+                                    super::super::OplogReadAttempt::invalidated()
+                                } else {
+                                    WorkerExecutorError::worker_not_found(
+                                        self.owned_agent_id.agent_id,
+                                    )
+                                }
+                            })?;
+                        if let Some(attempt) = lifecycle.read_attempt()
+                            && attempt
+                                .record()
+                                .is_none_or(|selected| selected.writer_nonce != record.writer_nonce)
+                        {
+                            return Err(super::super::OplogReadAttempt::invalidated());
+                        }
+                        service
+                            .unseal_record(
+                                &self.owned_agent_id,
+                                shard_epoch,
+                                &record,
+                                lifecycle.open_purpose(),
+                            )
+                            .await?;
                     }
                     Ok::<_, WorkerExecutorError>(())
                 }
@@ -117,16 +157,24 @@ impl OplogConstructor for CreateOplogConstructor {
                 if self.agent_mode == AgentMode::Durable
                     && let Some(service) = &self.seal_service
                 {
-                    match service.state(&self.owned_agent_id).await {
-                        Ok(super::super::seal::AgentSealState::Sealed(_)) => {
+                    if let Some(attempt) = lifecycle.read_attempt() {
+                        attempt.assert_id(&self.owned_agent_id);
+                        if !attempt.is_present() {
                             close();
                             return Err(WorkerExecutorError::ShardingNotReady);
                         }
-                        Err(error) => {
-                            close();
-                            return Err(WorkerExecutorError::runtime(error.to_string()));
+                    } else {
+                        match service.state(&self.owned_agent_id).await {
+                            Ok(super::super::seal::AgentSealState::Sealed(_)) => {
+                                close();
+                                return Err(WorkerExecutorError::ShardingNotReady);
+                            }
+                            Err(error) => {
+                                close();
+                                return Err(WorkerExecutorError::runtime(error.to_string()));
+                            }
+                            Ok(_) => {}
                         }
-                        Ok(_) => {}
                     }
                 }
                 None

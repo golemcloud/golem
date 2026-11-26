@@ -547,7 +547,18 @@ impl OplogService for PrimaryOplogService {
         };
 
         if fence_at_create.is_none() {
-            if let Some(service) = self.seal_service().filter(|service| service.enabled())
+            if let Some(attempt) = lifecycle.read_attempt()
+                && let Some(service) = self.seal_service().filter(|service| service.enabled())
+                && (!attempt.is_absent()
+                    || !service
+                        .validate_read_attempt(owned_agent_id, attempt)
+                        .await
+                        .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?)
+            {
+                return Err(super::super::OplogReadAttempt::invalidated());
+            }
+            if lifecycle.read_attempt().is_none()
+                && let Some(service) = self.seal_service().filter(|service| service.enabled())
                 && matches!(
                     service
                         .state(owned_agent_id)

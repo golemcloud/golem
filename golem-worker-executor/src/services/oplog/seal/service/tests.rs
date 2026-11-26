@@ -39,6 +39,212 @@ mod deletion_tests;
 mod scan_tests;
 
 #[test]
+async fn activation_reselects_a_newer_record_after_the_epoch_claim() {
+    use crate::services::oplog::tests::{default_execution_status, default_last_known_status};
+
+    let mut f = Fixture::new(Arc::new(InMemoryIndexedStorage::new())).await;
+    let stale_seal = f.service();
+    let pending = stale_seal
+        .prepare(f.metadata.clone(), ShardEpoch(6))
+        .await
+        .unwrap()
+        .unwrap();
+    stale_seal.remove_moved_copies(&pending).await.unwrap();
+    assert!(stale_seal.release(&pending).await.unwrap());
+    let attempt = stale_seal
+        .begin_read_attempt(&f.id(), Some(AgentMode::Durable))
+        .await
+        .unwrap();
+    let stale_oplog = f.oplog_service().await;
+    let requester_shard = f.shard.clone();
+
+    // A new executor owns epoch 7 while the old executor retains its unexpired local grant.
+    f.shard = Arc::new(ShardServiceDefault::new());
+    f.register(7, true);
+    let current = f.service();
+    current.unseal(&f.id(), ShardEpoch(7)).await.unwrap();
+    let archive = f.archive(0);
+    let handle = archive
+        .open(&f.id(), AgentMode::Durable, None, f.metadata.fingerprint)
+        .await
+        .unwrap();
+    let appended = OplogEntry::Exited {
+        timestamp: Timestamp::from(10000),
+    };
+    handle
+        .append(&[(OplogIndex::from_u64(10), appended.clone())])
+        .await
+        .unwrap();
+    f.metadata.last_known_status.oplog_idx = OplogIndex::from_u64(10);
+    let newer = current
+        .prepare(f.metadata.clone(), ShardEpoch(7))
+        .await
+        .unwrap()
+        .unwrap();
+    current.remove_moved_copies(&newer).await.unwrap();
+    assert!(current.release(&newer).await.unwrap());
+    assert_eq!(
+        current
+            .record_in_mode(&f.id(), AgentMode::Durable)
+            .await
+            .unwrap()
+            .unwrap()
+            .last_index,
+        OplogIndex::from_u64(10)
+    );
+    assert!(stale_seal.deadline(&f.id(), ShardEpoch(6)).is_some());
+    f.shard = requester_shard;
+    f.register(8, true);
+
+    let mut lifecycle = stale_oplog.lock_lifecycle(&f.id().agent_id).await;
+    lifecycle.set_read_attempt(Some(Arc::new(attempt)));
+    let opened = stale_oplog
+        .open(
+            &mut lifecycle,
+            &f.id(),
+            AgentMode::Durable,
+            None,
+            pending.record.metadata.clone(),
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(8)),
+        )
+        .await;
+    assert!(
+        matches!(opened, Err(ref error) if OplogReadAttempt::is_invalidated_error(error)),
+        "the obsolete read selection must be discarded after the claim"
+    );
+    assert!(
+        !f.indexed
+            .observe_agent("test", "after_invalidated", &f.id())
+            .await
+            .unwrap()
+            .has_data
+    );
+
+    let selected = stale_seal
+        .begin_read_attempt(&f.id(), Some(AgentMode::Durable))
+        .await
+        .unwrap();
+    assert_eq!(
+        selected.record().unwrap().writer_nonce,
+        newer.record.writer_nonce
+    );
+    let metadata = selected.record().unwrap().metadata.clone();
+    lifecycle.set_read_attempt(Some(Arc::new(selected)));
+    let opened = stale_oplog
+        .open(
+            &mut lifecycle,
+            &f.id(),
+            AgentMode::Durable,
+            None,
+            metadata,
+            default_last_known_status(),
+            default_execution_status(AgentMode::Durable),
+            Some(ShardEpoch(8)),
+        )
+        .await
+        .unwrap();
+    assert!(opened.fence().is_none());
+    assert_eq!(opened.current_oplog_index().await, OplogIndex::from_u64(10));
+    let mut expected = f.original.clone();
+    expected.insert(OplogIndex::from_u64(10), appended);
+    let actual = opened.read_exact(OplogIndex::INITIAL, 10).await.unwrap();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+async fn read_attempt_keeps_one_selected_source_until_authority_changes() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let f = Fixture::with_mode(Arc::new(InMemoryIndexedStorage::new()), mode).await;
+        let seal = f.service();
+        let service = f.oplog_service().await;
+        f.blobs.reset();
+        let present = seal.begin_read_attempt(&f.id(), Some(mode)).await.unwrap();
+        assert!(present.is_present());
+        assert!(present.record().is_none());
+        assert_eq!(f.blobs.seal_lists().len(), 1);
+        assert_eq!(
+            present
+                .read_exact(&service, &f.id(), mode, OplogIndex::INITIAL, 9)
+                .await
+                .unwrap(),
+            f.original
+        );
+        assert!(seal.validate_read_attempt(&f.id(), &present).await.unwrap());
+        assert_eq!(f.blobs.seal_lists().len(), 1);
+
+        f.reject(&[5, 8]).await;
+        let pending = seal
+            .prepare(f.metadata.clone(), ShardEpoch(6))
+            .await
+            .unwrap()
+            .unwrap();
+        seal.remove_moved_copies(&pending).await.unwrap();
+        assert!(seal.release(&pending).await.unwrap());
+        assert!(!seal.validate_read_attempt(&f.id(), &present).await.unwrap());
+
+        f.blobs.reset();
+        let frozen = seal.begin_read_attempt(&f.id(), Some(mode)).await.unwrap();
+        assert!(!frozen.is_present());
+        assert!(!frozen.is_absent());
+        assert_eq!(
+            frozen.record().unwrap().writer_nonce,
+            pending.record.writer_nonce
+        );
+        assert_eq!(f.blobs.seal_lists().len(), 1);
+        assert_eq!(
+            frozen
+                .get_last_index(&service, &f.id(), mode)
+                .await
+                .unwrap(),
+            OplogIndex::from_u64(9)
+        );
+        assert_eq!(
+            frozen
+                .read_exact(&service, &f.id(), mode, OplogIndex::INITIAL, 9)
+                .await
+                .unwrap(),
+            f.original
+        );
+        assert_eq!(
+            seal.moved_rejections_for_attempt(&f.id(), f.metadata.fingerprint, &frozen)
+                .await
+                .unwrap(),
+            BTreeSet::from([OplogIndex::from_u64(5), OplogIndex::from_u64(8)])
+        );
+        assert!(
+            seal.moved_rejections_for_attempt(&f.id(), AgentFingerprint(Uuid::new_v4()), &frozen)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        assert!(seal.validate_read_attempt(&f.id(), &frozen).await.unwrap());
+        assert_eq!(f.blobs.seal_lists().len(), 1);
+    }
+}
+
+#[test]
+async fn absent_read_attempt_validation_does_not_list_again() {
+    let f = Fixture::new(Arc::new(InMemoryIndexedStorage::new())).await;
+    let seal = f.service();
+    let id = OwnedAgentId::new(f.id().environment_id(), &AgentId::from_parts(7, 9999));
+    for (mode, lists) in [
+        (Some(AgentMode::Durable), 1),
+        (Some(AgentMode::Ephemeral), 1),
+        (None, 2),
+    ] {
+        f.blobs.reset();
+        let attempt = seal.begin_read_attempt(&id, mode).await.unwrap();
+        assert!(attempt.is_absent());
+        assert!(!attempt.is_present());
+        assert!(attempt.record().is_none());
+        assert!(seal.validate_read_attempt(&id, &attempt).await.unwrap());
+        assert_eq!(f.blobs.seal_lists().len(), lists);
+    }
+}
+
+#[test]
 async fn mode_addressed_records_list_only_the_requested_namespace() {
     let f = Fixture::new(Arc::new(InMemoryIndexedStorage::new())).await;
     let seal = f.service();

@@ -610,6 +610,34 @@ impl OplogService for RateLimitedOplogService {
         self.inner.get_last_index(owned_agent_id, agent_mode).await
     }
 
+    async fn get_last_index_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        self.inner.get_last_index_present(id, mode).await
+    }
+
+    async fn read_source_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        self.inner.read_source_present(id, mode, idx, n).await
+    }
+
+    async fn read_exact_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        self.inner.read_exact_present(id, mode, idx, n).await
+    }
+
     async fn try_get_last_index(
         &self,
         owned_agent_id: &OwnedAgentId,

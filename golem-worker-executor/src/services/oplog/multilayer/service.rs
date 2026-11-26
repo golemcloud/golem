@@ -498,25 +498,7 @@ impl OplogService for MultiLayerOplogService {
         self.read_with_authority(
             owned_agent_id,
             agent_mode,
-            || async {
-                let mut result = self
-                    .primary
-                    .get_last_index(owned_agent_id, agent_mode)
-                    .await?;
-                if result == OplogIndex::NONE {
-                    for (level, layer) in self.lower.iter().enumerate() {
-                        let idx = layer
-                            .get_last_index(owned_agent_id, agent_mode)
-                            .await
-                            .map_err(|error| unreadable_archive(owned_agent_id, level, error))?;
-                        if idx != OplogIndex::NONE {
-                            result = idx;
-                            break;
-                        }
-                    }
-                }
-                Ok(result)
-            },
+            || self.get_last_index_present(owned_agent_id, agent_mode),
             |record| async move {
                 Ok(if record.agent_mode == agent_mode {
                     record.last_index
@@ -528,6 +510,27 @@ impl OplogService for MultiLayerOplogService {
             std::convert::identity,
         )
         .await
+    }
+
+    async fn get_last_index_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+    ) -> Result<OplogIndex, UnreadableOplog> {
+        let mut result = self.primary.get_last_index_present(id, mode).await?;
+        if result == OplogIndex::NONE {
+            for (level, layer) in self.lower.iter().enumerate() {
+                let idx = layer
+                    .get_last_index(id, mode)
+                    .await
+                    .map_err(|error| unreadable_archive(id, level, error))?;
+                if idx != OplogIndex::NONE {
+                    result = idx;
+                    break;
+                }
+            }
+        }
+        Ok(result)
     }
 
     async fn try_get_last_index(
@@ -686,30 +689,7 @@ impl OplogService for MultiLayerOplogService {
         self.read_with_authority(
             owned_agent_id,
             agent_mode,
-            || async {
-                let mut read = OplogRead::new(idx, n).map_err(unreadable)?;
-                if let Some((start, count)) = read.next_range() {
-                    let entries = self
-                        .primary
-                        .read_source(owned_agent_id, agent_mode, start, count)
-                        .await?;
-                    read.add_source(OplogReadSource::Primary, entries)
-                        .map_err(unreadable)?;
-                }
-                for (level, layer) in self.lower.iter().enumerate() {
-                    if let Some((start, count)) = read.next_range() {
-                        let entries = layer
-                            .read_source(owned_agent_id, agent_mode, start, count)
-                            .await
-                            .map_err(unreadable)?;
-                        read.add_source(OplogReadSource::Archive(level), entries)
-                            .map_err(unreadable)?;
-                    } else {
-                        break;
-                    }
-                }
-                read.finish().map_err(unreadable)
-            },
+            || self.read_exact_present(owned_agent_id, agent_mode, idx, n),
             |record| async move {
                 if record.agent_mode != agent_mode {
                     return OplogRead::<OplogEntry>::new(idx, n)
@@ -737,6 +717,38 @@ impl OplogService for MultiLayerOplogService {
         .await
     }
 
+    async fn read_exact_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        let unreadable = |error| UnreadableOplog::new(&id.agent_id, error);
+        let mut read = OplogRead::new(idx, n).map_err(unreadable)?;
+        if let Some((start, count)) = read.next_range() {
+            let entries = self
+                .primary
+                .read_source_present(id, mode, start, count)
+                .await?;
+            read.add_source(OplogReadSource::Primary, entries)
+                .map_err(unreadable)?;
+        }
+        for (level, layer) in self.lower.iter().enumerate() {
+            if let Some((start, count)) = read.next_range() {
+                let entries = layer
+                    .read_source(id, mode, start, count)
+                    .await
+                    .map_err(unreadable)?;
+                read.add_source(OplogReadSource::Archive(level), entries)
+                    .map_err(unreadable)?;
+            } else {
+                break;
+            }
+        }
+        read.finish().map_err(unreadable)
+    }
+
     async fn read_source(
         &self,
         owned_agent_id: &OwnedAgentId,
@@ -749,31 +761,7 @@ impl OplogService for MultiLayerOplogService {
         self.read_with_authority(
             owned_agent_id,
             agent_mode,
-            || async {
-                let mut result = self
-                    .primary
-                    .read_source(owned_agent_id, agent_mode, idx, n)
-                    .await?;
-                for layer in &self.lower {
-                    // Each layer holds an older part of the oplog than the layer above it and reads a
-                    // suffix of the range it is given, so it is given the range below what is covered.
-                    let count = match result.first_key_value() {
-                        Some((first, _)) => first.as_u64().saturating_sub(idx.as_u64()),
-                        None => n,
-                    };
-                    if count == 0 {
-                        break;
-                    }
-                    let entries = layer
-                        .read_source(owned_agent_id, agent_mode, idx, count)
-                        .await
-                        .map_err(unreadable)?;
-                    for (index, entry) in entries {
-                        result.entry(index).or_insert(entry);
-                    }
-                }
-                Ok(result)
-            },
+            || self.read_source_present(owned_agent_id, agent_mode, idx, n),
             |record| async move {
                 if record.agent_mode != agent_mode {
                     return Ok(BTreeMap::new());
@@ -793,6 +781,36 @@ impl OplogService for MultiLayerOplogService {
             std::convert::identity,
         )
         .await
+    }
+
+    async fn read_source_present(
+        &self,
+        id: &OwnedAgentId,
+        mode: AgentMode,
+        idx: OplogIndex,
+        n: u64,
+    ) -> Result<BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+        let unreadable = |error| UnreadableOplog::new(&id.agent_id, error);
+        checked_range_end(idx, n).map_err(unreadable)?;
+        let mut result = self.primary.read_source_present(id, mode, idx, n).await?;
+        for layer in &self.lower {
+            // Every layer stores an older suffix than the layer above it.
+            let count = match result.first_key_value() {
+                Some((first, _)) => first.as_u64().saturating_sub(idx.as_u64()),
+                None => n,
+            };
+            if count == 0 {
+                break;
+            }
+            let entries = layer
+                .read_source(id, mode, idx, count)
+                .await
+                .map_err(unreadable)?;
+            for (index, entry) in entries {
+                result.entry(index).or_insert(entry);
+            }
+        }
+        Ok(result)
     }
 
     async fn exists(

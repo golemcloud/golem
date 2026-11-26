@@ -715,6 +715,8 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     last_resume_request: Mutex<Timestamp>,
     /// The automatic snapshot entries that the starts of the agent exclude.
     snapshot_exclusions: StdMutex<SnapshotExclusions>,
+    /// Moved rejections resolved by construction, retained until its first successful prepare.
+    initial_moved_snapshot_rejections: StdMutex<Option<std::collections::BTreeSet<OplogIndex>>>,
     startup_linear_memory_bytes: AtomicU64,
     memory_growth: StdMutex<Arc<PendingMemoryGrowth>>,
     memory_accounting: residency::MemoryAccounting,
@@ -1461,6 +1463,7 @@ pub enum ResultOrSubscription {
 pub(crate) struct GetOrCreateWorkerResult {
     pub(crate) initial_worker_metadata: AgentMetadata,
     pub(crate) current_status: Arc<arc_swap::ArcSwap<AgentStatusRecord>>,
+    initial_moved_snapshot_rejections: Option<std::collections::BTreeSet<OplogIndex>>,
     /// The status value currently persisted in the live cache, used as the first delta baseline.
     persisted_status: Option<AgentStatusRecord>,
     execution_status: Arc<std::sync::RwLock<ExecutionStatus>>,
@@ -1503,6 +1506,7 @@ enum StopResult {
 #[cfg(test)]
 mod resource_release_tests;
 
+pub(crate) use acquisition::AcquisitionAdmission;
 pub use acquisition::merge_agent_env_with_default_env;
 pub(crate) use ingress::{
     await_scalar_invocation, require_canonical_command_path,

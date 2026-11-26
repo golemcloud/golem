@@ -101,7 +101,14 @@ impl OplogConstructor for CreateOplogConstructor {
             AgentMode::Durable => {
                 let last_oplog_index = match self.last_oplog_index {
                     Some(idx) => idx,
-                    None => match self.stored_last_index(agent_mode).await {
+                    None => match match lifecycle.read_attempt() {
+                        Some(attempt) => {
+                            attempt
+                                .get_last_index(&self.service, &self.owned_agent_id, agent_mode)
+                                .await
+                        }
+                        None => self.stored_last_index(agent_mode).await,
+                    } {
                         Ok(idx) => idx,
                         Err(error) => return failed(close, error.into()),
                     },
@@ -170,11 +177,28 @@ impl OplogConstructor for CreateOplogConstructor {
                     && let Some(seal) = self.service.seal_service()
                     && seal.enabled()
                 {
-                    let mut state = match seal.state(&self.owned_agent_id).await {
-                        Ok(state) => state,
-                        Err(error) => {
-                            return failed(close, WorkerExecutorError::runtime(error.to_string()));
+                    let mut state = match lifecycle.read_attempt() {
+                        Some(attempt) => {
+                            attempt.assert_id(&self.owned_agent_id);
+                            match attempt.record() {
+                                Some(record) => super::super::seal::AgentSealState::Sealed(
+                                    Box::new(record.clone()),
+                                ),
+                                None if attempt.is_absent() => {
+                                    super::super::seal::AgentSealState::Absent
+                                }
+                                None => super::super::seal::AgentSealState::Present,
+                            }
                         }
+                        None => match seal.state(&self.owned_agent_id).await {
+                            Ok(state) => state,
+                            Err(error) => {
+                                return failed(
+                                    close,
+                                    WorkerExecutorError::runtime(error.to_string()),
+                                );
+                            }
+                        },
                     };
                     // Frozen observations never claim. A resident owning open still claims
                     // before reading any layer, and rechecks authority if release won the race.
@@ -184,12 +208,40 @@ impl OplogConstructor for CreateOplogConstructor {
                         let present = match seal.claim_ephemeral(&self.owned_agent_id, epoch).await
                         {
                             Ok(present) => present,
-                            // A bare higher fence does not prove presence. A stale observation
-                            // must still use frozen history when the agent is sealed.
-                            Err(WorkerExecutorError::OplogFenced { .. }) => false,
+                            // A stable present attempt still opens a fenced reader on refusal.
+                            // Without an attempt, a bare higher fence does not prove presence.
+                            Err(WorkerExecutorError::OplogFenced { .. }) => {
+                                lifecycle.read_attempt().is_some()
+                            }
                             Err(error) => return failed(close, error),
                         };
+                        if present && let Some(attempt) = lifecycle.read_attempt() {
+                            match seal
+                                .validate_read_attempt(&self.owned_agent_id, attempt)
+                                .await
+                            {
+                                Ok(true) => {}
+                                Ok(false) => {
+                                    return failed(
+                                        close,
+                                        super::super::OplogReadAttempt::invalidated(),
+                                    );
+                                }
+                                Err(error) => {
+                                    return failed(
+                                        close,
+                                        WorkerExecutorError::runtime(error.to_string()),
+                                    );
+                                }
+                            }
+                        }
                         if !present {
+                            if lifecycle.read_attempt().is_some() {
+                                return failed(
+                                    close,
+                                    super::super::OplogReadAttempt::invalidated(),
+                                );
+                            }
                             state = match seal.state(&self.owned_agent_id).await {
                                 Ok(state) => state,
                                 Err(error) => {
@@ -244,7 +296,10 @@ impl OplogConstructor for CreateOplogConstructor {
                 // after its claim: an index a caller read before can be behind by whatever an
                 // older owner's writer appended in between, and this handle's first append would
                 // collide with it.
-                let stored_last_index = || self.stored_last_index(agent_mode);
+                let stored_last_index = || {
+                    self.service
+                        .get_last_index_present(&self.owned_agent_id, agent_mode)
+                };
                 let last_oplog_index = match self.last_oplog_index {
                     None => stored_last_index().await,
                     Some(idx)

@@ -350,29 +350,31 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             deps,
             owned_agent_id,
             worker_env,
-            worker_agent_config,
+            Ok(worker_agent_config),
             component_revision,
             parent,
             invocation_context_stack,
-            caller,
+            Ok(caller),
             InvocationFreshnessDisposition::MayExist,
             CreateIntent::Existing,
+            None,
         )
         .await
     }
 
-    pub async fn get_or_add_with_freshness<T>(
+    pub(crate) async fn get_or_add_with_freshness<T>(
         &self,
         deps: &T,
         owned_agent_id: &OwnedAgentId,
         worker_env: Option<Vec<(String, String)>>,
-        worker_agent_config: Vec<AgentConfigEntryDto>,
+        worker_agent_config: Result<Vec<AgentConfigEntryDto>, WorkerExecutorError>,
         component_revision: Option<ComponentRevision>,
         parent: Option<AgentId>,
         invocation_context_stack: &InvocationContextStack,
-        caller: Caller,
+        caller: Result<Caller, WorkerExecutorError>,
         freshness_disposition: InvocationFreshnessDisposition,
         create_intent: CreateIntent,
+        admission: Option<crate::worker::AcquisitionAdmission>,
     ) -> Result<Arc<Worker<Ctx>>, WorkerExecutorError>
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
@@ -390,6 +392,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                 freshness_disposition,
                 WorkerCreationMode::ComponentAgent,
                 create_intent,
+                admission,
             )
             .in_current_span()
             .await?;
@@ -412,11 +415,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .primary
             .ensure_created(
                 None,
-                Vec::new(),
+                Ok(Vec::new()),
                 Some(component_revision),
                 None,
                 InvocationContextStack::fresh(),
-                caller,
+                Ok(caller),
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::OplogProcessor,
                 CreateIntent::Create {
@@ -424,6 +427,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                     exclusive: false,
                     idempotency_key: None,
                 },
+                None,
             )
             .in_current_span()
             .await?;
@@ -489,11 +493,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
         worker
             .ensure_created(
                 None,
-                Vec::new(),
+                Ok(Vec::new()),
                 Some(component_revision),
                 None,
                 invocation_context_stack.clone(),
-                caller,
+                Ok(caller),
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::EphemeralExternalTool,
                 CreateIntent::Create {
@@ -501,6 +505,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                     exclusive: false,
                     idempotency_key: Some(idempotency_key.clone()),
                 },
+                None,
             )
             .in_current_span()
             .await?;
@@ -530,11 +535,11 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
             .primary
             .ensure_created(
                 None,
-                Vec::new(),
+                Ok(Vec::new()),
                 Some(component_revision),
                 None,
                 invocation_context.clone(),
-                caller,
+                Ok(caller),
                 InvocationFreshnessDisposition::MayExist,
                 WorkerCreationMode::StandaloneTool,
                 CreateIntent::Create {
@@ -542,6 +547,7 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                     exclusive: false,
                     idempotency_key: Some(key),
                 },
+                None,
             )
             .await?;
         Ok(active_agent.primary())

@@ -626,6 +626,7 @@ pub trait ExternalOperations<Ctx: WorkerCtx> {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
+        reader: Option<crate::services::oplog::OplogReadContext<'_>>,
     ) -> impl Future<Output = Option<LastError>> + Send;
 
     /// Prepares a wasmtime instance after it has been created, but before it can be invoked.

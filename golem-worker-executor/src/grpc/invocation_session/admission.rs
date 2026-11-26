@@ -180,81 +180,75 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let owned_agent_id = resolved.owned_agent_id.clone();
 
-        Worker::<Ctx>::validate_invocation_freshness(
-            self,
-            &owned_agent_id,
-            &owner_key,
-            freshness_disposition,
-            resolved.new_owner.as_ref(),
-        )
-        .await?;
+        if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+            Worker::<Ctx>::validate_invocation_freshness(
+                self,
+                &owned_agent_id,
+                &owner_key,
+                freshness_disposition,
+                resolved.new_owner.as_ref(),
+            )
+            .await?;
+        }
 
-        let caller: Caller = crate::grpc::extract_caller(&request.caller)?;
+        let caller: Result<Caller, _> = crate::grpc::extract_caller(&request.caller);
+        if freshness_disposition == InvocationFreshnessDisposition::KnownFresh {
+            caller.clone()?;
+        }
+        let acquisition_admission = crate::worker::AcquisitionAdmission {
+            mode: resolved.agent_mode,
+            freshness_key: (freshness_disposition == InvocationFreshnessDisposition::MayExist)
+                .then_some(owner_key),
+            after_freshness: caller.as_ref().map(|_| ()).map_err(Clone::clone),
+            check_health: freshness_disposition != InvocationFreshnessDisposition::KnownFresh,
+            observe_failed: mode
+                == golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await
+                && freshness_disposition == InvocationFreshnessDisposition::MayExist,
+        };
 
         let invocation_context = self
             .limit_invocation_context_stack_depth(from_proto_invocation_context(&request.context));
 
         match mode {
             golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await => {
-                let acquisition = self
-                    .get_or_create_pending_with_freshness(
+                let (worker, _response_lease, health_refusal) = self
+                    .get_or_create_pending_with_admission(
                         request,
                         &resolved,
                         freshness_disposition,
                         expected_fingerprint,
+                        acquisition_admission,
                     )
-                    .await;
-                let (worker, _response_lease) = match acquisition {
+                    .await?;
+                if let Some(error) = health_refusal {
                     // A same-key retry that the agent's health refuses observes the recorded
                     // success of its invocation: an invocation that recorded its result keeps it
                     // when the agent gave up during its background work.
-                    Err(
-                        error @ (WorkerExecutorError::PreviousInvocationFailed { .. }
-                        | WorkerExecutorError::PreviousInvocationExited),
-                    ) if freshness_disposition == InvocationFreshnessDisposition::MayExist => {
-                        match self
-                            .get_or_create_pending_for_lookup(
-                                request,
-                                &resolved,
-                                expected_fingerprint,
-                            )
-                            .await?
-                        {
-                            Some((worker, lease)) => {
-                                let metadata = worker.get_initial_worker_metadata();
-                                let ik = request_key
-                                    .finalize(metadata.agent_id, metadata.fingerprint, &method_name)
-                                    .id();
-                                // The scope is not bound yet, so a deletion can stop this
-                                // generation's state actor; that read fails with the original
-                                // error rather than panicking.
-                                // Another caller observes only a recorded success; a recorded
-                                // failure keeps the agent's health error. Only an RPC caller
-                                // waits for accepted work without a result on a failed agent:
-                                // it is attached to that work.
-                                let observable =
-                                    match worker.try_lookup_invocation_result(&ik).await {
-                                        Ok(crate::model::LookupResult::Complete(Ok(_))) => true,
-                                        Ok(crate::model::LookupResult::New) | Err(_) => false,
-                                        Ok(_) => request.origin_invocation.is_some(),
-                                    };
-                                if !observable {
-                                    return worker
-                                        .deleted_incarnation_as_not_found(
-                                            expected_fingerprint,
-                                            Err(error),
-                                        )
-                                        .await;
-                                }
-                                // Acceptance still validates the exact origin and descriptor.
-                                // Observing accepted work does not start a failed runtime.
-                                (worker, lease)
-                            }
-                            _ => return Err(error),
-                        }
+                    let metadata = worker.get_initial_worker_metadata();
+                    let ik = request_key
+                        .finalize(metadata.agent_id, metadata.fingerprint, &method_name)
+                        .id();
+                    // The scope is not bound yet, so a deletion can stop this
+                    // generation's state actor; that read fails with the original
+                    // error rather than panicking.
+                    // Another caller observes only a recorded success; a recorded
+                    // failure keeps the agent's health error. Only an RPC caller
+                    // waits for accepted work without a result on a failed agent:
+                    // it is attached to that work.
+                    let observable = match worker.try_lookup_invocation_result(&ik).await {
+                        Ok(crate::model::LookupResult::Complete(Ok(_))) => true,
+                        Ok(crate::model::LookupResult::New) | Err(_) => false,
+                        Ok(_) => request.origin_invocation.is_some(),
+                    };
+                    if !observable {
+                        return worker
+                            .deleted_incarnation_as_not_found(expected_fingerprint, Err(error))
+                            .await;
                     }
-                    acquisition => acquisition?,
-                };
+                    // Acceptance still validates the exact origin and descriptor.
+                    // Observing accepted work does not start a failed runtime.
+                }
+                let caller = caller?;
                 let bound = scope
                     .bind(&worker.tasks)
                     .map_err(WorkerExecutorError::runtime);
@@ -531,17 +525,31 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             Some(expected),
                         )
                         .await?;
+                        if let Some(key) = &acquisition_admission.freshness_key {
+                            Worker::<Ctx>::validate_freshness_from_metadata(
+                                self,
+                                &owned_agent_id,
+                                key,
+                                freshness_disposition,
+                                resolved.new_owner.as_ref(),
+                                Some(&pinned.0.get_initial_worker_metadata()),
+                            )
+                            .await?;
+                        }
+                        acquisition_admission.after_freshness.clone()?;
                         pinned.0.ensure_owns_key(resolved.new_owner.as_ref())?;
                         Some(pinned)
                     }
                     (Some(_), None) => Some(
-                        self.get_or_create_pending_with_freshness(
+                        self.get_or_create_pending_with_admission(
                             request,
                             &resolved,
                             freshness_disposition,
                             expected_fingerprint,
+                            acquisition_admission.clone(),
                         )
-                        .await?,
+                        .await
+                        .map(|(worker, lease, _)| (worker, lease))?,
                     ),
                     (None, _) => None,
                 };
@@ -564,15 +572,18 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             allow_streams: false,
                             ..request.clone()
                         };
-                        self.get_or_create_pending_with_freshness(
+                        self.get_or_create_pending_with_admission(
                             &detached,
                             &resolved,
                             freshness_disposition,
                             None,
+                            acquisition_admission,
                         )
-                        .await?
+                        .await
+                        .map(|(worker, lease, _)| (worker, lease))?
                     }
                 };
+                let caller = caller?;
                 let bound = scope
                     .bind(&worker.tasks)
                     .map_err(WorkerExecutorError::runtime);

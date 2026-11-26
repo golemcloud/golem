@@ -40,6 +40,16 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
     agent_mode: AgentMode,
     latest_worker_status: &AgentStatusRecord,
 ) -> Option<LastError> {
+    last_error_with_reader(this, owned_agent_id, agent_mode, latest_worker_status, None).await
+}
+
+pub(crate) async fn last_error_with_reader<T: HasOplogService + HasConfig>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    latest_worker_status: &AgentStatusRecord,
+    reader: Option<crate::services::oplog::OplogReadContext<'_>>,
+) -> Option<LastError> {
     // Short-circuit: there is nothing to report unless the worker is currently in an error-bearing
     // state. `last_error` otherwise scans backward to the start of the current invocation, which is
     // unbounded for long-running invocations. A failed/retrying worker always has its error near the
@@ -53,11 +63,15 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
         return None;
     }
 
-    let last_index = match this
-        .oplog_service()
-        .get_last_index(owned_agent_id, agent_mode)
-        .await
-    {
+    let service = this.oplog_service();
+    let last_index = match match reader {
+        Some(reader) => {
+            reader
+                .get_last_index(service.as_ref(), owned_agent_id, agent_mode)
+                .await
+        }
+        None => service.get_last_index(owned_agent_id, agent_mode).await,
+    } {
         Ok(last_index) => last_index,
         Err(error) => return Some(unreadable_last_error(error)),
     };
@@ -74,15 +88,16 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
     let mut window_end = last_index;
     'scan: loop {
         let window_start = backward_scan_window_start(window_end);
-        let entries = match this
-            .oplog_service()
-            .read_exact(
-                owned_agent_id,
-                agent_mode,
-                window_start,
-                window_end.as_u64() - window_start.as_u64() + 1,
-            )
-            .await
+        let count = window_end.as_u64() - window_start.as_u64() + 1;
+        let entries = match read_error_range(
+            this,
+            owned_agent_id,
+            agent_mode,
+            window_start,
+            count,
+            reader,
+        )
+        .await
         {
             Ok(entries) => entries,
             Err(error) => return Some(unreadable_last_error(error)),
@@ -153,7 +168,14 @@ pub(crate) async fn last_error<T: HasOplogService + HasConfig>(
     match first_error {
         Some(error) => Some(LastError {
             error,
-            stderr: recover_stderr_logs(this, owned_agent_id, agent_mode, last_error_index).await,
+            stderr: recover_stderr_logs_with_reader(
+                this,
+                owned_agent_id,
+                agent_mode,
+                last_error_index,
+                reader,
+            )
+            .await,
             retry_from: first_retry_from,
         }),
         None => None,
@@ -177,6 +199,35 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     agent_mode: AgentMode,
     last_oplog_idx: OplogIndex,
 ) -> String {
+    recover_stderr_logs_with_reader(this, owned_agent_id, agent_mode, last_oplog_idx, None).await
+}
+
+async fn read_error_range<T: HasOplogService>(
+    this: &T,
+    id: &OwnedAgentId,
+    mode: AgentMode,
+    idx: OplogIndex,
+    count: u64,
+    reader: Option<crate::services::oplog::OplogReadContext<'_>>,
+) -> Result<std::collections::BTreeMap<OplogIndex, OplogEntry>, UnreadableOplog> {
+    let service = this.oplog_service();
+    match reader {
+        Some(reader) => {
+            reader
+                .read_exact(service.as_ref(), id, mode, idx, count)
+                .await
+        }
+        None => service.read_exact(id, mode, idx, count).await,
+    }
+}
+
+async fn recover_stderr_logs_with_reader<T: HasOplogService + HasConfig>(
+    this: &T,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+    last_oplog_idx: OplogIndex,
+    reader: Option<crate::services::oplog::OplogReadContext<'_>>,
+) -> String {
     let max_count = this.config().limits.event_history_size;
 
     // This might overestimate the size of stderr_entries by the size of current_stderr_entries_batch, but fine as we
@@ -192,15 +243,15 @@ pub(crate) async fn recover_stderr_logs<T: HasOplogService + HasConfig>(
     'scan: loop {
         let window_start = backward_scan_window_start(window_end);
         // The stderr is the context of an error, so a window that does not read ends it.
-        let Ok(entries) = this
-            .oplog_service()
-            .read_exact(
-                owned_agent_id,
-                agent_mode,
-                window_start,
-                window_end.as_u64() - window_start.as_u64() + 1,
-            )
-            .await
+        let Ok(entries) = read_error_range(
+            this,
+            owned_agent_id,
+            agent_mode,
+            window_start,
+            window_end.as_u64() - window_start.as_u64() + 1,
+            reader,
+        )
+        .await
         else {
             break 'scan;
         };

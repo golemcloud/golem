@@ -4015,12 +4015,14 @@ impl ExternalOperations<TestWorkerCtx> for TestWorkerCtx {
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
         latest_worker_status: &AgentStatusRecord,
+        reader: Option<golem_worker_executor::services::oplog::OplogReadContext<'_>>,
     ) -> Option<LastError> {
         DurableWorkerCtx::<TestWorkerCtx>::get_last_error_and_retry_count(
             this,
             owned_agent_id,
             agent_mode,
             latest_worker_status,
+            reader,
         )
         .await
     }

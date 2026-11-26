@@ -68,9 +68,18 @@ pub struct OplogLifecycleGuard {
     slot: Option<OwnedMutexGuard<Option<OpenOplogEntry>>>,
     owner: OpenOplogs,
     open_purpose: OplogOpenPurpose,
+    read_attempt: Option<Arc<super::OplogReadAttempt>>,
 }
 
 impl OplogLifecycleGuard {
+    pub fn set_read_attempt(&mut self, attempt: Option<Arc<super::OplogReadAttempt>>) {
+        self.read_attempt = attempt;
+    }
+
+    pub fn read_attempt(&self) -> Option<&Arc<super::OplogReadAttempt>> {
+        self.read_attempt.as_ref()
+    }
+
     pub fn assert_agent(&self, agent_id: &AgentId) {
         assert_eq!(&self.agent_id, agent_id);
     }
@@ -124,6 +133,7 @@ impl OpenOplogs {
             slot: Some(slot),
             owner: self.clone(),
             open_purpose: OplogOpenPurpose::Activation,
+            read_attempt: None,
         }
     }
 
