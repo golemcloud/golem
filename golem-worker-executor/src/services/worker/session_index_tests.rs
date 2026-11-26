@@ -1160,6 +1160,210 @@ async fn the_stream_session_suffix_fold_needs_the_fork_marker_in_the_index() {
     assert_eq!(metadata.covered_through(), marker);
 }
 
+/// A worker service whose stream session index gives control metadata covered through the next
+/// index of its script at each lookup. It has no other service.
+struct ScriptedCoverage(std::sync::Mutex<std::collections::VecDeque<OplogIndex>>);
+
+#[async_trait]
+impl WorkerService for ScriptedCoverage {
+    async fn lookup_durable_stream_control_metadata(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _fingerprint: AgentFingerprint,
+        _key: &golem_common::base_model::durable_stream::StreamSessionKey,
+    ) -> Result<
+        crate::durable_host::durable_stream::SessionControlMetadata,
+        crate::durable_host::durable_stream::SessionError,
+    > {
+        let mut metadata = crate::durable_host::durable_stream::SessionControlMetadata::default();
+        metadata.advance_coverage(
+            self.0
+                .lock()
+                .unwrap()
+                .pop_front()
+                .expect("a scripted lookup"),
+        );
+        Ok(metadata)
+    }
+
+    async fn lookup_durable_stream_public_binding(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _fingerprint: AgentFingerprint,
+        _route_scope: &str,
+        _public_session_id: &str,
+    ) -> Result<Option<DurableStreamPublicBinding>, crate::durable_host::durable_stream::SessionError>
+    {
+        unimplemented!()
+    }
+
+    async fn get(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<GetWorkerMetadataResult>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn lookup_durable_stream_session(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _fingerprint: AgentFingerprint,
+        _status: &golem_common::model::AgentStatusRecord,
+        _key: &InvocationId,
+    ) -> Result<
+        Option<golem_common::model::DurableStreamSessionStatus>,
+        crate::durable_host::durable_stream::SessionError,
+    > {
+        unimplemented!()
+    }
+
+    async fn get_running_workers_in_shards(
+        &self,
+        _on_stale: crate::services::worker::OnStale<'_>,
+    ) -> Result<Vec<GetWorkerMetadataResult>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn remove(
+        &self,
+        _lifecycle: &mut crate::services::oplog::OplogLifecycleGuard,
+        _owned_agent_id: &OwnedAgentId,
+        _agent_mode: AgentMode,
+        _fingerprint: AgentFingerprint,
+        _expected_epoch: Option<golem_common::model::ShardEpoch>,
+        _after_oplog_delete: &(dyn Fn(AgentFingerprint) + Send + Sync),
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn run_excluding_removal<'a>(
+        &self,
+        _agent_id: &golem_common::model::AgentId,
+        _operation: futures::future::BoxFuture<'a, Result<bool, WorkerExecutorError>>,
+    ) -> Result<bool, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn remove_cached_status(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+    ) -> Result<(), WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn resolve_agent_identity(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+    ) -> Result<Option<crate::services::worker::ResolvedAgentIdentity>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn write_cached_status(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+        _previous_status: Option<&golem_common::model::AgentStatusRecord>,
+        _status_value: golem_common::model::AgentStatusRecord,
+    ) -> Result<golem_common::model::AgentStatusRecord, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn read_status_checkpoint(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+        _agent_mode: AgentMode,
+    ) -> Result<Option<golem_common::model::AgentStatusRecord>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn write_status_checkpoint(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+        _previous_checkpoint: Option<&golem_common::model::AgentStatusRecord>,
+        _checkpoint: golem_common::model::AgentStatusRecord,
+    ) -> Result<golem_common::model::AgentStatusRecord, WorkerExecutorError> {
+        unimplemented!()
+    }
+
+    async fn set_assignment_tracking(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+        _status_value: &golem_common::model::AgentStatusRecord,
+    ) -> Result<(), String> {
+        unimplemented!()
+    }
+
+    async fn remove_if_stale(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+        _on_stale: crate::services::worker::OnStale<'_>,
+    ) -> Result<bool, WorkerExecutorError> {
+        unimplemented!()
+    }
+}
+
+/// At a fork marker after the indexed coverage, the fold of a stream session suffix reads the
+/// index again. When the index then covers the oplog through the marker, or through a later
+/// index, the fold goes on after the coverage of the index.
+#[test]
+async fn the_stream_session_suffix_fold_goes_on_when_the_index_covers_the_fork_marker() {
+    let owner = owned_agent("suffix-cut-covered");
+    let key = test_invocation_id("suffix-cut-covered".into());
+    let session = session_key(&owner, &key);
+    let (_, _, primary) = service_with_oplog().await;
+    let oplog = create_oplog(primary.as_ref(), &owner).await;
+    let marker = append_session(
+        oplog.as_ref(),
+        StreamSessionRecord::ForkCut(StreamForkCutRecord {
+            format_version: 1,
+            request_hash: vec![0; 32],
+            creation_fingerprint: session.callee_fingerprint,
+            export: None,
+            cut_index: OplogIndex::INITIAL,
+            revert: None,
+            epoch_floor: 2,
+            selected_stream_id: None,
+            retained_through: None,
+        }),
+    )
+    .await;
+    let last = append_memory_hint(oplog.as_ref()).await;
+    oplog.commit(CommitLevel::Always).await.unwrap();
+    let folds = futures::future::join_all([marker, last].map(|covered| {
+        let oplog = oplog.clone();
+        let owner = &owner;
+        let session = &session;
+        async move {
+            let service =
+                ScriptedCoverage(std::sync::Mutex::new([OplogIndex::INITIAL, covered].into()));
+            let folded = crate::worker::fold_stream_session_suffix(
+                oplog.as_ref(),
+                &service,
+                owner,
+                AgentMode::Durable,
+                session.callee_fingerprint,
+                session,
+                None,
+            )
+            .await
+            .map(|(metadata, resume_offset)| (metadata.covered_through(), resume_offset))
+            .map_err(|error| error.to_string());
+            let lookups_left = service.0.lock().unwrap().len();
+            (folded, lookups_left)
+        }
+    }))
+    .await;
+    assert_eq!(folds, vec![(Ok((last, None)), 0), (Ok((last, None)), 0)]);
+}
+
 async fn service() -> (DefaultWorkerService, Arc<InMemoryKeyValueStorage>) {
     let kv = Arc::new(InMemoryKeyValueStorage::new());
     let oplog = Arc::new(
