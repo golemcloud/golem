@@ -81,6 +81,39 @@ fn lookup_agent_id(
     .map_err(|error| format!("{error:?}"))
 }
 
+/// The values of the expected request of a failed update, or `None` for another entry.
+fn divergence_request(
+    entry: &golem_rust::bindings::golem::api::oplog::PublicOplogEntry,
+) -> Option<Option<Vec<u64>>> {
+    use golem_rust::bindings::golem::api::oplog::{PublicOplogEntry, ReplayStep};
+
+    let PublicOplogEntry::FailedUpdate(update) = entry else {
+        return None;
+    };
+    Some(
+        match update
+            .divergence
+            .as_ref()
+            .map(|divergence| &divergence.expected)
+        {
+            Some(ReplayStep::HostCall(call)) => call.request.as_ref().map(|request| {
+                request
+                    .value
+                    .value_nodes
+                    .iter()
+                    .filter_map(|node| match node {
+                        golem_rust::schema::wit::wire::SchemaValueNode::U64Value(value) => {
+                            Some(*value)
+                        }
+                        _ => None,
+                    })
+                    .collect()
+            }),
+            _ => None,
+        },
+    )
+}
+
 fn encode_tool_input(
     _input: String,
 ) -> Result<golem_rust::schema::wit::wire::TypedSchemaValue, String> {
@@ -230,6 +263,20 @@ pub trait GolemHostApi {
         agent_id: AgentId,
         start: u64,
     ) -> Result<Vec<(String, Vec<u64>)>, String>;
+    /// The number of entries in the first batch from `start`, and the values of the expected
+    /// request of each failed update in it.
+    fn read_oplog_divergence_requests(
+        &self,
+        agent_id: AgentId,
+        start: u64,
+    ) -> Result<Option<(u64, Vec<Option<Vec<u64>>>)>, String>;
+    /// The index of each failed update in the first batch of a search, with the values of its
+    /// expected request.
+    fn search_oplog_divergence_requests(
+        &self,
+        agent_id: AgentId,
+        query: String,
+    ) -> Result<Option<Vec<(u64, Option<Vec<u64>>)>>, String>;
     fn search_oplog_result(
         &mut self,
         agent_id: AgentId,
@@ -1056,6 +1103,40 @@ impl GolemHostApi for GolemHostApiImpl {
                 (method_name, values)
             })
             .collect())
+    }
+
+    fn read_oplog_divergence_requests(
+        &self,
+        agent_id: AgentId,
+        start: u64,
+    ) -> Result<Option<(u64, Vec<Option<Vec<u64>>>)>, String> {
+        let batch = GetOplog::new(wire_agent_id(agent_id), start)
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?;
+        Ok(batch.map(|entries| {
+            (
+                entries.len() as u64,
+                entries.iter().filter_map(divergence_request).collect(),
+            )
+        }))
+    }
+
+    fn search_oplog_divergence_requests(
+        &self,
+        agent_id: AgentId,
+        query: String,
+    ) -> Result<Option<Vec<(u64, Option<Vec<u64>>)>>, String> {
+        let batch = SearchOplog::new(wire_agent_id(agent_id), &query)
+            .get_next()
+            .map_err(|error| format!("{error:?}"))?;
+        Ok(batch.map(|entries| {
+            entries
+                .iter()
+                .filter_map(|(index, entry)| {
+                    divergence_request(entry).map(|request| (*index, request))
+                })
+                .collect()
+        }))
     }
 
     fn search_oplog_result(

@@ -6508,9 +6508,9 @@ async fn a_later_guest_oplog_batch_decodes_with_the_revision_at_its_start(
 /// A `FailedUpdate` in a guest oplog batch shows the expected request of its divergence, which the
 /// recorded `Start` at the divergence index holds. When that index lies outside the batch, the
 /// batch also needs the grant for it, as `enrich-oplog-entries` does: without the grant the batch
-/// is refused and the `Start` is not read, and with it the batch reads the `Start`. The target
-/// holds a failed update at 100, which the first search batch (1 to 100) holds, and one at 250,
-/// which a `get-oplog` batch from 201 holds; both name the `Start` at 150.
+/// is refused and the `Start` is not read, and with it the batch gives the request of the `Start`.
+/// The target holds a failed update at 100, which the first search batch (1 to 100) holds, and
+/// one at 250, which a `get-oplog` batch from 201 holds; both name the `Start` at 150.
 #[test]
 #[timeout("2m")]
 #[tracing::instrument]
@@ -6521,8 +6521,8 @@ async fn a_guest_oplog_batch_needs_the_grant_for_a_divergence_index_outside_it(
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     use golem_common::model::oplog::{
-        DurableFunctionType, OplogPayload, ReplayDivergence, ReplayHostCall, ReplayStep,
-        UpdateFailureClass,
+        DurableFunctionType, HostRequestMonotonicClockDuration, OplogPayload, ReplayDivergence,
+        ReplayHostCall, ReplayStep, UpdateFailureClass,
     };
 
     let context = TestContext::new(last_unique_id);
@@ -6577,7 +6577,10 @@ async fn a_guest_oplog_batch_needs_the_grant_for_a_divergence_index_outside_it(
                 observational_owner: None,
                 driver: None,
                 request: Some(OplogPayload::Inline(Box::new(
-                    golem_common::model::oplog::HostRequestNoInput {}.into(),
+                    HostRequestMonotonicClockDuration {
+                        duration_in_nanos: 4242,
+                    }
+                    .into(),
                 ))),
                 durable_function_type: DurableFunctionType::ReadLocal,
                 span_started: None,
@@ -6642,11 +6645,11 @@ async fn a_guest_oplog_batch_needs_the_grant_for_a_divergence_index_outside_it(
             .invoke_and_await_agent(
                 &reader,
                 &reader_agent,
-                "search_oplog_result",
+                "search_oplog_divergence_requests",
                 data_value!(target.agent_id(), "failed-update"),
             )
             .await?
-            .into_typed::<Result<Option<Vec<u64>>, String>>()?;
+            .into_typed::<Result<Option<Vec<(u64, Option<Vec<u64>>)>>, String>>()?;
         let search_read_the_start = executor.oplog_service_reads(&target.agent_id())[reads..]
             .contains(&(divergence_index, 1));
 
@@ -6655,11 +6658,11 @@ async fn a_guest_oplog_batch_needs_the_grant_for_a_divergence_index_outside_it(
             .invoke_and_await_agent(
                 &reader,
                 &reader_agent,
-                "read_oplog_batch_size",
+                "read_oplog_divergence_requests",
                 data_value!(target.agent_id(), 201u64),
             )
             .await?
-            .into_typed::<Result<Option<u64>, String>>()?;
+            .into_typed::<Result<Option<(u64, Vec<Option<Vec<u64>>>)>, String>>()?;
         let batch_read_the_start = executor.oplog_service_reads(&target.agent_id())[reads..]
             .contains(&(divergence_index, 1));
         results.push((
@@ -6685,9 +6688,9 @@ async fn a_guest_oplog_batch_needs_the_grant_for_a_divergence_index_outside_it(
             ),
             (
                 "divergence-granted",
-                Ok(Some(vec![100])),
+                Ok(Some(vec![(100, Some(vec![4242]))])),
                 true,
-                Ok(Some((last - 200).min(100))),
+                Ok(Some(((last - 200).min(100), vec![Some(vec![4242])]))),
                 true
             ),
         ]
