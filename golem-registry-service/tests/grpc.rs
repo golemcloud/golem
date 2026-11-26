@@ -318,7 +318,7 @@ async fn runtime_card_grpc_lifecycle_is_shared_across_executor_clients() {
     );
 
     let mut conflicting = card.clone().into_concrete().unwrap();
-    conflicting.expires_at = Some(Timestamp::now() + jiff::SignedDuration::from_hours((1) * 24));
+    conflicting.expires_at = Some(Timestamp::now() + jiff::SignedDuration::from_hours(24));
     assert!(matches!(
         writer
             .create_runtime_card(conflicting.into(), provenance)
