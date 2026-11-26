@@ -2491,8 +2491,36 @@ impl Streaming for StreamingImpl {
                 wait_at_crash_checkpoint(&stdout, "capable-terminal-retained-child").await;
             }
             "atomic-idempotency-child" => {
-                let _ = golem_rust::generate_idempotency_key();
-                send_idempotent_effect().await;
+                let error_mode = std::env::var("HTTP_ERROR_MODE").ok();
+                let error = async {
+                    if error_mode.is_some() {
+                        use golem_rust::wasip3::http::{client, types};
+                        use golem_rust::wasip3::wit_future;
+
+                        let fields = types::Fields::from_list(&[]).unwrap();
+                        let (_, trailers) = wit_future::new(|| Ok(None));
+                        let (request, _transmit) =
+                            types::Request::new(fields, None, trailers, None);
+                        request.set_scheme(Some(&types::Scheme::Https)).unwrap();
+                        let port = std::env::var("IDEMPOTENCY_EFFECT_PORT").unwrap();
+                        request
+                            .set_authority(Some(&format!("127.0.0.1:{port}")))
+                            .unwrap();
+                        request.set_path_with_query(Some("/unsupported")).unwrap();
+                        assert!(matches!(
+                            client::send(request).await,
+                            Err(types::ErrorCode::TlsProtocolError)
+                        ));
+                    }
+                };
+                if error_mode.as_deref() == Some("overlap") {
+                    let _ = golem_rust::generate_idempotency_key();
+                    (send_idempotent_effect(), error).join().await;
+                } else {
+                    error.await;
+                    let _ = golem_rust::generate_idempotency_key();
+                    send_idempotent_effect().await;
+                }
             }
             "historical-reconstruction-gate" => {
                 while let Some(item) = stdin.next().await {
