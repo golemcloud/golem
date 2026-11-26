@@ -620,7 +620,7 @@ fn authorize_environment_permission(
     ))
 }
 
-fn environment_permission_target(
+pub(crate) fn environment_permission_target(
     account_email: &AccountEmail,
     application_name: &ApplicationName,
     environment_name: &EnvironmentName,

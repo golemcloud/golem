@@ -117,7 +117,7 @@ impl ReportsService {
     }
 }
 
-fn system_permission_target(verb: SystemVerb) -> PermissionTarget {
+pub(crate) fn system_permission_target(verb: SystemVerb) -> PermissionTarget {
     PermissionTarget::System(ClassPermissionTarget {
         verb: Some(verb),
         owner: EmptyOwnerPattern,

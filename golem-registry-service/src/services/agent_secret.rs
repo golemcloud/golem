@@ -111,8 +111,20 @@ impl SecretOwner {
     }
 }
 
+/// The decision's operation for today's check of `verb` on a secret.
+pub(crate) fn secret_operation(verb: EnvironmentAgentSecretVerb) -> CatalogOperation {
+    match verb {
+        EnvironmentAgentSecretVerb::Create => CatalogOperation::CreateSecret,
+        EnvironmentAgentSecretVerb::Update => CatalogOperation::UpdateSecret,
+        EnvironmentAgentSecretVerb::Delete => CatalogOperation::DeleteSecret,
+        EnvironmentAgentSecretVerb::View | EnvironmentAgentSecretVerb::Restore => {
+            CatalogOperation::ViewSecret
+        }
+    }
+}
+
 /// Today's card check of `verb` on the secret at `key`.
-fn agent_secret_check(
+pub(crate) fn agent_secret_check(
     owner: EnvironmentOwnerPattern,
     key: &CanonicalAgentSecretPath,
     verb: EnvironmentAgentSecretVerb,
@@ -399,19 +411,11 @@ impl AgentSecretService {
         key: &CanonicalAgentSecretPath,
         verb: EnvironmentAgentSecretVerb,
     ) -> Result<(), AuthorizationError> {
-        let operation = match verb {
-            EnvironmentAgentSecretVerb::Create => CatalogOperation::CreateSecret,
-            EnvironmentAgentSecretVerb::Update => CatalogOperation::UpdateSecret,
-            EnvironmentAgentSecretVerb::Delete => CatalogOperation::DeleteSecret,
-            EnvironmentAgentSecretVerb::View | EnvironmentAgentSecretVerb::Restore => {
-                CatalogOperation::ViewSecret
-            }
-        };
         self.decisions
             .decide(
                 auth,
                 Operation::single(
-                    operation,
+                    secret_operation(verb),
                     Resource::Path(key.0.join("/")),
                     owner.target.clone(),
                 ),

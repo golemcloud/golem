@@ -442,7 +442,7 @@ fn authorize_account_permission(
     auth.authorize_permission(&account_permission_target(account_email, verb))
 }
 
-fn system_permission_target(verb: SystemVerb) -> PermissionTarget {
+pub(crate) fn system_permission_target(verb: SystemVerb) -> PermissionTarget {
     PermissionTarget::System(ClassPermissionTarget {
         verb: Some(verb),
         owner: EmptyOwnerPattern,
@@ -450,7 +450,10 @@ fn system_permission_target(verb: SystemVerb) -> PermissionTarget {
     })
 }
 
-fn account_permission_target(account_email: &AccountEmail, verb: AccountVerb) -> PermissionTarget {
+pub(crate) fn account_permission_target(
+    account_email: &AccountEmail,
+    verb: AccountVerb,
+) -> PermissionTarget {
     PermissionTarget::Account(ClassPermissionTarget {
         verb: Some(verb),
         owner: AccountOwnerPattern::Account {

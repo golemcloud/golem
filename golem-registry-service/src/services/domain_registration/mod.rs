@@ -497,7 +497,7 @@ fn authorize_domain_registration_permission_for_owner(
 }
 
 /// Today's card check of `verb` on the registration of `domain` in the environment of `owner`.
-fn domain_registration_check(
+pub(crate) fn domain_registration_check(
     owner: EnvironmentOwnerPattern,
     domain: Option<&Domain>,
     verb: EnvironmentDomainRegistrationVerb,

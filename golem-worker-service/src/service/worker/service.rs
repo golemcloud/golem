@@ -11095,6 +11095,197 @@ mod tests {
         }
     }
 
+    /// Each access that a call site of this service decides, named by its call sites. A call
+    /// site that builds a new access adds it here.
+    fn call_site_accesses() -> Vec<(&'static str, super::AgentAccess)> {
+        use super::{AgentAccess, AgentPermission, tool_access};
+        use golem_api_grpc::proto::golem::worker::AgentInvocationMode;
+        use golem_common::model::InvocationId;
+        use golem_common::model::authority::{CatalogOperation as Op, Resource};
+        use golem_common::model::card::AgentResourcePattern as R;
+
+        let lookup = AgentInvocationMode::Lookup as i32;
+        let call = AgentInvocationMode::Await as i32;
+        let method = "increment".to_string();
+        let invocation = Uuid::from_u128(0x11);
+        let path = CanonicalFilePath::from_abs_str("/data/a.txt").unwrap();
+        let file_path = Resource::Path(path.as_abs_str().to_string());
+        let file = |verb| AgentPermission::filesystem(verb, &path).unwrap();
+        let promise_id = golem_common::model::PromiseId {
+            agent_id: AgentId::from_parts(0, 9),
+            fingerprint: AgentFingerprint(Uuid::from_u128(0xf1)),
+            oplog_idx: OplogIndex::from_u64(3),
+        };
+        let agent = |operation, verb, resource| AgentAccess::agent(operation, verb, resource);
+        vec![
+            ("create, launch", AgentAccess::create_agent(R::Any)),
+            ("upsert", AgentAccess::upsert_agent()),
+            (
+                "lookup of a method",
+                AgentAccess::invocation(lookup, Some(&method)),
+            ),
+            (
+                "lookup without a method",
+                AgentAccess::invocation(lookup, None),
+            ),
+            (
+                "invocation of a method",
+                AgentAccess::invocation(call, Some(&method)),
+            ),
+            (
+                "start without a method",
+                AgentAccess::invocation(call, None),
+            ),
+            ("invoke, session resume", AgentAccess::invoke(&method)),
+            (
+                "connect, metadata, wallet, REST lookup",
+                agent(Op::ViewAgent, AgentVerb::View, R::Empty),
+            ),
+            (
+                "describe a tool of an agent",
+                agent(Op::ViewAgent, AgentVerb::View, R::Any),
+            ),
+            (
+                "delete",
+                agent(Op::DeleteAgent, AgentVerb::Delete, R::Empty),
+            ),
+            (
+                "interrupt",
+                agent(Op::InterruptAgent, AgentVerb::Interrupt, R::Empty),
+            ),
+            (
+                "resume",
+                agent(Op::ResumeAgent, AgentVerb::Resume, R::Empty),
+            ),
+            ("update the revision", AgentAccess::update_revision(None)),
+            ("fork", AgentAccess::fork(None)),
+            ("revert", agent(Op::RevertAgent, AgentVerb::Revert, R::Any)),
+            (
+                "revert to an oplog index",
+                agent(Op::RevertAgent, AgentVerb::Revert, R::OplogIndex(5)),
+            ),
+            (
+                "activate a plugin",
+                agent(Op::ActivateProcessor, AgentVerb::ActivatePlugin, R::Any),
+            ),
+            (
+                "deactivate a plugin",
+                agent(Op::DeactivateProcessor, AgentVerb::DeactivatePlugin, R::Any),
+            ),
+            (
+                "complete a promise",
+                AgentAccess::promise(
+                    promise_id,
+                    AgentPermission::Agent(AgentVerb::Invoke, R::Any),
+                ),
+            ),
+            (
+                "read the oplog, read one oplog entry",
+                AgentAccess::new(
+                    Op::ReadAgentOplog,
+                    Resource::None,
+                    [AgentPermission::Oplog(OplogResourcePattern::range(
+                        Some(1),
+                        Some(10),
+                    ))],
+                ),
+            ),
+            (
+                "search the oplog",
+                AgentAccess::new(
+                    Op::ReadAgentOplog,
+                    Resource::None,
+                    [AgentPermission::Oplog(OplogResourcePattern::Any)],
+                ),
+            ),
+            (
+                "list files",
+                AgentAccess::new(
+                    Op::ListFiles,
+                    file_path.clone(),
+                    [file(FilesystemVerb::Stat), file(FilesystemVerb::List)],
+                ),
+            ),
+            (
+                "read a file",
+                AgentAccess::new(Op::ReadFile, file_path, [file(FilesystemVerb::Read)]),
+            ),
+            (
+                "read an invocation",
+                AgentAccess::on_invocation(
+                    Op::ReadInvocation,
+                    InvocationId(invocation),
+                    AgentPermission::Agent(AgentVerb::View, R::Any),
+                ),
+            ),
+            (
+                "list invocations",
+                AgentAccess::new(
+                    Op::ListInvocations,
+                    Resource::None,
+                    [AgentPermission::Agent(AgentVerb::View, R::Any)],
+                ),
+            ),
+            (
+                "cancel an invocation",
+                AgentAccess::on_invocation(
+                    Op::CancelInvocation,
+                    InvocationId(invocation),
+                    AgentPermission::Agent(
+                        AgentVerb::CancelInvocation,
+                        R::InvocationId(AgentInvocationIdPattern::Uuid(invocation)),
+                    ),
+                ),
+            ),
+            (
+                "tool lookup on an agent",
+                tool_access(true, AgentVerb::View, "bash", &[]),
+            ),
+            (
+                "tool call on an agent",
+                tool_access(false, AgentVerb::Invoke, "bash", &["ls".to_string()]),
+            ),
+        ]
+    }
+
+    /// Asserts that each check of `checks` is a check of its part of `operation`. A check that is
+    /// not would deny every caller of its call site.
+    fn assert_checks_belong_to_parts(
+        site: &str,
+        operation: &golem_common::model::authority::Operation,
+        checks: &[Vec<PermissionTarget>],
+    ) {
+        let parts = operation.parts();
+        assert_eq!(parts.len(), checks.len(), "{site}");
+        for (part, part_checks) in parts.iter().zip(checks) {
+            for check in part_checks {
+                assert!(
+                    golem_common::model::card::check_belongs_to_part(part.verb, check),
+                    "{site}: {check:?} is not a check of {:?}",
+                    part.verb
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn every_call_site_check_belongs_to_its_part() {
+        let agent_id = AgentId::from_parts(0, 9);
+        let agent = super::DecisionAgentTarget {
+            environment_id: EnvironmentId(Uuid::from_u128(1)),
+            agent_type: AgentTypeName("Counter".to_string()),
+            agent_id,
+            fingerprint: Some(AgentFingerprint(Uuid::from_u128(0xf1))),
+        };
+        let owner = AgentOwnerPattern::parse(&format!("acme/shop/prod/cart/{agent_id}")).unwrap();
+        for (site, access) in call_site_accesses() {
+            let (operation, checks) = access
+                .decision(agent.clone(), &owner)
+                .unwrap_or_else(|error| panic!("{site}: {error}"));
+            assert_checks_belong_to_parts(site, &operation, &checks);
+        }
+    }
+
     /// A fork or an update that an agent asks for over gRPC names the calling agent, which asks
     /// on its own authority. Without a named caller, the account of the request's token asks.
     #[test]
@@ -11142,5 +11333,47 @@ mod tests {
             let unnamed = access(None).decision_request(operation, entry);
             assert_eq!(unnamed.caller, auth.entry_caller("golem"));
         }
+    }
+
+    /// The checks that the service decides without an agent access: a tool call on a fresh owner
+    /// agent, and a listing of the agents of a type.
+    #[test]
+    fn the_fresh_owner_and_listing_checks_belong_to_their_parts() {
+        use golem_common::model::authority::{
+            CatalogOperation, Operation, Resource, Target, ToolTarget,
+        };
+
+        let environment_id = EnvironmentId(Uuid::from_u128(1));
+        let agent_type = AgentTypeName("Counter".to_string());
+        let component = test_component(
+            ComponentId(Uuid::from_u128(2)),
+            environment_id,
+            AccountId(Uuid::from_u128(3)),
+            ComponentRevision::INITIAL,
+            test_agent_type(agent_type.clone(), AgentMode::Durable),
+        );
+
+        let tool_call = Operation::single(
+            CatalogOperation::InvokeTool,
+            Resource::Command("ls".to_string()),
+            Target::Tool(ToolTarget {
+                environment_id,
+                tool_name: ToolName::try_from("bash").unwrap(),
+            }),
+        )
+        .unwrap();
+        let fresh_owner = super::agent_owner(&component, AgentId::from_parts(0, 9), None);
+        let fresh_owner_check =
+            super::AgentPermission::Agent(AgentVerb::Invoke, AgentResourcePattern::Any)
+                .target(fresh_owner);
+        assert_checks_belong_to_parts(
+            "tool call on a fresh owner",
+            &tool_call,
+            &[vec![fresh_owner_check]],
+        );
+
+        let listing = super::list_agents(&component).unwrap();
+        let type_check = super::agent_type_check(&component, &agent_type);
+        assert_checks_belong_to_parts("list agents", &listing, &[vec![type_check]]);
     }
 }

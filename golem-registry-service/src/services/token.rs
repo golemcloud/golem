@@ -391,7 +391,7 @@ fn authorize_system_permission(auth: &AuthCtx, verb: SystemVerb) -> Result<(), A
     }))
 }
 
-fn account_token_permission_target(
+pub(crate) fn account_token_permission_target(
     account_email: &AccountEmail,
     verb: AccountTokenVerb,
     resource: AccountTokenResourcePattern,
