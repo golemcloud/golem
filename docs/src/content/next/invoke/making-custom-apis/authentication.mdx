@@ -285,7 +285,7 @@ agent.Handle(secure.GetProfile, func(ctx *golem.Context[state], _ golem.Unit) se
 </Tabs.Tab>
 </Tabs>
 
-A `Principal` or a `Caller` cannot be a method parameter, a result or part of a stored value: the build fails with a message that points to `ctx.caller`. To remember who called, store `ctx.caller.original.ref`, a `PrincipalRef`: an issuer and a subject that grant nothing by themselves. Compare it later with `equals`.
+A `Principal` or a `Caller` cannot be a method parameter, a result or part of a value type: the build fails with a message that points to `ctx.caller`. A principal kept in the agent's state fails when the SDK serializes that state, for example for a snapshot: at build time where the SDK can see it, otherwise at run time. To remember who called, store `ctx.caller.original.ref`, a `PrincipalRef`: an issuer and a subject that grant nothing by themselves. Compare it later with `equals`.
 
 ## Authenticate a Separate Frontend with PKCE
 
