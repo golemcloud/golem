@@ -168,10 +168,10 @@ pub enum WorkerExecutorError {
         kind: ComponentServiceRefusal,
         reason: String,
     },
-    /// The agent's oplog failed: it does not give the entries a replay, a recovery or a read
-    /// needs. An expired read fails the operation that reads. Only a failed source fails the
-    /// agent, which does not run; its oplog is left as it is, so it can be inspected. The failure
-    /// tells why.
+    /// The agent's oplog failed, or a read reached below its retained start: the oplog does not
+    /// give the entries that a replay, a recovery or a read needs. The operation that reads fails.
+    /// When that operation is the start or the replay of the agent, the agent fails and does not
+    /// run, and its oplog is left as it is. The failure tells why.
     OplogFailed {
         agent_id: AgentId,
         failure: OplogFailure,
