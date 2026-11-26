@@ -5332,6 +5332,12 @@ mod tests {
             {
                 return Err(WorkerServiceError::AgentNotFound(*agent_id));
             }
+            let canonical_key = self.metadata_canonical_key.lock().unwrap().clone();
+            let origin = if canonical_key.is_some() {
+                golem_common::model::agent::AgentOrigin::Keyed
+            } else {
+                golem_common::model::agent::AgentOrigin::Created
+            };
             match *self.metadata_component_revision.lock().unwrap() {
                 Some(component_revision) => Ok(ExistingAgent {
                     component_id: self.component_id,
@@ -5367,12 +5373,8 @@ mod tests {
                         agent_type_name: agent_id
                             .type_id()
                             .and(self.metadata_agent_type_name.lock().unwrap().clone()),
-                        canonical_key: self.metadata_canonical_key.lock().unwrap().clone(),
-                        origin: if self.metadata_canonical_key.lock().unwrap().is_some() {
-                            golem_common::model::agent::AgentOrigin::Keyed
-                        } else {
-                            golem_common::model::agent::AgentOrigin::Created
-                        },
+                        canonical_key,
+                        origin,
                         constructor_parameters: None,
                     },
                 }),
