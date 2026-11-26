@@ -160,6 +160,7 @@ async fn listing_projects_visible_direct_children_from_exactly_one_recursive_pag
     let (endpoint, mut requests, server) = server(vec![
         listing(
             &[
+                ("corpus/empty.txt", 0),
                 ("corpus/empty/", 0),
                 ("corpus/hidden/../file", 3),
                 ("corpus/hidden//file", 3),
@@ -178,6 +179,10 @@ async fn listing_projects_visible_direct_children_from_exactly_one_recursive_pag
     assert_eq!(
         first.entries.as_ref(),
         [
+            Entry {
+                path: path("empty.txt"),
+                node: Node::File { size: 0 }
+            },
             Entry {
                 path: path("literal%2Fname"),
                 node: Node::File { size: 19 }
