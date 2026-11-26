@@ -266,6 +266,8 @@ pub trait SecretHandleAgent {
     fn secret_metadata_result(&self) -> Result<String, String>;
 
     fn reveal_secret_result(&self) -> Result<String, String>;
+
+    fn reveal_secret_digest(&self) -> Result<String, String>;
 }
 
 struct SecretHandleAgentImpl {
@@ -310,6 +312,11 @@ impl SecretHandleAgent for SecretHandleAgentImpl {
             .map_err(|error| format!("{error:?}"))?;
         let value = decode_schema_value(value).map_err(|error| error.to_string())?;
         String::from_value(&value).map_err(|error| error.to_string())
+    }
+
+    fn reveal_secret_digest(&self) -> Result<String, String> {
+        self.reveal_secret_result()
+            .map(|value| blake3::hash(value.as_bytes()).to_hex().to_string())
     }
 
     async fn save_snapshot(&self) -> Result<Vec<u8>, String> {

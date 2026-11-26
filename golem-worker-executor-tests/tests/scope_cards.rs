@@ -8550,6 +8550,7 @@ async fn snapshot_restores_admitted_secret_handle_without_reauthorization(
     let authority = Arc::new(ScopeCardAuthority::default());
     let environment_state_service = Arc::new(TestEnvironmentStateService::default());
     let secret_value = "snapshot-secret-value";
+    let secret_digest = "c9eed3660ac3700afe55aea22b486bf7e3cad726b90778ce4428f9bb472b8490";
     environment_state_service.set_agent_secret(AgentSecret {
         owner: golem_common::model::agent_secret::AgentSecretOwner::Environment,
         destinations: vec![],
@@ -8595,10 +8596,10 @@ async fn snapshot_restores_admitted_secret_handle_without_reauthorization(
     authority.reset_check_cards_count();
 
     let before_restart = executor
-        .invoke_and_await_agent(&component, &agent, "reveal_secret_result", data_value!())
+        .invoke_and_await_agent(&component, &agent, "reveal_secret_digest", data_value!())
         .await?
         .into_typed::<Result<String, String>>()?;
-    assert_eq!(before_restart, Ok(secret_value.to_string()));
+    assert_eq!(before_restart, Ok(secret_digest.to_string()));
     assert_eq!(
         authority.check_cards_count(),
         0,
@@ -8613,6 +8614,7 @@ async fn snapshot_restores_admitted_secret_handle_without_reauthorization(
         )],
     );
     let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(!serde_json::to_string(&oplog)?.contains(secret_value));
     let constructor_snapshot = oplog
         .iter()
         .find(|entry| matches!(entry.entry, PublicOplogEntry::Snapshot(_)))
@@ -8631,12 +8633,12 @@ async fn snapshot_restores_admitted_secret_handle_without_reauthorization(
     let mut events = executor.capture_output(&worker_id).await?;
     authority.reset_check_cards_count();
     let after_restart = executor
-        .invoke_and_await_agent(&component, &agent, "reveal_secret_result", data_value!())
+        .invoke_and_await_agent(&component, &agent, "reveal_secret_digest", data_value!())
         .await?
         .into_typed::<Result<String, String>>()?;
     assert_snapshot_recovery_loaded(&mut events).await;
 
-    assert_eq!(after_restart, Ok(secret_value.to_string()));
+    assert_eq!(after_restart, Ok(secret_digest.to_string()));
     assert_eq!(
         authority.check_cards_count(),
         1,
@@ -8657,6 +8659,8 @@ async fn snapshot_restores_admitted_secret_handle_without_reauthorization(
         ],
         "the persisted success uses Historical; each new reveal uses Live",
     );
+    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert!(!serde_json::to_string(&oplog)?.contains(secret_value));
     Ok(())
 }
 
