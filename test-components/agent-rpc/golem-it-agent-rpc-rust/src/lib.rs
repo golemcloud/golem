@@ -45,6 +45,8 @@ pub trait RustParent {
     async fn spawn_child(&self, data: String) -> Uuid;
     async fn call_ts_agent(&self, name: String) -> f64;
     fn inspect_missing_rpc_type(&self) -> String;
+    /// Looks up a `RustChild` by ID: "found", or the error of the lookup.
+    fn get_child_by_id(&self, agent_id: Uuid) -> String;
 }
 
 struct RustParentImpl {
@@ -79,6 +81,13 @@ impl RustParent for RustParentImpl {
             .expect("failed to encode empty RPC constructor");
         match WasmRpc::upsert("MissingReflectedType", constructor) {
             Ok(_) => "unexpected success".to_string(),
+            Err(error) => format!("{error:?}"),
+        }
+    }
+
+    fn get_child_by_id(&self, agent_id: Uuid) -> String {
+        match RustChildClient::get_by_id(&golem_rust::AgentId::new(agent_id)) {
+            Ok(_) => "found".to_string(),
             Err(error) => format!("{error:?}"),
         }
     }

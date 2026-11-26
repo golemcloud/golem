@@ -16,6 +16,7 @@ use super::response_body::{HttpFutureDelivery, HttpFutureDeliveryGuard};
 use super::serialization::{
     deserialize_error_code, deserialize_headers, serialize_error_code, serialize_headers,
 };
+use crate::durable_host::attribution::with_import_access;
 use crate::durable_host::concurrent::{
     AccessClaimOptions, DeferredCallReplayOutcome, DurableCallSession, InvocationIdSource,
     LeaveIncompleteOnDrop, import_invocation_id, resolve_current_observational_owner,
@@ -1444,7 +1445,7 @@ where
             activity,
             false,
         );
-        let captured = store.with(|mut access| {
+        let captured = with_import_access(store, |mut access| {
             durable_worker_ctx::<Ctx, U>(access.data_mut())
                 .attribution
                 .capture()

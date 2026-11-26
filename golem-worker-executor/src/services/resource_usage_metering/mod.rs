@@ -23,7 +23,7 @@ use crate::services::byte_time_accumulator::{
 use crate::services::golem_config::ResourceUsageMeteringConfig;
 use crate::services::linear_memory::LinearMemoryTracker;
 use crate::services::resource_limits::{AtomicResourceEntry, ResourceUsageFlusher};
-use chrono::{DateTime, Utc};
+
 use golem_common::model::account_usage::AccountUsagePeriod;
 use golem_common::model::agent::AgentMode;
 use std::collections::BTreeMap;
@@ -94,7 +94,7 @@ impl FilesystemUsageSource {
 pub(super) trait MeteringClock: Send + Sync {
     fn now(&self) -> Instant;
 
-    fn utc_now(&self) -> DateTime<Utc>;
+    fn utc_now(&self) -> jiff::Timestamp;
 
     fn time(&self) -> MeteringTime {
         let before = self.now();
@@ -113,8 +113,8 @@ impl MeteringClock for SystemMeteringClock {
         Instant::now()
     }
 
-    fn utc_now(&self) -> DateTime<Utc> {
-        Utc::now()
+    fn utc_now(&self) -> jiff::Timestamp {
+        jiff::Timestamp::now()
     }
 
     fn sleep_until(&self, deadline: Instant) -> Pin<Box<dyn Future<Output = ()> + Send + '_>> {

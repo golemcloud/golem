@@ -1,17 +1,18 @@
 import { describe, expect, it } from "@effect/vitest"
 import { Effect, Result } from "effect"
 import * as InvocationId from "../src/InvocationId.js"
+import type { AgentId } from "../src/AgentId.js"
 import type { Uuid } from "../src/Ids.js"
 import { invocationMetadataFromHost } from "../src/internal/rpc.js"
 import { agentIdFor, hostInvocationMetadata } from "./invocation-metadata.js"
 
 const uuid = "0f1e2d3c-4b5a-4968-8776-a5b4c3d2e1f0" as Uuid
-const agent = "00000001-0000-8000-8000-0000000000aa" as Uuid
+const agent = "00000001-0000-8000-8000-0000000000aa" as AgentId
 
 describe("InvocationId", () => {
   it.effect("round-trips the `<agent-id>.<uuid>` text form", () =>
     Effect.gen(function* () {
-      const id: InvocationId.InvocationId = { agentId: { uuid: agent }, uuid }
+      const id: InvocationId.InvocationId = { agentId: agent, uuid }
       const text = InvocationId.format(id)
       expect(text).toBe(`${agent}.${uuid}`)
       const parsed = yield* InvocationId.parse(text)
@@ -25,7 +26,7 @@ describe("InvocationId", () => {
   it.effect("accepts upper-case UUIDs and normalizes them to lower case", () =>
     Effect.gen(function* () {
       const parsed = yield* InvocationId.parse(`${agent.toUpperCase()}.${uuid.toUpperCase()}`)
-      expect(parsed).toEqual({ agentId: { uuid: agent }, uuid })
+      expect(parsed).toEqual({ agentId: agent, uuid })
       expect(parsed.toString()).toBe(`${agent}.${uuid}`)
     }),
   )
@@ -33,9 +34,7 @@ describe("InvocationId", () => {
   it("formats host invocation metadata with toString", () => {
     const { agentId, invocationId } = invocationMetadataFromHost(hostInvocationMetadata("worker"))
     expect(agentId).toEqual(agentIdFor("worker"))
-    expect(`${invocationId}`).toBe(
-      `${agentIdFor("worker").uuid}.00000000-0000-0001-0000-000000000002`,
-    )
+    expect(`${invocationId}`).toBe(`${agentIdFor("worker")}.00000000-0000-0001-0000-000000000002`)
     expect(String(invocationId)).toBe(InvocationId.format(invocationId))
   })
 

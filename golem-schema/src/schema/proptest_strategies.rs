@@ -38,7 +38,7 @@ use crate::schema::schema_value::{
     ResultValuePayload, SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload,
     VariantValuePayload,
 };
-use chrono::{DateTime, TimeZone, Utc};
+use jiff::Timestamp;
 use proptest::collection::{hash_set, vec};
 use proptest::option;
 use proptest::prelude::*;
@@ -64,11 +64,9 @@ fn finite_f64() -> impl Strategy<Value = f64> {
 
 /// Datetime within a safe range that survives the WIT (seconds, nanoseconds)
 /// representation.
-fn datetime_strategy() -> impl Strategy<Value = DateTime<Utc>> {
+fn datetime_strategy() -> impl Strategy<Value = Timestamp> {
     (-100_000_000_000i64..100_000_000_000i64, 0u32..1_000_000_000).prop_map(|(s, n)| {
-        Utc.timestamp_opt(s, n)
-            .single()
-            .expect("strategy bounds keep timestamps valid")
+        Timestamp::new(s, n as i32).expect("strategy bounds keep timestamps valid")
     })
 }
 

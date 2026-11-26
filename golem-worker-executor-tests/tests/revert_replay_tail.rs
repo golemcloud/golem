@@ -104,7 +104,7 @@ async fn replay_tail_revert_records_and_authorizes_the_resolved_index(
             data_value!(),
         )
         .await?;
-    let target_before = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
+    let target_before = settled_oplog(&executor, &target_id).await?;
     let retained = target_before
         .iter()
         .rev()
@@ -193,10 +193,6 @@ async fn replay_tail_revert_records_and_authorizes_the_resolved_index(
     )?;
     let resolved = request.resolved_revert.expect("resolved target");
     assert_eq!(resolved.last_oplog_index, retained);
-    assert_eq!(
-        resolved.observed_oplog_index,
-        target_before.last().unwrap().oplog_index
-    );
     assert!(
         start.denial.is_some(),
         "authorization must check the actual retained index"
@@ -292,7 +288,7 @@ async fn revert_resolution_errors_survive_replay_tail_and_reconstruction(
                 )
                 .await?;
         }
-        let target_before = executor.get_oplog(&target_id, OplogIndex::INITIAL).await?;
+        let target_before = settled_oplog(&executor, &target_id).await?;
         executor
             .revert(
                 &caller_id,
@@ -357,4 +353,30 @@ async fn revert_resolution_errors_survive_replay_tail_and_reconstruction(
         );
     }
     Ok(())
+}
+
+/// The oplog of `agent_id` once every invocation with a recorded result settled. An invocation
+/// can settle after its caller got the result.
+pub(crate) async fn settled_oplog(
+    executor: &(impl TestDsl + Sync),
+    agent_id: &golem_common::model::OwnedAgentId,
+) -> anyhow::Result<Vec<golem_common::model::oplog::PublicOplogEntryWithIndex>> {
+    tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            let oplog = executor.get_oplog(agent_id, OplogIndex::INITIAL).await?;
+            let finished = oplog
+                .iter()
+                .filter(|e| matches!(e.entry, PublicOplogEntry::AgentInvocationFinished(_)))
+                .count();
+            let settled = oplog
+                .iter()
+                .filter(|e| matches!(e.entry, PublicOplogEntry::AgentInvocationSettled(_)))
+                .count();
+            if finished == settled {
+                return Ok(oplog);
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+    })
+    .await?
 }

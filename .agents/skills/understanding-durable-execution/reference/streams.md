@@ -23,13 +23,36 @@ from the invocation descriptor. A same-origin retry with a reissued caller-owned
 first acceptance; it does not replace the accepted input binding, even when the attempt ID survived
 the cut. Foreign handles unrelated to the caller still require exact identity.
 
-Initial acceptance commits `Prepared`, `PendingAgentInvocation`, `Attached`, and foreign-input
-`TopologyPrepared` intents in one atomic oplog batch (`DurableStreamProducer::prepare_session`).
-Foreign descriptors and referenced handles are validated before appending. Remote attachment
-prepare/activate runs after that commit; a crash in between leaves the original queued invocation,
-principal, input bindings, and enough topology evidence for `recover_durable_stream_topologies`
-to finish attaching before guest reconstruction. An arriving retry cannot substitute its own
-invocation in that crash window.
+Method Pending and Started payloads retain the original `AgentMethodInput`, not a replacement
+execution value. Request equality uses that input. HTTP routes decode with their deployed compiled
+schema and dispatch Native values; public JSON is decoded with the loaded Store's schema. Native
+values retain explicit stream paths and ordinal placeholders, never live endpoints. The Store
+validates the resulting input against its selected method. Prepared contributes endpoints and element
+fingerprints only: its scalar values never replace the original request. Native and public JSON
+bindings follow request-local traversal order, including Native values encoded by HTTP routes.
+Execution does not reinterpret HTTP strings or reorder deployed arguments. Incompatible element schemas or unused bindings
+fail reconstruction. An automatic update uses its candidate Store; reconstruction does not pin
+the previous method schema to make the update succeed. The start hook's secret-hold check inspects
+the lowered execution value before guest effects. Public method diagnostics project the original
+input without component metadata, retaining rejected JSON fields while redacting native host
+capabilities in a typed SchemaValue field.
+
+Method acceptance commits the original `PendingAgentInvocation` and schema-independent `Attached`
+together. Attached retains public session identity, expiry, authority, execution configuration and
+transport correspondence; no revision or stream element schema is selected yet. The loaded Store
+decodes and validates the method, including secret-hold checks, before committing registrations,
+foreign-input `TopologyPrepared`, `Prepared` and `AgentInvocationStarted` in one batch linked to
+that Pending entry. Only after commit are endpoints published and readiness sent. Queued resumes
+use Attached and the existing attachment epochs; slot operations wait for preparation instead of
+guessing a revision. A fork target's session has no preparation of its own: its slot operations
+resolve against, and wait for the preparation of, the copy of the source invocation that
+`ExportForkInitialized` names (`stream_session_content_key`). A same-origin observer is accepted
+against the retained request and authority before waiting for readiness, so an execution rejection
+remains an accepted invocation's failure.
+External tools retain their descriptor-based preparation path. Remote attachment prepare/activate
+runs after preparation commits; recovery uses that topology evidence without replacing the original
+request or input bindings. Resume serialization follows producer admission, session lock, then
+worker instance lock; the instance guard remains held through the resume commit.
 
 Cancelling an asynchronous streaming RPC also terminalizes its open caller-owned
 `AgentHostedInput` streams, including cancellation before target acceptance. The producer checks
@@ -76,16 +99,16 @@ belong to the final target; discarding a losing stage never deletes the target's
 
 Fork publication commits the exact prefix, `ForkCut`, and any synthetic guest result before
 exposing the target. The immutable marker binds the source generation, cut and request kind;
-retries reconcile it even if the target has advanced. Guest `fork()` derives its phantom ID from
-the source generation and durable call's idempotency key derived from its own `Start`.
+retries reconcile it even if the target has advanced. Guest `fork()` allocates the child's ID with
+`AgentId::allocated` from the source and the durable call's idempotency key derived from its own `Start`.
 The recorded `Start` anchors both the key and the pre-call cut, so
 skipped log hints cannot change either. A crash after child publication but before the caller's
-result resumes the same child; independent phantom siblings cannot collide.
+result resumes the same child; independent siblings without a key cannot collide.
 Tests: `guest_fork_retries_same_child_after_crash_before_caller_result`,
-`guest_fork_same_key_on_phantom_siblings_creates_distinct_children`.
+`guest_fork_same_key_on_unkeyed_siblings_creates_distinct_children`.
 
 Export forks use the same publication path (`services/worker_fork/export.rs`). The gateway maps
-`{base}/forks/{fork}/invocations/{session}/streams/{slot}` to a deterministic phantom agent and
+`{base}/forks/{fork}/invocations/{session}/streams/{slot}` to a fork agent at `AgentId::durable_stream_fork` and
 routes creation to the source executor. The executor pins one committed source horizon, resolves
 the opaque cursor plus message/byte sub-offset, and validates the cut against
 that horizon's skipped regions. JSON sub-offsets count flattened messages; binary sub-offsets
@@ -156,7 +179,7 @@ The target is pinned by `streaming_target_fingerprint`: `AgentFingerprint`
 restarts, so a deleted-and-recreated agent with the same `AgentId` is a different producer.
 For an ephemeral target, the first live preparation after the caller's `Start` commit uses
 `KnownFresh` with the call's derived idempotency key. Preparation validates the key-derived
-phantom identity and skips the creation-time existence lookup. Both remote routing layers
+target ID and skips the creation-time existence lookup. Both remote routing layers
 downgrade preparation retries to `MayExist`; replay repair also prepares with `MayExist`.
 The subsequent streaming invocation always uses `MayExist`, since preparation has already
 created the target whose fingerprint it carries. No second fresh creation is authorized.

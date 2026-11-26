@@ -14,7 +14,7 @@
 
 use desert_rust::BinaryCodec;
 
-use super::InvocationStatus;
+use super::{AgentMethodInput, InvocationOperation, InvocationStatus};
 use crate::base_model::caller::Caller;
 use crate::model::account::AccountId;
 use crate::model::card::ScopeCard;
@@ -46,6 +46,9 @@ pub enum AgentInvocationKind {
 pub enum AgentInvocation {
     ManualUpdate {
         target_revision: ComponentRevision,
+        /// Who asked for the update. It is not a caller: the update's snapshot save runs as the
+        /// agent itself, never as the requester.
+        requester: Caller,
     },
     AgentInitialization {
         idempotency_key: InvocationId,
@@ -56,7 +59,8 @@ pub enum AgentInvocation {
     AgentMethod {
         idempotency_key: InvocationId,
         method_name: String,
-        input: SchemaValue,
+        input: AgentMethodInput,
+        allow_streams: bool,
         invocation_context: InvocationContextStack,
         caller: Caller,
         scope_card: Option<ScopeCard>,
@@ -99,6 +103,8 @@ pub enum AgentInvocation {
 pub enum AgentInvocationPayload {
     ManualUpdate {
         target_revision: ComponentRevision,
+        /// Who asked for the update.
+        requester: Caller,
     },
     AgentInitialization {
         input: SchemaValue,
@@ -106,7 +112,8 @@ pub enum AgentInvocationPayload {
     },
     AgentMethod {
         method_name: String,
-        input: SchemaValue,
+        input: AgentMethodInput,
+        allow_streams: bool,
         caller: Caller,
         scope_card: Option<ScopeCard>,
     },
@@ -138,10 +145,338 @@ pub enum AgentInvocationPayload {
     },
 }
 
+/// What an accepted request runs. The request entries of the oplog hold it next to the
+/// [`StoredAgentInvocationPayload`], so a reader learns it without decoding or downloading the
+/// payload. Each variant names the [`AgentInvocationPayload`] variant it rebuilds.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub enum InvocationRequestOperation {
+    ManualUpdate {
+        target_revision: ComponentRevision,
+    },
+    AgentInitialization,
+    AgentMethod {
+        method_name: String,
+    },
+    ExternalTool {
+        tool_name: ToolName,
+        command_path: Vec<String>,
+    },
+    LoadSnapshot,
+    SaveSnapshot,
+    ProcessOplogEntries,
+}
+
+impl InvocationRequestOperation {
+    /// What this invocation runs. `None` for a manual update, which is not an invocation of the
+    /// agent.
+    pub fn operation(&self) -> Option<InvocationOperation> {
+        match self {
+            Self::ManualUpdate { .. } => None,
+            Self::AgentInitialization => Some(InvocationOperation::Constructor),
+            Self::AgentMethod { method_name } => {
+                Some(InvocationOperation::Method(method_name.clone()))
+            }
+            Self::ExternalTool {
+                tool_name,
+                command_path,
+            } => Some(InvocationOperation::tool(tool_name, command_path)),
+            Self::LoadSnapshot | Self::SaveSnapshot | Self::ProcessOplogEntries => {
+                Some(InvocationOperation::Internal)
+            }
+        }
+    }
+
+    pub fn manual_update_target(&self) -> Option<ComponentRevision> {
+        match self {
+            Self::ManualUpdate { target_revision } => Some(*target_revision),
+            _ => None,
+        }
+    }
+}
+
+/// An [`AgentInvocationPayload`] without its [`InvocationRequestOperation`], as the request
+/// entries of the oplog store it.
+#[derive(Clone, Debug, PartialEq, BinaryCodec)]
+#[desert(evolution())]
+pub enum StoredAgentInvocationPayload {
+    ManualUpdate {
+        /// Who asked for the update.
+        requester: Caller,
+    },
+    AgentInitialization {
+        input: SchemaValue,
+        caller: Caller,
+    },
+    AgentMethod {
+        input: AgentMethodInput,
+        allow_streams: bool,
+        caller: Caller,
+        scope_card: Option<ScopeCard>,
+    },
+    ExternalTool {
+        input: Box<TypedSchemaValue>,
+        stdin: bool,
+        stdout: bool,
+        stderr: bool,
+        activation: Box<ToolActivationSnapshot>,
+        caller: Caller,
+        scope_card: Option<ScopeCard>,
+    },
+    LoadSnapshot {
+        snapshot: RawSnapshotData,
+        caller: Caller,
+    },
+    SaveSnapshot {
+        caller: Caller,
+    },
+    ProcessOplogEntries {
+        account_id: AccountId,
+        config: Vec<(String, String)>,
+        metadata: AgentMetadataForGuests,
+        first_entry_index: OplogIndex,
+        entries: Vec<crate::model::oplog::OplogEntry>,
+        caller: Caller,
+    },
+}
+
+impl StoredAgentInvocationPayload {
+    /// The full payload of the request whose entry holds `operation`.
+    pub fn with_operation(
+        self,
+        operation: InvocationRequestOperation,
+    ) -> Result<AgentInvocationPayload, String> {
+        type Op = InvocationRequestOperation;
+        Ok(match (self, operation) {
+            (Self::ManualUpdate { requester }, Op::ManualUpdate { target_revision }) => {
+                AgentInvocationPayload::ManualUpdate {
+                    target_revision,
+                    requester,
+                }
+            }
+            (Self::AgentInitialization { input, caller }, Op::AgentInitialization) => {
+                AgentInvocationPayload::AgentInitialization { input, caller }
+            }
+            (
+                Self::AgentMethod {
+                    input,
+                    allow_streams,
+                    caller,
+                    scope_card,
+                },
+                Op::AgentMethod { method_name },
+            ) => AgentInvocationPayload::AgentMethod {
+                method_name,
+                input,
+                allow_streams,
+                caller,
+                scope_card,
+            },
+            (
+                Self::ExternalTool {
+                    input,
+                    stdin,
+                    stdout,
+                    stderr,
+                    activation,
+                    caller,
+                    scope_card,
+                },
+                Op::ExternalTool {
+                    tool_name,
+                    command_path,
+                },
+            ) => AgentInvocationPayload::ExternalTool {
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                stderr,
+                activation,
+                caller,
+                scope_card,
+            },
+            (Self::LoadSnapshot { snapshot, caller }, Op::LoadSnapshot) => {
+                AgentInvocationPayload::LoadSnapshot { snapshot, caller }
+            }
+            (Self::SaveSnapshot { caller }, Op::SaveSnapshot) => {
+                AgentInvocationPayload::SaveSnapshot { caller }
+            }
+            (
+                Self::ProcessOplogEntries {
+                    account_id,
+                    config,
+                    metadata,
+                    first_entry_index,
+                    entries,
+                    caller,
+                },
+                Op::ProcessOplogEntries,
+            ) => AgentInvocationPayload::ProcessOplogEntries {
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+                caller,
+            },
+            (payload, operation) => {
+                return Err(format!(
+                    "the stored invocation payload {} does not match the operation {operation:?}",
+                    payload.variant_name()
+                ));
+            }
+        })
+    }
+
+    fn variant_name(&self) -> &'static str {
+        match self {
+            Self::ManualUpdate { .. } => "ManualUpdate",
+            Self::AgentInitialization { .. } => "AgentInitialization",
+            Self::AgentMethod { .. } => "AgentMethod",
+            Self::ExternalTool { .. } => "ExternalTool",
+            Self::LoadSnapshot { .. } => "LoadSnapshot",
+            Self::SaveSnapshot { .. } => "SaveSnapshot",
+            Self::ProcessOplogEntries { .. } => "ProcessOplogEntries",
+        }
+    }
+}
+
 impl AgentInvocationPayload {
+    /// What this invocation runs. `None` for a manual update, which is not an invocation of the
+    /// agent.
+    pub fn operation(&self) -> Option<InvocationOperation> {
+        self.request_operation().operation()
+    }
+
+    pub fn request_operation(&self) -> InvocationRequestOperation {
+        match self {
+            Self::ManualUpdate {
+                target_revision, ..
+            } => InvocationRequestOperation::ManualUpdate {
+                target_revision: *target_revision,
+            },
+            Self::AgentInitialization { .. } => InvocationRequestOperation::AgentInitialization,
+            Self::AgentMethod { method_name, .. } => InvocationRequestOperation::AgentMethod {
+                method_name: method_name.clone(),
+            },
+            Self::ExternalTool {
+                tool_name,
+                command_path,
+                ..
+            } => InvocationRequestOperation::ExternalTool {
+                tool_name: tool_name.clone(),
+                command_path: command_path.clone(),
+            },
+            Self::LoadSnapshot { .. } => InvocationRequestOperation::LoadSnapshot,
+            Self::SaveSnapshot { .. } => InvocationRequestOperation::SaveSnapshot,
+            Self::ProcessOplogEntries { .. } => InvocationRequestOperation::ProcessOplogEntries,
+        }
+    }
+
+    /// Splits the payload into the operation its request entry holds and the payload it stores.
+    pub fn into_stored(self) -> (InvocationRequestOperation, StoredAgentInvocationPayload) {
+        type Op = InvocationRequestOperation;
+        type Stored = StoredAgentInvocationPayload;
+        match self {
+            Self::ManualUpdate {
+                target_revision,
+                requester,
+            } => (
+                Op::ManualUpdate { target_revision },
+                Stored::ManualUpdate { requester },
+            ),
+            Self::AgentInitialization { input, caller } => (
+                Op::AgentInitialization,
+                Stored::AgentInitialization { input, caller },
+            ),
+            Self::AgentMethod {
+                method_name,
+                input,
+                allow_streams,
+                caller,
+                scope_card,
+            } => (
+                Op::AgentMethod { method_name },
+                Stored::AgentMethod {
+                    input,
+                    allow_streams,
+                    caller,
+                    scope_card,
+                },
+            ),
+            Self::ExternalTool {
+                tool_name,
+                command_path,
+                input,
+                stdin,
+                stdout,
+                stderr,
+                activation,
+                caller,
+                scope_card,
+            } => (
+                Op::ExternalTool {
+                    tool_name,
+                    command_path,
+                },
+                Stored::ExternalTool {
+                    input,
+                    stdin,
+                    stdout,
+                    stderr,
+                    activation,
+                    caller,
+                    scope_card,
+                },
+            ),
+            Self::LoadSnapshot { snapshot, caller } => {
+                (Op::LoadSnapshot, Stored::LoadSnapshot { snapshot, caller })
+            }
+            Self::SaveSnapshot { caller } => (Op::SaveSnapshot, Stored::SaveSnapshot { caller }),
+            Self::ProcessOplogEntries {
+                account_id,
+                config,
+                metadata,
+                first_entry_index,
+                entries,
+                caller,
+            } => (
+                Op::ProcessOplogEntries,
+                Stored::ProcessOplogEntries {
+                    account_id,
+                    config,
+                    metadata,
+                    first_entry_index,
+                    entries,
+                    caller,
+                },
+            ),
+        }
+    }
+
     /// Compares the caller's execution contract, not deployment-time tool resolution.
     /// Tracing and scheduling metadata are stored outside the payload.
     pub fn same_caller_request(&self, other: &Self) -> bool {
+        self.same_caller_request_decoding(other, |_| None, false)
+    }
+
+    /// Like [`Self::same_caller_request`], but compares method inputs captured in different
+    /// representations, such as native REST input and public session JSON, by the values
+    /// `decode` gives for them. The stream permission of a request belongs to its transport,
+    /// not to its identity, so a trigger and a later awaited call with one key match.
+    ///
+    /// `self` is the accepted request and `other` the repeated one. External REST input forbids
+    /// host-managed capabilities in the result, so a repeated external REST request matches by
+    /// value an accepted request of another representation only when `result_admits_external_rest`
+    /// says that the method's result type has no host-managed capability.
+    pub fn same_caller_request_decoding(
+        &self,
+        other: &Self,
+        decode: impl Fn(&AgentMethodInput) -> Option<SchemaValue>,
+        result_admits_external_rest: bool,
+    ) -> bool {
         match (self, other) {
             (
                 Self::AgentInitialization { input, caller },
@@ -156,18 +491,28 @@ impl AgentInvocationPayload {
                     input,
                     caller,
                     scope_card,
+                    ..
                 },
                 Self::AgentMethod {
                     method_name: other_method,
                     input: other_input,
                     caller: other_caller,
                     scope_card: other_card,
+                    ..
                 },
             ) => {
                 method_name == other_method
                     && caller == other_caller
                     && scope_card == other_card
-                    && schema_value_same_request(input, other_input)
+                    && (input == other_input
+                        || (input.is_external_rest()
+                            || !other_input.is_external_rest()
+                            || result_admits_external_rest)
+                            && decode(input).zip(decode(other_input)).is_some_and(
+                                |(input, other_input)| {
+                                    schema_value_same_request(&input, &other_input)
+                                },
+                            ))
             }
             (
                 Self::ExternalTool {
@@ -299,6 +644,22 @@ pub struct AgentInvocationOutput {
     /// result. `None` for synthetic outputs (e.g. lookup-only status responses)
     /// or for legacy executors that did not report it.
     pub agent_fingerprint: Option<AgentFingerprint>,
+    /// The failure that made the agent give up during the background work of this invocation,
+    /// after its result was recorded. Only a result lookup sets it.
+    pub background_failure: Option<BackgroundFailure>,
+}
+
+/// How the agent gave up during the background work of an invocation whose result it had
+/// recorded.
+#[derive(Clone, Debug, PartialEq)]
+pub enum BackgroundFailure {
+    /// The background work trapped and the retry policy gave up.
+    Trapped {
+        error: crate::model::oplog::AgentError,
+        stderr: String,
+    },
+    /// The background work exited the agent.
+    Exited,
 }
 
 /// Compares two schema-native values for replay equivalence. This is the same
@@ -477,9 +838,13 @@ impl AgentInvocation {
         invocation_context: InvocationContextStack,
     ) -> Self {
         match payload {
-            AgentInvocationPayload::ManualUpdate { target_revision } => {
-                Self::ManualUpdate { target_revision }
-            }
+            AgentInvocationPayload::ManualUpdate {
+                target_revision,
+                requester,
+            } => Self::ManualUpdate {
+                target_revision,
+                requester,
+            },
             AgentInvocationPayload::AgentInitialization { input, caller } => {
                 Self::AgentInitialization {
                     idempotency_key,
@@ -491,12 +856,14 @@ impl AgentInvocation {
             AgentInvocationPayload::AgentMethod {
                 method_name,
                 input,
+                allow_streams,
                 caller,
                 scope_card,
             } => Self::AgentMethod {
                 idempotency_key,
                 method_name,
                 input,
+                allow_streams,
                 invocation_context,
                 caller,
                 scope_card,
@@ -554,9 +921,15 @@ impl AgentInvocation {
 
     pub fn into_parts(self) -> (InvocationId, AgentInvocationPayload, InvocationContextStack) {
         match self {
-            Self::ManualUpdate { target_revision } => (
+            Self::ManualUpdate {
+                target_revision,
+                requester,
+            } => (
                 InvocationId(Uuid::new_v4()),
-                AgentInvocationPayload::ManualUpdate { target_revision },
+                AgentInvocationPayload::ManualUpdate {
+                    target_revision,
+                    requester,
+                },
                 InvocationContextStack::fresh(),
             ),
             Self::AgentInitialization {
@@ -573,6 +946,7 @@ impl AgentInvocation {
                 idempotency_key,
                 method_name,
                 input,
+                allow_streams,
                 invocation_context,
                 caller,
                 scope_card,
@@ -581,6 +955,7 @@ impl AgentInvocation {
                 AgentInvocationPayload::AgentMethod {
                     method_name,
                     input,
+                    allow_streams,
                     caller,
                     scope_card,
                 },
@@ -773,6 +1148,8 @@ pub struct PendingInvocationRef {
     pub idempotency_key: Option<InvocationId>,
     /// Target revision of the manual update. `Some` only for manual update invocations.
     pub manual_update_target_revision: Option<ComponentRevision>,
+    /// What the invocation runs. `None` for a manual update.
+    pub operation: Option<InvocationOperation>,
 }
 
 impl PendingInvocationRef {
@@ -857,6 +1234,7 @@ mod request_equality_tests {
                     secret_keys_revealable: Default::default(),
                     filesystem_access: ToolFilesystemAccess::Denied,
                     source,
+                    shell: false,
                 },
                 filesystem: FilesystemCapability::Incapable,
                 middleware_chain: None,
@@ -875,7 +1253,8 @@ mod request_equality_tests {
             },
             AgentInvocationPayload::AgentMethod {
                 method_name: "run".to_string(),
-                input: value.clone(),
+                input: value.clone().try_into().unwrap(),
+                allow_streams: true,
                 caller: Caller::anonymous(),
                 scope_card: None,
             },
@@ -901,9 +1280,12 @@ mod request_equality_tests {
                     },
                     AgentInvocationPayload::AgentMethod {
                         method_name: "run".to_string(),
+                        allow_streams: false,
                         input: SchemaValue::Tuple {
                             elements: Vec::new(),
-                        },
+                        }
+                        .try_into()
+                        .unwrap(),
                         caller: caller.clone(),
                         scope_card: None,
                     },
@@ -918,6 +1300,118 @@ mod request_equality_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn stored_method_request_retains_original_input_and_stream_policy() {
+        for input in [
+            SchemaValue::Record {
+                fields: vec![SchemaValue::U32(7)],
+            }
+            .try_into()
+            .unwrap(),
+            AgentMethodInput::PublicJson(
+                crate::model::invocation_session_public::JsonMethodInput::capture(
+                    br#"{"amount": 7}"#,
+                )
+                .unwrap(),
+            ),
+        ] {
+            for allow_streams in [false, true] {
+                let request = AgentInvocationPayload::AgentMethod {
+                    method_name: "increment".into(),
+                    input: input.clone(),
+                    allow_streams,
+                    caller: Caller::anonymous(),
+                    scope_card: None,
+                };
+                let (operation, payload) = request.clone().into_stored();
+                let bytes = desert_rust::serialize_to_byte_vec(&payload).unwrap();
+                let stored: super::StoredAgentInvocationPayload =
+                    desert_rust::deserialize(&bytes).unwrap();
+                assert_eq!(stored.with_operation(operation).unwrap(), request);
+            }
+        }
+    }
+
+    #[test]
+    fn same_caller_request_decoding_matches_representations_but_keeps_the_rest_restriction() {
+        let value = || SchemaValue::Record {
+            fields: vec![SchemaValue::U32(7)],
+        };
+        let internal: AgentMethodInput = value().try_into().unwrap();
+        let AgentMethodInput::Native(native) = internal.clone() else {
+            unreachable!()
+        };
+        let rest = AgentMethodInput::Native(native.for_external_rest());
+        let json = AgentMethodInput::PublicJson(
+            crate::model::invocation_session_public::JsonMethodInput::capture(br#"{"amount": 7}"#)
+                .unwrap(),
+        );
+        let request =
+            |input: &AgentMethodInput, allow_streams| AgentInvocationPayload::AgentMethod {
+                method_name: "start".into(),
+                input: input.clone(),
+                allow_streams,
+                caller: Caller::anonymous(),
+                scope_card: None,
+            };
+        let decode = |amount| {
+            move |_: &AgentMethodInput| {
+                Some(SchemaValue::Record {
+                    fields: vec![SchemaValue::U32(amount)],
+                })
+            }
+        };
+        for (accepted, repeated, result_admits_external_rest, matches) in [
+            (&rest, &json, false, true),
+            (&rest, &internal, false, true),
+            (&json, &internal, false, true),
+            (&internal, &json, false, true),
+            (&json, &rest, false, false),
+            (&internal, &rest, false, false),
+            (&json, &rest, true, true),
+            (&internal, &rest, true, true),
+        ] {
+            assert_eq!(
+                request(accepted, false).same_caller_request_decoding(
+                    &request(repeated, true),
+                    decode(7),
+                    result_admits_external_rest
+                ),
+                matches,
+                "{accepted:?} then {repeated:?}, result admits REST: {result_admits_external_rest}"
+            );
+        }
+        assert!(request(&rest, false).same_caller_request_decoding(
+            &request(&rest, true),
+            |_| None,
+            false
+        ));
+        for result_admits_external_rest in [false, true] {
+            assert!(!request(&json, false).same_caller_request_decoding(
+                &request(&rest, true),
+                |input| {
+                    decode(if matches!(input, AgentMethodInput::PublicJson(_)) {
+                        8
+                    } else {
+                        7
+                    })(input)
+                },
+                result_admits_external_rest
+            ));
+        }
+        assert!(!request(&rest, false).same_caller_request_decoding(
+            &request(&json, true),
+            |input| {
+                decode(if matches!(input, AgentMethodInput::PublicJson(_)) {
+                    8
+                } else {
+                    7
+                })(input)
+            },
+            false
+        ));
     }
 
     #[test]

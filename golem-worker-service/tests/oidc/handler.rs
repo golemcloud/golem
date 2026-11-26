@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::{AuthorizationCodeWriteFailureStores, BearerWriteFailureStores};
-use chrono::Utc;
 use golem_common::model::component::ComponentId;
 use golem_common::model::domain_registration::Domain;
 use golem_common::model::security_scheme::{Provider, SecuritySchemeId, SecuritySchemeName};
@@ -40,6 +39,7 @@ use golem_worker_service::custom_api::{
     ResponseBody, RichCompiledRoute, RichRequest, RichRouteBehaviour, RichRouteSecurity,
     RichSecuritySchemeRouteSecurity,
 };
+use jiff::Timestamp;
 use openidconnect::core::CoreIdTokenClaims;
 use openidconnect::{
     Audience, AuthorizationCode, EmptyAdditionalClaims, IssuerUrl, StandardClaims,
@@ -115,8 +115,8 @@ impl IdentityProvider for FakeIdentityProvider {
         let claims = CoreIdTokenClaims::new(
             issuer,
             vec![aud],
-            Utc::now() + chrono::Duration::hours(8),
-            Utc::now(),
+            (std::time::SystemTime::now() + std::time::Duration::from_secs(8 * 3600)).into(),
+            std::time::SystemTime::now().into(),
             standard_claims,
             EmptyAdditionalClaims {},
         );
@@ -654,7 +654,7 @@ async fn pkce_authorization_and_callback_issue_bound_code_without_cookie(
     assert_eq!(issued.redirect_uri, FRONTEND_REDIRECT);
     assert_eq!(issued.code_challenge, CHALLENGE);
     assert_eq!(issued.principal.subject, "sub");
-    assert!(issued.expires_at > Utc::now());
+    assert!(issued.expires_at > Timestamp::now());
     Ok(())
 }
 
@@ -718,7 +718,7 @@ async fn pkce_callback_is_atomic_and_rejects_unknown_expired_and_changed_scheme(
                 frontend_state: FRONTEND_STATE.into(),
                 code_challenge: CHALLENGE.into(),
                 upstream_nonce: Nonce::new("nonce".into()),
-                expires_at: Utc::now() - chrono::TimeDelta::seconds(1),
+                expires_at: Timestamp::now() - jiff::SignedDuration::from_secs(1),
             },
         )
         .await?;
@@ -986,7 +986,7 @@ async fn pkce_token_redemption_consumes_code_on_all_proof_failures(
 
     let code = issue_code(&handler, &route, &scheme).await?;
     let mut expired = store.take_authorization_code(&code).await?.unwrap();
-    expired.expires_at = Utc::now() - chrono::TimeDelta::seconds(1);
+    expired.expires_at = Timestamp::now() - jiff::SignedDuration::from_secs(1);
     let expired_code = GolemAuthorizationCode::from_str(&code).unwrap();
     store
         .store_authorization_code(&expired_code, expired)
@@ -1137,7 +1137,7 @@ async fn pkce_bearer_is_bound_to_current_scheme_environment_and_origin(
         .get_bearer_credential(&token, &pkce_binding(&route, &scheme))
         .await?
         .unwrap();
-    credential.expires_at = Utc::now() - chrono::TimeDelta::seconds(1);
+    credential.expires_at = Timestamp::now() - jiff::SignedDuration::from_secs(1);
     store
         .store_bearer_credential(&parsed_token, credential)
         .await?;

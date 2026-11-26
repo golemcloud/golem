@@ -22,7 +22,7 @@ const STOP_BOUND: Duration = Duration::from_secs(8);
 
 macro_rules! pending_case {
     ($name:ident, Storage, $mode:ident, $asynchronous:expr) => {
-        pending_case!(#[cfg(target_os = "linux")] #[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode, $asynchronous);
+        pending_case!(#[ignore = "requires the privileged managed XFS test runner"] $name, Storage, $mode, $asynchronous);
     };
     ($(#[$attr:meta])* $name:ident, $resource:ident, $mode:ident, $asynchronous:expr) => {
         $(#[$attr])*
@@ -62,36 +62,42 @@ pending_case!(
     Ephemeral,
     false
 );
-pending_case!(
-    durable_sync_rpc_managed_xfs_storage_quota,
-    Storage,
-    Durable,
-    false
-);
-pending_case!(
-    ephemeral_sync_rpc_managed_xfs_storage_quota,
-    Storage,
-    Ephemeral,
-    false
-);
+#[cfg(target_os = "linux")]
+mod storage {
+    use super::*;
+    use test_r::test;
+
+    pending_case!(
+        durable_sync_rpc_managed_xfs_storage_quota,
+        Storage,
+        Durable,
+        false
+    );
+    pending_case!(
+        ephemeral_sync_rpc_managed_xfs_storage_quota,
+        Storage,
+        Ephemeral,
+        false
+    );
+    pending_case!(
+        durable_async_rpc_managed_xfs_storage_quota,
+        Storage,
+        Durable,
+        true
+    );
+    pending_case!(
+        ephemeral_async_rpc_managed_xfs_storage_quota,
+        Storage,
+        Ephemeral,
+        true
+    );
+}
 
 pending_case!(durable_async_rpc_memory_quota, Memory, Durable, true);
 pending_case!(ephemeral_async_rpc_memory_quota, Memory, Ephemeral, true);
 pending_case!(
     ephemeral_async_rpc_compute_quota_prepaid,
     Compute,
-    Ephemeral,
-    true
-);
-pending_case!(
-    durable_async_rpc_managed_xfs_storage_quota,
-    Storage,
-    Durable,
-    true
-);
-pending_case!(
-    ephemeral_async_rpc_managed_xfs_storage_quota,
-    Storage,
     Ephemeral,
     true
 );

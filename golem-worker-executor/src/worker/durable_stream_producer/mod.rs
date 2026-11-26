@@ -477,6 +477,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 }
 
 #[async_trait::async_trait]
+#[golem_async_trait::region_simple]
 impl<Ctx: WorkerCtx> DurableStreamConsumerJournal for WorkerDurableStreamConsumerJournal<Ctx> {
     #[tracing::instrument(name = "durable_stream.consumer.commit", level = "debug", skip_all)]
     async fn commit(&self) -> Result<(), SessionError> {

@@ -269,6 +269,7 @@ impl Clone for MultiLayerOplogService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl OplogService for MultiLayerOplogService {
     async fn lock_lifecycle(&self, agent_id: &AgentId) -> OplogLifecycleGuard {
         self.primary.lock_lifecycle(agent_id).await

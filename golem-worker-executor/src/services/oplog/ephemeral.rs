@@ -167,6 +167,7 @@ struct EphemeralOplogState {
     writer_watermark: Arc<AtomicU64>,
     last_added_non_hint_entry: Option<OplogIndex>,
     durable_stream_sessions: super::raw_session::RawSessionCache,
+    owned_starts: super::owned_starts::OwnedStartCheck,
     fence: Arc<OnceLock<OplogFence>>,
     /// The archive write the writer task could not store, latched like the fence.
     failure: Arc<OnceLock<OplogError>>,
@@ -191,6 +192,7 @@ impl EphemeralOplogState {
     /// single commit-threshold check, so the pair is never split by a commit.
     fn push(&mut self, entry: OplogEntry) -> OplogIndex {
         let is_hint = entry.is_hint();
+        self.owned_starts.append(self.last_oplog_idx.next(), &entry);
         self.durable_stream_sessions
             .apply_entry(self.last_oplog_idx.next(), &entry);
         self.buffer.push_back(entry);
@@ -356,6 +358,7 @@ impl EphemeralOplog {
             writer_watermark,
             last_added_non_hint_entry: None,
             durable_stream_sessions: super::raw_session::RawSessionCache::default(),
+            owned_starts: Default::default(),
             fence: fence.clone(),
             failure,
             lower: lower.clone(),
@@ -1001,6 +1004,7 @@ impl Debug for EphemeralOplog {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl Oplog for EphemeralOplog {
     fn executor_shutdown_handle(&self) -> super::OplogShutdownHandle {
         let executor_shutdown = self.executor_shutdown.clone();

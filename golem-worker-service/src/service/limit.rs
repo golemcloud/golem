@@ -59,6 +59,7 @@ impl RemoteLimitService {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl LimitService for RemoteLimitService {
     async fn update_worker_connection_limit(
         &self,

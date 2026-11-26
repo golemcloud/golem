@@ -21,9 +21,9 @@ use crate::custom_api::oidc::model::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use bytes::Bytes;
-use chrono::Utc;
 use fred::types::Expiration;
 use golem_common::redis::RedisPool;
+use jiff::Timestamp;
 
 #[derive(Clone)]
 pub struct RedisSessionStore {
@@ -78,8 +78,12 @@ return value
         format!("mcp_proxy_code:{}", code)
     }
 
-    fn expiration(expires_at: chrono::DateTime<Utc>) -> Expiration {
-        Expiration::PX((expires_at - Utc::now()).num_milliseconds().max(1))
+    fn expiration(expires_at: jiff::Timestamp) -> Expiration {
+        Expiration::PX(
+            (expires_at - Timestamp::now())
+                .as_millis()
+                .clamp(1, i64::MAX as i128) as i64,
+        )
     }
 
     async fn atomic_take(
@@ -97,6 +101,7 @@ return value
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl SessionStore for RedisSessionStore {
     async fn store_pending_oidc_login(
         &self,
@@ -256,8 +261,8 @@ impl SessionStore for RedisSessionStore {
         session_id: &SessionId,
         session: OidcSession,
     ) -> Result<(), SessionStoreError> {
-        let ttl_secs = (session.expires_at - chrono::Utc::now()).num_milliseconds();
-        let expiration = Expiration::PX(ttl_secs.max(1));
+        let ttl_secs = (session.expires_at - jiff::Timestamp::now()).as_millis();
+        let expiration = Expiration::PX(ttl_secs.clamp(1, i64::MAX as i128) as i64);
 
         let record = records::OidcSessionRecord::try_from(session)?;
         let serialized = golem_common::serialization::serialize(&record)

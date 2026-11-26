@@ -17,7 +17,7 @@ use crate::base_model::diff::Hash;
 use crate::base_model::tool_middleware::{ToolMiddlewareName, ToolMiddlewareSource};
 use crate::schema::tool::ToolMiddleware;
 use crate::{declare_enums, declare_structs, declare_unions, newtype_uuid};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use std::fmt::{Display, Formatter};
 
 newtype_uuid!(ToolMiddlewareReleaseId);
@@ -55,7 +55,11 @@ impl Display for ToolMiddlewarePublicationPlanAction {
     }
 }
 
-declare_structs! {
+crate::declare_datetime_struct! {
+    crate::base_model::tool_middleware_release::ToolMiddlewareRelease,
+    [],
+    [],
+    [],
     pub struct ToolMiddlewareRelease {
         pub id: ToolMiddlewareReleaseId,
         pub owner_account_id: AccountId,
@@ -68,11 +72,13 @@ declare_structs! {
         pub immutable: bool,
         pub lifecycle: ToolMiddlewareReleaseLifecycle,
         pub origin: ToolMiddlewareReleaseOrigin,
-        pub created_at: DateTime<Utc>,
+        pub created_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
         pub created_by: AccountId,
-        pub state_changed_at: DateTime<Utc>,
+        pub state_changed_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
         pub state_changed_by: AccountId,
     }
+}
+declare_structs! {
     pub struct ToolMiddlewareReleaseMetadata {
         pub id: ToolMiddlewareReleaseId,
         pub name: ToolMiddlewareName,
@@ -114,6 +120,7 @@ declare_structs! {
         pub version: String,
         pub reason: Option<String>
     }
+
 }
 
 declare_unions! {

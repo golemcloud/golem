@@ -59,7 +59,7 @@ class StreamRuntimeTest extends munit.FunSuite {
   private def message(kind: String, fields: (String, Json)*): Json =
     Json.parse(StreamSessionProtocol.message(kind, fields.toVector)).fold(e => throw new IllegalArgumentException(e), identity)
 
-  for (rejectAfterTakeover <- List(false, true); terminal <- List("finished", "failed", "consumer-cancelled")) test(s"resume switches to takeover and retries its uncertain descriptor ($rejectAfterTakeover, $terminal)") {
+  for (targetMode <- List("key", "key-known", "id"); rejectAfterTakeover <- List(false, true); terminal <- List("finished", "failed", "consumer-cancelled")) test(s"resume switches to takeover and retries its uncertain descriptor ($targetMode, $rejectAfterTakeover, $terminal)") {
     val server = new ServerSocket(0)
     val peerDone = Promise[Unit]()
     val consumed = Promise[Unit]()
@@ -72,6 +72,10 @@ class StreamRuntimeTest extends munit.FunSuite {
       try {
         val startPeer = connect()
         val start = startPeer.receive()
+        val target = if (targetMode == "id")
+          Json.obj("kind" -> Json.string("id"), "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"), "expectedFingerprint" -> Json.string("pinned"))
+        else Json.obj("kind" -> Json.string("key"), "constructorParameters" -> Json.parse("""{"kind":"tuple","value":{"elements":[]}}""").toOption.get)
+        assertEquals(field(start, "selector").render, Json.obj("agentType" -> Json.string("RecoveryAgent"), "application" -> Json.string("app"), "target" -> target, "environment" -> Json.string("env"), "method" -> Json.string("run")).render)
         val key = Json.string("00000000-0000-0000-0000-000000000123")
         assertNotEquals(key.render, field(start, "idempotencyKey").render)
         def accepted(p: Peer, descriptor: Json): Unit = p.send(message("invocationAccepted",
@@ -129,7 +133,9 @@ class StreamRuntimeTest extends munit.FunSuite {
     val empty = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"tuple","value":{"elements":[]}}}""")
     seedEnvironment(server.getLocalPort)
     val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
-      "RecoveryAgent", Some(SchemaValue.TupleValue(Nil)), None)
+      "RecoveryAgent", if (targetMode == "id") None else Some(SchemaValue.TupleValue(Nil)),
+      if (targetMode == "id") Some(AgentReference(AgentId("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"), "pinned")) else None)
+    if (targetMode == "key-known") resolved.knownAgentId.set(Some(AgentId("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d")))
     try {
       val result = Await.result(Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(Nil), empty, empty, Some(PublicValueCodec.fromSchemaGraphJson(graph))), 15.seconds)
       assertEquals(result.agentId, AgentId("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"))
@@ -473,6 +479,50 @@ class StreamRuntimeTest extends munit.FunSuite {
         }
       }
       else assert(intercept[BridgeException](Await.result(checked, 5.seconds)).getMessage.contains("unacknowledged input exceeds"))
+      complete.success(())
+      Await.result(peer, 5.seconds)
+    } finally { complete.trySuccess(()); server.close() }
+  }
+
+  test("an input that the server ends with a failure fails the call with that failure") {
+    val server = new ServerSocket(0)
+    val complete = Promise[Unit]()
+    val peer = Future {
+      val p = new Peer(server.accept())
+      try {
+        val start = p.receive()
+        val refs = field(field(start, "methodParameters"), "value")
+        val entry = Json.asArray(field(refs, "elements")).toOption.get.head
+        val mapping = Json.obj("channel" -> Json.fromInt(1), "direction" -> Json.string("input"),
+          "streamToken" -> Json.string("input-0"), "provisionalRef" -> field(field(entry, "value"), "provisionalRef"),
+          "inputHighWater" -> Json.obj("sequence" -> Json.string("0"), "terminal" -> Json.bool(false)))
+        p.send(message("invocationAccepted",
+          "agentId" -> Json.string("0a1b2c3d-4e5f-8a6b-9c7d-0e1f2a3b4c5d"),
+          "attemptId" -> field(start, "attemptId"), "idempotencyKey" -> Json.string("00000000-0000-0000-0000-000000000123"),
+          "sessionToken" -> Json.string("session"), "mappings" -> Json.arr(Vector(mapping))))
+        assertEquals(p.receiveBinary()._2, Vector[Byte](7))
+        p.send(message("stream-end", "channel" -> Json.fromInt(1), "direction" -> Json.string("input"), "sequence" -> Json.string("0"),
+          "outcome" -> Json.obj("kind" -> Json.string("failed"), "error" -> Json.obj("kind" -> Json.string("interrupted"),
+            "message" -> Json.string("input item 0 does not satisfy the element schema")))))
+        Await.result(complete.future, 5.seconds)
+      } finally { p.close(); server.close() }
+    }
+    val empty = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"tuple","value":{"elements":[]}}}""")
+    val codec = PublicValueCodec.fromSchemaGraphJson("""{"root":{"kind":"u8","value":{}}}""")
+    val inputGraph = """{"root":{"kind":"tuple","value":{"elements":[{"kind":"stream","value":{"inner":{"kind":"u8","value":{}}}}]}}}"""
+    var first = true
+    val source = AgentStream.fromPull[Int](() => {
+      if (first) { first = false; Future.successful(AgentStreamStep.Item(7)) }
+      else Promise[AgentStreamStep[Int]]().future
+    }, () => Future.unit)
+    seedEnvironment(server.getLocalPort)
+    val resolved = ResolvedAgent(Configuration(GolemServer.Custom(s"http://127.0.0.1:${server.getLocalPort}", "token"), "app", "env", global),
+      "RecoveryAgent", Some(SchemaValue.TupleValue(Nil)), None)
+    try {
+      val invocation = Bridge.invokeStreamingAgent(resolved, "run", () => SchemaValue.TupleValue(List(
+        StreamSession.input(source, SchemaValue.U8Value.apply, "u8", codec))), empty, PublicValueCodec.fromSchemaGraphJson(inputGraph), None)
+      val error = intercept[AgentStreamEnded](Await.result(invocation, 5.seconds))
+      assertEquals(error.outcome, StreamOutcome.Failed(StreamError.Interrupted("input item 0 does not satisfy the element schema")))
       complete.success(())
       Await.result(peer, 5.seconds)
     } finally { complete.trySuccess(()); server.close() }

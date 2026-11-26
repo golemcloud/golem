@@ -127,10 +127,16 @@ fn assert_resource_contract(
     path: &str,
     provider: &str,
     owner_agent_id: &str,
+    calling_agent_text: &str,
 ) {
-    let caller = callers::user_text(
-        "https://matrix-conformance.test",
-        "matrix-resource-acceptance",
+    // The provider sees the user as the original caller and the calling agent as the immediate
+    // one.
+    let caller = format!(
+        "{}|{calling_agent_text}",
+        callers::user_text(
+            "https://matrix-conformance.test",
+            "matrix-resource-acceptance",
+        )
     );
     let provider = provider.to_string();
     let owner_agent_id = owner_agent_id.to_string();
@@ -492,6 +498,15 @@ async fn run_resource_contract(
                         &path,
                         provider.language,
                         &worker_id.agent_id.to_string(),
+                        &callers::principal_text(
+                            &callers::agent_in(
+                                worker_id.agent_id,
+                                agent_id.agent_type.clone(),
+                                executor.get_worker_metadata(&worker_id).await?.fingerprint,
+                                context.default_environment_id,
+                            )
+                            .immediate,
+                        ),
                     ),
                     Err(error) => failures.push(format!("{path}.decode: {error:#}")),
                 },
@@ -977,7 +992,7 @@ async fn gol838_entity_install_definitions_survive_next_primary_pin_reconstructi
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -1386,7 +1401,7 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
                 lower_negative: Vec::new(),
                 upper_positive: Vec::new(),
                 upper_negative: Vec::new(),
-                created_at: chrono::Utc::now(),
+                created_at: jiff::Timestamp::now(),
                 expires_at: None,
                 system_card: false,
                 managed_by: None,

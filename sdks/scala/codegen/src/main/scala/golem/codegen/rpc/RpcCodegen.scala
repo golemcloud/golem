@@ -516,10 +516,14 @@ object RpcCodegen {
 
     sb.append("  /**\n")
     sb.append("   * A client of the existing agent with the given ID. Never creates the agent. An unknown\n")
-    sb.append("   * ID, or the ID of an agent of another type, fails with `AgentRpcError.NotFound`.\n")
+    sb.append("   * ID, or the ID of an agent of another type, throws `AgentRpcException` with\n")
+    sb.append("   * `AgentRpcError.NotFound`.\n")
     sb.append("   */\n")
-    sb.append(s"  def getById(agentId: $AgentIdType): $FutureType[$remoteName] =\n")
-    sb.append(s"    $RuntimeRef.getByIdWire[$traitRef](agentType, agentId).map(bindRemote)($JsQueue)\n\n")
+    sb.append(s"  def getById(agentId: $AgentIdType): $remoteName =\n")
+    sb.append(s"    $RuntimeRef.getByIdWire[$traitRef](agentType, agentId) match {\n")
+    sb.append(s"      case _root_.scala.Right(resolved) => bindRemote(resolved)\n")
+    sb.append(s"      case _root_.scala.Left(err) => throw _root_.golem.runtime.rpc.AgentRpcException(err)\n")
+    sb.append(s"    }\n\n")
   }
 
   private def constructorTypeExpr(ctor: ConstructorSurface): String =

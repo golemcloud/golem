@@ -32,7 +32,7 @@ use golem_common::model::invocation_session_public::{
     DecimalU64, INVOCATION_SESSION_SUBPROTOCOL, INVOCATION_SESSION_VERSION, InvocationSelector,
     PublicClientMessage, PublicErrorCode, PublicInvocationOutcome, PublicInvocationResult,
     PublicResumeOperation, PublicServerMessage, PublicStreamDirection, PublicStreamOutcome,
-    decode_server_text, encode_text,
+    decode_server_text, encode_client_text,
 };
 use golem_common::model::{AgentId, IdempotencyKey, InvocationRequestKey, RoutingTable};
 use golem_common::schema::{ResultValuePayload, SchemaValue, TypedSchemaValue};
@@ -117,7 +117,7 @@ pub(crate) async fn send_public_request(
     request: &PublicClientMessage,
 ) -> anyhow::Result<()> {
     socket
-        .send(Message::Text(encode_text(request)?.into()))
+        .send(Message::Text(encode_client_text(request)?.into()))
         .await?;
     Ok(())
 }
@@ -144,6 +144,24 @@ pub(crate) async fn receive_public_response(
     }
 }
 
+pub(crate) async fn receive_public_stream_readiness(
+    socket: &mut PublicInvocationSocket,
+) -> anyhow::Result<PublicServerMessage> {
+    let response = receive_public_response(socket).await?;
+    match response {
+        PublicServerMessage::InvocationAccepted { ref mappings, .. } if mappings.is_empty() => {
+            let ready = receive_public_response(socket).await?;
+            anyhow::ensure!(
+                matches!(ready, PublicServerMessage::InvocationReady { .. }),
+                "expected stream readiness, got {ready:?}"
+            );
+            Ok(ready)
+        }
+        PublicServerMessage::InvocationAccepted { .. } => Ok(response),
+        other => anyhow::bail!("invocation was not accepted: {other:?}"),
+    }
+}
+
 fn public_start(
     application_name: &str,
     environment_name: &str,
@@ -155,14 +173,16 @@ fn public_start(
         attempt_id: uuid::Uuid::new_v4(),
         config: Vec::new(),
         idempotency_key: IdempotencyKey::fresh().value,
-        method_parameters,
+        method_parameters: method_parameters.try_into().unwrap(),
         selector: Box::new(InvocationSelector {
             agent_type: "StreamingRpcTarget".to_string(),
             application: application_name.to_string(),
-            constructor_parameters: native_record([serde_json::json!({
-                "kind": "string",
-                "value": agent_name
-            })]),
+            target: golem_common::model::invocation_session_public::PublicAgentTarget::Key {
+                constructor_parameters: native_record([serde_json::json!({
+                    "kind": "string",
+                    "value": agent_name
+                })]),
+            },
             environment: environment_name.to_string(),
             method: method_name.to_string(),
         }),
@@ -227,9 +247,10 @@ async fn resume_public_input_with_end(
     };
     let mut socket = connect_public_invocation_socket(deps, environment_id, Some(token)).await?;
     send_public_request(&mut socket, &resume).await?;
-    let resumed = receive_public_response(&mut socket).await?;
+    let resumed = receive_public_stream_readiness(&mut socket).await?;
     let resumed_channel = match resumed {
-        PublicServerMessage::InvocationAccepted { mappings, .. } => mappings
+        PublicServerMessage::InvocationAccepted { mappings, .. }
+        | PublicServerMessage::InvocationReady { mappings, .. } => mappings
             .into_iter()
             .find(|mapping| {
                 mapping.direction == PublicStreamDirection::Input
@@ -311,10 +332,12 @@ async fn invoke_agent_session(
             target: Some(target),
             method_name: Some(method_name.to_string()),
             input: Some(input),
+            captured_method_input: None,
+            allow_streams: true,
             idempotency_key: Some(IdempotencyKey::fresh().into()),
             context: None,
             auth_ctx: Some(AuthCtx::System.into()),
-            caller: None,
+            caller: Some(golem_common::model::caller::Caller::anonymous().into()),
             environment_id: Some(component.environment_id.into()),
             config: Vec::new(),
             component_owner_account_id: None,
@@ -323,7 +346,7 @@ async fn invoke_agent_session(
             freshness_disposition:
                 golem_api_grpc::proto::golem::worker::InvocationFreshnessDisposition::MayExist
                     as i32,
-            attempt_id: None,
+            attempt_id: Some(uuid::Uuid::new_v4().into()),
             expected_callee_fingerprint: None,
             durable_input_mappings: Vec::new(),
             scope_card: None,
@@ -358,7 +381,10 @@ async fn invoke_agent_session(
             .validate_response(&response)
             .map_err(anyhow::Error::msg)?;
         match response.response {
-            Some(invocation_response::Response::Accepted(_)) => {}
+            Some(
+                invocation_response::Response::Accepted(_)
+                | invocation_response::Response::Ready(_),
+            ) => {}
             Some(invocation_response::Response::Rejected(rejected)) => {
                 anyhow::bail!("invocation session was rejected: {}", rejected.error);
             }
@@ -452,10 +478,12 @@ impl TrustedInvocationSession {
                 target: Some(target),
                 method_name: Some(method_name.to_string()),
                 input: Some(input),
+                captured_method_input: None,
+                allow_streams: true,
                 idempotency_key: Some(idempotency_key.into()),
                 context: None,
                 auth_ctx: Some(AuthCtx::System.into()),
-                caller: None,
+                caller: Some(golem_common::model::caller::Caller::anonymous().into()),
                 environment_id: Some(component.environment_id.into()),
                 config: Vec::new(),
                 component_owner_account_id: None,
@@ -531,7 +559,14 @@ impl TrustedInvocationSession {
             }
             other => anyhow::bail!("trusted invocation was not accepted: {other:?}"),
         };
-        session.acceptance = accepted;
+        session.acceptance = if accepted.component_revision.is_some() {
+            accepted
+        } else {
+            match session.receive().await?.response {
+                Some(invocation_response::Response::Ready(ready)) => ready,
+                other => anyhow::bail!("trusted invocation was not ready: {other:?}"),
+            }
+        };
         Ok(session)
     }
 
@@ -558,7 +593,8 @@ impl TrustedInvocationSession {
 
     fn remember_mappings(&mut self, response: &InvocationResponse) {
         let mappings = match response.response.as_ref() {
-            Some(invocation_response::Response::Accepted(accepted)) => &accepted.stream_mappings,
+            Some(invocation_response::Response::Accepted(accepted))
+            | Some(invocation_response::Response::Ready(accepted)) => &accepted.stream_mappings,
             Some(invocation_response::Response::Result(result)) => &result.new_stream_mappings,
             Some(invocation_response::Response::OutputItem(item)) => &item.new_stream_mappings,
             Some(invocation_response::Response::InputAck(ack)) => &ack.new_stream_mappings,
@@ -830,6 +866,7 @@ impl TrustedInvocationReport {
             Some(invocation_response::Response::Accepted(_)) => {
                 anyhow::bail!("trusted invocation was accepted more than once")
             }
+            Some(invocation_response::Response::Ready(_)) => {}
             Some(invocation_response::Response::AttachmentRevoked(revoked)) => {
                 anyhow::bail!(
                     "trusted invocation attachment was revoked: {}",
@@ -2541,14 +2578,18 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         ),
     )
     .await?;
-    assert_eq!(scalar.len(), 3);
+    assert_eq!(scalar.len(), 4);
     assert!(matches!(
         scalar[0],
         PublicServerMessage::InvocationAccepted { .. }
     ));
+    assert!(matches!(
+        scalar[1],
+        PublicServerMessage::InvocationReady { .. }
+    ));
     let PublicServerMessage::InvocationResult {
         mappings, result, ..
-    } = &scalar[1]
+    } = &scalar[2]
     else {
         anyhow::bail!("scalar public invocation did not return a result")
     };
@@ -2558,12 +2599,68 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     assert!(mappings.is_empty());
     assert_eq!(value, &serde_json::json!({"kind": "u64", "value": "42"}));
     assert!(matches!(
-        scalar[2],
+        scalar[3],
         PublicServerMessage::InvocationFinished {
             outcome: PublicInvocationOutcome::Success,
             ..
         }
     ));
+
+    let PublicServerMessage::InvocationAccepted { agent_id, .. } = scalar[0] else {
+        unreachable!()
+    };
+    let mut by_id = public_start(
+        application_name,
+        environment_name,
+        &agent_name,
+        "ping",
+        native_record([]),
+    );
+    if let PublicClientMessage::InvocationStart { selector, .. } = &mut by_id {
+        selector.target = golem_common::model::invocation_session_public::PublicAgentTarget::Id {
+            agent_id,
+            expected_fingerprint: None,
+        };
+    }
+    let existing = run_public_session(deps, environment.id, &user.token, by_id.clone()).await?;
+    assert!(matches!(
+        existing[2],
+        PublicServerMessage::InvocationResult { .. }
+    ));
+    let missing_key = agent_key!("StreamingRpcTarget", format!("{agent_name}-missing"));
+    let missing_key =
+        golem_common::model::agent::AgentKey::new(missing_key.agent_type, missing_key.parameters)?;
+    let missing = AgentId::keyed(environment.id, agent_id.type_id().unwrap(), &missing_key);
+    if let PublicClientMessage::InvocationStart { selector, .. } = &mut by_id {
+        selector.target = golem_common::model::invocation_session_public::PublicAgentTarget::Id {
+            agent_id: missing,
+            expected_fingerprint: None,
+        };
+    }
+    let rejected = run_public_session(deps, environment.id, &user.token, by_id).await?;
+    assert!(matches!(
+        &rejected[..],
+        [PublicServerMessage::InvocationRejected {
+            code: PublicErrorCode::NotFound,
+            ..
+        }]
+    ));
+    let worker_service = deps.worker_service();
+    let metadata = reqwest::Client::new()
+        .get(format!(
+            "http://{}:{}/v1/runtime/envs/{}/agents/{missing}",
+            worker_service.http_host(),
+            worker_service.http_port(),
+            environment.id,
+        ))
+        .bearer_auth(user.token.secret())
+        .send()
+        .await?;
+    assert_eq!(
+        metadata.status(),
+        reqwest::StatusCode::NOT_FOUND,
+        "an ID session must not create an agent"
+    );
 
     let produced = run_public_session(
         deps,
@@ -2581,10 +2678,14 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         ),
     )
     .await?;
-    assert_eq!(produced.len(), 7);
+    assert_eq!(produced.len(), 8);
+    assert!(matches!(
+        produced[1],
+        PublicServerMessage::InvocationReady { .. }
+    ));
     let PublicServerMessage::InvocationResult {
         mappings, result, ..
-    } = &produced[1]
+    } = &produced[2]
     else {
         anyhow::bail!("streaming public invocation did not return an initial result")
     };
@@ -2601,7 +2702,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
             "streamToken": output_mapping.stream_token.clone()
         }))
     );
-    let items = produced[2..5]
+    let items = produced[3..6]
         .iter()
         .enumerate()
         .map(|(expected_sequence, response)| match response {
@@ -2620,7 +2721,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         .collect::<Vec<_>>();
     assert_eq!(items, vec![native_u32(3), native_u32(5), native_u32(8)]);
     assert!(matches!(
-        produced[5],
+        produced[6],
         PublicServerMessage::StreamEnd {
             channel,
             direction: PublicStreamDirection::Output,
@@ -2630,7 +2731,7 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         } if channel == output_mapping.channel
     ));
     assert!(matches!(
-        produced[6],
+        produced[7],
         PublicServerMessage::InvocationFinished {
             outcome: PublicInvocationOutcome::Success,
             ..
@@ -2650,9 +2751,10 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     let mut socket =
         connect_public_invocation_socket(deps, environment.id, Some(&user.token)).await?;
     send_public_request(&mut socket, &start).await?;
-    let accepted = receive_public_response(&mut socket).await?;
+    let accepted = receive_public_stream_readiness(&mut socket).await?;
     let input_channel = match accepted {
-        PublicServerMessage::InvocationAccepted { mappings, .. } => mappings
+        PublicServerMessage::InvocationAccepted { mappings, .. }
+        | PublicServerMessage::InvocationReady { mappings, .. } => mappings
             .iter()
             .find(|mapping| mapping.provisional_ref == Some(input_reference))
             .map(|mapping| mapping.channel)
@@ -2734,9 +2836,14 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
     let mut blocked_socket =
         connect_public_invocation_socket(deps, environment.id, Some(&user.token)).await?;
     send_public_request(&mut blocked_socket, &blocked).await?;
-    let accepted = receive_public_response(&mut blocked_socket).await?;
+    let accepted = receive_public_stream_readiness(&mut blocked_socket).await?;
     let (blocked_session_token, blocked_channel) = match accepted {
         PublicServerMessage::InvocationAccepted {
+            mappings,
+            session_token,
+            ..
+        }
+        | PublicServerMessage::InvocationReady {
             mappings,
             session_token,
             ..
@@ -2810,9 +2917,14 @@ async fn public_websocket_invocation_forwards_scalar_and_streaming_sessions(
         ),
     )
     .await?;
-    let accepted = receive_public_response(&mut capability_socket).await?;
+    let accepted = receive_public_stream_readiness(&mut capability_socket).await?;
     let (capability_session_token, capability_channel) = match accepted {
         PublicServerMessage::InvocationAccepted {
+            mappings,
+            session_token,
+            ..
+        }
+        | PublicServerMessage::InvocationReady {
             mappings,
             session_token,
             ..

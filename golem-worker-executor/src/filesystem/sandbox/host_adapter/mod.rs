@@ -38,20 +38,16 @@ use crate::filesystem::host_directories::HostPath;
 use crate::filesystem::sandbox::FilesystemStorageError;
 use crate::filesystem::volume::{AgentAccounting, FilesystemAllocation, FilesystemLimits};
 use crate::filesystem::volume::{FilesystemVolume, NativeStorageProfile};
-#[cfg(target_os = "linux")]
-use crate::filesystem::volume::{ValidatedXfsNameMode, install_project_limits, project_allocation};
 use bytes::Bytes;
 use cap_fs_ext::{
     DirExt as _, FollowSymlinks, MetadataExt as _, OpenOptionsFollowExt as _,
     OpenOptionsMaybeDirExt, OpenOptionsSyncExt,
 };
-use cap_std::fs::FileExt as _;
 use fs_set_times::{SetTimes as _, SystemTimeSpec};
 use std::fmt::Debug;
 use std::fs::File;
 use std::future::Future;
 use std::io::{Seek, SeekFrom, Write};
-use std::num::{NonZeroU32, NonZeroU64};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::SystemTime;
@@ -63,7 +59,18 @@ pub(in crate::filesystem::sandbox) mod sandbox_cleanup;
 pub(in crate::filesystem::sandbox) mod sandbox_provisioning;
 pub(in crate::filesystem::sandbox) mod tree_copy;
 
+#[cfg(target_os = "linux")]
+#[path = "linux.rs"]
+mod platform;
+#[cfg(not(target_os = "linux"))]
+#[path = "other.rs"]
+mod platform;
+
 pub(crate) use allocation_observer::SandboxFilesystemAllocationObserver;
+pub(in crate::filesystem::sandbox) use path_resolution::{
+    NativeNameModeProbe, NativeNameModeSource,
+};
+pub(in crate::filesystem::sandbox) use platform::QuotaAuthority;
 pub(crate) use sandbox_provisioning::{SandboxFilesystemName, SandboxFilesystemProvisioning};
 pub(crate) use tree_copy::TreeExclusions;
 
@@ -75,33 +82,6 @@ pub(crate) struct SandboxFilesystem {
     pub(in crate::filesystem::sandbox) name_mode_source: NativeNameModeSource,
     pub(in crate::filesystem::sandbox) name_mode_probe: NativeNameModeProbe,
     pub(in crate::filesystem::sandbox) append_coordinators: Arc<AppendCoordinatorRegistry>,
-}
-
-#[derive(Clone, Copy)]
-pub(in crate::filesystem::sandbox) enum NativeNameModeSource {
-    NativeDetection,
-    #[cfg(target_os = "linux")]
-    ValidatedXfs(ValidatedXfsNameMode),
-}
-
-#[derive(Clone, Default)]
-pub(in crate::filesystem::sandbox) struct NativeNameModeProbe {
-    #[cfg(all(test, target_os = "linux"))]
-    pub(in crate::filesystem::sandbox) count: Arc<std::sync::atomic::AtomicUsize>,
-}
-
-impl NativeNameModeProbe {
-    #[cfg(target_os = "linux")]
-    fn record(&self) {
-        #[cfg(test)]
-        self.count
-            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-    }
-
-    #[cfg(all(test, target_os = "linux"))]
-    fn count(&self) -> usize {
-        self.count.load(std::sync::atomic::Ordering::Relaxed)
-    }
 }
 
 pub(in crate::filesystem::sandbox) struct NativeRoot {
@@ -170,17 +150,6 @@ impl NativeRoot {
             })
     }
 
-    #[cfg(target_os = "linux")]
-    fn from_directory(path: PathBuf, directory: Arc<cap_std::fs::Dir>) -> Self {
-        Self::from_handles(
-            path,
-            NativeRootHandles {
-                directory,
-                seed_flusher: None,
-            },
-        )
-    }
-
     fn from_handles(path: PathBuf, handles: NativeRootHandles) -> Self {
         Self {
             path: path.into_boxed_path(),
@@ -194,21 +163,6 @@ impl NativeRoot {
             .expect("sandbox filesystem root descriptor lock poisoned")
             .take();
     }
-}
-
-/// Who enforces and measures the limits of a sandbox. A sandbox with a project identity charges
-/// its project. A sandbox without one has no per-sandbox accounting.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(in crate::filesystem::sandbox) enum QuotaAuthority {
-    Unsupported,
-    #[cfg_attr(
-        not(target_os = "linux"),
-        expect(dead_code, reason = "project quotas are installed only on Linux")
-    )]
-    Project {
-        project_id: NonZeroU32,
-        filesystem_block_bytes: NonZeroU64,
-    },
 }
 
 impl SandboxFilesystem {
@@ -232,99 +186,8 @@ impl SandboxFilesystem {
         }
     }
 
-    #[cfg(all(test, target_os = "linux"))]
-    pub(in crate::filesystem::sandbox) fn name_mode_probe_count(&self) -> usize {
-        self.name_mode_probe.count()
-    }
-
     pub(in crate::filesystem::sandbox) fn root(&self) -> &Path {
         &self.root.path
-    }
-
-    pub(in crate::filesystem::sandbox) async fn observe_project_allocation(
-        &self,
-    ) -> Result<Option<FilesystemAllocation>, FilesystemStorageError> {
-        let QuotaAuthority::Project {
-            project_id: _project_id,
-            ..
-        } = self.quota_authority
-        else {
-            return Ok(None);
-        };
-        #[cfg(target_os = "linux")]
-        {
-            let root = self.root().to_path_buf();
-            let volume = self.volume.clone();
-            BlockingTask::Spawn
-                .run(move || project_allocation(&volume, _project_id))
-                .await
-                .map_err(|error| {
-                    FilesystemStorageError::from(OperationContext::task_failure(
-                        "observe managed XFS project allocation",
-                        Some(&root),
-                        error,
-                    ))
-                })?
-                .map(Some)
-                .map_err(|error| {
-                    FilesystemStorageError::io(
-                        "observe managed XFS project allocation",
-                        Some(&root),
-                        error,
-                    )
-                })
-        }
-        #[cfg(not(target_os = "linux"))]
-        unreachable!("managed XFS is unavailable on this platform");
-    }
-
-    pub(in crate::filesystem::sandbox) async fn install_storage_limits(
-        &self,
-        _limits: FilesystemLimits,
-    ) -> Result<InstalledLimits, FilesystemStorageError> {
-        let QuotaAuthority::Project {
-            project_id: _project_id,
-            filesystem_block_bytes: _filesystem_block_bytes,
-        } = self.quota_authority
-        else {
-            return Err(FilesystemStorageError::from(
-                OperationContext::verification(
-                    "install limits without quota authority",
-                    Some(self.root()),
-                ),
-            ));
-        };
-        #[cfg(target_os = "linux")]
-        {
-            let root = self.root().to_path_buf();
-            let volume = self.volume.clone();
-            let allocation = BlockingTask::Spawn
-                .run(move || {
-                    install_project_limits(&volume, _project_id, _filesystem_block_bytes, _limits)?;
-                    project_allocation(&volume, _project_id)
-                })
-                .await
-                .map_err(|error| {
-                    FilesystemStorageError::from(OperationContext::task_failure(
-                        "install managed XFS project limits",
-                        Some(&root),
-                        error,
-                    ))
-                })?
-                .map_err(|error| {
-                    FilesystemStorageError::io(
-                        "install managed XFS project limits",
-                        Some(&root),
-                        error,
-                    )
-                })?;
-            Ok(InstalledLimits {
-                limits: _limits,
-                allocation,
-            })
-        }
-        #[cfg(not(target_os = "linux"))]
-        unreachable!("managed XFS is unavailable on this platform");
     }
 
     pub(in crate::filesystem::sandbox) async fn delete_owned_filesystem(
@@ -360,14 +223,6 @@ impl SandboxFilesystem {
     pub(crate) fn root_for_test(&self) -> &Path {
         self.root()
     }
-
-    #[cfg(all(test, target_os = "linux"))]
-    pub(crate) fn project_id_for_test(&self) -> NonZeroU32 {
-        match self.quota_authority {
-            QuotaAuthority::Project { project_id, .. } => project_id,
-            QuotaAuthority::Unsupported => panic!("sandbox filesystem has no project identity"),
-        }
-    }
 }
 
 impl Drop for SandboxFilesystem {
@@ -379,9 +234,11 @@ impl Drop for SandboxFilesystem {
 }
 
 #[cfg(all(test, unix))]
-pub(in crate::filesystem::sandbox) fn running_as_root() -> bool {
-    // SAFETY: `geteuid` has no preconditions.
-    unsafe { libc::geteuid() == 0 }
+pub(in crate::filesystem::sandbox) mod root_user {
+    pub(in crate::filesystem::sandbox) fn running_as_root() -> bool {
+        // SAFETY: `geteuid` has no preconditions.
+        unsafe { libc::geteuid() == 0 }
+    }
 }
 
 /// What an open asks for, from its options.
@@ -428,21 +285,6 @@ impl SandboxFilePermissions {
             Self::Writable
         }
     }
-}
-
-/// Asks for the rights that a change of an object's times needs on Windows.
-///
-/// A read open maps to `GENERIC_READ`, which does not carry `FILE_WRITE_ATTRIBUTES`, so
-/// `SetFileTime` on such a handle is refused. An explicit access mode wins over the read and
-/// write flags, so this asks for the rights of a read together with the one the change needs.
-#[cfg(windows)]
-pub(in crate::filesystem::sandbox) fn windows_add_set_times_right(
-    options: &mut cap_std::fs::OpenOptions,
-) {
-    use cap_std::fs::OpenOptionsExt as _;
-    use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_READ, FILE_WRITE_ATTRIBUTES};
-
-    options.access_mode(FILE_GENERIC_READ | FILE_WRITE_ATTRIBUTES);
 }
 
 /// Gives what `options` ask for.
@@ -626,10 +468,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 }
                 native_options.read(flags.read).write(flags.write);
                 // A directory takes the same right, because its times change the same way.
-                #[cfg(windows)]
-                if request.access == SandboxAccessMode::ReadAndSetTimes {
-                    windows_add_set_times_right(&mut native_options);
-                }
+                native_io::set_times_right(&mut native_options, request.access);
                 native_options
                     .create(flags.create)
                     .create_new(flags.create_new)
@@ -756,10 +595,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                     let offset = range.offset.checked_add(read as u64).ok_or_else(|| {
                         std::io::Error::new(std::io::ErrorKind::InvalidInput, "read range overflow")
                     })?;
-                    #[cfg(unix)]
-                    let count = file.read_at(&mut buffer[read..], offset)?;
-                    #[cfg(windows)]
-                    let count = file.seek_read(&mut buffer[read..], offset)?;
+                    let count = native_io::read_at(&file, &mut buffer[read..], offset)?;
                     if count == 0 {
                         break;
                     }
@@ -874,11 +710,7 @@ impl SandboxFilesystemAdapter for SandboxFilesystem {
                 .run(move || {
                     match placement {
                         SandboxWritePlacement::At(offset) => {
-                            #[cfg(unix)]
-                            let result = file.write_at(&bytes, offset);
-                            #[cfg(windows)]
-                            let result = file.seek_write(&bytes, offset);
-                            result
+                            native_io::write_at(&file, &bytes, offset)
                         }
                         SandboxWritePlacement::Append => {
                             let mut file = file.as_ref().try_clone()?.into_std();
@@ -1601,8 +1433,6 @@ impl HostHandle {
         &self,
         level: SandboxFlushLevel,
     ) -> std::io::Result<()> {
-        #[cfg(windows)]
-        let is_file = matches!(self, Self::File(_));
         let file = match self {
             Self::File(file) => file.as_ref().try_clone()?.into_std(),
             Self::Directory(directory) => directory.open(Component::CurDir)?.into_std(),
@@ -1611,8 +1441,60 @@ impl HostHandle {
             SandboxFlushLevel::Data => file.sync_data(),
             SandboxFlushLevel::DataAndMetadata => file.sync_all(),
         };
-        #[cfg(windows)]
-        if is_file
+        native_io::flush_result(self, result)
+    }
+}
+
+#[cfg(unix)]
+mod native_io {
+    use super::{HostHandle, SandboxAccessMode};
+    use cap_std::fs::{File, FileExt as _, OpenOptions};
+
+    pub(super) fn set_times_right(_options: &mut OpenOptions, _access: SandboxAccessMode) {}
+
+    pub(super) fn read_at(file: &File, bytes: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        file.read_at(bytes, offset)
+    }
+
+    pub(super) fn write_at(file: &File, bytes: &[u8], offset: u64) -> std::io::Result<usize> {
+        file.write_at(bytes, offset)
+    }
+
+    pub(super) fn flush_result(
+        _handle: &HostHandle,
+        result: std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        result
+    }
+}
+
+#[cfg(windows)]
+mod native_io {
+    use super::{HostHandle, SandboxAccessMode};
+    use cap_std::fs::{File, FileExt as _, OpenOptions, OpenOptionsExt as _};
+    use windows_sys::Win32::Storage::FileSystem::{FILE_GENERIC_READ, FILE_WRITE_ATTRIBUTES};
+
+    /// A read open does not carry FILE_WRITE_ATTRIBUTES. An explicit access mode must retain
+    /// the read rights together with the right that SetFileTime needs.
+    pub(super) fn set_times_right(options: &mut OpenOptions, access: SandboxAccessMode) {
+        if access == SandboxAccessMode::ReadAndSetTimes {
+            options.access_mode(FILE_GENERIC_READ | FILE_WRITE_ATTRIBUTES);
+        }
+    }
+
+    pub(super) fn read_at(file: &File, bytes: &mut [u8], offset: u64) -> std::io::Result<usize> {
+        file.seek_read(bytes, offset)
+    }
+
+    pub(super) fn write_at(file: &File, bytes: &[u8], offset: u64) -> std::io::Result<usize> {
+        file.seek_write(bytes, offset)
+    }
+
+    pub(super) fn flush_result(
+        handle: &HostHandle,
+        result: std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        if matches!(handle, HostHandle::File(_))
             && result.as_ref().is_err_and(|error| {
                 error.raw_os_error()
                     == Some(windows_sys::Win32::Foundation::ERROR_ACCESS_DENIED as _)

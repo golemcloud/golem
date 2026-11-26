@@ -19,7 +19,7 @@ use crate::base_model::component::{ComponentId, ComponentRevision};
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::{AgentId, InvocationId, OplogIndex};
 use crate::{declare_revision, declare_structs, declare_unions, newtype_uuid};
-use chrono::{DateTime, Utc};
+use jiff::Timestamp;
 use uuid::Uuid;
 
 newtype_uuid!(CardId, wit_name: "card-id", wit_owner: "golem:core@2.0.0/types");
@@ -101,9 +101,16 @@ declare_structs! {
         pub invocation_key: InvocationId,
         pub oplog_index: OplogIndex,
     }
+}
 
-    #[derive(Eq)]
-    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+crate::declare_datetime_struct! {
+    crate::base_model::card::types::Card,
+    [
+        #[derive(Eq)]
+        #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    ],
+    [],
+    [],
     pub struct Card {
         pub card_id: CardId,
         pub parent_ids: Vec<CardId>,
@@ -115,14 +122,21 @@ declare_structs! {
         pub upper_positive: Vec<PermissionPattern>,
         #[serde(deserialize_with = "super::parsing::deserialize_permission_grants")]
         pub upper_negative: Vec<PermissionPattern>,
-        pub created_at: DateTime<Utc>,
-        pub expires_at: Option<DateTime<Utc>>,
+        pub created_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
+        pub expires_at: Option<Timestamp> => Option<crate::model::poem::datetime::OpenApiTimestamp>,
         pub system_card: bool,
         pub managed_by: Option<CardManagedBy>,
     }
+}
 
-    #[derive(Eq)]
-    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+crate::declare_datetime_struct! {
+    crate::base_model::card::types::ScopeCard,
+    [
+        #[derive(Eq)]
+        #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    ],
+    [],
+    [],
     pub struct ScopeCard {
         pub scope_card_id: CardId,
         pub root_card_ids: Vec<CardId>,
@@ -135,11 +149,18 @@ declare_structs! {
         #[serde(deserialize_with = "super::parsing::deserialize_permission_grants")]
         pub upper_negative: Vec<PermissionPattern>,
         /// The earliest expiry of the root cards; the scope card stops authorizing then.
-        pub expires_at: Option<DateTime<Utc>>,
+        pub expires_at: Option<Timestamp> => Option<crate::model::poem::datetime::OpenApiTimestamp>,
     }
+}
 
-    #[derive(Eq)]
-    #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+crate::declare_datetime_struct! {
+    crate::base_model::card::types::PolymorphicCard,
+    [
+        #[derive(Eq)]
+        #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+    ],
+    [],
+    [],
     pub struct PolymorphicCard {
         pub card_id: CardId,
         pub parent_ids: Vec<CardId>,
@@ -151,10 +172,12 @@ declare_structs! {
         pub upper_positive: Vec<PolymorphicPermissionPattern>,
         #[serde(deserialize_with = "super::parsing::deserialize_polymorphic_permission_grants")]
         pub upper_negative: Vec<PolymorphicPermissionPattern>,
-        pub created_at: DateTime<Utc>,
-        pub expires_at: Option<DateTime<Utc>>,
+        pub created_at: Timestamp => crate::model::poem::datetime::OpenApiTimestamp,
+        pub expires_at: Option<Timestamp> => Option<crate::model::poem::datetime::OpenApiTimestamp>,
         pub system_card: bool,
     }
+}
+declare_structs! {
 
     #[derive(Eq)]
     #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
@@ -177,6 +200,7 @@ declare_structs! {
         pub environment_id: EnvironmentId,
         pub agent_id: AgentId,
     }
+
 }
 
 declare_unions! {
@@ -268,14 +292,14 @@ impl StoredCard {
         }
     }
 
-    pub fn expires_at(&self) -> Option<DateTime<Utc>> {
+    pub fn expires_at(&self) -> Option<Timestamp> {
         match self {
             Self::Concrete(card) => card.expires_at,
             Self::Polymorphic(card) => card.expires_at,
         }
     }
 
-    pub fn created_at(&self) -> DateTime<Utc> {
+    pub fn created_at(&self) -> Timestamp {
         match self {
             Self::Concrete(card) => card.created_at,
             Self::Polymorphic(card) => card.created_at,

@@ -14,7 +14,6 @@
 
 use super::DEAD_MEMBER;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use golem_common::config::{DbPostgresConfig, DbSqliteConfig};
 use golem_common::model::ShardId;
 use golem_service_base::migration::{IncludedMigrationsDir, Migrations};
@@ -31,6 +30,7 @@ use golem_shard_manager::{
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
+use jiff::Timestamp;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -50,8 +50,8 @@ struct LeaseRow {
     executor_id: Uuid,
     ip: IpAddr,
     port: i32,
-    granted_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
+    granted_at: Timestamp,
+    expires_at: Timestamp,
     pod_name: Option<String>,
 }
 
@@ -723,7 +723,7 @@ async fn mirror_tables_follow_the_persisted_state(
 
     // ...and empties out with the last lease.
     let mut emptied = second.clone();
-    let _ = emptied.housekeep(granted_at() + chrono::Duration::from_std(LEASE_TTL).unwrap());
+    let _ = emptied.housekeep(granted_at() + jiff::SignedDuration::try_from(LEASE_TTL).unwrap());
     emptied
         .bump_revision()
         .expect("revision bump should succeed");
@@ -851,7 +851,7 @@ async fn housekeep_expiry_reclamation_roundtrips(
     let before = shard_state.executor_count();
 
     let expired =
-        shard_state.housekeep(granted_at() + chrono::Duration::from_std(LEASE_TTL).unwrap());
+        shard_state.housekeep(granted_at() + jiff::SignedDuration::try_from(LEASE_TTL).unwrap());
     assert_eq!(
         expired.len(),
         before,
@@ -1253,8 +1253,8 @@ async fn write_six_times(
     (revisions, prev_revision)
 }
 
-fn granted_at() -> DateTime<Utc> {
-    DateTime::from_timestamp(1_700_000_000, 0).expect("valid timestamp")
+fn granted_at() -> Timestamp {
+    Timestamp::new(1_700_000_000, 0).expect("valid timestamp")
 }
 
 fn executor(idx: u128) -> ExecutorId {

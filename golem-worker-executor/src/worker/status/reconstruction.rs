@@ -201,7 +201,7 @@ pub(in crate::worker) async fn fold_committed_status<T>(
     agent_mode: AgentMode,
     commit_level: CommitLevel,
     appended_through: OplogIndex,
-    baseline: AgentStatusRecord,
+    mut baseline: AgentStatusRecord,
     mut entries: BTreeMap<OplogIndex, OplogEntry>,
 ) -> (
     Result<Option<AgentStatusRecord>, StatusError>,
@@ -253,8 +253,18 @@ where
         .await
         {
             Ok(()) => {
-                update_status_with_new_entries(agent_mode, baseline, entries, &this.config().retry)
-                    .map_err(StatusError::from)
+                let reader =
+                    StatusOplogReader::new(this, owned_agent_id, agent_mode, Some(oplog), horizon);
+                match hydrate_initial_pending_evidence(&reader, &mut baseline, &entries).await {
+                    Ok(()) => update_status_with_new_entries(
+                        agent_mode,
+                        baseline,
+                        entries,
+                        &this.config().retry,
+                    )
+                    .map_err(StatusError::from),
+                    Err(error) => Err(error),
+                }
             }
             Err(error) => Err(error),
         };
@@ -638,13 +648,11 @@ pub(super) async fn hydrate_initial_pending_evidence(
         let StreamSessionRecord::Attached(attached) = record.as_ref() else {
             continue;
         };
-        let Some(status) = baseline
+        let status = baseline
             .durable_stream_sessions
             .get(&attached.session_key)
             .cloned()
-        else {
-            continue;
-        };
+            .unwrap_or_default();
         if status.lifecycle_error.is_some() || status.validated_initial_pending_invocation.is_some()
         {
             continue;
@@ -699,7 +707,7 @@ pub(crate) async fn skipped_regions_at(
 ) -> Result<DeletedRegions, StatusError> {
     let reader = StatusOplogReader::new(this, owned_agent_id, AgentMode::Durable, None, horizon);
     // A manual update invocation changes only the manual admissions, which no skipped region
-    // depends on, so the read does not decode the invocation payloads.
+    // depends on, so the read leaves them out.
     let entries = read_region_entries(&reader, OplogIndex::INITIAL, 1024, false)
         .await?
         .ok_or("Missing fork source history")?;
@@ -735,8 +743,8 @@ pub(super) async fn read_region_entries(
             ) || manual_admissions
                 && matches!(
                     entry,
-                    OplogEntry::PendingAgentInvocation { payload, .. }
-                        if manual_update_target_revision_of(payload).is_some()
+                    OplogEntry::PendingAgentInvocation { operation, .. }
+                        if operation.manual_update_target().is_some()
                 )
         }));
     }

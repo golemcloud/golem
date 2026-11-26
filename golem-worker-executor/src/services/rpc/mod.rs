@@ -23,7 +23,6 @@ use super::{
 };
 use crate::durable_host::durable_session::durable_stream_mapping_to_proto;
 use crate::durable_host::websocket::WebSocketConnectionPool;
-use crate::grpc::{build_durable_streaming_request, decode_invocation_input};
 use crate::services::agent_filesystem_snapshots::AgentFilesystemSnapshots;
 use crate::services::events::Events;
 use crate::services::oplog::plugin::OplogProcessorPlugin;
@@ -63,7 +62,7 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::{
     AgentError as ModelAgentError, AgentInvocationMode, InvocationFreshnessDisposition,
 };
-use golem_common::model::caller::Caller;
+use golem_common::model::caller::{Caller, Principal};
 use golem_common::model::card::{AgentMethodName, AgentResourcePattern, AgentVerb, ScopeCard};
 use golem_common::model::component::ComponentRevision;
 use golem_common::model::invocation_context::InvocationContextStack;
@@ -76,7 +75,6 @@ use golem_common::schema::SchemaValue;
 use golem_schema::proto::golem::schema::SchemaValue as ProtoSchemaValue;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
-use prost::Message;
 use std::collections::HashMap;
 use std::fmt::{Display, Formatter};
 use std::future::Future;
@@ -114,27 +112,30 @@ where
 #[async_trait]
 pub trait Rpc: Send + Sync {
     /// Routes cancellation to the target executor, which validates the incarnation-bound receipt
-    /// and scheduling owner and commits pending removal before returning true. Removing only the
-    /// scheduler wake does not withdraw work already accepted in the target oplog.
+    /// and that `canceller` is the immediate caller recorded for the scheduled call, and commits
+    /// pending removal before returning true. Removing only the scheduler wake does not withdraw
+    /// work already accepted in the target oplog.
     async fn cancel_scheduled_invocation(
         &self,
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &Principal,
         auth: &AuthCtx,
     ) -> Result<bool, RpcError>;
 
     /// Routes acceptance to the target executor, which commits the invocation and deadline in
     /// the expected incarnation's oplog without running guest code, then registers its wake.
-    /// The scheduler stores only the wake, not a second invocation payload.
+    /// The scheduler stores only the wake, not a second invocation payload. `self_agent_id` is
+    /// the scheduling agent, the parent of the call, also when one of its tools scheduled it.
     async fn schedule_invocation(
         &self,
         owned_agent_id: &OwnedAgentId,
         expected_fingerprint: AgentFingerprint,
         request_key: InvocationRequestKey,
         invocation: AgentInvocation,
-        scheduled_at: chrono::DateTime<chrono::Utc>,
+        scheduled_at: jiff::Timestamp,
+        self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError>;
 
@@ -159,6 +160,7 @@ pub trait Rpc: Send + Sync {
         &self,
         target: ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -437,6 +439,13 @@ impl From<WorkerExecutorError> for RpcError {
                 details: "Invalid account".to_string(),
             },
             WorkerExecutorError::PermissionDenied { details } => RpcError::Denied { details },
+            // Permanent: every retry under the same key is cancelled again. The detail string
+            // identifies a cancelled callee until the agent `rpc-error` gains a `cancelled` case.
+            error @ WorkerExecutorError::InvocationCancelled => RpcError::RemoteAgentError {
+                error: Box::new(ModelAgentError::InvalidInput(format!(
+                    "invocation-cancelled: {error}"
+                ))),
+            },
             WorkerExecutorError::InvalidRequest { details } => RpcError::RemoteAgentError {
                 error: Box::new(ModelAgentError::InvalidInput(details)),
             },

@@ -28,7 +28,7 @@ use golem_common::model::invocation_session_public::{
 };
 use golem_common::model::{AgentId, IdempotencyKey};
 use golem_service_base::custom_api::{
-    CallAgentBehaviour, DurableStreamRoutePolicy, PhantomSelection,
+    AgentSelection, CallAgentBehaviour, DurableStreamRoutePolicy,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
@@ -188,23 +188,22 @@ impl DurableStreamsHandler {
         }
         let scope = route_scope(route);
         let session_name = suffix.session.clone().unwrap_or_default();
-        let binding =
-            route_agent_binding(request, route, &behaviour.phantom_selection, |phantom| {
-                if phantom {
-                    AgentBinding::StreamSession {
-                        route_scope: scope.clone(),
-                        session: session_name.clone(),
-                    }
-                } else {
-                    AgentBinding::Constructor
-                }
-            })?;
-        let constructor = CallAgentHandler::route_constructor(
-            route,
-            &behaviour.agent_type,
-            &behaviour.constructor_input,
-            &behaviour.constructor_parameters,
-        )?;
+        let binding = route_agent_binding(request, route, &behaviour.agent_selection, |_| {
+            AgentBinding::StreamSession {
+                route_scope: scope.clone(),
+                session: session_name.clone(),
+            }
+        })?;
+        let constructor = if matches!(binding, AgentBinding::Id(_)) {
+            None
+        } else {
+            Some(CallAgentHandler::route_constructor(
+                route,
+                &behaviour.agent_type,
+                &behaviour.constructor_input,
+                &behaviour.constructor_parameters,
+            )?)
+        };
         let request_key = golem_common::model::invocation_id::InvocationRequestKey::RouteSession {
             scope: scope.clone(),
             key: IdempotencyKey::new(session_name),
@@ -213,7 +212,8 @@ impl DurableStreamsHandler {
             .worker_service
             .bound_invocation_target(
                 behaviour.component_id,
-                &constructor,
+                &behaviour.agent_type,
+                constructor.as_ref(),
                 binding,
                 &request_key,
                 &behaviour.method_name,
@@ -222,12 +222,7 @@ impl DurableStreamsHandler {
             .await?;
         let target = match suffix.fork.as_deref() {
             Some(fork) => RoutedTarget::existing(
-                AgentId::durable_stream_fork(
-                    route.route.environment_id,
-                    root.agent_id,
-                    &scope,
-                    fork,
-                ),
+                AgentId::durable_stream_fork(route.route.environment_id, root.agent_id, fork),
                 root.agent_type.clone(),
             ),
             None => root.clone(),
@@ -531,7 +526,7 @@ fn canonical_selector_path(
     route: &ResolvedRouteEntry,
     behaviour: &CallAgentBehaviour,
 ) -> Result<String, RequestHandlerError> {
-    let PhantomSelection::Path { index } = behaviour.phantom_selection else {
+    let AgentSelection::Path { index } = behaviour.agent_selection else {
         return Ok(path.to_owned());
     };
     let segment_index = route
@@ -547,14 +542,14 @@ fn canonical_selector_path(
             )
         })
         .nth(usize::from(index))
-        .expect("Compiled phantom capture is missing")
+        .expect("Compiled agent ID capture is missing")
         .0
         + 1;
     let mut segments: Vec<_> = path.split('/').map(str::to_owned).collect();
     let segment = segments
         .get_mut(segment_index)
         .ok_or(RequestHandlerError::MissingValue {
-            expected: "phantom UUID path selector",
+            expected: "agent ID path selector",
         })?;
     let decoded =
         urlencoding::decode(segment).map_err(|_| RequestHandlerError::ValueParsingFailed {
@@ -576,9 +571,9 @@ fn resource_url(
     path: &str,
 ) -> Result<String, RequestHandlerError> {
     let mut url = canonical_selector_path(path, route, behaviour)?;
-    if let PhantomSelection::Query { name, .. } = &behaviour.phantom_selection
+    if let AgentSelection::Query { name } = &behaviour.agent_selection
         && let AgentBinding::Id(agent_id) =
-            route_agent_binding(request, route, &behaviour.phantom_selection, |_| {
+            route_agent_binding(request, route, &behaviour.agent_selection, |_| {
                 AgentBinding::Constructor
             })?
     {
@@ -628,6 +623,185 @@ mod tests {
         DurableStreamRepresentation, DurableStreamSlot, DurableStreamSlotDirection,
     };
     use test_r::test;
+
+    #[test]
+    async fn creation_replay_and_existing_slot_put_retain_invocation_receipts() {
+        use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+        use golem_api_grpc::proto::golem::workerexecutor::v1::{
+            CreateStreamSessionSuccess, ReadStreamSlotSuccess, StreamSessionCreationIntent,
+        };
+        use golem_common::model::OwnedInvocationId;
+        use golem_service_base::custom_api::{
+            MethodParameter, PathSegmentType, QueryOrHeaderType, RouteBehaviour,
+        };
+
+        let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
+        let handler = DurableStreamsHandler::new(
+            harness.worker_service.clone(),
+            Arc::new(CallAgentHandler::new(harness.worker_service.clone())),
+            &DurableStreamsConfig::default(),
+        );
+        let mut compiled = test_route(1, "/run", Some("PUT"), "typed");
+        let RouteBehaviour::CallAgent(call) = &mut compiled.behavior else {
+            unreachable!()
+        };
+        let slot = DurableStreamSlot {
+            canonical_name: "events".into(),
+            public_name: "events".into(),
+            direction: DurableStreamSlotDirection::Input,
+            content_type: "application/json".into(),
+            representation: DurableStreamRepresentation::Json,
+        };
+        call.durable_streams = Some(DurableStreamRoutePolicy {
+            family_id: 1,
+            slots: vec![slot],
+            allow_external_writes: true,
+            allow_stream_delete: true,
+            allow_invocation_delete: true,
+            load: None,
+        });
+        let resolver = test_resolver(vec![compiled]);
+        let request = || {
+            RichRequest::new(
+                poem::Request::builder()
+                    .method(Method::PUT)
+                    .uri("/run".parse().unwrap())
+                    .header("host", "example.com")
+                    .finish(),
+            )
+        };
+        let route = resolver
+            .resolve_matching_route(&request().underlying)
+            .await
+            .unwrap();
+        let super::super::RichRouteBehaviour::CallAgent(call) = &route.route.behavior else {
+            unreachable!()
+        };
+        let mut call = call.clone();
+        let owner = AgentId::random(harness.type_id);
+        let target = RoutedTarget::existing(owner, None);
+        let key = Uuid::new_v4();
+        let expected = OwnedInvocationId::new(owner, key.into());
+        for replayed in [false, true] {
+            harness.durable_stream_creations.lock().unwrap().push_back(
+                CreateStreamSessionSuccess {
+                    invocation_key: Some(key.into()),
+                    replayed,
+                    session: "session".into(),
+                    ..Default::default()
+                },
+            );
+            let mut request = request();
+            let created = handler
+                .create(
+                    &mut request,
+                    &route,
+                    &call,
+                    &target,
+                    "session",
+                    StreamSessionCreationIntent::ExplicitPut,
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(created.replayed, replayed);
+            let receipt = request.accepted_invocation.unwrap();
+            assert_eq!(receipt.id, expected);
+            assert_eq!(receipt.environment_id, route.route.environment_id);
+        }
+        for replayed in [false, true] {
+            for accepted in [false, true] {
+                harness.durable_stream_reads.lock().unwrap().push_back(Some(
+                    ReadStreamSlotSuccess {
+                        invocation_key: Some(key.into()),
+                        content_type: "application/json".into(),
+                        writable: true,
+                        ..Default::default()
+                    },
+                ));
+                if accepted {
+                    harness.durable_stream_creations.lock().unwrap().push_back(
+                        CreateStreamSessionSuccess {
+                            invocation_key: Some(key.into()),
+                            replayed,
+                            session: "session".into(),
+                            ..Default::default()
+                        },
+                    );
+                }
+                let mut request = request();
+                assert!(
+                    handler
+                        .put(
+                            &mut request,
+                            &route,
+                            &call,
+                            &target,
+                            "session",
+                            Some("events"),
+                            None,
+                        )
+                        .await
+                        .is_err()
+                );
+                assert_eq!(
+                    request
+                        .accepted_invocation
+                        .as_ref()
+                        .map(|receipt| &receipt.id),
+                    accepted.then_some(&expected)
+                );
+                assert!(harness.durable_stream_reads.lock().unwrap().is_empty());
+                assert!(harness.durable_stream_creations.lock().unwrap().is_empty());
+            }
+        }
+        call.method_parameters.push(MethodParameter::Header {
+            header_name: "argument".into(),
+            parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
+        });
+        for rejected in [false, true] {
+            harness
+                .durable_stream_reads
+                .lock()
+                .unwrap()
+                .push_back(Some(ReadStreamSlotSuccess {
+                    invocation_key: Some(key.into()),
+                    content_type: "application/json".into(),
+                    writable: true,
+                    tombstoned: rejected,
+                    ..Default::default()
+                }));
+            let mut request = request();
+            let result = handler
+                .put(
+                    &mut request,
+                    &route,
+                    &call,
+                    &target,
+                    "session",
+                    Some("events"),
+                    None,
+                )
+                .await
+                .unwrap();
+            assert_eq!(
+                result.status,
+                if rejected {
+                    StatusCode::CONFLICT
+                } else {
+                    StatusCode::OK
+                }
+            );
+            assert_eq!(
+                request
+                    .accepted_invocation
+                    .as_ref()
+                    .map(|receipt| &receipt.id),
+                (!rejected).then_some(&expected)
+            );
+        }
+        assert!(harness.durable_stream_creations.lock().unwrap().is_empty());
+    }
 
     #[test]
     async fn query_keys_are_checked_before_session_and_resource_side_effects() {
@@ -705,7 +879,7 @@ mod tests {
     }
 
     #[test]
-    async fn session_and_fork_addressing_uses_family_scope_not_endpoint_identity() {
+    async fn sessions_use_the_family_scope_and_forks_ignore_the_route() {
         use crate::custom_api::model::RichCompiledRoute;
         use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
         use golem_common::model::invocation_id::InvocationRequestKey;
@@ -789,11 +963,7 @@ mod tests {
                     "session"
                 )
             );
-            let fork = AgentId::durable_stream_fork(environment_id, root, &scope, "fork");
-            assert_eq!(
-                fork,
-                AgentId::durable_stream_fork(environment_id, root, &expected_scope, "fork")
-            );
+            let fork = AgentId::durable_stream_fork(resolved.route.environment_id, root, "fork");
 
             for dimension in ["environment", "revision", "family"] {
                 let route = &resolved.route;
@@ -828,9 +998,11 @@ mod tests {
                 let isolated_scope = route_scope(&resolved);
                 assert_ne!(isolated_scope, expected_scope, "{dimension}");
                 assert_ne!(owner(isolated_scope.clone()), owner(expected_scope.clone()));
-                assert_ne!(
-                    AgentId::durable_stream_fork(environment_id, root, &isolated_scope, "fork"),
-                    fork,
+                // A fork name names one fork of the root in every revision and route family.
+                assert_eq!(
+                    AgentId::durable_stream_fork(resolved.route.environment_id, root, "fork")
+                        == fork,
+                    dimension != "environment",
                     "{dimension}"
                 );
                 assert_ne!(
@@ -899,12 +1071,11 @@ mod tests {
             let RouteBehaviour::CallAgent(call) = &mut compiled.behavior else {
                 unreachable!()
             };
-            call.phantom_selection = if path_selector {
-                PhantomSelection::Path { index: 1.into() }
+            call.agent_selection = if path_selector {
+                AgentSelection::Path { index: 1.into() }
             } else {
-                PhantomSelection::Query {
+                AgentSelection::Query {
                     name: "instance".into(),
-                    optional: true,
                 }
             };
             let behaviour = call.clone();
@@ -938,13 +1109,20 @@ mod tests {
                     .await
                     .unwrap();
                 let session_path = format!("{base}/invocations/s1");
+                if !present {
+                    assert!(matches!(
+                        resource_url(&request, &resolved, &behaviour, &session_path),
+                        Err(RequestHandlerError::MissingValue {
+                            expected: "agent ID query selector"
+                        })
+                    ));
+                    continue;
+                }
                 let url = resource_url(&request, &resolved, &behaviour, &session_path).unwrap();
                 let expected = if path_selector {
                     format!("/base/west/literal/{p}/run/invocations/s1")
-                } else if present {
-                    format!("/base/west/run/invocations/s1?instance={p}")
                 } else {
-                    "/base/west/run/invocations/s1".into()
+                    format!("/base/west/run/invocations/s1?instance={p}")
                 };
                 assert_eq!(url, expected);
                 let target_path = format!("{base}/forks/alternate/invocations/s1/streams/events");

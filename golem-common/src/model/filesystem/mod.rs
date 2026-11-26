@@ -12,9 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::worker as proto;
 use golem_schema::http::valid_decoded_segment;
+use jiff::Timestamp as JiffTimestamp;
 
 #[cfg(test)]
 mod selection_tests;
@@ -153,7 +153,7 @@ impl FileByteSelection {
 pub struct FileReadMetadata {
     pub total_size: u64,
     pub selection: FileReadExtent,
-    pub modified_at: Option<DateTime<Utc>>,
+    pub modified_at: Option<JiffTimestamp>,
 }
 
 impl FileReadMetadata {
@@ -249,8 +249,8 @@ impl TryFrom<proto::FileReadHead> for FileReadHead {
                     .map(|timestamp| {
                         proto_timestamp(timestamp.seconds, timestamp.nanos)
                             .ok_or(FileReadError::InvalidResponse)?;
-                        DateTime::from_timestamp(timestamp.seconds, timestamp.nanos as u32)
-                            .ok_or(FileReadError::InvalidResponse)
+                        JiffTimestamp::new(timestamp.seconds, timestamp.nanos)
+                            .map_err(|_| FileReadError::InvalidResponse)
                     })
                     .transpose()?;
                 Self::File(FileReadMetadata {
@@ -285,8 +285,8 @@ impl From<FileReadHead> for proto::FileReadHead {
                     // An unrepresentable optional timestamp must not prevent reading the file.
                     modified_at: metadata.modified_at.and_then(|timestamp| {
                         proto_timestamp(
-                            timestamp.timestamp(),
-                            timestamp.timestamp_subsec_nanos() as i32,
+                            timestamp.as_nanosecond().div_euclid(1_000_000_000) as i64,
+                            timestamp.as_nanosecond().rem_euclid(1_000_000_000) as i32,
                         )
                     }),
                 })

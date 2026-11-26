@@ -16,12 +16,6 @@ use super::super::object_identity::{NativeFileIdentity, native_file_identity};
 use super::super::{LinkGroup, SeedAccess, SeedPlacement};
 use super::{NativeRootHandles, QuotaAuthority};
 use crate::filesystem::volume::FileCopyMode;
-#[cfg(target_os = "macos")]
-use crate::filesystem::volume::clone_file_at;
-#[cfg(target_os = "linux")]
-use crate::filesystem::volume::{
-    clone_file_contents, clone_file_contents_into_project, sync_volume,
-};
 use cap_fs_ext::{DirExt as _, FollowSymlinks, MetadataExt as _, OpenOptionsFollowExt as _};
 use std::collections::{HashMap, HashSet};
 use std::ffi::{OsStr, OsString};
@@ -32,6 +26,53 @@ use std::path::{Component, Path, PathBuf};
 #[cfg(test)]
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 use std::time::SystemTime;
+
+#[cfg(target_os = "linux")]
+#[path = "linux.rs"]
+mod platform;
+#[cfg(target_os = "macos")]
+#[path = "macos.rs"]
+mod platform;
+#[cfg(not(any(target_os = "linux", target_os = "macos")))]
+#[path = "other.rs"]
+mod platform;
+pub(in crate::filesystem::sandbox) use platform::*;
+
+#[cfg(not(target_os = "linux"))]
+mod non_linux;
+#[cfg(not(target_os = "macos"))]
+mod non_macos;
+
+#[cfg(unix)]
+#[path = "unix.rs"]
+mod permissions_and_links;
+#[cfg(not(unix))]
+#[path = "non_unix.rs"]
+mod permissions_and_links;
+pub(in crate::filesystem::sandbox) use permissions_and_links::*;
+
+#[cfg(any(target_os = "macos", test))]
+mod macos_finalization {
+    use super::{finalize_observed_operation, finalize_operation};
+
+    pub(in crate::filesystem::sandbox) fn open_cloned_file(
+        open: impl FnOnce() -> std::io::Result<cap_std::fs::File>,
+        remove: impl FnOnce() -> std::io::Result<()>,
+    ) -> std::io::Result<cap_std::fs::File> {
+        finalize_observed_operation(open, |opened| match opened {
+            Ok(Ok(_)) => Ok(()),
+            _ => remove(),
+        })
+    }
+
+    pub(in crate::filesystem::sandbox) fn sync_seed_batch_submissions(
+        sync_file: impl FnOnce() -> std::io::Result<()>,
+        sync_root: impl FnOnce() -> std::io::Result<()>,
+        full_flush: impl FnOnce() -> std::io::Result<()>,
+    ) -> std::io::Result<()> {
+        finalize_operation(|| finalize_operation(sync_file, sync_root), full_flush)
+    }
+}
 
 /// How one file gets its contents.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -239,28 +280,6 @@ impl<'a> CapabilityTempFile<'a> {
         }
     }
 
-    #[cfg(target_os = "macos")]
-    fn from_clone(directory: &'a cap_std::fs::Dir, source: &File) -> std::io::Result<Self> {
-        let name = std::iter::repeat_with(temporary_copy_name)
-            .find_map(|name| match clone_file_at(source, directory, &name) {
-                Ok(()) => Some(Ok(name)),
-                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => None,
-                Err(error) => Some(Err(error)),
-            })
-            .expect("an unbounded clone-name iterator must return a result")?;
-        let mut options = cap_std::fs::OpenOptions::new();
-        options.read(true).follow(cap_fs_ext::FollowSymlinks::No);
-        let file = open_cloned_file(
-            || directory.open_with(&name, &options),
-            || directory.remove_file(&name),
-        )?;
-        Ok(Self {
-            directory,
-            name: Some(name),
-            file,
-        })
-    }
-
     fn as_file(&self) -> &cap_std::fs::File {
         &self.file
     }
@@ -320,17 +339,6 @@ impl<'a> CapabilityTempFile<'a> {
         self.name = None;
         Ok(())
     }
-}
-
-#[cfg(any(target_os = "macos", test))]
-pub(in crate::filesystem::sandbox) fn open_cloned_file(
-    open: impl FnOnce() -> std::io::Result<cap_std::fs::File>,
-    remove: impl FnOnce() -> std::io::Result<()>,
-) -> std::io::Result<cap_std::fs::File> {
-    finalize_observed_operation(open, |opened| match opened {
-        Ok(Ok(_)) => Ok(()),
-        _ => remove(),
-    })
 }
 
 /// One object of a tree, listed for a copy.
@@ -688,35 +696,6 @@ pub(in crate::filesystem::sandbox) fn copy_new_file(
             Ok(file)
         }
     }
-}
-
-#[cfg(target_os = "macos")]
-pub(in crate::filesystem::sandbox) fn clone_copied_file(
-    source: &File,
-    target: &Path,
-) -> std::io::Result<File> {
-    let parent = File::open(
-        target
-            .parent()
-            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?,
-    )?;
-    clone_file_at(
-        source,
-        &parent,
-        target
-            .file_name()
-            .ok_or_else(|| std::io::Error::from(std::io::ErrorKind::InvalidInput))?
-            .as_ref(),
-    )?;
-    File::open(target)
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(in crate::filesystem::sandbox) fn clone_copied_file(
-    _source: &File,
-    _target: &Path,
-) -> std::io::Result<File> {
-    Err(macos_clone_unavailable())
 }
 
 /// Gives a directory under the host directory `destination` the permissions and the modification
@@ -1219,45 +1198,15 @@ pub(in crate::filesystem::sandbox) fn open_file_nofollow(
     Ok(directory.open_with(path, &options)?.into_std())
 }
 
-/// Gives `permissions` the write permission that `access` sets.
-pub(in crate::filesystem::sandbox) fn seeded_permissions(
-    mut permissions: std::fs::Permissions,
-    access: SeedAccess,
-) -> std::fs::Permissions {
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-        let mode = permissions.mode();
-        match access {
-            SeedAccess::FromSource => {}
-            SeedAccess::ReadOnly => permissions.set_mode(mode & !0o222),
-            SeedAccess::ReadWrite => permissions.set_mode(mode | 0o200),
-        }
-    }
-    #[cfg(not(unix))]
-    match access {
-        SeedAccess::FromSource => {}
-        SeedAccess::ReadOnly => permissions.set_readonly(true),
-        SeedAccess::ReadWrite => permissions.set_readonly(false),
-    }
-    permissions
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(
+    dead_code,
+    reason = "shared policies describe all platforms, but only the native variant is constructed"
+)]
 pub(in crate::filesystem::sandbox) enum SeedSyncPlatform {
     MacOs,
     Linux,
     Other,
-}
-
-pub(in crate::filesystem::sandbox) fn native_seed_sync_platform() -> SeedSyncPlatform {
-    if cfg!(target_os = "macos") {
-        SeedSyncPlatform::MacOs
-    } else if cfg!(target_os = "linux") {
-        SeedSyncPlatform::Linux
-    } else {
-        SeedSyncPlatform::Other
-    }
 }
 
 /// Whether a sandbox root on `platform` keeps a seed_flusher, the unlinked regular file that the
@@ -1305,30 +1254,6 @@ pub(in crate::filesystem::sandbox) fn create_seed_file<'a>(
     }
 }
 
-#[cfg(target_os = "macos")]
-pub(in crate::filesystem::sandbox) fn clone_seed_file<'a>(
-    parent: &'a cap_std::fs::Dir,
-    source: &File,
-) -> std::io::Result<CapabilityTempFile<'a>> {
-    CapabilityTempFile::from_clone(parent, source)
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(in crate::filesystem::sandbox) fn clone_seed_file<'a>(
-    _parent: &'a cap_std::fs::Dir,
-    _source: &File,
-) -> std::io::Result<CapabilityTempFile<'a>> {
-    Err(macos_clone_unavailable())
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(in crate::filesystem::sandbox) fn macos_clone_unavailable() -> std::io::Error {
-    std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "macOS file clone is unavailable on this platform",
-    )
-}
-
 #[derive(Clone, Copy)]
 pub(in crate::filesystem::sandbox) struct SeedSyncPolicy {
     pub(in crate::filesystem::sandbox) transfer: FileTransfer,
@@ -1368,23 +1293,6 @@ pub(in crate::filesystem::sandbox) fn sync_seed_file(
         SeedFileSyncAction::Standard => file.sync_all(),
         SeedFileSyncAction::Ordinary => sync_ordinary_descriptor(file),
     }
-}
-
-#[cfg(unix)]
-pub(in crate::filesystem::sandbox) fn sync_ordinary_descriptor<F: std::os::fd::AsFd + ?Sized>(
-    file: &F,
-) -> std::io::Result<()> {
-    rustix::fs::fsync(file).map_err(std::io::Error::from)
-}
-
-#[cfg(not(unix))]
-pub(in crate::filesystem::sandbox) fn sync_ordinary_descriptor<F: ?Sized>(
-    _file: &F,
-) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "ordinary filesystem sync is unavailable on this platform",
-    ))
 }
 
 /// Runs the steps of one seeded file in the order that `action` sets. `transfer` gives the handle
@@ -1554,15 +1462,6 @@ pub(in crate::filesystem::sandbox) fn finish_seed_ancestor(
     })
 }
 
-#[cfg(any(target_os = "macos", test))]
-pub(in crate::filesystem::sandbox) fn sync_seed_batch_submissions(
-    sync_file: impl FnOnce() -> std::io::Result<()>,
-    sync_root: impl FnOnce() -> std::io::Result<()>,
-    full_flush: impl FnOnce() -> std::io::Result<()>,
-) -> std::io::Result<()> {
-    finalize_operation(|| finalize_operation(sync_file, sync_root), full_flush)
-}
-
 /// Executes the selected batch action after all entry finalizers, including on failure or unwind.
 pub(in crate::filesystem::sandbox) fn sync_seed_batch(
     policy: SeedSyncPolicy,
@@ -1590,42 +1489,6 @@ pub(in crate::filesystem::sandbox) fn sync_seed_batch(
     }
 }
 
-#[cfg(target_os = "linux")]
-pub(in crate::filesystem::sandbox) fn sync_seed_linux_volume(path: &Path) -> std::io::Result<()> {
-    sync_volume(path)
-}
-
-#[cfg(not(target_os = "linux"))]
-pub(in crate::filesystem::sandbox) fn sync_seed_linux_volume(_path: &Path) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "Linux seed volume sync is unavailable on this platform",
-    ))
-}
-
-#[cfg(target_os = "macos")]
-pub(in crate::filesystem::sandbox) fn sync_seed_mac_full_flush(
-    directory: &cap_std::fs::Dir,
-    seed_flusher: &cap_std::fs::File,
-) -> std::io::Result<()> {
-    sync_seed_batch_submissions(
-        || sync_ordinary_descriptor(seed_flusher),
-        || sync_ordinary_descriptor(directory),
-        || rustix::fs::fcntl_fullfsync(seed_flusher).map_err(std::io::Error::from),
-    )
-}
-
-#[cfg(not(target_os = "macos"))]
-pub(in crate::filesystem::sandbox) fn sync_seed_mac_full_flush(
-    _directory: &cap_std::fs::Dir,
-    _seed_flusher: &cap_std::fs::File,
-) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "macOS fullflush is unavailable on this platform",
-    ))
-}
-
 /// Transfers contents into a file whose clone, if selected, has already been created.
 pub(in crate::filesystem::sandbox) fn transfer_file(
     transfer: FileTransfer,
@@ -1635,17 +1498,8 @@ pub(in crate::filesystem::sandbox) fn transfer_file(
     match transfer {
         FileTransfer::Bytes => std::io::copy(&mut &*source, &mut &*target).map(|_| ()),
         FileTransfer::Clone => Ok(()),
-        #[cfg(target_os = "linux")]
-        FileTransfer::Reflink => clone_file_contents(source, target),
-        #[cfg(target_os = "linux")]
-        FileTransfer::ReflinkIntoProject(project) => {
-            clone_file_contents_into_project(source, target, project)
-        }
-        #[cfg(not(target_os = "linux"))]
-        FileTransfer::Reflink | FileTransfer::ReflinkIntoProject(_) => Err(std::io::Error::new(
-            std::io::ErrorKind::Unsupported,
-            "Linux file-descriptor cloning is unavailable on this platform",
-        )),
+        FileTransfer::Reflink => reflink_file(source, target, None),
+        FileTransfer::ReflinkIntoProject(project) => reflink_file(source, target, Some(project)),
     }
 }
 
@@ -1653,81 +1507,6 @@ pub(in crate::filesystem::sandbox) fn capability_time(
     time: SystemTime,
 ) -> cap_fs_ext::SystemTimeSpec {
     cap_fs_ext::SystemTimeSpec::Absolute(cap_std::time::SystemTime::from_std(time))
-}
-
-pub(in crate::filesystem::sandbox) fn host_permissions(
-    permissions: &cap_std::fs::Permissions,
-    file: &File,
-) -> std::io::Result<std::fs::Permissions> {
-    #[cfg(unix)]
-    {
-        use cap_std::fs::PermissionsExt as _;
-        use std::os::unix::fs::PermissionsExt as _;
-        let _ = file;
-        Ok(std::fs::Permissions::from_mode(permissions.mode()))
-    }
-    #[cfg(not(unix))]
-    {
-        let mut host = file.metadata()?.permissions();
-        host.set_readonly(permissions.readonly());
-        Ok(host)
-    }
-}
-
-#[cfg(unix)]
-pub(in crate::filesystem::sandbox) fn read_link_contents(
-    directory: &cap_std::fs::Dir,
-    name: &Path,
-) -> std::io::Result<PathBuf> {
-    directory.read_link_contents(name)
-}
-
-#[cfg(not(unix))]
-pub(in crate::filesystem::sandbox) fn read_link_contents(
-    directory: &cap_std::fs::Dir,
-    name: &Path,
-) -> std::io::Result<PathBuf> {
-    directory.read_link(name)
-}
-
-#[cfg(unix)]
-pub(in crate::filesystem::sandbox) fn create_host_symlink(
-    link_target: &Path,
-    link: &Path,
-) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(link_target, link)
-}
-
-#[cfg(not(unix))]
-pub(in crate::filesystem::sandbox) fn create_host_symlink(
-    _link_target: &Path,
-    _link: &Path,
-) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "tree copy cannot recreate symlinks on this platform",
-    ))
-}
-
-#[cfg(unix)]
-pub(in crate::filesystem::sandbox) fn create_capability_symlink(
-    directory: &cap_std::fs::Dir,
-    link_target: &Path,
-    link: &Path,
-) -> std::io::Result<()> {
-    directory.symlink_contents(link_target, link)
-}
-
-#[cfg(not(unix))]
-pub(in crate::filesystem::sandbox) fn create_capability_symlink(
-    _directory: &cap_std::fs::Dir,
-    _link_target: &Path,
-    _link: &Path,
-) -> std::io::Result<()> {
-    Err(std::io::Error::new(
-        std::io::ErrorKind::Unsupported,
-        "tree copy cannot recreate symlinks on this platform",
-    ))
 }
 
 /// Lists every root-relative path under `root` through the ambient filesystem, for comparisons.

@@ -487,6 +487,8 @@ impl OwnerExecution {
             .inspect_err(|_| wallet.retire())?;
         *generation = Some(OwnerReplayGeneration { replay, wallet });
         *self.append_tasks.lock().unwrap() = append_tasks;
+        // The reconstructed Store runs no invocation until its loop begins one.
+        self.primary_tail_work.end_invocation();
         // Observation state follows the existing replay generation. Old Store callbacks retain
         // the old coordinator and cannot alter eligibility of the reconstructed generation.
         *self.suspension.lock().unwrap() = super::suspension::OwnerSuspension::new();
@@ -538,6 +540,47 @@ impl OwnerExecution {
             .await?;
         drop(reconstruction);
         Ok(())
+    }
+
+    /// The wallet pin an invocation admitted now records: the current wallet's identity,
+    /// generation and cards.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[doc(hidden)]
+    pub async fn test_current_wallet_pin(
+        &self,
+    ) -> Result<golem_common::model::card::InvocationWalletPin, WorkerExecutorError> {
+        use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
+        let wallet = self.wallet().await?.snapshot();
+        Ok(InvocationWalletPin {
+            wallet_token: WalletVersionToken {
+                wallet_id_hash: wallet.wallet_id_hash,
+                generation: wallet.generation,
+            },
+            pinned_card_ids: wallet.cards.keys().copied().collect(),
+            scope_card_id: None,
+        })
+    }
+
+    /// Replays the `AgentInvocationStarted` at `anchor` through the production reader, as the
+    /// primary Store does before it replays the invocation.
+    #[cfg(any(test, feature = "test-utils"))]
+    #[doc(hidden)]
+    pub async fn test_replay_invocation_started(
+        &self,
+        anchor: OplogIndex,
+    ) -> Result<(), WorkerExecutorError> {
+        match self
+            .replay()
+            .await?
+            .get_oplog_entry_agent_invocation_started()
+            .await?
+        {
+            Some(started) if started.oplog_index == anchor => Ok(()),
+            other => Err(WorkerExecutorError::runtime(format!(
+                "expected to replay the AgentInvocationStarted at {anchor}, got {:?}",
+                other.map(|started| started.oplog_index)
+            ))),
+        }
     }
 
     #[cfg(any(test, feature = "test-utils"))]
@@ -931,16 +974,17 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
         let engine = owner.engine();
         let mut store = ObservedPrimaryStore::new(&engine, context, self.release_scope.as_ref());
         let guest_imports = store.data().durable_ctx().guest_imports.clone();
+        let attribution = store.data().durable_ctx().attribution.clone();
         let runtime = super::suspension::RuntimeStore::with_guest_imports(
             self.owner_execution.suspension(),
             guest_imports.clone(),
+            attribution.clone(),
         );
         store.data_mut().durable_ctx_mut().runtime_suspension = Some(runtime.clone());
         store
             .as_context_mut()
             .set_runtime_observer(runtime)
             .map_err(anyhow::Error::from)?;
-        let attribution = store.data().durable_ctx().attribution.clone();
         store.as_context_mut().task_group_hook(attribution.hook());
         let fuel_metering = store.data().fuel_metering_enabled();
         store.call_hook(move |mut store, boundary| {
@@ -948,12 +992,21 @@ impl<Ctx: WorkerCtx> InstanceHost<Ctx> {
             // the import's host code runs; see `GuestImportNumbering`.
             match boundary {
                 CallHook::CallingHost => {
-                    if attribution.resolve().is_none() {
+                    let invocation = attribution.resolve();
+                    if invocation.is_none() {
                         error!(
                             agent_id = %store.data().agent_id(),
                             "A guest host call has no attributed invocation"
                         );
                     }
+                    // The export's return, which the export future's waker signals inside
+                    // `task.return`, cuts off the invocation's scope card at its next host call.
+                    // A call made before keeps the authority it was made with.
+                    let before_cut_off = store
+                        .data_mut()
+                        .durable_ctx_mut()
+                        .host_call_made_before_cut_off(invocation);
+                    attribution.mark_next_import_before_cut_off(before_cut_off);
                     let custom_invocation_scope = store
                         .as_context()
                         .guest_task_context::<GuestTaskContext>()?

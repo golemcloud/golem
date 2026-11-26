@@ -1,11 +1,11 @@
-Third-party material in the real-world conformance corpus (sweep_realworld_*.py)
+Third-party material in the real-world conformance corpus (sweep_realworld_*.json)
 ===============================================================================
 
 1. tldr-pages
 -------------
 
-The `real tldr ...` cases in sweep_realworld_text.py, sweep_realworld_files.py,
-sweep_realworld_misc.py and sweep_realworld_builtins.py are adapted from the tldr-pages
+The `real tldr ...` cases in sweep_realworld_text.json, sweep_realworld_files.json,
+sweep_realworld_misc.json and sweep_realworld_builtins.json are adapted from the tldr-pages
 project:
 
     tldr-pages, https://github.com/tldr-pages/tldr
@@ -35,7 +35,7 @@ What was changed:
 2. Coding-agent trajectories
 ----------------------------
 
-The `real traj: ...` cases in sweep_realworld_agents.py replay the shapes of shell commands
+The `real traj: ...` cases in sweep_realworld_agents.json replay the shapes of shell commands
 found in two public datasets of coding-agent trajectories:
 
     SWE-bench/SWE-smith-trajectories, https://huggingface.co/datasets/SWE-bench/SWE-smith-trajectories

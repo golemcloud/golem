@@ -25,7 +25,7 @@
 mod encode;
 
 #[cfg(test)]
-mod decode;
+pub(crate) mod decode;
 #[cfg(test)]
 mod tests;
 

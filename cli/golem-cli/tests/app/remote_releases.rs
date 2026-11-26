@@ -14,7 +14,6 @@
 
 use crate::app::{Output, TestContext, cmd, flag};
 use crate::{Tracing, workspace_path};
-use chrono::{DateTime, Utc};
 use golem_cli::fs;
 use golem_cli::versions::sdk::MANIFEST as MANIFEST_VERSION;
 use golem_client::api::{RegistryServiceClient, RegistryServiceClientLive};
@@ -43,6 +42,7 @@ use golem_common::schema::tool::{
     CommandBody, CommandNode, CommandTree, Doc, Globals, Positionals, Tool, ToolMiddleware,
     ToolMiddlewareScope,
 };
+use jiff::Timestamp;
 use reqwest_middleware::ClientBuilder;
 use std::collections::BTreeMap;
 use std::ffi::OsStr;
@@ -54,14 +54,14 @@ use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 
-struct RegistryUser {
+pub(super) struct RegistryUser {
     account_id: AccountId,
     account_email: AccountEmail,
-    token: TokenSecret,
+    pub(super) token: TokenSecret,
     client: RegistryServiceClientLive,
 }
 
-fn registry_client(base_url: &Url, token: &str) -> RegistryServiceClientLive {
+pub(super) fn registry_client(base_url: &Url, token: &str) -> RegistryServiceClientLive {
     RegistryServiceClientLive {
         context: Context {
             client: ClientBuilder::new(reqwest::Client::new()).build(),
@@ -71,7 +71,7 @@ fn registry_client(base_url: &Url, token: &str) -> RegistryServiceClientLive {
     }
 }
 
-async fn create_registry_user(
+pub(super) async fn create_registry_user(
     admin: &RegistryServiceClientLive,
     base_url: &Url,
     label: &str,
@@ -88,7 +88,7 @@ async fn create_registry_user(
         .create_token(
             &account.id.0,
             &TokenCreation {
-                expires_at: DateTime::<Utc>::MAX_UTC,
+                expires_at: Timestamp::MAX,
             },
         )
         .await?
@@ -103,7 +103,7 @@ async fn create_registry_user(
     })
 }
 
-async fn create_app_and_environment(
+pub(super) async fn create_app_and_environment(
     user: &RegistryUser,
     label: &str,
 ) -> anyhow::Result<(Application, Environment)> {

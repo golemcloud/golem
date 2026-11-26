@@ -21,7 +21,7 @@ object HttpAgentValidation {
           !FileMappingParser.validateCompiled(m.filesystemBindings)
       )
     ) return Left("invalid-file-mapping")
-    val phantomError = agent.httpMount.flatMap(mount => validatePhantom(agent, mount).left.toOption)
+    val phantomError = agent.httpMount.flatMap(mount => validateMount(agent, mount).left.toOption)
     if (phantomError.nonEmpty) return Left(phantomError.get)
     if (
       agent.kind == AgentTypeKind.Regular && agent.mode.contains("ephemeral") &&
@@ -48,29 +48,54 @@ object HttpAgentValidation {
     agent
   }
 
-  private def validatePhantom(agent: AgentMetadata, mount: HttpMountDetails): Either[String, Unit] =
-    mount.phantomIdBinding match {
-      case None => Right(())
+  private def validateMount(agent: AgentMetadata, mount: HttpMountDetails): Either[String, Unit] =
+    mount.agentIdBinding match {
+      case None if mount.createRoute.nonEmpty => Left("Create route requires an agent ID binding")
+      case None                               => Right(())
       case Some(_)
           if agent.kind != AgentTypeKind.Regular || agent.mode.contains(
             "ephemeral"
-          ) || mount.filesystemBindings.nonEmpty =>
-        Left("Phantom selectors require a regular durable mount without filesystem exposure")
+          ) =>
+        Left("Agent ID bindings require a regular durable mount")
       case Some(binding) =>
-        val conflict = agent.methods.flatMap(_.httpEndpoints).exists { endpoint =>
-          binding match {
-            case PhantomIdBinding.Path(name, _) =>
-              endpoint.pathSuffix.exists {
-                case PathSegment.PathVariable(n)          => n == name
-                case PathSegment.RemainingPathVariable(n) => n == name
-                case _                                    => false
-              }
-            case PhantomIdBinding.Query(name, _) =>
-              endpoint.queryVars.exists(_.queryParamName == name) ||
-              (endpoint.durableStreams.nonEmpty && Set("offset", "cursor", "live").contains(name))
+        val conflict = agent.methods.exists { method =>
+          method.httpEndpoints.exists { endpoint =>
+            binding match {
+              case AgentIdBinding.Path(name) =>
+                endpoint.pathSuffix.exists {
+                  case PathSegment.PathVariable(n)          => n == name
+                  case PathSegment.RemainingPathVariable(n) => n == name
+                  case _                                    => false
+                }
+              case AgentIdBinding.Query(name) =>
+                endpoint.queryVars.exists(_.queryParamName == name) ||
+                (Set(HttpMethod.Get, HttpMethod.Head, HttpMethod.Delete).contains(
+                  endpoint.httpMethod
+                ) && method.input.userSupplied.exists(field =>
+                  field.name == name &&
+                    !RefResolution
+                      .resolveRef(field.graph, field.graph.root)
+                      .toOption
+                      .exists(_.body.isInstanceOf[StreamType]) &&
+                    !endpoint.pathSuffix.exists {
+                      case PathSegment.PathVariable(n)          => n == field.name
+                      case PathSegment.RemainingPathVariable(n) => n == field.name
+                      case _                                    => false
+                    } &&
+                    !endpoint.headerVars.exists(_.variableName == field.name) &&
+                    !endpoint.queryVars.exists(_.variableName == field.name)
+                )) ||
+                (endpoint.mode.getOrElse {
+                  val usesStreams = method.input.userSupplied.exists(_.graph.containsStream) || (method.output match {
+                    case OutputMetadata.Single(graph) => graph.containsStream
+                    case OutputMetadata.Unit          => false
+                  })
+                  if (usesStreams) HttpRouteMode.DurableStreams else HttpRouteMode.Plain
+                } == HttpRouteMode.DurableStreams && Set("offset", "cursor", "live").contains(name))
+            }
           }
         }
-        if (conflict) Left("Phantom selector conflicts with an endpoint binding or durable-stream control")
+        if (conflict) Left("Agent ID binding conflicts with an endpoint binding or durable-stream control")
         else HttpValidation.validateHttpMount(agent.name, mount, agent.constructor.input.parameters.map(_.name).toSet)
     }
 
@@ -152,6 +177,8 @@ object HttpAgentValidation {
       case PathSegment.PathVariable(_) | PathSegment.SystemVariable(_) => true
       case _                                                           => false
     }
+    if (mount.agentIdBinding.nonEmpty)
+      return if (validMount) Right(()) else Left("unbound-constructor")
     val validFields = fields.forall { field =>
       field.source == FieldSource.UserSupplied && RefResolution
         .resolveRef(field.graph, field.graph.root)

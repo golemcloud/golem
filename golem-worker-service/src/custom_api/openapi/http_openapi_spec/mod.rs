@@ -274,6 +274,9 @@ fn build_operation(
             operation.insert("description".to_string(), json!(description));
         }
     }
+    if matches!(&route.behavior, RichRouteBehaviour::CreateAgent(_)) {
+        operation.insert("description".into(), json!("Creates an agent without a key and waits for its constructor to complete. The body is a JSON object of the constructor parameters. Idempotency-Key is ignored for callers without a caller scope."));
+    }
 
     let mut parameters: Vec<Value> = Vec::new();
     add_route_parameters(route, route_schema, graph, components, &mut parameters)?;
@@ -287,14 +290,65 @@ fn build_operation(
         operation.insert("requestBody".to_string(), request_body);
     }
 
+    if matches!(&route.behavior, RichRouteBehaviour::CallAgent(_)) {
+        let has_key_binding = parameters.iter().any(|parameter| {
+            parameter["in"] == "header"
+                && parameter["name"]
+                    .as_str()
+                    .is_some_and(|name| name.eq_ignore_ascii_case("Idempotency-Key"))
+        });
+        if !has_key_binding {
+            let mut key = header_parameter("Idempotency-Key", false, string_schema());
+            key["description"] = json!(
+                "External invocation key. Without caller scope, repeated ordinary HTTP requests remain separate invocations."
+            );
+            parameters.push(key);
+        }
+    }
+
     if !parameters.is_empty() {
         operation.insert("parameters".to_string(), Value::Array(parameters));
     }
 
     let response_model = get_route_response_schema(route, route_schema, graph, components)?;
-    operation.insert("responses".to_string(), build_responses(response_model));
+    let mut responses = build_responses(response_model);
+    if matches!(&route.behavior, RichRouteBehaviour::CallAgent(_)) {
+        add_invocation_response_headers(&mut responses);
+    }
+    operation.insert("responses".to_string(), responses);
 
     Ok(Value::Object(operation))
+}
+
+fn add_invocation_response_headers(responses: &mut Value) {
+    let responses = responses.as_object_mut().unwrap();
+    responses
+        .entry("default")
+        .or_insert_with(|| json!({"description": "Request or invocation failure"}));
+    for response in responses.values_mut() {
+        if response.get("headers").is_none() {
+            response["headers"] = json!({});
+        }
+        response["headers"]
+            .as_object_mut()
+            .unwrap()
+            .retain(|name, _| {
+                !name.eq_ignore_ascii_case("Golem-Invocation-Id")
+                    && !name.eq_ignore_ascii_case("Golem-Environment-Id")
+            });
+        for (name, description) in [
+            (
+                "Golem-Invocation-Id",
+                "Accepted invocation identity. Present only after confirmed acceptance, including on invocation failures; absent on pre-acceptance errors and cache short-circuits.",
+            ),
+            (
+                "Golem-Environment-Id",
+                "Environment of the accepted invocation. Present together with Golem-Invocation-Id.",
+            ),
+        ] {
+            response["headers"][name] = json!({"description": description, "required": false, "schema": {"type": "string"}});
+        }
+    }
 }
 
 fn add_route_parameters(
@@ -305,6 +359,9 @@ fn add_route_parameters(
     parameters: &mut Vec<Value>,
 ) -> Result<(), String> {
     match &route.behavior {
+        RichRouteBehaviour::CreateAgent(_) => {
+            parameters.push(header_parameter("Idempotency-Key", false, string_schema()));
+        }
         RichRouteBehaviour::CallAgent(_) => {
             if let Some(call_agent) = &route_schema.call_agent {
                 for param in &call_agent.path_params {
@@ -358,6 +415,13 @@ fn build_request_body(
             let schema = render_input_schema(graph, ty, components)?;
             Some(request_body_value(
                 "JSON body",
+                vec![("application/json".to_string(), schema)],
+            ))
+        }
+        RequestBodyModel::CreateAgent(constructor) => {
+            let schema = render_input_schema(graph, constructor, components)?;
+            Some(request_body_value(
+                "Constructor parameters of the new agent. The agent has no key.",
                 vec![("application/json".to_string(), schema)],
             ))
         }
