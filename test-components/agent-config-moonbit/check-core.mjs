@@ -99,7 +99,7 @@ function guest(values, {deny = false, malformed = false} = {}) {
   }
   function metadata(p) {
     const schema = graph(p + 28);
-    const declarations = list(p + 224, 32, d => ({
+    const declarations = list(p + 232, 32, d => ({
       source: byte(d), path: list(d + 4, 8, str), type: schema.type(u32(d + 12)),
       defaultValue: byte(d + 16) ? value(d + 20, schema.type(u32(d + 12)), schema.defs) : undefined,
     }));
@@ -190,7 +190,7 @@ function guest(values, {deny = false, malformed = false} = {}) {
   instance = new WebAssembly.Instance(module, imports);
   const discover = instance.exports['golem:agent/guest@2.0.0#discover-agent-types']();
   assert.equal(byte(discover), 0);
-  const agents = list(discover + 4, 232, metadata);
+  const agents = list(discover + 4, 240, metadata);
   instance.exports['cabi_post_golem:agent/guest@2.0.0#discover-agent-types'](discover);
   function call(operation, name, input) {
     const tree = encode(['record', input.map((_, i) => [String(i), 'string'])], Object.fromEntries(input.map((v, i) => [i, v])), {});
