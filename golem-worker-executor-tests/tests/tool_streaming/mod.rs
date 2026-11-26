@@ -107,6 +107,7 @@ mod dropped_waits;
 mod durable_entity_blob;
 mod gol40_k1_audit_acceptance;
 mod held_http_crash_recovery;
+mod live_cancellation_open_calls;
 mod matrix_client_resource_acceptance;
 mod matrix_conformance;
 mod middleware_acceptance;
@@ -3737,6 +3738,57 @@ async fn cancelled_tool_body_with_in_flight_mcp_call_recovers_after_restart(
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    run_cancelled_mcp_body_probe(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CancelledMcpBodyRecovery::Restart,
+    )
+    .await
+}
+
+/// The live run of `cancelled_tool_body_with_in_flight_mcp_call_recovers_after_restart` is
+/// reverted to the cut after the middleware observed its checkpoint promise and before the
+/// in-flight MCP call's `End` and the body's `Cancelled`. Such a cut uses ordinary
+/// incomplete-call recovery: the resumed middleware cancels the incomplete MCP body live, and the
+/// body must end with `Cancelled` and the invocation must complete, as in the live run.
+#[test]
+#[tracing::instrument]
+#[timeout("3m")]
+async fn reverted_cancelled_mcp_body_completes_the_retained_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    run_cancelled_mcp_body_probe(
+        last_unique_id,
+        deps,
+        provider,
+        caller,
+        CancelledMcpBodyRecovery::RevertBeforeCancellation,
+    )
+    .await
+}
+
+/// How the agent of `run_cancelled_mcp_body_probe` continues after its live run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CancelledMcpBodyRecovery {
+    /// Two executor restarts replay the complete history.
+    Restart,
+    /// A revert to the cut before the body's cancellation, then one executor restart.
+    RevertBeforeCancellation,
+}
+
+async fn run_cancelled_mcp_body_probe(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    recovery: CancelledMcpBodyRecovery,
+) -> anyhow::Result<()> {
     use serde_json::{Value, json};
     use std::sync::Mutex;
 
@@ -3994,6 +4046,81 @@ async fn cancelled_tool_body_with_in_flight_mcp_call_recovers_after_restart(
     let live = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
     assert_cancelled_mcp_body_history(&live);
 
+    if recovery == CancelledMcpBodyRecovery::RevertBeforeCancellation {
+        use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget};
+
+        for entry in &live {
+            eprintln!(
+                "CANCELLED_MCP_BODY_RECORDED {} {}",
+                entry.oplog_index,
+                describe_public_entry(&entry.entry)
+            );
+        }
+        let cut = cancelled_mcp_body_cut(&live);
+        eprintln!("CANCELLED_MCP_BODY_CUT {cut}");
+        executor
+            .revert(
+                &worker_id,
+                RevertWorkerTarget::RevertToOplogIndex(RevertToOplogIndex {
+                    last_oplog_index: cut,
+                }),
+            )
+            .await?;
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let probe: String = executor
+            .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(probe, "replayed");
+        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        for entry in oplog.iter().filter(|entry| entry.oplog_index > cut) {
+            eprintln!(
+                "CANCELLED_MCP_BODY_RESUMED {} {}",
+                entry.oplog_index,
+                describe_public_entry(&entry.entry)
+            );
+        }
+        assert_eq!(
+            *requests.lock().unwrap(),
+            expected_requests,
+            "the resumed middleware called the MCP server again"
+        );
+        let retained = retained_after_revert(&oplog, cut);
+        assert_reverted_cancelled_mcp_body_history(&retained);
+
+        // The history that the resumed agent wrote replays too.
+        drop(executor);
+        let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+        let probe: String = executor
+            .invoke_and_await_agent(&caller_component, &agent_id, "replay_probe", data_value!())
+            .await?
+            .into_typed()?;
+        assert_eq!(probe, "replayed");
+        let replayed = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        assert_eq!(
+            replayed[..oplog.len()]
+                .iter()
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>(),
+            oplog
+                .iter()
+                .map(|entry| entry.oplog_index)
+                .collect::<Vec<_>>(),
+            "the replay kept the resumed history"
+        );
+        assert_eq!(
+            *requests.lock().unwrap(),
+            expected_requests,
+            "replaying the resumed history called the MCP server again"
+        );
+        assert_reverted_cancelled_mcp_body_history(&retained_after_revert(&replayed, cut));
+        drop(executor);
+        drop(server);
+        checkpoint_server.abort();
+        return Ok(());
+    }
+
     let mut executor = executor;
     let mut history = live;
     for restart in 1..=2 {
@@ -4053,6 +4180,141 @@ async fn cancelled_tool_body_with_in_flight_mcp_call_recovers_after_restart(
     drop(server);
     checkpoint_server.abort();
     Ok(())
+}
+
+/// The last index that a revert of the cancelled-MCP-body history retains: the last
+/// `CompletionDelivered` before the in-flight MCP call's `End` and the entity body's `Cancelled`.
+/// The middleware's checkpoint promise is the last completion it observes before it cancels.
+fn cancelled_mcp_body_cut(oplog: &[PublicOplogEntryWithIndex]) -> OplogIndex {
+    let body = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+            _ => None,
+        })
+        .expect("the entity body is cancelled");
+    let in_flight = oplog
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem::tool::mcp::call"
+                    && start.parent_start_index == Some(body) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .expect("an MCP call is in flight under the cancelled body");
+    let first_terminal = oplog
+        .iter()
+        .find(|entry| match &entry.entry {
+            PublicOplogEntry::End(end) => end.start_index == in_flight,
+            PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == body,
+            _ => false,
+        })
+        .map(|entry| entry.oplog_index)
+        .expect("the in-flight call or the body has a terminal");
+    oplog
+        .iter()
+        .filter(|entry| {
+            entry.oplog_index < first_terminal
+                && matches!(entry.entry, PublicOplogEntry::CompletionDelivered(_))
+        })
+        .map(|entry| entry.oplog_index)
+        .next_back()
+        .expect("the middleware observed its checkpoint promise before the cancellation")
+}
+
+/// The entries of `oplog` that one revert to `cut` retains: the prefix up to `cut` and every
+/// entry after the `Revert` entry.
+fn retained_after_revert(
+    oplog: &[PublicOplogEntryWithIndex],
+    cut: OplogIndex,
+) -> Vec<PublicOplogEntryWithIndex> {
+    let revert = oplog
+        .iter()
+        .find(|entry| matches!(entry.entry, PublicOplogEntry::Revert(_)))
+        .map(|entry| entry.oplog_index)
+        .expect("the oplog records the revert");
+    oplog
+        .iter()
+        .filter(|entry| entry.oplog_index <= cut || entry.oplog_index > revert)
+        .cloned()
+        .collect()
+}
+
+/// Checks the retained history of `reverted_cancelled_mcp_body_completes_the_retained_invocation`:
+/// the entity body is cancelled once; the MCP call that was in flight under it, whose `End` the
+/// revert removed, gets no new terminal (it is a `LeaveIncompleteOnDrop` call of a cancelled body);
+/// every other `Start` has a terminal; every invocation finishes once.
+fn assert_reverted_cancelled_mcp_body_history(oplog: &[PublicOplogEntryWithIndex]) {
+    let terminals = |start: OplogIndex| {
+        oplog
+            .iter()
+            .filter(|entry| match &entry.entry {
+                PublicOplogEntry::End(end) => end.start_index == start,
+                PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
+                _ => false,
+            })
+            .count()
+    };
+    let cancelled = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Cancelled(cancelled) => Some(cancelled.start_index),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cancelled.len(),
+        1,
+        "one entity body is cancelled: {cancelled:?}"
+    );
+    let body = cancelled[0];
+    let in_flight = oplog
+        .iter()
+        .filter_map(|entry| match &entry.entry {
+            PublicOplogEntry::Start(start)
+                if start.function_name == "golem::tool::mcp::call"
+                    && start.parent_start_index == Some(body) =>
+            {
+                Some(entry.oplog_index)
+            }
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        in_flight.len(),
+        1,
+        "one MCP call was in flight under the cancelled body"
+    );
+    assert!(
+        terminals(in_flight[0]) <= 1,
+        "the in-flight MCP call has at most one terminal"
+    );
+    for entry in oplog {
+        if let PublicOplogEntry::Start(start) = &entry.entry
+            && entry.oplog_index != in_flight[0]
+        {
+            assert_eq!(
+                terminals(entry.oplog_index),
+                1,
+                "the Start of {} at {} has one terminal",
+                start.function_name,
+                entry.oplog_index
+            );
+        }
+    }
+    let mut finished = BTreeMap::new();
+    for entry in oplog {
+        if let PublicOplogEntry::AgentInvocationFinished(params) = &entry.entry {
+            *finished.entry(params.invocation_id).or_insert(0) += 1;
+        }
+    }
+    assert!(
+        finished.values().all(|count| *count == 1),
+        "every invocation finishes once: {finished:?}"
+    );
 }
 
 /// The `AgentInvocationSettled` of the first invocation that starts in `entries`.
@@ -11949,7 +12211,7 @@ async fn gol838_accepted_scope_interest_survives_observer_detachment_before_stor
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
             managed_by: None,
@@ -15791,6 +16053,40 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
     #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    entity_http_key_recovery(last_unique_id, deps, provider, caller, None).await
+}
+
+#[test]
+#[timeout("3m")]
+async fn entity_http_error_replay_preserves_later_key(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    entity_http_key_recovery(last_unique_id, deps, provider, caller, Some("before")).await
+}
+
+#[test]
+#[timeout("3m")]
+async fn entity_http_error_completion_does_not_reorder_an_incomplete_send_key(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("tool_streaming_rust_provider")] provider: &PrecompiledComponent,
+    #[tagged_as("tool_streaming_rust_caller")] caller: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    entity_http_key_recovery(last_unique_id, deps, provider, caller, Some("overlap")).await
+}
+
+async fn entity_http_key_recovery(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    provider: &PrecompiledComponent,
+    caller: &PrecompiledComponent,
+    http_error_mode: Option<&str>,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let environment_state = Arc::new(TestEnvironmentStateService::default());
     let executor = start_with_overrides(
@@ -15802,7 +16098,7 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
         },
     )
     .await?;
-    let (effect_port, effect_server, mut attempts, keys, effects) =
+    let (effect_port, effect_server, mut attempts, attempt_keys, effects) =
         start_idempotency_effect_server().await;
     let provider_component = executor
         .component_dep(&context.default_environment_id, provider)
@@ -15831,31 +16127,62 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
     );
 
     let agent_id = agent_key!("ToolStreamingCaller", "entity-idempotency-recovery");
+    let env = std::iter::once((
+        "IDEMPOTENCY_EFFECT_PORT".to_string(),
+        effect_port.to_string(),
+    ))
+    .chain(http_error_mode.map(|mode| ("HTTP_ERROR_MODE".to_string(), mode.to_string())))
+    .collect();
     let worker_id = executor
-        .start_agent_with(
-            &caller_component.id,
-            agent_id.clone(),
-            HashMap::from([(
-                "IDEMPOTENCY_EFFECT_PORT".to_string(),
-                effect_port.to_string(),
-            )]),
-            Vec::new(),
-        )
+        .start_agent_with(&caller_component.id, agent_id.clone(), env, Vec::new())
         .await?;
-    let input = b"entity-idempotency".to_vec();
-    let call = executor.invoke_and_await_agent(
+    let input = b"entity-idempotency";
+    let invocation_key = IdempotencyKey::fresh();
+    let invocation_id = executor
+        .external_invocation_key(&worker_id.agent_id, &invocation_key, "collect_capable")
+        .await?;
+    let call = executor.invoke_and_await_agent_with_key(
         &caller_component,
         &agent_id,
+        &invocation_key,
         "collect_capable",
-        data_value!("atomic-idempotency-parent", input.clone()),
+        data_value!("atomic-idempotency-parent", input.to_vec()),
     );
     let recover = async {
         let first_key = tokio::time::timeout(std::time::Duration::from_secs(30), attempts.recv())
             .await
             .map_err(|_| anyhow::anyhow!("initial idempotent HTTP effect timed out"))?
-            .ok_or_else(|| anyhow::anyhow!("idempotency effect server stopped"))?;
+            .ok_or_else(|| anyhow::anyhow!("idempotency effect server stopped"))?
+            .into_boxed_str();
+        assert!(!first_key.is_empty());
 
-        let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+        let oplog = if http_error_mode.is_some() {
+            crate::http::wait_for_oplog(
+                &executor,
+                &worker_id,
+                "the entity's recorded HTTP error beside its incomplete effect",
+                |oplog| {
+                    let sends = oplog
+                        .iter()
+                        .filter_map(|entry| match &entry.entry {
+                            PublicOplogEntry::Start(params)
+                                if params.function_name == "http::client::send" =>
+                            {
+                                Some(entry.oplog_index)
+                            }
+                            _ => None,
+                        })
+                        .collect::<Box<[_]>>();
+                    sends.len() == 2 && oplog.iter().filter(|entry| matches!(
+                        &entry.entry,
+                        PublicOplogEntry::End(params) if sends.contains(&params.start_index)
+                    )).count() == 1
+                },
+            )
+            .await?
+        } else {
+            executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?
+        };
         let entity_starts = oplog
             .iter()
             .filter_map(|entry| match &entry.entry {
@@ -15866,49 +16193,411 @@ async fn entity_generated_key_replay_reserves_position_for_incomplete_http_retry
                 }
                 _ => None,
             })
-            .collect::<Vec<_>>();
-        let (child_start, Some(parent_start)) = entity_starts
-            .iter()
-            .find(|(_, parent)| parent.is_some())
-            .copied()
-            .expect("nested entity was admitted before its HTTP effect")
+            .collect::<Box<[_]>>();
+        let [
+            (parent_start, Some(invocation_start)),
+            (child_start, Some(child_parent)),
+        ] = entity_starts.as_ref()
         else {
-            unreachable!()
+            panic!("expected the parent entity and its nested child before the HTTP effect")
         };
+        assert_eq!(child_parent, parent_start);
+        assert!(oplog.iter().any(|entry| {
+            entry.oplog_index == *invocation_start
+                && matches!(&entry.entry,
+                    PublicOplogEntry::AgentInvocationStarted(started)
+                        if matches!(&started.invocation,
+                            PublicAgentInvocation::AgentMethodInvocation(method)
+                                if method.invocation_id == invocation_id
+                        )
+                )
+        }));
+        let (parent_start, child_start) = (*parent_start, *child_start);
+        let sends = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(params) if params.function_name == "http::client::send" => {
+                    assert_eq!(params.parent_start_index, Some(child_start));
+                    let is_error_request = params.span_started.as_ref().is_some_and(|span| {
+                        span.attributes.iter().any(|attribute| {
+                            let golem_common::model::oplog::PublicAttributeValue::String(value) =
+                                &attribute.value;
+                            attribute.key == "request.uri"
+                                && value.value
+                                    == format!("https://127.0.0.1:{effect_port}/unsupported")
+                        })
+                    });
+                    Some((entry.oplog_index, is_error_request))
+                }
+                _ => None,
+            })
+            .collect::<Box<[_]>>();
+        assert_eq!(sends.len(), 1 + usize::from(http_error_mode.is_some()));
+        assert_eq!(
+            sends.iter().filter(|(_, is_error)| !is_error).count(),
+            1,
+            "the held effect must have its own HTTP Start"
+        );
+        assert!(
+            sends
+                .iter()
+                .filter(|(_, is_error)| !is_error)
+                .all(|(start, _)| {
+                    !oplog.iter().any(|entry| match &entry.entry {
+                        PublicOplogEntry::End(end) => end.start_index == *start,
+                        PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == *start,
+                        _ => false,
+                    })
+                }),
+            "the held response must keep the effect's HTTP Start incomplete at the crash"
+        );
+        if http_error_mode.is_some() {
+            let (error_start, _) = sends
+                .iter()
+                .find(|(_, is_error)| *is_error)
+                .expect("the TLS error request must have its own Start");
+            assert!(
+                oplog.iter().any(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::End(params) if params.start_index == *error_start
+                )),
+                "the send error must be recorded before the crash"
+            );
+        }
 
         executor.simulated_crash(&worker_id).await?;
         let retry_key = tokio::time::timeout(std::time::Duration::from_secs(30), attempts.recv())
             .await
             .map_err(|_| anyhow::anyhow!("reconstructed HTTP retry timed out"))?
             .ok_or_else(|| anyhow::anyhow!("idempotency effect server stopped before retry"))?;
-        assert_eq!(retry_key, first_key, "incomplete HTTP retry changed key");
-        Ok::<_, anyhow::Error>((parent_start, child_start))
+        assert_eq!(
+            retry_key,
+            first_key.as_ref(),
+            "incomplete HTTP retry changed key"
+        );
+        Ok::<_, anyhow::Error>((parent_start, child_start, sends, first_key))
     };
-    let (result, (_parent_start, _child_start)) = tokio::try_join!(call, recover)?;
+    let (result, (parent_start, child_start, sends, first_key)) = tokio::try_join!(call, recover)?;
     let result: StreamEvidence = result.into_typed()?;
-    assert_evidence(&result, &input, 1, input.len() as u64);
-    let recorded_keys = keys.lock().await;
-    assert_eq!(recorded_keys.len(), 2);
-    assert_eq!(recorded_keys[0], recorded_keys[1]);
-    drop(recorded_keys);
+    assert_evidence(&result, input, 1, input.len() as u64);
+    let oplog = crate::http::wait_for_oplog(
+        &executor,
+        &worker_id,
+        "the repaired entity invocation's settlement",
+        |oplog| {
+            oplog.iter().any(|entry| {
+                matches!(&entry.entry,
+                    PublicOplogEntry::AgentInvocationSettled(settled)
+                        if settled.invocation_id == invocation_id
+                )
+            })
+        },
+    )
+    .await?;
+    let assert_repaired_history = |oplog: &[PublicOplogEntryWithIndex]| {
+        let started = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(started)
+                    if matches!(&started.invocation,
+                        PublicAgentInvocation::AgentMethodInvocation(method)
+                            if method.invocation_id == invocation_id
+                                && method.method_name.replace('-', "_") == "collect_capable"
+                    ) =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Box<[_]>>();
+        assert_eq!(
+            started.len(),
+            1,
+            "repair must retain the original keyed invocation"
+        );
+        let finished = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationFinished(finished)
+                    if finished.invocation_id == invocation_id =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Box<[_]>>();
+        let settled = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationSettled(settled)
+                    if settled.invocation_id == invocation_id =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Box<[_]>>();
+        assert_eq!(
+            finished.len(),
+            1,
+            "the original invocation must finish once"
+        );
+        assert_eq!(settled.len(), 1, "the original invocation must settle once");
+        assert!(started[0] < finished[0] && finished[0] < settled[0]);
+
+        let entity_starts = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if started[0] < entry.oplog_index
+                        && entry.oplog_index < settled[0]
+                        && start.function_name == "golem::entity::invoke" =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Box<[_]>>();
+        assert_eq!(entity_starts.as_ref(), &[parent_start, child_start]);
+        let http_starts = oplog
+            .iter()
+            .filter_map(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.function_name == "http::client::send"
+                        && start.parent_start_index == Some(child_start) =>
+                {
+                    Some(entry.oplog_index)
+                }
+                _ => None,
+            })
+            .collect::<Box<[_]>>();
+        assert!(
+            http_starts
+                .iter()
+                .copied()
+                .eq(sends.iter().map(|(start, _)| *start)),
+            "repair must end the original HTTP Starts instead of appending replacements"
+        );
+
+        [parent_start, child_start]
+            .into_iter()
+            .chain(sends.iter().map(|(start, _)| *start))
+            .for_each(|start| {
+                let terminals = oplog
+                    .iter()
+                    .filter(|entry| match &entry.entry {
+                        PublicOplogEntry::End(end) => end.start_index == start,
+                        PublicOplogEntry::Cancelled(cancelled) => cancelled.start_index == start,
+                        _ => false,
+                    })
+                    .collect::<Box<[_]>>();
+                assert_eq!(
+                    terminals.len(),
+                    1,
+                    "the original Start {start} must end once"
+                );
+                assert!(
+                    matches!(terminals[0].entry, PublicOplogEntry::End(_)),
+                    "the completed entity or HTTP call {start} must not be cancelled"
+                );
+                assert!(
+                    started[0] < start
+                        && start < terminals[0].oplog_index
+                        && terminals[0].oplog_index < settled[0],
+                    "the completed call {start} must end before invocation settlement"
+                );
+                if start == parent_start {
+                    assert!(
+                        terminals[0].oplog_index < finished[0],
+                        "the collected parent must end before the invocation returns"
+                    );
+                }
+            });
+        assert!(
+            oplog.iter().all(|entry| match &entry.entry {
+                PublicOplogEntry::Start(start)
+                    if start.invocation_id.is_some_and(|id| [
+                        started[0],
+                        parent_start,
+                        child_start
+                    ]
+                    .contains(&id.anchor))
+                        && start.driver.is_none_or(|driver| driver == started[0]) =>
+                    entry.oplog_index < settled[0],
+                _ => true,
+            }),
+            "positional work without a later driver must precede its invocation's settlement"
+        );
+        assert_eq!(
+            oplog
+                .iter()
+                .filter(|entry| matches!(&entry.entry,
+                    PublicOplogEntry::Start(start)
+                        if start.function_name == "golem::api::generate_idempotency-key"
+                            && start.parent_start_index == Some(child_start)
+                ))
+                .count(),
+            1,
+            "completed generated-key call must replay instead of running live"
+        );
+    };
+    assert_repaired_history(&oplog);
+    assert_eq!(
+        attempt_keys.lock().await.len(),
+        2,
+        "repair must make exactly two target attempts"
+    );
+    assert!(
+        attempt_keys
+            .lock()
+            .await
+            .iter()
+            .all(|key| key == first_key.as_ref())
+    );
     assert_eq!(
         effects.lock().await.len(),
         1,
         "upstream effect was repeated"
     );
 
-    let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    drop(executor);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            environment_state_service: Some(environment_state),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let probe_key = IdempotencyKey::fresh();
+    let probe_id = executor
+        .external_invocation_key(&worker_id.agent_id, &probe_key, "replay_probe")
+        .await?;
+    let replayed: String = executor
+        .invoke_and_await_agent_with_key(
+            &caller_component,
+            &agent_id,
+            &probe_key,
+            "replay_probe",
+            data_value!(),
+        )
+        .await?
+        .into_typed()?;
+    assert_eq!(replayed, "replayed");
+    let oplog = crate::http::wait_for_oplog(
+        &executor,
+        &worker_id,
+        "the completed-history replay probe's settlement",
+        |oplog| {
+            oplog.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationSettled(settled) if settled.invocation_id == probe_id
+        ))
+        },
+    )
+    .await?;
+    assert_repaired_history(&oplog);
     assert_eq!(
-        oplog
-            .iter()
-            .filter(|entry| matches!(
-                &entry.entry,
-                PublicOplogEntry::Start(params)
-                    if params.function_name == "golem::api::generate_idempotency-key"
-            ))
-            .count(),
+        attempt_keys.lock().await.len(),
+        2,
+        "completed entity replay must not make another old target attempt"
+    );
+    assert_eq!(
+        effects.lock().await.len(),
         1,
-        "completed generated-key call must replay instead of running live"
+        "completed entity replay must not apply an effect"
+    );
+    assert!(attempts.try_recv().is_err());
+
+    let fresh_key = IdempotencyKey::fresh();
+    assert_ne!(fresh_key, invocation_key);
+    let fresh_id = executor
+        .external_invocation_key(&worker_id.agent_id, &fresh_key, "collect_capable")
+        .await?;
+    assert_ne!(fresh_id, invocation_id);
+    let fresh_input = b"fresh-entity-idempotency";
+    let fresh: StreamEvidence = executor
+        .invoke_and_await_agent_with_key(
+            &caller_component,
+            &agent_id,
+            &fresh_key,
+            "collect_capable",
+            data_value!("atomic-idempotency-parent", fresh_input.to_vec()),
+        )
+        .await?
+        .into_typed()?;
+    assert_evidence(&fresh, fresh_input, 1, fresh_input.len() as u64);
+    let oplog = crate::http::wait_for_oplog(
+        &executor,
+        &worker_id,
+        "the fresh entity invocation's settlement",
+        |oplog| {
+            oplog.iter().any(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationSettled(settled) if settled.invocation_id == fresh_id
+        ))
+        },
+    )
+    .await?;
+    assert_repaired_history(&oplog);
+    let fresh_effect_key = attempts.try_recv()?.into_boxed_str();
+    assert!(!fresh_effect_key.is_empty());
+    assert_ne!(
+        fresh_effect_key, first_key,
+        "fresh work needs a distinct effect identity"
+    );
+    assert!(attempts.try_recv().is_err());
+    let recorded_attempts = attempt_keys.lock().await;
+    assert_eq!(
+        recorded_attempts.len(),
+        3,
+        "fresh work must add exactly one target attempt"
+    );
+    assert_eq!(
+        recorded_attempts
+            .iter()
+            .filter(|key| key.as_str() == first_key.as_ref())
+            .count(),
+        2
+    );
+    assert_eq!(
+        recorded_attempts
+            .iter()
+            .filter(|key| key.as_str() == fresh_effect_key.as_ref())
+            .count(),
+        1
+    );
+    drop(recorded_attempts);
+    let recorded_effects = effects.lock().await;
+    assert_eq!(
+        recorded_effects.len(),
+        2,
+        "fresh work must advance the provider-side effect counter"
+    );
+    assert!(recorded_effects.contains(first_key.as_ref()));
+    assert!(recorded_effects.contains(fresh_effect_key.as_ref()));
+    drop(recorded_effects);
+    assert_eq!(
+        oplog.iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationStarted(started)
+                if matches!(&started.invocation,
+                    PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == fresh_id
+                )
+        )).count(),
+        1,
+        "the fresh invocation must start once"
+    );
+    assert_eq!(
+        oplog.iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationFinished(finished) if finished.invocation_id == fresh_id
+        )).count(),
+        1,
+        "the fresh invocation must finish once"
+    );
+    assert_eq!(
+        oplog.iter().filter(|entry| matches!(&entry.entry,
+            PublicOplogEntry::AgentInvocationSettled(settled) if settled.invocation_id == fresh_id
+        )).count(),
+        1,
+        "the fresh invocation must settle once"
     );
     executor.delete_worker(&worker_id).await?;
     effect_server.abort();
@@ -21766,7 +22455,7 @@ async fn builtin_git_remote_secrets_redirects_and_discovery(
             secret_id: secret_id.0,
             config_key: Some(secret_path),
             version: 0,
-            resolved_at: chrono::Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         }))),
     };
@@ -23709,7 +24398,7 @@ async fn native_tool_secret_permissions_and_completed_replay(
             secret_id: secret_id.0,
             config_key: Some(path),
             version: 0,
-            resolved_at: chrono::Utc::now(),
+            resolved_at: jiff::Timestamp::now(),
             category: None,
         });
         for fail in [false, true] {

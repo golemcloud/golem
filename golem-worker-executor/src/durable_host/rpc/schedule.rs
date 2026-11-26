@@ -212,7 +212,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 "live streams cannot be used in scheduled invocations"
             ));
         }
-        let scheduled_at = chrono::DateTime::from_timestamp(datetime.seconds, datetime.nanoseconds)
+        let scheduled_at = i32::try_from(datetime.nanoseconds)
+            .ok()
+            .and_then(|nanos| jiff::Timestamp::new(datetime.seconds, nanos).ok())
             .ok_or_else(|| {
                 anyhow::Error::from(WorkerExecutorError::runtime(format!(
                     "Received invalid datetime from wasi: seconds={}, nanoseconds={}",

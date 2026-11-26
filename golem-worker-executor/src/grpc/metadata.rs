@@ -242,6 +242,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
 
         let mut updates = Vec::new();
 
+        let origin = metadata.origin();
         let latest_status = metadata.last_known_status;
         let reported_status = latest_status.reported_status();
         let underlying_status = latest_status.underlying_status();
@@ -321,6 +322,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         let active_plugins = latest_status.active_plugins;
 
         Ok(golem::worker::AgentMetadata {
+            origin: i32::from(origin),
             agent_id: Some(metadata.agent_id.into()),
             owner_kind: metadata.owner_kind.into(),
             agent_type_name: metadata.agent_type_name.map(|name| name.0),
@@ -377,6 +379,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 .map(|region| region.into())
                 .collect(),
             oplog_idx: u64::from(latest_status.oplog_idx),
+            state_oplog_idx: u64::from(latest_status.state_oplog_idx),
             fingerprint: Some(metadata.fingerprint.0.into()),
         })
     }

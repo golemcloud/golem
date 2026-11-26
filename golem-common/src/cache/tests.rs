@@ -954,23 +954,61 @@ async fn background_eviction_older_than_ttl() {
         "bg_eviction_ttl",
     );
 
-    cache
-        .get_or_insert_simple(&1, || async { Ok(42u64) })
-        .await
-        .unwrap();
-    assert!(cache.contains_key(&1).await);
+    let loader = cache.clone();
+    assert_eq!(
+        loader
+            .get_or_insert_simple_spawned(&1, || async { Ok(42) })
+            .await,
+        Ok(42)
+    );
+    drop(loader);
 
-    // Wait for TTL + a couple eviction periods to ensure background task runs
-    tokio::time::sleep(Duration::from_millis(300)).await;
-
-    assert!(
-        !cache.contains_key(&1).await,
-        "entry should have been evicted by background task"
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while cache.contains_key(&1).await {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the background task should evict the idle entry after the load completes");
+    assert_eq!(
+        cache.get_or_insert_simple(&1, || async { Ok(17) }).await,
+        Ok(17)
     );
 
     // Explicitly drop to abort background task before test ends
     drop(cache);
     tokio::task::yield_now().await;
+}
+
+#[test]
+async fn background_eviction_releases_entries_after_last_handle_drops() {
+    let cache: Cache<u64, (), Arc<u64>, String> = Cache::new(
+        None,
+        FullCacheEvictionMode::None,
+        BackgroundEvictionMode::OlderThan {
+            ttl: Duration::from_secs(60),
+            period: Duration::from_secs(60),
+        },
+        "bg_eviction_shutdown",
+    );
+    let value = cache
+        .get_or_insert_simple(&1, || async { Ok(Arc::new(42)) })
+        .await
+        .unwrap();
+    let entry = Arc::downgrade(&value);
+    drop(value);
+    let last_handle = cache.clone();
+    drop(cache);
+    assert!(entry.upgrade().is_some());
+    drop(last_handle);
+
+    tokio::time::timeout(Duration::from_secs(2), async {
+        while entry.upgrade().is_some() {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("the background task should release cached entries after the last handle drops");
 }
 
 #[test]

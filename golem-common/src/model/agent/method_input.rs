@@ -323,7 +323,7 @@ mod tests {
                                         secret_id: Uuid::from_u128(41),
                                         config_key: Some(vec!["private-config-key".into()]),
                                         version: 9,
-                                        resolved_at: chrono::DateTime::UNIX_EPOCH,
+                                        resolved_at: jiff::Timestamp::UNIX_EPOCH,
                                         category: None,
                                     }),
                                     SchemaValue::QuotaToken(QuotaTokenValuePayload {
@@ -333,7 +333,7 @@ mod tests {
                                         resource_name: "private-resource".into(),
                                         expected_use: 3,
                                         last_credit: 2,
-                                        last_credit_at: chrono::DateTime::UNIX_EPOCH,
+                                        last_credit_at: jiff::Timestamp::UNIX_EPOCH,
                                     }),
                                     SchemaValue::PermissionCard(PermissionCardValuePayload {
                                         card_id: Uuid::from_u128(43),

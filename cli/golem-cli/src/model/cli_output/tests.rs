@@ -4,10 +4,10 @@ use crate::model::cli_output::{
 };
 use crate::model::deploy::DeployPlanView;
 use crate::model::masking::MaskingConfig;
-use chrono::{TimeZone, Utc};
 use golem_common::model::card::{
     CardId, PolymorphicCard, PublicInvocationWalletPin, WalletVersionToken,
 };
+use jiff::Timestamp as JiffTimestamp;
 use proptest::prelude::*;
 use quote::ToTokens;
 use serde_json::{Value, json};
@@ -1268,6 +1268,7 @@ fn sample_agent_metadata_view() -> crate::model::agent::AgentMetadataView {
             "Agent".to_string(),
         )),
         agent_key: Some("Agent()".to_string()),
+        origin: golem_common::model::agent::AgentOrigin::Keyed,
         fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::nil()),
         created_by: golem_common::model::account::AccountId(uuid::Uuid::nil()),
         environment_id: golem_common::model::environment::EnvironmentId(uuid::Uuid::nil()),
@@ -1789,7 +1790,7 @@ fn agent_oplog_structured_output_exposes_secret_metadata_without_stdout_bytes() 
             secret_id,
             config_key: Some(vec!["database".to_string(), "password".to_string()]),
             version: 7,
-            resolved_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+            resolved_at: JiffTimestamp::new(1_700_000_000, 0).unwrap(),
             category: Some("api-key".to_string()),
         }),
     );
@@ -2879,7 +2880,7 @@ fn arb_small_u64() -> BoxedStrategy<u64> {
 }
 
 fn arb_timestamp_string() -> BoxedStrategy<String> {
-    arb_datetime().prop_map(|value| value.to_rfc3339()).boxed()
+    arb_datetime().prop_map(|value| value.to_string()).boxed()
 }
 
 fn arb_timestamp() -> BoxedStrategy<golem_common::model::Timestamp> {
@@ -2894,19 +2895,16 @@ fn arb_url_string() -> BoxedStrategy<String> {
         .boxed()
 }
 
-fn arb_datetime() -> BoxedStrategy<chrono::DateTime<chrono::Utc>> {
+fn arb_datetime() -> BoxedStrategy<JiffTimestamp> {
     (0i64..4_102_444_800i64)
         .prop_map(|seconds| {
-            chrono::DateTime::from_timestamp(seconds, 0)
-                .expect("generated timestamp should be in range")
+            JiffTimestamp::new(seconds, 0).expect("generated timestamp should be in range")
         })
         .boxed()
 }
 
-fn fixed_datetime() -> chrono::DateTime<chrono::Utc> {
-    chrono::DateTime::parse_from_rfc3339("1970-01-01T00:00:00Z")
-        .expect("fixed timestamp should parse")
-        .with_timezone(&chrono::Utc)
+fn fixed_datetime() -> JiffTimestamp {
+    JiffTimestamp::UNIX_EPOCH
 }
 
 fn arb_hash() -> BoxedStrategy<golem_common::model::diff::Hash> {
@@ -5206,6 +5204,13 @@ fn arb_agent_metadata_view() -> BoxedStrategy<crate::model::agent::AgentMetadata
                 )),
                 agent_key: (component_revision % 2 == 0)
                     .then(|| format!("GeneratedAgent(\"{agent_id}\")")),
+                origin: if component_revision % 2 == 0 {
+                    golem_common::model::agent::AgentOrigin::Keyed
+                } else if retry_count % 2 == 0 {
+                    golem_common::model::agent::AgentOrigin::Created
+                } else {
+                    golem_common::model::agent::AgentOrigin::Forked
+                },
                 fingerprint: golem_common::model::AgentFingerprint(uuid::Uuid::from_u128(
                     u128::from(retry_count),
                 )),
@@ -5516,13 +5521,13 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                         reason: grant_reason,
                         actor_account_id:
                             golem_common::model::account::AccountId(account_id),
-                        granted_at: chrono::DateTime::from_timestamp(
+                        granted_at: JiffTimestamp::new(
                             1_700_000_000,
                             0,
                         )
                         .unwrap(),
                         expires_at: Some(
-                            chrono::DateTime::from_timestamp(1_800_000_000, 0).unwrap(),
+                            JiffTimestamp::new(1_800_000_000, 0).unwrap(),
                         ),
                     };
                     let active_grant = |dimension| {
@@ -5548,7 +5553,7 @@ fn arb_account_limits_result() -> OutputDocumentStrategy {
                             latest_owner_transition: Some(
                                 golem_common::model::account_usage::MonthlyUsageModeTransition {
                                     actor_account_id: golem_common::model::account::AccountId(account_id),
-                                    changed_at: chrono::DateTime::from_timestamp(1_700_000_000, 0).unwrap(),
+                                    changed_at: JiffTimestamp::new(1_700_000_000, 0).unwrap(),
                                     source: golem_common::model::account_usage::MonthlyUsageModeTransitionSource::Owner,
                                     previous_mode: golem_common::model::account_usage::MonthlyUsageMode::HardLimit,
                                     new_mode: golem_common::model::account_usage::MonthlyUsageMode::AllowOverage,
@@ -5651,7 +5656,7 @@ fn arb_account_usage_view() -> BoxedStrategy<crate::model::account::AccountUsage
                             year,
                             month,
                         },
-                        as_of: Utc.with_ymd_and_hms(2026, 4, 2, 3, 4, 5).unwrap(),
+                        as_of: "2026-04-02T03:04:05Z".parse().unwrap(),
                         metering: golem_common::model::account_usage::AccountUsageMetering {
                             compute: metering_status,
                             memory: metering_status,
@@ -7074,14 +7079,17 @@ fn arb_manifest_build_command() -> BoxedStrategy<crate::model::app_raw::BuildCom
                 )
             }
         ),
-        (arb_small_string(), arb_small_string()).prop_map(|(preinitialize_js, into)| {
-            crate::model::app_raw::BuildCommand::PreinitializeJs(
-                crate::model::app_raw::PreinitializeJs {
-                    preinitialize_js,
-                    into,
-                },
-            )
-        }),
+        (arb_small_string(), arb_small_string(), arb_small_string()).prop_map(
+            |(preinitialize_js, module, into)| {
+                crate::model::app_raw::BuildCommand::PreinitializeJs(
+                    crate::model::app_raw::PreinitializeJs {
+                        preinitialize_js,
+                        module,
+                        into,
+                    },
+                )
+            }
+        ),
     ]
     .boxed()
 }

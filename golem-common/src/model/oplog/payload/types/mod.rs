@@ -18,9 +18,12 @@ use std::ops::Bound;
 
 use bigdecimal::BigDecimal;
 use bit_vec::BitVec;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use desert_rust::BinaryCodec;
 use golem_schema::schema::wit::wire::ValueNodeIndex as NodeIndex;
+use jiff::{
+    Timestamp,
+    civil::{Date, DateTime, Time},
+};
 use mac_address::MacAddress;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -1347,11 +1350,11 @@ pub enum SerializableDbValueNode {
     Float(f32),
     Double(f64),
     Decimal(BigDecimal),
-    Date(NaiveDate),
-    Datetimetz(DateTime<Utc>),
-    Timestamp(NaiveDateTime),
-    Timestamptz(DateTime<Utc>),
-    Time(chrono::NaiveTime),
+    Date(Date),
+    Datetimetz(Timestamp),
+    Timestamp(DateTime),
+    Timestamptz(Timestamp),
+    Time(Time),
     Timetz(TimeTz),
     Interval(Interval),
     Year(u16),
@@ -1381,9 +1384,9 @@ pub enum SerializableDbValueNode {
     Int4range(ValuesRange<i32>),
     Int8range(ValuesRange<i64>),
     Numrange(ValuesRange<BigDecimal>),
-    Tsrange(ValuesRange<NaiveDateTime>),
-    Tstzrange(ValuesRange<DateTime<Utc>>),
-    Daterange(ValuesRange<NaiveDate>),
+    Tsrange(ValuesRange<DateTime>),
+    Tstzrange(ValuesRange<Timestamp>),
+    Daterange(ValuesRange<Date>),
     Money(i64),
     Oid(u32),
     Enumeration(Enumeration),
@@ -1441,7 +1444,7 @@ pub struct Interval {
 )]
 #[desert(evolution())]
 pub struct TimeTz {
-    pub time: chrono::NaiveTime,
+    pub time: Time,
     pub offset: i32,
 }
 

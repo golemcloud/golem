@@ -1057,7 +1057,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 never_started_ephemeral_admission(
                     &current_status.load(),
                     (initial_worker_metadata.owner_kind != OwnerKind::EphemeralExternalTool)
-                        .then(|| self.initialization_idempotency_key())
+                        .then(|| InvocationId::constructor(initial_worker_metadata.fingerprint))
                         .as_ref(),
                 )
             })
@@ -1294,7 +1294,8 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             let create_request = &worker.initial_worker_metadata.create_request;
             let invocation_context = create_request.invocation_context();
             let caller = create_request.caller.clone();
-            let idempotency_key = self.initialization_idempotency_key();
+            let idempotency_key =
+                InvocationId::constructor(worker.initial_worker_metadata.fingerprint);
             let (_, entry) = self
                 .pending_invocation_entry(
                     &worker.oplog,
@@ -1540,6 +1541,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     &component.metadata,
                 )
                 .map_err(WorkerExecutorError::invalid_request)?;
+                if let Some(constructor) = owner_context.agent() {
+                    constructor
+                        .validate_restrictions()
+                        .map_err(WorkerExecutorError::invalid_request)?;
+                }
                 if component.environment_id != owned_agent_id.environment_id {
                     return Err(WorkerExecutorError::invalid_request(
                         "owner environment does not match the component environment",
@@ -1734,6 +1740,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 {
                     let mut status = initial_status.load_full().as_ref().clone();
                     status.oplog_idx = oplog.current_oplog_index().await;
+                    status.state_oplog_idx = status.oplog_idx;
                     initial_status.store(Arc::new(status));
                 }
 

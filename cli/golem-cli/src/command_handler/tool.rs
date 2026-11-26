@@ -37,7 +37,6 @@ use crate::model::tool_invoke::{ToolInvocationSessionView, ToolInvokeHelpView, T
 use crate::model::tool_middleware::*;
 use crate::model::tool_release::{ToolReleaseListView, ToolReleaseView};
 use anyhow::{anyhow, bail};
-use chrono::{DateTime, Utc};
 use golem_client::api::{
     AgentClient, EnvironmentClient, EnvironmentToolGrantsClient,
     EnvironmentToolMiddlewareGrantsClient, ToolMiddlewareReleasesClient, ToolReleasesClient,
@@ -73,6 +72,7 @@ use golem_common::model::{AgentId, IdempotencyKey};
 use golem_common::schema::tool::Tool;
 use golem_common::schema::{ExternalTypedSchemaValue, SchemaGraph, SchemaType, SchemaValue};
 use golem_schema::tool::argv as arguments;
+use jiff::Timestamp;
 use std::io::Read;
 use std::path::Path;
 use std::pin::Pin;
@@ -650,7 +650,7 @@ impl ToolCommandHandler {
         input: Option<ExternalTypedSchemaValue>,
         key: &IdempotencyKey,
         mode: NativeToolInvocationMode,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<Timestamp>,
     ) -> anyhow::Result<NativeToolInvocationResponse> {
         Ok(self
             .ctx

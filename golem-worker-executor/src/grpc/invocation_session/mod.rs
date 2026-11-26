@@ -15,6 +15,7 @@
 use super::WorkerExecutorImpl;
 use crate::durable_host::durable_session::{
     StreamSession, durable_stream_mapping_from_proto, durable_stream_mapping_to_proto,
+    with_input_server_terminals,
 };
 use crate::durable_host::durable_stream::{ProducerRegistrationRequest, SessionError};
 use crate::grpc::invocation::from_proto_invocation_context;
@@ -22,7 +23,7 @@ use crate::services::oplog::OplogError;
 use crate::services::{HasAll, HasComponentService, UsesAllDeps};
 use crate::worker::{DurableStreamingInvocationRequest, Worker};
 use crate::workerctx::WorkerCtx;
-use chrono::{DateTime, Utc};
+
 use futures::Stream;
 use golem_api_grpc::invocation_session_protocol::InvocationSessionState;
 use golem_api_grpc::proto::golem;

@@ -7,7 +7,6 @@
 import { Effect } from "effect"
 import type { AgentId } from "./AgentId.js"
 import type { Uuid } from "./Ids.js"
-import { typedAgentId } from "./internal/agentId.js"
 import { makeInvocationId } from "./internal/invocationId.js"
 
 /**
@@ -45,7 +44,7 @@ const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{1
  * @since 1.6.0
  * @category conversions
  */
-export const format = (id: InvocationId): string => `${id.agentId.uuid}.${id.uuid}`
+export const format = (id: InvocationId): string => `${id.agentId}.${id.uuid}`
 
 /**
  * Parse the `<agent-id>.<uuid>` text form. Both parts must be UUIDs in the hyphenated form;
@@ -63,6 +62,6 @@ export const parse = (text: string): Effect.Effect<InvocationId, InvocationIdPar
     if (!uuidPattern.test(agentId)) return fail(`invalid agent ID '${agentId}'`)
     if (!uuidPattern.test(uuid)) return fail(`invalid UUID '${uuid}'`)
     return Effect.succeed(
-      makeInvocationId(typedAgentId(agentId.toLowerCase() as Uuid), uuid.toLowerCase() as Uuid),
+      makeInvocationId(agentId.toLowerCase() as AgentId, uuid.toLowerCase() as Uuid),
     )
   })

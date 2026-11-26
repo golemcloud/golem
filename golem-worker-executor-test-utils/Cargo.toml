@@ -28,9 +28,9 @@ async-lock = { workspace = true }
 async-trait = { workspace = true }
 blake3 = { workspace = true }
 bytes = { workspace = true }
-chrono = { workspace = true }
 desert_rust = { workspace = true }
 futures = { workspace = true }
+jiff = { workspace = true }
 prometheus = { workspace = true }
 prost = { workspace = true }
 regex = { workspace = true }

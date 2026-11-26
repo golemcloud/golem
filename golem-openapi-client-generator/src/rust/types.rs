@@ -109,7 +109,7 @@ impl DataType {
                 to_ref(res, top_param)
             }
             DataType::DateTime => {
-                let res = rust_name("chrono", "DateTime") + "<" + rust_name("chrono", "Utc") + ">";
+                let res = rust_name("jiff", "Timestamp");
                 to_ref(res, top_param)
             }
             DataType::Boolean => unit() + "bool",

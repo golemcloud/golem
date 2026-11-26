@@ -37,7 +37,7 @@ use crate::schema::schema_value::{
 #[cfg(not(all(feature = "guest", not(feature = "host"))))]
 use crate::schema::schema_value::{QuotaTokenValuePayload, SecretValuePayload};
 use crate::schema::stream::SchemaValueStream;
-use chrono::{DateTime, TimeZone, Utc};
+use jiff::Timestamp;
 
 // --- small helpers -----------------------------------------------------------
 
@@ -105,17 +105,22 @@ fn req_box_value_from_proto(
     Ok(Box::new((*b).try_into()?))
 }
 
-fn datetime_to_proto(dt: DateTime<Utc>) -> proto::DatetimeValue {
+fn datetime_to_proto(dt: Timestamp) -> proto::DatetimeValue {
     proto::DatetimeValue {
-        seconds: dt.timestamp(),
-        nanoseconds: dt.timestamp_subsec_nanos(),
+        seconds: dt.as_nanosecond().div_euclid(1_000_000_000) as i64,
+        nanoseconds: dt.as_nanosecond().rem_euclid(1_000_000_000) as u32,
     }
 }
 
-fn datetime_from_proto(d: proto::DatetimeValue) -> Result<DateTime<Utc>, String> {
-    Utc.timestamp_opt(d.seconds, d.nanoseconds)
-        .single()
-        .ok_or_else(|| format!("Invalid datetime: {}s {}ns", d.seconds, d.nanoseconds))
+fn datetime_from_proto(d: proto::DatetimeValue) -> Result<Timestamp, String> {
+    if d.nanoseconds >= 1_000_000_000 {
+        return Err(format!(
+            "Invalid datetime: {}s {}ns",
+            d.seconds, d.nanoseconds
+        ));
+    }
+    Timestamp::new(d.seconds, d.nanoseconds as i32)
+        .map_err(|_| format!("Invalid datetime: {}s {}ns", d.seconds, d.nanoseconds))
 }
 
 fn map_entry_from_proto(e: proto::MapEntry) -> Result<(SchemaValue, SchemaValue), String> {
@@ -1293,6 +1298,22 @@ impl TryFrom<proto::TypedSchemaValue> for TypedSchemaValue {
 mod tests {
     use super::*;
     use test_r::test;
+
+    #[test]
+    fn datetime_protobuf_preserves_pre_epoch_nanoseconds() {
+        let timestamp = Timestamp::new(-19, 123456789).unwrap();
+        let wire = datetime_to_proto(timestamp);
+        assert_eq!(wire.seconds, -19);
+        assert_eq!(wire.nanoseconds, 123456789);
+        assert_eq!(datetime_from_proto(wire).unwrap(), timestamp);
+        assert!(
+            datetime_from_proto(proto::DatetimeValue {
+                seconds: 0,
+                nanoseconds: 1_000_000_000,
+            })
+            .is_err()
+        );
+    }
 
     #[cfg(all(feature = "host", not(feature = "guest")))]
     #[test]

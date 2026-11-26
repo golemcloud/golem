@@ -40,7 +40,7 @@ fn segment(value: &str) -> AccountSegment {
 }
 
 /// A segment that no other test uses, padded to `len` characters.
-fn unique_segment(len: usize) -> AccountSegment {
+pub fn unique_segment(len: usize) -> AccountSegment {
     let mut value = format!("t{}", new_repo_uuid().simple());
     while value.len() < len {
         value.push('a');
@@ -53,7 +53,7 @@ fn actor() -> Uuid {
     Uuid::new_v4()
 }
 
-async fn root(deps: &Deps) -> AccountNodeRecord {
+pub async fn root(deps: &Deps) -> AccountNodeRecord {
     let repo = &deps.account_tree_repo;
     if let Some(root) = repo.resolve_path(&AccountPath::root()).await.unwrap().pop() {
         return root;
@@ -70,14 +70,14 @@ async fn root(deps: &Deps) -> AccountNodeRecord {
     }
 }
 
-async fn child(deps: &Deps, parent: Uuid, name: &AccountSegment) -> AccountNodeRecord {
+pub async fn child(deps: &Deps, parent: Uuid, name: &AccountSegment) -> AccountNodeRecord {
     deps.account_tree_repo
         .create_child(Uuid::new_v4(), parent, name.clone(), None, actor())
         .await
         .unwrap()
 }
 
-async fn update(
+pub async fn update(
     deps: &Deps,
     node: &AccountNodeRecord,
     segment: Option<AccountSegment>,
@@ -404,7 +404,7 @@ pub async fn test_account_tree_grace_reserves_name_until_purge(deps: &Deps) {
     assert!(history(deps, customer.account_id).await.len() == 2);
 }
 
-trait SignalForTest {
+pub trait SignalForTest {
     fn signal_new_events_available_for_test(self, deps: &Deps);
 }
 

@@ -1526,8 +1526,16 @@ async fn do_read_sse_without_ids() -> String {
     use golem_rust::wasip3::wit_future;
 
     let port = std::env::var("PORT").unwrap();
-    let headers =
-        types::Fields::from_list(&[("accept".to_string(), b"text/event-stream".to_vec())]).unwrap();
+    let headers = types::Fields::from_list(
+        &std::iter::once(("accept".to_string(), b"text/event-stream".to_vec()))
+            .chain(
+                std::env::var("SSE_IDEMPOTENCY_KEY")
+                    .ok()
+                    .map(|key| ("idempotency-key".to_string(), key.into_bytes())),
+            )
+            .collect::<Box<[_]>>(),
+    )
+    .unwrap();
     // Dropping the writer ends the empty request body without trailers, so the recorded
     // request is complete and the host can resend it.
     let (_, request_done_rx) = wit_future::new(|| Ok(None));

@@ -169,7 +169,7 @@ pub(crate) fn component() -> Component {
         environment_name: EnvironmentName::try_from("test").unwrap(),
         component_size: 0,
         metadata: ComponentMetadata::default(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
         package_metadata: None,
         object_store_key: "test".into(),

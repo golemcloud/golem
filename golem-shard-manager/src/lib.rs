@@ -1504,7 +1504,7 @@ fn validate_timing_config(config: &ShardManagerConfig) -> anyhow::Result<Vec<Str
         "shard_lease_duration must be greater than zero"
     );
     anyhow::ensure!(
-        chrono::Duration::from_std(config.shard_lease_duration).is_ok(),
+        jiff::SignedDuration::try_from(config.shard_lease_duration).is_ok(),
         "shard_lease_duration {:?} is out of range",
         config.shard_lease_duration
     );

@@ -596,6 +596,13 @@ async fn redeploy_keeps_the_id_of_a_keyed_agent_and_recreates_an_unkeyed_agent_w
     let (unkeyed_id, _) = reference(&unkeyed);
     let unkeyed_address = format!("CounterAgent[{unkeyed_id}]");
 
+    let upserted = document(
+        &cli_json(&ctx, [cmd::AGENT, cmd::UPSERT, keyed_key]).await,
+        "agent.upsert",
+    );
+    assert_eq!(reference(&upserted), reference(&keyed));
+    invoke_ok(&ctx, &[keyed_key, "describe"], "keyed|keyed-mark|keyed-env").await;
+
     invoke_ok(&ctx, &[keyed_key, "increment"], "1").await;
     invoke_ok(&ctx, &[&unkeyed_address, "increment"], "1").await;
     invoke_ok(&ctx, &[&unkeyed_address, "increment"], "2").await;
@@ -761,4 +768,84 @@ async fn agent_list_pages_over_two_agent_types_with_one_cursor() {
         rejected.stdout_contains("The cursor continues agent types that are not listed"),
         "a cursor naming an unlisted agent type must be rejected"
     );
+}
+
+/// An update checks the config overrides of a keyed create against the new revision. When `mark`
+/// becomes a number, the update of the agent created with a text `mark` fails, and that agent
+/// keeps its revision, override and state. The agent without an override moves to the new
+/// revision and its new default.
+#[test]
+#[timeout("20 minutes")]
+async fn an_override_invalid_in_the_new_revision_fails_the_update_of_that_agent_only() {
+    let mut ctx = TestContext::new();
+    deploy_app(&mut ctx).await;
+
+    let overridden = r#"CounterAgent("overridden")"#;
+    let plain = r#"CounterAgent("plain")"#;
+    document(
+        &cli_json(
+            &ctx,
+            [
+                cmd::AGENT,
+                cmd::CREATE,
+                overridden,
+                "--keyed",
+                "-c",
+                r#"mark="text""#,
+            ],
+        )
+        .await,
+        "agent.create",
+    );
+    document(
+        &cli_json(&ctx, [cmd::AGENT, cmd::UPSERT, plain]).await,
+        "agent.upsert",
+    );
+    invoke_ok(&ctx, &[overridden, "increment"], "1").await;
+    invoke_ok(&ctx, &[plain, "increment"], "1").await;
+
+    let source = ctx.cwd_path_join("src/counter_agent.rs");
+    let text = fs::read_to_string(&source).unwrap();
+    fs::write_str(&source, text.replace("pub mark: String", "pub mark: u32")).unwrap();
+    let manifest = ctx.cwd_path_join("golem.yaml");
+    let text = fs::read_to_string(&manifest).unwrap();
+    fs::write_str(&manifest, text.replace("mark: ''", "mark: 7")).unwrap();
+    assert!(ctx.cli([cmd::DEPLOY, flag::YES]).await.success_or_dump());
+
+    let updated = ctx
+        .cli([cmd::AGENT, "update", plain, "automatic", "1", "--await"])
+        .await;
+    assert!(updated.success_or_dump());
+    assert_eq!(get_metadata(&ctx, plain).await["componentRevision"], 1);
+    invoke_ok(&ctx, &[plain, "describe"], "plain|7|").await;
+    invoke_ok(&ctx, &[plain, "value"], "1").await;
+
+    let failed = ctx
+        .cli([
+            cmd::AGENT,
+            "update",
+            overridden,
+            "automatic",
+            "1",
+            "--await",
+        ])
+        .await;
+    assert!(
+        !failed.success(),
+        "the update of the overridden agent must fail"
+    );
+    let reported = format!("{}\n{}", failed.stdout_text(), failed.stderr_text());
+    assert!(reported.contains("config mark"), "{reported}");
+    let metadata = get_metadata(&ctx, overridden).await;
+    assert_eq!(metadata["componentRevision"], 0);
+    assert!(
+        metadata["updates"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|update| update["type"] == "FailedUpdate" && update["targetRevision"] == 1),
+        "{metadata}"
+    );
+    invoke_ok(&ctx, &[overridden, "describe"], "overridden|text|").await;
+    invoke_ok(&ctx, &[overridden, "value"], "1").await;
 }

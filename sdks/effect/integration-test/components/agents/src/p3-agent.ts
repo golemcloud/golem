@@ -183,14 +183,12 @@ defineAgent({
         const firstResult = yield* first.echo({ value: "one" })
         const secondResult = yield* second.echo({ value: "two" })
         return {
-          firstAgentId: firstResult.metadata.agentId.uuid,
-          secondAgentId: secondResult.metadata.agentId.uuid,
-          identitiesDiffer:
-            firstResult.metadata.agentId.uuid !== secondResult.metadata.agentId.uuid,
+          firstAgentId: firstResult.metadata.agentId,
+          secondAgentId: secondResult.metadata.agentId,
+          identitiesDiffer: firstResult.metadata.agentId !== secondResult.metadata.agentId,
           invocationIdsMatchAgents:
-            firstResult.metadata.invocationId.agentId.uuid === firstResult.metadata.agentId.uuid &&
-            secondResult.metadata.invocationId.agentId.uuid ===
-              secondResult.metadata.agentId.uuid &&
+            firstResult.metadata.invocationId.agentId === firstResult.metadata.agentId &&
+            secondResult.metadata.invocationId.agentId === secondResult.metadata.agentId &&
             firstResult.metadata.invocationId.uuid !== secondResult.metadata.invocationId.uuid,
           values: [firstResult.value, secondResult.value],
         }

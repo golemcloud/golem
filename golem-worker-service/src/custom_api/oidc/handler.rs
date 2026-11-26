@@ -33,10 +33,10 @@ use crate::custom_api::{
     RouteExecutionResult,
 };
 use anyhow::anyhow;
-use chrono::Utc;
 use cookie::Cookie;
 use golem_service_base::custom_api::SecuritySchemeDetails;
 use http::{HeaderMap, HeaderValue, StatusCode};
+use jiff::Timestamp;
 use openidconnect::{AuthorizationCode, CsrfToken, Nonce};
 use std::collections::HashSet;
 use std::str::FromStr;
@@ -126,7 +126,7 @@ impl OidcHandler {
             .secure(is_https)
             .same_site(cookie::SameSite::Lax)
             .max_age(cookie::time::Duration::seconds(
-                OIDC_SESSION_EXPIRY.num_seconds(),
+                OIDC_SESSION_EXPIRY.as_secs(),
             ))
             .build();
 
@@ -171,9 +171,9 @@ impl OidcHandler {
         };
         let upstream_state = CsrfToken::new_random();
         let upstream_nonce = Nonce::new_random();
-        let expires_at = Utc::now()
-            .checked_add_signed(PENDING_PKCE_LOGIN_LIFETIME)
-            .ok_or_else(|| anyhow!("Failed to compute PKCE login expiry"))?;
+        let expires_at = Timestamp::now()
+            .checked_add(PENDING_PKCE_LOGIN_LIFETIME)
+            .map_err(|err| anyhow!("Failed to compute PKCE login expiry: {err}"))?;
         let scopes = provider_scopes(scheme);
         let authorization_url = self
             .identity_provider
@@ -254,9 +254,9 @@ impl OidcHandler {
                 RequestHandlerError::OidcTokenExchangeFailed
             })?;
         let principal = oidc_session(scopes, claims)?;
-        let expires_at = Utc::now()
-            .checked_add_signed(AUTHORIZATION_CODE_LIFETIME)
-            .ok_or_else(|| anyhow!("Failed to compute authorization code expiry"))?;
+        let expires_at = Timestamp::now()
+            .checked_add(AUTHORIZATION_CODE_LIFETIME)
+            .map_err(|err| anyhow!("Failed to compute authorization code expiry: {err}"))?;
         let authorization_code = GolemAuthorizationCode::generate();
         self.session_store
             .store_authorization_code(
@@ -343,9 +343,9 @@ impl OidcHandler {
             return invalid_grant();
         }
 
-        let expires_at = Utc::now()
-            .checked_add_signed(BEARER_TOKEN_LIFETIME)
-            .ok_or_else(|| anyhow!("Failed to compute bearer token expiry"))?;
+        let expires_at = Timestamp::now()
+            .checked_add(BEARER_TOKEN_LIFETIME)
+            .map_err(|err| anyhow!("Failed to compute bearer token expiry: {err}"))?;
         let bearer_token = BearerToken::generate();
         self.session_store
             .store_bearer_credential(
@@ -360,7 +360,7 @@ impl OidcHandler {
 
         let response = TokenResponse::bearer(
             bearer_token.secret().to_string(),
-            BEARER_TOKEN_LIFETIME.num_seconds() as u64,
+            BEARER_TOKEN_LIFETIME.as_secs() as u64,
         );
         let mut headers = token_cache_headers(true);
         headers.insert(
@@ -542,9 +542,9 @@ fn oidc_session(
     scopes: Vec<openidconnect::Scope>,
     claims: openidconnect::core::CoreIdTokenClaims,
 ) -> Result<OidcSession, RequestHandlerError> {
-    let expires_at = Utc::now()
-        .checked_add_signed(OIDC_SESSION_EXPIRY)
-        .ok_or_else(|| anyhow!("Failed to compute expiry"))?;
+    let expires_at = Timestamp::now()
+        .checked_add(OIDC_SESSION_EXPIRY)
+        .map_err(|err| anyhow!("Failed to compute expiry: {err}"))?;
     Ok(OidcSession {
         subject: claims.subject().to_string(),
         issuer: claims.issuer().to_string(),
