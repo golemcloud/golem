@@ -143,3 +143,7 @@ list-card-tokens: card : revoke [card] @ environment | account | invocation | pr
 upsert-agent: agent : invoke [any-one-method] @ agent
 send-tool-input: invocation : send [none] @ invocation (tool) ; tool : invoke [command] @ tool
 send-hosted-exec-input: invocation : send [none] @ invocation (agent) ; agent : exec [none] @ agent ; tool : invoke [command] @ tool
+inspect-agent-config: agent : view [none] @ agent
+inspect-agent-env-vars: agent : view [none] @ agent
+inspect-tool-config: tool : view [none] @ tool
+inspect-tool-env-vars: tool : view [none] @ tool

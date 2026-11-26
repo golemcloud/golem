@@ -875,6 +875,80 @@ fn input_to_a_running_tool_invocation_repeats_its_admission() {
 }
 
 #[test]
+fn reading_another_agents_or_tools_config_or_env_vars_needs_view_on_it() {
+    // Appended after send-hosted-exec-input, in this order.
+    let inspections = [
+        CatalogOperation::InspectAgentConfig,
+        CatalogOperation::InspectAgentEnvVars,
+        CatalogOperation::InspectToolConfig,
+        CatalogOperation::InspectToolEnvVars,
+    ];
+    for (offset, operation) in inspections.iter().enumerate() {
+        assert_eq!(
+            position_in_catalog(*operation),
+            position_in_catalog(CatalogOperation::SendHostedExecInput) + 1 + offset
+        );
+    }
+
+    let on_agent: Vec<Shape> = vec![(
+        Class::Agent,
+        "view",
+        ResourceKind::None,
+        vec![TargetKind::Agent],
+        vec![],
+    )];
+    let on_tool: Vec<Shape> = vec![(
+        Class::Tool,
+        "view",
+        ResourceKind::None,
+        vec![TargetKind::Tool],
+        vec![],
+    )];
+    for (operation, target, other) in [
+        (
+            CatalogOperation::InspectAgentConfig,
+            Target::Agent(agent()),
+            Target::Tool(tool()),
+        ),
+        (
+            CatalogOperation::InspectAgentEnvVars,
+            Target::Agent(agent()),
+            Target::Tool(tool()),
+        ),
+        (
+            CatalogOperation::InspectToolConfig,
+            Target::Tool(tool()),
+            Target::Agent(agent()),
+        ),
+        (
+            CatalogOperation::InspectToolEnvVars,
+            Target::Tool(tool()),
+            Target::Agent(agent()),
+        ),
+    ] {
+        let expected = if matches!(target, Target::Agent(_)) {
+            &on_agent
+        } else {
+            &on_tool
+        };
+        assert_eq!(&shapes(operation), expected);
+
+        let request = AuthorizationRequest::new(
+            sample_caller(),
+            Operation::single(operation, Resource::None, target).unwrap(),
+        );
+        assert_eq!(round_trip_json(&request), request);
+        assert_eq!(round_trip_desert(&request), request);
+
+        // An agent's inspection never targets a tool, and a tool's never an agent.
+        assert!(matches!(
+            Operation::single(operation, Resource::None, other),
+            Err(OperationShapeError::Target { .. })
+        ));
+    }
+}
+
+#[test]
 fn a_forbidden_denial_names_its_grant_under_a_camel_case_key() {
     let json = serde_json::to_value(Denial::Forbidden {
         missing_grant: Some(GrantText("tool(?env/report) @ * : invoke : *".to_string())),

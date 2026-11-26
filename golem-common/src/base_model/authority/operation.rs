@@ -413,6 +413,23 @@ catalog! {
         (Verb::Agent(AgentVerb::Exec), None, [Agent]),
         (Verb::Tool(ToolVerb::Invoke), Command, [Tool]),
     ],
+
+    // Management: inspection, appended (the binary encoding is the position).
+
+    /// Reading another agent's config is management inspection: `view` on that agent. An agent
+    /// reads its own config with no decision.
+    InspectAgentConfig("inspect-agent-config") => [(Verb::Agent(AgentVerb::View), None, [Agent])],
+    /// Reading another agent's environment variables is management inspection: `view` on that
+    /// agent. An agent reads its own environment variables with no decision.
+    InspectAgentEnvVars("inspect-agent-env-vars") => [
+        (Verb::Agent(AgentVerb::View), None, [Agent]),
+    ],
+    /// Reading another tool's config is management inspection: `view` on that tool. A tool reads
+    /// its own config with no decision.
+    InspectToolConfig("inspect-tool-config") => [(Verb::Tool(ToolVerb::View), None, [Tool])],
+    /// Reading another tool's environment variables is management inspection: `view` on that
+    /// tool. A tool reads its own environment variables with no decision.
+    InspectToolEnvVars("inspect-tool-env-vars") => [(Verb::Tool(ToolVerb::View), None, [Tool])],
 }
 
 /// One part of an operation: a verb, the resource it asks for, and the target it names. The class
