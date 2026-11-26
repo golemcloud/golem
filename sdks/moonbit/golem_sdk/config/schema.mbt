@@ -8,11 +8,16 @@ fn append_config_type(
   match node.body {
     @types.RefType(index) => {
       let def = graph.defs[index]
-      encoder.named(
+      let reference = encoder.named(
         def.id,
         () => append_config_type(encoder, graph, def.body),
         name=def.name,
       )
+      encoder.nodes[reference] = {
+        ..encoder.nodes[reference],
+        metadata: node.metadata,
+      }
+      reference
     }
     body =>
       encoder.push_with_metadata(

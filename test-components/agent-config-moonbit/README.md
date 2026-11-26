@@ -9,8 +9,17 @@ and return the captured settings from `read`.
 
 Use the MoonBit and Golem wit-bindgen versions pinned by `sdks/moonbit/AGENTS.md`
 and `golem_sdk/scripts/install-wit-bindgen.sh`. The local workspace resolves the
-SDK and generator from this checkout. This fixture is not in the broad component
-build list; build it explicitly before a consuming host test.
+SDK and generator from this checkout. The normal `build-components.sh moonbit`
+group builds this fixture and copies it to `test-components/agent_config_moonbit.wasm`.
+
+To build and stage only this fixture, run from this directory:
+
+```sh
+golem --preset release build --yes --skip-check
+golem --preset release exec copy
+```
+
+The equivalent manual pipeline is:
 
 From `sdks/moonbit/golem_sdk_tools`:
 
@@ -33,6 +42,7 @@ wasm-tools component embed ../../sdks/moonbit/golem_sdk/wit \
 wasm-tools component new _build/wasm/release/agent_config_moonbit.embed.wasm \
   --output _build/wasm/release/agent_config_moonbit.agent.wasm
 wasm-tools validate --features all _build/wasm/release/agent_config_moonbit.agent.wasm
+cp _build/wasm/release/agent_config_moonbit.agent.wasm ../agent_config_moonbit.wasm
 ```
 
 `check-core.mjs` executes actual metadata, initialization and invocation exports.

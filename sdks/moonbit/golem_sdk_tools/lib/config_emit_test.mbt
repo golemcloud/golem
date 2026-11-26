@@ -36,7 +36,7 @@ test "config defaults are portable metadata and names agree across access paths"
     #|  omitted : String?
     #|  #derive.config(default="[null,7,\"retained\"]")
     #|  slots : (Int?, Int?, String)
-    #|  #derive.config(default="18446744073709551615")
+    #|  #derive.config(default="\"18446744073709551615\"")
     #|  limit : UInt64
     #|}
   let configs = @lib.parse_config_types([("config.mbt", source)]) catch {
@@ -46,7 +46,10 @@ test "config defaults are portable metadata and names agree across access paths"
   assert_eq(configs[0].field_metadata["max_chars"], ("maxChars", Some("0")))
   assert_eq(configs[0].field_metadata["cleared"].1, Some("null"))
   assert_eq(configs[0].field_metadata["omitted"].1, None)
-  assert_eq(configs[0].field_metadata["limit"].1, Some("18446744073709551615"))
+  assert_eq(
+    configs[0].field_metadata["limit"].1,
+    Some("\"18446744073709551615\""),
+  )
   let output = @formatter.impls_to_string(
     @lib.generate_config_field_impls(configs),
   )

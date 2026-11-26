@@ -143,6 +143,49 @@ test "wire configuration declarations share one type pool and preserve secret wr
 }
 
 ///|
+priv struct MetadataFixture {}
+
+///|
+impl @schema.WireSchema for MetadataFixture with fn append_wire_type(encoder) {
+  let reference = encoder.named("MetadataFixture", () => {
+    encoder.push(@types.StringType)
+  })
+  encoder.nodes[reference] = {
+    ..encoder.nodes[reference],
+    metadata: {
+      ..@schema.empty_wire_metadata(),
+      doc: Some("config reference"),
+    },
+  }
+  reference
+}
+
+///|
+test "wire config preserves reference metadata and canonical u64 defaults" {
+  ignore(MetadataFixture::{ })
+  let encoder = @schema.WireTypeEncoder::new()
+  let entry = wire_local_entry(
+      encoder,
+      (@schema.type_tag() : @schema.TypeTag[MetadataFixture]),
+      ["label"],
+    )[0]
+  assert_eq(
+    encoder.nodes[entry.value_type].metadata.doc,
+    Some("config reference"),
+  )
+  let limit = wire_local_entry(
+      encoder,
+      (@schema.type_tag() : @schema.TypeTag[UInt64]),
+      ["limit"],
+      default_value="\"18446744073709551615\"",
+    )[0]
+  assert_eq(
+    limit.default_value.map(@model_host.schema_value_from_wit),
+    Some(@model.U64(18446744073709551615UL)),
+  )
+}
+
+///|
 priv struct NamingFixture {}
 
 ///|
