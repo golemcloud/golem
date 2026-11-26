@@ -1590,7 +1590,7 @@ impl IndexedStorage for ReadCountingIndexedStorage {
 pub(crate) struct ReadCountingBlobStorage<B = InMemoryBlobStorage> {
     inner: B,
     reads: AtomicUsize,
-    seal_lists: StdMutex<Vec<AgentMode>>,
+    seal_lists: StdMutex<Vec<(AgentMode, &'static str, &'static str)>>,
     fail_read_once: AtomicBool,
     fail_seal_list_once: AtomicBool,
     puts: AtomicUsize,
@@ -1721,6 +1721,10 @@ impl<B> ReadCountingBlobStorage<B> {
         self.reads.load(Ordering::Relaxed)
     }
 
+    pub(crate) fn seal_lists(&self) -> Vec<(AgentMode, &'static str, &'static str)> {
+        self.seal_lists.lock().unwrap().clone()
+    }
+
     pub(crate) fn reset(&self) {
         self.reads.store(0, Ordering::Relaxed);
         self.seal_lists.lock().unwrap().clear();
@@ -1745,7 +1749,10 @@ impl<B: BlobStorageBackend> BlobStorageBackend for ReadCountingBlobStorage<B> {
     ) -> anyhow::Result<Vec<golem_service_base::storage::blob::BlobPageEntry>> {
         self.count_read();
         if let BlobStorageNamespace::SealRecords { agent_mode, .. } = &namespace {
-            self.seal_lists.lock().unwrap().push(*agent_mode);
+            self.seal_lists
+                .lock()
+                .unwrap()
+                .push((*agent_mode, target_label, op_label));
         }
         let pause = if matches!(&namespace, BlobStorageNamespace::SealRecords { .. }) {
             let mut pause = self.pause_seal_list.lock().unwrap();

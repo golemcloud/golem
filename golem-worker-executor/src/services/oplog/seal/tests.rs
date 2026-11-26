@@ -226,7 +226,7 @@ async fn record_listing_ignores_malformed_keys_and_decodes_the_selected_body() {
         .put_raw(ns.clone(), &malformed, b"ignore")
         .await
         .unwrap();
-    let records = list_records(&storage, &owned, AgentMode::Durable)
+    let records = list_records(&storage, &owned, AgentMode::Durable, "test")
         .await
         .unwrap();
     assert_eq!(records.len(), 1);
@@ -248,7 +248,7 @@ async fn record_listing_ignores_malformed_keys_and_decodes_the_selected_body() {
         .put_raw(ns.clone(), &newer.path(), b"invalid")
         .await
         .unwrap();
-    let records = list_records(&storage, &owned, AgentMode::Durable)
+    let records = list_records(&storage, &owned, AgentMode::Durable, "test")
         .await
         .unwrap();
     assert!(matches!(
@@ -275,7 +275,7 @@ async fn record_listing_ignores_malformed_keys_and_decodes_the_selected_body() {
         .put_raw(ns.clone(), &deleted.path(), &serialize(&tombstone).unwrap())
         .await
         .unwrap();
-    let records = list_records(&storage, &owned, AgentMode::Durable)
+    let records = list_records(&storage, &owned, AgentMode::Durable, "test")
         .await
         .unwrap();
     assert_eq!(
@@ -341,7 +341,7 @@ async fn record_body_identity_and_snapshot_must_match_the_key() {
             )
             .await
             .unwrap();
-        let records = list_records(&storage, &owned, AgentMode::Durable)
+        let records = list_records(&storage, &owned, AgentMode::Durable, "test")
             .await
             .unwrap();
         assert!(matches!(
@@ -380,7 +380,7 @@ async fn deletion_body_identity_must_match_the_key() {
             )
             .await
             .unwrap();
-        let records = list_records(&storage, &owned, AgentMode::Durable)
+        let records = list_records(&storage, &owned, AgentMode::Durable, "test")
             .await
             .unwrap();
         assert!(matches!(
@@ -462,7 +462,7 @@ async fn record_listing_continues_after_a_full_page() {
             .await
             .unwrap();
     }
-    let records = list_records(&storage, &owned, AgentMode::Durable)
+    let records = list_records(&storage, &owned, AgentMode::Durable, "test")
         .await
         .unwrap();
     assert_eq!(records.len(), 1001);
@@ -492,7 +492,7 @@ async fn ephemeral_record_restores_status_mode_and_pending_promises() {
         )
         .await
         .unwrap();
-    let records = list_records(&storage, &owned, AgentMode::Ephemeral)
+    let records = list_records(&storage, &owned, AgentMode::Ephemeral, "test")
         .await
         .unwrap();
     assert_eq!(
@@ -734,7 +734,7 @@ async fn ephemeral_pending_completed_promise_collision_is_rejected() {
         )
         .await
         .unwrap();
-    let records = list_records(&storage, &owned, AgentMode::Ephemeral)
+    let records = list_records(&storage, &owned, AgentMode::Ephemeral, "test")
         .await
         .unwrap();
     assert!(matches!(

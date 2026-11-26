@@ -150,10 +150,14 @@ pub(super) fn assert_listing_only(blobs: &ReadCountingBlobStorage, mode: Option<
     );
     assert!(!lists.is_empty());
     if let Some(mode) = mode {
-        assert!(lists.iter().all(|listed| *listed == mode));
+        assert!(lists.iter().all(|(listed, _, _)| *listed == mode));
     } else {
-        assert!(lists.contains(&AgentMode::Durable));
-        assert!(lists.contains(&AgentMode::Ephemeral));
+        assert!(lists.iter().any(|(mode, _, _)| *mode == AgentMode::Durable));
+        assert!(
+            lists
+                .iter()
+                .any(|(mode, _, _)| *mode == AgentMode::Ephemeral)
+        );
     }
 }
 

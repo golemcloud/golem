@@ -66,7 +66,7 @@ impl SealService {
         mode: AgentMode,
         epoch: ShardEpoch,
     ) -> Result<Vec<ListedSealRecord>, OplogError> {
-        let records = list_records(self.blobs.as_ref(), id, mode)
+        let records = list_records(self.blobs.as_ref(), id, mode, "deletion")
             .await
             .map_err(maintenance)?;
         if let Some(actual) = records.iter().map(|record| record.key.epoch).max()
@@ -360,7 +360,7 @@ impl SealService {
         mode: AgentMode,
     ) -> Result<(), OplogError> {
         lifecycle.assert_agent(&id.agent_id);
-        let mut tombstones = list_records(self.blobs.as_ref(), id, mode)
+        let mut tombstones = list_records(self.blobs.as_ref(), id, mode, "gc_tombstones")
             .await
             .map_err(maintenance)?;
         tombstones.retain(|record| record.key.kind == SealRecordKind::Deleted);
@@ -380,7 +380,7 @@ impl SealService {
             let identity = self.indexed_identity(id).await?;
             let observation = self.observe(id).await.map_err(maintenance)?;
             let pinned = Self::pinned_fingerprint(identity, &observation).map_err(maintenance)?;
-            let records = list_records(self.blobs.as_ref(), id, mode)
+            let records = list_records(self.blobs.as_ref(), id, mode, "gc_revalidate")
                 .await
                 .map_err(maintenance)?;
             if !records.iter().any(|record| record.key == tombstone.key) {

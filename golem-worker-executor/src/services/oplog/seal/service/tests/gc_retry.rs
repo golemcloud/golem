@@ -22,7 +22,7 @@ async fn gc_retry_after_recreation_preserves_new_incarnation() {
                 .await
                 .unwrap();
             put_chunk_sentinel(&f, a).await;
-            let tombstones = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+            let tombstones = list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode, "test")
                 .await
                 .unwrap();
             assert_eq!(tombstones.len(), 1);
@@ -64,7 +64,7 @@ async fn gc_retry_after_recreation_preserves_new_incarnation() {
                 .await
                 .unwrap();
             assert!(
-                list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode)
+                list_records(f.blobs.as_ref(), &f.id(), f.metadata.agent_mode, "test")
                     .await
                     .unwrap()
                     .is_empty()

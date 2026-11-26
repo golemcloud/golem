@@ -893,7 +893,8 @@ async fn cold_reads_do_not_list_seal_records_for_stable_presence_or_disabled_sea
             crate::services::oplog::seal::list_records(
                 blobs.as_ref(),
                 &fixture.id(),
-                AgentMode::Durable
+                AgentMode::Durable,
+                "test"
             )
             .await
             .is_err(),

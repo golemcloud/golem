@@ -128,6 +128,58 @@ async fn mode_addressed_records_list_only_the_requested_namespace() {
     assert_eq!(f.blobs.reads(), 3, "two LISTs and one GET for Ephemeral");
 }
 
+#[test]
+async fn successful_seal_uses_two_lists_in_both_modes_including_partial_release_retry() {
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        for partial in [false, true] {
+            let f = Fixture::with_mode(Arc::new(InMemoryIndexedStorage::new()), mode).await;
+            f.put_promise(3, Some(vec![3, 9])).await;
+            f.reject(&[5, 8]).await;
+            let seal = f.service();
+            if partial {
+                let first = seal
+                    .prepare(f.metadata.clone(), ShardEpoch(6))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                seal.remove_moved_copies(&first).await.unwrap();
+            }
+            f.blobs.reset();
+            let pending = seal
+                .prepare(f.metadata.clone(), ShardEpoch(6))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                pending.record.completed_promises,
+                BTreeMap::from([(OplogIndex::from_u64(3), vec![3, 9])])
+            );
+            assert_eq!(
+                pending.record.rejected_periodic_snapshots,
+                BTreeSet::from([OplogIndex::from_u64(5), OplogIndex::from_u64(8)])
+            );
+            seal.remove_moved_copies(&pending).await.unwrap();
+            assert!(seal.release(&pending).await.unwrap());
+            let mut calls = f.blobs.seal_lists();
+            calls.sort_by_key(|(_, target, operation)| (*target, *operation));
+            assert_eq!(
+                calls,
+                vec![
+                    (mode, "oplog_seal", "prepare"),
+                    (mode, "oplog_seal", "verify_record"),
+                ],
+                "successful {mode:?} seal (partial retry: {partial})"
+            );
+            let remaining = list_records(f.blobs.as_ref(), &f.id(), mode, "test")
+                .await
+                .unwrap();
+            assert_eq!(remaining.len(), 1);
+            assert_eq!(remaining[0].key, pending.key);
+            f.assert_history(&pending.record).await;
+        }
+    }
+}
+
 #[derive(Default)]
 struct Scheduler {
     actions: Mutex<Vec<ScheduledAction>>,

@@ -53,6 +53,7 @@ pub(crate) struct PendingSeal {
     pub record: SealRecord,
     state: AgentIndexedState,
     key: SealRecordKey,
+    listed_records: Vec<ListedSealRecord>,
     rejected_snapshot_copy: Option<Bytes>,
 }
 
@@ -194,7 +195,7 @@ impl SealService {
         id: &OwnedAgentId,
         mode: AgentMode,
     ) -> Result<Option<Box<SealRecord>>, OplogArchiveError> {
-        let records = list_records(self.blobs.as_ref(), id, mode).await?;
+        let records = list_records(self.blobs.as_ref(), id, mode, "read_record").await?;
         match valid_record(&records) {
             Some(head) if matches!(head.key.kind, SealRecordKind::Sealed { .. }) => {
                 match read_record(self.blobs.as_ref(), id, mode, head).await? {
@@ -232,9 +233,9 @@ impl SealService {
         id: &OwnedAgentId,
         mode: AgentMode,
         fingerprint: AgentFingerprint,
+        records: &[ListedSealRecord],
     ) -> Result<Option<Box<SealRecord>>, OplogArchiveError> {
-        let records = list_records(self.blobs.as_ref(), id, mode).await?;
-        let Some(listed) = newest_seal_for_fingerprint(&records, fingerprint) else {
+        let Some(listed) = newest_seal_for_fingerprint(records, fingerprint) else {
             return Ok(None);
         };
         match read_record(self.blobs.as_ref(), id, mode, listed).await? {
@@ -268,8 +269,12 @@ impl SealService {
                     .into_iter()
                     .filter(|candidate| mode.is_none_or(|mode| mode == *candidate))
                 {
+                    let records =
+                        list_records(self.blobs.as_ref(), id, candidate_mode, "moved_data")
+                            .await
+                            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
                     if let Some(record) = self
-                        .record_for_fingerprint(id, candidate_mode, fingerprint)
+                        .record_for_fingerprint(id, candidate_mode, fingerprint, &records)
                         .await
                         .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
                     {
@@ -724,9 +729,12 @@ impl SealService {
                 "Retired worker fingerprint differs from indexed authority",
             ));
         }
+        let mut records = list_records(self.blobs.as_ref(), &id, metadata.agent_mode, "prepare")
+            .await
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         let previous = match pinned {
             Some(fingerprint) => self
-                .record_for_fingerprint(&id, metadata.agent_mode, fingerprint)
+                .record_for_fingerprint(&id, metadata.agent_mode, fingerprint, &records)
                 .await
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
             None => None,
@@ -831,9 +839,6 @@ impl SealService {
             &record.metadata.last_known_status,
             record.rejected_periodic_snapshots.iter().copied(),
         );
-        let mut records = list_records(self.blobs.as_ref(), &id, record.agent_mode)
-            .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         let mut seq = records
             .iter()
             .filter(|record| record.key.epoch == epoch)
@@ -870,7 +875,7 @@ impl SealService {
                 )
                 .await
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
-            records = list_records(self.blobs.as_ref(), &id, record.agent_mode)
+            records = list_records(self.blobs.as_ref(), &id, record.agent_mode, "verify_record")
                 .await
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
             let Some(listed) = records.iter().find(|listed| listed.key == key) else {
@@ -919,6 +924,7 @@ impl SealService {
                 record,
                 state,
                 key,
+                listed_records: records,
                 rejected_snapshot_copy,
             }));
         }
@@ -1020,27 +1026,19 @@ impl SealService {
         .map_err(|error| Self::indexed_error(&id, error))?
             == ReleaseAgentResult::Released;
         if released {
-            match list_records(self.blobs.as_ref(), &id, pending.record.agent_mode).await {
-                Ok(records) => {
-                    for old in records.into_iter().filter(|record| {
-                        matches!(record.key.kind, SealRecordKind::Sealed { .. })
-                            && record.key < pending.key
-                    }) {
-                        if let Err(error) = self
-                            .blobs
-                            .with("oplog_seal", "remove_old_record")
-                            .delete(
-                                seal_namespace(&id, pending.record.agent_mode),
-                                &old.entry.path,
-                            )
-                            .await
-                        {
-                            warn!(agent_id = %id, %error, "Failed to remove an older seal record");
-                        }
-                    }
-                }
-                Err(error) => {
-                    warn!(agent_id = %id, %error, "Failed to list older seal records for cleanup")
+            for old in pending.listed_records.iter().filter(|listed| {
+                matches!(listed.key.kind, SealRecordKind::Sealed { .. }) && listed.key < pending.key
+            }) {
+                if let Err(error) = self
+                    .blobs
+                    .with("oplog_seal", "remove_old_record")
+                    .delete(
+                        seal_namespace(&id, pending.record.agent_mode),
+                        &old.entry.path,
+                    )
+                    .await
+                {
+                    warn!(agent_id = %id, %error, "Failed to remove an older seal record");
                 }
             }
         }

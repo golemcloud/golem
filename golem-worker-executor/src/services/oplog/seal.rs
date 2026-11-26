@@ -214,13 +214,14 @@ pub(crate) async fn list_records(
     storage: &dyn BlobStorage,
     owned_agent_id: &OwnedAgentId,
     mode: AgentMode,
+    operation: &'static str,
 ) -> Result<Vec<ListedSealRecord>, OplogArchiveError> {
     let prefix = seal_prefix(&owned_agent_id.agent_id);
     let mut cursor: Option<PathBuf> = None;
     let mut result = Vec::new();
     loop {
         let page = storage
-            .with("oplog_seal", "list_records")
+            .with("oplog_seal", operation)
             .list_page(
                 seal_namespace(owned_agent_id, mode),
                 &prefix,
