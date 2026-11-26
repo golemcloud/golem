@@ -31,4 +31,13 @@ disallowed-macros = [
     { path = "prometheus::register_histogram_with_registry", reason = "declare the metric in golem_common::metrics::catalog" },
     { path = "prometheus::register_histogram_vec", reason = "declare the metric in golem_common::metrics::catalog" },
     { path = "prometheus::register_histogram_vec_with_registry", reason = "declare the metric in golem_common::metrics::catalog" },
+    # The metrics crate writes through the process-global recorder that exports the Tokio runtime
+    # metrics, which bypasses the catalog.
+    { path = "metrics::counter", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "metrics::gauge", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "metrics::histogram", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "metrics::describe", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "metrics::describe_counter", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "metrics::describe_gauge", reason = "declare the metric in golem_common::metrics::catalog" },
+    { path = "metrics::describe_histogram", reason = "declare the metric in golem_common::metrics::catalog" },
 ]

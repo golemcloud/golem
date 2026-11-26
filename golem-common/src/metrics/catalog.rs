@@ -225,35 +225,76 @@ impl<M: MetricKind> Metric<M> {
     }
 }
 
-/// Registers a collector in `registry`. Panics when the collector describes a metric family that
-/// the catalog does not declare, so a custom collector cannot export an undeclared family.
+/// Registers a collector in `registry`. Panics when the collector exports a metric family that
+/// the catalog does not declare, or one whose labels or type differ from its catalog entry, so a
+/// custom collector cannot export an undeclared family.
 #[allow(clippy::disallowed_methods)]
 pub fn register_collector(
     registry: &Registry,
     collector: Box<dyn Collector>,
 ) -> prometheus::Result<()> {
-    for desc in collector.desc() {
-        let name = &desc.fq_name;
-        assert!(
-            find(name).is_some() || find_group(name).is_some(),
-            "{name} is not declared in golem_common::metrics::catalog"
-        );
+    if let Err(err) = check_collector(collector.as_ref()) {
+        panic!("{err}");
     }
     registry.register(collector)
+}
+
+/// Checks every family of `collector` against its catalog entry: the name, the label names and
+/// the type. A generated group is not accepted; only the catalog registers those collectors.
+fn check_collector(collector: &dyn Collector) -> Result<(), String> {
+    for desc in collector.desc() {
+        let name = &desc.fq_name;
+        let def = find(name)
+            .ok_or_else(|| format!("{name} is not declared in golem_common::metrics::catalog"))?;
+        if !desc.variable_labels.iter().eq(def.labels.iter()) {
+            return Err(format!(
+                "{name} has the labels {:?}, the catalog declares {:?}",
+                desc.variable_labels, def.labels
+            ));
+        }
+    }
+    for family in collector.collect() {
+        let name = family.name();
+        let def = find(name)
+            .ok_or_else(|| format!("{name} is not declared in golem_common::metrics::catalog"))?;
+        let metric_type = match family.get_field_type() {
+            prometheus::proto::MetricType::COUNTER => MetricType::Counter,
+            prometheus::proto::MetricType::GAUGE => MetricType::Gauge,
+            prometheus::proto::MetricType::HISTOGRAM => MetricType::Histogram,
+            other => {
+                return Err(format!(
+                    "{name} is a {other:?}, which the catalog cannot declare"
+                ));
+            }
+        };
+        if metric_type != def.metric_type {
+            return Err(format!(
+                "{name} is a {}, the catalog declares a {}",
+                metric_type.as_str(),
+                def.metric_type.as_str()
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Replaces the process metrics that the Prometheus client registers in its default registry,
 /// named `process_*`, with the same metrics under the `golem_process_` prefix of the catalog.
 /// Call it once per process, from the owner of the process.
 #[cfg(target_os = "linux")]
+#[allow(clippy::disallowed_methods)]
 pub fn register_process_metrics(registry: &Registry) {
     use prometheus::process_collector::ProcessCollector;
     let _ = registry.unregister(Box::new(ProcessCollector::for_self()));
     let namespace = PROCESS.prefix.trim_end_matches("_process_");
-    if let Err(err) = register_collector(
-        registry,
-        Box::new(ProcessCollector::new(std::process::id() as i32, namespace)),
-    ) {
+    let collector = ProcessCollector::new(std::process::id() as i32, namespace);
+    debug_assert!(
+        collector
+            .desc()
+            .iter()
+            .all(|desc| desc.fq_name.starts_with(PROCESS.prefix))
+    );
+    if let Err(err) = registry.register(Box::new(collector)) {
         tracing::warn!("Failed to register the process metrics: {err}");
     }
 }
@@ -455,9 +496,12 @@ catalog! {
     section "HTTP and gRPC APIs" {
         metric HTTP_REQUESTS_TOTAL: IntCounterVec = Metric::new(
             "golem_http_requests_total", NoUnit, &["method", "route", "status"],
-            "Requests served on an HTTP interface. `route` is the matched route pattern of a \
-             Golem API, or `other` for any other request, such as a request of a custom HTTP \
-             API; `method` is `other` for a method that HTTP does not define");
+            "Requests served by the worker service gateway and MCP server, and by the HTTP \
+             interface of the single executable. The handlers of the management APIs record \
+             golem_api_success_seconds and golem_api_failure_seconds instead. `route` is the \
+             matched route pattern of a Golem API, or `other` for any other request, such as a \
+             request of a custom HTTP API; `method` is `other` for a method that HTTP does not \
+             define");
         metric HTTP_REQUEST_DURATION_SECONDS: HistogramVec = Metric::histogram(
             "golem_http_request_duration_seconds", Seconds, &["method", "route", "status"],
             DEFAULT_TIME_BUCKETS,
@@ -1632,6 +1676,26 @@ mod tests {
         ));
         let mut page = mint.new_goldenfile("metrics.mdx").unwrap();
         page.write_all(render_docs_page().as_bytes()).unwrap();
+    }
+
+    #[test]
+    fn the_collector_check_rejects_families_that_differ_from_the_catalog() {
+        let declared = INVOCATION_TOTAL.build();
+        assert!(check_collector(&declared).is_ok());
+
+        let wrong_labels =
+            CounterVec::new(Opts::new(INVOCATION_TOTAL.def.name, "help"), &["agent_id"]).unwrap();
+        assert!(check_collector(&wrong_labels).is_err());
+
+        let wrong_type = GaugeVec::new(
+            Opts::new(INVOCATION_TOTAL.def.name, "help"),
+            INVOCATION_TOTAL.def.labels,
+        )
+        .unwrap();
+        assert!(check_collector(&wrong_type).is_err());
+
+        let in_a_group = IntCounter::new("golem_process_anything_total", "help").unwrap();
+        assert!(check_collector(&in_a_group).is_err());
     }
 
     /// A dashboard panel that queries a name the services do not export stays empty, and nothing

@@ -236,11 +236,7 @@ impl<E: Endpoint> Endpoint for HttpMetricsEndpoint<E> {
             Ok(response) => (response.status(), response.data::<PathPattern>()),
             Err(error) => (error.status(), error.data::<PathPattern>()),
         };
-        // A route nested at `/`, such as the custom HTTP APIs of the gateway, has an empty pattern.
-        let route = route
-            .map(|route| route.0.as_ref())
-            .filter(|route| !route.is_empty())
-            .unwrap_or("other");
+        let route = route_label(route);
         let labels = [method, route, status.as_str()];
         HTTP_REQUESTS_TOTAL.with_label_values(&labels).inc();
         HTTP_REQUEST_DURATION_SECONDS
@@ -248,6 +244,17 @@ impl<E: Endpoint> Endpoint for HttpMetricsEndpoint<E> {
             .observe(start.elapsed().as_secs_f64());
         result
     }
+}
+
+/// The `route` label of a request: the matched pattern of a Golem API, or `other`.
+///
+/// A route nested at `/`, such as the custom HTTP APIs of the gateway, has an empty pattern. A
+/// route mounted with `.at("*", ...)`, such as the registry API in the single executable, prefixes
+/// the inner pattern with `/*`, and a request that no inner route matches has the bare `/*`.
+fn route_label(route: Option<&PathPattern>) -> &str {
+    let route = route.map_or("", |route| route.0.as_ref());
+    let route = route.strip_prefix("/*").unwrap_or(route);
+    if route.is_empty() { "other" } else { route }
 }
 
 fn method_label(method: &Method) -> &'static str {

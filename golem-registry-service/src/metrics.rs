@@ -35,39 +35,4 @@ pub mod storage {
         record_storage_bytes_written(STORAGE_TYPE_COMPONENT, bytes);
         record_storage_objects_written(STORAGE_TYPE_COMPONENT, 1);
     }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use test_r::test;
-
-        test_r::enable!();
-
-        /// Other tests of this crate may upload components at the same time, so the counters
-        /// grow by at least the recorded upload.
-        #[test]
-        fn record_component_uploaded_increments_bytes_and_objects() {
-            let bytes_before = STORAGE_BYTES_WRITTEN_TOTAL
-                .with_label_values(&[STORAGE_TYPE_COMPONENT])
-                .get();
-            let objects_before = STORAGE_OBJECTS_WRITTEN_TOTAL
-                .with_label_values(&[STORAGE_TYPE_COMPONENT])
-                .get();
-
-            record_component_uploaded(1024);
-
-            assert!(
-                STORAGE_BYTES_WRITTEN_TOTAL
-                    .with_label_values(&[STORAGE_TYPE_COMPONENT])
-                    .get()
-                    >= bytes_before + 1024.0
-            );
-            assert!(
-                STORAGE_OBJECTS_WRITTEN_TOTAL
-                    .with_label_values(&[STORAGE_TYPE_COMPONENT])
-                    .get()
-                    >= objects_before + 1.0
-            );
-        }
-    }
 }

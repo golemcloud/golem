@@ -23,7 +23,7 @@ Every service exports its version, so a query can join any metric with the versi
 
 | Metric | Type | Labels | Description |
 | --- | --- | --- | --- |
-| `golem_http_requests_total` | counter | `method`, `route`, `status` | Requests served on an HTTP interface. `route` is the matched route pattern of a Golem API, or `other` for any other request, such as a request of a custom HTTP API; `method` is `other` for a method that HTTP does not define |
+| `golem_http_requests_total` | counter | `method`, `route`, `status` | Requests served by the worker service gateway and MCP server, and by the HTTP interface of the single executable. The handlers of the management APIs record golem_api_success_seconds and golem_api_failure_seconds instead. `route` is the matched route pattern of a Golem API, or `other` for any other request, such as a request of a custom HTTP API; `method` is `other` for a method that HTTP does not define |
 | `golem_http_request_duration_seconds` | histogram | `method`, `route`, `status` | Time of serving a request on an HTTP interface, with the labels of golem_http_requests_total |
 | `golem_api_success_seconds` | histogram | `api`, `api_type` | Time of successfully serving an API request (HTTP and gRPC) |
 | `golem_api_failure_seconds` | histogram | `api`, `api_type`, `error` | Time of serving a failed API request (HTTP and gRPC). `error` is `Drop` when the caller went away before the request produced a result |

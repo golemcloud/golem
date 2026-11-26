@@ -124,6 +124,39 @@ async fn metrics_use_the_matched_route_and_response_status() {
         "{output}"
     );
     assert!(!output.contains(r#"route="""#), "{output}");
+
+    // The single executable mounts the registry API with `.at("*", ...)`, which prefixes its
+    // patterns with `/*`.
+    let inner = poem::Route::new().at(
+        "/v1/components/:component_id",
+        poem::endpoint::make_sync(|_| StatusCode::ACCEPTED),
+    );
+    let wildcard = poem::Route::new().at("*", inner).with(HttpMetrics);
+    let client = TestClient::new(wildcard);
+    client
+        .get("/v1/components/c1")
+        .send()
+        .await
+        .assert_status(StatusCode::ACCEPTED);
+    client
+        .put("/v1/nothing")
+        .send()
+        .await
+        .assert_status(StatusCode::NOT_FOUND);
+    let output = prometheus::TextEncoder::new()
+        .encode_to_string(&prometheus::gather())
+        .unwrap();
+    assert!(
+        output.contains(
+            r#"golem_http_requests_total{method="GET",route="/v1/components/:component_id",status="202"} 1"#
+        ),
+        "{output}"
+    );
+    assert!(
+        output.contains(r#"golem_http_requests_total{method="PUT",route="other",status="404"} 1"#),
+        "{output}"
+    );
+    assert!(!output.contains(r#"route="/*"#), "{output}");
 }
 
 #[derive(Clone, Debug, Default)]

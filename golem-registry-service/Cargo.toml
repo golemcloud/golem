@@ -22,6 +22,11 @@ name = "tests"
 path = "tests/lib.rs"
 harness = false
 
+[[test]]
+name = "storage_metrics"
+path = "tests/storage_metrics.rs"
+harness = false
+
 [dependencies]
 golem-api-grpc = { workspace = true }
 golem-async-trait = { workspace = true }
