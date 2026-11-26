@@ -63,8 +63,8 @@ pub enum OplogCursorRefused {
     /// the start of its range.
     SearchScan { next: OplogIndex, start: OplogIndex },
     /// The search start of the cursor is not the start of the range of the read. Or the cursor
-    /// does not point to an index from 1 to before its search start. The cursor came from a
-    /// search of another range.
+    /// does not point to an index from 1 to before its search start. Or the range ends before the
+    /// search start. The cursor came from a search of another range.
     ScanOutsideRange {
         next: OplogIndex,
         scan_to: u64,
