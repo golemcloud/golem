@@ -35,7 +35,7 @@ use crate::services::oplog::{OplogLifecycleGuard, OplogService};
 use crate::services::shard::ShardService;
 use crate::services::stream_session_index::StreamSessionIndexService;
 use crate::storage::keyvalue::{
-    DERIVED_CACHE_EXPIRY, KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
+    KeyValueStorage, KeyValueStorageLabelledApi, KeyValueStorageNamespace,
 };
 use crate::worker::snapshot_selection::kept_rejections;
 use crate::worker::status::calculate_last_known_status_with_checkpoint_reader;
@@ -63,6 +63,8 @@ use std::sync::{Arc, Mutex as StdMutex, Weak};
 use tokio::sync::{Mutex as AsyncMutex, RwLock};
 use tracing::{debug, error};
 
+pub(crate) const DERIVED_CACHE_EXPIRY: std::time::Duration =
+    std::time::Duration::from_secs(7 * 24 * 60 * 60);
 const INVOCATION_RESULT_INDEX_METADATA_FIELD: &str = "metadata";
 const INVOCATION_RESULT_INDEX_FIELD_PREFIX: &str = "ir:";
 

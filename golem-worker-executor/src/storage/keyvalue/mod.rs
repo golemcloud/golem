@@ -948,10 +948,6 @@ impl<'a, S: ?Sized + KeyValueStorage> LabelledEntityKeyValueStorage<'a, S> {
     }
 }
 
-/// The expiry that each write to a cache namespace passes. A backend that supports expiry sets or
-/// renews it. The SQL and in-memory backends ignore it.
-pub(crate) const DERIVED_CACHE_EXPIRY: Duration = Duration::from_secs(7 * 24 * 60 * 60);
-
 /// Various namespaces for key-value storage
 #[derive(Debug, Clone, PartialEq, Eq, Ord, PartialOrd, Hash)]
 pub enum KeyValueStorageNamespace {
@@ -1017,27 +1013,6 @@ pub enum KeyValueStorageNamespace {
         environment_id: EnvironmentId,
         bucket: Arc<str>,
     },
-}
-
-impl KeyValueStorageNamespace {
-    /// The expiry of the namespace. A namespace with an expiry is a derived cache: the oplog
-    /// rebuilds it, its writers give it [`DERIVED_CACHE_EXPIRY`], and namespace routing stores it
-    /// in the cache backend. `None` means that the namespace is persistent: it does not expire,
-    /// and namespace routing stores it in the persistent backend.
-    pub fn expiry(&self) -> Option<Duration> {
-        match self {
-            Self::Worker { .. }
-            | Self::AgentStatus { .. }
-            | Self::AgentInvocationResultIndex { .. }
-            | Self::AgentDurableStreamSessionIndex { .. } => Some(DERIVED_CACHE_EXPIRY),
-            Self::RunningWorkers
-            | Self::AgentStatusCheckpoint { .. }
-            | Self::AgentRejectedPeriodicSnapshots { .. }
-            | Self::Promise { .. }
-            | Self::Schedule
-            | Self::UserDefined { .. } => None,
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1191,68 +1166,6 @@ mod tests {
                 "connection reset".to_string()
             ))
             .contains("connection reset")
-        );
-    }
-
-    /// The expiry of a derived cache is a week.
-    #[test]
-    fn the_derived_cache_expiry_is_a_week() {
-        assert_eq!(
-            super::DERIVED_CACHE_EXPIRY,
-            std::time::Duration::from_secs(604_800)
-        );
-    }
-
-    /// The derived caches of an agent expire after a week. The status baseline and the other
-    /// namespaces do not expire.
-    #[test]
-    fn only_the_derived_caches_expire() {
-        use super::{DERIVED_CACHE_EXPIRY, KeyValueStorageNamespace};
-        use golem_common::model::environment::EnvironmentId;
-        use golem_common::model::{AgentFingerprint, AgentId, OwnedAgentId};
-        use std::sync::Arc;
-
-        let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(7, 1));
-        let fingerprint = AgentFingerprint::new();
-        let week = Some(DERIVED_CACHE_EXPIRY);
-
-        assert_eq!(
-            [
-                KeyValueStorageNamespace::RunningWorkers,
-                KeyValueStorageNamespace::Worker {
-                    owned_agent_id: owned_agent_id.clone(),
-                },
-                KeyValueStorageNamespace::AgentStatus {
-                    owned_agent_id: owned_agent_id.clone(),
-                    fingerprint,
-                },
-                KeyValueStorageNamespace::AgentInvocationResultIndex {
-                    owned_agent_id: owned_agent_id.clone(),
-                    fingerprint,
-                },
-                KeyValueStorageNamespace::AgentStatusCheckpoint {
-                    owned_agent_id: owned_agent_id.clone(),
-                    fingerprint,
-                },
-                KeyValueStorageNamespace::AgentDurableStreamSessionIndex {
-                    owned_agent_id: owned_agent_id.clone(),
-                    fingerprint,
-                },
-                KeyValueStorageNamespace::AgentRejectedPeriodicSnapshots {
-                    owned_agent_id: owned_agent_id.clone(),
-                },
-                KeyValueStorageNamespace::Promise {
-                    owned_agent_id,
-                    fingerprint,
-                },
-                KeyValueStorageNamespace::Schedule,
-                KeyValueStorageNamespace::UserDefined {
-                    environment_id: EnvironmentId::new(),
-                    bucket: Arc::from("bucket"),
-                },
-            ]
-            .map(|namespace| namespace.expiry()),
-            [None, week, week, week, None, week, None, None, None, None]
         );
     }
 }

@@ -36,10 +36,21 @@ impl NamespaceRoutedKeyValueStorage {
         &self,
         namespace: &KeyValueStorageNamespace,
     ) -> &Arc<dyn KeyValueStorage + Send + Sync> {
-        match namespace.expiry() {
-            Some(_) => &self.cache,
-            None => &self.persistent,
+        if Self::is_cache_namespace(namespace) {
+            &self.cache
+        } else {
+            &self.persistent
         }
+    }
+
+    fn is_cache_namespace(namespace: &KeyValueStorageNamespace) -> bool {
+        matches!(
+            namespace,
+            KeyValueStorageNamespace::Worker { .. }
+                | KeyValueStorageNamespace::AgentStatus { .. }
+                | KeyValueStorageNamespace::AgentInvocationResultIndex { .. }
+                | KeyValueStorageNamespace::AgentDurableStreamSessionIndex { .. }
+        )
     }
 }
 
@@ -74,7 +85,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         value: &[u8],
         expiry: Duration,
     ) -> Result<(), KeyValueStorageError> {
-        if namespace.expiry().is_none() {
+        if !Self::is_cache_namespace(&namespace) {
             return Err(KeyValueStorageError::Other(
                 "expiry is only supported for cache-routed namespaces".to_string(),
             ));
@@ -156,7 +167,7 @@ impl KeyValueStorage for NamespaceRoutedKeyValueStorage {
         deletions: &[&str],
         expiry: Duration,
     ) -> Result<bool, KeyValueStorageError> {
-        if namespace.expiry().is_none() {
+        if !Self::is_cache_namespace(&namespace) {
             return Err(KeyValueStorageError::Other(
                 "expiry is only supported for cache-routed namespaces".to_string(),
             ));
@@ -443,8 +454,8 @@ mod tests {
         ));
     }
 
-    /// A write with an expiry to a namespace that has no expiry fails, also when the namespace
-    /// is the status baseline. A write with an expiry to a derived cache succeeds.
+    /// A write with an expiry to a namespace of the persistent backend fails, also when the
+    /// namespace is the status baseline. A write with an expiry to a derived cache succeeds.
     #[test]
     async fn an_expiry_is_refused_for_a_namespace_with_no_expiry() {
         let storage = NamespaceRoutedKeyValueStorage::new(
