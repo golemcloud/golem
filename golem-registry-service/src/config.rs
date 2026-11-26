@@ -1125,6 +1125,19 @@ mod tests {
             8
         );
         assert!(artifacts.contains_key("python"));
+        if include_str!(concat!(env!("OUT_DIR"), "/builtin-artifacts.release.json")).is_empty() {
+            // A development build provisions the optional built-ins it selects, and no others.
+            let selected = crate::builtin_manifest::development_inventory(option_env!(
+                "GOLEM_OPTIONAL_BUILTINS"
+            ))
+            .unwrap();
+            assert!(
+                artifacts.keys().eq(selected.keys()),
+                "provisioned {:?}, selected {:?}",
+                artifacts.keys().collect::<Vec<_>>(),
+                selected.keys().collect::<Vec<_>>()
+            );
+        }
         for (artifact_id, source) in artifacts {
             #[cfg(feature = "embed-builtin-artifacts")]
             assert!(

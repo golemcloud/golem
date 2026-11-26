@@ -13,6 +13,9 @@
 // limitations under the License.
 
 use super::{ParsedToolArguments, parse, parse_with_variables};
+use crate::schema::schema_type::{
+    NumericBound, NumericRestrictions, PathDirection, PathKind, PathSpec,
+};
 use crate::schema::tool::process::{ParsedProcessCommand, parse_command};
 use crate::schema::tool::*;
 use crate::schema::{SchemaGraph, SchemaType, SchemaTypeDef, SchemaValue, TypeId};
@@ -1957,6 +1960,47 @@ fn conformance_tool(fixture: &str) -> Tool {
                 "Use one",
             ));
             vec![conformance_node("numbers", "Read a number", Some(b))]
+        }
+        "bounded" => {
+            b.positionals.fixed = vec![conformance_positional(
+                "size",
+                SchemaType::U8 {
+                    restrictions: Some(NumericRestrictions {
+                        min: Some(NumericBound::Unsigned(1)),
+                        max: Some(NumericBound::Unsigned(10)),
+                        unit: None,
+                    }),
+                    metadata: Default::default(),
+                },
+                true,
+                "Size",
+            )];
+            b.options = vec![
+                conformance_option(
+                    "count",
+                    None,
+                    OptionShape::Scalar(SchemaType::u32()),
+                    "Count",
+                ),
+                conformance_option(
+                    "file",
+                    None,
+                    OptionShape::Scalar(SchemaType::path(PathSpec {
+                        direction: PathDirection::InOut,
+                        kind: PathKind::Any,
+                        allowed_mime_types: None,
+                        allowed_extensions: None,
+                    })),
+                    "File",
+                ),
+                conformance_option(
+                    "site",
+                    None,
+                    OptionShape::Scalar(SchemaType::url(Default::default())),
+                    "Site",
+                ),
+            ];
+            vec![conformance_node("bounded", "Read a bounded size", Some(b))]
         }
         other => panic!("unknown argv conformance fixture {other}"),
     };

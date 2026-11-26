@@ -112,6 +112,13 @@ type ArgvNumbersArgs struct {
 	One   bool
 }
 
+type ArgvBoundedArgs struct {
+	Size  uint8
+	Count golem.Option[uint32]
+	File  golem.Option[golem.Path]
+	Site  golem.Option[golem.URL]
+}
+
 type ArgvFixture struct{}
 
 func handle[A any](_ *tool.Context, _ A) (golem.Unit, error) { return golem.Unit{}, nil }
@@ -211,6 +218,15 @@ func argvFixture(t *testing.T, name string) reflection.Tool {
 				s.Positional(&a.Value).Doc("Value")
 				s.Flag(&a.One).Short('1').Doc("Use one")
 			}).Handle(handle[ArgvNumbersArgs])
+		})
+	case "bounded":
+		meta = tool.DeclaredMetadata(t, name, spec("Read a bounded size"), enums, func(d *tool.Definition[ArgvFixture]) {
+			d.Body[ArgvBoundedArgs, golem.Unit](func(a *ArgvBoundedArgs, s *tool.CommandSpec) {
+				s.Positional(&a.Size).Range(1, 10).Doc("Size")
+				s.Option(&a.Count).Doc("Count")
+				s.Option(&a.File).Doc("File")
+				s.Option(&a.Site).Doc("Site")
+			}).Handle(handle[ArgvBoundedArgs])
 		})
 	default:
 		t.Fatalf("unknown argv conformance fixture %s", name)

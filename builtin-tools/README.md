@@ -159,7 +159,7 @@ export GOLEM_OPTIONAL_BUILTINS=all
 
 `build-builtin-tools` and `ensure-builtin-artifacts` build and require only the mandatory tools
 and the selected optional ones. Running an optional tool's own task, such as
-`cargo make build-yq-tool`, always builds it. A development registry provisions the same
+`cargo make build-yq-tool`, builds it also when it is not selected. A development registry provisions the same
 selection, fixed when `golem-registry-service` compiles, and logs one line for each optional
 tool it does not provision. A selection that names something other than an optional built-in
 fails the registry build. Tests of an optional tool need it selected.

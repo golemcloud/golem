@@ -521,16 +521,38 @@ func (p *argParser) applyFlag(f *toolCommon.FlagSpec, negated bool) error {
 
 func boolWord(value string) (bool, bool) {
 	for _, w := range []string{"1", "true", "yes", "on", "y", "t"} {
-		if strings.EqualFold(value, w) {
+		if asciiEqualFold(value, w) {
 			return true, true
 		}
 	}
 	for _, w := range []string{"0", "false", "no", "off", "n", "f"} {
-		if strings.EqualFold(value, w) {
+		if asciiEqualFold(value, w) {
 			return false, true
 		}
 	}
 	return false, false
+}
+
+// asciiEqualFold reports whether a and b are equal when ASCII letters are
+// compared without regard to case. Other characters must match exactly, so
+// that a word such as "yeſ" is not read as "yes".
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
 }
 
 func flagFromVariable(f *toolCommon.FlagSpec, value string) (*flagState, error) {
@@ -541,7 +563,8 @@ func flagFromVariable(f *toolCommon.FlagSpec, value string) (*flagState, error) 
 		}
 		return &flagState{boolean: &v}, nil
 	}
-	count, err := strconv.ParseUint(value, 10, 32)
+	// A count reads as a decimal u32, which may have a leading '+'.
+	count, err := strconv.ParseUint(strings.TrimPrefix(value, "+"), 10, 32)
 	if err != nil {
 		return nil, fmt.Errorf("invalid value %q: expected a count", value)
 	}
@@ -843,9 +866,9 @@ func decodeArg(t core.Ref, raw string) (core.SchemaValue, error) {
 		value = enumCase(b.Cases, raw)
 	case core.BoolType:
 		switch {
-		case strings.EqualFold(raw, "true"):
+		case asciiEqualFold(raw, "true"):
 			value = true
-		case strings.EqualFold(raw, "false"):
+		case asciiEqualFold(raw, "false"):
 			value = false
 		default:
 			value, err = parseJSON(raw)
@@ -862,7 +885,9 @@ func decodeArg(t core.Ref, raw string) (core.SchemaValue, error) {
 	if err != nil {
 		return nil, fmt.Errorf("invalid value %q: %w", raw, err)
 	}
-	v, err := t.PackJSON(value)
+	// Restrictions are checked by the validation of the whole input, after
+	// every value decodes.
+	v, err := t.PackJSONUnrestricted(value)
 	if err != nil {
 		return nil, fmt.Errorf("invalid value %q: %w", raw, err)
 	}
@@ -891,7 +916,7 @@ func enumCase(cases []string, raw string) string {
 		if c == raw {
 			return raw
 		}
-		if strings.EqualFold(c, raw) {
+		if asciiEqualFold(c, raw) {
 			equal = append(equal, c)
 		}
 	}
