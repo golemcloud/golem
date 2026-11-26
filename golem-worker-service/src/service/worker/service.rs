@@ -7600,6 +7600,44 @@ mod tests {
                     "{refused:?}"
                 )
             });
+
+        // With a permission from 5 to 54, a page of 50 entries from 5 is in the permission. A
+        // search from 5 needs the oplog to its end, so the same permission refuses it.
+        let page_sized = auth_ctx_with_permissions(vec![oplog_target(
+            &agent_id,
+            OplogResourcePattern::range(Some(5), Some(54)),
+        )]);
+        harness
+            .worker_service
+            .get_oplog(
+                &owned,
+                range(None),
+                None,
+                50,
+                None,
+                None,
+                ClaimVisibility::Hidden,
+                page_sized.clone(),
+            )
+            .await
+            .unwrap();
+        let search_past_the_page = harness
+            .worker_service
+            .search_oplog(
+                &owned,
+                range(None),
+                None,
+                50,
+                "error".to_string(),
+                None,
+                ClaimVisibility::Hidden,
+                page_sized,
+            )
+            .await;
+        assert!(
+            search_past_the_page.is_err(),
+            "a search from index 5 without an end reads past the permitted index 54"
+        );
     }
 
     #[test]
