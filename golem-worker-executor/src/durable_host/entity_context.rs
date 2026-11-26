@@ -159,14 +159,37 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     }
 
     /// Installs the ID of the invocation the loop runs, or removes it when `running` is false.
-    pub(crate) fn set_invocation_id(&mut self, running: bool) {
+    pub(crate) fn set_invocation_id(&mut self, running: bool) -> Result<(), WorkerExecutorError> {
         let invocation_id = running
             .then(|| self.state.invocations.loop_key().invocation_id())
             .flatten()
             .map(|key| {
-                golem_common::model::OwnedInvocationId::new(self.state.owned_agent_id.agent_id, key)
-            });
+                let metadata = self.public_state.worker().get_initial_worker_metadata();
+                let owner = if metadata.owner_kind
+                    == golem_common::model::agent::OwnerKind::StandaloneTool
+                {
+                    golem_common::model::InvocationOwner::Tool(
+                        metadata
+                            .standalone_tool
+                            .as_ref()
+                            .ok_or_else(|| {
+                                WorkerExecutorError::runtime(
+                                    "standalone owner is missing its Create identity",
+                                )
+                            })?
+                            .tool_name
+                            .clone(),
+                    )
+                } else {
+                    golem_common::model::InvocationOwner::Agent(self.state.owned_agent_id.agent_id)
+                };
+                Ok::<_, WorkerExecutorError>(golem_common::model::OwnedInvocationId::new(
+                    owner, key,
+                ))
+            })
+            .transpose()?;
         self.state.loop_invocation_state_mut().invocation_id = invocation_id;
+        Ok(())
     }
 
     /// The invocation that the invocation loop runs, or last ran, in this Store. The loop arms

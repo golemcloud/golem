@@ -52,8 +52,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
     revoke_card_response, update_worker_connection_limit_response,
 };
 use golem_api_grpc::proto::golem::registry::v1::{
-    GetGolemIssuerRequest, ResolveAgentTypeNameRequest, get_golem_issuer_response,
-    resolve_agent_type_name_response,
+    GetGolemIssuerRequest, ResolveAgentTypeNameRequest, ResolveToolTypeIdRequest,
+    get_golem_issuer_response, resolve_agent_type_name_response, resolve_tool_type_id_response,
 };
 use golem_common::config::{ConfigExample, HasConfigExamples};
 use golem_common::model::AgentId;
@@ -75,7 +75,7 @@ use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_common::model::golem_issuer::GolemIssuer;
 use golem_common::model::mcp_import::{McpImportCredential, McpImportSource};
 use golem_common::model::quota::{ResourceDefinition, ResourceDefinitionId, ResourceName};
-use golem_common::model::tool::ToolDeploymentState;
+use golem_common::model::tool::{ToolDeploymentState, ToolName};
 use golem_common::model::type_id::{TypeId, TypeIdKind};
 use golem_common::{IntoAnyhow, SafeDisplay, grpc_uri};
 use http::Uri;
@@ -373,6 +373,17 @@ pub trait RegistryService: Send + Sync {
     ) -> Result<Option<ResolvedTypeId>, RegistryServiceError> {
         Err(RegistryServiceError::internal_client_error(
             "resolve_type_id is not supported by this registry service",
+        ))
+    }
+
+    /// Resolves the retained ID of a tool name, including removed tools.
+    async fn resolve_tool_type_id(
+        &self,
+        _environment_id: EnvironmentId,
+        _tool_name: &ToolName,
+    ) -> Result<Option<TypeId>, RegistryServiceError> {
+        Err(RegistryServiceError::internal_client_error(
+            "resolve_tool_type_id is not supported by this registry service",
         ))
     }
 
@@ -1520,6 +1531,32 @@ impl RegistryService for GrpcRegistryService {
                 payload.resolved.map(ResolvedTypeId::try_from).transpose()
             }
             Some(resolve_type_id_response::Result::Error(error)) => Err(error.into()),
+        }
+    }
+
+    async fn resolve_tool_type_id(
+        &self,
+        environment_id: EnvironmentId,
+        tool_name: &ToolName,
+    ) -> Result<Option<TypeId>, RegistryServiceError> {
+        let tool_name = tool_name.to_string();
+        let response = self
+            .client
+            .call("resolve_tool_type_id", move |client| {
+                Box::pin(client.resolve_tool_type_id(ResolveToolTypeIdRequest {
+                    environment_id: Some(environment_id.into()),
+                    tool_name: tool_name.clone(),
+                }))
+            })
+            .await?
+            .into_inner();
+        match response.result {
+            None => Err(RegistryServiceError::empty_response()),
+            Some(resolve_tool_type_id_response::Result::Success(payload)) => payload
+                .type_id
+                .map(|id| TypeId::try_from(id).map_err(RegistryServiceError::internal_client_error))
+                .transpose(),
+            Some(resolve_tool_type_id_response::Result::Error(error)) => Err(error.into()),
         }
     }
 

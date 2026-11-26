@@ -875,6 +875,7 @@ fn test_worker_metadata(
     };
 
     let metadata = AgentMetadata {
+        standalone_tool: None,
         component_id: ComponentId(uuid::Uuid::from_u128(1)),
         agent_type_name: Some(golem_common::model::agent::AgentTypeName(
             "TestPlugin".into(),

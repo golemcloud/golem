@@ -43,7 +43,7 @@ pub struct AgentTypeResolver {
     registry_service: Arc<dyn RegistryService>,
     type_ids: TypeIdResolutionCache,
     deployed: Cache<(EnvironmentId, AgentTypeName), (), FetchedDeployedType, RegistryServiceError>,
-    generations: Arc<InvalidationGenerations>,
+    generations: Arc<InvalidationGenerations<EnvironmentId>>,
 }
 
 #[derive(Clone)]
@@ -83,6 +83,40 @@ impl AgentTypeResolver {
         self.registry_service
             .authorize_environment(environment_id, auth_ctx)
             .await
+    }
+
+    pub async fn is_agent_address(
+        &self,
+        environment_id: EnvironmentId,
+        agent_id: AgentId,
+    ) -> Result<bool, RegistryServiceError> {
+        let Some(type_id) = agent_id.type_id() else {
+            return Ok(false);
+        };
+        Ok(self
+            .type_ids
+            .resolve(environment_id, type_id)
+            .await?
+            .is_none_or(|resolved| resolved.0 == TypeIdKind::AgentType))
+    }
+
+    pub async fn tool_deployment(
+        &self,
+        environment_id: EnvironmentId,
+    ) -> Result<Option<golem_common::model::tool::ToolDeploymentState>, RegistryServiceError> {
+        Ok(self
+            .registry_service
+            .get_current_environment_state(environment_id)
+            .await?
+            .tool_deployment)
+    }
+
+    pub async fn tool_type_id(
+        &self,
+        environment_id: EnvironmentId,
+        name: &golem_common::model::tool::ToolName,
+    ) -> Result<Option<golem_common::model::type_id::TypeId>, RegistryServiceError> {
+        self.type_ids.tool_type_id(environment_id, name).await
     }
 
     /// Retained declarations for management, including past implementing components.

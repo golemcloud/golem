@@ -14,6 +14,7 @@
 
 pub mod api;
 pub mod api_tags;
+pub mod aws;
 pub mod body_limit;
 pub mod clients;
 pub mod config;
@@ -36,6 +37,7 @@ pub mod service;
 pub mod storage;
 pub mod stream;
 pub mod tls;
+pub mod volume;
 
 #[cfg(test)]
 test_r::enable!();

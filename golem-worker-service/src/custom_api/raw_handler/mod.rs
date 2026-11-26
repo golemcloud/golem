@@ -105,11 +105,12 @@ impl RawHandler {
         if let Some(accepted) = accepted {
             request.accepted_invocation = Some(AcceptedInvocation {
                 id: golem_common::model::OwnedInvocationId::new(
-                    accepted
-                        .agent_id
-                        .ok_or(RequestHandlerError::RawBadGateway)?
-                        .try_into()
-                        .map_err(|_| RequestHandlerError::RawBadGateway)?,
+                    golem_common::model::AgentId::try_from(
+                        accepted
+                            .agent_id
+                            .ok_or(RequestHandlerError::RawBadGateway)?,
+                    )
+                    .map_err(|_| RequestHandlerError::RawBadGateway)?,
                     accepted
                         .idempotency_key
                         .ok_or(RequestHandlerError::RawBadGateway)?

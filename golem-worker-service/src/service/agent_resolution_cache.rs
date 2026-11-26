@@ -13,18 +13,24 @@
 // limitations under the License.
 
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentTypeName, ResolvedAgentType};
 use golem_common::model::application::ApplicationName;
 use golem_common::model::deployment::{CurrentDeploymentRevision, DeploymentRevision};
 use golem_common::model::environment::{EnvironmentId, EnvironmentName};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
+use golem_service_base::service::type_id_resolution::InvalidationGenerations;
 use std::sync::Arc;
 use std::time::Duration;
 use tracing::warn;
 
+// These keys assume token-authenticated User or AdminImpersonation callers with per-account
+// permission surfaces. Account permission events invalidate their entries. Agent contexts
+// with independently attenuated runtime-card surfaces must not share this cache.
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 struct AgentResolutionCacheKey {
+    caller_account_id: AccountId,
     app_name: String,
     env_name: String,
     agent_type_name: String,
@@ -33,6 +39,7 @@ struct AgentResolutionCacheKey {
 
 #[derive(Debug, Clone, Hash, Eq, PartialEq)]
 struct PinnedAgentResolutionCacheKey {
+    caller_account_id: AccountId,
     app_name: String,
     env_name: String,
     agent_type_name: String,
@@ -45,12 +52,23 @@ struct CurrentDeploymentRevisions {
     current_deployment_revision: CurrentDeploymentRevision,
 }
 
+#[derive(Clone)]
+struct FetchedAgentResolution {
+    generation: u64,
+    resolved: Arc<ResolvedAgentType>,
+}
+
 pub struct AgentResolutionCache {
-    cache: Cache<AgentResolutionCacheKey, (), Arc<ResolvedAgentType>, RegistryServiceError>,
-    pinned_cache:
-        Cache<PinnedAgentResolutionCacheKey, (), Arc<ResolvedAgentType>, RegistryServiceError>,
+    cache: Cache<AgentResolutionCacheKey, (), FetchedAgentResolution, (u64, RegistryServiceError)>,
+    pinned_cache: Cache<
+        PinnedAgentResolutionCacheKey,
+        (),
+        FetchedAgentResolution,
+        (u64, RegistryServiceError),
+    >,
     registry_service: Arc<dyn RegistryService>,
     current_revisions: scc::HashMap<EnvironmentId, CurrentDeploymentRevisions>,
+    generations: Arc<InvalidationGenerations<AccountId>>,
 }
 
 impl AgentResolutionCache {
@@ -80,6 +98,7 @@ impl AgentResolutionCache {
             pinned_cache,
             registry_service,
             current_revisions: scc::HashMap::new(),
+            generations: Arc::default(),
         }
     }
 
@@ -92,35 +111,88 @@ impl AgentResolutionCache {
         auth_ctx: &AuthCtx,
     ) -> Result<Arc<ResolvedAgentType>, RegistryServiceError> {
         let key = AgentResolutionCacheKey {
+            caller_account_id: auth_ctx.access_account_id(),
             app_name: app_name.0.clone(),
             env_name: env_name.0.clone(),
             agent_type_name: agent_type_name.0.clone(),
             owner_account_email: owner_account_email.map(|s| s.to_string()),
         };
 
-        // Check if we have a cached but stale entry and remove it before get_or_insert
-        if let Some(resolved) = self.cache.try_get(&key).await
-            && self.is_stale(&resolved)
-        {
-            self.cache.remove(&key).await;
-        }
-
-        let registry = self.registry_service.clone();
-        let app = app_name.clone();
-        let env = env_name.clone();
-        let agent = agent_type_name.clone();
-        let owner = owner_account_email.map(|s| s.to_string());
-        let auth = auth_ctx.clone();
-
-        let resolved = self
-            .cache
-            .get_or_insert_simple(&key, async || {
-                registry
-                    .resolve_agent_type_by_names(&app, &env, &agent, None, owner.as_deref(), &auth)
-                    .await
-                    .map(Arc::new)
-            })
-            .await?;
+        let generation = self.generations.current();
+        self.cache
+            .remove_if_cached(&key, |cached| self.is_stale(&cached.resolved))
+            .await;
+        let resolved = loop {
+            let registry = self.registry_service.clone();
+            let app = app_name.clone();
+            let env = env_name.clone();
+            let agent = agent_type_name.clone();
+            let owner = owner_account_email.map(str::to_owned);
+            let auth = auth_ctx.clone();
+            let fetched = self
+                .cache
+                .get_or_insert_simple_spawned(&key, move || async move {
+                    let resolved = registry
+                        .resolve_agent_type_by_names(
+                            &app,
+                            &env,
+                            &agent,
+                            None,
+                            owner.as_deref(),
+                            &auth,
+                        )
+                        .await
+                        .map(Arc::new)
+                        .map_err(|error| (generation, error))?;
+                    Ok(FetchedAgentResolution {
+                        generation,
+                        resolved,
+                    })
+                })
+                .await;
+            let fetched = match fetched {
+                Ok(fetched) => fetched,
+                Err((fetched_generation, error)) => {
+                    if self
+                        .generations
+                        .is_current(key.caller_account_id, fetched_generation)
+                        || !self
+                            .generations
+                            .is_current(key.caller_account_id, generation)
+                    {
+                        return Err(error);
+                    }
+                    continue;
+                }
+            };
+            if fetched.resolved.current_deployment_revision.is_some()
+                && self.is_stale(&fetched.resolved)
+            {
+                self.cache
+                    .remove_if_cached(&key, |cached| {
+                        Arc::ptr_eq(&cached.resolved, &fetched.resolved)
+                    })
+                    .await;
+                continue;
+            }
+            if self
+                .generations
+                .is_current(key.caller_account_id, fetched.generation)
+            {
+                break fetched.resolved;
+            }
+            self.cache
+                .remove_if_cached(&key, |cached| cached.generation == fetched.generation)
+                .await;
+            // A request whose authentication predates invalidation may finish, but cannot
+            // retain its response. A newer request that joined it must fetch with its own auth.
+            if !self
+                .generations
+                .is_current(key.caller_account_id, generation)
+            {
+                return Ok(fetched.resolved);
+            }
+        };
 
         // Track the revision for staleness detection
         if let Some(current_deployment_revision) = resolved.current_deployment_revision {
@@ -144,6 +216,7 @@ impl AgentResolutionCache {
         auth_ctx: &AuthCtx,
     ) -> Result<Arc<ResolvedAgentType>, RegistryServiceError> {
         let key = PinnedAgentResolutionCacheKey {
+            caller_account_id: auth_ctx.access_account_id(),
             app_name: app_name.0.clone(),
             env_name: env_name.0.clone(),
             agent_type_name: agent_type_name.0.clone(),
@@ -151,28 +224,66 @@ impl AgentResolutionCache {
             owner_account_email: owner_account_email.map(|s| s.to_string()),
         };
 
-        let registry = self.registry_service.clone();
-        let app = app_name.clone();
-        let env = env_name.clone();
-        let agent = agent_type_name.clone();
-        let owner = owner_account_email.map(|s| s.to_string());
-        let auth = auth_ctx.clone();
-
-        self.pinned_cache
-            .get_or_insert_simple(&key, async move || {
-                registry
-                    .resolve_agent_type_by_names(
-                        &app,
-                        &env,
-                        &agent,
-                        Some(deployment_revision),
-                        owner.as_deref(),
-                        &auth,
-                    )
-                    .await
-                    .map(Arc::new)
-            })
-            .await
+        let generation = self.generations.current();
+        loop {
+            let registry = self.registry_service.clone();
+            let app = app_name.clone();
+            let env = env_name.clone();
+            let agent = agent_type_name.clone();
+            let owner = owner_account_email.map(str::to_owned);
+            let auth = auth_ctx.clone();
+            let fetched = self
+                .pinned_cache
+                .get_or_insert_simple_spawned(&key, move || async move {
+                    let resolved = registry
+                        .resolve_agent_type_by_names(
+                            &app,
+                            &env,
+                            &agent,
+                            Some(deployment_revision),
+                            owner.as_deref(),
+                            &auth,
+                        )
+                        .await
+                        .map(Arc::new)
+                        .map_err(|error| (generation, error))?;
+                    Ok(FetchedAgentResolution {
+                        generation,
+                        resolved,
+                    })
+                })
+                .await;
+            let fetched = match fetched {
+                Ok(fetched) => fetched,
+                Err((fetched_generation, error)) => {
+                    if self
+                        .generations
+                        .is_current(key.caller_account_id, fetched_generation)
+                        || !self
+                            .generations
+                            .is_current(key.caller_account_id, generation)
+                    {
+                        return Err(error);
+                    }
+                    continue;
+                }
+            };
+            if self
+                .generations
+                .is_current(key.caller_account_id, fetched.generation)
+            {
+                return Ok(fetched.resolved);
+            }
+            self.pinned_cache
+                .remove_if_cached(&key, |cached| cached.generation == fetched.generation)
+                .await;
+            if !self
+                .generations
+                .is_current(key.caller_account_id, generation)
+            {
+                return Ok(fetched.resolved);
+            }
+        }
     }
 
     fn is_stale(&self, resolved: &ResolvedAgentType) -> bool {
@@ -187,8 +298,9 @@ impl AgentResolutionCache {
 
         self.current_revisions
             .read_sync(&resolved.environment_id, |_, current_rev| {
-                current_deployment_revision != current_rev.current_deployment_revision
-                    || resolved.deployment_revision != current_rev.deployment_revision
+                current_deployment_revision < current_rev.current_deployment_revision
+                    || (current_deployment_revision == current_rev.current_deployment_revision
+                        && resolved.deployment_revision != current_rev.deployment_revision)
             })
             == Some(true)
     }
@@ -266,10 +378,36 @@ impl AgentResolutionCache {
         self.current_revisions.remove_sync(&environment_id);
     }
 
+    /// Invalidates account entries in both caches, including responses still in flight.
+    pub async fn invalidate_by_account(&self, account_id: AccountId) {
+        let generation = self.generations.invalidate(account_id);
+        for (key, _) in self.cache.iter().await {
+            if key.caller_account_id == account_id {
+                self.cache
+                    .remove_if_cached(&key, |cached| cached.generation < generation)
+                    .await;
+            }
+        }
+        for (key, _) in self.pinned_cache.iter().await {
+            if key.caller_account_id == account_id {
+                self.pinned_cache
+                    .remove_if_cached(&key, |cached| cached.generation < generation)
+                    .await;
+            }
+        }
+    }
+
     pub async fn clear(&self) {
-        let keys = self.cache.keys().await;
-        for key in keys {
-            self.cache.remove(&key).await;
+        let generation = self.generations.invalidate_all();
+        for (key, _) in self.cache.iter().await {
+            self.cache
+                .remove_if_cached(&key, |cached| cached.generation < generation)
+                .await;
+        }
+        for (key, _) in self.pinned_cache.iter().await {
+            self.pinned_cache
+                .remove_if_cached(&key, |cached| cached.generation < generation)
+                .await;
         }
         self.current_revisions.retain_sync(|_, _| false);
     }
@@ -339,19 +477,26 @@ mod tests {
 
     struct MockRegistryService {
         env_id: EnvironmentId,
+        environments_by_account: std::collections::HashMap<AccountId, EnvironmentId>,
         revision: AtomicU64,
+        current_revision: AtomicU64,
+        next_lookup: std::sync::Mutex<Option<Arc<crate::service::component::tests::LookupGate>>>,
     }
 
     impl MockRegistryService {
         fn new(env_id: EnvironmentId) -> Self {
             Self {
                 env_id,
+                environments_by_account: std::collections::HashMap::new(),
                 revision: AtomicU64::new(0),
+                current_revision: AtomicU64::new(0),
+                next_lookup: std::sync::Mutex::new(None),
             }
         }
 
         fn set_revision(&self, rev: u64) {
             self.revision.store(rev, Ordering::SeqCst);
+            self.current_revision.store(rev, Ordering::SeqCst);
         }
     }
 
@@ -473,14 +618,31 @@ mod tests {
             _environment_name: &EnvironmentName,
             _agent_type_name: &AgentTypeName,
             _deployment_revision: Option<DeploymentRevision>,
-            _owner_account_email: Option<&str>,
-            _auth_ctx: &AuthCtx,
+            owner_account_email: Option<&str>,
+            auth_ctx: &AuthCtx,
         ) -> Result<ResolvedAgentType, RegistryServiceError> {
             let rev = self.revision.load(Ordering::SeqCst);
-            Ok(make_resolved(
-                self.env_id,
+            let current_revision = self.current_revision.load(Ordering::SeqCst);
+            let env_id = if owner_account_email.is_none() {
+                self.environments_by_account
+                    .get(&auth_ctx.access_account_id())
+                    .copied()
+                    .unwrap_or(self.env_id)
+            } else {
+                self.env_id
+            };
+            let gate = self.next_lookup.lock().unwrap().take();
+            if let Some(gate) = gate {
+                gate.started.add_permits(1);
+                gate.release.acquire().await.unwrap().forget();
+            }
+            let mut resolved = make_resolved(
+                env_id,
                 DeploymentRevision::new(rev).unwrap_or(DeploymentRevision::INITIAL),
-            ))
+            );
+            resolved.current_deployment_revision =
+                Some(CurrentDeploymentRevision::new(current_revision).unwrap());
+            Ok(resolved)
         }
         async fn get_active_routes_for_domain(
             &self,
@@ -556,6 +718,97 @@ mod tests {
             Duration::from_secs(60),
             Duration::from_secs(60),
         )
+    }
+
+    #[test]
+    async fn test_resolution_is_scoped_to_caller_account() {
+        let alice_id = AccountId(Uuid::new_v4());
+        let bob_id = AccountId(Uuid::new_v4());
+        let alice_env = EnvironmentId(Uuid::new_v4());
+        let bob_env = EnvironmentId(Uuid::new_v4());
+        let mut registry = MockRegistryService::new(EnvironmentId(Uuid::new_v4()));
+        registry.environments_by_account = [(alice_id, alice_env), (bob_id, bob_env)].into();
+        let cache = make_cache(Arc::new(registry));
+        let app = ApplicationName("app".to_string());
+        let env = EnvironmentName("env".to_string());
+        let agent = AgentTypeName("agent".to_string());
+
+        let admin_id = AccountId(Uuid::new_v4());
+        for (account_id, email, expected_env) in [
+            (alice_id, "alice@test.com", alice_env),
+            (bob_id, "bob@test.com", bob_env),
+            (alice_id, "alice@test.com", alice_env),
+            (bob_id, "bob@test.com", bob_env),
+        ] {
+            for auth in [
+                AuthCtx::agent_with_effective_surface(
+                    account_id,
+                    golem_common::model::account::AccountEmail::new(email),
+                    Default::default(),
+                ),
+                AuthCtx::admin_impersonation(
+                    admin_id,
+                    account_id,
+                    golem_common::model::account::AccountEmail::new(email),
+                    Default::default(),
+                    golem_common::model::plan::PlanId(Uuid::nil()),
+                    Default::default(),
+                ),
+            ] {
+                let resolved = cache
+                    .resolve(&app, &env, &agent, None, &auth)
+                    .await
+                    .unwrap();
+                assert_eq!(resolved.environment_id, expected_env);
+            }
+        }
+    }
+
+    #[test]
+    async fn test_pinned_resolution_is_scoped_to_caller_account() {
+        let alice_id = AccountId(Uuid::new_v4());
+        let bob_id = AccountId(Uuid::new_v4());
+        let alice_env = EnvironmentId(Uuid::new_v4());
+        let bob_env = EnvironmentId(Uuid::new_v4());
+        let mut registry = MockRegistryService::new(EnvironmentId(Uuid::new_v4()));
+        registry.environments_by_account = [(alice_id, alice_env), (bob_id, bob_env)].into();
+        let revision = DeploymentRevision::new(5).unwrap();
+        registry.set_revision(5);
+        let cache = make_cache(Arc::new(registry));
+        let app = ApplicationName("app".to_string());
+        let env = EnvironmentName("env".to_string());
+        let agent = AgentTypeName("agent".to_string());
+
+        let admin_id = AccountId(Uuid::new_v4());
+        for (account_id, email, expected_env) in [
+            (alice_id, "alice@test.com", alice_env),
+            (bob_id, "bob@test.com", bob_env),
+            (alice_id, "alice@test.com", alice_env),
+            (bob_id, "bob@test.com", bob_env),
+        ] {
+            for auth in [
+                AuthCtx::agent_with_effective_surface(
+                    account_id,
+                    golem_common::model::account::AccountEmail::new(email),
+                    Default::default(),
+                ),
+                AuthCtx::admin_impersonation(
+                    admin_id,
+                    account_id,
+                    golem_common::model::account::AccountEmail::new(email),
+                    Default::default(),
+                    golem_common::model::plan::PlanId(Uuid::nil()),
+                    Default::default(),
+                ),
+            ] {
+                let resolved = cache
+                    .resolve_pinned(&app, &env, &agent, revision, None, &auth)
+                    .await
+                    .unwrap();
+                assert_eq!(resolved.environment_id, expected_env);
+                assert_eq!(resolved.deployment_revision, revision);
+            }
+        }
     }
 
     #[test]
@@ -655,6 +908,58 @@ mod tests {
     }
 
     #[test]
+    #[test_r::timeout("30s")]
+    async fn post_deployment_caller_does_not_join_old_revision() {
+        let env_id = EnvironmentId::new();
+        let registry = Arc::new(MockRegistryService::new(env_id));
+        let cache = make_cache(registry.clone());
+        let app = ApplicationName("app".into());
+        let env = EnvironmentName("env".into());
+        let agent = AgentTypeName("agent".into());
+        let auth = AuthCtx::admin_impersonation(
+            AccountId::new(),
+            AccountId::new(),
+            golem_common::model::account::AccountEmail::new("caller@test.com"),
+            Default::default(),
+            golem_common::model::plan::PlanId::new(),
+            Default::default(),
+        );
+        let gate = crate::service::component::tests::LookupGate::new();
+        *registry.next_lookup.lock().unwrap() = Some(gate.clone());
+        let old = cache.resolve(&app, &env, &agent, None, &auth);
+        tokio::pin!(old);
+        assert!(futures::poll!(&mut old).is_pending());
+        gate.started.acquire().await.unwrap().forget();
+
+        let new_rev = DeploymentRevision::new(1).unwrap();
+        registry.set_revision(1);
+        cache.update_current_revision(env_id, new_rev, CurrentDeploymentRevision::new(1).unwrap());
+        let fresh = cache.resolve(&app, &env, &agent, None, &auth);
+        tokio::pin!(fresh);
+        let immediate = futures::poll!(&mut fresh);
+        gate.release.add_permits(1);
+        old.await.unwrap();
+        let result = match immediate {
+            std::task::Poll::Ready(result) => result,
+            std::task::Poll::Pending => fresh.await,
+        }
+        .unwrap();
+        // Both the pending caller and a later caller must observe the deployment.
+        assert_eq!(
+            cache
+                .resolve(&app, &env, &agent, None, &auth)
+                .await
+                .unwrap()
+                .deployment_revision,
+            new_rev
+        );
+        assert_eq!(
+            result.deployment_revision, new_rev,
+            "a request started after the deployment update must not reuse its predecessor's revision"
+        );
+    }
+
+    #[test]
     async fn test_clear_flushes_everything() {
         let env_id = EnvironmentId(Uuid::new_v4());
         let registry = Arc::new(MockRegistryService::new(env_id));
@@ -722,6 +1027,74 @@ mod tests {
         let r2 = r2.unwrap();
         assert_eq!(r2.deployment_revision, rev);
         assert_eq!(r2.registered_agent_type.type_id.get(), 42);
+    }
+
+    #[test]
+    #[test_r::timeout("10s")]
+    async fn newer_registry_revision_before_event_completes() {
+        let env_id = EnvironmentId::new();
+        let registry = Arc::new(MockRegistryService::new(env_id));
+        let cache = make_cache(registry.clone());
+        let app = ApplicationName("app".into());
+        let env = EnvironmentName("env".into());
+        let auth = make_auth();
+        cache
+            .resolve(&app, &env, &AgentTypeName("first".into()), None, &auth)
+            .await
+            .unwrap();
+
+        // The registry can observe a deployment before the asynchronous event arrives.
+        // A miss for another agent must accept that newer authoritative response.
+        registry.set_revision(1);
+        let resolved = tokio::time::timeout(
+            Duration::from_secs(1),
+            cache.resolve(&app, &env, &AgentTypeName("second".into()), None, &auth),
+        )
+        .await;
+
+        let resolved = resolved
+            .expect("a newer registry response must not retry until its deployment event arrives")
+            .unwrap();
+        assert_eq!(
+            resolved.deployment_revision,
+            DeploymentRevision::new(1).unwrap()
+        );
+
+        // A delayed older event must not undo the revision learned from the registry.
+        cache.update_current_revision(
+            env_id,
+            DeploymentRevision::INITIAL,
+            CurrentDeploymentRevision::INITIAL,
+        );
+        assert_eq!(
+            cache
+                .resolve(&app, &env, &AgentTypeName("first".into()), None, &auth)
+                .await
+                .unwrap()
+                .deployment_revision,
+            DeploymentRevision::new(1).unwrap()
+        );
+
+        // A rollback decreases the deployment revision but increases the current counter.
+        registry.set_revision(0);
+        registry.current_revision.store(2, Ordering::SeqCst);
+        let rollback = cache
+            .resolve(&app, &env, &AgentTypeName("third".into()), None, &auth)
+            .await
+            .unwrap();
+        assert_eq!(rollback.deployment_revision, DeploymentRevision::INITIAL);
+        assert_eq!(
+            rollback.current_deployment_revision,
+            Some(CurrentDeploymentRevision::new(2).unwrap())
+        );
+        assert_eq!(
+            cache
+                .resolve(&app, &env, &AgentTypeName("first".into()), None, &auth)
+                .await
+                .unwrap()
+                .deployment_revision,
+            DeploymentRevision::INITIAL
+        );
     }
 
     #[test]

@@ -798,7 +798,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 Err(error) => return LookupResult::Complete(Err(error.into())),
             }
         };
-        if let Some((mut result, result_oplog_idx)) = maybe_result {
+        let result = if let Some((mut result, result_oplog_idx)) = maybe_result {
             if matches!(result.as_ref(), InvocationResult::Lazy { .. })
                 && let Err(error) = Arc::make_mut(&mut result)
                     .cache(
@@ -829,7 +829,22 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             } else {
                 LookupResult::New
             }
+        };
+        // A terminal standalone owner cannot resume its accepted work. Its primary may
+        // have failed before the invocation started, leaving only the owner's error.
+        if result == LookupResult::Pending
+            && self.standalone_invocation_id() == Some(*key)
+            && let Err(error) = Self::ensure_not_failed(
+                &self.deps,
+                &self.owned_agent_id,
+                self.agent_mode(),
+                &status,
+            )
+            .await
+        {
+            return LookupResult::Complete(Err(error));
         }
+        result
     }
     pub(in crate::worker) async fn resolve_old_invocation_result_index(
         &self,

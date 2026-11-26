@@ -66,7 +66,7 @@ func wasm_stream_lift_result_list_u8_golem_tool_streams_byte_stream_failure(src 
 
 		result0 = witTypes.Ok[[]uint8, golem_tool_streams.ByteStreamFailure](value)
 	case 1:
-		result := wasm_lift_1_t722(unsafe.Add(unsafe.Pointer(src), 4))
+		result := wasm_lift_1_t726(unsafe.Add(unsafe.Pointer(src), 4))
 
 		result0 = witTypes.Err[[]uint8, golem_tool_streams.ByteStreamFailure](result)
 	default:
@@ -94,7 +94,7 @@ func wasm_stream_lower_result_list_u8_golem_tool_streams_byte_stream_failure(
 	case witTypes.ResultErr:
 		payload := value.Err()
 		*(*int8)(unsafe.Add(unsafe.Pointer(dst), 0)) = int8(int32(1))
-		wasm_lower_1_t722(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 4))
+		wasm_lower_1_t726(pinner, payload, unsafe.Add(unsafe.Pointer(dst), 4))
 
 	default:
 		panic("unreachable")
@@ -381,7 +381,7 @@ func (self *UnderlyingInvokeResult) Get() witTypes.Result[witTypes.Option[golem_
 
 		result1 = witTypes.Ok[witTypes.Option[golem_core_types.TypedSchemaValue], UnderlyingError](option)
 	case 1:
-		result0 := wasm_lift_1_t785(unsafe.Add(unsafe.Pointer(returnArea), 4))
+		result0 := wasm_lift_1_t789(unsafe.Add(unsafe.Pointer(returnArea), 4))
 
 		result1 = witTypes.Err[witTypes.Option[golem_core_types.TypedSchemaValue], UnderlyingError](result0)
 	default:
@@ -402,7 +402,7 @@ func (self *UnderlyingInvokeResult) Cancel() {
 }
 
 //go:noinline
-func wasm_lift_1_t722(src unsafe.Pointer) golem_tool_streams.ByteStreamFailure {
+func wasm_lift_1_t726(src unsafe.Pointer) golem_tool_streams.ByteStreamFailure {
 	var variant golem_tool_streams.ByteStreamFailure
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -430,7 +430,7 @@ func wasm_lift_1_t722(src unsafe.Pointer) golem_tool_streams.ByteStreamFailure {
 }
 
 //go:noinline
-func wasm_lower_1_t722(pinner *runtime.Pinner, value golem_tool_streams.ByteStreamFailure, dst unsafe.Pointer) {
+func wasm_lower_1_t726(pinner *runtime.Pinner, value golem_tool_streams.ByteStreamFailure, dst unsafe.Pointer) {
 
 	switch value.Tag() {
 	case golem_tool_streams.ByteStreamFailureCancelled:
@@ -475,7 +475,7 @@ func wasm_lift_1_t81(src unsafe.Pointer) golem_core_types.TypedSchemaValue {
 }
 
 //go:noinline
-func wasm_lift_1_t785(src unsafe.Pointer) UnderlyingError {
+func wasm_lift_1_t789(src unsafe.Pointer) UnderlyingError {
 	var variant UnderlyingError
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:

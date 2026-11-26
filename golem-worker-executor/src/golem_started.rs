@@ -73,6 +73,9 @@ pub(crate) fn agent_principal(
         (None, OwnerKind::EphemeralExternalTool) => {
             AgentTypeName("~golem-external-tool-owner".to_string())
         }
+        (None, OwnerKind::StandaloneTool) => {
+            AgentTypeName("~golem-standalone-tool-owner".to_string())
+        }
         (None, OwnerKind::OplogProcessor) => AgentTypeName("~golem-oplog-processor".to_string()),
         (None, OwnerKind::ComponentAgent) => AgentTypeName(String::new()),
     };

@@ -134,6 +134,14 @@ message CreateParameters {
   OwnerKind owner_kind = 16;
   optional string agent_type_name = 17;
   bool never_live = 18;
+  optional PublicStandaloneToolInvocation standalone_tool = 19;
+}
+
+message PublicStandaloneToolInvocation {
+  string tool_name = 1;
+  repeated string command_path = 2;
+  golem.common.UUID invocation_id = 3;
+  golem.component.PublicCaller caller = 4;
 }
 
 // Identifies a durable call by the oplog index of the record that numbers it and its place among

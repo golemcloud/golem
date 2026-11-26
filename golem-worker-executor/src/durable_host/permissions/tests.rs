@@ -460,8 +460,8 @@ fn installed_child_request_matches_registry_canonicalization() {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: jiff::Timestamp::new(1_700_000_000, (123_456_789) as i32).unwrap(),
-        expires_at: Some(jiff::Timestamp::new(1_800_000_000, (987_654_321) as i32).unwrap()),
+        created_at: jiff::Timestamp::new(1_700_000_000, 123_456_789_i32).unwrap(),
+        expires_at: Some(jiff::Timestamp::new(1_800_000_000, 987_654_321_i32).unwrap()),
         system_card: false,
         managed_by: None,
     });
@@ -473,10 +473,9 @@ fn installed_child_request_matches_registry_canonicalization() {
     };
     let mut canonical = requested.clone();
     if let StoredCard::Concrete(canonical_card) = &mut canonical {
-        canonical_card.created_at =
-            jiff::Timestamp::new(1_700_000_000, (123_456_000) as i32).unwrap();
+        canonical_card.created_at = jiff::Timestamp::new(1_700_000_000, 123_456_000_i32).unwrap();
         canonical_card.expires_at =
-            Some(jiff::Timestamp::new(1_800_000_000, (987_654_000) as i32).unwrap());
+            Some(jiff::Timestamp::new(1_800_000_000, 987_654_000_i32).unwrap());
         canonical_card.managed_by = Some(CardManagedBy::RuntimeDerived(provenance.clone()));
     }
 
@@ -1563,7 +1562,7 @@ fn derive_expiry_parses_fixed_iso_8601_duration() {
     assert_eq!(
         derive_expires_at(now, Some(&lifespan("P1DT2H3M4.5S")), None).unwrap(),
         Some(
-            now + jiff::SignedDuration::from_hours((1) * 24)
+            now + jiff::SignedDuration::from_hours(24)
                 + jiff::SignedDuration::from_hours(2)
                 + jiff::SignedDuration::from_mins(3)
                 + jiff::SignedDuration::from_secs(4)
