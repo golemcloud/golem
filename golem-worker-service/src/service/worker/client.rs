@@ -4090,17 +4090,26 @@ mod rejection_mapping_tests {
         ));
     }
 
-    /// A shard manager whose routing table is always the same, and which counts how often it is
-    /// asked for it.
+    /// A shard manager whose routing table changes only when a test sets it, and which counts how
+    /// often it is asked for it.
     #[derive(Clone)]
-    struct StaticShardManager(RoutingTable, Arc<AtomicUsize>);
+    struct StaticShardManager(Arc<std::sync::Mutex<RoutingTable>>, Arc<AtomicUsize>);
+
+    impl StaticShardManager {
+        fn new(routing_table: RoutingTable) -> Self {
+            Self(
+                Arc::new(std::sync::Mutex::new(routing_table)),
+                Arc::default(),
+            )
+        }
+    }
 
     #[async_trait::async_trait]
     #[golem_async_trait::region_simple]
     impl ShardManager for StaticShardManager {
         async fn get_routing_table(&self) -> Result<RoutingTable, ShardManagerError> {
             self.1.fetch_add(1, Ordering::SeqCst);
-            Ok(self.0.clone())
+            Ok(self.0.lock().unwrap().clone())
         }
 
         async fn register(
@@ -4172,7 +4181,8 @@ mod rejection_mapping_tests {
     /// Rejects every invocation as `NotFound`, after first rejecting `routing_misses` of them as
     /// having reached an executor that does not own the agent's shard. With `accept` it accepts
     /// instead of rejecting as `NotFound`, and keeps the session open until its request stream ends.
-    /// Every `get_workers_metadata` call counts in `calls` and fails as a lost connection would.
+    /// Every `get_workers_metadata` call counts in `calls` and fails as a lost connection would,
+    /// or with `list_agents` finds no agents.
     #[derive(Clone, Default)]
     struct RejectingExecutor {
         routing_misses: Arc<AtomicUsize>,
@@ -4198,6 +4208,7 @@ mod rejection_mapping_tests {
         /// With this set, `get_oplog_entry` counts the call in `calls`, waits for one permit of
         /// the semaphore, and returns a `Log` entry at the requested index.
         oplog_entry_release: Option<Arc<tokio::sync::Semaphore>>,
+        list_agents: bool,
     }
 
     macro_rules! unimplemented_unary {
@@ -4338,10 +4349,29 @@ mod rejection_mapping_tests {
         );
         async fn get_workers_metadata(
             &self,
-            _request: Request<GetWorkersMetadataRequest>,
+            request: Request<GetWorkersMetadataRequest>,
         ) -> Result<Response<GetWorkersMetadataResponse>, Status> {
             self.calls.fetch_add(1, Ordering::SeqCst);
-            Err(Status::unavailable("connection reset"))
+            if !self.list_agents {
+                return Err(Status::unavailable("connection reset"));
+            }
+            let page_scan = request
+                .into_inner()
+                .page_scan
+                .map(|page_scan| PageScanGrant {
+                    calls: 1,
+                    keys: page_scan.keys,
+                    millis: page_scan.millis,
+                });
+            Ok(Response::new(GetWorkersMetadataResponse {
+                result: Some(get_workers_metadata_response::Result::Success(
+                    GetWorkersMetadataSuccessResponse {
+                        workers: vec![],
+                        cursor: None,
+                        page_scan,
+                    },
+                )),
+            }))
         }
         unimplemented_unary!(update_worker, UpdateWorkerRequest, UpdateWorkerResponse);
         unimplemented_unary!(get_oplog, GetOplogRequest, GetOplogResponse);
@@ -4573,31 +4603,21 @@ mod rejection_mapping_tests {
         }
     }
 
-    /// A worker service client with no executor in its routing table, and the count of its
-    /// routing table reads.
-    fn client_without_executors() -> (WorkerExecutorWorkerClient, Arc<AtomicUsize>) {
-        let routing_table: RoutingTable = GrpcRoutingTable {
+    fn routing_table_without_executors() -> RoutingTable {
+        GrpcRoutingTable {
             number_of_shards: 1,
             shard_assignments: vec![],
         }
         .try_into()
-        .unwrap();
-        let reads = Arc::new(AtomicUsize::new(0));
-        let routing = Arc::new(RoutingTableService::new(
-            RoutingTableConfig::default(),
-            Arc::new(StaticShardManager(routing_table, reads.clone())),
-        ));
-        let clients = MultiTargetGrpcClient::new(
-            "no-executor",
-            |channel: OtelGrpcService<_>, _| {
-                golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient::new(channel)
-            },
-            GrpcClientConfig::default(),
-        );
-        (
-            WorkerExecutorWorkerClient::new(clients, RetryConfig::default(), routing, 1),
-            reads,
-        )
+        .unwrap()
+    }
+
+    /// A worker service client with no executor in its routing table, and the count of its
+    /// routing table reads.
+    fn client_without_executors() -> (WorkerExecutorWorkerClient, Arc<AtomicUsize>) {
+        let shard_manager = StaticShardManager::new(routing_table_without_executors());
+        let reads = shard_manager.1.clone();
+        (client_routed_by(shard_manager), reads)
     }
 
     /// One agent listing call of `client`, a page call when `page_scan` is set.
@@ -4683,12 +4703,62 @@ mod rejection_mapping_tests {
         );
     }
 
+    /// A page call that failed at a stale routing table, without an executor or at an executor that
+    /// failed, does not keep that routing table: the next page call of the same client reads a new
+    /// one and reaches the executor that the shard manager returns now.
+    #[test]
+    async fn the_page_call_after_a_stale_routing_table_reads_a_new_one() {
+        let listing_executor = RejectingExecutor {
+            list_agents: true,
+            ..RejectingExecutor::default()
+        };
+        let listing_calls = listing_executor.calls.clone();
+        let listing_table = serve(listing_executor, 32 * 1024 * 1024).await;
+        let failing_executor = RejectingExecutor::default();
+        let failing_calls = failing_executor.calls.clone();
+        let failing_table = serve(failing_executor, 32 * 1024 * 1024).await;
+
+        for (stale_table, cause) in [
+            (routing_table_without_executors(), "no executor"),
+            (failing_table, "a failed executor"),
+        ] {
+            let shard_manager = StaticShardManager::new(stale_table);
+            let client = client_routed_by(shard_manager.clone());
+            let error = find_agents(&client, Some(golem_common::model::PageScanRequest::FIRST))
+                .await
+                .expect_err(cause);
+            assert_eq!(
+                http_status(error),
+                poem::http::StatusCode::INTERNAL_SERVER_ERROR,
+                "{cause}"
+            );
+
+            *shard_manager.0.lock().unwrap() = listing_table.clone();
+            let found = find_agents(&client, Some(golem_common::model::PageScanRequest::FIRST))
+                .await
+                .unwrap_or_else(|error| panic!("after {cause}: {error:?}"));
+            assert!(found.agents.is_empty(), "{cause}");
+            assert!(found.page_scan.is_some(), "{cause}");
+            assert_eq!(shard_manager.1.load(Ordering::SeqCst), 2, "{cause}");
+        }
+        assert_eq!(failing_calls.load(Ordering::SeqCst), 1);
+        assert_eq!(listing_calls.load(Ordering::SeqCst), 2);
+    }
+
     /// A worker service client whose only executor is `executor`, and an agent to invoke through
     /// it.
     async fn client_against(
         executor: RejectingExecutor,
         max_decoding_message_size: usize,
     ) -> (WorkerExecutorWorkerClient, AgentId) {
+        let routing_table = serve(executor, max_decoding_message_size).await;
+        let client = client_routed_by(StaticShardManager::new(routing_table));
+        let agent_id = AgentId::from_parts(7, 1);
+        (client, agent_id)
+    }
+
+    /// Serves `executor`, and returns a routing table whose only executor it is.
+    async fn serve(executor: RejectingExecutor, max_decoding_message_size: usize) -> RoutingTable {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -4704,7 +4774,7 @@ mod rejection_mapping_tests {
                 .unwrap();
         });
 
-        let routing_table: RoutingTable = GrpcRoutingTable {
+        GrpcRoutingTable {
             number_of_shards: 1,
             shard_assignments: vec![RoutingTableEntry {
                 shard_id: Some(ShardId { value: 0 }),
@@ -4717,10 +4787,13 @@ mod rejection_mapping_tests {
             }],
         }
         .try_into()
-        .unwrap();
+        .unwrap()
+    }
+
+    fn client_routed_by(shard_manager: StaticShardManager) -> WorkerExecutorWorkerClient {
         let routing = Arc::new(RoutingTableService::new(
             RoutingTableConfig::default(),
-            Arc::new(StaticShardManager(routing_table, Arc::default())),
+            Arc::new(shard_manager),
         ));
         let clients = MultiTargetGrpcClient::new(
             "provisional-rejecting-executor",
@@ -4733,9 +4806,7 @@ mod rejection_mapping_tests {
             },
             GrpcClientConfig::default(),
         );
-        let client = WorkerExecutorWorkerClient::new(clients, RetryConfig::default(), routing, 1);
-        let agent_id = AgentId::from_parts(7, 1);
-        (client, agent_id)
+        WorkerExecutorWorkerClient::new(clients, RetryConfig::default(), routing, 1)
     }
 
     /// A target that creates the agent without a key at `agent_id`, of the agent type `missing`

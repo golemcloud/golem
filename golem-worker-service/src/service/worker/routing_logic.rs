@@ -476,7 +476,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                 match worker_result {
                     Ok((result, pod)) => match result {
                         None if retried => retry.retry(self, &"NoActiveShards", &pod).await,
-                        None => retry.not_retried(&"NoActiveShards", &pod),
+                        None => retry.not_retried(self, &"NoActiveShards", &pod).await,
                         Some(out) => match response_map(out) {
                             Ok(result) => {
                                 retry.success(&pod);
@@ -489,7 +489,7 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                                 if retried {
                                     retry.retry(self, &error, &pod).await
                                 } else {
-                                    retry.not_retried(&error, &pod)
+                                    retry.not_retried(self, &error, &pod).await
                                 }
                             }
                             Err(ResponseMapResult::Expected(error)) => {
@@ -504,6 +504,11 @@ impl<T: HasRoutingTableService + HasWorkerExecutorClients + Send + Sync> Routing
                         if retried && error.is_retriable() {
                             retry.retry(self, &error, &pod).await
                         } else {
+                            if !retried
+                                && !matches!(error, CallWorkerExecutorError::MessageTooLarge(_))
+                            {
+                                retry.invalidate_routing_table(self).await;
+                            }
                             retry.non_retryable_error(error_map(error), &pod)
                         }
                     }
@@ -625,10 +630,7 @@ impl<'a> RetryState<'a> {
         error: &impl Debug,
         pod: &Option<Pod>,
     ) -> Result<Option<U>, WorkerServiceError> {
-        let invalidated = context
-            .routing_table_service()
-            .try_invalidate_routing_table()
-            .await;
+        let invalidated = self.invalidate_routing_table(context).await;
 
         match get_delay(self.retry_config, self.retry_attempt) {
             Some(delay) => {
@@ -664,13 +666,26 @@ impl<'a> RetryState<'a> {
         }
     }
 
+    /// Lets the next routing table read get a new routing table instead of the cached one. The
+    /// cached routing table does not expire, so every call that found it stale invalidates it,
+    /// whether the call retries or not.
+    async fn invalidate_routing_table<T: HasRoutingTableService>(&self, context: &T) -> bool {
+        context
+            .routing_table_service()
+            .try_invalidate_routing_table()
+            .await
+    }
+
     /// Fails a call that is not retried at an outcome that the routing retries for other calls.
-    fn not_retried<T>(
+    async fn not_retried<T: HasRoutingTableService, U>(
         &self,
+        context: &T,
         error: &impl Debug,
         pod: &Option<Pod>,
-    ) -> Result<Option<T>, WorkerServiceError> {
+    ) -> Result<Option<U>, WorkerServiceError> {
+        let invalidated = self.invalidate_routing_table(context).await;
         info!(
+            invalidated,
             error = format!("{error:?}"),
             pod = format_pod(pod),
             op = self.op,
