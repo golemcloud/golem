@@ -67,7 +67,8 @@ use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern}
 use golem_common::model::card::{
     AgentInvocationIdPattern, AgentMethodName, AgentPluginName, AgentResourcePattern, AgentVerb,
     CardId, ClassPermissionTarget, FilesystemPathPattern, FilesystemResourcePattern,
-    FilesystemVerb, OplogResourcePattern, OplogVerb, PermissionTarget, StoredCard, exec_check,
+    FilesystemVerb, OplogResourcePattern, OplogVerb, PartChecks, PermissionTarget, StoredCard,
+    exec_check,
 };
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -561,6 +562,26 @@ impl AgentAccess {
         )
     }
 
+    /// A lookup of an invocation's result: `read-invocation` on the invocation that `key` names,
+    /// with today's `view` check. A key that is not an invocation ID names no invocation, so the
+    /// lookup keeps today's view of the agent, and the executor refuses the key as today.
+    fn lookup(key: Option<&str>, permission: AgentPermission) -> Self {
+        match key.and_then(|key| key.parse::<golem_common::model::InvocationId>().ok()) {
+            Some(invocation_id) => {
+                Self::on_invocation(CatalogOperation::ReadInvocation, invocation_id, permission)
+            }
+            None => Self::new(CatalogOperation::ViewAgent, Resource::None, [permission]),
+        }
+    }
+
+    /// Whether this access looks up an invocation's result.
+    fn is_lookup(&self) -> bool {
+        matches!(
+            self.operation,
+            CatalogOperation::ReadInvocation | CatalogOperation::ViewAgent
+        )
+    }
+
     /// A fork of the agent, decided for the caller that the request names.
     fn fork(caller: Option<Caller>) -> Self {
         Self::agent(
@@ -581,18 +602,16 @@ impl AgentAccess {
         .called_by(requester)
     }
 
-    /// An invocation in `mode`: a lookup views the agent, a method call invokes it, and a start
-    /// without a method creates it.
-    fn invocation(mode: i32, method_name: Option<&String>) -> Self {
+    /// An invocation in `mode`: a lookup reads the invocation that its key `key` names, a method
+    /// call invokes the agent, and a start without a method creates it.
+    fn invocation(mode: i32, method_name: Option<&String>, key: Option<&str>) -> Self {
         let verb = agent_verb_for_invocation_mode(mode);
         let resource = method_name
             .map(|method_name| AgentResourcePattern::Method(AgentMethodName(method_name.clone())))
             .unwrap_or(AgentResourcePattern::Any);
         let permission = AgentPermission::Agent(verb, resource);
         match (verb, method_name) {
-            (AgentVerb::View, _) => {
-                Self::new(CatalogOperation::ViewAgent, Resource::None, [permission])
-            }
+            (AgentVerb::View, _) => Self::lookup(key, permission),
             (_, Some(method_name)) => Self::new(
                 CatalogOperation::InvokeAgent,
                 Resource::Method(method_name.clone()),
@@ -672,7 +691,7 @@ impl AgentAccess {
         &self,
         agent: DecisionAgentTarget,
         owner: &AgentOwnerPattern,
-    ) -> Result<(Operation, Vec<Vec<PermissionTarget>>), OperationShapeError> {
+    ) -> Result<(Operation, Vec<PartChecks>), OperationShapeError> {
         let checks = self
             .permissions
             .iter()
@@ -685,7 +704,7 @@ impl AgentAccess {
                     self.resource.clone(),
                     DecisionTarget::Agent(agent),
                 )?,
-                vec![checks],
+                vec![checks.into()],
             )),
             AccessTarget::Promise(promise_id) => Ok((
                 Operation::single(
@@ -696,7 +715,7 @@ impl AgentAccess {
                         owner: PromiseOwner::Agent(agent),
                     }),
                 )?,
-                vec![checks],
+                vec![checks.into()],
             )),
             AccessTarget::Invocation(invocation_id) => Ok((
                 Operation::single(
@@ -707,7 +726,7 @@ impl AgentAccess {
                         owner: InvocationOwner::Agent(agent),
                     }),
                 )?,
-                vec![checks],
+                vec![checks.into()],
             )),
             AccessTarget::HostedExec { tool, command } => {
                 let tool = ToolTarget {
@@ -716,25 +735,39 @@ impl AgentAccess {
                 };
                 Ok((
                     Operation::hosted_exec(agent, tool, command.clone())?,
-                    vec![vec![exec_check(owner.clone())], Vec::new()],
+                    vec![
+                        vec![exec_check(owner.clone())].into(),
+                        PartChecks::NotCheckedToday,
+                    ],
                 ))
             }
         }
     }
 }
 
-/// The access of a tool call on an existing agent: a lookup views the agent, and a call is a
-/// hosted exec on it. A tool name that is not valid keeps today's check, so the answer and its
-/// order stay as today.
+/// The text of a request's key, which a lookup's final key holds as an invocation ID.
+fn request_key_text(request_key: &InvocationRequestKey) -> Option<&str> {
+    match request_key {
+        InvocationRequestKey::External { key, .. }
+        | InvocationRequestKey::Internal(key)
+        | InvocationRequestKey::RouteSession { key, .. } => Some(key.value.as_str()),
+        InvocationRequestKey::Unkeyed(_) => None,
+    }
+}
+
+/// The access of a tool call on an existing agent: a lookup reads the invocation that its key
+/// `key` names, and a call is a hosted exec on the agent. A tool name that is not valid keeps
+/// today's check, so the answer and its order stay as today.
 fn tool_access(
     lookup: bool,
+    key: Option<&str>,
     verb: AgentVerb,
     tool_name: &str,
     command_path: &[String],
 ) -> AgentAccess {
     let permission = AgentPermission::Agent(verb, AgentResourcePattern::Any);
     if lookup {
-        return AgentAccess::new(CatalogOperation::ViewAgent, Resource::None, [permission]);
+        return AgentAccess::lookup(key, permission);
     }
     match ToolName::try_from(tool_name) {
         Ok(tool) => AgentAccess::hosted_exec(tool, command_path.join(" ")),
@@ -851,6 +884,10 @@ pub struct WorkerService {
     agent_types: Arc<AgentTypeResolver>,
     golem_issuer: GolemIssuer,
     audit: DecisionAudit,
+    /// The decision requests that this service made. Only its unit tests count them; production
+    /// builds do not compile this field.
+    #[cfg(test)]
+    decisions: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 pub struct PublicAgentSessionStart {
@@ -938,6 +975,8 @@ impl WorkerService {
             agent_types,
             golem_issuer,
             audit,
+            #[cfg(test)]
+            decisions: Arc::default(),
         }
     }
 
@@ -964,7 +1003,7 @@ impl WorkerService {
                         &self.audit,
                         auth,
                         self.entry_request(auth, operation),
-                        vec![vec![check]],
+                        vec![vec![check].into()],
                         surface,
                     )
                     .await
@@ -1005,7 +1044,7 @@ impl WorkerService {
                 &self.audit.denials_only(),
                 auth,
                 self.entry_request(auth, operation),
-                vec![vec![agent_type_check(component, agent_type)]],
+                vec![vec![agent_type_check(component, agent_type)].into()],
                 surface,
             )
             .await;
@@ -1032,7 +1071,7 @@ impl WorkerService {
         auth: &AuthCtx,
         access: &AgentAccess,
         operation: Operation,
-        checks: Vec<Vec<PermissionTarget>>,
+        checks: Vec<PartChecks>,
         surface: Surface,
     ) -> Result<Grantors, AuthorizationError> {
         self.decide_with(
@@ -1062,9 +1101,12 @@ impl WorkerService {
         audit: &DecisionAudit,
         auth: &AuthCtx,
         request: AuthorizationRequest,
-        checks: Vec<Vec<PermissionTarget>>,
+        checks: Vec<PartChecks>,
         surface: Surface,
     ) -> Result<Grantors, AuthorizationError> {
+        #[cfg(test)]
+        self.decisions
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         decide_with_todays_checks(auth, request, checks, audit, surface).await
     }
 
@@ -1188,8 +1230,8 @@ impl WorkerService {
                 .map_err(|error| error.to_string())
             });
         let result = match operation {
-            Ok(operation) if access.operation != CatalogOperation::ViewAgent => self
-                .decide(auth_ctx, access, operation, vec![checks], surface)
+            Ok(operation) if !access.is_lookup() => self
+                .decide(auth_ctx, access, operation, vec![checks.into()], surface)
                 .await
                 .map(|_| ()),
             other => {
@@ -1489,7 +1531,7 @@ impl WorkerService {
     /// `ignore_already_existing` is set. `access` is what the request decides: a creation, or a
     /// methodless upsert.
     #[allow(clippy::too_many_arguments)]
-    pub async fn create(
+    pub(crate) async fn create(
         &self,
         target: &RoutedTarget,
         component: &Component,
@@ -3175,7 +3217,7 @@ impl WorkerService {
                 trusted_internal_caller,
                 expected_fingerprint,
                 &auth_ctx,
-                AgentAccess::invocation(mode, method_name.as_ref()),
+                AgentAccess::invocation(mode, method_name.as_ref(), request_key_text(&request_key)),
                 surface,
             )
             .await?;
@@ -3294,7 +3336,11 @@ impl WorkerService {
             .external_tool
             .as_ref()
             .is_some_and(|tool| tool.fresh_owner);
-        let access = AgentAccess::invocation(start.mode, start.method_name.as_ref());
+        let access = AgentAccess::invocation(
+            start.mode,
+            start.method_name.as_ref(),
+            start.idempotency_key.as_ref().map(|key| key.value.as_str()),
+        );
         let (target, component) = if fresh_tool_owner {
             let Some(tool) = start.external_tool.as_ref() else {
                 unreachable!("a fresh owner is an external tool's");
@@ -3605,8 +3651,16 @@ impl WorkerService {
                     &request_key,
                     &method_name,
                 )?;
+                self.authorize_routed(
+                    &auth,
+                    &component,
+                    &target,
+                    &AgentAccess::invoke(&method_name),
+                )
+                .await?;
                 (target, component, None)
             }
+            // `resolve_requested_target` decides `invoke-agent` on the agent that the ID names.
             PublicAgentTarget::Id {
                 agent_id,
                 expected_fingerprint,
@@ -3633,14 +3687,6 @@ impl WorkerService {
                 (target, component, expected_fingerprint)
             }
         };
-        self.authorize_routed(
-            &auth,
-            &component,
-            &target,
-            &AgentAccess::invoke(&method_name),
-            surface,
-        )
-        .await?;
         let invocation_component = component;
         let caller: golem_api_grpc::proto::golem::component::Caller =
             self.rest_caller(&auth).into();
@@ -4578,7 +4624,15 @@ impl WorkerService {
                         &OwnedAgentId::new(environment_id, &agent_id),
                         None,
                         auth,
-                        &tool_access(lookup, verb, tool_name, command_path), surface,)
+                        &tool_access(
+                            lookup,
+                            request_key_text(request_key),
+                            verb,
+                            tool_name,
+                            command_path,
+                        ),
+                        surface,
+                    )
                     .await?;
                 if !lookup && agent.metadata.owner_kind != OwnerKind::ComponentAgent {
                     return Err(WorkerServiceError::TypeChecker(
@@ -5277,7 +5331,7 @@ mod tests {
         AgentInvocationIdPattern, AgentMethodName, AgentPluginName, AgentResourcePattern,
         AgentVerb, Card, CardId, ClassPermissionTarget, EffectiveSurface, FilesystemPathPattern,
         FilesystemResourcePattern, FilesystemVerb, GrantSurface, OplogResourcePattern, OplogVerb,
-        PermissionPattern, PermissionTarget, PolymorphicCard, StoredCard,
+        PartChecks, PermissionPattern, PermissionTarget, PolymorphicCard, StoredCard,
     };
     use golem_common::model::component::{
         CanonicalFilePath, ComponentId, ComponentName, ComponentRevision, InstalledPlugin,
@@ -12120,6 +12174,7 @@ mod tests {
         let call = AgentInvocationMode::Await as i32;
         let method = "increment".to_string();
         let invocation = Uuid::from_u128(0x11);
+        let key = invocation.to_string();
         let path = CanonicalFilePath::from_abs_str("/data/a.txt").unwrap();
         let file_path = Resource::Path(path.as_abs_str().to_string());
         let file = |verb| AgentPermission::filesystem(verb, &path).unwrap();
@@ -12134,19 +12189,23 @@ mod tests {
             ("upsert", AgentAccess::upsert_agent()),
             (
                 "lookup of a method",
-                AgentAccess::invocation(lookup, Some(&method)),
+                AgentAccess::invocation(lookup, Some(&method), Some(&key)),
             ),
             (
                 "lookup without a method",
-                AgentAccess::invocation(lookup, None),
+                AgentAccess::invocation(lookup, None, Some(&key)),
+            ),
+            (
+                "lookup with a key that is not an invocation ID",
+                AgentAccess::invocation(lookup, None, Some("not-an-invocation-id")),
             ),
             (
                 "invocation of a method",
-                AgentAccess::invocation(call, Some(&method)),
+                AgentAccess::invocation(call, Some(&method), None),
             ),
             (
                 "start without a method",
-                AgentAccess::invocation(call, None),
+                AgentAccess::invocation(call, None, None),
             ),
             ("invoke, session resume", AgentAccess::invoke(&method)),
             (
@@ -12251,25 +12310,37 @@ mod tests {
             ),
             (
                 "tool lookup on an agent",
-                tool_access(true, AgentVerb::View, "bash", &[]),
+                tool_access(true, Some(&key), AgentVerb::View, "bash", &[]),
             ),
             (
                 "tool call on an agent",
-                tool_access(false, AgentVerb::Invoke, "bash", &["ls".to_string()]),
+                tool_access(false, None, AgentVerb::Invoke, "bash", &["ls".to_string()]),
             ),
         ]
     }
 
-    /// Asserts that each check of `checks` is a check of its part of `operation`. A check that is
-    /// not would deny every caller of its call site.
+    /// Asserts that each part of `operation` has checks, and that each check is a check of its
+    /// part. A part without a check, or with a check of another part, would deny every caller of
+    /// its call site. Only the tool part of a hosted exec is not checked today.
     fn assert_checks_belong_to_parts(
         site: &str,
         operation: &golem_common::model::authority::Operation,
-        checks: &[Vec<PermissionTarget>],
+        checks: &[PartChecks],
     ) {
+        use golem_common::model::authority::{CatalogOperation, ToolVerb, Verb};
+
         let parts = operation.parts();
         assert_eq!(parts.len(), checks.len(), "{site}");
         for (part, part_checks) in parts.iter().zip(checks) {
+            let PartChecks::Checks(part_checks) = part_checks else {
+                assert!(
+                    operation.name() == CatalogOperation::HostedExec
+                        && part.verb == Verb::Tool(ToolVerb::Invoke),
+                    "{site}: only the tool part of a hosted exec is not checked today"
+                );
+                continue;
+            };
+            assert!(!part_checks.is_empty(), "{site}: a part without a check");
             for check in part_checks {
                 assert!(
                     golem_common::model::card::check_belongs_to_part(part.verb, check),
@@ -12325,7 +12396,8 @@ mod tests {
             EffectiveSurface::default(),
         );
         let entry = |operation| auth.entry_request("golem", operation);
-        let accesses: [(CatalogOperation, fn(Option<Caller>) -> super::AgentAccess); 2] = [
+        type AccessFor = fn(Option<Caller>) -> super::AgentAccess;
+        let accesses: [(CatalogOperation, AccessFor); 2] = [
             (CatalogOperation::ForkAgent, super::AgentAccess::fork),
             (
                 CatalogOperation::UpdateAgentRevision,
@@ -12344,6 +12416,120 @@ mod tests {
 
             let unnamed = access(None).decision_request(operation, entry);
             assert_eq!(unnamed.caller, auth.entry_caller("golem"));
+        }
+    }
+
+    /// A lookup of an invocation's result reads the invocation that its final key names, with
+    /// today's `view` check. A key that is not an invocation ID keeps today's view of the agent.
+    #[test]
+    fn a_lookup_reads_the_invocation_that_its_key_names() {
+        use golem_api_grpc::proto::golem::worker::AgentInvocationMode;
+        use golem_common::model::InvocationId;
+        use golem_common::model::authority::{CatalogOperation, Target};
+
+        let agent_id = AgentId::from_parts(0, 9);
+        let target = super::DecisionAgentTarget {
+            environment_id: EnvironmentId(Uuid::from_u128(1)),
+            agent_type: AgentTypeName("Counter".to_string()),
+            agent_id,
+            fingerprint: Some(AgentFingerprint(Uuid::from_u128(0xf1))),
+        };
+        let owner = AgentOwnerPattern::parse(&format!("acme/shop/prod/cart/{agent_id}")).unwrap();
+        let lookup = AgentInvocationMode::Lookup as i32;
+        let method = "increment".to_string();
+        let invocation = Uuid::from_u128(0x42);
+        let key = invocation.to_string();
+        for (site, access) in [
+            (
+                "lookup of a method",
+                super::AgentAccess::invocation(lookup, Some(&method), Some(&key)),
+            ),
+            (
+                "lookup without a method",
+                super::AgentAccess::invocation(lookup, None, Some(&key)),
+            ),
+            (
+                "tool lookup on an agent",
+                super::tool_access(true, Some(&key), AgentVerb::View, "bash", &[]),
+            ),
+        ] {
+            let (operation, checks) = access.decision(target.clone(), &owner).unwrap();
+            assert_eq!(operation.name(), CatalogOperation::ReadInvocation, "{site}");
+            assert!(
+                matches!(
+                    &operation.parts()[0].target,
+                    Target::Invocation(read) if read.invocation_id == InvocationId(invocation)
+                ),
+                "{site}"
+            );
+            assert_eq!(access_view_checks(&checks), 1, "{site}");
+        }
+
+        let (operation, _) = super::AgentAccess::invocation(lookup, None, Some("not-an-id"))
+            .decision(target, &owner)
+            .unwrap();
+        assert_eq!(operation.name(), CatalogOperation::ViewAgent);
+    }
+
+    /// The number of today's `agent : view` checks in `checks`.
+    fn access_view_checks(checks: &[PartChecks]) -> usize {
+        checks
+            .iter()
+            .filter_map(|checks| match checks {
+                PartChecks::Checks(checks) => Some(checks),
+                PartChecks::NotCheckedToday => None,
+            })
+            .flatten()
+            .filter(|check| {
+                matches!(
+                    check,
+                    PermissionTarget::Agent(ClassPermissionTarget {
+                        verb: Some(AgentVerb::View),
+                        ..
+                    })
+                )
+            })
+            .count()
+    }
+
+    /// A public session decides `invoke-agent` once, by agent ID as by key.
+    #[test]
+    async fn a_public_session_decides_once_by_agent_id_and_by_key() {
+        use std::sync::atomic::Ordering;
+
+        let harness = RestHarness::new_with_output(
+            AgentMode::Durable,
+            OutputSchema::Single(Box::new(SchemaType::stream(Some(SchemaType::u32())))),
+        );
+        harness
+            .worker_client
+            .set_metadata_component_revision(harness.component_revision);
+        let decisions = || harness.worker_service.decisions.load(Ordering::SeqCst);
+
+        let mut by_id = harness.public_invocation_start(IdempotencyKey::fresh());
+        by_id.selector.target = PublicAgentTarget::Id {
+            agent_id: harness.keyed_agent_id(),
+            expected_fingerprint: Some(harness.worker_client.fingerprint),
+        };
+        for (target, start) in [
+            (
+                "by key",
+                harness.public_invocation_start(IdempotencyKey::fresh()),
+            ),
+            ("by agent ID", by_id),
+        ] {
+            let before = decisions();
+            harness
+                .worker_service
+                .invoke_public_agent_session_v1(
+                    start,
+                    Box::pin(stream::empty()),
+                    AuthCtx::system(),
+                    |_, _| panic!("stream-free input"),
+                )
+                .await
+                .unwrap_or_else(|error| panic!("{target}: {error:?}"));
+            assert_eq!(decisions() - before, 1, "{target}");
         }
     }
 
@@ -12381,11 +12567,11 @@ mod tests {
         assert_checks_belong_to_parts(
             "tool call on a fresh owner",
             &tool_call,
-            &[vec![fresh_owner_check]],
+            &[vec![fresh_owner_check].into()],
         );
 
         let listing = super::list_agents(&component).unwrap();
         let type_check = super::agent_type_check(&component, &agent_type);
-        assert_checks_belong_to_parts("list agents", &listing, &[vec![type_check]]);
+        assert_checks_belong_to_parts("list agents", &listing, &[vec![type_check].into()]);
     }
 }

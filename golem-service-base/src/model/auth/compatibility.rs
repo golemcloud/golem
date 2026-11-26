@@ -23,7 +23,8 @@ use golem_common::model::authority::{
 };
 use golem_common::model::caller::{AccountAuthentication, AccountPrincipal, Caller, Principal};
 use golem_common::model::card::{
-    EffectiveSurface, PermissionTarget, check_belongs_to_part, checks_allow, decide_with_checks,
+    EffectiveSurface, PartChecks, PermissionTarget, check_belongs_to_part, checks_allow,
+    decide_with_checks,
 };
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -34,7 +35,7 @@ use std::sync::Arc;
 pub struct CompatibilityAuthorizer {
     auth: AuthCtx,
     /// Today's checks for each part of the request's operation, in the order of the parts.
-    checks: Vec<Vec<PermissionTarget>>,
+    checks: Vec<PartChecks>,
     /// Today's check of each row that a listing may return.
     row_checks: HashMap<Target, Vec<PermissionTarget>>,
     /// Today's check of each agent type that a listing may scan.
@@ -42,7 +43,7 @@ pub struct CompatibilityAuthorizer {
 }
 
 impl CompatibilityAuthorizer {
-    pub fn new(auth: AuthCtx, checks: Vec<Vec<PermissionTarget>>) -> Self {
+    pub fn new(auth: AuthCtx, checks: Vec<PartChecks>) -> Self {
         Self {
             auth,
             checks,
@@ -74,6 +75,9 @@ impl CompatibilityAuthorizer {
     /// part. Call sites return it, so that a denial keeps today's response.
     pub fn todays_error(&self, request: &AuthorizationRequest) -> AuthorizationError {
         for (part, checks) in request.operation.parts().iter().zip(&self.checks) {
+            let PartChecks::Checks(checks) = checks else {
+                continue;
+            };
             for check in checks {
                 if !check_belongs_to_part(part.verb, check) {
                     return AuthorizationError::PermissionNotAllowed(Box::new(check.clone()));
@@ -83,7 +87,8 @@ impl CompatibilityAuthorizer {
                 }
             }
         }
-        // Reached only when the checks do not match the parts, which no call site does.
+        // Reached only when a part's check list is empty or the checks do not match the parts,
+        // which no call site does.
         AuthorizationError::SystemOnlyActionNotAllowed(request.operation.name().to_string())
     }
 
@@ -156,7 +161,7 @@ impl Authorizer for CompatibilityAuthorizer {
 pub async fn decide_with_todays_checks(
     auth: &AuthCtx,
     request: AuthorizationRequest,
-    checks: Vec<Vec<PermissionTarget>>,
+    checks: Vec<PartChecks>,
     audit: &DecisionAudit,
     surface: Surface,
 ) -> Result<Grantors, AuthorizationError> {

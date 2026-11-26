@@ -49,13 +49,24 @@ impl Decisions {
         operation: Result<Operation, OperationShapeError>,
         check: PermissionTarget,
     ) -> Result<Grantors, AuthorizationError> {
+        self.decide_checks(auth, operation, vec![check]).await
+    }
+
+    /// Decides `operation`, whose one part today's code checks with each of `checks` in turn. A
+    /// denial is the error of the first check that refuses, as today.
+    pub async fn decide_checks(
+        &self,
+        auth: &AuthCtx,
+        operation: Result<Operation, OperationShapeError>,
+        checks: Vec<PermissionTarget>,
+    ) -> Result<Grantors, AuthorizationError> {
         match operation {
             Ok(operation) => {
                 let request = auth.entry_request(self.golem_issuer.to_string(), operation);
                 decide_with_todays_checks(
                     auth,
                     request,
-                    vec![vec![check]],
+                    vec![checks.into()],
                     &self.audit,
                     Surface::Rest,
                 )
@@ -63,7 +74,9 @@ impl Decisions {
             }
             Err(shape) => {
                 error!("Registry operation has no valid decision request: {shape}");
-                auth.authorize_permission(&check)?;
+                for check in &checks {
+                    auth.authorize_permission(check)?;
+                }
                 Ok(Grantors::default())
             }
         }
@@ -263,7 +276,20 @@ mod tests {
                 ),
             ),
             (
-                "revoke an API token",
+                "revoke an API token, its view check",
+                single(
+                    CatalogOperation::RevokeApiToken,
+                    Resource::ApiToken(token_id),
+                    account.clone(),
+                ),
+                token::account_token_permission_target(
+                    &email,
+                    AccountTokenVerb::View,
+                    AccountTokenResourcePattern::Token(token_id),
+                ),
+            ),
+            (
+                "revoke an API token, its delete check",
                 single(
                     CatalogOperation::RevokeApiToken,
                     Resource::ApiToken(token_id),
@@ -349,6 +375,74 @@ mod tests {
                     part.verb
                 );
             }
+        }
+    }
+
+    /// A revoke is one decision with today's two checks. A caller that may not see the token
+    /// gets "token not found", as for an unknown token; one that may see it but not revoke it
+    /// gets a 403; one that may do both is allowed. These are today's answers.
+    #[test]
+    async fn a_revoke_is_one_decision_with_todays_answers() {
+        use crate::services::token::{TokenError, decide_revoke};
+        use golem_common::model::card::recipient::RecipientPattern;
+        use golem_common::model::card::{EffectiveSurface, parse_permission};
+        use golem_service_base::model::auth::AuthCtx;
+
+        let account_id = AccountId::new();
+        let email = AccountEmail::new("acme");
+        let token_id = TokenId::new();
+        let decisions = super::Decisions::new("https://golem.test".parse().unwrap());
+        let view = format!("account.token(acme) @ acme : view : {token_id}");
+        let delete = format!("account.token(acme) @ acme : delete : {token_id}");
+        let today = |auth: &AuthCtx| {
+            let check = |verb| {
+                token::account_token_permission_target(
+                    &email,
+                    verb,
+                    AccountTokenResourcePattern::Token(token_id),
+                )
+            };
+            if auth
+                .authorize_permission(&check(AccountTokenVerb::View))
+                .is_err()
+            {
+                "not found"
+            } else if auth
+                .authorize_permission(&check(AccountTokenVerb::Delete))
+                .is_err()
+            {
+                "forbidden"
+            } else {
+                "allowed"
+            }
+        };
+        for (grants, expected) in [
+            (vec![], "not found"),
+            (vec![view.clone()], "forbidden"),
+            (vec![view.clone(), delete.clone()], "allowed"),
+        ] {
+            let grants = grants
+                .iter()
+                .map(|grant| parse_permission(grant).unwrap())
+                .collect::<Vec<_>>();
+            let surface = EffectiveSurface::from_grants(
+                &grants,
+                &[],
+                &[],
+                &[],
+                &RecipientPattern::parse("acme").unwrap(),
+            )
+            .unwrap();
+            let auth = AuthCtx::agent_with_effective_surface(account_id, email.clone(), surface);
+            let answer = match decide_revoke(&decisions, &auth, account_id, &email, token_id).await
+            {
+                Ok(()) => "allowed",
+                Err(TokenError::TokenNotFound(id)) if id == token_id => "not found",
+                Err(TokenError::Unauthorized(_)) => "forbidden",
+                Err(other) => panic!("{other}"),
+            };
+            assert_eq!(answer, expected, "{grants:?}");
+            assert_eq!(answer, today(&auth), "{grants:?}");
         }
     }
 }
