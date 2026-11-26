@@ -1605,6 +1605,123 @@ async fn disabling_the_sweep_restores_the_ephemeral_archive_registration(
     Ok(())
 }
 
+#[test]
+#[timeout("4m")]
+async fn fully_archived_running_agent_stops_scheduling_and_seals_when_idle(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.oplog.indexed_storage_layers = 1;
+                config.oplog.blob_storage_layers = 1;
+                config.oplog.entry_count_limit = 1_000_000;
+                config.oplog.archive_interval = Duration::from_millis(100);
+                config.scheduler.refresh_interval = Duration::from_millis(50);
+                config.oplog.shard_lease_max_ttl = Duration::from_secs(300);
+                config.oplog.skew_margin = Duration::from_secs(1);
+                config.suspend.suspend_after = Duration::from_secs(60);
+                config.suspend.wait_suspend_grace = Duration::from_secs(60);
+            })),
+            wrap_shard_service: Some(Arc::new({
+                let shard = shard.clone();
+                move |inner| {
+                    assert!(shard.set(inner.clone()).is_ok());
+                    inner
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let shard = shard.get().unwrap();
+    let assignment = shard.current_assignment()?;
+    shard.update_lease(
+        &assignment.shard_epochs,
+        ShardLeaseClock {
+            sent_at: Instant::now(),
+            wall_anchor: SystemTime::now(),
+            ttl: Duration::from_secs(300),
+        },
+        ShardLeaseRevision {
+            incarnation: uuid::Uuid::new_v4(),
+            number: 1,
+        },
+        assignment.executor_count,
+    )?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let key = agent_key!("Clocks", "archive-running-then-idle");
+    let id = executor.start_agent(&component.id, key.clone()).await?;
+    executor
+        .invoke_agent(&component, &key, "sleep_for", data_value!(10.0f64))
+        .await?;
+    executor
+        .wait_for_status(&id, AgentStatus::Running, Duration::from_secs(10))
+        .await?;
+    let worker = executor.active_agents().try_get(&id).await.unwrap();
+    let service = worker.oplog_service();
+    let activator = worker.worker_activator();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            let last = service.get_last_index(&id, AgentMode::Durable).await?;
+            if activator
+                .archive_oplog(&id, last, ArchiveWait::Finished)
+                .await?
+                == Some(false)
+                && scheduled_action_count(deps, &context).await? == 0
+            {
+                break anyhow::Ok(());
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await??;
+    assert_eq!(
+        executor.get_worker_metadata(&id).await?.status,
+        AgentStatus::Running
+    );
+    // More than one archive interval must pass without an eligibility polling row.
+    tokio::time::sleep(Duration::from_millis(350)).await;
+    assert_eq!(scheduled_action_count(deps, &context).await?, 0);
+    let indexed_config =
+        derive_disjoint_sqlite_config(&sqlite_storage_config(deps, &context), "indexed");
+    let indexed = SqliteIndexedStorage::configured(&indexed_config).await?;
+    assert!(
+        indexed
+            .observe_agent("test", "running", &id)
+            .await?
+            .has_data
+    );
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while indexed
+            .observe_agent("test", "after_idle", &id)
+            .await?
+            .has_data
+        {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    assert_eq!(
+        executor.get_worker_metadata(&id).await?.status,
+        AgentStatus::Idle
+    );
+    assert!(!executor.worker_is_cached(&id).await);
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    Ok(())
+}
+
 /// A sealed owner must lose its cached Worker, not just its Store. Reusing that Worker after
 /// restoration at the same shard epoch must refuse both invocation admission and oplog writes.
 #[test]

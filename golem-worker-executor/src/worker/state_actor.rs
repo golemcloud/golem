@@ -1677,14 +1677,16 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             return;
         }
 
-        if old_status.status != new_status.status
+        if (old_status.status != new_status.status
             && matches!(
                 new_status.status,
                 AgentStatus::Idle
                     | AgentStatus::Suspended
                     | AgentStatus::Failed
                     | AgentStatus::Exited
-            )
+            ))
+            || (!crate::services::worker::seal_status_is_eligible(old_status)
+                && crate::services::worker::seal_status_is_eligible(new_status))
         {
             let archive_interval = self.deps.config().oplog.archive_interval;
             let last_oplog_index = new_status.oplog_idx;

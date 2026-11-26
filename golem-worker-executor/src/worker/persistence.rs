@@ -68,9 +68,6 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 && let Some(epoch) = self.oplog.shard_epoch()
                 && self.shard_service().current_assignment()?.lease.is_some()
             {
-                if seal.deadline(&self.owned_agent_id, epoch).is_none() {
-                    return Ok(Some(true));
-                }
                 let worker = self.clone();
                 // Retirement and release must finish even when the scheduler loses its delivery
                 // lease and cancels its waiter. The task retains both lifecycle boundaries.
@@ -80,6 +77,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     if !crate::services::worker::seal_status_is_eligible(
                         &metadata.last_known_status,
                     ) {
+                        return Ok(Some(false));
+                    }
+                    if seal.deadline(&worker.owned_agent_id, epoch).is_none() {
                         return Ok(Some(true));
                     }
                     let sealed = worker
