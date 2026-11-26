@@ -17,7 +17,7 @@
 
 use crate::Tracing;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 use golem_common::model::account::AccountId;
 use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
 use golem_common::model::agent::{
@@ -188,6 +188,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         &self,
         target: &ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -201,6 +202,7 @@ impl WorkerProxy for LocalCardTransferProxy {
             .prepare(
                 target,
                 method_name,
+                invocation,
                 caller_agent_id,
                 caller_env,
                 caller_stack,
@@ -246,7 +248,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         method_name: String,
         method_parameters: SchemaValue,
         mode: AgentInvocationMode,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<jiff::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -310,6 +312,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         target_revision: ComponentRevision,
         mode: golem_api_grpc::proto::golem::worker::UpdateMode,
         disable_wakeup: bool,
+        requester: golem_common::model::caller::Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -318,6 +321,7 @@ impl WorkerProxy for LocalCardTransferProxy {
                 target_revision,
                 mode,
                 disable_wakeup,
+                requester,
                 auth_ctx,
             )
             .await
@@ -424,6 +428,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: &AuthCtx,
+        caller: &golem_common::model::caller::Caller,
     ) -> Result<(), WorkerProxyError> {
         self.inner
             .process_oplog_entries(
@@ -438,6 +443,7 @@ impl WorkerProxy for LocalCardTransferProxy {
                 first_entry_index,
                 entries,
                 auth_ctx,
+                caller,
             )
             .await
     }
@@ -885,7 +891,7 @@ async fn ts_permissions_wallet_labels_card_kinds_and_scope_expiry(
     let context = TestContext::new(last_unique_id);
     let scenario = start_scenario(deps, &context, agent_sdk_ts, "kinds").await?;
 
-    let started = chrono::Utc::now().timestamp() as f64;
+    let started = jiff::Timestamp::now().as_second() as f64;
     let observed = scenario
         .executor
         .invoke_and_await_agent(

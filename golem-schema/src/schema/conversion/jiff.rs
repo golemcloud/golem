@@ -18,7 +18,7 @@ use crate::schema::schema_type::SchemaType;
 use crate::schema::schema_value::{DurationValuePayload, SchemaValue};
 
 #[cfg(feature = "guest")]
-impl crate::schema::wit::direct::WireSchema for ::chrono::Duration {
+impl crate::schema::wit::direct::WireSchema for ::jiff::SignedDuration {
     fn wire_type_id() -> String {
         <Self as IntoSchema>::type_id().0
     }
@@ -29,25 +29,23 @@ impl crate::schema::wit::direct::WireSchema for ::chrono::Duration {
 }
 
 #[cfg(feature = "guest")]
-fn chrono_duration_nanoseconds(
-    duration: &::chrono::Duration,
+fn jiff_duration_nanoseconds(
+    duration: &::jiff::SignedDuration,
 ) -> Result<i64, crate::schema::wit::direct::WireError> {
-    duration
-        .num_nanoseconds()
-        .ok_or(crate::schema::wit::direct::WireError::Shape(
-            "duration within the i64 nanosecond range",
-        ))
+    i64::try_from(duration.as_nanos()).map_err(|_| {
+        crate::schema::wit::direct::WireError::Shape("duration within the i64 nanosecond range")
+    })
 }
 
 #[cfg(feature = "guest")]
-impl crate::schema::wit::direct::IntoWire for ::chrono::Duration {
+impl crate::schema::wit::direct::IntoWire for ::jiff::SignedDuration {
     const NEEDS_PREPARATION: bool = false;
 
     fn preflight(
         &self,
         _resources: &mut crate::schema::wit::direct::WirePreflight,
     ) -> Result<(), crate::schema::wit::direct::WireError> {
-        chrono_duration_nanoseconds(self).map(|_| ())
+        jiff_duration_nanoseconds(self).map(|_| ())
     }
 
     fn write_wire(
@@ -57,7 +55,7 @@ impl crate::schema::wit::direct::IntoWire for ::chrono::Duration {
         Ok(
             writer.push(crate::schema::wit::wire::SchemaValueNode::DurationValue(
                 crate::schema::wit::wire::DurationValuePayload {
-                    nanoseconds: chrono_duration_nanoseconds(self)?,
+                    nanoseconds: jiff_duration_nanoseconds(self)?,
                 },
             )),
         )
@@ -65,23 +63,23 @@ impl crate::schema::wit::direct::IntoWire for ::chrono::Duration {
 }
 
 #[cfg(feature = "guest")]
-impl crate::schema::wit::direct::FromWire for ::chrono::Duration {
+impl crate::schema::wit::direct::FromWire for ::jiff::SignedDuration {
     fn read_wire(
         reader: &mut crate::schema::wit::direct::WireReader,
         index: i32,
     ) -> Result<Self, crate::schema::wit::direct::WireError> {
         match reader.take(index)? {
             crate::schema::wit::wire::SchemaValueNode::DurationValue(value) => {
-                Ok(Self::nanoseconds(value.nanoseconds))
+                Ok(Self::from_nanos(value.nanoseconds))
             }
             _ => Err(crate::schema::wit::direct::WireError::Shape("duration")),
         }
     }
 }
 
-impl IntoSchema for ::chrono::Duration {
+impl IntoSchema for ::jiff::SignedDuration {
     fn type_id() -> TypeId {
-        TypeId::new("chrono.Duration")
+        TypeId::new("jiff.SignedDuration")
     }
     fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
         SchemaType::duration()
@@ -89,128 +87,160 @@ impl IntoSchema for ::chrono::Duration {
     // `to_value` cannot fail, so a duration outside the i64 nanosecond range
     // saturates, like `std::time::Duration`. The wire encoder rejects it.
     fn to_value(&self) -> SchemaValue {
-        let nanoseconds = self
-            .num_nanoseconds()
-            .unwrap_or(if *self < ::chrono::Duration::zero() {
-                i64::MIN
-            } else {
-                i64::MAX
-            });
+        let nanoseconds = i64::try_from(self.as_nanos()).unwrap_or(if self.is_negative() {
+            i64::MIN
+        } else {
+            i64::MAX
+        });
         SchemaValue::Duration(DurationValuePayload { nanoseconds })
     }
 }
 
-impl FromSchema for ::chrono::Duration {
+impl FromSchema for ::jiff::SignedDuration {
     fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
         match v {
-            SchemaValue::Duration(p) => Ok(::chrono::Duration::nanoseconds(p.nanoseconds)),
+            SchemaValue::Duration(p) => Ok(::jiff::SignedDuration::from_nanos(p.nanoseconds)),
             other => Err(FromSchemaError::shape_mismatch(
                 "duration",
                 value_kind(other),
-                "chrono::Duration",
+                "jiff::SignedDuration",
             )),
         }
     }
 }
 
-const NAIVE_DATE_FMT: &str = "%Y-%m-%d";
-const NAIVE_DATE_TIME_FMT: &str = "%Y-%m-%dT%H:%M:%S%.9f";
-const NAIVE_TIME_FMT: &str = "%H:%M:%S%.9f";
+fn parse_date(value: &str) -> Result<::jiff::civil::Date, String> {
+    let date = value
+        .parse::<::jiff::civil::Date>()
+        .map_err(|error| error.to_string())?;
+    if date.to_string() != value {
+        return Err("expected a date without time, offset or annotations".into());
+    }
+    Ok(date)
+}
+
+fn parse_time(value: &str) -> Result<::jiff::civil::Time, String> {
+    let bytes = value.as_bytes();
+    let valid_seconds = bytes.len() >= 8
+        && bytes[..2].iter().all(u8::is_ascii_digit)
+        && bytes[2] == b':'
+        && bytes[3..5].iter().all(u8::is_ascii_digit)
+        && bytes[5] == b':'
+        && bytes[6..8].iter().all(u8::is_ascii_digit)
+        && &bytes[6..8] != b"60";
+    let valid_fraction = bytes.len() == 8
+        || ((10..=18).contains(&bytes.len())
+            && bytes[8] == b'.'
+            && bytes[9..].iter().all(u8::is_ascii_digit));
+    if !valid_seconds || !valid_fraction {
+        return Err("expected HH:MM:SS with optional nanoseconds and no leap second".into());
+    }
+    value
+        .parse::<::jiff::civil::Time>()
+        .map_err(|error| error.to_string())
+}
+
+fn parse_datetime(value: &str) -> Result<::jiff::civil::DateTime, String> {
+    let (date, time) = value
+        .split_once('T')
+        .ok_or_else(|| "expected a date and time separated by T".to_string())?;
+    Ok(parse_date(date)?.to_datetime(parse_time(time)?))
+}
 
 #[cfg(feature = "guest")]
 crate::schema::wit::direct::wire_string!(
-    ::chrono::NaiveDate,
-    |value: &::chrono::NaiveDate| value.format(NAIVE_DATE_FMT).to_string(),
-    |value: &str| ::chrono::NaiveDate::parse_from_str(value, NAIVE_DATE_FMT)
+    ::jiff::civil::Date,
+    |value: &::jiff::civil::Date| value.to_string(),
+    parse_date
 );
 #[cfg(feature = "guest")]
 crate::schema::wit::direct::wire_string!(
-    ::chrono::NaiveDateTime,
-    |value: &::chrono::NaiveDateTime| value.format(NAIVE_DATE_TIME_FMT).to_string(),
-    |value: &str| ::chrono::NaiveDateTime::parse_from_str(value, NAIVE_DATE_TIME_FMT)
+    ::jiff::civil::DateTime,
+    |value: &::jiff::civil::DateTime| format!("{value:.9}"),
+    parse_datetime
 );
 #[cfg(feature = "guest")]
 crate::schema::wit::direct::wire_string!(
-    ::chrono::NaiveTime,
-    |value: &::chrono::NaiveTime| value.format(NAIVE_TIME_FMT).to_string(),
-    |value: &str| ::chrono::NaiveTime::parse_from_str(value, NAIVE_TIME_FMT)
+    ::jiff::civil::Time,
+    |value: &::jiff::civil::Time| format!("{value:.9}"),
+    parse_time
 );
 
-impl IntoSchema for ::chrono::NaiveDate {
+impl IntoSchema for ::jiff::civil::Date {
     fn type_id() -> TypeId {
-        TypeId::new("chrono.NaiveDate")
+        TypeId::new("jiff.civil.Date")
     }
     fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
         SchemaType::string()
     }
     fn to_value(&self) -> SchemaValue {
-        SchemaValue::String(self.format(NAIVE_DATE_FMT).to_string())
+        SchemaValue::String(self.to_string())
     }
 }
 
-impl FromSchema for ::chrono::NaiveDate {
-    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
-        match v {
-            SchemaValue::String(s) => ::chrono::NaiveDate::parse_from_str(s, NAIVE_DATE_FMT)
-                .map_err(|e| FromSchemaError::custom(format!("invalid NaiveDate: {e}"))),
-            other => Err(FromSchemaError::shape_mismatch(
-                "string",
-                value_kind(other),
-                "NaiveDate",
-            )),
-        }
-    }
-}
-
-impl IntoSchema for ::chrono::NaiveDateTime {
-    fn type_id() -> TypeId {
-        TypeId::new("chrono.NaiveDateTime")
-    }
-    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
-        SchemaType::string()
-    }
-    fn to_value(&self) -> SchemaValue {
-        SchemaValue::String(self.format(NAIVE_DATE_TIME_FMT).to_string())
-    }
-}
-
-impl FromSchema for ::chrono::NaiveDateTime {
+impl FromSchema for ::jiff::civil::Date {
     fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
         match v {
             SchemaValue::String(s) => {
-                ::chrono::NaiveDateTime::parse_from_str(s, NAIVE_DATE_TIME_FMT)
-                    .map_err(|e| FromSchemaError::custom(format!("invalid NaiveDateTime: {e}")))
+                parse_date(s).map_err(|e| FromSchemaError::custom(format!("invalid Date: {e}")))
             }
             other => Err(FromSchemaError::shape_mismatch(
                 "string",
                 value_kind(other),
-                "NaiveDateTime",
+                "Date",
             )),
         }
     }
 }
 
-impl IntoSchema for ::chrono::NaiveTime {
+impl IntoSchema for ::jiff::civil::DateTime {
     fn type_id() -> TypeId {
-        TypeId::new("chrono.NaiveTime")
+        TypeId::new("jiff.civil.DateTime")
     }
     fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
         SchemaType::string()
     }
     fn to_value(&self) -> SchemaValue {
-        SchemaValue::String(self.format(NAIVE_TIME_FMT).to_string())
+        SchemaValue::String(format!("{self:.9}"))
     }
 }
 
-impl FromSchema for ::chrono::NaiveTime {
+impl FromSchema for ::jiff::civil::DateTime {
     fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
         match v {
-            SchemaValue::String(s) => ::chrono::NaiveTime::parse_from_str(s, NAIVE_TIME_FMT)
-                .map_err(|e| FromSchemaError::custom(format!("invalid NaiveTime: {e}"))),
+            SchemaValue::String(s) => parse_datetime(s)
+                .map_err(|e| FromSchemaError::custom(format!("invalid DateTime: {e}"))),
             other => Err(FromSchemaError::shape_mismatch(
                 "string",
                 value_kind(other),
-                "NaiveTime",
+                "DateTime",
+            )),
+        }
+    }
+}
+
+impl IntoSchema for ::jiff::civil::Time {
+    fn type_id() -> TypeId {
+        TypeId::new("jiff.civil.Time")
+    }
+    fn register_in(_b: &mut SchemaBuilder) -> SchemaType {
+        SchemaType::string()
+    }
+    fn to_value(&self) -> SchemaValue {
+        SchemaValue::String(format!("{self:.9}"))
+    }
+}
+
+impl FromSchema for ::jiff::civil::Time {
+    fn from_value(v: &SchemaValue) -> Result<Self, FromSchemaError> {
+        match v {
+            SchemaValue::String(s) => {
+                parse_time(s).map_err(|e| FromSchemaError::custom(format!("invalid Time: {e}")))
+            }
+            other => Err(FromSchemaError::shape_mismatch(
+                "string",
+                value_kind(other),
+                "Time",
             )),
         }
     }

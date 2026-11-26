@@ -22,7 +22,6 @@
 use super::DEAD_MEMBER;
 use super::proxy::BreakableProxy;
 use anyhow::anyhow;
-use chrono::DateTime;
 use golem_api_grpc::proto::golem::shardmanager::v1::GetRoutingTableRequest;
 use golem_api_grpc::proto::golem::shardmanager::v1::shard_manager_service_client::ShardManagerServiceClient;
 use golem_common::model::RetryConfig;
@@ -44,6 +43,7 @@ use golem_shard_manager::{
     ShardManagerError,
 };
 use golem_test_framework::components::etcd::docker_etcd::DockerEtcd;
+use jiff::Timestamp;
 use std::collections::{BTreeMap, BTreeSet};
 use std::net::Ipv4Addr;
 use std::sync::Arc;
@@ -904,7 +904,7 @@ async fn write_state_with_executor(etcd: &DockerEtcd, addr: ExecutorAddr) {
         ExecutorId(Uuid::from_u128(1)),
         addr,
         None,
-        DateTime::from_timestamp(1_700_000_000, 0).expect("valid timestamp"),
+        Timestamp::new(1_700_000_000, 0).expect("valid timestamp"),
         LEASE_TTL,
     );
     shard_state

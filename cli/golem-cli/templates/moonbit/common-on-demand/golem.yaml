@@ -51,3 +51,49 @@ componentTemplates:
           targets:
           - "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
         componentWasm: "{{ appRootDir }}/_build/wasm/release/{{ componentName | to_snake_case }}.agent.wasm"
+      debug-gc:
+        build:
+        - command: GOLEM_MOONBIT_BUILD_TOOLS_CMD reexports "GOLEM_MOONBIT_BUILD_SDK_PATH" "{{ componentDir }}"
+          dir: "{{ appRootDir }}"
+        - command: GOLEM_MOONBIT_BUILD_TOOLS_CMD agents "{{ appRootDir }}" --component-dir "{{ componentDir }}"
+          dir: "{{ appRootDir }}"
+        - command: moon build --target wasm-gc
+          dir: "{{ appRootDir }}"
+        - command: wasm-tools component embed "GOLEM_MOONBIT_BUILD_SDK_PATH/wit" "{{ appRootDir }}/_build/wasm-gc/debug/build/app-name/{{ moonbitBuildPackagePath }}" --world agent-guest --encoding utf16 --output "{{ appRootDir }}/_build/wasm-gc/debug/{{ componentName | to_snake_case }}.embed.wasm"
+          dir: "{{ appRootDir }}"
+          mkdirs:
+          - "{{ appRootDir }}/_build/wasm-gc/debug"
+          sources:
+          - "GOLEM_MOONBIT_BUILD_SDK_PATH/wit"
+          - "{{ appRootDir }}/_build/wasm-gc/debug/build/app-name/{{ moonbitBuildPackagePath }}"
+          targets:
+          - "{{ appRootDir }}/_build/wasm-gc/debug/{{ componentName | to_snake_case }}.embed.wasm"
+        - command: wasm-tools component new "{{ appRootDir }}/_build/wasm-gc/debug/{{ componentName | to_snake_case }}.embed.wasm" --output "{{ appRootDir }}/_build/wasm-gc/debug/{{ componentName | to_snake_case }}.agent.wasm"
+          sources:
+          - "{{ appRootDir }}/_build/wasm-gc/debug/{{ componentName | to_snake_case }}.embed.wasm"
+          targets:
+          - "{{ appRootDir }}/_build/wasm-gc/debug/{{ componentName | to_snake_case }}.agent.wasm"
+        componentWasm: "{{ appRootDir }}/_build/wasm-gc/debug/{{ componentName | to_snake_case }}.agent.wasm"
+      release-gc:
+        build:
+        - command: GOLEM_MOONBIT_BUILD_TOOLS_CMD reexports "GOLEM_MOONBIT_BUILD_SDK_PATH" "{{ componentDir }}"
+          dir: "{{ appRootDir }}"
+        - command: GOLEM_MOONBIT_BUILD_TOOLS_CMD agents "{{ appRootDir }}" --component-dir "{{ componentDir }}"
+          dir: "{{ appRootDir }}"
+        - command: moon build --target wasm-gc --release
+          dir: "{{ appRootDir }}"
+        - command: wasm-tools component embed "GOLEM_MOONBIT_BUILD_SDK_PATH/wit" "{{ appRootDir }}/_build/wasm-gc/release/build/app-name/{{ moonbitBuildPackagePath }}" --world agent-guest --encoding utf16 --output "{{ appRootDir }}/_build/wasm-gc/release/{{ componentName | to_snake_case }}.embed.wasm"
+          dir: "{{ appRootDir }}"
+          mkdirs:
+          - "{{ appRootDir }}/_build/wasm-gc/release"
+          sources:
+          - "GOLEM_MOONBIT_BUILD_SDK_PATH/wit"
+          - "{{ appRootDir }}/_build/wasm-gc/release/build/app-name/{{ moonbitBuildPackagePath }}"
+          targets:
+          - "{{ appRootDir }}/_build/wasm-gc/release/{{ componentName | to_snake_case }}.embed.wasm"
+        - command: wasm-tools component new "{{ appRootDir }}/_build/wasm-gc/release/{{ componentName | to_snake_case }}.embed.wasm" --output "{{ appRootDir }}/_build/wasm-gc/release/{{ componentName | to_snake_case }}.agent.wasm"
+          sources:
+          - "{{ appRootDir }}/_build/wasm-gc/release/{{ componentName | to_snake_case }}.embed.wasm"
+          targets:
+          - "{{ appRootDir }}/_build/wasm-gc/release/{{ componentName | to_snake_case }}.agent.wasm"
+        componentWasm: "{{ appRootDir }}/_build/wasm-gc/release/{{ componentName | to_snake_case }}.agent.wasm"

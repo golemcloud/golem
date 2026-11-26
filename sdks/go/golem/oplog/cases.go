@@ -34,6 +34,8 @@ const (
 	AgentInvocationFinished = oplogwit.PublicOplogEntryAgentInvocationFinished
 	// A method failed without failing the agent.
 	AgentInvocationFailed = oplogwit.PublicOplogEntryAgentInvocationFailed
+	// The background work of an agent invocation ended after its result was recorded
+	AgentInvocationSettled = oplogwit.PublicOplogEntryAgentInvocationSettled
 	// Agent suspended
 	Suspend = oplogwit.PublicOplogEntrySuspend
 	// Agent failed

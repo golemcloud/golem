@@ -278,6 +278,29 @@ impl Debug for TestOplog {
 }
 
 impl TestOplog {
+    pub(crate) fn session_acceptance(
+        &self,
+        key: &golem_common::model::InvocationId,
+    ) -> golem_common::model::durable_stream::StreamSessionAcceptance {
+        self.entries()
+            .into_iter()
+            .rev()
+            .find_map(|entry| {
+                if let OplogEntry::StreamSession {
+                    record: OplogPayload::Inline(record),
+                    ..
+                } = entry
+                    && let StreamSessionRecord::Prepared(prepared) = *record
+                    && prepared.session_key == *key
+                {
+                    Some(prepared.acceptance())
+                } else {
+                    None
+                }
+            })
+            .expect("fixture must prepare its session before attaching")
+    }
+
     pub(crate) fn take_read_ranges(&self) -> Vec<(OplogIndex, u64)> {
         std::mem::take(&mut *self.read_ranges.lock().unwrap())
     }
@@ -9959,6 +9982,125 @@ async fn byte_output_drain_publishes_only_the_live_suffix() {
             .await
             .is_err()
     );
+}
+
+/// A guest output item that its element schema forbids ends the output with a `Protocol`
+/// failure at the sequence of the item; the items before it stay committed.
+#[test]
+#[test_r::timeout("15s")]
+async fn an_output_item_outside_its_element_schema_ends_the_output() {
+    use crate::durable_host::durable_session::StreamSession;
+    use crate::durable_host::stream_transport::test_output_stream_pair;
+    use golem_common::schema::schema_type::{NumericBound, NumericRestrictions};
+    use golem_common::schema::{MetadataEnvelope, SchemaGraph, SchemaType, SchemaValue};
+
+    let at_least_10 = || {
+        Some(NumericRestrictions {
+            min: Some(NumericBound::Unsigned(10)),
+            max: None,
+            unit: None,
+        })
+    };
+    let bytes = SchemaType::U8 {
+        restrictions: at_least_10(),
+        metadata: MetadataEnvelope::default(),
+    };
+    let numbers = SchemaType::U32 {
+        restrictions: at_least_10(),
+        metadata: MetadataEnvelope::default(),
+    };
+    for (element_type, items, committed) in [
+        (
+            bytes,
+            vec![
+                SchemaValue::U8(11),
+                SchemaValue::U8(12),
+                SchemaValue::U8(5),
+                SchemaValue::U8(13),
+            ],
+            vec![
+                CommittedProducerStreamEventPayload::PackedU8(11),
+                CommittedProducerStreamEventPayload::PackedU8(12),
+            ],
+        ),
+        (
+            numbers,
+            vec![
+                SchemaValue::U32(11),
+                SchemaValue::U32(5),
+                SchemaValue::U32(13),
+            ],
+            vec![],
+        ),
+    ] {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let store = producer(oplog.clone(), &identity, None).await;
+        let handle = store
+            .register(None, root_registration(&identity))
+            .await
+            .unwrap()
+            .value;
+        let mut subscription = store
+            .stream_bus(handle.stream_id)
+            .await
+            .unwrap()
+            .subscribe()
+            .await
+            .unwrap();
+        let session = StreamSession::new(
+            store.clone(),
+            oplog.clone(),
+            StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+            [],
+        );
+        let (publisher, endpoint) = test_output_stream_pair(8).unwrap();
+        let invalid_sequence = items.len() as u64 - 2;
+        let (_, drained) = tokio::join!(
+            async {
+                for item in items {
+                    let _ = publisher.publish_item(item).await;
+                }
+                let _ = publisher.publish_end().await;
+            },
+            session.drain_registered_output(
+                handle.clone(),
+                endpoint,
+                Arc::new(SchemaGraph::empty()),
+                element_type,
+            ),
+        );
+        drained.unwrap();
+        for (sequence, payload) in committed.into_iter().enumerate() {
+            let event = subscription.recv().await.unwrap();
+            assert_eq!(event.payload.producer_sequence, sequence as u64);
+            assert_eq!(event.payload.payload, payload);
+        }
+        let mut event = subscription.recv().await.unwrap();
+        while !matches!(
+            event.payload.payload,
+            CommittedProducerStreamEventPayload::Terminal(_)
+        ) {
+            assert!(event.payload.producer_sequence < invalid_sequence);
+            event = subscription.recv().await.unwrap();
+        }
+        assert_eq!(event.payload.producer_sequence, invalid_sequence);
+        assert_eq!(
+            event.payload.terminal_author,
+            Some(StreamTerminalAuthor::Protocol)
+        );
+        let CommittedProducerStreamEventPayload::Terminal(StreamTerminal::Failed(
+            StreamError::Interrupted(message),
+        )) = event.payload.payload
+        else {
+            panic!("unexpected terminal {:?}", event.payload.payload)
+        };
+        assert!(
+            message.starts_with(&format!("output item {invalid_sequence} "))
+                && message.contains("below minimum 10"),
+            "{message}"
+        );
+    }
 }
 
 #[test]

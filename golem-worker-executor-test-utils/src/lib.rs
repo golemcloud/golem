@@ -30,7 +30,7 @@ use self::component_writer::FileSystemComponentWriter;
 use crate::component_service::ComponentServiceLocalFileSystem;
 use anyhow::{Error, anyhow};
 use async_trait::async_trait;
-use chrono::DateTime;
+
 use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetRunningWorkersMetadataRequest, get_running_workers_metadata_response,
@@ -181,8 +181,8 @@ pub use golem_worker_executor::workerctx::ReplayAdmissionStage;
 use golem_worker_executor::workerctx::{
     CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement, ExternalOperations,
     FileSystemReading, FuelManagement, InvocationContextManagement, InvocationHooks,
-    InvocationManagement, LogEventEmitBehaviour, P3HttpBodyProducerHook, StatusManagement,
-    UpdateManagement, WorkerCtx, WorkerFilesystemContext,
+    InvocationManagement, LogEventEmitBehaviour, P3HttpBodyProducerHook, ResultRecordedAt,
+    StatusManagement, UpdateManagement, WorkerCtx, WorkerFilesystemContext,
 };
 use golem_worker_executor::{
     Bootstrap, RunDetails, bootstrap_and_run_worker_executor, derive_disjoint_sqlite_config,
@@ -717,8 +717,7 @@ impl TestWorkerExecutor {
             .as_ref()
             .expect("test service graph is captured");
         let owned_agent_id = OwnedAgentId::new(environment_id, agent_id);
-        let worker =
-            Worker::get_exact_existing_suspended(services, &owned_agent_id, caller.clone()).await?;
+        let worker = Worker::get_exact_existing_suspended(services, &owned_agent_id).await?;
         let invocation_id = golem_common::model::InvocationRequestKey::Internal(idempotency_key)
             .finalize(
                 *agent_id,
@@ -761,14 +760,29 @@ impl TestWorkerExecutor {
     }
 
     pub async fn remove_cached_status(&self, agent_id: &AgentId) -> anyhow::Result<()> {
+        let fingerprint = self.agent_fingerprint(agent_id).await?;
+        self.services
+            .as_ref()
+            .expect("test service graph is captured")
+            .worker_service()
+            .remove_cached_status(
+                &OwnedAgentId::new(self.context.default_environment_id, agent_id),
+                fingerprint,
+            )
+            .await?;
+        Ok(())
+    }
+
+    /// The fingerprint of the current incarnation of a durable agent, read from its `Create`
+    /// entry.
+    pub async fn agent_fingerprint(&self, agent_id: &AgentId) -> anyhow::Result<AgentFingerprint> {
         use golem_worker_executor::services::HasOplogService;
 
-        let services = self
+        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
+        let create = self
             .services
             .as_ref()
-            .expect("test service graph is captured");
-        let owned_agent_id = OwnedAgentId::new(self.context.default_environment_id, agent_id);
-        let create = services
+            .expect("test service graph is captured")
             .oplog_service()
             .read_exact(&owned_agent_id, AgentMode::Durable, OplogIndex::INITIAL, 1)
             .await?
@@ -777,11 +791,7 @@ impl TestWorkerExecutor {
         let OplogEntry::Create { parameters, .. } = create else {
             return Err(anyhow!("first oplog entry is not create: {owned_agent_id}"));
         };
-        services
-            .worker_service()
-            .remove_cached_status(&owned_agent_id, AgentFingerprint(parameters.instance_id))
-            .await?;
-        Ok(())
+        Ok(AgentFingerprint(parameters.instance_id))
     }
 
     /// The number of captures of agent filesystems on this executor with the metric label
@@ -1175,6 +1185,16 @@ impl TestWorkerExecutor {
     pub fn oplog_entries_read(&self, agent_id: &AgentId) -> u64 {
         self.additional_test_deps
             .oplog_entries_read(&OwnedAgentId::new(
+                self.context.default_environment_id,
+                agent_id,
+            ))
+    }
+
+    /// The entries of each commit of the agent's opened oplog that stored entries, in commit
+    /// order: one list of indices per commit made at a level other than `ReportOnly`.
+    pub fn oplog_commit_writes(&self, agent_id: &AgentId) -> Vec<Vec<OplogIndex>> {
+        self.additional_test_deps
+            .oplog_commit_writes(&OwnedAgentId::new(
                 self.context.default_environment_id,
                 agent_id,
             ))
@@ -4058,9 +4078,10 @@ impl InvocationHooks for TestWorkerCtx {
     async fn on_agent_invocation_started(
         &mut self,
         invocation: golem_worker_executor::worker::HydratedInvocation,
+        input: Option<&SchemaValue>,
     ) -> Result<bool, WorkerExecutorError> {
         self.durable_ctx
-            .on_agent_invocation_started(invocation)
+            .on_agent_invocation_started(invocation, input)
             .await
     }
 
@@ -4082,9 +4103,10 @@ impl InvocationHooks for TestWorkerCtx {
         &mut self,
         full_function_name: &str,
         error: AgentError,
+        recorded_at: ResultRecordedAt,
     ) -> Result<(), WorkerExecutorError> {
         self.durable_ctx
-            .record_agent_method_failure(full_function_name, error)
+            .record_agent_method_failure(full_function_name, error, recorded_at)
             .await
     }
 
@@ -4093,6 +4115,7 @@ impl InvocationHooks for TestWorkerCtx {
         full_function_name: &str,
         consumed_fuel: u64,
         output: &mut AgentInvocationOutput,
+        recorded_at: ResultRecordedAt,
     ) -> Result<(), WorkerExecutorError> {
         if let Some(gate) = self
             .additional_test_deps
@@ -4116,7 +4139,7 @@ impl InvocationHooks for TestWorkerCtx {
             }
         }
         self.durable_ctx
-            .on_agent_invocation_success(full_function_name, consumed_fuel, output)
+            .on_agent_invocation_success(full_function_name, consumed_fuel, output, recorded_at)
             .await
     }
 
@@ -6414,6 +6437,13 @@ impl Oplog for TestOplog {
             }
         }
         let committed = self.oplog.commit(level).await;
+        if level != CommitLevel::ReportOnly
+            && let Ok(entries) = &committed
+            && !entries.is_empty()
+        {
+            self.additional_test_deps
+                .record_oplog_commit_write(&self.owned_agent_id, entries.keys().copied().collect());
+        }
         if committed.as_ref().is_ok_and(|entries| {
             entries
                 .values()
@@ -7125,6 +7155,7 @@ pub struct AdditionalTestDeps {
     oplog_end_gates: Arc<std::sync::Mutex<OplogEndGates>>,
     oplog_call_counts: Arc<std::sync::Mutex<HashMap<(OwnedAgentId, &'static str), usize>>>,
     oplog_entries_read: Arc<std::sync::Mutex<HashMap<OwnedAgentId, u64>>>,
+    oplog_commit_writes: Arc<std::sync::Mutex<HashMap<OwnedAgentId, Vec<Vec<OplogIndex>>>>>,
     oplog_download_failures: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outages: Arc<std::sync::Mutex<HashSet<AgentId>>>,
     oplog_download_outage_targets: Arc<std::sync::Mutex<HashMap<AgentId, PayloadId>>>,
@@ -7217,6 +7248,7 @@ impl AdditionalTestDeps {
             rpc_memory_failures: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_call_counts: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_entries_read: Arc::new(std::sync::Mutex::new(HashMap::new())),
+            oplog_commit_writes: Arc::new(std::sync::Mutex::new(HashMap::new())),
             oplog_download_failures: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outages: Arc::new(std::sync::Mutex::new(HashSet::new())),
             oplog_download_outage_targets: Arc::new(std::sync::Mutex::new(HashMap::new())),
@@ -7747,6 +7779,24 @@ impl AdditionalTestDeps {
             .unwrap()
             .entry(owned_agent_id.clone())
             .or_default() += entries;
+    }
+
+    fn record_oplog_commit_write(&self, owned_agent_id: &OwnedAgentId, indices: Vec<OplogIndex>) {
+        self.oplog_commit_writes
+            .lock()
+            .unwrap()
+            .entry(owned_agent_id.clone())
+            .or_default()
+            .push(indices);
+    }
+
+    fn oplog_commit_writes(&self, owned_agent_id: &OwnedAgentId) -> Vec<Vec<OplogIndex>> {
+        self.oplog_commit_writes
+            .lock()
+            .unwrap()
+            .get(owned_agent_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     fn oplog_entries_read(&self, owned_agent_id: &OwnedAgentId) -> u64 {
@@ -9567,7 +9617,7 @@ impl Rpc for RecordingRpc {
         expected_fingerprint: golem_common::model::AgentFingerprint,
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
-        scheduled_at: chrono::DateTime<chrono::Utc>,
+        scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
@@ -9589,6 +9639,7 @@ impl Rpc for RecordingRpc {
         &self,
         target: ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -9604,6 +9655,7 @@ impl Rpc for RecordingRpc {
             .create_demand(
                 target,
                 method_name,
+                invocation,
                 self_created_by,
                 self_agent_id,
                 self_env,
@@ -9745,7 +9797,7 @@ impl Rpc for FailingRpc {
         expected_fingerprint: golem_common::model::AgentFingerprint,
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
-        scheduled_at: chrono::DateTime<chrono::Utc>,
+        scheduled_at: jiff::Timestamp,
         self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, ServiceRpcError> {
@@ -9766,6 +9818,7 @@ impl Rpc for FailingRpc {
         &self,
         target: ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -9780,6 +9833,7 @@ impl Rpc for FailingRpc {
             .create_demand(
                 target,
                 method_name,
+                invocation,
                 self_created_by,
                 self_agent_id,
                 self_env,
@@ -9886,7 +9940,7 @@ pub fn registry_test_card() -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: DateTime::from_timestamp_nanos(0),
+        created_at: jiff::Timestamp::UNIX_EPOCH,
         expires_at: None,
         system_card: false,
         managed_by: None,

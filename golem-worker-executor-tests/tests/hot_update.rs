@@ -35,6 +35,8 @@ use golem_common::model::{AgentEvent, AgentStatus, OwnedAgentId, ScanCursor, Tim
 use golem_common::{agent_key, data_value};
 use golem_test_framework::dsl::{TestDsl, update_counts};
 
+use golem_common::model::account::AccountId;
+use golem_common::model::caller::{Caller, ClaimVisibility, PublicCaller};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::replayable_stream::ErasedReplayableStream;
@@ -52,6 +54,7 @@ use golem_worker_executor::services::golem_config::{
     FilesystemSnapshotUploadConfig, OplogConfig, SnapshotPolicy,
 };
 use golem_worker_executor::services::key_value::KeyValueService;
+use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
     LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
     WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
@@ -60,7 +63,7 @@ use golem_worker_executor_test_utils::{
 use http::StatusCode;
 use log::info;
 use pretty_assertions::{assert_eq, assert_ne};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -1307,7 +1310,7 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
             managed_by: None,
@@ -2156,6 +2159,16 @@ async fn assert_snapshot_assisted_suffix_failure(
         "unexpected assisted failure: {details}"
     );
     assert_eq!(failed.failure_class, expected_class, "{details}");
+    // The target code decides the divergence of an update replay, not the snapshot load.
+    assert_eq!(
+        failed
+            .divergence
+            .as_ref()
+            .and_then(|divergence| divergence.replay_start.clone()),
+        None,
+        "{details}"
+    );
+    assert!(!details.contains("replay started"), "{details}");
     assert_eq!(
         failed
             .snapshot_assisted_details
@@ -2603,6 +2616,247 @@ async fn automatic_and_manual_update_contracts_remain_distinct(
 
 #[test]
 #[timeout("120s")]
+async fn queued_methods_validate_against_the_selected_update_revision(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::caller::Caller;
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::{AgentInvocation, InvocationId};
+    use golem_common::schema::SchemaValue;
+    use golem_worker_executor::worker::ResultOrSubscription;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let mut http_server = TestHttpServer::start().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_key!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "revision_one_only", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        1
+    );
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    let mut control = http_server.f1_control(2117).await;
+    let executor_clone = executor.clone();
+    let component_clone = component.clone();
+    let agent_clone = agent_id.clone();
+    let held = spawn(async move {
+        executor_clone
+            .invoke_and_await_agent(
+                &component_clone,
+                &agent_clone,
+                "blocking_stable",
+                data_value!(2117u64),
+            )
+            .await
+    });
+    control.await_reached().await;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    let pending = wait_for_update_counts(&executor, &worker_id, (1, 0, 0)).await?;
+    assert_eq!(pending.component_revision, component.revision);
+
+    let invocation = |method_name: &str| AgentInvocation::AgentMethod {
+        idempotency_key: InvocationId(uuid::Uuid::new_v4()),
+        method_name: method_name.to_string(),
+        allow_streams: false,
+        input: SchemaValue::Record { fields: vec![] }.try_into().unwrap(),
+        invocation_context: InvocationContextStack::fresh(),
+        caller: Caller::anonymous(),
+        scope_card: None,
+    };
+    let removed = invocation("revision_one_only");
+    let added = invocation("revision_two_only");
+    let worker = executor.active_agent(&worker_id).await.unwrap().primary();
+    for request in [&removed, &added] {
+        assert!(matches!(
+            worker.clone().invoke(request.clone()).await?,
+            ResultOrSubscription::Pending(_)
+        ));
+    }
+    // Both observations use revision one's read-only policy while the update is
+    // pending. Revision two makes the method mutating, so neither caller may
+    // borrow the other key's execution result.
+    let mut reads = [
+        Box::pin(
+            worker
+                .clone()
+                .invoke_and_await(invocation("revision_cache_probe")),
+        ),
+        Box::pin(
+            worker
+                .clone()
+                .invoke_and_await(invocation("revision_cache_probe")),
+        ),
+    ];
+    for read in &mut reads {
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), read)
+                .await
+                .is_err(),
+            "a cache miss cannot complete while the gate is held"
+        );
+    }
+    assert!(!held.is_finished());
+    control.resume();
+    assert_eq!(held.await??.into_typed::<u32>()?, 100);
+
+    assert!(matches!(
+        worker.clone().invoke_and_await(removed).await,
+        Err(WorkerExecutorError::InvalidRequest { details })
+            if details.contains("revision_one_only") && details.contains("not found")
+    ));
+    let output = worker.clone().invoke_and_await(added).await?;
+    assert_eq!(output.component_revision, Some(target.revision));
+    assert!(matches!(
+        output.result,
+        golem_common::model::AgentInvocationResult::AgentMethod {
+            output: SchemaValue::U32(2)
+        }
+    ));
+    let mut values = Vec::new();
+    for read in reads {
+        let output = read.await?;
+        assert_eq!(output.component_revision, Some(target.revision));
+        let golem_common::model::AgentInvocationResult::AgentMethod {
+            output: SchemaValue::U32(value),
+        } = output.result
+        else {
+            panic!("expected the selected revision's counter result");
+        };
+        values.push(value);
+    }
+    values.sort();
+    assert_eq!(values, vec![101, 102]);
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        102
+    );
+    http_server.abort();
+    Ok(())
+}
+
+/// A repeated trigger with an accepted key is answered by the retained invocation, even after an
+/// update removed its method.
+#[test]
+#[timeout("120s")]
+async fn repeated_trigger_after_an_update_keeps_the_retained_invocation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_update_v1")] agent_update_v1: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::worker::{
+        AgentInvocationMode, InvocationFreshnessDisposition, InvocationStart,
+    };
+    use golem_common::model::{IdempotencyKey, InvocationRequestKey};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let http_server = TestHttpServer::start().await;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_update_v1)
+        .store()
+        .await?;
+    let agent_id = agent_key!("SnapshotUpdateTest");
+    let worker_id = executor
+        .start_agent_with(
+            &component.id,
+            agent_id.clone(),
+            HashMap::from([("PORT".to_string(), http_server.port().to_string())]),
+            Vec::new(),
+        )
+        .await?;
+    let key = IdempotencyKey::fresh();
+    let (_, input) = data_value!().into_parts();
+    let trigger = |method_name: &str| -> anyhow::Result<InvocationStart> {
+        Ok(InvocationStart {
+            target: Some(crate::agent::id_target(&worker_id)),
+            component_id: Some(component.id.into()),
+            method_name: Some(method_name.to_string()),
+            input: Some(input.clone().try_into().map_err(anyhow::Error::msg)?),
+            mode: AgentInvocationMode::Schedule as i32,
+            idempotency_key: Some(key.clone().into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(golem_worker_executor_test_utils::callers::anonymous().into()),
+            freshness_disposition: InvocationFreshnessDisposition::MayExist as i32,
+            request_key: Some(
+                InvocationRequestKey::external(executor.auth_ctx().idempotency_scope(), Some(&key))
+                    .into(),
+            ),
+            ..Default::default()
+        })
+    };
+    let starts = |entries: &[golem_common::model::oplog::PublicOplogEntryWithIndex]| {
+        entries
+            .iter()
+            .filter(|entry| {
+                matches!(&entry.entry,
+                    PublicOplogEntry::AgentInvocationStarted(start)
+                        if matches!(&start.invocation,
+                            PublicAgentInvocation::AgentMethodInvocation(call)
+                                if call.method_name == "revision_one_only"))
+            })
+            .count()
+    };
+
+    executor
+        .invoke_agent_session(trigger("revision_one_only")?)
+        .await?;
+    // Invocations run in order, so this read returns after the trigger finished.
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "accumulated_value", data_value!())
+        .await?;
+    // Revision two cannot replay the removed method, so the update restores a snapshot.
+    let target = executor
+        .update_component(&component.id, "it_agent_update_v2_release")
+        .await?;
+    executor
+        .manual_update_worker(&worker_id, target.revision, false)
+        .await?;
+    executor
+        .wait_for_component_revision(&worker_id, target.revision, Duration::from_secs(30))
+        .await?;
+
+    executor
+        .invoke_agent_session(trigger("revision_one_only")?)
+        .await?;
+    assert_eq!(
+        starts(&executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?),
+        1,
+        "the repeated trigger must not execute the method again"
+    );
+
+    http_server.abort();
+    Ok(())
+}
+
+#[test]
+#[timeout("120s")]
 async fn snapshot_assisted_restart_before_attempt_and_later_update_modes_succeed(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -2717,8 +2971,17 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
     let assisted = executor
         .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
-    executor
-        .auto_update_worker(&worker_id, assisted.revision, true)
+    // The strategy entry of this update is written after the restart: it must still name the
+    // requester of the admission.
+    let assisted_requester = callers::account(AccountId::new());
+    let assisted_attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Automatic,
+            assisted.revision,
+            true,
+            assisted_requester.clone(),
+        )
         .await?;
     let pending = wait_for_update_counts(&executor, &worker_id, (1, 0, 0)).await?;
     assert_eq!(pending.component_revision, component.revision);
@@ -2763,8 +3026,15 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
     let manual = executor
         .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
-    executor
-        .manual_update_worker(&worker_id, manual.revision, false)
+    let manual_requester = callers::account(AccountId::new());
+    let manual_attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Manual,
+            manual.revision,
+            false,
+            manual_requester.clone(),
+        )
         .await?;
     executor
         .wait_for_component_revision(&worker_id, manual.revision, Duration::from_secs(30))
@@ -2795,6 +3065,11 @@ async fn restart_before_attempt_and_later_update_modes_succeed(
         update_counts(&executor.get_worker_metadata(&worker_id).await?),
         (0, 4, 0)
     );
+    // The admission and the strategy entry of the first update, and the queued manual update
+    // and its `PendingUpdate`, each name their own requester.
+    let requesters = update_requesters(&executor, &worker_id).await?;
+    assert_requested_by(&requesters, assisted_attempt, &assisted_requester, 2);
+    assert_requested_by(&requesters, manual_attempt, &manual_requester, 2);
     files
         .assert_files(
             &executor,
@@ -2876,11 +3151,27 @@ async fn queued_automatic_targets_select_strategy_when_each_reaches_queue_head(
     let revision_three = executor
         .update_component(&component.id, "it_agent_update_v2_release")
         .await?;
-    executor
-        .auto_update_worker(&worker_id, revision_two.revision, true)
+    // Two accounts each queue one update. The executor writes the strategy entry of each when it
+    // reaches the head of the queue, with the requester of that update's own admission.
+    let first_requester = callers::account(AccountId::new());
+    let second_requester = callers::account(AccountId::new());
+    let first_attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Automatic,
+            revision_two.revision,
+            true,
+            first_requester.clone(),
+        )
         .await?;
-    executor
-        .auto_update_worker(&worker_id, revision_three.revision, true)
+    let second_attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Automatic,
+            revision_three.revision,
+            true,
+            second_requester.clone(),
+        )
         .await?;
 
     let pending = wait_for_update_counts(&executor, &worker_id, (2, 0, 0)).await?;
@@ -2921,6 +3212,9 @@ async fn queued_automatic_targets_select_strategy_when_each_reaches_queue_head(
             .collect::<HashSet<_>>(),
         pending_attempts,
     );
+    let requesters = update_requesters(&executor, &worker_id).await?;
+    assert_requested_by(&requesters, first_attempt, &first_requester, 2);
+    assert_requested_by(&requesters, second_attempt, &second_requester, 2);
     http_server.abort();
     Ok(())
 }
@@ -4395,8 +4689,17 @@ async fn manual_update_on_idle(
         .invoke_and_await_agent(&component, &agent_id, "f2", data_value!())
         .await?;
 
-    executor
-        .manual_update_worker(&worker_id, updated_component.revision, false)
+    // An account requests the update: the queued manual update and its `PendingUpdate` both
+    // record it.
+    let requester = callers::account(AccountId::new());
+    let attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Manual,
+            updated_component.revision,
+            false,
+            requester.clone(),
+        )
         .await?;
 
     let after_update = executor
@@ -4404,6 +4707,7 @@ async fn manual_update_on_idle(
         .await?;
 
     let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let requesters = update_requesters(&executor, &worker_id).await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -4417,6 +4721,7 @@ async fn manual_update_on_idle(
     assert_eq!(before_update, after_update);
     assert_eq!(metadata.component_revision, updated_component.revision);
     assert_eq!(update_counts(&metadata), (0, 1, 0));
+    assert_requested_by(&requesters, attempt, &requester, 2);
 
     Ok(())
 }
@@ -4569,8 +4874,17 @@ async fn manual_update_on_idle_without_save_snapshot(
         .invoke_and_await_agent(&component, &agent_id, "f1", data_value!(0u64))
         .await?;
 
-    executor
-        .manual_update_worker(&worker_id, updated_component.revision, false)
+    // The save fails, so no `PendingUpdate` exists: the queued manual update alone records the
+    // requester.
+    let requester = callers::account(AccountId::new());
+    let attempt = executor
+        .update_worker_as_caller(
+            &worker_id,
+            AgentUpdateMode::Manual,
+            updated_component.revision,
+            false,
+            requester.clone(),
+        )
         .await?;
 
     let result = executor
@@ -4578,6 +4892,7 @@ async fn manual_update_on_idle_without_save_snapshot(
         .await?;
 
     let metadata = executor.get_worker_metadata(&worker_id).await?;
+    let requesters = update_requesters(&executor, &worker_id).await?;
 
     executor.check_oplog_is_queryable(&worker_id).await?;
 
@@ -4592,6 +4907,7 @@ async fn manual_update_on_idle_without_save_snapshot(
     assert_eq!(result.into_typed::<u64>()?, 5);
     assert_eq!(metadata.component_revision, ComponentRevision::INITIAL);
     assert_eq!(update_counts(&metadata), (0, 0, 1));
+    assert_requested_by(&requesters, attempt, &requester, 1);
 
     Ok(())
 }
@@ -8748,6 +9064,7 @@ async fn a_divergent_bootstrap_block_fails_the_snapshot_based_update(
                 function_name: HostFunctionName::WallClockNow,
                 invocation_id: None,
                 observational_owner: None,
+                driver: None,
                 request: None,
                 durable_function_type: DurableFunctionType::ReadLocal,
                 span_started: None,
@@ -9866,6 +10183,48 @@ async fn an_automatic_update_from_a_promoted_snapshot_that_the_target_cannot_loa
     Ok(())
 }
 
+/// The requester of every `PendingUpdate` and of every queued manual update of the agent, by the
+/// update attempt that each belongs to, in oplog order.
+async fn update_requesters(
+    executor: &impl TestDsl,
+    worker_id: &OwnedAgentId,
+) -> anyhow::Result<BTreeMap<OplogIndex, Vec<PublicCaller>>> {
+    let mut requesters: BTreeMap<OplogIndex, Vec<PublicCaller>> = BTreeMap::new();
+    for entry in executor.get_oplog(worker_id, OplogIndex::INITIAL).await? {
+        match entry.entry {
+            PublicOplogEntry::PendingUpdate(params) => requesters
+                .entry(params.update_attempt_index)
+                .or_default()
+                .push(params.requester),
+            PublicOplogEntry::PendingAgentInvocation(params) => {
+                if let PublicAgentInvocation::ManualUpdate(manual) = params.invocation {
+                    requesters
+                        .entry(entry.oplog_index)
+                        .or_default()
+                        .push(manual.requester);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(requesters)
+}
+
+/// Every record of update attempt `attempt` names `requester`, and there are `count` of them.
+fn assert_requested_by(
+    requesters: &BTreeMap<OplogIndex, Vec<PublicCaller>>,
+    attempt: OplogIndex,
+    requester: &Caller,
+    count: usize,
+) {
+    let expected = PublicCaller::new(requester, ClaimVisibility::Hidden);
+    assert_eq!(
+        requesters.get(&attempt).cloned().unwrap_or_default(),
+        vec![expected; count],
+        "the requesters of update attempt {attempt}"
+    );
+}
+
 /// An automatic update whose target makes a different host call than the recorded one fails with
 /// the class `Divergence` and the divergence at the recorded `Start`. After a real restart, the
 /// agent metadata and the public oplog still show the class, the index, both calls and the
@@ -9938,6 +10297,8 @@ async fn a_diverging_automatic_update_keeps_its_class_and_divergence_across_a_re
         .clone()
         .expect("the oplog keeps the divergence");
     assert_eq!(from_metadata.divergence.as_ref(), Some(&divergence));
+    // The new code decides the divergence of an update replay, so it names no replay start.
+    assert_eq!(divergence.replay_start, None);
 
     // The index names the recorded `Start` of the call that the source made.
     let recorded = oplog

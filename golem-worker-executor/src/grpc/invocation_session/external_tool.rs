@@ -124,6 +124,7 @@ where
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         };
         if mode == Mode::Lookup {
             let key = request
@@ -145,13 +146,9 @@ where
             let (worker, metadata, _response_lease) = if let Some(expected) = expected_fingerprint {
                 // The guard pins the named incarnation, and the response describes that worker,
                 // so a delete or re-create between reads cannot answer for another incarnation.
-                let (worker, response_lease) = Worker::get_exact_existing_suspended_for_response(
-                    self,
-                    &owned,
-                    caller,
-                    Some(expected),
-                )
-                .await?;
+                let (worker, response_lease) =
+                    Worker::get_exact_existing_suspended_for_response(self, &owned, Some(expected))
+                        .await?;
                 let bound = scope
                     .bind(&worker.tasks)
                     .map_err(WorkerExecutorError::runtime);
@@ -177,8 +174,7 @@ where
                     return Ok(response);
                 };
                 let (worker, response_lease) =
-                    Worker::get_exact_existing_suspended_for_response(self, &owned, caller, None)
-                        .await?;
+                    Worker::get_exact_existing_suspended_for_response(self, &owned, None).await?;
                 scope
                     .bind(&worker.tasks)
                     .map_err(WorkerExecutorError::runtime)?;
@@ -319,13 +315,13 @@ where
                 &tool_name,
                 &tool.command_path,
             )?;
-            let at = DateTime::from_timestamp(
-                timestamp.seconds,
-                timestamp.nanos.try_into().map_err(|_| {
-                    WorkerExecutorError::invalid_request("invalid schedule timestamp")
-                })?,
-            )
-            .ok_or_else(|| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
+            if !(0..1_000_000_000).contains(&timestamp.nanos) {
+                return Err(WorkerExecutorError::invalid_request(
+                    "invalid schedule timestamp",
+                ));
+            }
+            let at = jiff::Timestamp::new(timestamp.seconds, timestamp.nanos)
+                .map_err(|_| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
             let _account_id: golem_common::model::account::AccountId = request
                 .component_owner_account_id
                 .ok_or_else(|| WorkerExecutorError::invalid_request("account_id not found"))?
@@ -391,13 +387,9 @@ where
         // A missing, replaced or deleting incarnation is answered before the call reads or
         // prepares it. A deletion that starts later cancels this session and waits for it before
         // it stops the agent.
-        let (worker, _response_lease) = Worker::get_exact_existing_suspended_for_response(
-            self,
-            &owned,
-            caller.clone(),
-            expected_fingerprint,
-        )
-        .await?;
+        let (worker, _response_lease) =
+            Worker::get_exact_existing_suspended_for_response(self, &owned, expected_fingerprint)
+                .await?;
         let bound = scope
             .bind(&worker.tasks)
             .map_err(WorkerExecutorError::runtime);
@@ -492,6 +484,7 @@ where
                     prepared: Some(acceptance.prepared),
                     durable_replayed: acceptance.replayed,
                     joined_origin_observer: acceptance.joined_origin_observer,
+                    queued: None,
                 })
                 .map_err(|_| {
                     WorkerExecutorError::runtime(
@@ -501,13 +494,13 @@ where
             Worker::start_if_needed(worker.clone()).await?;
         } else if mode == Mode::Schedule && request.schedule_at.is_some() {
             let timestamp = request.schedule_at.as_ref().unwrap();
-            let at = DateTime::from_timestamp(
-                timestamp.seconds,
-                timestamp.nanos.try_into().map_err(|_| {
-                    WorkerExecutorError::invalid_request("invalid schedule timestamp")
-                })?,
-            )
-            .ok_or_else(|| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
+            if !(0..1_000_000_000).contains(&timestamp.nanos) {
+                return Err(WorkerExecutorError::invalid_request(
+                    "invalid schedule timestamp",
+                ));
+            }
+            let at = jiff::Timestamp::new(timestamp.seconds, timestamp.nanos)
+                .map_err(|_| WorkerExecutorError::invalid_request("invalid schedule timestamp"))?;
             let _account_id: golem_common::model::account::AccountId = request
                 .component_owner_account_id
                 .ok_or_else(|| WorkerExecutorError::invalid_request("account_id not found"))?

@@ -271,7 +271,7 @@ mod tests {
                     secret_id: uuid::Uuid::nil(),
                     config_key: Some(vec!["private-key".into()]),
                     version: 0,
-                    resolved_at: chrono::DateTime::UNIX_EPOCH,
+                    resolved_at: jiff::Timestamp::UNIX_EPOCH,
                     category: None,
                 })],
             },

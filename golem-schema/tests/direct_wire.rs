@@ -162,18 +162,112 @@ fn json_values_use_the_normal_string_representation() {
     assert!(decode::<serde_json::Value>(encode("{").unwrap()).is_err());
 }
 
-#[cfg(feature = "chrono")]
+#[cfg(feature = "jiff")]
 #[test]
-fn chrono_types_preserve_signed_duration_and_naive_formats() {
-    assert_direct_parity(chrono::Duration::nanoseconds(-12345678901));
-    let date = chrono::NaiveDate::from_ymd_opt(2024, 2, 29).unwrap();
-    let time = chrono::NaiveTime::from_hms_nano_opt(23, 17, 9, 123456789).unwrap();
+fn jiff_types_preserve_signed_duration_and_naive_formats() {
+    use golem_schema::schema::{IntoSchema, SchemaValue};
+
+    assert_direct_parity(jiff::SignedDuration::from_nanos(-12345678901));
+    let date = jiff::civil::Date::new(2024, 2, 29).unwrap();
+    let time = jiff::civil::Time::new(23, 17, 9, 123456789).unwrap();
+    assert_eq!(date.to_value(), SchemaValue::String("2024-02-29".into()));
+    assert_eq!(
+        time.to_value(),
+        SchemaValue::String("23:17:09.123456789".into())
+    );
+    assert_eq!(
+        jiff::civil::Time::new(0, 0, 0, 0).unwrap().to_value(),
+        SchemaValue::String("00:00:00.000000000".into())
+    );
     assert_direct_parity(date);
     assert_direct_parity(time);
-    assert_direct_parity(date.and_time(time));
-    assert!(decode::<chrono::NaiveDate>(encode("2024-02-30").unwrap()).is_err());
-    assert!(decode::<chrono::NaiveTime>(encode("25:00:00").unwrap()).is_err());
-    assert!(decode::<chrono::NaiveDateTime>(encode("not a date").unwrap()).is_err());
+    assert_direct_parity(date.to_datetime(time));
+    assert!(decode::<jiff::civil::Date>(encode("2024-02-30").unwrap()).is_err());
+    assert!(decode::<jiff::civil::Time>(encode("25:00:00").unwrap()).is_err());
+    assert!(decode::<jiff::civil::DateTime>(encode("not a date").unwrap()).is_err());
+}
+
+#[cfg(feature = "jiff")]
+#[test]
+fn jiff_civil_parsing_requires_complete_unambiguous_shapes() {
+    use golem_schema::schema::{FromSchema, SchemaValue};
+    use jiff::civil::{Date, DateTime, Time};
+
+    fn reject<T: FromSchema + direct::FromWire>(inputs: &[&str]) {
+        for input in inputs {
+            assert!(
+                T::from_value(&SchemaValue::String((*input).into())).is_err(),
+                "FromSchema accepted {input}"
+            );
+            assert!(
+                decode::<T>(encode(*input).unwrap()).is_err(),
+                "FromWire accepted {input}"
+            );
+        }
+    }
+    reject::<Date>(&[
+        "2024-02-29T12:34:56",
+        "2024-02-29T12:34:56+05:00",
+        "2024-02-29[UTC]",
+        "20240229",
+        "2024-02-30",
+        "",
+        "é",
+    ]);
+    reject::<DateTime>(&[
+        "2024-02-29",
+        "2024-02-29T12:34",
+        "2024-02-29T12:34:56+05:00",
+        "2024-02-29T12:34:56Z",
+        "2024-02-29T12:34:56[UTC]",
+        "2016-12-31T23:59:60.123456789",
+        "2024-02-29T12:34:56.1234567890",
+    ]);
+    reject::<Time>(&[
+        "2024-02-29T12:34:56",
+        "12:34:56+05:00",
+        "12:34:56Z",
+        "12:34:56[UTC]",
+        "12:34",
+        "123456",
+        "23:59:60",
+        "23:59:60.123456789",
+        "12:34:56.",
+        "12:34:56.1234567890",
+        "25:00:00",
+        "",
+        "é",
+    ]);
+    for date in [Date::MIN, Date::MAX, Date::new(0, 1, 1).unwrap()] {
+        assert_direct_parity(date);
+        for time in [Time::MIN, Time::MAX] {
+            assert_direct_parity(date.to_datetime(time));
+        }
+    }
+    for (input, expected) in [
+        ("12:34:56", Time::new(12, 34, 56, 0).unwrap()),
+        ("12:34:56.1", Time::new(12, 34, 56, 100_000_000).unwrap()),
+        (
+            "12:34:56.123456789",
+            Time::new(12, 34, 56, 123_456_789).unwrap(),
+        ),
+    ] {
+        assert_eq!(
+            Time::from_value(&SchemaValue::String(input.into())).unwrap(),
+            expected
+        );
+        assert_eq!(decode::<Time>(encode(input).unwrap()).unwrap(), expected);
+        let datetime = format!("2024-02-29T{input}");
+        let expected = Date::new(2024, 2, 29).unwrap().to_datetime(expected);
+        assert_eq!(
+            DateTime::from_value(&SchemaValue::String(datetime.clone())).unwrap(),
+            expected
+        );
+        assert_eq!(
+            decode::<DateTime>(encode(&datetime).unwrap()).unwrap(),
+            expected
+        );
+    }
 }
 
 #[cfg(feature = "bit_vec")]
@@ -339,7 +433,7 @@ fn rich_values_and_nominal_ids_use_direct_wire_shapes() {
     assert_eq!(value.low_bits, 0x9876);
     assert_eq!(decode::<uuid::Uuid>(tree).unwrap(), uuid);
     let promise = golem_schema::PromiseId::new(
-        golem_schema::AgentId::new(golem_schema::ComponentId::new(uuid), "Counter(abc)".into()),
+        golem_schema::AgentId::new(uuid),
         uuid::Uuid::from_u64_pair(0x5678, 0x4321),
         83,
     );
@@ -354,11 +448,16 @@ fn rich_values_and_nominal_ids_use_direct_wire_shapes() {
     actual.defs.sort_by(|a, b| a.id.cmp(&b.id));
     expected.defs.sort_by(|a, b| a.id.cmp(&b.id));
     assert_eq!(actual, expected);
-    let date = chrono::DateTime::from_timestamp(-19, 123456789).unwrap();
-    assert_eq!(
-        decode::<chrono::DateTime<chrono::Utc>>(encode(&date).unwrap()).unwrap(),
-        date
-    );
+    let date = jiff::Timestamp::new(-19, 123456789).unwrap();
+    let encoded_date = encode(&date).unwrap();
+    assert!(matches!(
+        encoded_date.value_nodes.as_slice(),
+        [wire::SchemaValueNode::DatetimeValue(wire::Datetime {
+            seconds: -19,
+            nanoseconds: 123456789,
+        })]
+    ));
+    assert_eq!(decode::<jiff::Timestamp>(encoded_date).unwrap(), date);
     let duration = std::time::Duration::from_nanos(123456789);
     assert_eq!(
         decode::<std::time::Duration>(encode(&duration).unwrap()).unwrap(),
@@ -375,7 +474,7 @@ fn rich_values_and_nominal_ids_use_direct_wire_shapes() {
         .is_err()
     );
     assert!(
-        decode::<chrono::DateTime<chrono::Utc>>(wire::SchemaValueTree {
+        decode::<jiff::Timestamp>(wire::SchemaValueTree {
             root: 0,
             value_nodes: vec![wire::SchemaValueNode::DatetimeValue(wire::Datetime {
                 seconds: i64::MAX,
@@ -1491,20 +1590,20 @@ fn std_durations_beyond_the_i64_nanosecond_range_fail_to_encode() {
     assert_direct_parity(longest);
 }
 
-#[cfg(feature = "chrono")]
+#[cfg(feature = "jiff")]
 #[test]
-fn chrono_durations_beyond_the_i64_nanosecond_range_fail_to_encode() {
+fn jiff_durations_beyond_the_i64_nanosecond_range_fail_to_encode() {
     use golem_schema::schema::{IntoSchema, SchemaValue};
-    for too_long in [chrono::Duration::MAX, chrono::Duration::MIN] {
+    for too_long in [jiff::SignedDuration::MAX, jiff::SignedDuration::MIN] {
         assert!(matches!(encode(&too_long), Err(WireError::Shape(_))));
     }
     assert!(matches!(
-        chrono::Duration::MAX.to_value(),
+        jiff::SignedDuration::MAX.to_value(),
         SchemaValue::Duration(p) if p.nanoseconds == i64::MAX
     ));
     assert!(matches!(
-        chrono::Duration::MIN.to_value(),
+        jiff::SignedDuration::MIN.to_value(),
         SchemaValue::Duration(p) if p.nanoseconds == i64::MIN
     ));
-    assert_direct_parity(chrono::Duration::nanoseconds(i64::MIN));
+    assert_direct_parity(jiff::SignedDuration::from_nanos(i64::MIN));
 }

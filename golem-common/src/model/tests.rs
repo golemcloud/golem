@@ -683,6 +683,19 @@ fn durable_stream_session_index_serialization_stays_bounded() {
     );
 }
 
+fn stream_acceptance(key: InvocationId) -> crate::model::durable_stream::StreamSessionAcceptance {
+    crate::model::durable_stream::StreamSessionAcceptance {
+        public_session_id: key.to_string(),
+        route_scope: None,
+        expiry_policy: crate::model::durable_stream::StreamSessionExpiryPolicy::None,
+        expiry_deadline_millis: None,
+        effective_identity: Vec::new(),
+        execution_config: Vec::new(),
+        live_join_buffer_events: 1,
+        transport_stream_ids: Vec::new(),
+    }
+}
+
 #[test]
 fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
     let key = invocation_id(14);
@@ -699,20 +712,15 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
         &session_key.idempotency_key,
     )
     .unwrap();
-    let pending = OplogIndex::from_u64(12);
-    let mut status = DurableStreamSessionStatus {
-        first_prepared: Some(OplogIndex::from_u64(10)),
-        prepared: Some(OplogIndex::from_u64(10)),
-        session_key: Some(session_key.idempotency_key),
-        prepared_attempt_id: Some(attempt),
-        ..Default::default()
-    };
+    let pending = OplogIndex::from_u64(9);
+    let mut status = DurableStreamSessionStatus::default();
     status.apply_pending_invocation(pending, &key);
     status.apply_record(
         OplogIndex::from_u64(13),
         &StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: session_key.idempotency_key,
+            acceptance: stream_acceptance(key),
             attachment_id,
             attempt_id: attempt,
             epoch: 1,
@@ -720,6 +728,53 @@ fn durable_stream_initial_attachment_requires_exact_pending_evidence() {
         }),
     );
     assert_eq!(status.validated_initial_pending_invocation, Some(pending));
+    assert_eq!(status.lifecycle_error, None);
+    assert_eq!(status.prepared, None);
+    assert_eq!(status.attachment_epoch, Some(1));
+    assert_eq!(status.attachment_attempt_id, Some(attempt));
+    assert_eq!(status.attachment_attached, Some(true));
+    use crate::model::durable_stream::{
+        PersistedInvocationTarget, PersistedStreamInvocationDescriptor, StartAttemptDescriptor,
+        StreamSessionPreparedRecord,
+    };
+    status.apply_record(
+        OplogIndex::from_u64(14),
+        &StreamSessionRecord::Prepared(StreamSessionPreparedRecord {
+            format_version: 1,
+            public_session_id: key.to_string(),
+            route_scope: None,
+            session_key: key,
+            expiry_policy: StreamSessionExpiryPolicy::None,
+            expiry_deadline_millis: None,
+            attempt: StartAttemptDescriptor {
+                format_version: 1,
+                session_key: session_key.clone(),
+                attachment_id,
+                expected_callee_fingerprint: session_key.callee_fingerprint,
+                attempt_id: attempt,
+                invocation: PersistedStreamInvocationDescriptor {
+                    format_version: 1,
+                    session_key,
+                    target_component_revision: ComponentRevision::INITIAL,
+                    target: PersistedInvocationTarget::AgentMethod {
+                        method_name: "test".into(),
+                    },
+                    invocation_value: Vec::new(),
+                    stream_handles: Vec::new(),
+                    execution_config: Vec::new(),
+                    effective_identity: Vec::new(),
+                },
+                effective_identity: Vec::new(),
+                live_join_buffer_events: 1,
+            },
+            stream_mappings: Vec::new(),
+        }),
+    );
+    assert_eq!(status.prepared, Some(OplogIndex::from_u64(14)));
+    assert_eq!(status.validated_initial_pending_invocation, Some(pending));
+    assert_eq!(status.attachment_epoch, Some(1));
+    assert_eq!(status.attachment_attempt_id, Some(attempt));
+    assert_eq!(status.attachment_attached, Some(true));
     assert_eq!(status.lifecycle_error, None);
 }
 
@@ -751,6 +806,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
         &StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: session_key.idempotency_key,
+            acceptance: stream_acceptance(key),
             attachment_id,
             attempt_id: attempt,
             epoch: 1,
@@ -762,7 +818,6 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
 
     for pending in [
         OplogIndex::NONE,
-        OplogIndex::from_u64(9),
         OplogIndex::from_u64(13),
         OplogIndex::from_u64(14),
     ] {
@@ -777,6 +832,7 @@ fn durable_stream_initial_attachment_records_malformed_pending_relationship() {
         let mut attached = match StreamSessionRecord::Attached(StreamSessionAttachedRecord {
             format_version: 1,
             session_key: invalid.session_key.unwrap(),
+            acceptance: stream_acceptance(key),
             attachment_id: AttachmentId::primary(
                 session_key.callee_environment_id,
                 &session_key.callee,
@@ -1829,6 +1885,7 @@ fn agent_metadata_dto_keeps_the_underlying_status_through_the_proto() {
         agent_id: AgentId::from_parts(1, 1),
         agent_type_name: None,
         canonical_key: None,
+        origin: crate::model::agent::AgentOrigin::Forked,
         constructor_parameters: None,
         owner_kind: crate::model::agent::OwnerKind::ComponentAgent,
         environment_id: EnvironmentId::new(),
@@ -1864,6 +1921,7 @@ fn agent_metadata_dto_keeps_the_underlying_status_through_the_proto() {
     let json = serde_json::to_value(&sandbox).unwrap();
     assert_eq!(json["status"], "Sandboxed");
     assert_eq!(json["underlyingStatus"], "Interrupted");
+    assert_eq!(json["origin"], "forked");
 
     let live = dto(AgentStatus::Idle, None);
     let proto = ProtoAgentMetadata::try_from(live.clone()).unwrap();
@@ -2041,6 +2099,7 @@ fn agent_status_record_agent_mode_is_not_serialized() {
             updated_millis: 1200,
             credit_millis: Some(900),
         },
+        settling_invocation: Some(invocation_id(11)),
         agent_mode: AgentMode::Ephemeral,
         ..AgentStatusRecord::default()
     };
@@ -2075,7 +2134,7 @@ fn agent_invocation_result_redacted_debug_hides_capability_material() {
                     secret_id: uuid::Uuid::nil(),
                     config_key: None,
                     version: 0,
-                    resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+                    resolved_at: jiff::Timestamp::new(0, 0).unwrap(),
                     category: None,
                 }),
             ],
@@ -2119,9 +2178,12 @@ fn agent_invocation_payload_round_trip_preserves_scope_card() {
     let invocation = AgentInvocation::AgentMethod {
         idempotency_key: InvocationId::new(),
         method_name: "run".to_string(),
+        allow_streams: false,
         input: SchemaValue::Tuple {
             elements: Vec::new(),
-        },
+        }
+        .try_into()
+        .unwrap(),
         invocation_context: InvocationContextStack::fresh(),
         caller: sample_caller(),
         scope_card: Some(scope_card.clone()),
@@ -2145,6 +2207,46 @@ fn agent_invocation_payload_round_trip_preserves_scope_card() {
         original_claims_json(&caller),
         original_claims_json(&sample_caller())
     );
+}
+
+/// A queued manual update keeps its requester, both roles and the exact claims, from the
+/// invocation to its payload, through the binary codec and back. The requester is not the
+/// invocation's caller.
+#[test]
+fn manual_update_payload_round_trips_the_requester() {
+    use crate::base_model::caller::test_support::{original_claims_json, sample_caller};
+    use crate::model::{AgentInvocation, AgentInvocationPayload};
+    use crate::serialization::{deserialize, serialize};
+
+    let target_revision = ComponentRevision::new(3).unwrap();
+    let invocation = AgentInvocation::ManualUpdate {
+        target_revision,
+        requester: sample_caller(),
+    };
+    assert_eq!(invocation.caller(), None);
+
+    let (idempotency_key, payload, invocation_context) = invocation.clone().into_parts();
+    assert_eq!(
+        payload,
+        AgentInvocationPayload::ManualUpdate {
+            target_revision,
+            requester: sample_caller(),
+        }
+    );
+    let decoded: AgentInvocationPayload = deserialize(&serialize(&payload).unwrap()).unwrap();
+    assert_eq!(decoded, payload);
+    let AgentInvocationPayload::ManualUpdate { requester, .. } = &decoded else {
+        panic!("expected a manual update payload, got {decoded:?}");
+    };
+    assert_eq!(
+        original_claims_json(requester),
+        original_claims_json(&sample_caller())
+    );
+
+    let rebuilt = AgentInvocation::from_parts(idempotency_key, decoded, invocation_context);
+    assert_eq!(rebuilt, invocation);
+    let decoded: AgentInvocation = deserialize(&serialize(&invocation).unwrap()).unwrap();
+    assert_eq!(decoded, invocation);
 }
 
 #[test]

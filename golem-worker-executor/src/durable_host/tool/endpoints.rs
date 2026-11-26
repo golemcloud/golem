@@ -352,6 +352,7 @@ pub(super) async fn admit_tool_response_secret_holds<U, Ctx>(
     accessor: &Accessor<U, HasSelf<DurableWorkerCtx<Ctx>>>,
     response: ToolInvokeResponse,
     invocation_id: crate::durable_host::concurrent::InvocationIdSource,
+    parent_start_index: Option<golem_common::model::oplog::OplogIndex>,
 ) -> anyhow::Result<ToolInvokeResponse>
 where
     U: Send + 'static,
@@ -391,6 +392,8 @@ where
             DurableFunctionType::ReadLocal,
             crate::durable_host::concurrent::AccessClaimOptions {
                 invocation_id,
+                parent_start_index,
+                incomplete_repair_authorized_by_scope: parent_start_index.is_some(),
                 ..Default::default()
             },
             async || {

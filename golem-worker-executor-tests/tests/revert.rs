@@ -52,6 +52,10 @@ inherit_test_dep!(
     #[tagged_as("host_api_tests")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("agent_sdk_rust")]
+    PrecompiledComponent
+);
 inherit_test_dep!(Tracing);
 
 #[test]
@@ -279,7 +283,7 @@ async fn count_based_revert_rejects_a_stale_resolution_without_writing(
     executor
         .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
         .await?;
-    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let before = crate::revert_replay_tail::settled_oplog(&executor, &worker_id).await?;
 
     let response = executor
         .client
@@ -318,6 +322,365 @@ async fn count_based_revert_rejects_a_stale_resolution_without_writing(
     );
 
     Ok(())
+}
+
+/// Two count-based reverts of the last invocation carry the same resolution, as a repaired guest
+/// call or a retried request sends them. The first drops the last invocation. The second finds
+/// that revert already applied and succeeds without writing. A new resolution of the last
+/// invocation skips the dropped one. After a new invocation starts, the same resolution is stale.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn a_repeated_count_based_revert_of_the_same_resolution_writes_nothing(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let agent_id = agent_key!("RpcCounter", "double-revert");
+    let worker_id = executor
+        .start_agent(&component.id, agent_id.clone())
+        .await?;
+
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "inc_by", data_value!(1u64))
+        .await?;
+    executor
+        .invoke_and_await_agent(&component, &agent_id, "inc_by", data_value!(10u64))
+        .await?;
+
+    let resolve = || {
+        let mut client = executor.client.clone();
+        let request = ResolveRevertLastInvocationsRequest {
+            agent_id: Some(worker_id.agent_id.into()),
+            number_of_invocations: 1,
+            environment_id: Some(context.default_environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+        };
+        async move {
+            match client
+                .resolve_revert_last_invocations(request)
+                .await?
+                .into_inner()
+                .result
+            {
+                Some(resolve_revert_last_invocations_response::Result::Success(resolved)) => {
+                    Ok(resolved)
+                }
+                other => Err(anyhow::anyhow!("failed to resolve the revert: {other:?}")),
+            }
+        }
+    };
+    let revert = |resolved| {
+        let mut client = executor.client.clone();
+        let request = RevertWorkerRequest {
+            agent_id: Some(worker_id.agent_id.into()),
+            target: Some(
+                RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                    number_of_invocations: 1,
+                })
+                .into(),
+            ),
+            environment_id: Some(context.default_environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(callers::anonymous().into()),
+            resolved_revert: Some(resolved),
+            expected_fingerprint: None,
+        };
+        async move { anyhow::Ok(client.revert_worker(request).await?.into_inner().result) }
+    };
+
+    let resolved = resolve().await?;
+    match revert(resolved).await? {
+        Some(revert_worker_response::Result::Success(_)) => {}
+        other => anyhow::bail!("the first revert failed: {other:?}"),
+    }
+    let before = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+
+    let resolved_again = resolve().await?;
+    assert!(
+        resolved_again.last_oplog_index < resolved.last_oplog_index,
+        "the resolution after the revert counted the dropped invocation: {resolved_again:?}, \
+         first resolution {resolved:?}"
+    );
+
+    match revert(resolved).await? {
+        Some(revert_worker_response::Result::Success(_)) => {}
+        other => anyhow::bail!("the repeated revert of an applied resolution failed: {other:?}"),
+    }
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        before.last().map(|entry| entry.oplog_index),
+        after.last().map(|entry| entry.oplog_index),
+        "the repeated revert wrote an oplog entry"
+    );
+
+    let value = executor
+        .invoke_and_await_agent(&component, &agent_id, "get_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(value, 1, "the first revert drops only the last invocation");
+
+    let before = crate::revert_replay_tail::settled_oplog(&executor, &worker_id).await?;
+    match revert(resolved).await? {
+        Some(revert_worker_response::Result::Failure(error)) => {
+            assert!(
+                format!("{error:?}").contains("Stale count-based revert resolution"),
+                "unexpected stale revert error: {error:?}"
+            );
+        }
+        other => anyhow::bail!("the resolution applied again after a new invocation: {other:?}"),
+    }
+    let after = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    assert_eq!(
+        before.last().map(|entry| entry.oplog_index),
+        after.last().map(|entry| entry.oplog_index),
+        "the stale revert wrote an oplog entry"
+    );
+
+    Ok(())
+}
+
+/// Runs `add_after_release` on a `BackgroundWork` agent, whose result arrives while its
+/// background work waits for a promise, and resolves a count-based revert of that invocation.
+/// With `settle_first`, the test completes the promise and waits for the invocation's
+/// `AgentInvocationSettled` before it sends the revert, so the oplog tail moved after the
+/// resolution without a new invocation. Otherwise it sends the revert while the background work
+/// still waits. Either way the revert applies the resolved cut and drops the invocation.
+async fn count_based_revert_of_an_invocation_with_background_work(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    agent_sdk_rust: &PrecompiledComponent,
+    case: &str,
+    settle_first: bool,
+) -> anyhow::Result<()> {
+    use golem_common::model::PromiseId;
+    use golem_common::model::oplog::PublicAgentInvocation;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.suspend.suspend_after = std::time::Duration::from_secs(600);
+                config.suspend.rpc_suspend_after = std::time::Duration::from_secs(600);
+                config.suspend.wait_suspend_grace = std::time::Duration::from_secs(600);
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_sdk_rust)
+        .store()
+        .await?;
+    let tally_name = format!("{case}-tally-{}", context.redis_prefix());
+    let tally = agent_key!("Tally", tally_name.clone());
+    let agent = agent_key!(
+        "BackgroundWork",
+        format!("{case}-{}", context.redis_prefix())
+    );
+    let worker_id = executor.start_agent(&component.id, agent.clone()).await?;
+
+    let release = executor
+        .invoke_and_await_agent(&component, &agent, "create_release", data_value!())
+        .await?
+        .into_typed::<PromiseId>()?;
+    let result = executor
+        .invoke_and_await_agent(
+            &component,
+            &agent,
+            "add_after_release",
+            data_value!(release.clone(), tally_name, None::<PromiseId>, 5u64),
+        )
+        .await?
+        .into_typed::<String>()?;
+    assert_eq!(result, "returned");
+
+    let resolution = executor
+        .client
+        .clone()
+        .resolve_revert_last_invocations(ResolveRevertLastInvocationsRequest {
+            agent_id: Some(worker_id.agent_id.into()),
+            number_of_invocations: 1,
+            environment_id: Some(context.default_environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+        })
+        .await?
+        .into_inner();
+    let resolved = match resolution.result {
+        Some(resolve_revert_last_invocations_response::Result::Success(resolved)) => resolved,
+        other => anyhow::bail!("failed to resolve count-based revert: {other:?}"),
+    };
+    let resolved_tail = executor
+        .get_oplog(&worker_id, OplogIndex::INITIAL)
+        .await?
+        .last()
+        .map(|entry| entry.oplog_index);
+
+    if settle_first {
+        executor
+            .complete_promise(&worker_id.environment_id, &release, vec![1])
+            .await?;
+        let invocation = executor
+            .get_oplog(&worker_id, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .find_map(|entry| match &entry.entry {
+                PublicOplogEntry::AgentInvocationStarted(started) => match &started.invocation {
+                    PublicAgentInvocation::AgentMethodInvocation(method)
+                        if method.method_name == "add_after_release" =>
+                    {
+                        Some(method.invocation_id)
+                    }
+                    _ => None,
+                },
+                _ => None,
+            })
+            .expect("add_after_release started");
+        let settled = tokio::time::timeout(std::time::Duration::from_secs(30), async {
+            loop {
+                let oplog = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+                if oplog.iter().any(|entry| {
+                    matches!(&entry.entry,
+                        PublicOplogEntry::AgentInvocationSettled(settled)
+                            if settled.invocation_id == invocation)
+                }) {
+                    return Ok::<_, anyhow::Error>(oplog);
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        })
+        .await??;
+        assert_ne!(
+            settled.last().map(|entry| entry.oplog_index),
+            resolved_tail,
+            "the oplog tail moved after the resolution"
+        );
+        assert_eq!(
+            settled
+                .iter()
+                .filter(|entry| matches!(entry.entry, PublicOplogEntry::AgentInvocationStarted(_)))
+                .count(),
+            3,
+            "no invocation started after add_after_release"
+        );
+    }
+
+    let response = executor
+        .client
+        .clone()
+        .revert_worker(RevertWorkerRequest {
+            agent_id: Some(worker_id.agent_id.into()),
+            target: Some(
+                RevertWorkerTarget::RevertLastInvocations(RevertLastInvocations {
+                    number_of_invocations: 1,
+                })
+                .into(),
+            ),
+            environment_id: Some(context.default_environment_id.into()),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            caller: Some(callers::anonymous().into()),
+            resolved_revert: Some(resolved),
+            expected_fingerprint: None,
+        })
+        .await?
+        .into_inner();
+    match response.result {
+        Some(revert_worker_response::Result::Success(_)) => {}
+        other => anyhow::bail!("count-based revert failed: {other:?}"),
+    }
+
+    let reverted = executor.get_oplog(&worker_id, OplogIndex::INITIAL).await?;
+    let region = reverted
+        .iter()
+        .find_map(|entry| match &entry.entry {
+            PublicOplogEntry::Revert(revert) => Some(revert.dropped_region.clone()),
+            _ => None,
+        })
+        .expect("the revert is recorded");
+    assert_eq!(
+        region.start,
+        OplogIndex::from_u64(resolved.last_oplog_index).next(),
+        "the revert drops the oplog from the resolved cut"
+    );
+
+    if !settle_first {
+        executor
+            .complete_promise(&worker_id.environment_id, &release, vec![1])
+            .await?;
+    }
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &agent, "completions", data_value!())
+            .await?
+            .into_typed::<u64>()?,
+        0,
+        "the reverted invocation's background run is not part of the agent's state"
+    );
+    if !settle_first {
+        assert_eq!(
+            executor
+                .invoke_and_await_agent(&component, &tally, "total", data_value!())
+                .await?
+                .into_typed::<u64>()?,
+            0,
+            "the reverted invocation's background work never adds to the tally"
+        );
+    }
+
+    drop(executor);
+    Ok(())
+}
+
+/// A count-based revert sent after the reverted invocation settled applies: the settlement and
+/// the background work moved the oplog tail after the resolution, but no invocation started, so
+/// the stopped oplog still cuts at the resolved index.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn count_based_revert_applies_after_the_reverted_invocation_settled(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    count_based_revert_of_an_invocation_with_background_work(
+        last_unique_id,
+        deps,
+        agent_sdk_rust,
+        "revert-after-settled",
+        true,
+    )
+    .await
+}
+
+/// A count-based revert sent while the reverted invocation's background work still waits stops
+/// the agent and applies.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn count_based_revert_applies_while_the_background_work_waits(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    count_based_revert_of_an_invocation_with_background_work(
+        last_unique_id,
+        deps,
+        agent_sdk_rust,
+        "revert-during-drain",
+        false,
+    )
+    .await
 }
 
 #[test]

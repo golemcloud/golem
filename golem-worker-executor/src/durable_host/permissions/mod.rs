@@ -72,9 +72,12 @@ use grants::parse_grants;
 use grants::parse_pattern_grant;
 use grants::permission_error_from_algebra;
 use grants::permission_error_from_parse;
+use grants::wallet_permission_error_from_algebra;
 use handles::handle_card_id;
 use handles::permission_card_scope_card;
+use handles::permission_card_scope_lineage_of_child;
 use handles::permission_card_snapshot;
+use handles::refuse_cut_off_scope_card;
 pub(crate) use handles::resolve_invocation_scope_card;
 use handles::resolve_permission_card;
 use handles::resolve_permission_card_handle;
@@ -104,7 +107,7 @@ use crate::services::card::{CardRevokeResult, CardState, RuntimeCardCreation};
 use crate::services::oplog::{CommitLevel, OplogOps};
 use crate::workerctx::WorkerCtx;
 use anyhow::anyhow;
-use chrono::{DateTime, TimeDelta, Utc};
+
 use desert_rust::{BinaryCodec, BinaryDeserializer, BinarySerializer};
 use golem_common::base_model::oplog::QueuedCardEventTransfer;
 use golem_common::model::account::AccountEmail;
@@ -164,6 +167,9 @@ enum PermissionCardEntry {
         /// stays in the table until the guest drops its handle, so the handle never names another
         /// entry, but it can no longer be attached or used as a parent.
         invocation_key: Option<golem_common::model::InvocationId>,
+        /// The scope cards that the card was derived from, directly or through other scope
+        /// cards of the invocation.
+        lineage: BTreeSet<CardId>,
     },
 }
 
@@ -196,7 +202,7 @@ struct DerivedGrantSets<P = PolymorphicPermissionPattern> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct ScopeDerivationParent {
     root_card_ids: Vec<CardId>,
-    expires_at: Option<DateTime<Utc>>,
+    expires_at: Option<jiff::Timestamp>,
     delegation: DelegationCard,
 }
 
@@ -214,14 +220,14 @@ enum DecidedScopeParent {
 
 async fn durable_now<Ctx: WorkerCtx>(
     ctx: &mut DurableWorkerCtx<Ctx>,
-) -> anyhow::Result<DateTime<Utc>> {
+) -> anyhow::Result<jiff::Timestamp> {
     let now =
         <DurableWorkerCtx<Ctx> as wasmtime_wasi::p2::bindings::clocks::wall_clock::Host>::now(ctx)
             .await?;
     let seconds = i64::try_from(now.seconds)
         .map_err(|_| anyhow!("durable wall-clock timestamp is out of range"))?;
-    DateTime::from_timestamp(seconds, now.nanoseconds)
-        .ok_or_else(|| anyhow!("durable wall-clock timestamp is invalid"))
+    jiff::Timestamp::new(seconds, (now.nanoseconds) as i32)
+        .map_err(|_| anyhow!("durable wall-clock timestamp is invalid"))
 }
 
 #[derive(Clone, Copy)]

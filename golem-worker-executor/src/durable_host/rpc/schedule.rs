@@ -212,7 +212,9 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 "live streams cannot be used in scheduled invocations"
             ));
         }
-        let scheduled_at = chrono::DateTime::from_timestamp(datetime.seconds, datetime.nanoseconds)
+        let scheduled_at = i32::try_from(datetime.nanoseconds)
+            .ok()
+            .and_then(|nanos| jiff::Timestamp::new(datetime.seconds, nanos).ok())
             .ok_or_else(|| {
                 anyhow::Error::from(WorkerExecutorError::runtime(format!(
                     "Received invalid datetime from wasi: seconds={}, nanoseconds={}",
@@ -352,6 +354,11 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                 .create_demand(
                     dispatch_target(&remote_agent_id, ephemeral.as_ref()),
                     &method_name,
+                    Some(crate::worker::invocation::native_invocation_start(
+                        &method_name,
+                        &input_value,
+                        false,
+                    )?),
                     self.created_by(),
                     self.agent_id(),
                     &env,
@@ -381,7 +388,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
         let invocation = AgentInvocation::AgentMethod {
             idempotency_key: invocation_id.id(),
             method_name,
-            input: input_value,
+            allow_streams: false,
+            input: input_value
+                .try_into()
+                .map_err(|error: String| handle.trap(anyhow::anyhow!(error)))?,
             invocation_context: stack,
             caller: self.outgoing_caller(),
             scope_card: None,

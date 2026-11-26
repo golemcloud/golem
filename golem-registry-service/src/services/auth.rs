@@ -18,7 +18,6 @@ use crate::repo::model::account::AccountRepoError;
 use crate::repo::model::card::CardRepoError;
 use crate::services::account::{AccountError, AccountService};
 use crate::services::permission_share::{PermissionShareError, PermissionShareService};
-use chrono::Utc;
 use golem_common::model::account::{Account, AccountId};
 use golem_common::model::auth::{TokenId, TokenSecret};
 use golem_common::model::card::owner::EmptyOwnerPattern;
@@ -30,6 +29,7 @@ use golem_common::model::card::{
 use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::model::auth::{AdminImpersonationAuthCtx, AuthCtx, UserAuthCtx};
 use golem_service_base::repo::RepoError;
+use jiff::Timestamp;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 use tracing::warn;
@@ -90,7 +90,7 @@ impl AuthService {
             .ok_or(AuthError::CouldNotAuthenticate)?;
 
         // IMPORTANT: make sure the token is still valid
-        if *record.token_expires_at.as_utc() <= Utc::now() {
+        if *record.token_expires_at.as_utc() <= Timestamp::now() {
             warn!(
                 "Tried to resolve an expired token {}",
                 TokenId(record.token_id)

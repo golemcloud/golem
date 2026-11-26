@@ -304,6 +304,41 @@ mod tests {
         assert_eq!(embedded["entries"][1]["index"], 2);
     }
 
+    /// The data document that a viewer page embeds.
+    fn embedded_document(html: &str) -> serde_json::Value {
+        let open_tag = "<script id=\"oplog-data\" type=\"application/json\">";
+        let start = html.find(open_tag).unwrap() + open_tag.len();
+        let end = start + html[start..].find("</script>").unwrap();
+        serde_json::from_str(&html[start..end]).unwrap()
+    }
+
+    /// The page of `agent oplog --show-claims --html` embeds the claims of a caller as a JSON
+    /// object, so the viewer shows them as it shows every other object of the entry. An entry
+    /// that the server gave without claims has none in the page.
+    #[test]
+    fn viewer_embeds_the_claims_of_a_caller_as_an_object() {
+        use crate::model::agent::oplog::test_support::{
+            CLAIMS, CLAIMS_POINTER, entry_of_a_signed_in_user,
+        };
+
+        let embedded = |with_claims: bool| {
+            let html =
+                render_oplog_viewer_html(&document(vec![entry_of_a_signed_in_user(with_claims)]))
+                    .unwrap();
+            embedded_document(&html)
+        };
+        let claims_pointer = format!("/entries/0{CLAIMS_POINTER}");
+
+        let shown = embedded(true);
+        let claims = shown.pointer(&claims_pointer).expect("the claims");
+        assert!(claims.is_object(), "{claims}");
+        assert_eq!(
+            claims,
+            &serde_json::from_str::<serde_json::Value>(CLAIMS).unwrap()
+        );
+        assert!(embedded(false).pointer(&claims_pointer).is_none());
+    }
+
     #[test]
     fn script_terminators_in_payloads_do_not_break_the_page() {
         let html = render_oplog_viewer_html(&document(vec![entry(

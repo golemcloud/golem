@@ -129,6 +129,9 @@ priv struct LiveStreamSession {
   socket_write : @async.Mutex
   output_space : @cond.Cond
   mut result_seen : Bool
+  /// Whether the current attachment has its stream bindings: its acceptance
+  /// carried mappings, or `invocationReady` followed a queued acceptance.
+  mut execution_ready : Bool
   mut finished : Bool
   mut actor_owner : @io.MemoryReader?
   clock : ReconnectClock
@@ -610,6 +613,8 @@ async fn resume_session(
       .unwrap_or(false)
   })
   install_mappings(session, accepted)
+  // A resume of queued work is accepted without mappings; its readiness follows.
+  session.execution_ready = !expect_array(get_field(accepted, "mappings")).is_empty()
   for input in session.inputs {
     if input.stream_token is Some(_) && input.channel is None {
       raise BridgeError(
@@ -860,7 +865,7 @@ fn validate_message_fields(
   kind : String,
 ) -> Unit raise {
   let required = match kind {
-    "invocationAccepted" =>
+    "invocationAccepted" | "invocationReady" =>
       [
         "version", "type", "attemptId", "agentId", "idempotencyKey", "mappings",
         "sessionToken",
@@ -1113,10 +1118,10 @@ fn apply_input_high_water(
 }
 
 ///|
-fn install_mappings(
+async fn install_mappings(
   session : LiveStreamSession,
   message : Map[String, Json],
-) -> Unit raise {
+) -> Unit {
   let mappings = expect_array(get_field(message, "mappings"))
   if mappings.length() > 4096 {
     raise BridgeError("resource-exhausted: too many stream mappings")
@@ -1124,6 +1129,7 @@ fn install_mappings(
   let channels : Map[UInt32, Bool] = Map([])
   let tokens : Map[String, Bool] = Map([])
   let provisionals : Map[String, Bool] = Map([])
+  let mut server_failure : BridgeError? = None
   for mapping_json in mappings {
     let mapping = expect_object(mapping_json)
     validate_object_fields(mapping, ["channel", "direction", "streamToken"], [
@@ -1152,7 +1158,7 @@ fn install_mappings(
     match expect_string(get_field(mapping, "direction")) {
       "input" => {
         let high_water = expect_object(get_field(mapping, "inputHighWater"))
-        validate_object_fields(high_water, ["sequence", "terminal"], [])
+        validate_object_fields(high_water, ["sequence", "terminal"], ["outcome"])
         let input = match field_opt(mapping, "provisionalRef") {
           Some(value) => {
             let provisional = expect_string(value)
@@ -1182,12 +1188,31 @@ fn install_mappings(
         session.input_tokens[token] = input
         input.stream_token = Some(token)
         input.channel = Some(channel)
-        apply_input_high_water(
-          session,
-          input,
-          parse_canonical_u64(get_field(high_water, "sequence")),
-          expect_bool(get_field(high_water, "terminal")),
-        )
+        let terminal = expect_bool(get_field(high_water, "terminal"))
+        match field_opt(high_water, "outcome") {
+          Some(outcome) => {
+            if !terminal {
+              raise BridgeError(
+                "malformed-message: input high-water has an outcome but is not terminal",
+              )
+            }
+            // The server ended the input, so the items it did not accept are dropped.
+            let failure = decode_stream_outcome(outcome)
+            release_input_replay(input)
+            input.terminal = true
+            (input.cancel)()
+            if server_failure is None && failure is Some(StreamFailed(_)) {
+              server_failure = failure
+            }
+          }
+          None =>
+            apply_input_high_water(
+              session,
+              input,
+              parse_canonical_u64(get_field(high_water, "sequence")),
+              terminal,
+            )
+        }
       }
       "output" => {
         if field_opt(mapping, "provisionalRef") is Some(_) ||
@@ -1215,6 +1240,9 @@ fn install_mappings(
       }
       _ => raise BridgeError("malformed-message: invalid mapping direction")
     }
+  }
+  if server_failure is Some(failure) {
+    raise failure
   }
 }
 
@@ -1993,6 +2021,41 @@ async fn dispatch_server_message(
   message : Map[String, Json],
 ) -> Bool {
   match expect_string(get_field(message, "type")) {
+    "invocationReady" => {
+      // Readiness completes the current attachment of the same accepted
+      // invocation: it installs the stream bindings that a queued acceptance
+      // withheld, but is not a new acceptance.
+      if session.execution_ready {
+        raise BridgeError("protocol-error: unexpected invocation readiness")
+      }
+      ignore(
+        validate_acceptance_identity(
+          message,
+          session.attempt_id,
+          Some((session.agent_id, session.idempotency_key)),
+        ),
+      )
+      install_mappings(session, message)
+      for input in session.inputs {
+        if input.channel is None {
+          raise BridgeError(
+            "invalid-attachment-state: readiness omitted an input mapping",
+          )
+        }
+      }
+      session.output_queues.each((token, _) => {
+        if !session.output_channels.contains(token) {
+          raise BridgeError(
+            "invalid-attachment-state: readiness omitted an output mapping",
+          )
+        }
+      })
+      session.session_token = Some(
+        expect_string(get_field(message, "sessionToken")),
+      )
+      session.execution_ready = true
+      pump_next_input(session)
+    }
     "invocationResult" => {
       if session.result_seen {
         raise BridgeError("protocol-error: duplicate invocation result")
@@ -2059,6 +2122,12 @@ async fn dispatch_server_message(
       release_input_replay(input)
       input.terminal = true
       (input.cancel)()
+      // A failed input end is at an item the caller sent, so the call fails with
+      // it. A consumer cancellation only stops the input.
+      match decode_stream_outcome(get_field(message, "outcome")) {
+        Some(StreamFailed(_) as failure) => raise failure
+        _ => ()
+      }
       pump_next_input(session)
     }
     "attachmentRevoked" => {
@@ -2340,6 +2409,8 @@ pub async fn invoke_streaming_agent(
     socket_write: @async.Mutex(),
     output_space: @cond.Cond(),
     result_seen: false,
+    // A queued acceptance has no mappings; its readiness follows.
+    execution_ready: !expect_array(get_field(accepted, "mappings")).is_empty(),
     finished: false,
     actor_owner: None,
     clock,

@@ -1,4 +1,5 @@
 use super::*;
+use crate::worker::persistence::starts_with_a_committed_start;
 use golem_common::model::InvocationId;
 
 impl SelectedWork {
@@ -171,7 +172,22 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                             break self.interrupt(interrupt).await;
                         }
 
-                        let result = match self.select_next_work().await {
+                        let selected = self.select_next_work().await;
+                        // Only the start of an agent invocation stores a deferred settlement
+                        // with its own entry; any other work commits it first. A selected
+                        // resident request gets the refusal of that commit as its answer.
+                        if !matches!(
+                            &selected,
+                            Ok(SelectedWork::Durable(pending)) if starts_with_a_committed_start(pending)
+                        ) && let Err(error) = self.parent.commit_deferred_settlement().await
+                        {
+                            let error = WorkerExecutorError::from(error);
+                            if let Ok(SelectedWork::Resident(message)) = selected {
+                                message.fail(&error);
+                            }
+                            break self.unreadable_oplog_outcome(&error).await;
+                        }
+                        let result = match selected {
                             Ok(SelectedWork::Resident(message)) => {
                                 self.internal_invocation(message).await
                             }
@@ -193,6 +209,15 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
                                 continue;
                             }
                             CommandOutcome::WaitForWakeup => {
+                                // The fairness yield after an invocation whose settlement waits
+                                // for the next start wakes the loop again at once, so it does not
+                                // wait with the settlement uncommitted.
+                                if self.parent.settlement_commit_deferred() {
+                                    InvocationLoop::<Ctx>::defer_wakeup(
+                                        self.deferred_wakeups,
+                                        WorkerCommand::WorkAvailable,
+                                    );
+                                }
                                 break CommandOutcome::Continue;
                             }
                             other => {
@@ -241,6 +266,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
         }
         self.abort_idle_snapshot_task();
         self.waiting_for_command.store(false, Ordering::Release);
+        // The outer loop decides with the folded status, which must show the settlement.
+        if let Err(error) = self.parent.commit_deferred_settlement().await {
+            warn!(%agent_id, %error, "Failed to commit a deferred invocation settlement");
+        }
 
         let result = InnerInvocationLoopResult {
             retry_decision: final_decision,
@@ -258,7 +287,9 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
     }
 
     pub(super) async fn pending_work_requires_permit(&self) -> bool {
-        if !self.active.read().await.is_empty()
+        // A deferred settlement is committed by the drain under the permit, never while waiting.
+        if self.parent.settlement_commit_deferred()
+            || !self.active.read().await.is_empty()
             || self.interrupts.has_interrupt().await
             || self.parent.last_known_status_detached()
         {
@@ -303,11 +334,10 @@ impl<Ctx: WorkerCtx> InnerInvocationLoop<'_, Ctx> {
             }
         }
 
-        let constructor_key = self
-            .parent
-            .parsed_agent_id
-            .as_ref()
-            .map(|_| self.parent.initialization_idempotency_key());
+        let constructor_key =
+            self.parent.parsed_agent_id.as_ref().map(|_| {
+                InvocationId::constructor(self.parent.initial_worker_metadata.fingerprint)
+            });
         Ok(SelectedWork::next(
             &mut queue,
             status,

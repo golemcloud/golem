@@ -122,13 +122,14 @@ type session struct {
 	tokenChannels map[string]uint32
 	cursors       map[string]string
 
-	attempt       string
-	descriptor    []byte
-	accepted      bool
-	everAccepted  bool
-	sessionToken  string
-	acceptedOwner AgentID
-	acceptedKey   string
+	attempt        string
+	descriptor     []byte
+	accepted       bool
+	executionReady bool
+	everAccepted   bool
+	sessionToken   string
+	acceptedOwner  AgentID
+	acceptedKey    string
 	// nextDelay is the delay the next connection attempt waits after a
 	// connection that did not stay up.
 	nextDelay time.Duration
@@ -296,6 +297,7 @@ func (s *session) prepareResume() error {
 		"sessionToken":  s.sessionToken,
 	})
 	s.accepted = false
+	s.executionReady = false
 	return err
 }
 
@@ -853,11 +855,11 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 		return err
 	}
 	switch kind {
-	case "invocationAccepted":
+	case "invocationAccepted", "invocationReady":
 		if err := m.members(kind, []string{"attemptId", "agentId", "idempotencyKey", "mappings", "sessionToken"}); err != nil {
 			return err
 		}
-		return s.accept(c, m)
+		return s.accept(c, m, kind == "invocationReady")
 	case "invocationRejected":
 		if err := m.members(kind, []string{"code", "message", "retryable"}, "attemptId", "stderr"); err != nil {
 			return err
@@ -912,7 +914,7 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 	return protocolErrorf("unknown message type %q", kind)
 }
 
-func (s *session) accept(c *sessionConn, m message) error {
+func (s *session) accept(c *sessionConn, m message, ready bool) error {
 	attempt, err := m.str("attemptId")
 	if err != nil {
 		return err
@@ -942,8 +944,11 @@ func (s *session) accept(c *sessionConn, m message) error {
 	if s.conn != c {
 		return nil
 	}
-	if s.accepted {
+	if s.accepted && !ready {
 		return protocolErrorf("duplicate invocation acceptance")
+	}
+	if ready && (!s.accepted || s.executionReady) {
+		return protocolErrorf("unexpected invocation readiness")
 	}
 	if attempt != s.attempt {
 		return protocolErrorf("the acceptance does not match the pending operation")
@@ -951,13 +956,21 @@ func (s *session) accept(c *sessionConn, m message) error {
 	if s.everAccepted && (s.acceptedOwner != acceptedOwner || s.acceptedKey != key) {
 		return protocolErrorf("accepted invocation identity changed")
 	}
-	if err := s.install(mappings, true); err != nil {
+	if ready && len(s.byToken) == 0 {
+		for ref := range s.byProvisional {
+			if !slices.ContainsFunc(mappings, func(mp mapping) bool { return mp.provisional == ref }) {
+				return protocolErrorf("readiness omitted a stream argument")
+			}
+		}
+	}
+	if err := s.install(mappings, ready || len(mappings) != 0); err != nil {
 		return err
 	}
 	s.sessionToken = token
 	s.acceptedOwner = acceptedOwner
 	s.acceptedKey = key
 	s.accepted = true
+	s.executionReady = ready || len(mappings) != 0
 	c.acceptedAt = time.Now()
 	s.everAccepted = true
 	return nil
@@ -1090,6 +1103,7 @@ func (s *session) install(mappings []mapping, complete bool) error {
 			}
 		}
 	}
+	var serverFailure error
 	for _, mp := range mappings {
 		s.directions[mp.token] = mp.direction
 		s.channels[mp.channel] = mp.token
@@ -1101,6 +1115,20 @@ func (s *session) install(mappings []mapping, complete bool) error {
 				in = s.byProvisional[mp.provisional]
 				in.token = mp.token
 				s.byToken[mp.token] = in
+			}
+			if mp.endedByServer {
+				// The server ended the input, so items it did not accept are dropped.
+				in.channel = mp.channel
+				in.cancelled = true
+				in.ended = true
+				in.release()
+				poke(in.wake)
+				go in.h.stop("ended by the server")
+				var failure *StreamError
+				if errors.As(mp.serverEnd, &failure) && serverFailure == nil {
+					serverFailure = &StreamItemError{Err: fmt.Errorf("golem: the server ended input stream item %d: %w", mp.highWater, failure)}
+				}
+				continue
 			}
 			if err := in.remap(mp.channel, mp.highWater, mp.terminal); err != nil {
 				return err
@@ -1118,7 +1146,7 @@ func (s *session) install(mappings []mapping, complete bool) error {
 			}
 		}
 	}
-	return nil
+	return serverFailure
 }
 
 func (s *session) installFrom(c *sessionConn, m message) (bool, error) {
@@ -1427,7 +1455,7 @@ func (s *session) receiveEnd(c *sessionConn, m message) error {
 		return err
 	}
 	if direction == "input" {
-		return s.receiveCancel(c, m)
+		return s.receiveCancel(c, m, end)
 	}
 	channel, err := m.channel()
 	if err != nil {
@@ -1487,7 +1515,10 @@ func (s *session) receiveAck(c *sessionConn, m message) error {
 	return s.byToken[token].acknowledge(high, terminal)
 }
 
-func (s *session) receiveCancel(c *sessionConn, m message) error {
+// receiveCancel stops an input that the server ended. A failed outcome ends
+// the input at an item the caller sent, so the call fails with a
+// StreamItemError; a consumer cancellation only stops the input.
+func (s *session) receiveCancel(c *sessionConn, m message, end error) error {
 	channel, err := m.channel()
 	if err != nil {
 		return err
@@ -1514,6 +1545,11 @@ func (s *session) receiveCancel(c *sessionConn, m message) error {
 	poke(in.wake)
 	s.mu.Unlock()
 	in.h.stop(reason)
+	var failure *StreamError
+	if errors.As(end, &failure) {
+		sequence, _ := m.u64("sequence")
+		s.abort(&StreamItemError{Err: fmt.Errorf("golem: the server ended input stream item %d: %w", sequence, failure)})
+	}
 	return nil
 }
 

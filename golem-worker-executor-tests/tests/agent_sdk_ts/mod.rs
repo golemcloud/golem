@@ -22,11 +22,13 @@ use test_r::inherit_test_dep;
 use crate::Tracing;
 
 pub mod attempt_server;
+pub mod background_work;
 pub mod checkout_v2_regressions;
 pub mod custom_durability;
 pub mod manifest_status;
 pub mod permissions;
 pub mod sdk_policy;
+pub mod snapshot_divergence;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);

@@ -290,6 +290,7 @@ test("SDK checks collect failures only on CI, including with the ci profile", as
               "lint",
               "format:check",
               "typecheck",
+              "typecheck:integration",
               "test",
               "check:dts",
               "check:contracts",
@@ -302,8 +303,12 @@ test("SDK checks collect failures only on CI, including with the ci profile", as
               "git diff --exit-code packages/golem-ts-sdk/types",
               "pnpm --filter @golemcloud/golem-ts-sdk run check:package"
             )
+          } else {
+            expected.unshift("npm ci --prefix integration-test")
           }
-          const stop = ci !== "true" && fail !== "none" ? checks.indexOf(fail) + 1 : expected.length
+          const stop = ci !== "true" && fail !== "none" ?
+            checks.indexOf(fail) + 1 + (name === "effect" ? 1 : 0) :
+            expected.length
           expect(commands, `CI=${ci}, failure=${fail}, SDK=${name}`).toEqual(expected.slice(0, stop))
         }
       }

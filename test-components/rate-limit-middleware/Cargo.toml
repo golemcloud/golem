@@ -21,4 +21,4 @@ strip = "symbols"
 golem-rust = { path = "../../sdks/rust/golem-rust", features = ["export_golem_agentic"] }
 
 [dev-dependencies]
-test-r = "3.0.12"
+test-r = "3.0.16"

@@ -503,6 +503,7 @@ impl FakeComponentService {
                 plugin_version: "1.0.0".to_string(),
                 oplog_processor_component_id: Some(ComponentId::new()),
                 oplog_processor_component_revision: Some(ComponentRevision::INITIAL),
+                installed_by: golem_common::model::account::AccountId::new(),
             }],
         }
     }
@@ -581,7 +582,7 @@ impl ComponentService for FakeComponentService {
                 vec![],
                 provision_configs,
             ),
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             wasm_hash: diff::Hash::empty(),
             package_metadata: None,
             object_store_key: String::new(),
@@ -1336,6 +1337,7 @@ async fn reserved_start_forwarded_in_initiation_order_and_reaches_plugin() {
             function_name,
             invocation_id: None,
             observational_owner: None,
+            driver: None,
             request: Some(request_payload),
             durable_function_type: DurableFunctionType::ReadRemote,
             span_started: None,

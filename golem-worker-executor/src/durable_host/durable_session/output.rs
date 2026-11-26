@@ -13,6 +13,20 @@
 // limitations under the License.
 
 use super::*;
+use golem_schema::schema::validation::{ValueError, validate_value};
+
+/// The terminal of an output item that does not satisfy its element schema. It names the
+/// path and the restriction, not the value.
+fn invalid_output_item(sequence: u64, errors: &[ValueError]) -> StreamTerminal {
+    StreamTerminal::Failed(StreamError::Interrupted(format!(
+        "output item {sequence} does not satisfy the element schema: {}",
+        errors
+            .iter()
+            .map(ValueError::diagnostic)
+            .collect::<Vec<_>>()
+            .join("; ")
+    )))
+}
 
 fn stops_at_control_terminal(error: &StreamStoreError, history_pending: bool) -> bool {
     !history_pending
@@ -869,11 +883,15 @@ impl StreamSession {
     }
 
     /// Validates committed bytes and terminals without republishing the historical prefix.
+    ///
+    /// `invalid_bytes` holds the validation errors of each byte that its element schema rejects.
+    /// A rejected byte ends the output with a `Protocol` failure at its sequence.
     async fn drain_byte_output(
         &self,
         handle: DurableStreamHandle,
         endpoint: LiveStreamEndpoint,
         mut activity: Option<ExternalActivity>,
+        invalid_bytes: &HashMap<u8, Vec<ValueError>>,
     ) -> Result<(), SessionError> {
         let lifecycle = endpoint.lifecycle();
         let runtime_source = endpoint.runtime_source();
@@ -965,13 +983,23 @@ impl StreamSession {
             if event.offset != sequence {
                 return Err("byte output producer sequence diverged".into());
             }
-            let authored_by = match &event.payload {
+            let mut terminal_origin = event.terminal_origin;
+            let mut authored_by = match &event.payload {
                 LiveStreamEventPayload::Terminal { authored_by, .. } => *authored_by,
                 LiveStreamEventPayload::Item(_) => StreamTerminalAuthor::Guest,
             };
             let payload = match event.payload {
                 LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => {
-                    CommittedProducerStreamEventPayload::PackedU8(byte)
+                    match invalid_bytes.get(&byte) {
+                        Some(errors) => {
+                            authored_by = StreamTerminalAuthor::Protocol;
+                            terminal_origin = Some(StreamTerminalOrigin::Source);
+                            CommittedProducerStreamEventPayload::Terminal(invalid_output_item(
+                                sequence, errors,
+                            ))
+                        }
+                        None => CommittedProducerStreamEventPayload::PackedU8(byte),
+                    }
                 }
                 LiveStreamEventPayload::Item(_) => {
                     return Err("byte output contains a non-byte value".into());
@@ -984,7 +1012,7 @@ impl StreamSession {
                 if recorded.payload != payload
                     || (recorded.is_terminal()
                         && (recorded.terminal_author != Some(authored_by)
-                            || recorded.terminal_origin != event.terminal_origin))
+                            || recorded.terminal_origin != terminal_origin))
                 {
                     return Err("byte output differs from its recorded bytes or terminal".into());
                 }
@@ -1020,7 +1048,9 @@ impl StreamSession {
                             return Err("byte output producer sequence diverged".into());
                         }
                         match next.payload {
-                            LiveStreamEventPayload::Item(SchemaValue::U8(byte)) => {
+                            LiveStreamEventPayload::Item(SchemaValue::U8(byte))
+                                if !invalid_bytes.contains_key(&byte) =>
+                            {
                                 bytes.push(byte);
                                 sequence += 1;
                             }
@@ -1052,7 +1082,7 @@ impl StreamSession {
                         handle.stream_id,
                         sequence,
                         authored_by,
-                        event.terminal_origin.expect("live terminal origin"),
+                        terminal_origin.expect("live terminal origin"),
                         terminal,
                     )
                     .await
@@ -1130,7 +1160,16 @@ impl StreamSession {
             mut activity,
         } = drain;
         if matches!(graph.resolve_ref(&element_type), Ok(SchemaType::U8 { .. })) {
-            return self.drain_byte_output(handle, endpoint, activity).await;
+            let invalid_bytes = (0..=u8::MAX)
+                .filter_map(|byte| {
+                    validate_value(&graph, &element_type, &SchemaValue::U8(byte))
+                        .err()
+                        .map(|errors| (byte, errors))
+                })
+                .collect();
+            return self
+                .drain_byte_output(handle, endpoint, activity, &invalid_bytes)
+                .await;
         }
         // Root drains require admission; children are admitted by their committed parent item.
         // A child returned unread to its producer is consumed locally, without an attachment.
@@ -1267,6 +1306,24 @@ impl StreamSession {
                                 event.offset,
                                 StreamTerminalAuthor::Protocol,
                                 StreamTerminal::Failed(StreamError::Interrupted(error)),
+                            )
+                            .await;
+                        if let Err(error) = result
+                            && !stops_at_control_terminal(&error, history_pending)
+                        {
+                            return Err(error.into());
+                        }
+                        break;
+                    }
+                    if let Err(errors) = validate_value(&graph, &element_type, &value) {
+                        let result = self
+                            .producer
+                            .end(
+                                None,
+                                handle.stream_id,
+                                event.offset,
+                                StreamTerminalAuthor::Protocol,
+                                invalid_output_item(event.offset, &errors),
                             )
                             .await;
                         if let Err(error) = result

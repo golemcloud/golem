@@ -19,10 +19,10 @@ use super::{
     native_tool_result,
 };
 use crate::api::invocation::{
-    Invocation, InvocationFailure, InvocationKind, InvocationMethodResult, InvocationOutcome,
-    InvocationPage, InvocationState, InvocationSummary, InvocationToolResult,
+    Invocation, InvocationBackgroundFailure, InvocationFailure, InvocationKind,
+    InvocationMethodResult, InvocationOutcome, InvocationPage, InvocationState, InvocationSummary,
+    InvocationToolResult,
 };
-use chrono::{DateTime, Utc};
 use golem_api_grpc::proto::golem::worker::{Cursor, InvocationStart};
 use golem_api_grpc::proto::golem::workerexecutor::v1 as executor;
 use golem_common::SafeDisplay;
@@ -30,11 +30,12 @@ use golem_common::model::caller::Caller;
 use golem_common::model::card::{AgentInvocationIdPattern, AgentResourcePattern, AgentVerb};
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::{
-    AgentId, AgentInvocationResult, IdempotencyKey, OwnedAgentId, OwnedInvocationId,
-    RESERVED_TYPE_TAG,
+    AgentId, AgentInvocationResult, BackgroundFailure, IdempotencyKey, OwnedAgentId,
+    OwnedInvocationId, RESERVED_TYPE_TAG,
 };
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
+use jiff::Timestamp;
 use std::time::SystemTime;
 use tracing::warn;
 
@@ -44,8 +45,8 @@ pub struct InvocationListQuery {
     pub operation: Option<String>,
     pub states: Vec<InvocationState>,
     pub kind: Option<InvocationKind>,
-    pub since: Option<DateTime<Utc>>,
-    pub until: Option<DateTime<Utc>>,
+    pub since: Option<Timestamp>,
+    pub until: Option<Timestamp>,
     pub page_size: Option<u32>,
     pub cursor: Option<String>,
 }
@@ -71,7 +72,9 @@ impl WorkerService {
             .invocation_summary(environment_id, invocation_id, auth_ctx.clone())
             .await?;
         let result = match summary.state {
-            InvocationState::Completed | InvocationState::Failed => {
+            InvocationState::Completed
+            | InvocationState::BackgroundFailed
+            | InvocationState::Failed => {
                 self.invocation_outcome(&agent, invocation_id, &summary, auth_ctx)
                     .await?
             }
@@ -105,8 +108,14 @@ impl WorkerService {
             kind: query
                 .kind
                 .map(|kind| executor::InvocationKind::from(kind) as i32),
-            since: query.since.map(|since| SystemTime::from(since).into()),
-            until: query.until.map(|until| SystemTime::from(until).into()),
+            since: query.since.map(|since| prost_types::Timestamp {
+                seconds: since.as_nanosecond().div_euclid(1_000_000_000) as i64,
+                nanos: since.as_nanosecond().rem_euclid(1_000_000_000) as i32,
+            }),
+            until: query.until.map(|until| prost_types::Timestamp {
+                seconds: until.as_nanosecond().div_euclid(1_000_000_000) as i64,
+                nanos: until.as_nanosecond().rem_euclid(1_000_000_000) as i32,
+            }),
             page_size: query.page_size.unwrap_or(0),
             cursor: query.cursor.map(|value| Cursor { value }),
             ..Default::default()
@@ -282,6 +291,7 @@ impl WorkerService {
                 return Ok(None);
             }
         };
+        let background_failure = output.background_failure.map(background_failure);
         let decoded = match output.result {
             AgentInvocationResult::AgentMethod { output: value } => {
                 let method_name = summary.operation.as_deref().ok_or_else(|| {
@@ -322,14 +332,36 @@ impl WorkerService {
                 .map(|result| Some(InvocationOutcome::Tool(InvocationToolResult { result }))),
             _ => Ok(None),
         };
-        Ok(decoded.unwrap_or_else(|error| {
+        let decoded = decoded.unwrap_or_else(|error| {
             warn!(
                 invocation_id = %invocation_id,
                 error = error.to_safe_string(),
                 "Failed to decode the result of a completed invocation"
             );
             None
-        }))
+        });
+        Ok(match background_failure {
+            Some(InvocationFailure { error }) => Some(InvocationOutcome::BackgroundFailure(
+                InvocationBackgroundFailure {
+                    value: match decoded {
+                        Some(InvocationOutcome::Method(InvocationMethodResult { value })) => {
+                            Some(value)
+                        }
+                        _ => None,
+                    },
+                    error,
+                },
+            )),
+            None => decoded,
+        })
+    }
+}
+
+/// The failure of the agent during the background work of an invocation that recorded its
+/// result, shown as the error that a fresh invocation of the failed agent gets.
+pub(super) fn background_failure(failure: BackgroundFailure) -> InvocationFailure {
+    InvocationFailure {
+        error: WorkerServiceError::GolemError(WorkerExecutorError::from(failure)).to_safe_string(),
     }
 }
 
@@ -337,6 +369,7 @@ impl WorkerService {
 /// failure to read the result, such as an unavailable executor, and is not the outcome.
 fn recorded_failure(error: &WorkerServiceError) -> Option<InvocationFailure> {
     match error {
+        WorkerServiceError::AcceptedInvocation { source, .. } => recorded_failure(source),
         WorkerServiceError::GolemError(
             WorkerExecutorError::InvocationFailed { .. }
             | WorkerExecutorError::PreviousInvocationFailed { .. }
@@ -362,8 +395,8 @@ fn summary_from_proto(
     let kind = InvocationKind::try_from(summary.kind).ok();
     let timestamp = |timestamp: prost_types::Timestamp| {
         SystemTime::try_from(timestamp)
-            .map(DateTime::<Utc>::from)
             .map_err(|_| invalid("timestamp"))
+            .and_then(|time| Timestamp::try_from(time).map_err(|_| invalid("timestamp")))
     };
     Ok(InvocationSummary {
         invocation_id: invocation_id.to_string(),
@@ -372,8 +405,14 @@ fn summary_from_proto(
         state,
         kind,
         operation: summary.operation,
-        accepted_at: summary.accepted_at.map(timestamp).transpose()?,
-        changed_at: timestamp(summary.changed_at.ok_or_else(|| invalid("change time"))?)?,
+        accepted_at: summary
+            .accepted_at
+            .map(timestamp)
+            .transpose()?
+            .map(golem_common::model::poem::datetime::OpenApiTimestamp),
+        changed_at: golem_common::model::poem::datetime::OpenApiTimestamp(timestamp(
+            summary.changed_at.ok_or_else(|| invalid("change time"))?,
+        )?),
     })
 }
 
@@ -387,6 +426,7 @@ impl From<InvocationState> for executor::InvocationLifecycleState {
             InvocationState::Retrying => Self::Retrying,
             InvocationState::Interrupted => Self::Interrupted,
             InvocationState::Completed => Self::Completed,
+            InvocationState::BackgroundFailed => Self::BackgroundFailed,
             InvocationState::Failed => Self::Failed,
             InvocationState::Cancelled => Self::Cancelled,
         }
@@ -405,6 +445,7 @@ impl TryFrom<i32> for InvocationState {
             Ok(executor::InvocationLifecycleState::Retrying) => Ok(Self::Retrying),
             Ok(executor::InvocationLifecycleState::Interrupted) => Ok(Self::Interrupted),
             Ok(executor::InvocationLifecycleState::Completed) => Ok(Self::Completed),
+            Ok(executor::InvocationLifecycleState::BackgroundFailed) => Ok(Self::BackgroundFailed),
             Ok(executor::InvocationLifecycleState::Failed) => Ok(Self::Failed),
             Ok(executor::InvocationLifecycleState::Cancelled) => Ok(Self::Cancelled),
             Ok(executor::InvocationLifecycleState::Unspecified) | Err(_) => {

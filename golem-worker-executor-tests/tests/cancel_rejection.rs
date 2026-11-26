@@ -19,7 +19,7 @@
 // `store_invocation_failure` with the rejection trap.
 
 use crate::Tracing;
-use chrono::Utc;
+
 use golem_common::model::InvocationRequestOperation;
 use golem_common::model::StoredAgentInvocationPayload;
 use golem_common::model::agent::AgentTypeName;
@@ -54,6 +54,134 @@ inherit_test_dep!(
     PrecompiledComponent
 );
 
+#[test]
+#[timeout("4m")]
+async fn unrepresentable_schedule_is_rejected_before_committing_pending_work(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_rpc_rust")] agent_rpc_rust: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::PublicOplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let overrides = TestExecutorOverrides::default();
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_rpc_rust)
+        .store()
+        .await?;
+    let server = agent_key!("ScheduledInvocationServer", "rounded-deadline");
+    let target = executor.start_agent(&component.id, server.clone()).await?;
+    let owner = executor
+        .start_agent(
+            &component.id,
+            agent_key!("ScheduledInvocationClient", "rounded-deadline-owner"),
+        )
+        .await?;
+    let invocation = |key: InvocationId| AgentInvocation::AgentMethod {
+        idempotency_key: key,
+        method_name: "inc_global_by".to_string(),
+        input: data_value!(1u64).into_parts().1.try_into().unwrap(),
+        allow_streams: false,
+        invocation_context: InvocationContextStack::fresh(),
+        caller: callers::agent(
+            owner.agent_id,
+            AgentTypeName("ScheduledInvocationClient".to_string()),
+        ),
+        scope_card: None,
+    };
+    let key = InvocationId(uuid::Uuid::new_v4());
+    let worker = executor.active_agent(&target).await.unwrap().primary();
+    let result = worker
+        .schedule_invocation(invocation(key), jiff::Timestamp::MAX)
+        .await;
+    assert!(matches!(
+        result,
+        Err(WorkerExecutorError::InvalidRequest { .. })
+    ));
+    assert_eq!(
+        worker.lookup_invocation_result(&key).await,
+        LookupResult::New
+    );
+    assert!(
+        worker
+            .get_last_known_status()
+            .await
+            .pending_invocations
+            .is_empty()
+    );
+    assert!(
+        executor
+            .get_oplog(&target, OplogIndex::INITIAL)
+            .await?
+            .iter()
+            .all(|entry| {
+                !matches!(&entry.entry, PublicOplogEntry::PendingAgentInvocation(pending)
+                if pending.not_before.is_some())
+            }),
+        "rejection must not commit a scheduled pending entry"
+    );
+    drop(worker);
+    drop(executor);
+
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    let value = executor
+        .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(value, 0);
+    let worker = executor.active_agent(&target).await.unwrap().primary();
+    assert_eq!(
+        worker.lookup_invocation_result(&key).await,
+        LookupResult::New
+    );
+    assert!(
+        worker
+            .get_last_known_status()
+            .await
+            .pending_invocations
+            .is_empty()
+    );
+
+    // The last whole millisecond is valid, and the rejected key has no prior receipt to reuse.
+    let edge = jiff::Timestamp::from_millisecond(jiff::Timestamp::MAX.as_millisecond())?;
+    let receipt = worker.schedule_invocation(invocation(key), edge).await?;
+    assert_eq!(
+        worker
+            .schedule_invocation(invocation(key), jiff::Timestamp::MAX)
+            .await?,
+        receipt,
+        "same-key repair preserves a valid committed deadline"
+    );
+    let fractional_key = InvocationId(uuid::Uuid::new_v4());
+    let due = jiff::Timestamp::now()
+        + jiff::SignedDuration::from_hours(24)
+        + jiff::SignedDuration::from_nanos(1);
+    worker
+        .schedule_invocation(invocation(fractional_key), due)
+        .await?;
+    let status = worker.get_last_known_status().await;
+    assert_eq!(status.pending_invocations.len(), 2);
+    for (key, requested) in [(key, edge), (fractional_key, due)] {
+        let pending = status
+            .pending_invocations
+            .iter()
+            .find(|pending| pending.has_idempotency_key(&key))
+            .unwrap();
+        let persisted = i128::from(pending.not_before.unwrap().to_millis()) * 1_000_000;
+        assert!(persisted >= requested.as_nanosecond());
+        assert!(persisted - requested.as_nanosecond() < 1_000_000);
+    }
+    drop(worker);
+    let value = executor
+        .invoke_and_await_agent(&component, &server, "get_global_value", data_value!())
+        .await?
+        .into_typed::<u64>()?;
+    assert_eq!(value, 0, "future invocations must not run early");
+    Ok(())
+}
+
 async fn late_rejection_after_cancel(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
@@ -78,7 +206,8 @@ async fn late_rejection_after_cancel(
     let invocation = |key: &InvocationId, value: u64| AgentInvocation::AgentMethod {
         idempotency_key: *key,
         method_name: "inc_global_by".to_string(),
-        input: data_value!(value).into_parts().1,
+        input: data_value!(value).into_parts().1.try_into().unwrap(),
+        allow_streams: false,
         invocation_context: InvocationContextStack::fresh(),
         caller: callers::agent(
             owner.agent_id,
@@ -88,7 +217,7 @@ async fn late_rejection_after_cancel(
     };
     let owned = target.clone();
     let worker = executor.active_agent(&owned).await.unwrap().primary();
-    let due = Utc::now() + chrono::Duration::hours(1);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
 
     let key = InvocationId(uuid::Uuid::new_v4());
     let receipt = worker.schedule_invocation(invocation(&key, 5), due).await?;
@@ -271,7 +400,8 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
     let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
         idempotency_key: *key,
         method_name: "inc_global_by".to_string(),
-        input: data_value!(1u64).into_parts().1,
+        input: data_value!(1u64).into_parts().1.try_into().unwrap(),
+        allow_streams: false,
         invocation_context: InvocationContextStack::fresh(),
         caller: callers::agent(
             owner.agent_id,
@@ -284,7 +414,7 @@ async fn invocations_are_listed_the_same_after_eviction_and_restart(
         .await?;
     let owned = target.clone();
     let worker = executor.active_agent(&owned).await.unwrap().primary();
-    let due = Utc::now() + chrono::Duration::hours(1);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
 
     let mut cancelled = Vec::new();
     for _ in 0..3 {
@@ -413,7 +543,8 @@ async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
     let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
         idempotency_key: *key,
         method_name: "inc_global_by".to_string(),
-        input: data_value!(1u64).into_parts().1,
+        input: data_value!(1u64).into_parts().1.try_into().unwrap(),
+        allow_streams: false,
         invocation_context: InvocationContextStack::fresh(),
         caller: caller.clone(),
         scope_card: None,
@@ -423,7 +554,7 @@ async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
         .await?;
     let owned = target.clone();
     let worker = executor.active_agent(&owned).await.unwrap().primary();
-    let due = Utc::now() + chrono::Duration::hours(1);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
 
     let finished = InvocationId(uuid::Uuid::new_v4());
     worker
@@ -478,13 +609,14 @@ async fn a_withdrawn_duplicate_of_an_older_result_keeps_that_result(
     // A queued duplicate of the finished key, withdrawn as `discard_pending_duplicate` does.
     worker
         .add_to_oplog(OplogEntry::pending_agent_invocation(
-            Some(Timestamp::from(due.timestamp_millis() as u64)),
+            Some(Timestamp::from(due.as_millisecond() as u64)),
             finished,
             Box::new(InvocationRequestOperation::AgentMethod {
                 method_name: "inc_global_by".to_string(),
             }),
             OplogPayload::Inline(Box::new(StoredAgentInvocationPayload::AgentMethod {
-                input: data_value!(1u64).into_parts().1,
+                input: data_value!(1u64).into_parts().1.try_into().unwrap(),
+                allow_streams: false,
                 caller: caller.clone(),
                 scope_card: None,
             })),
@@ -625,7 +757,8 @@ async fn cancel_decides_before_reading_recent_results(
     let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
         idempotency_key: *key,
         method_name: "inc_global_by".to_string(),
-        input: data_value!(1u64).into_parts().1,
+        input: data_value!(1u64).into_parts().1.try_into().unwrap(),
+        allow_streams: false,
         invocation_context: InvocationContextStack::fresh(),
         caller: callers::agent(
             owner.agent_id,
@@ -638,7 +771,7 @@ async fn cancel_decides_before_reading_recent_results(
         .await
         .unwrap()
         .primary();
-    let due = Utc::now() + chrono::Duration::hours(1);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
     let queued = InvocationId(uuid::Uuid::new_v4());
     worker.schedule_invocation(invocation(&queued), due).await?;
     let trapped = InvocationId(uuid::Uuid::new_v4());

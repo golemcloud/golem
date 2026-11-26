@@ -171,6 +171,8 @@ async fn a_lookup_created_worker_expires_and_its_stranded_oplog_is_swept(
             ),
             component_id: Some(component.id.into()),
             method_name: None,
+            allow_streams: false,
+            captured_method_input: None,
             input: None,
             mode: AgentInvocationMode::Lookup as i32,
             schedule_at: None,

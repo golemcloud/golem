@@ -1708,6 +1708,7 @@ fn first_call_oplog_requires_complete_network_free_evidence() {
     use golem_cli::model::agent::oplog::OmittedOplogEntryContent;
     use golem_common::model::account::AccountId;
     use golem_common::model::agent::AgentMode;
+    use golem_common::model::caller::{Caller, ClaimVisibility, PublicCaller};
     use golem_common::model::component::ComponentRevision;
     use golem_common::model::environment::EnvironmentId;
     use golem_common::model::oplog::host_functions::WebsocketClientConnect;
@@ -1755,7 +1756,10 @@ fn first_call_oplog_requires_complete_network_free_evidence() {
             PublicOplogEntry::AgentInvocationStarted(AgentInvocationStartedParams {
                 timestamp: Timestamp::from(0),
                 invocation: PublicAgentInvocation::ProcessOplogEntries(
-                    ProcessOplogEntriesParameters { invocation_id: id },
+                    ProcessOplogEntriesParameters {
+                        invocation_id: id,
+                        caller: PublicCaller::new(&Caller::anonymous(), ClaimVisibility::Hidden),
+                    },
                 ),
                 wallet_pin: golem_common::model::card::PublicInvocationWalletPin {
                     wallet_token: golem_common::model::card::WalletVersionToken {
@@ -1774,6 +1778,7 @@ fn first_call_oplog_requires_complete_network_free_evidence() {
                 function_name: "cli::environment::get-environment".into(),
                 invocation_id: None,
                 observational_owner: None,
+                driver: None,
                 request: None,
                 durable_function_type: PublicDurableFunctionType::ReadLocal(Empty {}),
                 span_started: None,

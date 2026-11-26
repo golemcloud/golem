@@ -1,11 +1,11 @@
 use crate::api::common::ApiEndpointError;
+use crate::api::invocation::InvocationFailure;
 use crate::api::invocation_session::serve_public_invocation_session;
 use crate::invocation_session_token::InvocationSessionTokenKeyring;
 use crate::metrics::{ActiveHttpApiStream, HttpApiStreamKind};
 use crate::model::WorkersMetadataResponse;
 use crate::service::auth::AuthService;
 use crate::service::worker::WorkerService;
-use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentTypeName;
@@ -16,6 +16,7 @@ use golem_common::model::invocation_session_public::{
     INVOCATION_SESSION_SUBPROTOCOL, PublicErrorCode,
 };
 use golem_common::model::oplog::OplogIndex;
+use golem_common::model::poem::datetime::OpenApiTimestamp;
 use golem_common::model::tool::SerializableToolRpcError;
 use golem_common::model::{
     AgentFilter, AgentFingerprint, AgentId, IdempotencyKey, InvocationId, OwnedInvocationId,
@@ -618,7 +619,7 @@ pub struct AgentInvocationRequest {
     pub method: String,
     pub method_parameters: ExternalSchemaValue,
     pub mode: AgentInvocationMode,
-    pub schedule_at: Option<DateTime<Utc>>,
+    pub schedule_at: Option<OpenApiTimestamp>,
     pub expected_fingerprint: Option<AgentFingerprint>,
 }
 
@@ -630,6 +631,10 @@ pub struct AgentInvocationResult {
     pub idempotency_key: InvocationId,
     pub result: Option<ExternalTypedSchemaValue>,
     pub component_revision: Option<ComponentRevision>,
+    // Present when the invocation recorded `result`, then the agent failed during the
+    // invocation's background work. A doc comment would make the schema an `allOf`, which the
+    // client generator does not support.
+    pub background_failure: Option<InvocationFailure>,
 }
 
 /// Select exactly one target: `agentId` for an existing real owner, or `componentId`
@@ -645,7 +650,7 @@ pub struct NativeToolInvocationRequest {
     pub command_path: Vec<String>,
     pub input: Option<ExternalTypedSchemaValue>,
     pub mode: NativeToolInvocationMode,
-    pub schedule_at: Option<DateTime<Utc>>,
+    pub schedule_at: Option<OpenApiTimestamp>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
@@ -747,8 +752,8 @@ mod websocket_limit_tests;
 #[cfg(test)]
 mod tests {
     use super::{AgentInvocationRequest, CreateAgentRequest};
-    use chrono::{TimeZone, Utc};
     use golem_common::schema::{SchemaValue, SecretValuePayload};
+    use jiff::Timestamp;
     use poem_openapi::types::{ParseFromJSON, ToJSON};
     use serde_json::{Value, json};
     use test_r::test;
@@ -830,7 +835,7 @@ mod tests {
             secret_id: Uuid::nil(),
             config_key: None,
             version: 1,
-            resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+            resolved_at: Timestamp::new(0, 0).unwrap(),
             category: None,
         }))
         .unwrap();

@@ -375,7 +375,15 @@ if [[ "$*" == *"--skip-check"* ]]; then
 fi
 if [[ "$*" == *"exec copy"* ]]; then
  printf 'compiled:%s' "\${PWD##*/}" > "../\${PWD##*/}.wasm"
- case "\${PWD##*/}" in *scala*|*moonbit*) name="golem_it_\${PWD##*/}"; printf compiled > "../\${name//-/_}.wasm" ;; esac
+ case "\${PWD##*/}" in *scala*|*moonbit*)
+  name="golem_it_\${PWD##*/}"
+  if [[ "\${PWD##*/}" == agent-sdk-moonbit && "$*" == *"--preset release-gc"* ]]; then
+   printf compiled-gc > "../\${name//-/_}_gc.wasm"
+  else
+   printf compiled > "../\${name//-/_}.wasm"
+  fi
+  ;;
+ esac
 fi
 `
   )
@@ -421,6 +429,8 @@ fi
   await shell("benchmarks", "rebuild")
   const cold = await exports()
   expect(Object.keys(cold).length).toBeGreaterThan(30)
+  expect(cold["golem_it_agent_sdk_moonbit.wasm"]).toBe("compiled")
+  expect(cold["golem_it_agent_sdk_moonbit_gc.wasm"]).toBe("compiled-gc")
   for (
     const name of ["retention_canonical_floor", "retention_empty", "retention_non_reflective", "retention_reflection"]
   ) {

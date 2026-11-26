@@ -13,7 +13,6 @@
 // limitations under the License.
 
 use super::lexer::{LexError, Lexer, Token};
-use chrono::DateTime;
 use golem_common::schema::agent::NamedField;
 use golem_common::schema::canonical::{
     binary as canon_binary, datetime as canon_datetime, duration as canon_duration,
@@ -26,6 +25,7 @@ use golem_common::schema::schema_type::{
     NamedFieldType, ResultSpec, SchemaType, UnionBranch, VariantCaseType,
 };
 use golem_common::schema::schema_value::{DurationValuePayload, SchemaValue, UnionValuePayload};
+use jiff::Timestamp;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct ParseError {
@@ -498,7 +498,6 @@ pub(super) fn duration_value_from_nanos(nanos: i64) -> SchemaValue {
 
 pub(super) fn datetime_value_from_text(pos: usize, s: &str) -> Result<SchemaValue, ParseError> {
     let value = canon_datetime::from_text(s)
-        .or_else(|_| DateTime::parse_from_rfc3339(s).map(|d| d.with_timezone(&chrono::Utc)))
         .map_err(|e| perr(pos, &format!("invalid datetime value: {e}")))?;
     Ok(SchemaValue::Datetime { value })
 }
@@ -507,7 +506,7 @@ pub(super) fn datetime_value_from_millis(
     pos: usize,
     millis: i64,
 ) -> Result<SchemaValue, ParseError> {
-    let value = DateTime::<chrono::Utc>::from_timestamp_millis(millis).ok_or_else(|| {
+    let value = Timestamp::from_millisecond(millis).map_err(|_| {
         perr(
             pos,
             &format!("datetime out of range for epoch millis {millis}"),
@@ -521,7 +520,10 @@ pub(super) fn datetime_value_from_secs_nanos(
     secs: i64,
     nanos: u32,
 ) -> Result<SchemaValue, ParseError> {
-    let value = DateTime::<chrono::Utc>::from_timestamp(secs, nanos).ok_or_else(|| {
+    if nanos >= 1_000_000_000 {
+        return Err(perr(pos, "datetime nanoseconds must be below 1000000000"));
+    }
+    let value = Timestamp::new(secs, nanos as i32).map_err(|_| {
         perr(
             pos,
             &format!("datetime out of range for epoch seconds {secs}"),
@@ -536,7 +538,7 @@ pub(super) fn datetime_value_from_secs_nanos(
 /// values are rejected rather than silently coerced to the epoch.
 ///
 /// The split is done in floating-point *seconds* (not total nanoseconds) so the
-/// supported range matches `chrono`'s own range rather than being clipped to the
+/// supported range matches Jiff's own range rather than being clipped to the
 /// ±292-year window where epoch nanoseconds happen to fit in `i64`.
 pub(super) fn datetime_value_from_epoch_millis_f64(
     pos: usize,

@@ -461,6 +461,233 @@ fn ephemeral_restart_interrupts_become_invocation_failures() {
 }
 
 #[test]
+fn a_rejection_after_the_result_is_an_ordinary_trap_of_the_agent() {
+    let current = Some(golem_common::model::InvocationId::new());
+    let retry_from = OplogIndex::from_u64(11);
+    for error in [
+        AgentError::PermissionDenied("card-revoked".to_string()),
+        AgentError::InvalidRequest("invalid".to_string()),
+    ] {
+        let trap = TrapType::Error {
+            error,
+            retry_from,
+            semantic_trap_retry_override: None,
+            provenance: crate::model::FailureProvenance::Host,
+        };
+        assert_eq!(
+            failure_attribution(current, &trap, false),
+            FailureAttribution {
+                failed_invocation: current,
+                rejection: true,
+            },
+            "before the result, a rejection trap rejects its invocation"
+        );
+        assert_eq!(
+            failure_attribution(current, &trap, true),
+            FailureAttribution {
+                failed_invocation: None,
+                rejection: false,
+            },
+            "after the result, a rejection trap names and rejects no invocation"
+        );
+    }
+    // The status fold reads an `Invocation` permission denial as a rejection only when it names
+    // the invocation it rejects. After the result, the denial is an ordinary trap of the agent.
+    let denied = TrapType::Error {
+        error: AgentError::PermissionDenied("card-revoked".to_string()),
+        retry_from,
+        semantic_trap_retry_override: None,
+        provenance: crate::model::FailureProvenance::Host,
+    };
+    let folded_status = |after_result| {
+        let running = AgentStatusRecord {
+            status: AgentStatus::Running,
+            running: current.map(|key| golem_common::model::RunningInvocation {
+                key,
+                request: golem_common::model::InvocationRequestRef {
+                    index: OplogIndex::INITIAL,
+                    accepted_at: Timestamp::from(0),
+                    operation: None,
+                },
+                last_change: OplogIndex::INITIAL,
+                last_change_at: Timestamp::from(0),
+            }),
+            ..AgentStatusRecord::default()
+        };
+        let error = OplogEntry::error(
+            None,
+            OplogErrorKind::Invocation,
+            failure_attribution(current, &denied, after_result).failed_invocation,
+            AgentError::PermissionDenied("card-revoked".to_string()),
+            retry_from,
+            None,
+            None,
+            None,
+        );
+        crate::worker::status::update_status_with_new_entries(
+            AgentMode::Durable,
+            running,
+            std::collections::BTreeMap::from([(OplogIndex::from_u64(12), error)]),
+            &golem_common::model::RetryConfig::default(),
+        )
+        .expect("the status folds")
+        .expect("the status folds from the new entries")
+        .status
+    };
+    assert_eq!(folded_status(false), AgentStatus::Idle);
+    assert_eq!(folded_status(true), AgentStatus::Failed);
+    let trap = TrapType::Error {
+        error: AgentError::OutOfMemory,
+        retry_from,
+        semantic_trap_retry_override: None,
+        provenance: crate::model::FailureProvenance::Host,
+    };
+    assert_eq!(
+        failure_attribution(current, &trap, true),
+        FailureAttribution {
+            failed_invocation: None,
+            rejection: false,
+        }
+    );
+    assert_eq!(
+        failure_attribution(current, &trap, false),
+        FailureAttribution {
+            failed_invocation: current,
+            rejection: false,
+        }
+    );
+}
+
+/// A give-up after the result records an exhausted retry state, whatever the policy evaluation
+/// gave, so the status fold reads the `Error` as the background failure of the settling result.
+/// A retry, and a give-up before the result, keep the evaluated state.
+#[test]
+fn a_give_up_after_the_result_records_an_exhausted_retry_state() {
+    let counted = RetryPolicyState::Counter(2);
+    for evaluated in [
+        None,
+        Some(counted.clone()),
+        Some(RetryPolicyState::Terminal),
+    ] {
+        let recorded = drain_give_up_retry_state(true, &RetryDecision::None, evaluated.clone());
+        assert!(
+            recorded
+                .as_ref()
+                .is_some_and(RetryPolicyState::is_exhausted),
+            "a give-up after the result with {evaluated:?} records {recorded:?}"
+        );
+        assert_eq!(
+            drain_give_up_retry_state(false, &RetryDecision::None, evaluated.clone()),
+            evaluated
+        );
+        assert_eq!(
+            drain_give_up_retry_state(true, &RetryDecision::Immediate, evaluated.clone()),
+            evaluated
+        );
+    }
+    assert_eq!(
+        drain_give_up_retry_state(true, &RetryDecision::None, Some(RetryPolicyState::Terminal)),
+        Some(RetryPolicyState::Terminal),
+        "an exhausted state stays as it is"
+    );
+
+    let key = golem_common::model::InvocationId::new();
+    let index = OplogIndex::from_u64;
+    let give_up = OplogEntry::error(
+        None,
+        OplogErrorKind::Invocation,
+        failure_attribution(
+            Some(key),
+            &TrapType::Error {
+                error: AgentError::Unknown("trapped".to_string()),
+                retry_from: index(1),
+                semantic_trap_retry_override: None,
+                provenance: crate::model::FailureProvenance::TargetInstruction,
+            },
+            true,
+        )
+        .failed_invocation,
+        AgentError::Unknown("trapped".to_string()),
+        index(1),
+        drain_give_up_retry_state(true, &RetryDecision::None, None),
+        None,
+        None,
+    );
+    let settling = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        AgentStatusRecord::default(),
+        std::collections::BTreeMap::from([
+            (
+                index(1),
+                OplogEntry::AgentInvocationStarted {
+                    timestamp: Timestamp::now_utc(),
+                    invocation_id: key,
+                    operation: Box::new(
+                        golem_common::model::InvocationRequestOperation::AgentMethod {
+                            method_name: "agent:method".to_string(),
+                        },
+                    ),
+                    payload: golem_common::model::oplog::OplogPayload::Inline(Box::new(
+                        golem_common::model::StoredAgentInvocationPayload::AgentMethod {
+                            input: golem_common::schema::SchemaValue::Record { fields: Vec::new() }
+                                .try_into()
+                                .unwrap(),
+                            allow_streams: false,
+                            caller: golem_common::model::caller::Caller::anonymous(),
+                            scope_card: None,
+                        },
+                    )),
+                    trace_id: golem_common::model::invocation_context::TraceId::generate(),
+                    trace_states: Vec::new(),
+                    invocation_context: Vec::new(),
+                    wallet_pin: Box::new(golem_common::model::card::InvocationWalletPin {
+                        wallet_token: golem_common::model::card::WalletVersionToken {
+                            wallet_id_hash: [0; 32],
+                            generation: 0,
+                        },
+                        pinned_card_ids: Vec::new(),
+                        scope_card_id: None,
+                    }),
+                },
+            ),
+            (
+                index(2),
+                OplogEntry::AgentInvocationFinished {
+                    timestamp: Timestamp::now_utc(),
+                    invocation_id: key,
+                    result: golem_common::model::oplog::OplogPayload::Inline(Box::new(
+                        golem_common::model::AgentInvocationResult::AgentInitialization,
+                    )),
+                    method_name: None,
+                    consumed_fuel: 0,
+                    component_revision: golem_common::model::component::ComponentRevision::INITIAL,
+                    awaits_settlement: true,
+                },
+            ),
+        ]),
+        &golem_common::model::RetryConfig::default(),
+    )
+    .expect("the status folds")
+    .expect("the status folds from the new entries");
+    let failed = crate::worker::status::update_status_with_new_entries(
+        AgentMode::Durable,
+        settling,
+        std::collections::BTreeMap::from([(index(3), give_up)]),
+        &golem_common::model::RetryConfig::default(),
+    )
+    .expect("the status folds")
+    .expect("the status folds from the new entries");
+    assert_eq!(failed.status, AgentStatus::Failed);
+    assert_eq!(
+        failed
+            .invocation_results
+            .position(&key)
+            .map(|position| position.end),
+        Some(golem_common::model::InvocationEnd::BackgroundFailed { failure: index(3) })
+    );
+}
+
+#[test]
 fn ephemeral_active_suspend_becomes_an_invocation_failure() {
     let start_index = OplogIndex::from_u64(37);
     let trap = TrapType::Interrupt(InterruptKind::Suspend(Timestamp::now_utc()));
@@ -760,8 +987,8 @@ fn effective_surface_authorization_preserves_algebra_and_batch_atomicity() {
 
 #[test]
 fn authority_fast_path_requires_an_open_current_unexpired_snapshot() {
-    let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-    let later = now + chrono::Duration::nanoseconds(1);
+    let now = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
+    let later = now + jiff::SignedDuration::from_nanos(1);
 
     assert!(authority_snapshot_is_current_at(
         true,
@@ -817,7 +1044,7 @@ fn generation_recheck_invalidates_in_progress_allow_and_deny() {
         }],
         upper: Vec::new(),
     };
-    let now = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let now = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
 
     assert!(authorize_effective_surface(&surface, &[allowed]).is_ok());
     assert!(authorize_effective_surface(&surface, &[denied]).is_err());
@@ -839,8 +1066,8 @@ fn authorize_boundary_for_test(
     authority_open: bool,
     processed_generation: &mut u64,
     published_generation: u64,
-    expiration: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
+    expiration: Option<jiff::Timestamp>,
+    now: jiff::Timestamp,
     slow_refreshes: &mut usize,
     surface: &golem_common::model::card::EffectiveSurface,
     target: &PermissionTarget,
@@ -888,7 +1115,7 @@ fn unchanged_authority_generation_uses_no_io_fast_path() {
         &mut processed,
         9,
         None,
-        Utc::now(),
+        jiff::Timestamp::now(),
         &mut slow_refreshes,
         &surface,
         &target,
@@ -910,7 +1137,7 @@ fn authority_event_burst_causes_exactly_one_slow_refresh() {
             &mut processed,
             8,
             None,
-            Utc::now(),
+            jiff::Timestamp::now(),
             &mut slow_refreshes,
             &surface,
             &target,
@@ -934,7 +1161,7 @@ fn closed_authority_cannot_allow() {
             &mut processed,
             3,
             None,
-            Utc::now(),
+            jiff::Timestamp::now(),
             &mut slow_refreshes,
             &surface,
             &target,
@@ -947,7 +1174,7 @@ fn closed_authority_cannot_allow() {
 fn expiration_is_visible_at_first_due_live_boundary() {
     let target = network_permission("expired.example.com");
     let surface = allowing_surface(target.clone());
-    let due = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
+    let due = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
     let mut processed = 5;
     let mut slow_refreshes = 0;
     authorize_boundary_for_test(
@@ -1206,22 +1433,22 @@ fn inherited_scope_roots_are_checked_once_and_unknown_roots_are_errors() {
 fn inherited_scope_detects_revoked_and_expired_roots() {
     let root = CardId(Uuid::from_u128(1));
     let unrelated = CardId(Uuid::from_u128(2));
-    let now = Utc::now();
+    let now = jiff::Timestamp::now();
     let scope = InheritedInvocationScope {
         card: invocation_scope_card(vec![root]),
         roots: Some(BTreeMap::from([(
             root,
-            concrete_card_expiring_at(root, Some(now + chrono::Duration::seconds(60))),
+            concrete_card_expiring_at(root, Some(now + jiff::SignedDuration::from_secs(60))),
         )])),
     };
 
     assert!(!scope.roots_include(&HashSet::from([unrelated])));
     assert!(scope.roots_include(&HashSet::from([root])));
     assert!(!scope.roots_expired(now));
-    assert!(scope.roots_expired(now + chrono::Duration::seconds(60)));
+    assert!(scope.roots_expired(now + jiff::SignedDuration::from_secs(60)));
     assert!(
         !InheritedInvocationScope::unchecked(invocation_scope_card(vec![root]))
-            .roots_expired(now + chrono::Duration::seconds(60))
+            .roots_expired(now + jiff::SignedDuration::from_secs(60))
     );
 }
 
@@ -1415,7 +1642,7 @@ fn concrete_card(card_id: CardId) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -1423,7 +1650,7 @@ fn concrete_card(card_id: CardId) -> StoredCard {
     .into()
 }
 
-fn concrete_card_expiring_at(card_id: CardId, expires_at: Option<DateTime<Utc>>) -> StoredCard {
+fn concrete_card_expiring_at(card_id: CardId, expires_at: Option<jiff::Timestamp>) -> StoredCard {
     let mut card = concrete_card(card_id);
     match &mut card {
         StoredCard::Concrete(card) => card.expires_at = expires_at,
@@ -1465,7 +1692,7 @@ fn agent_permission_card(
             .map(|verb| agent_permission_pattern(owner, recipient, verb))
             .collect(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -1741,15 +1968,15 @@ fn expiry_generation_outcome_is_stable_when_replayed() {
 
 #[test]
 fn expiry_boundary_is_inclusive_and_preserves_later_cards() {
-    let boundary = DateTime::from_timestamp(1_700_000_000, 123).unwrap();
+    let boundary = jiff::Timestamp::new(1_700_000_000, 123).unwrap();
     let elapsed = concrete_card_expiring_at(
         CardId::new(),
-        Some(boundary - chrono::Duration::nanoseconds(1)),
+        Some(boundary - jiff::SignedDuration::from_nanos(1)),
     );
     let at_boundary = concrete_card_expiring_at(CardId::new(), Some(boundary));
     let later = concrete_card_expiring_at(
         CardId::new(),
-        Some(boundary + chrono::Duration::nanoseconds(1)),
+        Some(boundary + jiff::SignedDuration::from_nanos(1)),
     );
     let indefinite = concrete_card(CardId::new());
     let wallet = wallet_cards([
@@ -1769,15 +1996,17 @@ fn expiry_boundary_is_inclusive_and_preserves_later_cards() {
 
 #[test]
 fn recorded_expiry_events_replay_identically_with_an_earlier_clock() {
-    let boundary = DateTime::from_timestamp(1_700_000_000, 0).unwrap();
-    let replay_clock = boundary - chrono::Duration::hours(1);
+    let boundary = jiff::Timestamp::new(1_700_000_000, 0).unwrap();
+    let replay_clock = boundary - jiff::SignedDuration::from_hours(1);
     let elapsed = concrete_card_expiring_at(
         CardId::new(),
-        Some(boundary - chrono::Duration::nanoseconds(1)),
+        Some(boundary - jiff::SignedDuration::from_nanos(1)),
     );
     let at_boundary = concrete_card_expiring_at(CardId::new(), Some(boundary));
-    let later =
-        concrete_card_expiring_at(CardId::new(), Some(boundary + chrono::Duration::hours(1)));
+    let later = concrete_card_expiring_at(
+        CardId::new(),
+        Some(boundary + jiff::SignedDuration::from_hours(1)),
+    );
     let original_wallet = wallet_cards([
         (elapsed.card_id(), elapsed),
         (at_boundary.card_id(), at_boundary),
@@ -2051,7 +2280,7 @@ fn polymorphic_card(card_id: CardId) -> StoredCard {
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
     })

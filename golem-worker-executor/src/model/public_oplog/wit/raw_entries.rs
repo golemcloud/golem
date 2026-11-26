@@ -90,6 +90,7 @@ before (value) {}
         observational_owner: params
         .observational_owner
         .map(golem_common::base_model::OplogIndex::from_u64),
+        driver: params.driver.map(golem_common::base_model::OplogIndex::from_u64),
         request: params.request.map(oplog_payload_from_wit),
         durable_function_type: params.durable_function_type.into(),
         span_started: params.span_started.map(|span| raw_span_started_from_wit(span).map(Box::new)).transpose()?,
@@ -139,6 +140,7 @@ before (value) {}
         .component_revision
         .try_into()
         .map_err(|e: String| e)?,
+        awaits_settlement: false,
     } }
     AgentInvocationFailed { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
@@ -146,6 +148,12 @@ before (value) {}
         invocation_id: uuid::Uuid::from(params.invocation_id).into(),
         error: params.error.into(),
         start_index: golem_common::model::OplogIndex::from_u64(params.start_index),
+        awaits_settlement: false,
+    } }
+    AgentInvocationSettled { record (params) {
+        timestamp: timestamp_from_datetime(params.timestamp),
+        invocation_id: uuid::Uuid::from(params.invocation_id).into(),
+        consumed_fuel: params.consumed_fuel,
     } }
     Suspend { record (ts) {
         timestamp: timestamp_from_datetime(ts.timestamp),
@@ -209,6 +217,7 @@ before (value) {}
         update_attempt_index: params
         .update_attempt_index
         .map(golem_common::model::oplog::OplogIndex::from_u64),
+        requester: Box::new(requester_from_wit(&params.requester)?),
     } }
     SuccessfulUpdate { record (params) {
         timestamp: timestamp_from_datetime(params.timestamp),
@@ -611,6 +620,7 @@ before (value) {}
         function_name: function_name.to_string(),
         invocation_id: invocation_id.map(durable_invocation_id_to_wit),
         observational_owner: observational_owner.map(|i| i.into()),
+        driver: driver.map(|i| i.into()),
         request: request.map(oplog_payload_to_wit).transpose()?,
         durable_function_type: durable_function_type.into(),
         span_started: span_started.map(|span| raw_span_started_to_wit(*span)),
@@ -640,7 +650,7 @@ before (value) {}
         invocation_context: invocation_context.into_iter().map(|s| s.into()).collect(),
         wallet_pin: invocation_wallet_pin_to_wit(*wallet_pin),
     } }
-    AgentInvocationFinished { record () => RawAgentInvocationFinishedParameters {
+    AgentInvocationFinished { record (awaits_settlement) => RawAgentInvocationFinishedParameters {
         timestamp: timestamp.into(),
         invocation_id: invocation_id.0.into(),
         result: oplog_payload_to_wit(result)?,
@@ -648,11 +658,16 @@ before (value) {}
         consumed_fuel: consumed_fuel,
         component_revision: component_revision.get(),
     } }
-    AgentInvocationFailed { record (entity_parent_start_index) => RawAgentInvocationFailedParameters {
+    AgentInvocationFailed { record (entity_parent_start_index, awaits_settlement) => RawAgentInvocationFailedParameters {
         timestamp: timestamp.into(),
         invocation_id: invocation_id.0.into(),
         error: error.into(),
         start_index: start_index.into(),
+    } }
+    AgentInvocationSettled { record () => RawAgentInvocationSettledParameters {
+        timestamp: timestamp.into(),
+        invocation_id: invocation_id.0.into(),
+        consumed_fuel: consumed_fuel,
     } }
     Suspend { override (M::Suspend { timestamp }) => Ok(Self::Suspend(timestamp.into())) }
     Error { record (entity_parent_start_index) => RawErrorParameters {
@@ -689,6 +704,7 @@ before (value) {}
         timestamp: timestamp.into(),
         description: description.try_into()?,
         update_attempt_index: update_attempt_index.map(Into::into),
+        requester: requester_to_wit(&requester)?,
     } }
     SuccessfulUpdate { record (new_total_linear_memory_size) => RawSuccessfulUpdateParameters {
         timestamp: timestamp.into(),

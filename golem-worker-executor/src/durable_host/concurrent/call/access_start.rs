@@ -690,7 +690,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             started,
             _activity: activity,
         };
-        let captured = store.with(|mut access| get_ctx(access.data_mut()).attribution.capture());
+        let captured = crate::durable_host::attribution::with_import_access(store, |mut access| {
+            get_ctx(access.data_mut()).attribution.capture()
+        });
         store
             .spawn(async move |store| captured.run(task.run(store)).await)
             .map_err(|error| E::from_durable_call_trap(error.into()))?;
@@ -750,7 +752,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             ))
         })?;
         let (started, receiver) = oneshot::channel();
-        let captured = store.with(|mut access| get_ctx(access.data_mut()).attribution.capture());
+        let captured = crate::durable_host::attribution::with_import_access(store, |mut access| {
+            get_ctx(access.data_mut()).attribution.capture()
+        });
         let mut access = owner.access(captured);
         let builder_access = access.clone();
         drop(tasks.spawn_metadata(async move {
@@ -1098,7 +1102,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
             });
             let (claimed, receiver) = oneshot::channel();
             let captured =
-                store.with(|mut access| get_ctx(access.data_mut()).attribution.capture());
+                crate::durable_host::attribution::with_import_access(store, |mut access| {
+                    get_ctx(access.data_mut()).attribution.capture()
+                });
             let mut access = owner.access(captured);
             drop(
                 tasks
@@ -1141,7 +1147,9 @@ impl<Pair: HostPayloadPair, P: DropPolicy> DurableCallSession<Pair, P> {
                 _activity: activity,
             };
             let captured =
-                store.with(|mut access| get_ctx(access.data_mut()).attribution.capture());
+                crate::durable_host::attribution::with_import_access(store, |mut access| {
+                    get_ctx(access.data_mut()).attribution.capture()
+                });
             store
                 .spawn(async move |store| captured.run(task.run(store)).await)
                 .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;

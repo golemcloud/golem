@@ -27,7 +27,7 @@ use crate::command::shared_args::{OplogExportArgs, OplogViewerArgs};
 use crate::command::worker::{AgentSubcommand, InvocationStdinFormat, InvocationStdoutFormat};
 use crate::command_handler::Handlers;
 use crate::command_handler::agent::oplog_serve::{
-    OplogViewerServer, open_in_browser, oplog_page_entry_view, serve_oplog_viewer,
+    OplogViewerServer, open_in_browser, oplog_include, oplog_page_entry_view, serve_oplog_viewer,
 };
 use crate::command_handler::agent::stream::{AgentConnection, LiveOutput};
 use crate::context::Context;
@@ -62,9 +62,9 @@ use crate::model::help::{
 use crate::model::invoke_result_view::InvokeResultView;
 use crate::model::text_format::{log_fuzzy_match, log_text_view};
 use anyhow::{anyhow, bail};
-use chrono::{DateTime, Utc};
 use colored::Colorize;
 use golem_common::model::invocation_session_public::PublicErrorCode;
+use jiff::Timestamp as JiffTimestamp;
 
 use crate::agent_id_display::SourceLanguage;
 use crate::context::GlobalEnvironmentSelector;
@@ -273,17 +273,33 @@ impl AgentCommandHandler {
                     from,
                     query,
                     omit_payloads,
+                    show_claims,
                     page,
                     cursor,
                     viewer,
                     export,
                 } => {
                     if page {
-                        self.cmd_oplog_page(agent_id, from, cursor, query, omit_payloads)
-                            .await
+                        self.cmd_oplog_page(
+                            agent_id,
+                            from,
+                            cursor,
+                            query,
+                            omit_payloads,
+                            show_claims,
+                        )
+                        .await
                     } else {
-                        self.cmd_oplog(agent_id, from, query, omit_payloads, viewer, export)
-                            .await
+                        self.cmd_oplog(
+                            agent_id,
+                            from,
+                            query,
+                            omit_payloads,
+                            show_claims,
+                            viewer,
+                            export,
+                        )
+                        .await
                     }
                 }
                 AgentSubcommand::Revert {
@@ -447,7 +463,7 @@ impl AgentCommandHandler {
         resume_session: Option<std::path::PathBuf>,
         takeover_session: Option<std::path::PathBuf>,
         post_deploy_args: Option<PostDeployArgs>,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<JiffTimestamp>,
         expected_fingerprint: Option<AgentFingerprint>,
     ) -> anyhow::Result<()> {
         let _raw_output_guard = (stdout_format == InvocationStdoutFormat::Raw)
@@ -810,18 +826,15 @@ impl AgentCommandHandler {
                 .log_handler()
                 .log_output(InvokeResultView::new_trigger(accepted_key))?;
         } else {
+            let background_failure = result.background_failure.map(|failure| failure.error);
             let result = result
                 .result
                 .map(golem_common::schema::TypedSchemaValue::from);
             logln("");
-            self.ctx
-                .log_handler()
-                .log_output(InvokeResultView::new_agent_invoke(
-                    accepted_key,
-                    result,
-                    &agent_type,
-                    &method_name,
-                ))?;
+            self.ctx.log_handler().log_output(
+                InvokeResultView::new_agent_invoke(accepted_key, result, &agent_type, &method_name)
+                    .with_background_failure(background_failure),
+            )?;
         }
 
         Ok(())
@@ -941,6 +954,7 @@ impl AgentCommandHandler {
         from: Option<u64>,
         query: Option<String>,
         omit_payloads: bool,
+        show_claims: bool,
         viewer: OplogViewerArgs,
         export: OplogExportArgs,
     ) -> anyhow::Result<()> {
@@ -996,7 +1010,7 @@ impl AgentCommandHandler {
                 agent_id: format_agent_id_match(&agent_id_match),
                 component_name: component.component_name.0.clone(),
                 component_id: component.id.0.to_string(),
-                generated_at: Utc::now().to_rfc3339(),
+                generated_at: JiffTimestamp::now().to_string(),
                 cli_version: crate::version().to_string(),
                 from,
                 query: query.clone(),
@@ -1014,6 +1028,7 @@ impl AgentCommandHandler {
                     page,
                     page_size: batch_size,
                     omit_payloads,
+                    show_claims,
                     export: None,
                 },
                 viewer.port,
@@ -1041,6 +1056,7 @@ impl AgentCommandHandler {
                         batch_size,
                         cursor.as_ref(),
                         query.as_deref(),
+                        oplog_include(show_claims).as_ref(),
                         None,
                         None,
                         None,
@@ -1062,6 +1078,7 @@ impl AgentCommandHandler {
                         &agent_id,
                         entry,
                         omit_payloads,
+                        show_claims,
                     )
                     .await?;
                     if html.is_some() {
@@ -1129,6 +1146,7 @@ impl AgentCommandHandler {
         cursor: Option<OplogCursor>,
         query: Option<String>,
         omit_payloads: bool,
+        show_claims: bool,
     ) -> anyhow::Result<()> {
         self.ctx.silence_app_context_init().await;
         let agent_id_match = self.match_agent_id(agent_id.agent_id).await?;
@@ -1147,6 +1165,7 @@ impl AgentCommandHandler {
                 self.ctx.http_batch_size(),
                 cursor.as_ref(),
                 query.as_deref(),
+                oplog_include(show_claims).as_ref(),
                 None,
                 None,
                 None,
@@ -1158,8 +1177,15 @@ impl AgentCommandHandler {
         let mut entries = Vec::with_capacity(page.entries.len());
         for entry in page.entries {
             entries.push(
-                oplog_page_entry_view(&self.ctx, &environment_id, &agent_id, entry, omit_payloads)
-                    .await?,
+                oplog_page_entry_view(
+                    &self.ctx,
+                    &environment_id,
+                    &agent_id,
+                    entry,
+                    omit_payloads,
+                    show_claims,
+                )
+                .await?,
             );
         }
         self.ctx.log_handler().log_output(AgentOplogPageView {
@@ -4563,7 +4589,7 @@ mod tests {
             application_id: ApplicationId(uuid::Uuid::nil()),
             account_id: AccountId(uuid::Uuid::nil()),
             component_size: 0,
-            created_at: chrono::DateTime::<chrono::Utc>::UNIX_EPOCH,
+            created_at: jiff::Timestamp::UNIX_EPOCH,
             metadata: ComponentMetadata::from_parts(
                 Default::default(),
                 vec![],

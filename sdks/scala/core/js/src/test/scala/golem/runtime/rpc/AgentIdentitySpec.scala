@@ -244,7 +244,7 @@ object AgentIdentitySpec extends ZIOSpecDefault {
       val host = new Host
       host.install()
       for {
-        client <- ZIO.fromFuture(_ => AgentIdentity.getById("lookup-name", createdId))
+        client <- ZIO.fromEither(AgentIdentity.getById("lookup-name", createdId)).orDieWith(AgentRpcException(_))
         id     <- ZIO.fromFuture(_ => client.agentId())
       } yield assertTrue(
         host.calls == List("lookup:lookup-name", "get-by-id:DisplayName"),
@@ -256,8 +256,9 @@ object AgentIdentitySpec extends ZIOSpecDefault {
       val host = new Host
       host.getByIdError = Some(rpcError("not-found", "no agent of the type has the ID"))
       host.install()
-      failure(AgentIdentity.getById("lookup-name", createdId)).map(error =>
-        assertTrue(error.contains(AgentRpcError.NotFound("no agent of the type has the ID")))
+      assertTrue(
+        AgentIdentity.getById("lookup-name", createdId).left.toOption ==
+          Some(AgentRpcError.NotFound("no agent of the type has the ID"))
       )
     },
     test("reflected upsert maps host failures to typed RPC errors") {
@@ -276,27 +277,25 @@ object AgentIdentitySpec extends ZIOSpecDefault {
     test("reflected getById reads the agent type from the type tag of the ID") {
       val host = new Host
       host.install()
-      ZIO.fromFuture(_ => DynamicAgentClient.getById(createdId)).map { result =>
-        assertTrue(
-          result.isRight,
-          host.typeOfIdArgument.contains(createdId),
-          host.calls.contains("get-by-id:DisplayName")
-        )
-      }
+      val result = DynamicAgentClient.getById(createdId)
+      assertTrue(
+        result.isRight,
+        host.typeOfIdArgument.contains(createdId),
+        host.calls.contains("get-by-id:DisplayName")
+      )
     },
     test("reflected getById of an ID no deployed type tags is not-found without get-by-id") {
       val host = new Host
       host.typeOfId = js.undefined
       host.install()
-      ZIO.fromFuture(_ => DynamicAgentClient.getById(createdId)).map { result =>
-        assertTrue(
-          result.left.toOption.exists {
-            case GolemReflectError.Remote(AgentRpcError.NotFound(_)) => true
-            case _                                                   => false
-          },
-          !host.calls.exists(_.startsWith("get-by-id"))
-        )
-      }
+      val result = DynamicAgentClient.getById(createdId)
+      assertTrue(
+        result.left.toOption.exists {
+          case GolemReflectError.Remote(AgentRpcError.NotFound(_)) => true
+          case _                                                   => false
+        },
+        !host.calls.exists(_.startsWith("get-by-id"))
+      )
     }
   ) @@ TestAspect.sequential
 }

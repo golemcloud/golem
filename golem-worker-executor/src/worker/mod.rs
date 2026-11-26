@@ -23,6 +23,7 @@ mod runtime;
 mod startup;
 mod streaming;
 
+use acquisition::ConstructionError;
 #[cfg(test)]
 use acquisition::snapshot_policy_of_mode;
 #[cfg(test)]
@@ -337,6 +338,7 @@ pub enum CreateIntent {
     Invocation {
         owner: NewOwner,
         idempotency_key: Option<IdempotencyKey>,
+        invocation: Option<Box<golem_api_grpc::proto::golem::worker::InvocationStart>>,
     },
     /// An explicit create request.
     Create {
@@ -364,6 +366,7 @@ impl CreateIntent {
             Self::Invocation {
                 owner,
                 idempotency_key,
+                ..
             } if !owner.keyed => (CreateRequestKind::Unkeyed, idempotency_key.clone()),
             Self::Invocation { .. } => (CreateRequestKind::GetOrCreate, None),
             Self::Create {
@@ -652,6 +655,9 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     #[allow(dead_code)]
     metrics_status: Arc<WorkerStatusMetric>,
     last_known_status_detached: Arc<AtomicBool>,
+    /// Set while an `AgentInvocationSettled` that the invocation loop appended waits for the
+    /// commit of the next `AgentInvocationStarted` (see [`Worker::defer_settlement_commit`]).
+    settlement_commit_deferred: AtomicBool,
     status_flusher: Arc<status_flusher::AgentStatusFlusher>,
     status_checkpointer: status_checkpointer::StatusCheckpointer,
     // Note: std lock for wasmtime reasons
@@ -929,33 +935,16 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.initial_worker_metadata.clone()
     }
 
-    /// This agent as a principal, under the Golem issuer. An owner that has no agent type gets
-    /// the fixed type name of its owner kind.
+    /// This agent as a principal, under the Golem issuer.
     pub(crate) fn self_principal(
         &self,
         issuer: &golem_common::model::golem_issuer::GolemIssuer,
     ) -> golem_common::model::caller::Principal {
-        use golem_common::model::agent::{AgentTypeName, OwnerKind};
-        use golem_common::model::caller::{AgentPrincipal, Principal};
-
-        let metadata = &self.initial_worker_metadata;
-        let agent_type = match (&metadata.agent_type_name, metadata.owner_kind) {
-            (Some(agent_type), _) => agent_type.clone(),
-            (None, OwnerKind::EphemeralExternalTool) => {
-                AgentTypeName("~golem-external-tool-owner".to_string())
-            }
-            (None, OwnerKind::OplogProcessor) => {
-                AgentTypeName("~golem-oplog-processor".to_string())
-            }
-            (None, OwnerKind::ComponentAgent) => AgentTypeName(String::new()),
-        };
-        Principal::Agent(AgentPrincipal::of_agent(
-            issuer.to_string(),
-            self.owned_agent_id.agent_id,
-            metadata.fingerprint,
-            agent_type,
-            self.owned_agent_id.environment_id,
-        ))
+        crate::golem_started::agent_principal(
+            issuer,
+            &self.owned_agent_id,
+            &self.initial_worker_metadata,
+        )
     }
 
     pub(crate) fn owned_agent_id(&self) -> &OwnedAgentId {
@@ -968,6 +957,18 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
 
     pub fn agent_mode(&self) -> AgentMode {
         self.execution_status.read().unwrap().agent_mode()
+    }
+
+    /// Whether a stream-permitted invocation needs a stream session. An ephemeral agent executes the
+    /// component it was created with, so its method is classified before acceptance; its
+    /// runtime ends with the invocation and cannot retain a durable attachment for scalar work.
+    pub(crate) fn invocation_needs_stream_session(&self, invocation: &AgentInvocation) -> bool {
+        self.agent_mode() != AgentMode::Ephemeral
+            || crate::worker::invocation::invocation_uses_streams(
+                invocation,
+                &self.current_component.load().metadata,
+                self.parsed_agent_id.as_ref(),
+            )
     }
 
     /// Gets the timestamp of the last time the execution status changed
@@ -1014,7 +1015,7 @@ impl Drop for WorkerStatusMetric {
 #[derive(Debug)]
 enum WorkerInstance {
     Unresolved,
-    Initializing(Shared<BoxFuture<'static, Result<bool, WorkerExecutorError>>>),
+    Initializing(Shared<BoxFuture<'static, Result<bool, ConstructionError>>>),
     /// No invocation loop runs. `startup_failure` is the failed last start of a durable agent:
     /// admission returns it until the next start, which runs the agent again.
     Unloaded {
@@ -1295,6 +1296,8 @@ enum InvocationResult {
     Cancelled,
     Lazy {
         oplog_idx: OplogIndex,
+        /// The give-up entry of a background failure after the result at `oplog_idx`.
+        background_failure: Option<OplogIndex>,
     },
 }
 
@@ -1337,6 +1340,8 @@ pub(crate) enum MethodFailureSettlementError {
 pub enum InvocationFailureDecision {
     /// Retry the invocation, or stop, as the retry decision says.
     Retry(RetryDecision),
+    /// The cancellation and typed rejection were committed. The rejected key must not run again.
+    Rejected,
     /// The oplog refused the record of the failure. A `RecoveryRequired` error, a storage that did
     /// not answer, sends the agent to infrastructure recovery, and the invocation stays pending, so
     /// it continues when the storage answers again. An `OplogFailed` error stops the agent, and the
@@ -1492,13 +1497,11 @@ pub(crate) use ingress::{
     await_scalar_invocation, require_canonical_command_path,
     require_expected_tool_deployment_revision,
 };
-use ingress::{
-    inactive_ephemeral_agent_error, replace_invocation_input, validate_resolved_invocation_identity,
-};
+use ingress::{inactive_ephemeral_agent_error, validate_resolved_invocation_identity};
 use interrupt::register_interrupt_request;
 use lifecycle::retirement::owned_shard_epoch;
 pub(crate) use lifecycle::retirement::retired_by_assignment;
-use lifecycle::stop::invocation_keys_to_fail;
+use lifecycle::stop::{invocation_keys_failed_on_giving_up, invocation_keys_to_fail};
 use read_only_cache::{build_read_only_cache_entry, is_no_cache, populate_read_only_cache};
 use runtime::shared_linear_memory_error;
 use streaming::sessions::{
@@ -1507,6 +1510,6 @@ use streaming::sessions::{
     validate_stream_session_record,
 };
 pub(crate) use streaming::sessions::{
-    same_origin_stream_invocation, stream_session_record_key, stream_session_record_keys,
-    stream_session_record_reference,
+    same_origin_queued_request, same_origin_stream_invocation, stream_session_record_key,
+    stream_session_record_keys, stream_session_record_reference,
 };

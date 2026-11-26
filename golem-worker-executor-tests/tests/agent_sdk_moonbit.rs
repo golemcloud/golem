@@ -37,7 +37,7 @@ use serde::Deserialize;
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use test_r::{inherit_test_dep, test, timeout};
+use test_r::{define_matrix_dimension, inherit_test_dep, test, timeout};
 use tokio::sync::Notify;
 use tracing::Instrument;
 
@@ -48,6 +48,12 @@ inherit_test_dep!(
     #[tagged_as("agent_sdk_moonbit")]
     PrecompiledComponent
 );
+inherit_test_dep!(
+    #[tagged_as("agent_sdk_moonbit_gc")]
+    PrecompiledComponent
+);
+
+define_matrix_dimension!(backend: PrecompiledComponent -> "agent_sdk_moonbit", "agent_sdk_moonbit_gc");
 
 const GENERATOR: &str = "golem-it::test-generator";
 const SEND: &str = "http::client::send";
@@ -243,7 +249,7 @@ async fn assert_replay_repeats_nothing(fixture: &Fixture, history: &History) -> 
 async fn moonbit_custom_scopes_stay_with_their_coroutines(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_sdk_moonbit")] agent_sdk_moonbit: &PrecompiledComponent,
+    #[dimension(backend)] agent_sdk_moonbit: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let history = History::default();
@@ -392,7 +398,7 @@ async fn moonbit_nested_custom_scopes_keep_their_parent(
 async fn moonbit_custom_scopes_recover_with_one_completed_and_one_suspended_sibling(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("agent_sdk_moonbit")] agent_sdk_moonbit: &PrecompiledComponent,
+    #[dimension(backend)] agent_sdk_moonbit: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
     let history = History::default();

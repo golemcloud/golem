@@ -15,7 +15,7 @@
 // The executor's invocation reads: `GetInvocation`, `ListInvocations` and `LookupInvocations`.
 
 use crate::Tracing;
-use chrono::Utc;
+
 use golem_api_grpc::proto::golem::worker::Cursor;
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     InvocationKind, InvocationLifecycleState, InvocationSummary, ListInvocationsRequest,
@@ -76,7 +76,8 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
     let invocation = |key: &InvocationId| AgentInvocation::AgentMethod {
         idempotency_key: *key,
         method_name: "inc_global_by".to_string(),
-        input: data_value!(1u64).into_parts().1,
+        input: data_value!(1u64).into_parts().1.try_into().unwrap(),
+        allow_streams: false,
         invocation_context: InvocationContextStack::fresh(),
         caller: callers::agent(
             owner.agent_id,
@@ -89,7 +90,7 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
         .await?;
     let owned = target.clone();
     let worker = executor.active_agent(&owned).await.unwrap().primary();
-    let due = Utc::now() + chrono::Duration::hours(1);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
 
     let cancelled = InvocationId(uuid::Uuid::new_v4());
     let receipt = worker
@@ -156,13 +157,20 @@ async fn invocations_are_read_by_id_and_listed_in_pages(
     assert_eq!(ids.len(), 4, "{:?}", all.invocations);
     assert_eq!(ids[0], scheduled);
     assert_eq!(ids[1], cancelled);
-    assert!(
-        all.invocations
-            .iter()
-            .any(|summary| summary.kind == InvocationKind::Constructor as i32
-                && state_of(summary) == InvocationLifecycleState::Completed
-                && summary.operation.is_none())
-    );
+    let fingerprint = executor.get_worker_metadata(&target).await?.fingerprint;
+    let constructor_id = InvocationId(uuid::Uuid::new_v5(&fingerprint.0, b"constructor"));
+    assert!(all.invocations.iter().any(|summary| summary.kind
+        == InvocationKind::Constructor as i32
+        && id_of(summary) == constructor_id
+        && state_of(summary) == InvocationLifecycleState::Completed
+        && summary.operation.is_none()));
+    let constructor = executor
+        .get_invocation(&target.agent_id, env, constructor_id)
+        .await?
+        .map_err(|error| anyhow::anyhow!("{error:?}"))?
+        .expect("the constructor is readable by its fingerprint-derived ID");
+    assert_eq!(constructor.kind, InvocationKind::Constructor as i32);
+    assert_eq!(state_of(&constructor), InvocationLifecycleState::Completed);
 
     // Pages of two give the same invocations in the same order, each once.
     let mut paged = Vec::new();

@@ -53,6 +53,17 @@ impl MessageWithFields for InvocationGetView {
             Some(InvocationOutcome::Failure(failure)) => {
                 fields.push(("Error".to_string(), format_error(&failure.error)))
             }
+            Some(InvocationOutcome::BackgroundFailure(failure)) => {
+                if let Some(value) = &failure.value {
+                    fields.push((
+                        "Result".to_string(),
+                        pretty_json(&serde_json::to_value(value).ok().and_then(|mut value| {
+                            value.get_mut("value").map(serde_json::Value::take)
+                        })),
+                    ));
+                }
+                fields.push(("Error".to_string(), format_error(&failure.error)))
+            }
             None => {}
         }
         fields
@@ -113,7 +124,7 @@ impl TextOutput for InvocationListView {
                     .map(ToString::to_string)
                     .unwrap_or_default(),
                 invocation.operation.clone().unwrap_or_default(),
-                invocation.changed_at.to_rfc3339(),
+                invocation.changed_at.to_string(),
             ]);
         }
         log_table(table);
@@ -162,8 +173,8 @@ fn summary_fields(summary: &InvocationSummary) -> Vec<(String, String)> {
         .fmt_field("State", &summary.state, ToString::to_string)
         .fmt_field_option("Kind", &summary.kind, ToString::to_string)
         .fmt_field_option("Operation", &summary.operation, ToString::to_string)
-        .fmt_field_option("Accepted at", &summary.accepted_at, |at| at.to_rfc3339())
-        .fmt_field("Changed at", &summary.changed_at, |at| at.to_rfc3339());
+        .fmt_field_option("Accepted at", &summary.accepted_at, ToString::to_string)
+        .fmt_field("Changed at", &summary.changed_at, ToString::to_string);
     fields.build()
 }
 

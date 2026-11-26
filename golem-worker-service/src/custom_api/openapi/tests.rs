@@ -485,11 +485,12 @@ fn id_selector_openapi_documents_concrete_paths_and_required_query() {
         assert_eq!(
             params
                 .iter()
+                .filter(|p| p["in"] == "path")
                 .map(|p| p["name"].as_str().unwrap())
                 .collect::<Vec<_>>(),
             names
         );
-        for param in params {
+        for param in params.iter().filter(|p| p["in"] == "path") {
             assert_eq!(param["in"], "path");
             assert_eq!(param["required"], true);
             if param["name"] == "instance" {
@@ -524,7 +525,7 @@ fn id_selector_openapi_documents_concrete_paths_and_required_query() {
         let params = spec["paths"]["/query"]["get"]["parameters"]
             .as_array()
             .unwrap();
-        assert_eq!(params.len(), 1);
+        assert_eq!(params.len(), 2);
         assert_eq!(params[0]["name"], "instance");
         assert_eq!(params[0]["in"], "query");
         assert_eq!(params[0]["required"], true);
@@ -533,7 +534,7 @@ fn id_selector_openapi_documents_concrete_paths_and_required_query() {
 }
 
 #[test]
-fn create_agent_openapi_projects_canonical_envelope_reference_and_location() {
+fn create_agent_openapi_projects_constructor_body_reference_and_location() {
     use golem_common::schema::NamedField;
     use golem_service_base::custom_api::{AgentSelection, CreateAgentBehaviour, MountAgent};
     for query in [false, true] {
@@ -612,65 +613,25 @@ fn create_agent_openapi_projects_canonical_envelope_reference_and_location() {
             spec["paths"]["/ordinary-create"]["post"]["operationId"],
             "TestAgent-create"
         );
-        assert!(
-            operation["description"]
-                .as_str()
-                .unwrap()
-                .contains("keyed: true is rejected")
-        );
         assert_eq!(operation["requestBody"]["required"], true);
-        let body = &operation["requestBody"]["content"]["application/json"]["schema"];
-        assert_eq!(body["properties"]["keyed"]["const"], false);
-        let constructor = &body["properties"]["parameters"]["x-golem-constructor-schema"];
-        assert_eq!(constructor["properties"]["decision"]["type"], "string");
-        let envelope = body;
-        assert!(envelope["properties"].get("parameters").is_some());
-        assert!(envelope["properties"].get("config").is_none());
-        assert!(envelope["properties"].get("env").is_none());
-        assert_eq!(envelope["additionalProperties"], false);
-        let mut schema = body.clone();
+        let mut schema = operation["requestBody"]["content"]["application/json"]["schema"].clone();
+        assert_eq!(schema["properties"]["decision"]["type"], "string");
         schema["components"] = spec["components"].clone();
         let validator = jsonschema::validator_for(&schema).unwrap();
-        let request = json!({
-            "parameters": { "kind": "record", "value": { "fields": [{ "kind": "string", "value": "ready" }] } }
-        });
-        assert!(
-            serde_json::from_value::<crate::api::agents::CreateAgentRequest>(request.clone())
-                .is_ok()
-        );
-        assert!(validator.is_valid(&request));
-        let mut explicit_unkeyed = request.clone();
-        explicit_unkeyed["keyed"] = json!(false);
-        assert!(validator.is_valid(&explicit_unkeyed));
-        for (field, value) in [
-            ("env", json!({"SETTING": "override"})),
-            ("env", json!({})),
-            ("env", Value::Null),
-            (
-                "config",
-                json!([{"path": ["setting"], "value": "override"}]),
-            ),
-            ("config", json!([])),
-            ("config", Value::Null),
+        assert!(validator.is_valid(&json!({ "decision": "ready" })));
+        for rejected in [
+            json!({}),
+            json!({ "decision": 1 }),
+            json!({ "decision": "ready", "keyed": false }),
+            json!({ "decision": "ready", "env": {} }),
+            json!({ "decision": "ready", "config": [] }),
+            json!({
+                "parameters": { "kind": "record", "value": { "fields": [{ "kind": "string", "value": "ready" }] } }
+            }),
+            json!(["ready"]),
         ] {
-            let mut overrides = request.clone();
-            overrides[field] = value;
-            assert!(!validator.is_valid(&overrides), "{overrides}");
-            if !overrides[field].is_null() {
-                assert!(
-                    serde_json::from_value::<crate::api::agents::CreateAgentRequest>(overrides)
-                        .is_ok()
-                );
-            }
+            assert!(!validator.is_valid(&rejected), "{rejected}");
         }
-        let mut malformed = request.clone();
-        malformed["parameters"] = json!({ "kind": "string", "value": "not a constructor record" });
-        assert!(!validator.is_valid(&malformed));
-        malformed["parameters"] = json!({ "kind": "record", "value": { "fields": [] } });
-        assert!(!validator.is_valid(&malformed));
-        let mut keyed = request;
-        keyed["keyed"] = json!(true);
-        assert!(!validator.is_valid(&keyed));
         let responses = &operation["responses"];
         assert!(responses.get("200").is_none());
         assert_eq!(responses["201"]["headers"]["Location"]["required"], true);
@@ -936,7 +897,15 @@ fn durable_stream_base_put_cors_exposes_only_base_response_headers() {
         .collect();
     assert_eq!(
         exposed,
-        ["Allow", "Location", "Retry-After",].into_iter().collect()
+        [
+            "Allow",
+            "Golem-Environment-Id",
+            "Golem-Invocation-Id",
+            "Location",
+            "Retry-After"
+        ]
+        .into_iter()
+        .collect()
     );
 }
 
@@ -1047,9 +1016,77 @@ fn durable_stream_schema_distinguishes_slots_and_scalar_results() {
 }
 
 #[test]
+fn typed_invocation_headers_preserve_declared_key_bindings() {
+    for binding in [
+        None,
+        Some(QueryOrHeaderType::Primitive(PathSegmentType::U32)),
+    ] {
+        let parameters = binding
+            .clone()
+            .into_iter()
+            .map(|parameter_type| MethodParameter::Header {
+                header_name: "iDeMpOtEnCy-KeY".into(),
+                parameter_type,
+            })
+            .collect();
+        let route = call_agent_route(
+            Method::POST,
+            vec![PathSegment::Literal {
+                value: "invoke".into(),
+            }],
+            RequestBodySchema::Unused,
+            parameters,
+            unit_response(),
+            None,
+        );
+        let spec = spec_for(vec![route]);
+        let operation = &spec["paths"]["/invoke"]["post"];
+        let keys: Vec<_> = operation["parameters"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|parameter| {
+                parameter["in"] == "header"
+                    && parameter["name"]
+                        .as_str()
+                        .unwrap()
+                        .eq_ignore_ascii_case("Idempotency-Key")
+            })
+            .collect();
+        assert_eq!(keys.len(), 1);
+        assert_eq!(keys[0]["required"], binding.is_some());
+        if binding.is_some() {
+            assert_eq!(keys[0]["description"], "Header parameter: iDeMpOtEnCy-KeY");
+        } else {
+            assert!(
+                keys[0]["description"]
+                    .as_str()
+                    .unwrap()
+                    .contains("External invocation key")
+            );
+        }
+        assert_eq!(
+            keys[0]["schema"]["type"],
+            if binding.is_some() {
+                "integer"
+            } else {
+                "string"
+            }
+        );
+        for response in operation["responses"].as_object().unwrap().values() {
+            for name in ["Golem-Invocation-Id", "Golem-Environment-Id"] {
+                assert_eq!(response["headers"][name]["schema"]["type"], "string");
+                assert_eq!(response["headers"][name]["required"], false);
+            }
+        }
+        assert!(operation["responses"]["default"].is_object());
+    }
+}
+
+#[test]
 fn durable_stream_deployment_spec_snapshots() {
     use golem_common::schema::NamedField;
-    for with_input in [false, true] {
+    for (with_input, url_bound) in [(false, true), (true, true), (true, false)] {
         let mut route = call_agent_route(
             Method::PUT,
             vec![PathSegment::Literal {
@@ -1064,13 +1101,55 @@ fn durable_stream_deployment_spec_snapshots() {
             panic!()
         };
         call.route_mode = golem_service_base::custom_api::AgentRouteMode::DurableStreams;
+        let mut fields = vec![];
         if with_input {
-            call.method_input.input_schema = InputSchema::parameters([NamedField::user_supplied(
+            fields.push(NamedField::user_supplied(
                 "input",
                 SchemaType::stream(Some(str())),
-            )]);
+            ));
         }
+        if !url_bound {
+            fields.push(NamedField::user_supplied("argument", str()));
+            call.method_parameters.push(MethodParameter::Header {
+                header_name: "argument".into(),
+                parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
+            });
+        }
+        call.method_input.input_schema = InputSchema::parameters(fields);
         let spec = spec_for(vec![route]);
+        for (path, item) in spec["paths"].as_object().unwrap() {
+            for (method, operation) in item.as_object().unwrap() {
+                if !["put", "get", "head", "post", "delete"].contains(&method.as_str()) {
+                    continue;
+                }
+                assert!(
+                    !operation["parameters"]
+                        .as_array()
+                        .unwrap()
+                        .iter()
+                        .any(|parameter| parameter["name"]
+                            .as_str()
+                            .is_some_and(|name| name.eq_ignore_ascii_case("Idempotency-Key")))
+                );
+                let accepting = !path.contains("/forks/")
+                    && (method == "put" || (method == "post" && url_bound));
+                for response in operation["responses"].as_object().unwrap().values() {
+                    assert_eq!(
+                        response["headers"]["Golem-Invocation-Id"].is_object(),
+                        accepting,
+                        "{method} {path}"
+                    );
+                    assert_eq!(
+                        response["headers"]["Golem-Environment-Id"].is_object(),
+                        accepting,
+                        "{method} {path}"
+                    );
+                }
+            }
+        }
+        if !url_bound {
+            continue;
+        }
         let name = if with_input {
             "durable-stream-duplex.json"
         } else {
@@ -1265,7 +1344,22 @@ fn durable_stream_operations_have_concrete_typed_slots() {
         let fork = &paths[&format!("{fork_session}/streams/{slot}")];
         for method in ["get", "head", "post", "delete"] {
             assert_eq!(fork[method]["requestBody"], original[method]["requestBody"]);
-            assert_eq!(fork[method]["responses"], original[method]["responses"]);
+            let mut shared_responses = original[method]["responses"].clone();
+            if method == "post"
+                && let Some(responses) = shared_responses.as_object_mut()
+            {
+                responses.remove("default");
+                for response in responses.values_mut() {
+                    if let Some(headers) = response["headers"].as_object_mut() {
+                        headers.remove("Golem-Invocation-Id");
+                        headers.remove("Golem-Environment-Id");
+                        if headers.is_empty() {
+                            response.as_object_mut().unwrap().remove("headers");
+                        }
+                    }
+                }
+            }
+            assert_eq!(fork[method]["responses"], shared_responses);
             if let Some(parameters) = fork[method]["parameters"].as_array() {
                 let inherited: Vec<_> = parameters
                     .iter()

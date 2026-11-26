@@ -12,7 +12,7 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-use golem_common::base_model::durable_stream::{
+use crate::base_model::durable_stream::{
     MAX_DURABLE_STREAM_ITEM_SIZE, MAX_NEW_STREAM_HANDLES_PER_VALUE,
     MAX_STREAM_VALUE_TRAVERSAL_DEPTH, StreamMapSide, StreamValuePathStep,
 };
@@ -582,6 +582,13 @@ pub fn preflight_proto_recursive_stream_value(
                 .to_string(),
         );
     }
+    proto_method_input_stream_references(value)
+}
+
+/// Returns the transport stream ID of each stream reference in a method input, in traversal
+/// order. A method input is not a durable stream item, so the 16 MiB logical value limit does
+/// not apply to it; the traversal depth and new stream handle limits do.
+pub fn proto_method_input_stream_references(value: &ProtoSchemaValue) -> Result<Vec<u64>, String> {
     let mut stream_references = Vec::new();
     decode_recursive_stream_value(value.clone(), |stream_id, _| {
         stream_references.push(stream_id);

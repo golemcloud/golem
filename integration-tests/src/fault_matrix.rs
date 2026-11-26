@@ -48,6 +48,12 @@
 //! Cancel is the client's operation: the client cancels an output of `produce` as its
 //! consumer, and the output then ends with a cancellation, never a clean end.
 //!
+//! Every fixture also declares the tool [`FIXTURE_TOOL`] with the command
+//! `produce(run, count, pause_after, gate)`, which writes the records of `produce` to its stdout,
+//! each as 4 big-endian bytes, and awaits `gate` before record `pause_after + 1`. A row binds the
+//! tool to [`FIXTURE_AGENT_TYPE`] and runs the command on a fixture agent, the agent that created
+//! the gate.
+//!
 //! A fixture whose SDK exposes Durable Streams routes also mounts the agent at
 //! `/fault-matrix/{name}` and serves `PUT /numbered/{run}/{count}?delay_ms={delay_ms}`, which
 //! writes records 1..=count with `delay_ms` before each record.
@@ -56,6 +62,9 @@ use std::fmt::{Display, Formatter};
 
 /// The agent type that every fixture defines.
 pub const FIXTURE_AGENT_TYPE: &str = "FaultMatrixFixture";
+
+/// The tool that every fixture declares.
+pub const FIXTURE_TOOL: &str = "fault-matrix";
 
 /// Distance between the record numbers of two runs.
 pub const RUN_STRIDE: u32 = 100_000;

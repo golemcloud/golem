@@ -430,6 +430,9 @@ build_sdk_apps() {
           ;;
         agent-sdk-moonbit)
           test -s ../golem_it_agent_sdk_moonbit.wasm
+          "$GOLEM_CLI" --preset release-gc build --yes --skip-check
+          "$GOLEM_CLI" --preset release-gc exec copy
+          test -s ../golem_it_agent_sdk_moonbit_gc.wasm
           ;;
         fault-matrix-moonbit)
           test -s ../golem_it_fault_matrix_moonbit.wasm

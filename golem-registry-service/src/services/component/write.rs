@@ -36,6 +36,7 @@ use golem_common::base_model::component_metadata::{
     AgentTypeProvisionConfig, ComponentProvisionConfig,
 };
 use golem_common::base_model::environment_plugin_grant::EnvironmentPluginGrantWithDetails;
+use golem_common::model::account::AccountId;
 use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::model::agent::AgentConfigSource;
 use golem_common::model::agent::TypedAgentConfigEntry;
@@ -56,7 +57,6 @@ use golem_common::model::component::{
     AgentTypeProvisionConfigCreation, AgentTypeProvisionConfigUpdate,
 };
 use golem_common::model::component_metadata::{ComponentMetadata, ComponentProcessingError};
-use golem_common::model::diff::Hash;
 use golem_common::model::environment::{Environment, EnvironmentId};
 use golem_common::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use golem_common::model::tool::{ToolDeploymentMetadata, ToolName, ToolProvisionConfig};
@@ -316,15 +316,6 @@ impl ComponentWriteService {
         };
 
         let component_id = ComponentId::new();
-        let wasm_bytes = wasm.len() as u64;
-        let (wasm_hash, wasm_object_store_key) = self
-            .upload_and_hash_component_wasm(environment_id, wasm.clone())
-            .await?;
-        record_component_uploaded(
-            &auth.actor_account_id().to_string(),
-            &environment_id.to_string(),
-            wasm_bytes,
-        );
 
         // Batch-resolve all plugin grants referenced across all agent types in one pass,
         // so the same grant is only fetched once even if shared by multiple agent types.
@@ -392,6 +383,7 @@ impl ComponentWriteService {
                 .component_provision_config
                 .plugin_installations,
             &resolved_grants,
+            auth.access_account_id(),
         )?;
         let (component_initial_permissions, component_card_record) = self
             .prepare_component_initial_permission_card_record(
@@ -421,8 +413,11 @@ impl ComponentWriteService {
                 })?;
 
             let files = resolve_files_for_creation(agent_type_name, creation, &uploaded_files)?;
-            let plugins =
-                resolve_plugins_for_creation(&creation.plugin_installations, &resolved_grants)?;
+            let plugins = resolve_plugins_for_creation(
+                &creation.plugin_installations,
+                &resolved_grants,
+                auth.access_account_id(),
+            )?;
             let config =
                 validate_and_transform_config_entries(agent_type, creation.config.clone())?;
             let (initial_permission, card_record) = self.prepare_initial_permission_card_record(
@@ -451,6 +446,7 @@ impl ComponentWriteService {
             component_creation.tool_deployment_configs,
             &uploaded_files,
             &resolved_grants,
+            auth.access_account_id(),
         )?;
         let tool_middleware_deployment_metadata =
             resolve_tool_middleware_deployment_metadata_for_creation(
@@ -458,6 +454,7 @@ impl ComponentWriteService {
                 component_creation.tool_middleware_provision_configs,
                 &uploaded_files,
                 &resolved_grants,
+                auth.access_account_id(),
             )?;
 
         let component_metadata = analyze_and_validate_component_wasm(
@@ -473,6 +470,19 @@ impl ComponentWriteService {
         validate_component_metadata_invariants(&component_metadata)?;
 
         let component_size = wasm.len() as u64;
+        let (wasm_hash, upload) = self
+            .object_store
+            .stage(
+                self.component_repo.as_ref(),
+                environment.owner_account_id,
+                wasm,
+            )
+            .await?;
+        record_component_uploaded(
+            &auth.actor_account_id().to_string(),
+            &environment_id.to_string(),
+            component_size,
+        );
 
         let record = ComponentRevisionRecord::creation(
             component_id,
@@ -480,19 +490,26 @@ impl ComponentWriteService {
             component_metadata,
             wasm_hash,
             component_creation.package_metadata,
-            wasm_object_store_key,
+            upload.object_key.clone(),
             auth.actor_account_id(),
         );
 
-        let stored_component: Component = self
+        let result = self
             .component_repo
-            .create(
+            .create_with_upload(
                 environment_id.0,
                 &component_creation.component_name.0,
                 record,
                 cards_to_create,
+                Some(upload.clone()),
             )
-            .await
+            .await;
+        if result.is_err() {
+            self.object_store
+                .abandon_upload(self.component_repo.as_ref(), &upload.object_key)
+                .await;
+        }
+        let stored_component: Component = result
             .map_err(|err| match err {
                 ComponentRepoError::ConcurrentModification
                 | ComponentRepoError::VersionAlreadyExists { .. } => {
@@ -514,7 +531,12 @@ impl ComponentWriteService {
             )?;
 
         self.component_compilation
-            .enqueue_compilation(environment_id, component_id, stored_component.revision)
+            .enqueue_compilation(
+                environment_id,
+                component_id,
+                stored_component.revision,
+                stored_component.wasm_hash,
+            )
             .await;
 
         Ok(stored_component)
@@ -668,7 +690,11 @@ impl ComponentWriteService {
                     &final_config_schema,
                     config.config,
                 )?,
-                plugins: resolve_plugins_for_creation(&config.plugin_installations, &grants)?,
+                plugins: resolve_plugins_for_creation(
+                    &config.plugin_installations,
+                    &grants,
+                    auth.access_account_id(),
+                )?,
                 files: resolve_component_files_for_creation(&config.files, &uploaded_files)?,
             };
         } else {
@@ -814,7 +840,7 @@ impl ComponentWriteService {
             }
         }
 
-        if let Some(new_wasm) = new_wasm {
+        if let Some(new_wasm) = &new_wasm {
             self.account_usage_service
                 .ensure_updated_component_within_limits(
                     environment.owner_account_id,
@@ -823,19 +849,7 @@ impl ComponentWriteService {
                 )
                 .await?;
 
-            let new_wasm_bytes = new_wasm.len() as u64;
-            let (wasm_hash, wasm_object_store_key) = self
-                .upload_and_hash_component_wasm(environment_id, new_wasm.clone())
-                .await?;
-            record_component_uploaded(
-                &auth.actor_account_id().to_string(),
-                &environment_id.to_string(),
-                new_wasm_bytes,
-            );
-
-            component.wasm_hash = wasm_hash;
             component.package_metadata = package_metadata;
-            component.object_store_key = wasm_object_store_key;
             let metadata = analyze_and_validate_component_wasm(
                 final_config_schema.clone(),
                 final_component_provision_config.clone(),
@@ -851,7 +865,7 @@ impl ComponentWriteService {
             // TODO: skip the download here
             let old_data = self
                 .object_store
-                .get(environment_id, &component.object_store_key)
+                .get(environment.owner_account_id, &component.object_store_key)
                 .await?;
 
             let metadata = analyze_and_validate_component_wasm(
@@ -887,13 +901,40 @@ impl ComponentWriteService {
         }
 
         validate_component_metadata_invariants(&component.metadata)?;
+        let upload = if let Some(new_wasm) = new_wasm {
+            let new_wasm_bytes = new_wasm.len() as u64;
+            let (wasm_hash, staged) = self
+                .object_store
+                .stage(
+                    self.component_repo.as_ref(),
+                    environment.owner_account_id,
+                    new_wasm,
+                )
+                .await?;
+            component.wasm_hash = wasm_hash;
+            component.object_store_key.clone_from(&staged.object_key);
+            record_component_uploaded(
+                &auth.actor_account_id().to_string(),
+                &environment_id.to_string(),
+                new_wasm_bytes,
+            );
+            Some(staged)
+        } else {
+            None
+        };
 
         let record = ComponentRevisionRecord::from_model(component, auth.actor_account_id());
 
-        let stored_component: Component = self
+        let result = self
             .component_repo
-            .update(record, cards_to_create)
-            .await
+            .update_with_upload(record, cards_to_create, upload.clone())
+            .await;
+        if let Some(upload) = upload.filter(|_| result.is_err()) {
+            self.object_store
+                .abandon_upload(self.component_repo.as_ref(), &upload.object_key)
+                .await;
+        }
+        let stored_component: Component = result
             .map_err(|err| match err {
                 ComponentRepoError::ConcurrentModification => ComponentError::ConcurrentUpdate,
                 ComponentRepoError::VersionAlreadyExists { version } => {
@@ -910,7 +951,12 @@ impl ComponentWriteService {
             )?;
 
         self.component_compilation
-            .enqueue_compilation(environment_id, component_id, stored_component.revision)
+            .enqueue_compilation(
+                environment_id,
+                component_id,
+                stored_component.revision,
+                stored_component.wasm_hash,
+            )
             .await;
 
         Ok(stored_component)
@@ -958,16 +1004,6 @@ impl ComponentWriteService {
             .signal_new_events_available(self.registry_change_notifier.as_ref());
 
         Ok(())
-    }
-
-    async fn upload_and_hash_component_wasm(
-        &self,
-        environment_id: EnvironmentId,
-        data: Arc<[u8]>,
-    ) -> Result<(Hash, String), ComponentError> {
-        // TODO: use something like PluginWasmFilesService instead of raw object store
-        let hash = self.object_store.put(environment_id, data).await?;
-        Ok((hash, hash.to_string()))
     }
 
     async fn upload_agent_files(
@@ -1114,6 +1150,9 @@ impl ComponentWriteService {
                     if let Some(new_parameters) = inner.new_parameters {
                         plugin.parameters = new_parameters;
                     };
+
+                    // An update keeps `installed_by`: the account that installed the plugin stays
+                    // its installer, whatever account changes the priority or the parameters.
                 }
                 PluginInstallationAction::Install(inner) => {
                     // ensure the plugin priority and environment_plugin_grant_id is not already used
@@ -1159,6 +1198,7 @@ impl ComponentWriteService {
                             .oplog_processor_component_revision(),
                         plugin_name: environment_plugin_grant.plugin.name,
                         plugin_version: environment_plugin_grant.plugin.version,
+                        installed_by: auth.access_account_id(),
                     });
                 }
             }
@@ -1541,6 +1581,7 @@ fn resolve_tool_middleware_deployment_metadata_for_creation(
     mut configs: BTreeMap<ToolMiddlewareName, ToolProvisionConfigCreation>,
     uploaded_files: &HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>,
     resolved_grants: &HashMap<EnvironmentPluginGrantId, EnvironmentPluginGrantWithDetails>,
+    installed_by: AccountId,
 ) -> Result<BTreeMap<ToolMiddlewareName, ToolMiddlewareDeploymentMetadata>, ComponentError> {
     let definitions = tool_middleware_definitions_by_name(definitions)?;
     let mut result = BTreeMap::new();
@@ -1554,6 +1595,7 @@ fn resolve_tool_middleware_deployment_metadata_for_creation(
             config,
             uploaded_files,
             resolved_grants,
+            installed_by,
         )?;
         result.insert(
             name,
@@ -1576,6 +1618,7 @@ fn resolve_tool_deployment_metadata_for_creation(
     mut configs: BTreeMap<ToolName, ToolDeploymentConfigCreation>,
     uploaded_files: &HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>,
     resolved_grants: &HashMap<EnvironmentPluginGrantId, EnvironmentPluginGrantWithDetails>,
+    installed_by: AccountId,
 ) -> Result<BTreeMap<ToolName, ToolDeploymentMetadata>, ComponentError> {
     let definitions = tool_definitions_by_name(tools)?;
     let mut result = BTreeMap::new();
@@ -1589,6 +1632,7 @@ fn resolve_tool_deployment_metadata_for_creation(
             config.provision,
             uploaded_files,
             resolved_grants,
+            installed_by,
         )?;
         result.insert(
             name,
@@ -1614,11 +1658,16 @@ fn resolve_tool_provision_config_for_creation(
     creation: ToolProvisionConfigCreation,
     uploaded_files: &HashMap<ArchiveFilePath, (AgentFileContentHash, u64)>,
     resolved_grants: &HashMap<EnvironmentPluginGrantId, EnvironmentPluginGrantWithDetails>,
+    installed_by: AccountId,
 ) -> Result<ToolProvisionConfig, ComponentError> {
     Ok(ToolProvisionConfig {
         config: creation.config,
         env: creation.env,
-        plugins: resolve_plugins_for_creation(&creation.plugin_installations, resolved_grants)?,
+        plugins: resolve_plugins_for_creation(
+            &creation.plugin_installations,
+            resolved_grants,
+            installed_by,
+        )?,
         files: resolve_tool_files_for_creation(tool_name, &creation.files, uploaded_files)?,
     })
 }
@@ -1943,6 +1992,7 @@ fn validate_and_transform_component_config_entries(
 fn resolve_plugins_for_creation(
     plugin_installations: &[PluginInstallation],
     resolved_grants: &HashMap<EnvironmentPluginGrantId, EnvironmentPluginGrantWithDetails>,
+    installed_by: AccountId,
 ) -> Result<Vec<InstalledPlugin>, ComponentError> {
     let mut result: Vec<InstalledPlugin> = Vec::new();
 
@@ -1981,6 +2031,7 @@ fn resolve_plugins_for_creation(
             oplog_processor_component_revision: grant.plugin.oplog_processor_component_revision(),
             plugin_name: grant.plugin.name.clone(),
             plugin_version: grant.plugin.version.clone(),
+            installed_by,
         });
     }
 
@@ -2366,6 +2417,7 @@ mod initial_agent_file_tests {
     use golem_common::model::application::{ApplicationId, ApplicationName};
     use golem_common::model::card::owner::EnvironmentOwnerPattern;
     use golem_common::model::card::{EffectiveSurface, EnvironmentResourcePattern, GrantSurface};
+    use golem_common::model::diff::Hash;
     use golem_common::model::environment::{EnvironmentName, EnvironmentRevision};
     use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
     use test_r::test;
@@ -2483,6 +2535,7 @@ mod tests {
         validate_component_config_schema, validate_component_metadata_invariants,
     };
     use crate::services::component::ComponentError;
+    use golem_common::model::account::AccountId;
     use golem_common::model::agent::{AgentConfigSource, AgentFileContentHash, AgentTypeName};
     use golem_common::model::card::recipient::RecipientPattern;
     use golem_common::model::card::{
@@ -2813,6 +2866,7 @@ mod tests {
             BTreeMap::new(),
             &HashMap::new(),
             &HashMap::new(),
+            AccountId::new(),
         )
         .unwrap_err();
         assert!(matches!(
@@ -2838,6 +2892,7 @@ mod tests {
             )]),
             &HashMap::new(),
             &HashMap::new(),
+            AccountId::new(),
         )
         .unwrap_err();
         assert!(matches!(
@@ -2888,6 +2943,7 @@ mod tests {
             )]),
             &HashMap::new(),
             &HashMap::new(),
+            AccountId::new(),
         )
         .unwrap();
         assert_eq!(metadata[&name].definition, definition);

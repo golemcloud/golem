@@ -143,11 +143,11 @@ mod tests {
 
     use super::*;
     use crate::sharding::model::{ExecutorAddr, ExecutorId, ShardAssignmentEntry, ShardEpoch};
-    use chrono::{DateTime, Utc};
     use golem_common::model::{Pod, ShardId};
     use golem_common::serialization::{
         SERIALIZATION_VERSION_V1, SERIALIZATION_VERSION_V2, serialize,
     };
+    use jiff::Timestamp;
     use std::net::{IpAddr, Ipv4Addr};
     use std::panic::{AssertUnwindSafe, catch_unwind};
     use std::time::Duration;
@@ -155,8 +155,8 @@ mod tests {
 
     const TTL: Duration = Duration::from_secs(60);
 
-    fn t0() -> DateTime<Utc> {
-        DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+    fn t0() -> Timestamp {
+        Timestamp::new(1_700_000_000, 0).unwrap()
     }
 
     fn pod(last_octet: u8, port: u16) -> Pod {

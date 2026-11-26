@@ -35,6 +35,24 @@ use test_r::test;
 #[path = "live_files_tests.rs"]
 mod live_files;
 
+fn compiled_input(input_schema: InputSchema) -> CompiledInputSchema {
+    let graph = SchemaGraph::anonymous(SchemaType::record(
+        input_schema
+            .fields()
+            .iter()
+            .map(|field| golem_common::schema::NamedFieldType {
+                name: field.name.clone(),
+                body: field.schema.clone(),
+                metadata: field.metadata.clone(),
+            })
+            .collect(),
+    ));
+    CompiledInputSchema {
+        graph,
+        input_schema,
+    }
+}
+
 #[test]
 async fn authenticated_finalization_preserves_repeated_no_store() {
     use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
@@ -120,6 +138,7 @@ async fn typed_cache_privacy_follows_authentication_not_principal_usage() {
                     idempotency_key: None,
                     oplog_index: Some(OplogIndex::from_u64(17)),
                     agent_fingerprint: Some(AgentFingerprint(uuid::Uuid::new_v4())),
+                    background_failure: None,
                 },
                 AgentConstructorSchema {
                     name: None,
@@ -210,6 +229,174 @@ async fn typed_cache_privacy_follows_authentication_not_principal_usage() {
                 assert!(response.into_body().into_vec().await.unwrap().is_empty());
             }
         }
+    }
+}
+
+#[test]
+async fn http_method_arguments_use_the_deployed_schema() {
+    use crate::custom_api::poem_endpoint::CustomApiPoemEndpoint;
+    use crate::custom_api::route_resolver::tests::{test_resolver, test_route};
+    use golem_common::schema::{AgentMethodSchema, NamedField, SchemaValue};
+    use golem_service_base::custom_api::{MethodParameter, PathSegmentType, QueryOrHeaderType};
+
+    let input = InputSchema::parameters([
+        NamedField::user_supplied("count", SchemaType::u32()),
+        NamedField::user_supplied("message", SchemaType::string()),
+        NamedField::user_supplied("suffix", SchemaType::string()),
+    ]);
+    let harness = route_harness(
+        "oracle-agent",
+        DURABLE_STREAM_COMPONENT,
+        vec![AgentMethodSchema {
+            name: "run".into(),
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters([NamedField::user_supplied(
+                "count",
+                SchemaType::string(),
+            )]),
+            output_schema: OutputSchema::Unit,
+            http_endpoint: vec![],
+            read_only: None,
+        }],
+    );
+    let mut route = test_route(1, "/run", Some("POST"), "typed");
+    let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        unreachable!()
+    };
+    call.component_id = harness.component_id;
+    call.agent_type = harness.agent_type.type_name.clone();
+    call.method_input = compiled_input(input);
+    call.body = RequestBodySchema::JsonBody {
+        expected: CompiledSchema {
+            graph: SchemaGraph::anonymous(SchemaType::record_from_fields([
+                ("text", SchemaType::string()),
+                ("tail", SchemaType::string()),
+            ])),
+        },
+    };
+    call.method_parameters = vec![
+        MethodParameter::Query {
+            query_parameter_name: "wire".into(),
+            parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::U32),
+        },
+        MethodParameter::JsonObjectBodyField {
+            field_index: 0.into(),
+        },
+        MethodParameter::JsonObjectBodyField {
+            field_index: 1.into(),
+        },
+    ];
+    let durable_call = call.clone();
+    let handler = request_handler_with_worker(
+        test_resolver(vec![route]),
+        Arc::new(InitialAgentFilesService::new(Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        ))),
+        harness.worker_service.clone(),
+    );
+    let endpoint = CustomApiPoemEndpoint::new(Arc::new(handler));
+    let response = endpoint
+        .execute(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri("/run?wire=7".parse().unwrap())
+                .header("host", "example.com")
+                .header("content-type", "application/json")
+                .body(r#"{"tail":"!","text":"hello"}"#),
+        )
+        .await;
+    assert_eq!(
+        response.status(),
+        StatusCode::NO_CONTENT,
+        "{}",
+        response.into_body().into_string().await.unwrap()
+    );
+    assert_eq!(
+        harness.recorded_method_params(),
+        SchemaValue::Record {
+            fields: vec![
+                SchemaValue::U32(7),
+                SchemaValue::String("hello".into()),
+                SchemaValue::String("!".into())
+            ],
+        }
+    );
+
+    let mut route = test_route(1, "/run", Some("PUT"), "typed");
+    route.behavior = RouteBehaviour::CallAgent(durable_call);
+    let RouteBehaviour::CallAgent(call) = &mut route.behavior else {
+        unreachable!()
+    };
+    call.route_mode = AgentRouteMode::DurableStreams;
+    call.method_input = compiled_input(InputSchema::parameters([
+        NamedField::user_supplied("numbers", SchemaType::stream(Some(SchemaType::u32()))),
+        NamedField::user_supplied("count", SchemaType::u32()),
+        NamedField::user_supplied("message", SchemaType::string()),
+        NamedField::user_supplied("labels", SchemaType::stream(Some(SchemaType::string()))),
+        NamedField::user_supplied("suffix", SchemaType::string()),
+    ]));
+    call.durable_streams = Some(DurableStreamRoutePolicy {
+        family_id: 1,
+        slots: ["numbers", "labels"]
+            .into_iter()
+            .map(|name| DurableStreamSlot {
+                canonical_name: name.into(),
+                public_name: name.into(),
+                direction: DurableStreamSlotDirection::Input,
+                content_type: "application/json".into(),
+                representation: DurableStreamRepresentation::Json,
+            })
+            .collect(),
+        allow_external_writes: true,
+        allow_stream_delete: false,
+        allow_invocation_delete: false,
+        load: None,
+    });
+    let handler = request_handler_with_worker(
+        test_resolver(vec![route]),
+        Arc::new(InitialAgentFilesService::new(Arc::new(
+            golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+        ))),
+        harness.worker_service.clone(),
+    );
+    let response = CustomApiPoemEndpoint::new(Arc::new(handler))
+        .execute(
+            Request::builder()
+                .method(http::Method::PUT)
+                .uri("/run?wire=7".parse().unwrap())
+                .header("host", "example.com")
+                .header("content-type", "application/json")
+                .body(r#"{"tail":"!","text":"hello"}"#),
+        )
+        .await;
+    // The harness records dispatch, then deliberately refuses session creation.
+    assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let inputs = harness.recorded_method_inputs();
+    assert_eq!(inputs.len(), 2);
+    let Some(golem_common::model::agent::AgentMethodInput::Native(input)) = &inputs[1] else {
+        panic!("expected deployed native input")
+    };
+    let value = input
+        .decode(|ordinal, handle| {
+            assert!(handle.is_none());
+            Ok(golem_common::schema::stream::SchemaValueStream::from_host_endpoint(ordinal as u64))
+        })
+        .unwrap();
+    let SchemaValue::Record { fields } = value else {
+        panic!("expected deployed argument order")
+    };
+    assert_eq!(fields[1], SchemaValue::U32(7));
+    assert_eq!(fields[2], SchemaValue::String("hello".into()));
+    assert_eq!(fields[4], SchemaValue::String("!".into()));
+    for (index, ordinal) in [(0, 0u64), (3, 1u64)] {
+        let SchemaValue::Stream(stream) = &fields[index] else {
+            panic!("expected interleaved stream")
+        };
+        assert_eq!(
+            stream.with_host_endpoint::<u64, _>(|id| *id).unwrap(),
+            ordinal
+        );
     }
 }
 
@@ -450,6 +637,7 @@ async fn http_api_request_validation_errors_preserve_json_details_and_cors() {
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         AgentConstructorSchema {
             name: None,
@@ -550,6 +738,7 @@ async fn http_api_body_limit_rejects_before_invocation_and_keeps_cors() {
                     idempotency_key: None,
                     oplog_index: None,
                     agent_fingerprint: None,
+                    background_failure: None,
                 },
                 AgentConstructorSchema {
                     name: None,
@@ -694,7 +883,7 @@ fn create_request(authenticated: bool) -> Request {
     if authenticated {
         request = request.header("x-golem-session", r#"{"subject":"create-user"}"#);
     }
-    request.body(r#"{"parameters":{"kind":"record","value":{"fields":[]}}}"#)
+    request.body("{}")
 }
 
 #[test]
@@ -750,11 +939,15 @@ async fn create_dispatch_rejects_overrides_before_creating_an_agent() {
                 ),
                 ("config", serde_json::json!([])),
                 ("config", serde_json::Value::Null),
+                ("keyed", serde_json::json!(true)),
+                ("keyed", serde_json::json!(false)),
+                (
+                    "parameters",
+                    serde_json::json!({"kind": "record", "value": {"fields": []}}),
+                ),
                 ("unexpected", serde_json::json!(true)),
             ] {
-                let mut body = serde_json::json!({
-                    "parameters": {"kind": "record", "value": {"fields": []}}
-                });
+                let mut body = serde_json::json!({});
                 body[field] = value;
                 harness
                     .creates
@@ -800,13 +993,7 @@ async fn create_dispatch_returns_reference_and_selector_location_without_caller_
                     .lock()
                     .unwrap()
                     .push_back(Box::pin(async move { Ok(fingerprint) }));
-                let mut request = create_request(authenticated);
-                if index == 1 {
-                    request.set_body(
-                        r#"{"parameters":{"kind":"record","value":{"fields":[]}},"keyed":false}"#,
-                    );
-                }
-                let response = endpoint.execute(request).await;
+                let response = endpoint.execute(create_request(authenticated)).await;
                 assert_eq!(
                     response.status(),
                     StatusCode::CREATED,
@@ -978,7 +1165,7 @@ async fn oidc_create_dispatch_does_not_turn_a_session_into_an_idempotency_scope(
         let (store, _db) =
             crate::custom_api::oidc::session_store::sqlite_test_session_store().await;
         let session_id = SessionId(uuid::Uuid::new_v4());
-        let expires_at = chrono::Utc::now() + chrono::Duration::hours(1);
+        let expires_at = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
         store
             .store_authenticated_session(
                 &session_id,
@@ -995,8 +1182,8 @@ async fn oidc_create_dispatch_does_not_turn_a_session_into_an_idempotency_scope(
                     claims: openidconnect::IdTokenClaims::new(
                         openidconnect::IssuerUrl::new("https://idp.example".into()).unwrap(),
                         vec![],
-                        expires_at,
-                        chrono::Utc::now(),
+                        std::time::SystemTime::try_from(expires_at).unwrap().into(),
+                        std::time::SystemTime::now().into(),
                         openidconnect::StandardClaims::new(openidconnect::SubjectIdentifier::new(
                             "create-user".into(),
                         )),
@@ -1105,19 +1292,13 @@ async fn create_dispatch_inherits_auth_and_cors_and_does_not_require_an_incoming
                 StatusCode::BAD_REQUEST,
                 Some("REQUEST_BODY_INVALID_JSON"),
             ),
+            // The route's constructor declares no parameters, so a field it does not declare is
+            // rejected before the create service is called.
             (
                 true,
-                r#"{"parameters":{"kind":"record","value":{"fields":[]}},"keyed":true}"#,
+                r#"{"name":"bad"}"#,
                 StatusCode::BAD_REQUEST,
-                Some("REQUEST_VALUE_PARSING_FAILED"),
-            ),
-            // This reaches the real create service without an incoming agent ID. The
-            // constructor rejects the extra field before any worker can be created.
-            (
-                true,
-                r#"{"parameters":{"kind":"record","value":{"fields":[{"kind":"string","value":"bad"}]}}}"#,
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Some("INTERNAL_AGENT_EXECUTION_FAILED"),
+                Some("REQUEST_JSON_BODY_PARSING_FAILED"),
             ),
         ] {
             let mut request = Request::builder()
@@ -1139,13 +1320,6 @@ async fn create_dispatch_inherits_auth_and_cors_and_does_not_require_an_incoming
             if let Some(code) = code {
                 let body: serde_json::Value = response.into_body().into_json().await.unwrap();
                 assert_eq!(body["code"], code, "{kind}: {body}");
-                if status == StatusCode::INTERNAL_SERVER_ERROR {
-                    assert!(
-                        body.to_string()
-                            .contains("Agent constructor parameters type error"),
-                        "{body}"
-                    );
-                }
             }
         }
         for (headers, expected) in [
@@ -1207,6 +1381,7 @@ async fn agent_selector_runs_after_auth_and_before_etag_revalidation() {
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         AgentConstructorSchema {
             name: None,
@@ -1267,6 +1442,7 @@ async fn agent_selector_runs_after_auth_and_before_etag_revalidation() {
                 owner_kind: OwnerKind::ComponentAgent,
                 agent_type_name: Some(AgentTypeName("mcp-agent".into())),
                 canonical_key: None,
+                origin: golem_common::model::agent::AgentOrigin::Created,
                 constructor_parameters: None,
                 environment_id: harness.environment_id,
                 created_by: harness.account_id,
@@ -1631,10 +1807,12 @@ fn durable_stream_routes() -> CompiledRoutes {
         constructor_parameters: vec![],
         agent_selection: golem_service_base::custom_api::AgentSelection::Key,
         method_name: "stream".to_string(),
-        method_input: CompiledInputSchema {
-            graph: SchemaGraph::empty(),
-            input_schema: InputSchema::Parameters(vec![]),
-        },
+        method_input: compiled_input(InputSchema::parameters([
+            golem_common::schema::NamedField::user_supplied(
+                "input",
+                SchemaType::stream(Some(SchemaType::u8())),
+            ),
+        ])),
         body: RequestBodySchema::Unused,
         method_parameters: vec![],
         expected_agent_response: CompiledOutputSchema {
@@ -1841,6 +2019,7 @@ fn route_harness(
             idempotency_key: None,
             oplog_index: None,
             agent_fingerprint: None,
+            background_failure: None,
         },
         golem_common::schema::AgentTypeSchema {
             kind: golem_common::schema::agent::AgentTypeKind::Regular,
@@ -2047,6 +2226,187 @@ async fn durable_stream_unknown_and_canonical_slot_names_are_not_probed() {
 }
 
 #[test]
+async fn invalid_lazy_appends_do_not_create_sessions() {
+    use crate::custom_api::route_resolver::tests::test_resolver;
+
+    let cases = vec![
+        (
+            vec![("producer-id", "p")],
+            Some("application/json"),
+            "1".into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![
+                ("producer-id", "p"),
+                ("producer-epoch", "x"),
+                ("producer-seq", "0"),
+            ],
+            Some("application/json"),
+            "1".into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![
+                ("producer-id", "p"),
+                ("producer-id", "q"),
+                ("producer-epoch", "0"),
+                ("producer-seq", "0"),
+            ],
+            Some("application/json"),
+            "1".into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (vec![], None, "1".into(), StatusCode::BAD_REQUEST),
+        (vec![], Some("text/plain"), "1".into(), StatusCode::CONFLICT),
+        (
+            vec![],
+            Some("application/json"),
+            r#""not-a-number""#.into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![],
+            Some("application/json"),
+            r#"[7,"not-a-number",19]"#.into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![],
+            Some("application/json"),
+            "[".into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![],
+            Some("application/json"),
+            "[]".into(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![],
+            Some("application/json"),
+            String::new(),
+            StatusCode::BAD_REQUEST,
+        ),
+        (
+            vec![],
+            Some("application/json"),
+            format!("[{}]", vec!["1"; 4097].join(",")),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+        (
+            vec![],
+            Some("application/json"),
+            " ".repeat(1024 * 1024 + 1),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
+    ];
+    for (headers, content_type, body, expected) in cases {
+        let harness = invocation_harness();
+        let mut routes = durable_stream_routes().routes;
+        for route in &mut routes {
+            if let RouteBehaviour::CallAgent(call) = &mut route.behavior {
+                call.method_input = compiled_input(InputSchema::parameters([
+                    golem_common::schema::NamedField::user_supplied(
+                        "input",
+                        SchemaType::stream(Some(SchemaType::u32())),
+                    ),
+                ]));
+                for slot in &mut call.durable_streams.as_mut().unwrap().slots {
+                    if slot.public_name == "requests" {
+                        slot.content_type = "application/json".into();
+                        slot.representation = DurableStreamRepresentation::Json;
+                    }
+                }
+            }
+        }
+        let handler = request_handler_with_worker(
+            test_resolver(routes),
+            Arc::new(InitialAgentFilesService::new(Arc::new(
+                golem_service_base::storage::blob::memory::InMemoryBlobStorage::new(),
+            ))),
+            harness.worker_service.clone(),
+        );
+        harness.script_durable_stream_reads(vec![None]);
+        let session =
+            golem_common::model::invocation_session_public::new_durable_stream_session_id();
+        let mut builder = Request::builder()
+            .method(http::Method::POST)
+            .uri(
+                format!("http://example.com/writable/invocations/{session}/streams/requests")
+                    .parse()
+                    .unwrap(),
+            )
+            .header(http::header::HOST, "example.com")
+            .header("x-golem-session", "{}");
+        for (name, value) in headers {
+            builder = builder.header(name, value);
+        }
+        if let Some(content_type) = content_type {
+            builder = builder.content_type(content_type);
+        }
+        let response = handler.handle_request(builder.body(body)).await.unwrap();
+        assert_eq!(response.status(), expected);
+        let log = harness.native_sessions.lock().unwrap();
+        assert!(log.starts.is_empty());
+        assert!(log.appends.is_empty());
+    }
+}
+
+#[test]
+async fn valid_lazy_append_creates_once_and_preserves_body() {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        CreateStreamSessionSuccess, ReadStreamSlotSuccess, append_to_stream_slot_request::Payload,
+    };
+
+    let (handler, harness) = request_handler_and_harness();
+    let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
+    harness
+        .native_sessions
+        .lock()
+        .unwrap()
+        .public_session_creation = Some(CreateStreamSessionSuccess {
+        session: session.clone(),
+        invocation_key: Some(uuid::Uuid::new_v4().into()),
+        ..Default::default()
+    });
+    harness.script_durable_stream_reads(vec![
+        None,
+        None,
+        Some(ReadStreamSlotSuccess {
+            writable: true,
+            element_schema: Some(SchemaGraph::anonymous(SchemaType::u8()).into()),
+            ..Default::default()
+        }),
+    ]);
+    let response = handler
+        .handle_request(
+            Request::builder()
+                .method(http::Method::POST)
+                .uri(
+                    format!("http://ds.example/writable/invocations/{session}/streams/requests")
+                        .parse()
+                        .unwrap(),
+                )
+                .header(http::header::HOST, "ds.example")
+                .header("x-golem-session", "{}")
+                .content_type("application/vnd.golem.fragment")
+                .body(vec![7u8, 19, 41]),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let log = harness.native_sessions.lock().unwrap();
+    assert_eq!(log.starts.len(), 1);
+    assert_eq!(log.appends.len(), 1);
+    assert_eq!(
+        log.appends[0].payload,
+        Some(Payload::PackedU8(vec![7, 19, 41]))
+    );
+}
+
+#[test]
 async fn durable_stream_disabled_operations_are_rejected_before_worker_calls() {
     let handler = request_handler();
     let session = golem_common::model::invocation_session_public::new_durable_stream_session_id();
@@ -2201,9 +2561,8 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
     let source_fork =
         golem_common::model::invocation_session_public::new_durable_stream_session_id();
     let environment_id = EnvironmentId(uuid::Uuid::nil());
-    let named_fork = |root: AgentId, scope: &str, name: &str| {
-        AgentId::durable_stream_fork(environment_id, root, scope, name)
-    };
+    let named_fork =
+        |root: AgentId, name: &str| AgentId::durable_stream_fork(environment_id, root, name);
     for path_selector in [false, true] {
         for root in [p, q] {
             for nested in [false, true] {
@@ -2319,15 +2678,12 @@ async fn durable_stream_selector_keeps_named_forks_in_the_selected_root() {
                 assert_eq!(
                     source_agent_id,
                     if nested {
-                        named_fork(root_id, &forks[0].route_scope, &source_fork)
+                        named_fork(root_id, &source_fork)
                     } else {
                         root_id
                     }
                 );
-                assert_eq!(
-                    target_agent_id,
-                    named_fork(root_id, &forks[0].route_scope, &target_fork)
-                );
+                assert_eq!(target_agent_id, named_fork(root_id, &target_fork));
                 assert_eq!(target_agent_id.type_tag(), root_id.type_tag());
                 assert_eq!(forks[0].source_path, source);
             }

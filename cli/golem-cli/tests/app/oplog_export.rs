@@ -755,6 +755,28 @@ async fn oplog_export_hides_customer_data() {
     // --keep-scalars and --keep-shape at the arguments of `record`.
     let record_index = invocation_indices(&plain, "record")[0];
     let default_record = entry_at(&documents, record_index);
+
+    // The caller of `record`: the kinds stay, the issuer and the subject are tokens.
+    let plain_record = plain
+        .iter()
+        .find(|document| document["index"] == record_index)
+        .unwrap();
+    let original = &plain_record["entry"]["invocation"]["caller"]["original"];
+    assert_eq!(original["kind"], "account", "{plain_record}");
+    let exported_record = serde_json::to_string(default_record).unwrap();
+    for pair_text in [&original["pair"]["issuer"], &original["pair"]["subject"]] {
+        let pair_text = pair_text.as_str().unwrap();
+        assert!(
+            !exported_record.contains(pair_text),
+            "{pair_text} in {exported_record}"
+        );
+    }
+    assert!(
+        objects(default_record)
+            .iter()
+            .any(|object| object.get("case") == Some(&Value::from("account"))),
+        "{default_record}"
+    );
     assert!(
         !serde_json::to_string(&documents)
             .unwrap()
@@ -839,26 +861,49 @@ async fn oplog_export_hides_customer_data() {
         .into_iter()
         .filter(|document| document.get("omitted").is_some())
         .collect::<Vec<_>>();
-    assert_eq!(omitted.len(), 1, "{limited:?}");
-    let omitted_index = omitted[0]["index"].as_u64().unwrap();
-    assert_eq!(omitted[0]["omitted"]["reason"], "tooLarge");
-    assert!(omitted[0]["omitted"]["size"].as_u64().unwrap() > 400000);
+    // The 600000-byte result is above the limit, and the 200000-byte result is within it. A
+    // session-carried result also has a `StreamSession` record, so more than one entry can be
+    // above the limit.
+    let finished_omitted = omitted
+        .iter()
+        .filter(|document| document["kind"] == "AgentInvocationFinished")
+        .count();
+    assert_eq!(finished_omitted, 1, "{limited:?}");
+    let omitted_indices = omitted
+        .iter()
+        .map(|document| document["index"].as_u64().unwrap())
+        .collect::<Vec<_>>();
     let coverage = documents_of_type(&limited, "agent.oplog-export-coverage")[0];
-    assert!(
-        coverage["hydrationFailures"]["shown"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|item| item["index"] == omitted_index),
-        "{coverage}"
-    );
+    for document in &omitted {
+        assert_eq!(document["omitted"]["reason"], "tooLarge");
+        assert!(document["omitted"]["size"].as_u64().unwrap() > 400000);
+        assert!(
+            coverage["hydrationFailures"]["shown"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["index"] == document["index"]),
+            "{coverage}"
+        );
+    }
     assert_eq!(coverage["incomplete"], true);
-    assert_eq!(limited_reads.len(), 1, "{limited_reads:?}");
-    assert_ne!(limited_reads[0], omitted_index);
-    assert!(entry_at(&limited, limited_reads[0]).get("body").is_some());
+    assert!(
+        limited_reads
+            .iter()
+            .any(|index| entry_at(&limited, *index)["kind"] == "AgentInvocationFinished"),
+        "{limited_reads:?}"
+    );
+    for index in &limited_reads {
+        assert!(!omitted_indices.contains(index), "{limited_reads:?}");
+        assert!(entry_at(&limited, *index).get("body").is_some());
+    }
 
     let unlimited = export_json(&ctx, LARGE_PROBE, &[]).await;
-    assert_eq!(entry_reads(&proxy.take()).len(), 2);
+    let mut unlimited_reads = entry_reads(&proxy.take());
+    unlimited_reads.sort();
+    let mut expected_reads = [limited_reads.clone(), omitted_indices.clone()].concat();
+    expected_reads.sort();
+    assert_eq!(unlimited_reads, expected_reads);
     assert!(
         documents_of_type(&unlimited, "agent.oplog-export-entry")
             .iter()

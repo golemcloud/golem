@@ -66,6 +66,19 @@ impl AgentMetadata {
         OwnedAgentId::new(self.environment_id, &self.agent_id)
     }
 
+    /// A fork is forked; otherwise an agent that owns its key is keyed, and every other
+    /// owner, ephemeral agents included, was created without a key.
+    pub fn origin(&self) -> crate::base_model::agent::AgentOrigin {
+        use crate::base_model::agent::AgentOrigin;
+        if self.create_request.kind == oplog::CreateRequestKind::Fork {
+            AgentOrigin::Forked
+        } else if self.canonical_key.is_some() {
+            AgentOrigin::Keyed
+        } else {
+            AgentOrigin::Created
+        }
+    }
+
     /// Resolves the persisted type and decodes the persisted constructor parameters.
     pub fn parse_agent_id(
         &self,
@@ -292,6 +305,11 @@ pub enum InvocationEnd {
     /// A retry marker `Error` of the running invocation. It stays its result only when the
     /// retries are exhausted.
     Retrying,
+    /// `AgentInvocationFinished` with `awaits_settlement`, after which the agent gave up during
+    /// the background work of the invocation, before its `AgentInvocationSettled`. `failure` is
+    /// the give-up entry: an `Error` that names no invocation and has an exhausted retry state, or
+    /// `Exited`. The recorded result stays at `terminal`.
+    BackgroundFailed { failure: OplogIndex },
 }
 
 /// Where an invocation result lies in the oplog, and what lists the invocation without reading
@@ -299,7 +317,8 @@ pub enum InvocationEnd {
 #[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
 #[desert(evolution())]
 pub struct InvocationResultPosition {
-    /// The entry that holds the result. It is the last change of the invocation.
+    /// The entry that holds the result. It is the last change of the invocation, except for a
+    /// background failure (see [`Self::last_change`]).
     pub terminal: OplogIndex,
     /// The `AgentInvocationStarted` or `PendingAgentInvocation` entry that holds the accepted
     /// request, so a duplicate request is compared with it without searching the oplog. `None`
@@ -311,8 +330,32 @@ pub struct InvocationResultPosition {
     pub operation: Option<InvocationOperation>,
     /// The timestamp of the acceptance entry, when the fold saw it.
     pub accepted_at: Option<Timestamp>,
-    /// The timestamp of `terminal`.
+    /// The timestamp of the last change: of `terminal`, or of the give-up entry of a background
+    /// failure.
     pub changed_at: Timestamp,
+}
+
+impl InvocationResultPosition {
+    /// The last entry that changed the invocation: the give-up entry of a background failure,
+    /// `terminal` otherwise.
+    pub fn last_change(&self) -> OplogIndex {
+        match self.end {
+            InvocationEnd::BackgroundFailed { failure } => failure,
+            _ => self.terminal,
+        }
+    }
+}
+
+/// The invocation whose result was recorded at the export's return and whose background work has
+/// not settled: its `AgentInvocationFinished` or `AgentInvocationFailed` awaits settlement and no
+/// `AgentInvocationSettled` followed it.
+#[derive(Clone, Debug, PartialEq, Eq, BinaryCodec)]
+#[desert(evolution())]
+pub struct SettlingInvocation {
+    pub key: InvocationId,
+    /// The position of the invocation's result: the recorded result, or
+    /// [`InvocationEnd::BackgroundFailed`] after the agent gave up during the background work.
+    pub result: InvocationResultPosition,
 }
 
 /// The accepted request of an invocation that has no result yet.
@@ -350,6 +393,8 @@ enum InvocationResultMembershipState {
     },
     Indexed {
         recent_by_key: OrdMap<InvocationId, InvocationResultPosition>,
+        /// The recent results by their last change, so the truncated ones are exactly those that
+        /// last changed before every retained one.
         recent_by_index: OrdMap<OplogIndex, InvocationId>,
         bloom: InvocationResultBloom,
     },
@@ -418,9 +463,9 @@ impl InvocationResultMembership {
             } => {
                 bloom.insert(&key);
                 if let Some(previous) = recent_by_key.remove(&key) {
-                    recent_by_index.remove(&previous.terminal);
+                    recent_by_index.remove(&previous.last_change());
                 }
-                recent_by_index.insert(position.terminal, key);
+                recent_by_index.insert(position.last_change(), key);
                 recent_by_key.insert(key, position);
                 Self::truncate_recent(self.capacity, recent_by_key, recent_by_index);
             }
@@ -438,10 +483,12 @@ impl InvocationResultMembership {
         matches!(self.state, InvocationResultMembershipState::Exact { .. })
     }
 
+    /// The oldest last change of a retained result. Every result that changed after it is
+    /// retained.
     pub fn oldest_retained_index(&self) -> Option<OplogIndex> {
         match &self.state {
             InvocationResultMembershipState::Exact { by_key, .. } => {
-                by_key.values().map(|position| position.terminal).min()
+                by_key.values().map(|position| position.last_change()).min()
             }
             InvocationResultMembershipState::Indexed {
                 recent_by_index, ..
@@ -504,7 +551,7 @@ impl InvocationResultMembership {
                 ..
             } => {
                 let position = recent_by_key.remove(key)?;
-                recent_by_index.remove(&position.terminal);
+                recent_by_index.remove(&position.last_change());
                 position
             }
         };
@@ -547,11 +594,11 @@ impl InvocationResultMembership {
                 (position.clone(), *key)
             })
             .collect();
-        by_index.sort_unstable_by_key(|(position, _)| position.terminal);
+        by_index.sort_unstable_by_key(|(position, _)| position.last_change());
         let mut recent_by_key = OrdMap::new();
         let mut recent_by_index = OrdMap::new();
         for (position, key) in by_index.into_iter().rev().take(self.capacity) {
-            recent_by_index.insert(position.terminal, key);
+            recent_by_index.insert(position.last_change(), key);
             recent_by_key.insert(key, position);
         }
         self.state = InvocationResultMembershipState::Indexed {
@@ -718,11 +765,22 @@ pub struct AgentStatusRecord {
     /// The last invocation cancelled again while it was neither pending nor running. A rejection
     /// `Error` that follows it in a later fold does not replace its earlier cancellation.
     pub withdrawn_again: Option<InvocationId>,
+    /// The invocation whose result was recorded at the export's return and whose background work
+    /// has not settled: its `AgentInvocationFinished` or `AgentInvocationFailed` awaits settlement
+    /// and no `AgentInvocationSettled` followed it. The agent runs while this is set.
+    pub settling_invocation: Option<InvocationId>,
+    /// The settling invocation as the invocation result fold sees it, with the position of its
+    /// recorded result, so a give-up in a later fold is attributed to it.
+    pub settling_result: Option<SettlingInvocation>,
     pub component_revision: ComponentRevision,
     pub component_size: u64,
     pub total_linear_memory_size: u64,
     pub owned_resources: HashMap<AgentResourceId, AgentResourceDescription>,
     pub oplog_idx: OplogIndex,
+    /// The index of the latest entry other than `AgentInvocationSettled`. A settlement only marks
+    /// the end of the background work that follows a recorded result, so the agent state that the
+    /// result describes stays at this index. Read-only HTTP validators name it.
+    pub state_oplog_idx: OplogIndex,
     pub active_plugins: HashSet<EnvironmentPluginGrantId>,
     pub oplog_processor_checkpoints:
         HashMap<EnvironmentPluginGrantId, OplogProcessorCheckpointState>,
@@ -792,11 +850,14 @@ impl Default for AgentStatusRecord {
             pending_durable_stream_cancellations: HashMap::new(),
             running: None,
             withdrawn_again: None,
+            settling_invocation: None,
+            settling_result: None,
             component_revision: ComponentRevision::INITIAL,
             component_size: 0,
             total_linear_memory_size: 0,
             owned_resources: HashMap::new(),
             oplog_idx: OplogIndex::default(),
+            state_oplog_idx: OplogIndex::default(),
             active_plugins: HashSet::new(),
             oplog_processor_checkpoints: HashMap::new(),
             revoked_cards: HashSet::new(),
@@ -936,10 +997,8 @@ pub struct DurableStreamSessionStatus {
 
 impl DurableStreamSessionStatus {
     fn invalidate_initial_attachment(&mut self) {
-        self.lifecycle_error = Some(
-            "durable Attached record does not identify an ordered Prepared and pending invocation"
-                .into(),
-        );
+        self.lifecycle_error =
+            Some("durable Attached record does not identify an ordered pending invocation".into());
     }
 
     pub fn validate_initial_attachment_reference(
@@ -951,12 +1010,12 @@ impl DurableStreamSessionStatus {
             return false;
         }
         let valid = attached.format_version == 1
-            && self.session_key.as_ref() == Some(&attached.session_key)
-            && self.prepared_attempt_id == Some(attached.attempt_id)
-            && self.prepared.is_some_and(|prepared_idx| {
-                prepared_idx < attached.pending_invocation_oplog_index
-                    && attached.pending_invocation_oplog_index < attached_idx
-            });
+            && self
+                .session_key
+                .as_ref()
+                .is_none_or(|key| key == &attached.session_key)
+            && attached.pending_invocation_oplog_index.is_defined()
+            && attached.pending_invocation_oplog_index < attached_idx;
         if !valid {
             self.invalidate_initial_attachment();
         }
@@ -972,10 +1031,7 @@ impl DurableStreamSessionStatus {
             || self
                 .session_key
                 .as_ref()
-                .is_none_or(|key| key != idempotency_key)
-            || self
-                .prepared
-                .is_none_or(|prepared_idx| oplog_idx <= prepared_idx)
+                .is_some_and(|key| key != idempotency_key)
             || self.initial_attachment_epoch.is_some()
         {
             return;
@@ -983,6 +1039,7 @@ impl DurableStreamSessionStatus {
         if self.validated_initial_pending_invocation.is_some() {
             return;
         }
+        self.session_key.get_or_insert(*idempotency_key);
         self.validated_initial_pending_invocation = Some(oplog_idx);
     }
 
@@ -1067,10 +1124,6 @@ impl DurableStreamSessionStatus {
                     self.first_prepared = Some(oplog_idx);
                     self.prepared = Some(oplog_idx);
                     self.prepared_attempt_id = Some(v.attempt.attempt_id);
-                    self.public_session_id = Some(v.public_session_id.clone());
-                    self.route_scope = v.route_scope.clone();
-                    self.expiry_policy = v.expiry_policy;
-                    self.expiry_deadline_millis = v.expiry_deadline_millis;
                 }
             }
             StreamSessionRecord::ExpiryRefreshed(v)
@@ -1107,6 +1160,10 @@ impl DurableStreamSessionStatus {
                     self.lifecycle_error =
                         Some("durable session contains a repeated initial attachment".into());
                 } else if self.validate_initial_attachment_reference(oplog_idx, v) {
+                    self.public_session_id = Some(v.acceptance.public_session_id.clone());
+                    self.route_scope = v.acceptance.route_scope.clone();
+                    self.expiry_policy = v.acceptance.expiry_policy;
+                    self.expiry_deadline_millis = v.acceptance.expiry_deadline_millis;
                     self.initial_attachment_epoch = Some(v.epoch);
                     self.initial_attachment_attempt_id = Some(v.attempt_id);
                     self.initial_pending_invocation_oplog_index =
@@ -1191,17 +1248,17 @@ impl DurableStreamPublicBinding {
         use crate::model::durable_stream::StreamSessionRecord;
 
         match record {
-            StreamSessionRecord::Prepared(record) => match current {
+            StreamSessionRecord::Attached(record) => match current {
                 None => Some(Self::Live {
                     session_key: record.session_key,
-                    expiry_policy: record.expiry_policy,
-                    expiry_deadline_millis: record.expiry_deadline_millis,
+                    expiry_policy: record.acceptance.expiry_policy,
+                    expiry_deadline_millis: record.acceptance.expiry_deadline_millis,
                 }),
                 Some(Self::Retired { session_key }) if session_key != &record.session_key => {
                     Some(Self::Live {
                         session_key: record.session_key,
-                        expiry_policy: record.expiry_policy,
-                        expiry_deadline_millis: record.expiry_deadline_millis,
+                        expiry_policy: record.acceptance.expiry_policy,
+                        expiry_deadline_millis: record.acceptance.expiry_deadline_millis,
                     })
                 }
                 Some(current) => Some(current.clone()),

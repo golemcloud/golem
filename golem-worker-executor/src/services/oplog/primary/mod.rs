@@ -315,6 +315,7 @@ struct PrimaryOplogState {
     /// any buffered entries, so no committed entry can reference a not-yet-written blob.
     pending_uploads: Vec<PendingUpload>,
     durable_stream_sessions: super::raw_session::RawSessionCache,
+    owned_starts: super::owned_starts::OwnedStartCheck,
     /// The shard epoch this executor held for the agent's shard when the oplog was opened, and
     /// the one every append asserts.
     ///

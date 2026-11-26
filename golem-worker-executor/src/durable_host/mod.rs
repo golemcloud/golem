@@ -31,6 +31,7 @@ mod replay_to_live;
 mod resources;
 mod snapshots;
 mod wasi;
+pub(crate) use attribution::{InvocationAttribution, with_import_access};
 pub(crate) use authorization::context::{
     add_wallet_card, adopt_recorded_wallet_generation,
     agent_effective_surface_from_component_metadata, agent_initial_card_from_component_metadata,
@@ -52,9 +53,12 @@ pub(crate) use error_history::{last_error, recover_stderr_logs};
 #[cfg(test)]
 use filesystem::component_file_node;
 #[cfg(test)]
-pub(crate) use invocation::{ephemeral_suspend_trap, terminal_entry_refusal};
+use invocation::{
+    FailureAttribution, drain_give_up_retry_state, ephemeral_terminal_decision,
+    ephemeral_terminal_trap, failure_attribution,
+};
 #[cfg(test)]
-use invocation::{ephemeral_terminal_decision, ephemeral_terminal_trap};
+pub(crate) use invocation::{ephemeral_suspend_trap, terminal_entry_refusal};
 pub(crate) use recovery::selected_recovery_error;
 #[cfg(test)]
 use recovery::{
@@ -114,7 +118,6 @@ pub mod rpc;
 pub(crate) mod sockets;
 pub mod stream_bus;
 pub(crate) mod stream_outcome;
-pub mod stream_session;
 pub mod stream_transport;
 mod suspendable_wait;
 pub mod tail_work;
@@ -224,8 +227,8 @@ use crate::wasi_host;
 use crate::worker::agent_config::effective_agent_config;
 use crate::worker::instance::{OwnerExecution, OwnerRuntimeResources};
 use crate::worker::invocation::{
-    AgentExportFuncs, InvokeResult, invocation_uses_streams, invoke_observed_and_traced,
-    load_load_snapshot_guest, lower_invocation,
+    AgentExportFuncs, InvokeResult, ReturnRecorder, invocation_uses_streams,
+    invoke_observed_and_traced, load_load_snapshot_guest, lower_invocation,
 };
 use crate::worker::owner_lane::{OwnerInvocationId, OwnerInvocationPermit};
 use crate::worker::owner_wallet::{
@@ -236,11 +239,12 @@ use crate::worker::status::{StatusError, calculate_last_known_status_with_checkp
 use crate::worker::{InvocationFailureDecision, RetryDecision, Worker};
 use crate::workerctx::{
     ExternalOperations, FileSystemReading, InvocationContextManagement, InvocationHooks,
-    InvocationManagement, PublicWorkerIo, StatusManagement, UpdateManagement, WorkerCtx,
+    InvocationManagement, PublicWorkerIo, ResultRecordedAt, StatusManagement, UpdateManagement,
+    WorkerCtx,
 };
 use anyhow::anyhow;
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
+
 pub(crate) use concurrent::{CallReplayOutcome, DurableCallSession, NotCancellable};
 pub use durability::*;
 use golem_common::base_model::oplog::QueuedCardEvent;
@@ -520,6 +524,8 @@ const UUID_V7_MAX_TIMESTAMP: u64 = (1_u64 << 48) - 1;
 /// invocation.
 pub struct InvocationDeadline {
     latch: Arc<AtomicBool>,
+    /// Set by whichever comes first: the timer firing, or [`InvocationDeadline::disarm`].
+    claim: Arc<AtomicBool>,
     duration: Option<Duration>,
     timer: Option<tokio::task::JoinHandle<()>>,
 }
@@ -1284,6 +1290,19 @@ struct PrivateDurableWorkerState {
     /// guest-call wrapper reports the dedicated tail-work timeout after the event loop unwinds.
     tail_work_deadline_exceeded: Arc<AtomicBool>,
 
+    /// The open replay anchor of the invocation the loop replays, when that invocation records
+    /// its result at the export's return and drains its background work after it. The end of the
+    /// drain closes the anchor.
+    open_invocation_anchor: Option<OplogIndex>,
+
+    /// The terminal of the invocation the loop replays, which replay consumed when the export
+    /// returned. The result reader of the invocation takes it.
+    replayed_invocation_terminal: Option<Result<(OplogIndex, OplogEntry), WorkerExecutorError>>,
+
+    /// Whether the loop's invocation recorded its result at the export's return, so that a
+    /// failure of its background work is no longer the outcome of the invocation.
+    result_recorded_at_return: bool,
+
     dropped_call_events: (
         tokio::sync::mpsc::UnboundedSender<concurrent::DropEvent>,
         tokio::sync::mpsc::UnboundedReceiver<concurrent::DropEvent>,
@@ -1352,7 +1371,10 @@ pub(crate) struct WakeupScheduler {
 }
 
 impl WakeupScheduler {
-    pub(crate) async fn sleep_until(&self, when: DateTime<Utc>) -> Result<(), WorkerExecutorError> {
+    pub(crate) async fn sleep_until(
+        &self,
+        when: jiff::Timestamp,
+    ) -> Result<(), WorkerExecutorError> {
         let promise_id = self
             .promise_service
             .create(
@@ -1376,7 +1398,7 @@ impl WakeupScheduler {
             .await;
         debug!(
             "Schedule added to awake suspended worker at {} with id {}",
-            when.to_rfc3339(),
+            when.to_string(),
             schedule_id
         );
 
@@ -1718,15 +1740,56 @@ impl PrivateDurableWorkerState {
         &mut self,
         invocation_key: golem_common::model::InvocationId,
     ) {
-        self.invocations
-            .begin(attribution::InvocationKey::Invocation(invocation_key));
+        self.result_recorded_at_return = false;
+        let key = attribution::InvocationKey::Invocation(invocation_key);
+        self.attribution.retain_export_returned(key);
+        self.invocations.begin(key);
+        self.tail_work.end_invocation();
+    }
+
+    /// Sets the `AgentInvocationStarted` index of the invocation the loop runs. Store tasks of
+    /// earlier invocations that resume from now on are driven by it.
+    pub fn set_loop_invocation_start_index(&mut self, start_index: OplogIndex) {
+        let invocation = self.invocations.loop_entry_mut();
+        invocation.start_index = Some(start_index);
+        self.tail_work
+            .begin_invocation(start_index, &invocation.tail_work);
+    }
+
+    /// Records that the invocation the loop runs closed at its `AgentInvocationSettled`. The live
+    /// work of a parked store task then waits for the next invocation to drive it
+    /// ([`tail_work::TailActivity::park_until_driven`]).
+    pub(crate) fn close_loop_invocation(&mut self) {
+        self.tail_work.end_invocation();
+    }
+
+    /// The `AgentInvocationStarted` index of the invocation that drives the running host code
+    /// when that code is not attributed to the invocation the loop runs: a store task that its
+    /// spawning invocation left behind, resumed by a later invocation, or agent-level work that
+    /// runs while an invocation is current. `None` for code of the invocation the loop runs and
+    /// for code attributed to nothing.
+    pub(crate) fn recording_driver(&self) -> Option<OplogIndex> {
+        let attributed = self.attribution.resolve()?;
+        if attributed == self.invocations.loop_key() {
+            return None;
+        }
+        let driver = self.tail_work.current_invocation();
+        debug_assert!(
+            driver.is_some(),
+            "work of {attributed:?} records while no invocation is current"
+        );
+        driver
     }
 
     /// Ends the loop's invocation without beginning another, as an entity Store does when its
     /// entity invocation scope is removed.
     pub fn clear_current_idempotency_key(&mut self) {
+        self.result_recorded_at_return = false;
+        self.attribution
+            .retain_export_returned(attribution::InvocationKey::AgentLevel);
         self.invocations
             .begin(attribution::InvocationKey::AgentLevel);
+        self.tail_work.end_invocation();
     }
 
     /// The execution state of the invocation the running host code belongs to.
@@ -1748,9 +1811,16 @@ impl PrivateDurableWorkerState {
         self.invocations.own_mut(attributed)
     }
 
-    /// The authority of the invocation the calling code is attributed to.
-    pub fn authority(&self) -> &execution_state::InvocationAuthority {
-        &self.invocation_state().authority
+    /// The authority of the invocation the calling code is attributed to, as that code sees it:
+    /// code of a call made before the invocation's final outcome keeps the scope card that the
+    /// final outcome hides (see [`execution_state::AuthorityView`]).
+    pub fn authority(&self) -> execution_state::AuthorityView<'_> {
+        let attributed = self.attribution.resolve();
+        let key = self.invocations.key(attributed);
+        execution_state::AuthorityView::new(
+            &self.invocations.get(attributed).authority,
+            attributed == Some(key) && self.attribution.issued_before_cut_off(),
+        )
     }
 
     pub fn authority_mut(&mut self) -> &mut execution_state::InvocationAuthority {

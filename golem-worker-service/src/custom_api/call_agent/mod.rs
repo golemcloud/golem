@@ -31,7 +31,7 @@ use super::error::RequestHandlerError;
 use super::model::ResponseBody;
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ParsedRequestBody, RouteExecutionResult};
-use crate::service::worker::{AgentBinding, WorkerService};
+use crate::service::worker::{AcceptedInvocation, AgentBinding, WorkerService, WorkerServiceError};
 use anyhow::anyhow;
 use golem_common::model::OplogIndex;
 use golem_common::model::Timestamp;
@@ -83,7 +83,15 @@ impl CallAgentHandler {
                 &behaviour.constructor_parameters,
             )?)
         };
-        let request_key = InvocationRequestKey::external(None, None);
+        let supplied_key = if behaviour.method_parameters.iter().any(|parameter| {
+            matches!(parameter, MethodParameter::Header { header_name, .. }
+                if header_name.eq_ignore_ascii_case("Idempotency-Key"))
+        }) {
+            None
+        } else {
+            request.idempotency_key()?
+        };
+        let request_key = InvocationRequestKey::external(None, supplied_key.as_ref());
         let (target, component, freshness_disposition) = self
             .worker_service
             .bound_invocation_target(
@@ -103,7 +111,7 @@ impl CallAgentHandler {
         // For read-only methods bound to GET/HEAD routes with a revalidatable
         // cache policy, try to serve a `304 Not Modified` without invoking the
         // executor when the client's `If-None-Match` value matches the agent's
-        // current oplog index. `get_metadata` is safe here because the
+        // current state oplog index. The metadata read is safe here because the
         // executor implementation reads cached metadata / persisted oplog
         // state and does **not** wake or load the worker.
         if let Some(read_only) = behaviour.read_only.as_ref()
@@ -128,7 +136,7 @@ impl CallAgentHandler {
             fields: method_params,
         };
 
-        let proto_method_parameters: golem_schema::proto::golem::schema::SchemaValue =
+        let method_input: golem_common::model::agent::AgentMethodInput =
             method_params_value.try_into().map_err(|error| {
                 anyhow!("method parameters cannot cross the worker boundary: {error}")
             })?;
@@ -149,10 +157,11 @@ impl CallAgentHandler {
                 &component,
                 &target,
                 Some(behaviour.method_name.clone()),
-                Some(proto_method_parameters),
+                Some(method_input),
                 golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
                 None,
                 request_key,
+                supplied_key,
                 invocation_context,
                 freshness_disposition,
                 Vec::new(),
@@ -163,12 +172,32 @@ impl CallAgentHandler {
                 None,
                 None,
             )
-            .await?;
+            .await;
+        let agent_response = match agent_response {
+            Ok(output) => {
+                if let (Some(agent_id), Some(invocation_id)) =
+                    (output.agent_id, output.idempotency_key)
+                {
+                    request.accepted_invocation = Some(AcceptedInvocation {
+                        id: golem_common::model::OwnedInvocationId::new(agent_id, invocation_id),
+                        environment_id: resolved_route.route.environment_id,
+                    });
+                }
+                output
+            }
+            Err(error) => {
+                if let WorkerServiceError::AcceptedInvocation { accepted, .. } = &error {
+                    request.accepted_invocation = Some(accepted.clone());
+                }
+                return Err(error.into());
+            }
+        };
 
         debug!("Received agent response: {agent_response:?}");
 
-        // The executor returns the oplog index of the agent right after the
-        // invocation, paired with the per-instance agent fingerprint of the
+        // The executor returns the index of the invocation's
+        // `AgentInvocationFinished`, which is the agent's state oplog index until
+        // a later entry other than its settlement, paired with the per-instance agent fingerprint of the
         // worker that produced it. Using this index+fingerprint pair as the
         // ETag validator avoids TOCTOU: because the cached entry stores the
         // same pair, a subsequent cache hit produces the same ETag; any
@@ -277,20 +306,23 @@ impl CallAgentHandler {
         }))
     }
 
-    /// Fetch the agent's current `(fingerprint, last_oplog_index)` pair, used
+    /// Fetch the agent's current `(fingerprint, state oplog index)` pair, used
     /// as the strong-validator value for `If-None-Match` revalidation. The
     /// pair must come from the same metadata snapshot so the fingerprint and
-    /// the oplog index describe the same agent instance.
+    /// the oplog index describe the same agent instance. The state oplog index
+    /// skips `AgentInvocationSettled`: a read-only result names the index of its
+    /// `AgentInvocationFinished`, and the settlement that follows it after the
+    /// background work does not change the state the result describes.
     async fn fetch_current_validator(
         &self,
         agent_id: &OwnedAgentId,
     ) -> Result<Option<(AgentFingerprint, OplogIndex)>, RequestHandlerError> {
         match self
             .worker_service
-            .get_metadata(agent_id, None, AuthCtx::System)
+            .get_state_validator(agent_id, AuthCtx::System)
             .await
         {
-            Ok(metadata) => Ok(Some((metadata.fingerprint, metadata.last_oplog_index))),
+            Ok(validator) => Ok(Some(validator)),
             Err(err) => {
                 // Failing to fetch metadata must not block the response. We
                 // simply skip the cache-headers / 304 path and let the regular
@@ -673,12 +705,12 @@ mod tests {
     use test_r::test;
 
     fn oidc_session(issuer: &str, subject: &str) -> crate::custom_api::model::OidcSession {
-        use chrono::{TimeDelta, Utc};
+        use jiff::{SignedDuration, Timestamp};
         use openidconnect::{
             EmptyAdditionalClaims, IdTokenClaims, IssuerUrl, StandardClaims, SubjectIdentifier,
         };
 
-        let issued_at = Utc::now();
+        let issued_at = Timestamp::now();
         crate::custom_api::model::OidcSession {
             subject: subject.to_string(),
             issuer: issuer.to_string(),
@@ -692,13 +724,15 @@ mod tests {
             claims: IdTokenClaims::new(
                 IssuerUrl::new(issuer.to_string()).unwrap(),
                 Vec::new(),
-                issued_at + TimeDelta::hours(1),
-                issued_at,
+                std::time::SystemTime::try_from(issued_at + SignedDuration::from_hours(1))
+                    .unwrap()
+                    .into(),
+                std::time::SystemTime::try_from(issued_at).unwrap().into(),
                 StandardClaims::new(SubjectIdentifier::new(subject.to_string())),
                 EmptyAdditionalClaims {},
             ),
             scopes: Default::default(),
-            expires_at: issued_at + TimeDelta::hours(1),
+            expires_at: issued_at + SignedDuration::from_hours(1),
         }
     }
 
@@ -733,8 +767,7 @@ mod tests {
     }
 
     #[test]
-    async fn id_selection_skips_nonempty_constructor_and_does_not_create_missing_agent() {
-        use crate::service::worker::WorkerServiceError;
+    async fn id_selection_skips_nonempty_constructor_and_dispatches_existing_only() {
         use golem_common::schema::NamedField;
         let harness = crate::mcp::InvocationHarness::with_run_method(AgentMode::Durable);
         let handler = CallAgentHandler::new(harness.worker_service.clone());
@@ -790,22 +823,25 @@ mod tests {
                 )
                 .is_err()
             );
-            let error = handler
+            let response = handler
                 .handle_call_agent_behaviour(&mut RichRequest::new(request), &route, &behaviour)
                 .await
-                .unwrap_err();
-            assert!(
-                matches!(error, RequestHandlerError::AgentInvocationFailed(
-                WorkerServiceError::AgentNotFound(id)
-            ) if id == agent_id),
-                "{error:?}"
-            );
+                .unwrap();
+            assert_eq!(response.status, http::StatusCode::NO_CONTENT);
         }
-        assert_eq!(
-            *harness.metadata_reads.lock().unwrap(),
-            vec![agent_id, agent_id]
-        );
-        assert!(harness.targets.lock().unwrap().is_empty());
+        assert!(harness.metadata_reads.lock().unwrap().is_empty());
+        let targets = harness.targets.lock().unwrap();
+        assert_eq!(targets.len(), 2);
+        for target in targets.iter() {
+            assert_eq!(target.agent_id, agent_id);
+            let (target, constructor, _) = target.invoke_fields();
+            assert!(matches!(
+                target.target,
+                Some(golem_api_grpc::proto::golem::worker::agent_target::Target::Id(_))
+            ));
+            assert!(constructor.is_none());
+        }
+        assert!(harness.creates.calls.lock().unwrap().is_empty());
     }
 
     #[test]
@@ -885,6 +921,233 @@ mod tests {
                     "{error:?}"
                 );
             }
+        }
+    }
+
+    #[test]
+    async fn typed_routes_forward_only_header_keys_without_changing_invocation_identity() {
+        use crate::mcp::InvocationHarness;
+        use golem_common::model::{
+            AgentInvocationOutput, AgentInvocationResult, InvocationId, OwnedInvocationId,
+        };
+        use golem_common::schema::{AgentConstructorSchema, AgentMethodSchema, OutputSchema};
+        use golem_service_base::custom_api::{CompiledSchema, RouteBehaviour};
+
+        let actual_agent = AgentId::from_parts(7, 19);
+        let actual_invocation = InvocationId(Uuid::from_u128(91));
+        let harness = InvocationHarness::new(
+            AgentInvocationOutput {
+                result: AgentInvocationResult::AgentInitialization,
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: None,
+                agent_id: Some(actual_agent),
+                idempotency_key: Some(actual_invocation),
+                oplog_index: None,
+                agent_fingerprint: None,
+                background_failure: None,
+            },
+            AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            vec![AgentMethodSchema {
+                name: "run".into(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            }],
+        );
+        let handler = CallAgentHandler::new(harness.worker_service.clone());
+        let mut compiled = test_route(1, "/", Some("POST"), "typed");
+        let RouteBehaviour::CallAgent(behaviour) = &mut compiled.behavior else {
+            unreachable!()
+        };
+        behaviour.component_id = harness.component_id;
+        behaviour.agent_type = harness.agent_type.type_name.clone();
+        behaviour.body = RequestBodySchema::JsonBody {
+            expected: CompiledSchema {
+                graph: SchemaGraph::anonymous(SchemaType::record(vec![])),
+            },
+        };
+        let resolver = test_resolver(vec![compiled]);
+
+        for (header, body, accepted) in [
+            (None, "{}", true),
+            (Some(http::HeaderValue::from_static("k1")), "{}", true),
+            (Some(http::HeaderValue::from_static("k1")), "{}", true),
+            (Some(http::HeaderValue::from_static("")), "{}", false),
+            (
+                Some(http::HeaderValue::from_bytes(&[0xff]).unwrap()),
+                "{}",
+                false,
+            ),
+            (None, "{\"idempotencyKey\":\"body-key\"}", false),
+        ] {
+            let mut builder = poem::Request::builder()
+                .method(Method::POST)
+                .uri("/".parse().unwrap())
+                .header("host", "example.com")
+                .header("content-type", "application/json");
+            if let Some(header) = header.clone() {
+                builder = builder.header("Idempotency-Key", header);
+            }
+            let request = builder.body(body.to_string());
+            let route = resolver.resolve_matching_route(&request).await.unwrap();
+            let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior
+            else {
+                unreachable!()
+            };
+            let mut request = RichRequest::new(request);
+            let before = harness.contexts.lock().unwrap().len();
+            let result = handler
+                .handle_call_agent_behaviour(&mut request, &route, behaviour)
+                .await;
+            if accepted {
+                result.unwrap();
+                let receipt = request.accepted_invocation.unwrap();
+                assert_eq!(
+                    receipt.id,
+                    OwnedInvocationId::new(actual_agent, actual_invocation)
+                );
+                let calls = harness.contexts.lock().unwrap();
+                let call = &calls[before];
+                assert_eq!(
+                    call.supplied_key.as_ref().map(|key| key.value.as_str()),
+                    header.as_ref().map(|value| value.to_str().unwrap())
+                );
+                assert!(matches!(call.request_key, InvocationRequestKey::Unkeyed(_)));
+            } else {
+                let error = result.unwrap_err();
+                assert!(request.accepted_invocation.is_none());
+                assert_eq!(harness.contexts.lock().unwrap().len(), before);
+                if header.as_ref().is_some_and(|value| value.is_empty()) {
+                    assert!(
+                        matches!(&error, RequestHandlerError::InvalidParameter { name, .. } if name == "Idempotency-Key")
+                    );
+                    use poem::IntoResponse;
+                    let response =
+                        crate::api::common::ApiEndpointError::from(error).into_response();
+                    assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+                    let body: serde_json::Value = response.into_body().into_json().await.unwrap();
+                    assert!(body.to_string().contains("Idempotency-Key"));
+                } else if header.is_some() {
+                    assert!(
+                        matches!(error, RequestHandlerError::HeaderIsNotAscii { header_name } if header_name == "Idempotency-Key")
+                    );
+                } else {
+                    assert!(error.to_string().contains("idempotencyKey"), "{error}");
+                }
+            }
+        }
+        let calls = harness.contexts.lock().unwrap();
+        assert_ne!(calls[1].request_key, calls[2].request_key);
+    }
+
+    #[test]
+    async fn declared_idempotency_key_header_remains_a_business_argument() {
+        use crate::mcp::InvocationHarness;
+        use golem_common::model::{AgentInvocationOutput, AgentInvocationResult};
+        use golem_common::schema::{
+            AgentConstructorSchema, AgentMethodSchema, NamedField, OutputSchema,
+        };
+        use golem_service_base::custom_api::{QueryOrHeaderType, RouteBehaviour};
+
+        let input_schema =
+            InputSchema::parameters([NamedField::user_supplied("orderRef", SchemaType::string())]);
+        let harness = InvocationHarness::new(
+            AgentInvocationOutput {
+                result: AgentInvocationResult::AgentInitialization,
+                consumed_fuel: None,
+                invocation_status: None,
+                component_revision: None,
+                agent_id: None,
+                idempotency_key: None,
+                oplog_index: None,
+                agent_fingerprint: None,
+                background_failure: None,
+            },
+            AgentConstructorSchema {
+                name: None,
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: InputSchema::Parameters(vec![]),
+            },
+            vec![AgentMethodSchema {
+                name: "run".into(),
+                description: String::new(),
+                prompt_hint: None,
+                input_schema: input_schema.clone(),
+                output_schema: OutputSchema::Unit,
+                http_endpoint: vec![],
+                read_only: None,
+            }],
+        );
+        let handler = CallAgentHandler::new(harness.worker_service.clone());
+        let mut compiled = test_route(1, "/", Some("POST"), "typed");
+        let RouteBehaviour::CallAgent(behaviour) = &mut compiled.behavior else {
+            unreachable!()
+        };
+        behaviour.component_id = harness.component_id;
+        behaviour.agent_type = harness.agent_type.type_name.clone();
+        behaviour.body = RequestBodySchema::Unused;
+        behaviour.method_input = CompiledInputSchema {
+            graph: SchemaGraph::anonymous(SchemaType::record(vec![
+                golem_common::schema::NamedFieldType {
+                    name: "orderRef".into(),
+                    body: SchemaType::string(),
+                    metadata: Default::default(),
+                },
+            ])),
+            input_schema,
+        };
+        behaviour.method_parameters = vec![MethodParameter::Header {
+            header_name: "iDeMpOtEnCy-KeY".into(),
+            parameter_type: QueryOrHeaderType::Primitive(PathSegmentType::Str),
+        }];
+        let resolver = test_resolver(vec![compiled]);
+
+        for (index, value) in ["", "order-1"].into_iter().enumerate() {
+            let request = poem::Request::builder()
+                .method(Method::POST)
+                .uri("/".parse().unwrap())
+                .header("host", "example.com")
+                .header("Idempotency-Key", value)
+                .finish();
+            let route = resolver.resolve_matching_route(&request).await.unwrap();
+            let super::super::RichRouteBehaviour::CallAgent(behaviour) = &route.route.behavior
+            else {
+                unreachable!()
+            };
+            let response = handler
+                .handle_call_agent_behaviour(&mut RichRequest::new(request), &route, behaviour)
+                .await
+                .unwrap();
+            assert_eq!(response.status, StatusCode::NO_CONTENT);
+            let golem_common::model::agent::AgentMethodInput::Native(input) =
+                harness.recorded_method_inputs()[index].clone().unwrap()
+            else {
+                panic!("expected native method input")
+            };
+            assert_eq!(
+                input
+                    .decode(|_, _| Err("unexpected stream".into()))
+                    .unwrap(),
+                SchemaValue::Record {
+                    fields: vec![SchemaValue::String(value.into())],
+                }
+            );
+            let contexts = harness.contexts.lock().unwrap();
+            assert!(contexts[index].supplied_key.is_none());
+            assert!(matches!(
+                contexts[index].request_key,
+                InvocationRequestKey::Unkeyed(_)
+            ));
         }
     }
 

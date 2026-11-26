@@ -17,11 +17,11 @@ use futures_util::{SinkExt, Stream, StreamExt};
 use golem_common::model::invocation_session_public::{
     BinaryMessage, BinaryMessageKind, BinaryMessageMetadata, DecimalU64,
     INVOCATION_SESSION_SUBPROTOCOL, INVOCATION_SESSION_VERSION, InvocationSelector,
-    MAX_LOGICAL_VALUE_SIZE, MAX_PACKED_U8_SIZE, MAX_WEBSOCKET_MESSAGE_SIZE, PublicByteStreamRole,
-    PublicClientMessage, PublicConfigEntry, PublicErrorCode, PublicInvocationOutcome,
-    PublicInvocationResult, PublicResumeOperation, PublicServerMessage, PublicStreamDirection,
-    PublicStreamError, PublicStreamMapping, PublicStreamOutcome, decode_binary_message,
-    decode_server_text, encode_binary_message, encode_text,
+    JsonMethodInput, MAX_LOGICAL_VALUE_SIZE, MAX_PACKED_U8_SIZE, MAX_WEBSOCKET_MESSAGE_SIZE,
+    PublicByteStreamRole, PublicClientMessage, PublicConfigEntry, PublicErrorCode,
+    PublicInvocationOutcome, PublicInvocationResult, PublicResumeOperation, PublicServerMessage,
+    PublicStreamDirection, PublicStreamError, PublicStreamMapping, PublicStreamOutcome,
+    decode_binary_message, decode_server_text, encode_binary_message, encode_client_text,
 };
 use golem_common::model::{InvocationId, OwnedInvocationId};
 use golem_common::schema::public_json::{
@@ -137,6 +137,13 @@ pub enum SessionTransportError {
     },
     #[error("the server answered neither the start nor the resume")]
     NotAnswered,
+    /// The server ended an input stream with a failure at an item that the caller sent, for
+    /// example an item that does not satisfy its element schema.
+    #[error("the server ended the input at item {sequence}: {}", stream_error_text(.error))]
+    InputStreamFailed {
+        sequence: u64,
+        error: Box<PublicStreamError>,
+    },
     #[error("invocation session endpoint {endpoint} was unreachable for {window:?}: {last_cause}")]
     Unreachable {
         endpoint: String,
@@ -624,7 +631,7 @@ impl InputReplayBuffer {
         let exhausted =
             || SessionTransportError::Protocol("unacknowledged input limit exceeded".into());
         // A pending failure may not have an attachment yet. Reserve maximum-width identifiers.
-        let overhead = encode_text(&PublicClientMessage::StreamEnd {
+        let overhead = encode_client_text(&PublicClientMessage::StreamEnd {
             channel: u32::MAX,
             direction: PublicStreamDirection::Input,
             sequence: DecimalU64(u64::MAX),
@@ -728,6 +735,17 @@ impl InputReplayBuffer {
             state.terminal = true;
         }
         Ok(())
+    }
+
+    /// Ends the input because the server ended it. Items that the server did not accept are
+    /// dropped.
+    fn end_by_server(&self) {
+        let mut state = self
+            .state
+            .lock()
+            .expect("input replay buffer mutex poisoned");
+        state.terminal = true;
+        state.queue.clear();
     }
 
     pub fn initialize_high_water(
@@ -1489,7 +1507,7 @@ impl InvocationSessionSender {
         &self,
         message: &PublicClientMessage,
     ) -> Result<(), SessionTransportError> {
-        let text = encode_text(message)
+        let text = encode_client_text(message)
             .map_err(|error| SessionTransportError::Protocol(error.to_string()))?;
         let len = text.len();
         self.send_wire(Message::Text(text.into()), len).await
@@ -1647,6 +1665,7 @@ pub struct InvocationSession {
     deliveries: DeliveryTracker,
     inputs: Vec<RegisteredInput>,
     attachment_state: AttachmentState,
+    execution_ready: bool,
     /// How many times the session has left a connection for a new one.
     reconnects: u64,
     reconnect: ReconnectClock,
@@ -1821,6 +1840,7 @@ impl InvocationSession {
             attachment_state: AttachmentState::Pending {
                 exact_retry: pending_operation_is_retry,
             },
+            execution_ready: false,
             reconnects: 0,
             reconnect,
         })
@@ -2073,7 +2093,8 @@ impl InvocationSession {
                         return Err(SessionTransportError::UnexpectedAttempt);
                     }
                     self.deliveries.begin_connection(mappings)?;
-                    self.install_input_mappings(mappings, true)?;
+                    self.execution_ready = !mappings.is_empty();
+                    self.install_input_mappings(mappings, self.execution_ready)?;
                     self.deliveries.set_attachment_state(
                         None,
                         Some(session_token.clone()),
@@ -2084,6 +2105,31 @@ impl InvocationSession {
                         attempt_id: *attempt_id,
                         replay_revocation_eligible: exact_retry,
                     };
+                }
+                PublicServerMessage::InvocationReady {
+                    attempt_id,
+                    agent_id,
+                    idempotency_key,
+                    mappings,
+                    session_token,
+                    ..
+                } => {
+                    if self.execution_ready
+                        || !matches!(self.attachment_state,
+                        AttachmentState::Accepted { attempt_id: accepted, .. } if accepted == *attempt_id)
+                        || self.deliveries.snapshot().accepted_invocation.as_ref()
+                            != Some(&OwnedInvocationId::new(*agent_id, *idempotency_key))
+                    {
+                        return Err(SessionTransportError::UnexpectedAttempt);
+                    }
+                    self.deliveries.begin_connection(mappings)?;
+                    self.install_input_mappings(mappings, true)?;
+                    self.deliveries.set_attachment_state(
+                        None,
+                        Some(session_token.clone()),
+                        None,
+                    )?;
+                    self.execution_ready = true;
                 }
                 PublicServerMessage::InvocationRejected {
                     attempt_id,
@@ -2242,7 +2288,7 @@ impl InvocationSession {
             } => {
                 *attempt_id = uuid::Uuid::new_v4();
                 let mut renamed = HashMap::new();
-                renew_provisional_refs(method_parameters, &mut renamed);
+                renew_provisional_refs(method_parameters, &mut renamed)?;
                 for input in &mut self.inputs {
                     if let Some(wire_ref) = renamed.get(&input.wire_ref) {
                         input.wire_ref = *wire_ref;
@@ -2284,6 +2330,7 @@ impl InvocationSession {
 
     async fn connect_pending(&mut self, exact_retry: bool) -> Result<(), SessionTransportError> {
         self.attachment_state = AttachmentState::Pending { exact_retry };
+        self.execution_ready = false;
         self.deliveries.begin_connection(&[])?;
         for input in &mut self.inputs {
             input.channel = None;
@@ -2312,6 +2359,7 @@ impl InvocationSession {
             && input_mappings.len() == 1
             && self.inputs[0].stream_token.is_none();
         let mut installed = vec![false; self.inputs.len()];
+        let mut server_failure = None;
         for mapping in &input_mappings {
             let matches = self
                 .inputs
@@ -2349,6 +2397,17 @@ impl InvocationSession {
                 .input_high_water
                 .as_ref()
                 .ok_or(SessionTransportError::InvalidMapping)?;
+            if let Some(outcome) = &high_water.outcome {
+                // The server ended the input, so the items it did not accept are dropped.
+                if !high_water.terminal {
+                    return Err(SessionTransportError::InvalidMapping);
+                }
+                input.buffer.end_by_server();
+                if server_failure.is_none() {
+                    server_failure = input_terminal_failure(outcome, high_water.sequence);
+                }
+                continue;
+            }
             input
                 .buffer
                 .initialize_high_water(high_water.sequence.0, high_water.terminal)?;
@@ -2358,7 +2417,10 @@ impl InvocationSession {
                 "invocation acceptance omitted a registered input stream mapping".to_string(),
             ));
         }
-        Ok(())
+        match server_failure {
+            Some(error) => Err(error),
+            None => Ok(()),
+        }
     }
 }
 
@@ -2793,10 +2855,23 @@ where
                             result = Some((**value).clone());
                         }
                         ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => {},
-                        ServerFrame::Message(PublicServerMessage::StreamEnd { direction: PublicStreamDirection::Input, channel, .. }) if binding.as_ref().is_some_and(|binding| binding.0 == *channel) => {
+                        ServerFrame::Message(PublicServerMessage::StreamEnd { direction: PublicStreamDirection::Input, channel, outcome, sequence, .. }) if binding.as_ref().is_some_and(|binding| binding.0 == *channel) => {
                             input_open = false;
                             let _ = cancel_input.send(true);
                             input_cancelled_by_server = true;
+                            if let Some(error) = input_terminal_failure(outcome, *sequence) {
+                                let _ = cancel_output.send(true);
+                                cancel_native_streams(
+                                    &session,
+                                    None,
+                                    [
+                                        stdout_channel.filter(|_| !stdout_terminal),
+                                        stderr_channel.filter(|_| !stderr_terminal),
+                                    ],
+                                    error.to_string(),
+                                ).await;
+                                return Err(error);
+                            }
                         }
                         ServerFrame::Message(PublicServerMessage::InvocationFinished { outcome, .. }) => {
                             match outcome {
@@ -2835,6 +2910,32 @@ where
 }
 
 /// The text of a failed or rejected invocation, followed by what the agent wrote to stderr.
+fn stream_error_text(error: &PublicStreamError) -> String {
+    match error {
+        PublicStreamError::Trapped { message }
+        | PublicStreamError::Interrupted { message }
+        | PublicStreamError::ResourceExhausted { message } => message.clone(),
+        PublicStreamError::Failed { .. } => "the producer failed".to_string(),
+        PublicStreamError::Cancelled => "cancelled".to_string(),
+        PublicStreamError::Abandoned => "abandoned".to_string(),
+    }
+}
+
+/// The error of a server input terminal that fails the call. A failed input terminal is at an
+/// item that the caller sent; a consumer cancellation only stops the input.
+fn input_terminal_failure(
+    outcome: &PublicStreamOutcome,
+    sequence: DecimalU64,
+) -> Option<SessionTransportError> {
+    match outcome {
+        PublicStreamOutcome::Failed { error } => Some(SessionTransportError::InputStreamFailed {
+            sequence: sequence.0,
+            error: Box::new(error.clone()),
+        }),
+        PublicStreamOutcome::Finished | PublicStreamOutcome::ConsumerCancelled { .. } => None,
+    }
+}
+
 fn failure_text(code: PublicErrorCode, message: &str, stderr: Option<&str>) -> String {
     match stderr {
         Some(stderr) => format!("{}: {message}\n{stderr}", code.as_str()),
@@ -3116,33 +3217,60 @@ async fn connect_for_pending_operation(
 /// Gives every provisional stream reference in a start's method parameters a new UUID, and
 /// records the old and new reference.
 fn renew_provisional_refs(
-    value: &mut serde_json::Value,
+    value: &mut JsonMethodInput,
     renamed: &mut HashMap<uuid::Uuid, uuid::Uuid>,
-) {
-    match value {
-        serde_json::Value::Object(object) => {
-            if object.get("kind").and_then(|kind| kind.as_str()) == Some("stream")
-                && let Some(serde_json::Value::Object(reference)) = object.get_mut("value")
-                && let Some(provisional) = reference.get_mut("provisionalRef")
-                && let Some(old) = provisional
-                    .as_str()
-                    .and_then(|old| uuid::Uuid::parse_str(old).ok())
-            {
-                let new = *renamed.entry(old).or_insert_with(uuid::Uuid::new_v4);
-                *provisional = serde_json::Value::String(new.to_string());
-                return;
+) -> Result<(), SessionTransportError> {
+    fn renew(
+        value: &serde_json::value::RawValue,
+        renamed: &mut HashMap<uuid::Uuid, uuid::Uuid>,
+    ) -> Result<Box<serde_json::value::RawValue>, serde_json::Error> {
+        let encoded = match value.get().as_bytes().first() {
+            Some(b'{') => {
+                let mut object: BTreeMap<String, Box<serde_json::value::RawValue>> =
+                    serde_json::from_str(value.get())?;
+                if object.get("kind").is_some_and(|kind| {
+                    serde_json::from_str::<String>(kind.get()).is_ok_and(|kind| kind == "stream")
+                }) && let Some(mut reference) = object.get("value").and_then(|value| {
+                    serde_json::from_str::<BTreeMap<String, Box<serde_json::value::RawValue>>>(
+                        value.get(),
+                    )
+                    .ok()
+                }) && let Some(old) = reference
+                    .get("provisionalRef")
+                    .and_then(|value| serde_json::from_str::<uuid::Uuid>(value.get()).ok())
+                {
+                    let new = *renamed.entry(old).or_insert_with(uuid::Uuid::new_v4);
+                    reference.insert(
+                        "provisionalRef".into(),
+                        serde_json::value::to_raw_value(&new)?,
+                    );
+                    object.insert("value".into(), serde_json::value::to_raw_value(&reference)?);
+                } else {
+                    for nested in object.values_mut() {
+                        *nested = renew(nested, renamed)?;
+                    }
+                }
+                serde_json::to_string(&object)?
             }
-            for nested in object.values_mut() {
-                renew_provisional_refs(nested, renamed);
+            Some(b'[') => {
+                let mut items: Vec<Box<serde_json::value::RawValue>> =
+                    serde_json::from_str(value.get())?;
+                for item in &mut items {
+                    *item = renew(item, renamed)?;
+                }
+                serde_json::to_string(&items)?
             }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                renew_provisional_refs(item, renamed);
-            }
-        }
-        _ => {}
+            _ => value.get().to_string(),
+        };
+        serde_json::value::RawValue::from_string(encoded)
     }
+
+    let raw = serde_json::from_str(value.as_str())
+        .and_then(|raw: &serde_json::value::RawValue| renew(raw, renamed))
+        .map_err(|error| SessionTransportError::Protocol(error.to_string()))?;
+    *value = JsonMethodInput::capture(raw.get().as_bytes())
+        .map_err(|error| SessionTransportError::Protocol(error.to_string()))?;
+    Ok(())
 }
 
 fn operation_attempt_id(operation: &PublicClientMessage) -> Option<uuid::Uuid> {
@@ -3157,6 +3285,7 @@ fn operation_attempt_id(operation: &PublicClientMessage) -> Option<uuid::Uuid> {
 fn server_mappings(message: &PublicServerMessage) -> &[PublicStreamMapping] {
     match message {
         PublicServerMessage::InvocationAccepted { mappings, .. }
+        | PublicServerMessage::InvocationReady { mappings, .. }
         | PublicServerMessage::InvocationResult { mappings, .. }
         | PublicServerMessage::OutputStreamItem { mappings, .. }
         | PublicServerMessage::InputStreamAck { mappings, .. } => mappings,
@@ -3356,6 +3485,8 @@ where
 {
     let method_parameters = encode_context
         .encode_value(&request.input_graph.root, &method_parameters)
+        .map_err(|error| SessionTransportError::Protocol(error.to_string()))?;
+    let method_parameters = JsonMethodInput::try_from(method_parameters)
         .map_err(|error| SessionTransportError::Protocol(error.to_string()))?;
     let application = request.selector.application.clone();
     let environment = request.selector.environment.clone();
@@ -3825,6 +3956,7 @@ where
 {
     match frame.frame() {
         ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
+        | ServerFrame::Message(PublicServerMessage::InvocationReady { .. })
         | ServerFrame::Message(PublicServerMessage::InputStreamAck { .. }) => Ok(false),
         ServerFrame::Message(PublicServerMessage::InvocationRejected {
             code,
@@ -4001,6 +4133,8 @@ where
         ServerFrame::Message(PublicServerMessage::StreamEnd {
             direction: PublicStreamDirection::Input,
             channel,
+            outcome,
+            sequence,
             ..
         }) => {
             match session.delivery_tracker().direction_for_channel(*channel) {
@@ -4031,7 +4165,10 @@ where
                     ));
                 }
             }
-            Ok(false)
+            match input_terminal_failure(outcome, *sequence) {
+                Some(error) => Err(error),
+                None => Ok(false),
+            }
         }
         ServerFrame::Message(PublicServerMessage::AttachmentRevoked { .. }) => {
             Err(SessionTransportError::AttachmentTerminated)
@@ -4551,6 +4688,7 @@ impl<T> Drop for AgentStream<T> {
 mod tests {
     use super::*;
     use base64::Engine;
+    use golem_common::model::invocation_session_public::encode_text;
     use serde::Deserialize;
 
     fn accepted_agent_id() -> golem_common::model::AgentId {
@@ -4628,7 +4766,7 @@ mod tests {
             attempt_id: uuid::Uuid::new_v4(),
             config: Vec::new(),
             idempotency_key: "invocation-key".to_string(),
-            method_parameters: serde_json::json!({}),
+            method_parameters: serde_json::json!({}).try_into().unwrap(),
             selector: Box::new(InvocationSelector {
                 agent_type: "agent".to_string(),
                 application: "app".to_string(),
@@ -4722,7 +4860,7 @@ mod tests {
             let canonical = vector["canonical"].as_str().unwrap();
             let encoded = match vector["direction"].as_str().unwrap() {
                 "client" => {
-                    encode_text(&decode_client_text(canonical.as_bytes()).unwrap()).unwrap()
+                    encode_client_text(&decode_client_text(canonical.as_bytes()).unwrap()).unwrap()
                 }
                 "server" => {
                     encode_text(&decode_server_text(canonical.as_bytes()).unwrap()).unwrap()
@@ -4814,7 +4952,7 @@ mod tests {
             attempt_id,
             config: Vec::new(),
             idempotency_key: "invocation-key".to_string(),
-            method_parameters: serde_json::json!({}),
+            method_parameters: serde_json::json!({}).try_into().unwrap(),
             selector: Box::new(InvocationSelector {
                 agent_type: "agent".to_string(),
                 application: "app".to_string(),
@@ -5095,6 +5233,7 @@ mod tests {
                                 input_high_water: Some(PublicInputHighWater {
                                     sequence: DecimalU64(0),
                                     terminal: false,
+                                    outcome: None,
                                 }),
                                 provisional_ref: None,
                                 stream_token: "native-stdin".to_string(),
@@ -5519,6 +5658,7 @@ mod tests {
                                 input_high_water: Some(PublicInputHighWater {
                                     sequence: DecimalU64(0),
                                     terminal: false,
+                                    outcome: None,
                                 }),
                                 provisional_ref: None,
                                 stream_token: "native-stdin".to_string(),
@@ -5714,6 +5854,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(0),
                                 terminal: stdin_terminal,
+                                outcome: None,
                             }),
                             provisional_ref: None,
                             stream_token: "native-stdin".to_string(),
@@ -7177,6 +7318,7 @@ mod tests {
                     golem_common::model::invocation_session_public::PublicInputHighWater {
                         sequence: DecimalU64(0),
                         terminal: false,
+                        outcome: None,
                     },
                 ),
                 provisional_ref: None,
@@ -7530,6 +7672,253 @@ mod tests {
             &pending_output_cancellations,
             &failed_inputs,
         ));
+    }
+
+    #[test]
+    async fn generated_call_fails_when_the_server_ends_an_input_with_a_failure() {
+        for (outcome, fails) in [
+            (
+                PublicStreamOutcome::Failed {
+                    error: PublicStreamError::Interrupted {
+                        message: "input item 2 does not satisfy the element schema".to_string(),
+                    },
+                },
+                true,
+            ),
+            (
+                PublicStreamOutcome::ConsumerCancelled {
+                    details: Some("consumer-drop".to_string()),
+                },
+                false,
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let attempt_id = uuid::Uuid::new_v4();
+            let provisional_ref = uuid::Uuid::new_v4();
+            let initial = start_request(attempt_id);
+            let server_initial = initial.clone();
+            let server = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut socket =
+                    accept_hdr_async(socket, |request: &Request, response: Response| {
+                        Ok(select_session_subprotocol(request, response))
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(receive_client_message(&mut socket).await, server_initial);
+                socket
+                    .send(Message::Text(
+                        encode_text(&PublicServerMessage::InvocationAccepted {
+                            attempt_id,
+                            agent_id: accepted_agent_id(),
+                            idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
+                            mappings: vec![PublicStreamMapping {
+                                channel: 4,
+                                direction: PublicStreamDirection::Input,
+                                byte_role: None,
+                                input_high_water: Some(PublicInputHighWater {
+                                    sequence: DecimalU64(0),
+                                    terminal: false,
+                                    outcome: None,
+                                }),
+                                provisional_ref: Some(provisional_ref),
+                                stream_token: "input-stream".to_string(),
+                            }],
+                            session_token: "session-token".to_string(),
+                            version: 1,
+                        })
+                        .unwrap()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+                while let Some(frame) = socket.next().await {
+                    if matches!(frame.unwrap(), Message::Close(_)) {
+                        break;
+                    }
+                }
+            });
+
+            let mut session = InvocationSession::open(
+                Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+                None,
+                ReconnectPolicy::Unlimited,
+                InvocationSessionStateSnapshot {
+                    delivered_output_cursors: BTreeMap::new(),
+                    stable_stream_bindings: BTreeMap::new(),
+                    pending_operation: Some(initial),
+                    session_token: None,
+                    accepted_invocation: None,
+                },
+                false,
+                Arc::new(()),
+            )
+            .await
+            .unwrap();
+            let buffer = InputReplayBuffer::new(GENERATED_INPUT_BYTES, GENERATED_INPUT_ITEMS);
+            session
+                .register_input(provisional_ref, None, buffer.clone())
+                .unwrap();
+            session.receive().await.unwrap();
+
+            let server_frame = ServerFrame::Message(PublicServerMessage::StreamEnd {
+                channel: 4,
+                direction: PublicStreamDirection::Input,
+                cursor_token: None,
+                outcome: outcome.clone(),
+                sequence: DecimalU64(2),
+                version: 1,
+            });
+            let frame = ReceivedFrame {
+                delivery: session.delivery_tracker().delivery(&server_frame).unwrap(),
+                frame: server_frame,
+                _admission: permit(),
+            };
+            let mut decode: Option<Box<GeneratedResultDecoder<()>>> = None;
+            let mut result_tx = None;
+            let mut inputs = HashMap::from([(provisional_ref, buffer)]);
+            let mut input_tasks = HashMap::new();
+            let result = handle_generated_frame(
+                frame,
+                &mut session,
+                None,
+                None,
+                &mut decode,
+                &mut result_tx,
+                &mut inputs,
+                &mut input_tasks,
+                &mut HashMap::new(),
+                &mut HashSet::new(),
+            )
+            .await;
+            if fails {
+                let Err(SessionTransportError::InputStreamFailed { sequence, error }) = &result
+                else {
+                    panic!("expected the failed input error, got {result:?}")
+                };
+                assert_eq!(*sequence, 2);
+                assert!(matches!(**error, PublicStreamError::Interrupted { .. }));
+                assert!(
+                    result
+                        .unwrap_err()
+                        .to_string()
+                        .contains("item 2: input item 2 does not satisfy the element schema")
+                );
+            } else {
+                assert!(!result.unwrap(), "a consumer cancellation failed the call");
+            }
+            session.close().await.unwrap();
+            server.await.unwrap();
+        }
+    }
+
+    #[test]
+    async fn accepted_input_mapping_carries_the_outcome_that_the_server_selected() {
+        for (outcome, fails) in [
+            (
+                PublicStreamOutcome::Failed {
+                    error: PublicStreamError::Interrupted {
+                        message: "input item 2 does not satisfy the element schema".to_string(),
+                    },
+                },
+                true,
+            ),
+            (
+                PublicStreamOutcome::ConsumerCancelled {
+                    details: Some("consumer-drop".to_string()),
+                },
+                false,
+            ),
+        ] {
+            let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let attempt_id = uuid::Uuid::new_v4();
+            let provisional_ref = uuid::Uuid::new_v4();
+            let initial = start_request(attempt_id);
+            let server_initial = initial.clone();
+            let server_outcome = outcome.clone();
+            let server = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut socket =
+                    accept_hdr_async(socket, |request: &Request, response: Response| {
+                        Ok(select_session_subprotocol(request, response))
+                    })
+                    .await
+                    .unwrap();
+                assert_eq!(receive_client_message(&mut socket).await, server_initial);
+                socket
+                    .send(Message::Text(
+                        encode_text(&PublicServerMessage::InvocationAccepted {
+                            attempt_id,
+                            agent_id: accepted_agent_id(),
+                            idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
+                            mappings: vec![PublicStreamMapping {
+                                channel: 4,
+                                direction: PublicStreamDirection::Input,
+                                byte_role: None,
+                                input_high_water: Some(PublicInputHighWater {
+                                    sequence: DecimalU64(1),
+                                    terminal: true,
+                                    outcome: Some(server_outcome),
+                                }),
+                                provisional_ref: Some(provisional_ref),
+                                stream_token: "input-stream".to_string(),
+                            }],
+                            session_token: "session-token".to_string(),
+                            version: 1,
+                        })
+                        .unwrap()
+                        .into(),
+                    ))
+                    .await
+                    .unwrap();
+                while let Some(frame) = socket.next().await {
+                    if matches!(frame, Err(_) | Ok(Message::Close(_))) {
+                        break;
+                    }
+                }
+            });
+
+            let mut session = InvocationSession::open(
+                Arc::new(StaticRequestProvider(format!("ws://{address}"))),
+                None,
+                ReconnectPolicy::Unlimited,
+                InvocationSessionStateSnapshot {
+                    delivered_output_cursors: BTreeMap::new(),
+                    stable_stream_bindings: BTreeMap::new(),
+                    pending_operation: Some(initial),
+                    session_token: None,
+                    accepted_invocation: None,
+                },
+                false,
+                Arc::new(()),
+            )
+            .await
+            .unwrap();
+            let buffer = InputReplayBuffer::new(GENERATED_INPUT_BYTES, GENERATED_INPUT_ITEMS);
+            session
+                .register_input(provisional_ref, None, buffer.clone())
+                .unwrap();
+            let result = session.receive().await;
+            if fails {
+                let Err(SessionTransportError::InputStreamFailed { sequence, error }) = &result
+                else {
+                    panic!(
+                        "expected the failed input error, got {:?}",
+                        result.as_ref().err()
+                    )
+                };
+                assert_eq!(*sequence, 1);
+                assert!(matches!(**error, PublicStreamError::Interrupted { .. }));
+            } else {
+                result.unwrap();
+            }
+            assert!(buffer.is_terminal(), "the server-ended input stays open");
+            assert!(buffer.is_empty());
+            session.close().await.ok();
+            server.await.unwrap();
+        }
     }
 
     #[test]
@@ -8421,6 +8810,7 @@ mod tests {
                         input_high_water: Some(PublicInputHighWater {
                             sequence: DecimalU64(0),
                             terminal: false,
+                            outcome: None,
                         }),
                         provisional_ref: Some(provisional_ref),
                         stream_token: "input".to_string(),
@@ -8550,6 +8940,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(0),
                                 terminal: false,
+                                outcome: None,
                             }),
                             provisional_ref: Some(provisional_ref),
                             stream_token: "input-stream".to_string(),
@@ -8598,6 +8989,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(0),
                                 terminal: false,
+                                outcome: None,
                             }),
                             provisional_ref: Some(provisional_ref),
                             stream_token: "input-stream".to_string(),
@@ -9035,6 +9427,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(3),
                                 terminal: false,
+                                outcome: None,
                             }),
                             provisional_ref: None,
                             stream_token: "replacement-input".to_string(),
@@ -9107,6 +9500,7 @@ mod tests {
                             input_high_water: Some(PublicInputHighWater {
                                 sequence: DecimalU64(3),
                                 terminal: false,
+                                outcome: None,
                             }),
                             provisional_ref: None,
                             stream_token: "stable-input".to_string(),
@@ -9497,9 +9891,9 @@ mod tests {
             attempt_id,
             config,
             idempotency_key,
-            method_parameters: serde_json::json!({"kind":"record","value":{"fields":[
-                {"kind":"stream","value":{"provisionalRef":provisional_ref}}
-            ]}}),
+            method_parameters: JsonMethodInput::capture(format!(
+                r#"{{"kind":"record","value":{{"fields":[{{"kind":"stream","value":{{"provisionalRef":"{provisional_ref}"}}}},{{"kind":"f64","value":1e400}}]}}}}"#
+            ).as_bytes()).unwrap(),
             selector,
             version,
         };
@@ -9523,10 +9917,16 @@ mod tests {
             };
             assert_ne!(*retry_attempt, attempt_id);
             assert_eq!(idempotency_key, "invocation-key");
-            let retry_ref: uuid::Uuid = serde_json::from_value(
-                method_parameters["value"]["fields"][0]["value"]["provisionalRef"].clone(),
-            )
-            .unwrap();
+            assert!(method_parameters.as_str().contains(r#""value":1e400"#));
+            let parameters: BTreeMap<String, &serde_json::value::RawValue> =
+                serde_json::from_str(method_parameters.as_str()).unwrap();
+            let value: BTreeMap<String, &serde_json::value::RawValue> =
+                serde_json::from_str(parameters["value"].get()).unwrap();
+            let fields: Vec<&serde_json::value::RawValue> =
+                serde_json::from_str(value["fields"].get()).unwrap();
+            let reference: serde_json::Value = serde_json::from_str(fields[0].get()).unwrap();
+            let retry_ref: uuid::Uuid =
+                serde_json::from_value(reference["value"]["provisionalRef"].clone()).unwrap();
             assert_ne!(retry_ref, provisional_ref);
             send_server(
                 &mut socket,
@@ -9539,6 +9939,7 @@ mod tests {
                         input_high_water: Some(PublicInputHighWater {
                             sequence: DecimalU64(0),
                             terminal: false,
+                            outcome: None,
                         }),
                         provisional_ref: Some(retry_ref),
                         stream_token: "input".to_string(),

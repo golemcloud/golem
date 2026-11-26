@@ -28,6 +28,7 @@ golem-async-trait = { workspace = true }
 golem-common = { workspace = true, default-features = true }
 golem-mcp-import = { workspace = true }
 golem-native-tool = { workspace = true }
+golem-package = { workspace = true }
 golem-schema = { workspace = true, features = ["protobuf"] }
 golem-service-base = { workspace = true }
 
@@ -37,7 +38,6 @@ async-trait = { workspace = true }
 async_zip = { workspace = true, features = ["tokio", "tokio-fs", "deflate"] }
 blake3 = { workspace = true }
 bytes = { workspace = true }
-chrono = { workspace = true }
 conditional-trait-gen = { workspace = true }
 desert_rust.workspace = true
 fd-lock = { workspace = true }
@@ -49,6 +49,7 @@ humantime-serde = { workspace = true }
 include_dir = { workspace = true }
 itertools = { workspace = true }
 indoc = { workspace = true }
+jiff = { workspace = true }
 lazy_static = { workspace = true }
 mime = { workspace = true }
 oauth2 = { workspace = true }
@@ -79,7 +80,7 @@ sqlx = { workspace = true, features = [
     "uuid",
     "migrate",
     "bigdecimal",
-    "chrono",
+    "time",
 ] }
 strum = { workspace = true }
 strum_macros = { workspace = true }
@@ -112,6 +113,7 @@ futures = { workspace = true }
 golem-worker-executor-test-utils = { workspace = true }
 http-body-util = { workspace = true }
 poem = { workspace = true, features = ["rustls"] }
+tar = { workspace = true }
 testcontainers = { workspace = true }
 testcontainers-modules = { workspace = true }
 test-r = { workspace = true }

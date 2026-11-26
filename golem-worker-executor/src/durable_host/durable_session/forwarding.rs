@@ -123,6 +123,23 @@ impl StreamSession {
     }
 }
 
+/// Sets the server-selected input terminals on the high-waters of encoded mappings.
+pub fn with_input_server_terminals(
+    mut mappings: Vec<DurableStreamMapping>,
+    terminals: &HashMap<u64, StreamTerminal>,
+) -> Result<Vec<DurableStreamMapping>, String> {
+    for mapping in &mut mappings {
+        if let (Some(high_water), Some(terminal)) = (
+            mapping.high_water.as_mut(),
+            terminals.get(&mapping.transport_stream_id),
+        ) && high_water.terminal
+        {
+            high_water.server_outcome = Some(terminal.clone().try_into()?);
+        }
+    }
+    Ok(mappings)
+}
+
 /// Encodes a fingerprint-bound session mapping for transport.
 pub fn durable_stream_mapping_to_proto(
     mapping: &StreamSessionMappingRecord,
@@ -160,6 +177,7 @@ pub fn durable_stream_mapping_to_proto(
             highest_contiguous_sequence: high_water.highest_contiguous_sequence,
             resulting_offset: high_water.resulting_offset.as_bytes().to_vec(),
             terminal: high_water.terminal,
+            server_outcome: None,
         }),
         role: match mapping.role.direction() {
             SessionStreamRole::Input => StreamMappingRole::Input as i32,

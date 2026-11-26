@@ -106,7 +106,7 @@ fn http_context(agents: Vec<AgentTypeSchema>) -> DeploymentContext {
             .collect(),
         webhooks_prefix: "/webhooks".into(),
         openapi_endpoint_prefix: "/".into(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
     };
     DeploymentContext {
         environment,
@@ -978,7 +978,7 @@ async fn router_index_preparation_reuses_upload_hash_and_pins_policy() {
             lower_negative: vec![],
             upper_positive: vec![],
             upper_negative: vec![],
-            created_at: chrono::Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
         },
@@ -1608,7 +1608,7 @@ fn http_mounts_compile_only_when_selected_for_deployment() {
                 agents: BTreeMap::from([(name, Default::default())]),
                 webhooks_prefix: "/webhooks".into(),
                 openapi_endpoint_prefix: "/".into(),
-                created_at: chrono::Utc::now(),
+                created_at: jiff::Timestamp::now(),
             },
         );
         let routes = context.compile_http_api_routes(
@@ -1778,7 +1778,7 @@ fn mcp_deployment(
         hash: diff::Hash::empty(),
         agents,
         tools,
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
     }
 }
 
@@ -1805,7 +1805,7 @@ fn test_tool_component(name: &str, tools: BTreeMap<ToolName, ToolDeploymentMetad
             BTreeMap::new(),
             tools,
         ),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         wasm_hash: diff::Hash::empty(),
         package_metadata: None,
         object_store_key: String::new(),
@@ -1843,9 +1843,9 @@ fn test_remote_tool(
         lifecycle: ToolReleaseLifecycle::Published,
         origin: ToolReleaseOrigin::Ordinary,
         system_availability: None,
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         created_by: owner_account_id,
-        state_changed_at: chrono::Utc::now(),
+        state_changed_at: jiff::Timestamp::now(),
         state_changed_by: owner_account_id,
     };
     (
@@ -1971,7 +1971,7 @@ fn compile_test_mcp() -> (CompiledMcp, Vec<RegisteredAgentTypeSchema>) {
             (agent_a_name.clone(), McpDeploymentAgentOptions::default()),
         ]),
         tools: BTreeMap::new(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
     };
     let context = DeploymentContext {
         environment,
@@ -2024,7 +2024,7 @@ fn compile_mcp_rejects_a_domain_that_also_has_an_http_api_deployment() {
                 agents: BTreeMap::new(),
                 webhooks_prefix: "/webhooks".into(),
                 openapi_endpoint_prefix: "/".into(),
-                created_at: chrono::Utc::now(),
+                created_at: jiff::Timestamp::now(),
             },
         )]),
         mcp_deployments: BTreeMap::from([
@@ -2422,13 +2422,132 @@ fn compile_mcp_rejects_cross_tool_normalized_name_collision_and_auth_conflict() 
         &mut errors,
     );
 
-    assert!(errors.iter().any(|e| matches!(e, DeployValidationError::McpDeploymentToolNameCollision { name, .. } if name == "foo_bar_baz")), "{errors:?}");
+    assert!(errors.iter().any(|e| matches!(e, DeployValidationError::McpDeploymentToolNameCollision { name, first, second, .. } if name == "foo_bar_baz" && first == "tool command `foo bar-baz`" && second == "tool command `foo-bar baz`")), "{errors:?}");
     assert!(
         errors.iter().any(|e| matches!(
             e,
             DeployValidationError::McpDeploymentConflictingSecuritySchemes { .. }
         )),
         "{errors:?}"
+    );
+}
+
+#[test]
+fn compile_mcp_names_the_alias_in_a_cross_tool_name_collision() {
+    let environment = test_environment();
+    let mut aliased = executable_test_tool("foo", "run");
+    aliased.commands.nodes[1].aliases = vec!["bar-baz".to_string()];
+    let first = native_tool_component("first", "foo", aliased);
+    let second = native_tool_component("second", "foo-bar", executable_test_tool("foo-bar", "baz"));
+    let tool_options = |component: &Component| McpDeploymentToolOptions {
+        owner_component: component.component_name.clone(),
+        security_scheme: None,
+        include: None,
+        exclude: None,
+    };
+    let deployment = mcp_deployment(
+        environment.id,
+        "alias-collision.example.com",
+        BTreeMap::new(),
+        BTreeMap::from([
+            (ToolName::try_from("foo").unwrap(), tool_options(&first)),
+            (
+                ToolName::try_from("foo-bar").unwrap(),
+                tool_options(&second),
+            ),
+        ]),
+    );
+    let context = DeploymentContext {
+        environment,
+        components: BTreeMap::from([
+            (first.component_name.clone(), first),
+            (second.component_name.clone(), second),
+        ]),
+        http_api_deployments: BTreeMap::new(),
+        mcp_deployments: BTreeMap::from([(deployment.domain.clone(), deployment)]),
+        registered_agent_types: HashMap::new(),
+    };
+    let mut errors = Vec::new();
+    let tools = context.compile_tools(
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &mut errors,
+        &mut Vec::new(),
+    );
+    context.compile_mcp_deployments(
+        AccountId::new(),
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &HashMap::new(),
+        &tools,
+        &[],
+        &mut errors,
+    );
+
+    assert_eq!(
+        errors,
+        vec![DeployValidationError::McpDeploymentToolNameCollision {
+            mcp_deployment_domain: Domain("alias-collision.example.com".to_string()),
+            name: "foo_bar_baz".to_string(),
+            first: "tool command `foo bar-baz`".to_string(),
+            second: "tool command `foo-bar baz`".to_string(),
+        }]
+    );
+}
+
+#[test]
+fn compile_mcp_names_the_owning_tool_of_a_root_alias_in_a_cross_tool_name_collision() {
+    let environment = test_environment();
+    let mut aliased = executable_test_tool("grep", "run");
+    aliased.commands.nodes[0].aliases = vec!["search".to_string()];
+    let first = native_tool_component("first", "grep", aliased);
+    let second = native_tool_component("second", "search", executable_test_tool("search", "run"));
+    let tool_options = |component: &Component| McpDeploymentToolOptions {
+        owner_component: component.component_name.clone(),
+        security_scheme: None,
+        include: None,
+        exclude: None,
+    };
+    let deployment = mcp_deployment(
+        environment.id,
+        "root-alias-collision.example.com",
+        BTreeMap::new(),
+        BTreeMap::from([
+            (ToolName::try_from("grep").unwrap(), tool_options(&first)),
+            (ToolName::try_from("search").unwrap(), tool_options(&second)),
+        ]),
+    );
+    let context = DeploymentContext {
+        environment,
+        components: BTreeMap::from([
+            (first.component_name.clone(), first),
+            (second.component_name.clone(), second),
+        ]),
+        http_api_deployments: BTreeMap::new(),
+        mcp_deployments: BTreeMap::from([(deployment.domain.clone(), deployment)]),
+        registered_agent_types: HashMap::new(),
+    };
+    let mut errors = Vec::new();
+    let tools = context.compile_tools(
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &mut errors,
+        &mut Vec::new(),
+    );
+    context.compile_mcp_deployments(
+        AccountId::new(),
+        golem_common::model::deployment::DeploymentRevision::INITIAL,
+        &HashMap::new(),
+        &tools,
+        &[],
+        &mut errors,
+    );
+
+    assert_eq!(
+        errors,
+        vec![DeployValidationError::McpDeploymentToolNameCollision {
+            mcp_deployment_domain: Domain("root-alias-collision.example.com".to_string()),
+            name: "search_run".to_string(),
+            first: "tool command `search run` of tool `grep`".to_string(),
+            second: "tool command `search run`".to_string(),
+        }]
     );
 }
 
@@ -2923,7 +3042,7 @@ fn zero_agent_remote_component_binding_hash_uses_effective_binding_and_matches_c
                     owner_account_email: remote.1.as_ref().unwrap().owner.email.clone(),
                     metadata_version: release.metadata_version.clone(),
                     metadata_digest: release.metadata_digest,
-                    provision: remote.0.provision.clone(),
+                    provision: (&remote.0.provision).into(),
                     component_bindings: BTreeMap::from([(
                         component.component_name.0.clone(),
                         effective,
@@ -3881,4 +4000,86 @@ fn optional_secret_declaration_accepts_existing_stored_plaintext_schema() {
     assert_eq!(creations.len(), 0);
     assert_eq!(updates.len(), 0);
     assert_eq!(replacements.len(), 0);
+}
+
+#[test]
+fn compile_mcp_checks_reserved_arguments_only_on_exported_commands() {
+    let environment = test_environment();
+    let mut definition = executable_test_tool("foo", "search");
+    definition.commands.nodes[1]
+        .body
+        .as_mut()
+        .unwrap()
+        .options
+        .push(golem_common::schema::tool::OptionSpec {
+            long: "idempotency-key".to_string(),
+            short: None,
+            aliases: Vec::new(),
+            doc: Doc::default(),
+            value_name: None,
+            shape: golem_common::schema::tool::OptionShape::Scalar(SchemaType::string()),
+            default: None,
+            required: false,
+            env_var: None,
+        });
+    definition.commands.nodes[0]
+        .subcommands
+        .push(CommandIndex(2));
+    definition.commands.nodes.push(CommandNode {
+        name: "list".to_string(),
+        ..definition.commands.nodes[1].clone()
+    });
+    definition.commands.nodes[2]
+        .body
+        .as_mut()
+        .unwrap()
+        .options
+        .clear();
+    let component = native_tool_component("owner", "foo", definition);
+    let compile = |exclude: Option<Vec<String>>| {
+        let deployment = mcp_deployment(
+            environment.id,
+            "reserved.example.com",
+            BTreeMap::new(),
+            BTreeMap::from([(
+                ToolName::try_from("foo").unwrap(),
+                McpDeploymentToolOptions {
+                    owner_component: component.component_name.clone(),
+                    security_scheme: None,
+                    include: None,
+                    exclude,
+                },
+            )]),
+        );
+        let context = DeploymentContext {
+            environment: environment.clone(),
+            components: BTreeMap::from([(component.component_name.clone(), component.clone())]),
+            http_api_deployments: BTreeMap::new(),
+            mcp_deployments: BTreeMap::from([(deployment.domain.clone(), deployment)]),
+            registered_agent_types: HashMap::new(),
+        };
+        let mut errors = Vec::new();
+        let tools = context.compile_tools(
+            golem_common::model::deployment::DeploymentRevision::INITIAL,
+            &mut errors,
+            &mut Vec::new(),
+        );
+        let compiled = context.compile_mcp_deployments(
+            AccountId::new(),
+            golem_common::model::deployment::DeploymentRevision::INITIAL,
+            &HashMap::new(),
+            &tools,
+            &[],
+            &mut errors,
+        );
+        (compiled, errors)
+    };
+
+    let (_, errors) = compile(None);
+    assert!(errors.iter().any(|e| matches!(e, DeployValidationError::McpDeploymentInvalidTool { error, .. } if error.contains("`foo search`") && error.contains("`idempotency-key`"))), "{errors:?}");
+
+    let (compiled, errors) = compile(Some(vec!["search".to_string()]));
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(compiled[0].tools.len(), 1);
+    assert_eq!(compiled[0].tools[0].mcp_name, "foo_list");
 }

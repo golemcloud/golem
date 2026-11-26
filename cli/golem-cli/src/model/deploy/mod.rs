@@ -739,7 +739,7 @@ pub struct DeploymentDisplayRemoteTool {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata_digest: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub provision: Option<golem_common::model::tool::ToolProvisionConfig>,
+    pub provision: Option<diff::ToolProvision>,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub bindings: BTreeMap<String, diff::EffectiveToolBinding>,
 }

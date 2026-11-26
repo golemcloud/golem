@@ -16,7 +16,7 @@
 //! `MoonBitPermissionAgent` of the MoonBit tool-streaming test component.
 
 use super::*;
-use chrono::DateTime;
+
 use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem::worker::UpdateMode;
 use golem_common::model::account::AccountId;
@@ -60,6 +60,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         &self,
         target: &ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -73,6 +74,7 @@ impl WorkerProxy for LocalCardTransferProxy {
             .prepare(
                 target,
                 method_name,
+                invocation,
                 caller_agent_id,
                 caller_env,
                 caller_stack,
@@ -118,7 +120,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         method_name: String,
         method_parameters: SchemaValue,
         mode: AgentInvocationMode,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<jiff::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -182,6 +184,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         target_revision: ComponentRevision,
         mode: UpdateMode,
         disable_wakeup: bool,
+        requester: golem_common::model::caller::Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -190,6 +193,7 @@ impl WorkerProxy for LocalCardTransferProxy {
                 target_revision,
                 mode,
                 disable_wakeup,
+                requester,
                 auth_ctx,
             )
             .await
@@ -296,6 +300,7 @@ impl WorkerProxy for LocalCardTransferProxy {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: &AuthCtx,
+        caller: &golem_common::model::caller::Caller,
     ) -> Result<(), WorkerProxyError> {
         self.inner
             .process_oplog_entries(
@@ -310,6 +315,7 @@ impl WorkerProxy for LocalCardTransferProxy {
                 first_entry_index,
                 entries,
                 auth_ctx,
+                caller,
             )
             .await
     }

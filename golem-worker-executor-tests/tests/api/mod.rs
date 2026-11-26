@@ -18,7 +18,7 @@ use anyhow::{anyhow, bail};
 use async_trait::async_trait;
 use axum::Router;
 use axum::routing::get;
-use chrono::{DateTime, Utc};
+
 use futures::future::BoxFuture;
 use golem_api_grpc::proto::golem::worker::{UpdateMode, log_event};
 use golem_common::model::account::AccountId;
@@ -43,11 +43,13 @@ use golem_common::{agent_key, data_value};
 use golem_service_base::clients::registry::{
     RegistryService, RegistryServiceError, ResourceUsageUpdate,
 };
+use golem_service_base::config::{BlobStorageConfig, LocalFileSystemBlobStorageConfig};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::{AccountResourceLimits, MonthlyResourcePolicy};
+use golem_service_base::service::compiled_component::DefaultCompiledComponentService;
 use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
-use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace, join_blob_key};
+use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
 use golem_test_framework::dsl::TestDsl;
 use golem_test_framework::dsl::{
     AgentResult, count_agent_invocation_pair_since, drain_connection, stdout_event_matching,
@@ -1484,6 +1486,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         &self,
         target: &ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         caller_agent_id: &AgentId,
         caller_env: HashMap<String, String>,
         caller_stack: InvocationContextStack,
@@ -1497,6 +1500,7 @@ impl WorkerProxy for RecordingWorkerProxy {
             .prepare(
                 target,
                 method_name,
+                invocation,
                 caller_agent_id,
                 caller_env,
                 caller_stack,
@@ -1542,7 +1546,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         method_name: String,
         method_parameters: SchemaValue,
         mode: AgentInvocationMode,
-        schedule_at: Option<DateTime<Utc>>,
+        schedule_at: Option<jiff::Timestamp>,
         idempotency_key: Option<IdempotencyKey>,
         freshness_disposition: InvocationFreshnessDisposition,
         expected_callee_fingerprint: Option<AgentFingerprint>,
@@ -1642,6 +1646,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         target_revision: ComponentRevision,
         mode: UpdateMode,
         disable_wakeup: bool,
+        requester: golem_common::model::caller::Caller,
         auth_ctx: &AuthCtx,
     ) -> Result<(), WorkerProxyError> {
         self.inner
@@ -1650,6 +1655,7 @@ impl WorkerProxy for RecordingWorkerProxy {
                 target_revision,
                 mode,
                 disable_wakeup,
+                requester,
                 auth_ctx,
             )
             .await
@@ -1764,6 +1770,7 @@ impl WorkerProxy for RecordingWorkerProxy {
         first_entry_index: OplogIndex,
         entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
         auth_ctx: &AuthCtx,
+        caller: &golem_common::model::caller::Caller,
     ) -> Result<(), WorkerProxyError> {
         self.inner
             .process_oplog_entries(
@@ -1778,6 +1785,7 @@ impl WorkerProxy for RecordingWorkerProxy {
                 first_entry_index,
                 entries,
                 auth_ctx,
+                caller,
             )
             .await
     }
@@ -1872,7 +1880,7 @@ async fn card_transfer_to_an_unknown_agent_does_not_create_it(
         lower_negative: vec![],
         upper_positive: vec![],
         upper_negative: vec![],
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,
@@ -5113,6 +5121,78 @@ async fn component_env_variables(
     Ok(())
 }
 
+/// The agent-type env and the create env cannot set the variables that Golem sets, but
+/// `GOLEM_WORKER_NAME` and `GOLEM_COMPONENT_ID` are ordinary variables.
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn an_env_cannot_override_the_variables_that_golem_sets(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+
+    let component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .with_env(
+            "Environment",
+            vec![
+                ("GOLEM_WORKER_NAME".to_string(), "from-type-env".to_string()),
+                ("GOLEM_AGENT_ID".to_string(), "forged".to_string()),
+                ("GOLEM_AGENT_TYPE".to_string(), "forged".to_string()),
+            ],
+        )
+        .store()
+        .await?;
+
+    let key = agent_key!("Environment", "env-cannot-override-golem-variables");
+    let agent_id = executor
+        .start_agent_with(
+            &component.id,
+            key.clone(),
+            HashMap::from([
+                (
+                    "GOLEM_COMPONENT_ID".to_string(),
+                    "from-create-env".to_string(),
+                ),
+                ("GOLEM_AGENT_KEY".to_string(), "forged".to_string()),
+                ("GOLEM_COMPONENT_REVISION".to_string(), "forged".to_string()),
+            ]),
+            Vec::<AgentConfigEntryDto>::new(),
+        )
+        .await?;
+    assert_eq!(
+        agent_id,
+        crate::agent::keyed_agent_id(component.environment_id, &key)
+    );
+
+    let mut env = executor
+        .invoke_and_await_agent(&component, &key, "get_environment", data_value!())
+        .await?
+        .into_typed::<Result<Vec<(String, String)>, String>>()?
+        .map_err(anyhow::Error::msg)?;
+    env.sort();
+
+    assert_eq!(
+        env,
+        vec![
+            ("GOLEM_AGENT_ID".to_string(), agent_id.agent_id.to_string()),
+            ("GOLEM_AGENT_KEY".to_string(), key.to_string()),
+            ("GOLEM_AGENT_TYPE".to_string(), "Environment".to_string()),
+            (
+                "GOLEM_COMPONENT_ID".to_string(),
+                "from-create-env".to_string()
+            ),
+            ("GOLEM_COMPONENT_REVISION".to_string(), "0".to_string()),
+            ("GOLEM_WORKER_NAME".to_string(), "from-type-env".to_string()),
+        ]
+    );
+
+    Ok(())
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -6469,13 +6549,18 @@ async fn stale_scheduled_actions_do_not_recreate_or_mutate_agents(
             storage
                 .insert(
                     ScheduleId::fresh(),
-                    Utc::now(),
+                    jiff::Timestamp::now(),
                     ShardId::new(0),
                     &serialize(&action).map_err(anyhow::Error::msg)?,
                 )
                 .await?;
             tokio::time::timeout(Duration::from_secs(30), async {
-                while storage.count_due(Utc::now(), &assignment).await.unwrap() != 0 {
+                while storage
+                    .count_due(jiff::Timestamp::now(), &assignment)
+                    .await
+                    .unwrap()
+                    != 0
+                {
                     tokio::task::yield_now().await;
                 }
             })
@@ -7043,7 +7128,13 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     // case: WASM can be parsed, but wasmtime does not support it
-    let executor = start(deps, &context).await?;
+    let blob_dir = tempfile::tempdir()?;
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        isolated_compilation_cache(blob_dir.path().to_path_buf()),
+    )
+    .await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -7085,6 +7176,19 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     Ok(())
 }
 
+// These tests corrupt Wasm and must not read or remove an artifact shared with another test.
+fn isolated_compilation_cache(root: std::path::PathBuf) -> TestExecutorOverrides {
+    TestExecutorOverrides {
+        configure: Some(Arc::new(move |config| {
+            config.blob_storage =
+                BlobStorageConfig::LocalFileSystem(LocalFileSystemBlobStorageConfig {
+                    root: root.clone(),
+                });
+        })),
+        ..Default::default()
+    }
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
@@ -7094,7 +7198,9 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let blob_dir = tempfile::tempdir()?;
+    let overrides = isolated_compilation_cache(blob_dir.path().to_path_buf());
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
     let component = executor
         .component_dep(&context.default_environment_id, host_api_tests)
         .store()
@@ -7117,10 +7223,8 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     )?;
     let artifact_fingerprint =
         golem_common::wasmtime_config::wasmtime_artifact_fingerprint(&engine);
-    let compiled_component_path = join_blob_key(
-        &format!("{}/0", component.id),
-        &format!("{artifact_fingerprint}.cwasm"),
-    );
+    let compiled_component_path =
+        DefaultCompiledComponentService::key(component.wasm_hash, &artifact_fingerprint);
 
     let span = Span::current();
     tokio::task::spawn_blocking(move || {
@@ -7139,20 +7243,18 @@ async fn trying_to_use_a_wasm_that_wasmtime_cannot_load_provides_good_error_mess
     .unwrap();
 
     debug!("Deleting {:?}", compiled_component_path);
-    FileSystemBlobStorage::new(&deps.blob_storage_root())
+    FileSystemBlobStorage::new(blob_dir.path())
         .await?
         .delete(
             "test",
             "delete-compiled-component",
-            BlobStorageNamespace::CompilationCache {
-                environment_id: component.environment_id,
-            },
+            BlobStorageNamespace::CompilationCache,
             compiled_component_path.as_ref(),
         )
         .await
         .expect("Failed to delete compiled component");
 
-    let executor = start(deps, &context).await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
 
     debug!("Trying to invoke recovered worker");
 
@@ -8442,13 +8544,174 @@ async fn invocation_queue_is_persistent(
 #[test]
 #[tracing::instrument]
 #[timeout("4m")]
+async fn invalid_fresh_invocations_leave_no_agent(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::agent::{AgentMethodInput, JsonMethodInput};
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start(deps, &context).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let counter = agent_key!("Counter", "invalid-fresh-call");
+    let worker_id = executor.keyed_agent_id(component.environment_id, &counter)?;
+    for (method, params) in [
+        ("WRONG", data_value!()),
+        ("increment", data_value!("unexpected")),
+    ] {
+        assert!(
+            executor
+                .invoke_and_await_agent(&component, &counter, method, params)
+                .await
+                .is_err()
+        );
+        assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+        assert!(executor.stored_oplog(&worker_id.agent_id).await.is_empty());
+        assert_eq!(executor.instance_load_count(&worker_id.agent_id), 0);
+    }
+    let json =
+        AgentMethodInput::PublicJson(JsonMethodInput::capture(br#"{"unexpected":7}"#).unwrap());
+    let start = golem_api_grpc::proto::golem::worker::InvocationStart {
+        target: Some(golem_api_grpc::proto::golem::worker::AgentTarget {
+            target: Some(
+                golem_api_grpc::proto::golem::worker::agent_target::Target::Key(
+                    counter.clone().try_into().map_err(anyhow::Error::msg)?,
+                ),
+            ),
+        }),
+        method_name: Some("increment".into()),
+        captured_method_input: Some(
+            golem_common::serialization::serialize(&json).map_err(anyhow::Error::msg)?,
+        ),
+        component_id: Some(component.id.into()),
+        environment_id: Some(component.environment_id.into()),
+        component_owner_account_id: Some(component.account_id.into()),
+        auth_ctx: Some(executor.auth_ctx().into()),
+        caller: Some(golem_common::model::caller::Caller::anonymous().into()),
+        request_key: Some(golem_common::model::InvocationRequestKey::external(None, None).into()),
+        mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Await as i32,
+        ..Default::default()
+    };
+    assert!(executor.invoke_agent_session(start).await.is_err());
+    assert!(executor.get_worker_metadata(&worker_id).await.is_err());
+    assert!(executor.stored_oplog(&worker_id.agent_id).await.is_empty());
+    assert_eq!(executor.instance_load_count(&worker_id.agent_id), 0);
+
+    let (valid, invalid) = tokio::join!(
+        executor.invoke_and_await_agent(&component, &counter, "increment", data_value!()),
+        executor.invoke_and_await_agent(&component, &counter, "WRONG", data_value!()),
+    );
+    assert_eq!(valid?.into_typed::<u32>()?, 1);
+    assert!(invalid.is_err());
+    assert_eq!(executor.instance_load_count(&worker_id.agent_id), 1);
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
+async fn fenced_pre_guest_rejection_does_not_publish_a_recorded_rejection(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::OplogEntry;
+
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            configure: Some(Arc::new(|config| {
+                config.oplog.max_operations_before_commit = 100_000;
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, agent_counters)
+        .store()
+        .await?;
+    let name = agent_key!("Counter", "fenced-pre-guest-rejection");
+    executor
+        .invoke_and_await_agent(&component, &name, "count", data_value!())
+        .await?;
+    let id = executor.keyed_agent_id(component.environment_id, &name)?;
+    let mut rejection = executor
+        .gate_before_next_oplog_commit(&id.agent_id, |entry| {
+            matches!(
+                entry,
+                OplogEntry::Error {
+                    error: golem_common::model::oplog::AgentError::InvalidRequest(_),
+                    ..
+                }
+            )
+        })
+        .await;
+    let invoke = {
+        let executor = executor.clone();
+        let component = component.clone();
+        let name = name.clone();
+        tokio::spawn(async move {
+            executor
+                .invoke_and_await_agent(&component, &name, "WRONG", data_value!())
+                .await
+        })
+    };
+    tokio::time::timeout(Duration::from_secs(20), rejection.entered()).await?;
+    take_agent_oplog_over_at_epoch(deps, &context, &id, 1).await?;
+    rejection.release();
+    let error = tokio::time::timeout(Duration::from_secs(20), invoke)
+        .await??
+        .expect_err("a refused rejection commit must not succeed");
+    let details = format!("{error:#}");
+    assert!(
+        details.contains("fenced") || details.contains("Sharding not ready"),
+        "{details}"
+    );
+    assert!(
+        !executor
+            .stored_oplog(&id.agent_id)
+            .await
+            .iter()
+            .any(|entry| matches!(
+                entry,
+                OplogEntry::Error {
+                    error: golem_common::model::oplog::AgentError::InvalidRequest(_),
+                    ..
+                }
+            ))
+    );
+    Ok(())
+}
+
+#[test]
+#[tracing::instrument]
+#[timeout("4m")]
 async fn invoke_with_non_existing_function(
     last_unique_id: &LastUniqueId,
     deps: &WorkerExecutorTestDependencies,
     #[tagged_as("agent_counters")] agent_counters: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
+    use golem_common::model::AgentInvocation;
+    use golem_common::model::caller::Caller;
+    use golem_common::model::oplog::{AgentError, OplogEntry};
+    use golem_worker_executor::model::LookupResult;
+
     let context = TestContext::new(last_unique_id);
-    let executor = start(deps, &context).await?;
+    let overrides = TestExecutorOverrides {
+        configure: Some(Arc::new(|config| {
+            config.invocation_results.recent_capacity = 1;
+            config.invocation_results.hydrated_cache_capacity = 0;
+        })),
+        ..Default::default()
+    };
+    let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_counters)
@@ -8460,7 +8723,55 @@ async fn invoke_with_non_existing_function(
         .start_agent(&component.id, counter_id.clone())
         .await?;
 
-    // First we invoke a function that does not exist and expect a failure
+    executor
+        .invoke_and_await_agent(&component, &counter_id, "count", data_value!())
+        .await?;
+    let loads = executor.instance_load_count(&worker_id.agent_id);
+
+    // Queue directly so the selected Store rejects this method.
+    let rejected_key = InvocationId(uuid::Uuid::new_v4());
+    let cancelled_key = InvocationId(uuid::Uuid::new_v4());
+    let invocation = |key, method_name: &str| AgentInvocation::AgentMethod {
+        idempotency_key: key,
+        method_name: method_name.to_string(),
+        allow_streams: false,
+        input: SchemaValue::Record { fields: vec![] }.try_into().unwrap(),
+        invocation_context: InvocationContextStack::fresh(),
+        caller: Caller::anonymous(),
+        scope_card: None,
+    };
+    let worker = executor.active_agent(&worker_id).await.unwrap().primary();
+    let rejection = worker
+        .clone()
+        .invoke_and_await(invocation(rejected_key, "WRONG"))
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&rejection, WorkerExecutorError::InvalidRequest { details }
+        if details.contains("WRONG") && details.contains("not found"))
+    );
+    let oplog = executor.stored_oplog(&worker_id.agent_id).await;
+    assert!(oplog.windows(2).any(|pair| matches!(
+        (&pair[0], &pair[1]),
+        (
+            OplogEntry::CancelPendingInvocation { invocation_id: cancelled, .. },
+            OplogEntry::Error {
+                kind: OplogErrorKind::Invocation,
+                invocation_id: Some(rejected),
+                error: AgentError::InvalidRequest(details),
+                ..
+            }
+        ) if *cancelled == rejected_key && *rejected == rejected_key && details.contains("WRONG")
+    )));
+    worker
+        .schedule_invocation(
+            invocation(cancelled_key, "increment"),
+            jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
+        )
+        .await?;
+    worker.cancel_invocation(cancelled_key).await?;
+
+    // The public ingress still returns a typed error for the same invalid method.
     let failure = executor
         .invoke_and_await_agent(&component, &counter_id, "WRONG", data_value!())
         .await;
@@ -8472,7 +8783,79 @@ async fn invoke_with_non_existing_function(
 
     assert!(failure.is_err());
     assert_eq!(success.into_typed::<u32>()?, 1);
+    assert_eq!(executor.instance_load_count(&worker_id.agent_id), loads);
 
+    for input in [
+        SchemaValue::Record {
+            fields: vec![SchemaValue::String("unexpected".into())],
+        }
+        .try_into()
+        .unwrap(),
+        golem_common::model::agent::AgentMethodInput::PublicJson(
+            golem_common::model::agent::JsonMethodInput::capture(br#"{"unexpected":7}"#).unwrap(),
+        ),
+    ] {
+        let mut rejected = invocation(InvocationId(uuid::Uuid::new_v4()), "increment");
+        if let AgentInvocation::AgentMethod { input: value, .. } = &mut rejected {
+            *value = input;
+        }
+        assert!(worker.clone().invoke_and_await(rejected).await.is_err());
+    }
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &counter_id, "count", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        1
+    );
+    assert_eq!(executor.instance_load_count(&worker_id.agent_id), loads);
+
+    drop(worker);
+    executor.release().await?;
+    let executor = start_with_overrides(deps, &context, overrides).await?;
+    assert_eq!(
+        executor
+            .invoke_and_await_agent(&component, &counter_id, "increment", data_value!())
+            .await?
+            .into_typed::<u32>()?,
+        2
+    );
+    let worker = executor.active_agent(&worker_id).await.unwrap().primary();
+    assert_eq!(
+        worker.lookup_invocation_result(&rejected_key).await,
+        LookupResult::Complete(Err(rejection.clone()))
+    );
+    let rejected_entries = |entries: Vec<OplogEntry>| {
+        entries
+            .into_iter()
+            .filter(|entry| match entry {
+                OplogEntry::PendingAgentInvocation { invocation_id, .. }
+                | OplogEntry::CancelPendingInvocation { invocation_id, .. } => {
+                    *invocation_id == rejected_key
+                }
+                OplogEntry::Error { invocation_id, .. } => {
+                    invocation_id.as_ref() == Some(&rejected_key)
+                }
+                _ => false,
+            })
+            .collect::<Vec<_>>()
+    };
+    let before_retry = rejected_entries(executor.stored_oplog(&worker_id.agent_id).await);
+    assert_eq!(
+        worker
+            .clone()
+            .invoke_and_await(invocation(rejected_key, "WRONG"))
+            .await,
+        Err(rejection)
+    );
+    assert_eq!(
+        rejected_entries(executor.stored_oplog(&worker_id.agent_id).await),
+        before_retry
+    );
+    assert_eq!(
+        worker.lookup_invocation_result(&cancelled_key).await,
+        LookupResult::Complete(Err(WorkerExecutorError::InvocationCancelled))
+    );
     executor.check_oplog_is_queryable(&worker_id).await?;
     Ok(())
 }
@@ -9063,7 +9446,7 @@ async fn scheduled_invocation(
         let late_server = executor
             .start_agent(&component.id, late_server_agent_id.clone())
             .await?;
-        let due = Utc::now() + chrono::Duration::seconds(3);
+        let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(3);
         executor
             .invoke_and_await_agent_as_caller(
                 &component,
@@ -9072,8 +9455,8 @@ async fn scheduled_invocation(
                 "schedule_at",
                 data_value!(
                     late_server_name,
-                    due.timestamp() as u64,
-                    due.timestamp_subsec_nanos()
+                    due.as_second() as u64,
+                    due.subsec_nanosecond() as u32
                 ),
             )
             .await?;
@@ -9087,7 +9470,7 @@ async fn scheduled_invocation(
             )
             .await?;
         assert!(
-            Utc::now() < due,
+            jiff::Timestamp::now() < due,
             "the second caller must reach the client before the scheduled call runs"
         );
         loop {
@@ -9177,12 +9560,13 @@ async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruct
     let pending_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let complete_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
     let raced_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
-    let deadline = Utc::now() + chrono::Duration::hours(1);
+    let deadline = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
     let request =
         |key: &golem_common::model::InvocationId, value, scope_card| AgentInvocation::AgentMethod {
             idempotency_key: *key,
             method_name: "inc_global_by".to_string(),
-            input: data_value!(value).into_parts().1,
+            allow_streams: false,
+            input: data_value!(value).into_parts().1.try_into().unwrap(),
             invocation_context: InvocationContextStack::fresh(),
             caller: callers::anonymous(),
             scope_card,
@@ -9224,7 +9608,7 @@ async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruct
             worker
                 .schedule_invocation(
                     request(&pending_key, 17u64, None),
-                    deadline + chrono::Duration::hours(1)
+                    deadline + jiff::SignedDuration::from_hours(1)
                 )
                 .await?,
             receipt,
@@ -9288,9 +9672,10 @@ async fn invocation_identity_rejects_changed_payload_and_scope_after_reconstruct
                         pending_count += 1;
                         assert_eq!(
                             parameters.not_before.unwrap().to_millis(),
-                            deadline.timestamp_millis() as u64
+                            deadline.as_millisecond() as u64
                                 + u64::from(
-                                    !deadline.timestamp_subsec_nanos().is_multiple_of(1_000_000)
+                                    !(deadline.subsec_nanosecond() as u32)
+                                        .is_multiple_of(1_000_000)
                                 )
                         );
                     }
@@ -9356,7 +9741,7 @@ async fn grpc_schedule_commits_pending_without_loading_target(
     )
     .id();
     assert_ne!(key.to_string(), raw_key.value);
-    let future = Utc::now() + chrono::Duration::hours(1);
+    let future = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
 
     for round in 0..2 {
         if round == 1 {
@@ -9366,8 +9751,8 @@ async fn grpc_schedule_commits_pending_without_loading_target(
         // A repair may change its proposed deadline, but cannot change the accepted input.
         for (at, value) in [
             (future, 101u64),
-            (future + chrono::Duration::hours(1), 101),
-            (future + chrono::Duration::hours(1), 999),
+            (future + jiff::SignedDuration::from_hours(1), 101),
+            (future + jiff::SignedDuration::from_hours(1), 999),
         ] {
             let (_, input) = data_value!(value).into_parts();
             let request = InvocationRequest {
@@ -9384,8 +9769,8 @@ async fn grpc_schedule_commits_pending_without_loading_target(
                     mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule
                         as i32,
                     schedule_at: Some(prost_types::Timestamp {
-                        seconds: at.timestamp(),
-                        nanos: at.timestamp_subsec_nanos() as i32,
+                        seconds: at.as_second(),
+                        nanos: at.subsec_nanosecond() as u32 as i32,
                     }),
                     caller: Some(callers::anonymous().into()),
                     ..Default::default()
@@ -9454,14 +9839,14 @@ async fn grpc_schedule_commits_pending_without_loading_target(
         })
         .collect::<Vec<_>>();
         assert_eq!(pending.len(), 1);
-        let expected_millis = future.timestamp_millis() as u64
-            + u64::from(!future.timestamp_subsec_nanos().is_multiple_of(1_000_000));
+        let expected_millis = future.as_millisecond() as u64
+            + u64::from(!(future.subsec_nanosecond() as u32).is_multiple_of(1_000_000));
         assert_eq!(pending[0].not_before.unwrap().to_millis(), expected_millis);
         let PublicAgentInvocation::AgentMethodInvocation(method) = &pending[0].invocation else {
             unreachable!()
         };
         assert_eq!(
-            method.function_input.clone().into_parts().1,
+            golem_test_framework::dsl::original_native_method_input(&method.function_input)?,
             data_value!(101u64).into_parts().1
         );
     }
@@ -9514,7 +9899,7 @@ async fn due_wake_runs_scheduled_invocation_on_unloaded_target(
     })
     .await??;
 
-    let due = Utc::now() + chrono::Duration::seconds(3);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(3);
     executor
         .invoke_and_await_agent(
             &component,
@@ -9522,8 +9907,8 @@ async fn due_wake_runs_scheduled_invocation_on_unloaded_target(
             "schedule_at",
             data_value!(
                 server_name.to_string(),
-                due.timestamp() as u64,
-                due.timestamp_subsec_nanos()
+                due.as_second() as u64,
+                due.subsec_nanosecond() as u32
             ),
         )
         .await?;
@@ -9627,7 +10012,7 @@ async fn owner_load_restores_lost_invocation_wake(
         async fn insert(
             &self,
             id: ScheduleId,
-            due: chrono::DateTime<Utc>,
+            due: jiff::Timestamp,
             shard: ShardId,
             action: &[u8],
         ) -> Result<(), SchedulerStorageError> {
@@ -9647,7 +10032,7 @@ async fn owner_load_restores_lost_invocation_wake(
 
         async fn claim_due(
             &self,
-            now: chrono::DateTime<Utc>,
+            now: jiff::Timestamp,
             assignment: &ShardAssignment,
             limit: u32,
             ttl: Duration,
@@ -9657,7 +10042,7 @@ async fn owner_load_restores_lost_invocation_wake(
 
         async fn count_due(
             &self,
-            now: chrono::DateTime<Utc>,
+            now: jiff::Timestamp,
             assignment: &ShardAssignment,
         ) -> Result<u64, SchedulerStorageError> {
             self.inner.count_due(now, assignment).await
@@ -9667,8 +10052,8 @@ async fn owner_load_restores_lost_invocation_wake(
             &self,
             id: &ScheduleId,
             owner: uuid::Uuid,
-            until: chrono::DateTime<Utc>,
-            now: chrono::DateTime<Utc>,
+            until: jiff::Timestamp,
+            now: jiff::Timestamp,
         ) -> Result<bool, SchedulerStorageError> {
             self.inner.extend_lease(id, owner, until, now).await
         }
@@ -9677,7 +10062,7 @@ async fn owner_load_restores_lost_invocation_wake(
             &self,
             id: &ScheduleId,
             owner: uuid::Uuid,
-            now: chrono::DateTime<Utc>,
+            now: jiff::Timestamp,
         ) -> Result<bool, SchedulerStorageError> {
             self.inner.ack(id, owner, now).await
         }
@@ -9707,13 +10092,13 @@ async fn owner_load_restores_lost_invocation_wake(
     let caller = agent_key!("ScheduledInvocationClient", "lost-wake-owner");
     let target = executor.start_agent(&component.id, server.clone()).await?;
     executor.start_agent(&component.id, caller.clone()).await?;
-    let due = Utc::now() + chrono::Duration::seconds(20);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(20);
     executor
         .invoke_and_await_agent(
             &component,
             &caller,
             "schedule_at",
-            data_value!(server_name.to_string(), due.timestamp() as u64, 0u32),
+            data_value!(server_name.to_string(), due.as_second() as u64, 0u32),
         )
         .await?;
     assert!(
@@ -9733,7 +10118,7 @@ async fn owner_load_restores_lost_invocation_wake(
         0
     );
     assert!(
-        Utc::now() < due,
+        jiff::Timestamp::now() < due,
         "the owner load must precede the scheduled deadline"
     );
 
@@ -9822,12 +10207,13 @@ async fn local_schedule_rejects_recreated_cached_target(
             AgentInvocation::AgentMethod {
                 idempotency_key: accepted_id,
                 method_name: "inc_global_by".to_string(),
-                input: data_value!(91u64).into_parts().1,
+                allow_streams: false,
+                input: data_value!(91u64).into_parts().1.try_into().unwrap(),
                 invocation_context: InvocationContextStack::fresh(),
                 caller: callers::anonymous(),
                 scope_card: None,
             },
-            Utc::now() + chrono::Duration::hours(1),
+            jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1),
             &target.agent_id,
             &AuthCtx::System,
         )
@@ -9877,13 +10263,14 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
     let started_key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
 
     for (key, value, cancel_wins) in [(cancelled_key, 71u64, true), (started_key, 29u64, false)] {
-        let due = Utc::now() + chrono::Duration::seconds(5);
+        let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(5);
         let receipt = worker
             .schedule_invocation(
                 AgentInvocation::AgentMethod {
                     idempotency_key: key,
                     method_name: "inc_global_by".to_string(),
-                    input: data_value!(value).into_parts().1,
+                    allow_streams: false,
+                    input: data_value!(value).into_parts().1.try_into().unwrap(),
                     invocation_context: InvocationContextStack::fresh(),
                     caller: callers::agent(
                         owner.agent_id,
@@ -9923,7 +10310,7 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
             let (selected, release_selection) =
                 executor.gate_next_oplog_read(&target.agent_id, pending.oplog_index);
             assert!(
-                Utc::now() < due,
+                jiff::Timestamp::now() < due,
                 "the selection gate must precede the deadline"
             );
             tokio::time::timeout(Duration::from_secs(30), selected)
@@ -9953,7 +10340,7 @@ async fn scheduled_cancellation_linearizes_with_invocation_start(
                 .gate_next_invocation_started_append(&target.agent_id)
                 .await;
             assert!(
-                Utc::now() < due,
+                jiff::Timestamp::now() < due,
                 "the Started gate must precede the deadline"
             );
             assert!(
@@ -10079,7 +10466,8 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         |key: &golem_common::model::InvocationId, value: u64| AgentInvocation::AgentMethod {
             idempotency_key: *key,
             method_name: "inc_global_by".to_string(),
-            input: data_value!(value).into_parts().1,
+            allow_streams: false,
+            input: data_value!(value).into_parts().1.try_into().unwrap(),
             invocation_context: InvocationContextStack::fresh(),
             caller: callers::agent(
                 owner.agent_id,
@@ -10089,7 +10477,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         };
     let owned = target.clone();
     let key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
-    let due = Utc::now() + chrono::Duration::seconds(5);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(5);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let receipt = worker
         .schedule_invocation(invocation(&key, 71), due)
@@ -10153,7 +10541,7 @@ async fn cancelled_schedule_retry_stays_cancelled_after_restart(
         }
     })
     .await??;
-    assert!(Utc::now() >= due);
+    assert!(jiff::Timestamp::now() >= due);
     assert_eq!(
         worker
             .schedule_invocation(invocation(&key, 71), due)
@@ -10228,14 +10616,15 @@ async fn scheduled_cancellation_by_another_agent_is_refused(
         .await?;
     let owned = target.clone();
     let key = golem_common::model::InvocationId(uuid::Uuid::new_v4());
-    let due = Utc::now() + chrono::Duration::seconds(5);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_secs(5);
     let worker = executor.active_agent(&owned).await.unwrap().primary();
     let receipt = worker
         .schedule_invocation(
             AgentInvocation::AgentMethod {
                 idempotency_key: key,
                 method_name: "inc_global_by".to_string(),
-                input: data_value!(37u64).into_parts().1,
+                input: data_value!(37u64).into_parts().1.try_into().unwrap(),
+                allow_streams: false,
                 invocation_context: InvocationContextStack::fresh(),
                 caller: callers::agent(
                     owner.agent_id,
@@ -10317,13 +10706,13 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
         anyhow::Ok(())
     })
     .await??;
-    let due = Utc::now() + chrono::Duration::hours(1);
+    let due = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(1);
     executor
         .invoke_and_await_agent(
             &component,
             &caller,
             "schedule_at",
-            data_value!(server_name.to_string(), due.timestamp() as u64, 0u32),
+            data_value!(server_name.to_string(), due.as_second() as u64, 0u32),
         )
         .await?;
     assert!(!executor.worker_is_loaded(&owned).await);
@@ -10337,7 +10726,7 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
     let key = *scheduled[0].idempotency_key().unwrap();
     assert_eq!(
         scheduled[0].not_before.unwrap().to_millis(),
-        due.timestamp() as u64 * 1000
+        due.as_second() as u64 * 1000
     );
     let fingerprint = executor.get_worker_metadata(&target).await?.fingerprint;
     let receipt = ScheduleId::for_invocation(fingerprint, &key);
@@ -10403,7 +10792,8 @@ async fn guest_schedule_cancellation_survives_restart_and_stale_wakes(
                 AgentInvocation::AgentMethod {
                     idempotency_key: key,
                     method_name: "inc_global_by".to_string(),
-                    input: data_value!(91u64).into_parts().1,
+                    allow_streams: false,
+                    input: data_value!(91u64).into_parts().1.try_into().unwrap(),
                     invocation_context: InvocationContextStack::fresh(),
                     caller: callers::agent(caller_id.agent_id, caller.agent_type.clone()),
                     scope_card: None,
@@ -10717,6 +11107,7 @@ async fn worker_created_by_reflects_component_owner_not_caller(
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
+            invocation: None,
         })
         .await?
         .into_inner();
@@ -10814,6 +11205,7 @@ async fn create_rejects_an_environment_that_does_not_own_the_component(
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
+            invocation: None,
         })
         .await?
         .into_inner();
@@ -10954,6 +11346,7 @@ async fn resource_limits_initialized_for_component_owner_not_caller(
             invocation_context: None,
             idempotency_key: None,
             freshness_disposition: 0,
+            invocation: None,
         })
         .await?
         .into_inner();
@@ -12514,7 +12907,7 @@ async fn send_increment(
         ),
         mode: mode as i32,
         schedule_at: delayed.then(|| prost_types::Timestamp {
-            seconds: chrono::Utc::now().timestamp() + 3600,
+            seconds: jiff::Timestamp::now().as_second() + 3600,
             nanos: 0,
         }),
         idempotency_key: Some(IdempotencyKey::fresh().into()),
@@ -12784,7 +13177,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
         async fn insert(
             &self,
             id: ScheduleId,
-            due: chrono::DateTime<Utc>,
+            due: jiff::Timestamp,
             shard: ShardId,
             action: &[u8],
         ) -> Result<(), SchedulerStorageError> {
@@ -12797,7 +13190,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
 
         async fn claim_due(
             &self,
-            now: chrono::DateTime<Utc>,
+            now: jiff::Timestamp,
             assignment: &ShardAssignment,
             limit: u32,
             ttl: Duration,
@@ -12822,7 +13215,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
 
         async fn count_due(
             &self,
-            now: chrono::DateTime<Utc>,
+            now: jiff::Timestamp,
             assignment: &ShardAssignment,
         ) -> Result<u64, SchedulerStorageError> {
             self.inner.count_due(now, assignment).await
@@ -12832,8 +13225,8 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             &self,
             id: &ScheduleId,
             owner: uuid::Uuid,
-            until: chrono::DateTime<Utc>,
-            now: chrono::DateTime<Utc>,
+            until: jiff::Timestamp,
+            now: jiff::Timestamp,
         ) -> Result<bool, SchedulerStorageError> {
             self.inner.extend_lease(id, owner, until, now).await
         }
@@ -12842,7 +13235,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             &self,
             id: &ScheduleId,
             owner: uuid::Uuid,
-            now: chrono::DateTime<Utc>,
+            now: jiff::Timestamp,
         ) -> Result<bool, SchedulerStorageError> {
             if self.wakes.lock().unwrap().contains(id) {
                 self.wake_acked.store(true, Ordering::Release);
@@ -12938,7 +13331,7 @@ async fn calls_after_a_failed_deletion_get_the_deletion_refusal_without_a_panic(
             ),
             mode: golem_api_grpc::proto::golem::worker::AgentInvocationMode::Schedule as i32,
             schedule_at: Some(prost_types::Timestamp {
-                seconds: chrono::Utc::now().timestamp() + 1,
+                seconds: jiff::Timestamp::now().as_second() + 1,
                 nanos: 0,
             }),
             idempotency_key: Some(IdempotencyKey::fresh().into()),

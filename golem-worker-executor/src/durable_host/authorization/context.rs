@@ -234,7 +234,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .state
             .published_authority_generation
             .load(Ordering::Acquire);
-        let now = Utc::now();
+        let now = jiff::Timestamp::now();
         if self.state.authority().is_current_at(
             self.state.card_interest_index.authority_is_open(),
             published_generation,
@@ -284,7 +284,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     .published_authority_generation
                     .load(Ordering::Acquire),
                 self.state.authority().next_expiration(),
-                Utc::now(),
+                jiff::Timestamp::now(),
             )
     }
 
@@ -353,7 +353,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .state
             .published_authority_generation
             .load(Ordering::Acquire);
-        let now = Utc::now();
+        let now = jiff::Timestamp::now();
         if self.state.authority().is_current_at(
             self.state.card_interest_index.authority_is_open(),
             published_generation,
@@ -620,6 +620,16 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .entries()
             .map(|(key, entry)| {
                 let wallet = self.authority_wallet_cards();
+                let admitted_surface = match &self.runtime {
+                    OwnerRuntime::Agent => entry.authority.hidden_scope_card().map(|card| {
+                        golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
+                            &context,
+                            self.authority_wallet_cards(),
+                            Some(card),
+                        )
+                    }),
+                    OwnerRuntime::Entity(_) => None,
+                };
                 let surface = match &self.runtime {
                     OwnerRuntime::Agent => {
                         golem_common::model::card::agent_effective_surface_from_wallet_and_scope(
@@ -641,15 +651,13 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                         }
                     },
                 };
-                (*key, surface)
+                (*key, surface, admitted_surface)
             })
             .collect::<Vec<_>>();
-        for (key, surface) in surfaces {
-            self.state
-                .invocations
-                .entry_mut(key)
-                .authority
-                .replace_surface(surface);
+        for (key, surface, admitted_surface) in surfaces {
+            let authority = &mut self.state.invocations.entry_mut(key).authority;
+            authority.replace_surface(surface);
+            authority.replace_admitted_surface(admitted_surface);
         }
     }
 
@@ -698,7 +706,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     Some(root_states) => scope.check_roots(root_states)?,
                     None => true,
                 };
-                !all_live || scope.roots_expired(Utc::now())
+                !all_live || scope.roots_expired(jiff::Timestamp::now())
             }
             None => false,
         };
@@ -836,7 +844,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     async fn remove_expired_invocation_scope_roots(&mut self) -> Result<(), WorkerExecutorError> {
         let expired_root_ids = expired_wallet_card_ids_at(
             self.state.authority().scope_root_cards().values(),
-            Utc::now(),
+            jiff::Timestamp::now(),
         );
         if !expired_root_ids.is_empty() {
             self.apply_card_revoked_cascade(
@@ -966,7 +974,7 @@ impl InheritedInvocationScope {
             .any(|root_id| card_ids.contains(root_id))
     }
 
-    pub(in crate::durable_host) fn roots_expired(&self, now: DateTime<Utc>) -> bool {
+    pub(in crate::durable_host) fn roots_expired(&self, now: jiff::Timestamp) -> bool {
         self.roots
             .as_ref()
             .is_some_and(|roots| !expired_wallet_card_ids_at(roots.values(), now).is_empty())
@@ -1170,8 +1178,8 @@ pub(crate) fn authority_snapshot_is_current_at(
     authority_open: bool,
     processed_generation: u64,
     published_generation: u64,
-    next_expiration: Option<DateTime<Utc>>,
-    now: DateTime<Utc>,
+    next_expiration: Option<jiff::Timestamp>,
+    now: jiff::Timestamp,
 ) -> bool {
     initialized
         && authority_open
@@ -1348,7 +1356,7 @@ pub(crate) fn remove_wallet_cards(
 
 pub(in crate::durable_host) fn expired_wallet_card_ids_at<'a>(
     cards: impl IntoIterator<Item = &'a StoredCard>,
-    now: DateTime<Utc>,
+    now: jiff::Timestamp,
 ) -> Vec<CardId> {
     cards
         .into_iter()
@@ -1543,7 +1551,7 @@ mod tests {
             lower_negative: Vec::new(),
             upper_positive: Vec::new(),
             upper_negative: Vec::new(),
-            created_at: Utc::now(),
+            created_at: jiff::Timestamp::now(),
             expires_at: None,
             system_card: false,
         });

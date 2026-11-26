@@ -62,6 +62,7 @@ use golem_common::model::{
     AgentId, AgentInvocationOutput, AgentStatusRecord, InvocationId, OplogIndex, OwnedAgentId,
 };
 use golem_common::resource_runtime::ResourceStore;
+use golem_common::schema::SchemaValue;
 use golem_service_base::error::worker_executor::{InterruptKind, WorkerExecutorError};
 use golem_service_base::model::GetFileSystemNodeResult;
 use golem_service_base::model::component::Component;
@@ -127,6 +128,17 @@ pub trait EntityInvocationBodyHook: Send + Sync {
 #[async_trait]
 pub trait EntityReconstructionClaimHook: Send + Sync {
     async fn after_claim(&self, start_index: OplogIndex);
+}
+
+/// When an invocation records its result.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ResultRecordedAt {
+    /// At the export's return, before the background work of the invocation drains. The end of
+    /// the drain then disposes the producers, checks the custom durable scopes and releases the
+    /// retained `Start`s.
+    ExportReturn,
+    /// After the work of the invocation settled, on the settled path.
+    Settlement,
 }
 
 /// Where a replaying accessor durable call is paused relative to its scope admission.
@@ -490,9 +502,12 @@ pub trait StatusManagement {
 pub trait InvocationHooks {
     /// Called when a worker is about to be invoked. Returns false if the pending invocation
     /// was removed before it could start; the caller must skip execution and result persistence.
+    /// `input` is the lowered initializer, method or tool input for execution. The hydrated
+    /// invocation retains the original persisted request independently of this value.
     fn on_agent_invocation_started(
         &mut self,
         invocation: crate::worker::HydratedInvocation,
+        input: Option<&SchemaValue>,
     ) -> impl Future<Output = Result<bool, WorkerExecutorError>> + Send;
 
     /// Clears invocation-scoped runtime state after the guest call returns or traps.
@@ -510,6 +525,7 @@ pub trait InvocationHooks {
         &mut self,
         full_function_name: &str,
         error: AgentError,
+        recorded_at: ResultRecordedAt,
     ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send;
 
     /// Called when an agent invocation succeeds, with the typed result directly.
@@ -517,12 +533,14 @@ pub trait InvocationHooks {
     /// The implementation may populate fields on `output` that are only known
     /// after the success has been persisted to the oplog — for example
     /// `oplog_index` and `agent_fingerprint` derived from the committed
-    /// `AgentInvocationFinished` entry.
+    /// `AgentInvocationFinished` entry. It must not change `output.result`: the invocation
+    /// returns that value.
     fn on_agent_invocation_success(
         &mut self,
         full_function_name: &str,
         consumed_fuel: u64,
         output: &mut AgentInvocationOutput,
+        recorded_at: ResultRecordedAt,
     ) -> impl Future<Output = Result<(), WorkerExecutorError>> + Send;
 
     /// Gets the retry point that should be associated with a current error. Errors are grouped

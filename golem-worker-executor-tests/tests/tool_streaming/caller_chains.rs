@@ -289,7 +289,7 @@ impl Rpc for HoldReportAnswerRpc {
         expected_fingerprint: AgentFingerprint,
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
-        scheduled_at: chrono::DateTime<chrono::Utc>,
+        scheduled_at: jiff::Timestamp,
         self_agent_id: &AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
@@ -340,6 +340,7 @@ impl Rpc for HoldReportAnswerRpc {
         &self,
         target: ResolvedTarget,
         method_name: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         self_created_by: AccountId,
         self_agent_id: &AgentId,
         self_env: &[(String, String)],
@@ -354,6 +355,7 @@ impl Rpc for HoldReportAnswerRpc {
             .create_demand(
                 target,
                 method_name,
+                invocation,
                 self_created_by,
                 self_agent_id,
                 self_env,

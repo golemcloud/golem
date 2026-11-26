@@ -677,6 +677,10 @@ paths:
       tags:
       - Worker
       summary: Get the oplog of an agent
+      description: |-
+        Each recorded invocation shows its caller: the principal that started the chain, the
+        principal that made the call, and the tokens presented at the entry point. With
+        `include=claims`, the users among the callers also show their verified claims.
       parameters:
       - name: environment_id
         schema:
@@ -720,6 +724,13 @@ paths:
       - name: query
         schema:
           type: string
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: include
+        schema:
+          $ref: '#/components/schemas/OplogInclude'
         in: query
         required: false
         deprecated: false
@@ -833,7 +844,8 @@ paths:
         Oplog pages omit entries whose encoded form is larger than a server limit, and describe
         them by their type, timestamp, size and component revision. This endpoint returns such an
         entry in full. Pass the component revision of the description to save the server from
-        scanning the oplog for it.
+        scanning the oplog for it. With `include=claims`, the users among the callers also show
+        their verified claims.
       parameters:
       - name: environment_id
         schema:
@@ -863,6 +875,13 @@ paths:
         schema:
           type: integer
           format: uint64
+        in: query
+        required: false
+        deprecated: false
+        explode: true
+      - name: include
+        schema:
+          $ref: '#/components/schemas/OplogInclude'
         in: query
         required: false
         deprecated: false
@@ -3144,6 +3163,13 @@ paths:
       operationId: cancel_invocation
 components:
   schemas:
+    AccountAuthentication:
+      type: string
+      description: How an account authenticated.
+      enum:
+      - apiToken
+      - bootstrapToken
+      - signIn
     AccountCardHolder:
       type: object
       title: AccountCardHolder
@@ -3443,6 +3469,7 @@ components:
       - traceId
       - traceStates
       - invocationContext
+      - caller
       properties:
         invocationId:
           type: string
@@ -3461,6 +3488,8 @@ components:
             type: array
             items:
               $ref: '#/components/schemas/PublicSpanData'
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
     AgentInvocationMode:
       type: string
       enum:
@@ -3518,6 +3547,8 @@ components:
         componentRevision:
           type: integer
           format: uint64
+        backgroundFailure:
+          $ref: '#/components/schemas/InvocationFailure'
     AgentKeyFilter:
       type: object
       title: AgentKeyFilter
@@ -3547,6 +3578,7 @@ components:
       required:
       - agentId
       - ownerKind
+      - origin
       - environmentId
       - createdBy
       - env
@@ -3576,6 +3608,11 @@ components:
         canonicalKey:
           type: string
           description: The canonical key text of a keyed agent. An agent without a key has none.
+        origin:
+          description: 'How the agent came to exist: keyed, created without a key, or forked.'
+          allOf:
+          - $ref: '#/components/schemas/AgentOrigin'
+          - description: 'How the agent came to exist: keyed, created without a key, or forked.'
         constructorParameters:
           type: string
           description: |-
@@ -3675,6 +3712,7 @@ components:
       - traceId
       - traceStates
       - invocationContext
+      - caller
       properties:
         invocationId:
           type: string
@@ -3682,7 +3720,16 @@ components:
         methodName:
           type: string
         functionInput:
-          $ref: '#/components/schemas/TypedSchemaValue'
+          description: |-
+            Component-independent original-method-input diagnostic envelope, not the executed
+            method's input schema. Captured JSON fields include rejected values; native
+            host capabilities are redacted before encoding.
+          allOf:
+          - $ref: '#/components/schemas/TypedSchemaValue'
+          - description: |-
+              Component-independent original-method-input diagnostic envelope, not the executed
+              method's input schema. Captured JSON fields include rejected values; native
+              host capabilities are redacted before encoding.
         traceId:
           type: string
         traceStates:
@@ -3695,6 +3742,8 @@ components:
             type: array
             items:
               $ref: '#/components/schemas/PublicSpanData'
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
     AgentMode:
       type: string
       enum:
@@ -3729,6 +3778,13 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AgentFilter'
+    AgentOrigin:
+      type: string
+      description: How an agent came to exist.
+      enum:
+      - keyed
+      - created
+      - forked
     AgentReference:
       type: object
       title: AgentReference
@@ -5886,6 +5942,7 @@ components:
       - traceId
       - traceStates
       - invocationContext
+      - caller
       properties:
         invocationId:
           type: string
@@ -5910,6 +5967,8 @@ components:
             type: array
             items:
               $ref: '#/components/schemas/PublicSpanData'
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
     ExternalToolResultParameters:
       type: object
       title: ExternalToolResultParameters
@@ -6329,8 +6388,8 @@ components:
       type: object
       title: Invocation
       description: |-
-        An invocation with its result. `result` is present once the invocation is `completed` or
-        `failed`; a completed constructor run has no result.
+        An invocation with its result. `result` is present once the invocation is `completed`,
+        `background-failed` or `failed`; a completed constructor run has no result.
       required:
       - summary
       properties:
@@ -6338,6 +6397,19 @@ components:
           $ref: '#/components/schemas/InvocationSummary'
         result:
           $ref: '#/components/schemas/InvocationOutcome'
+    InvocationBackgroundFailure:
+      type: object
+      title: InvocationBackgroundFailure
+      description: |-
+        The recorded result of an invocation, and the failure of the agent during the invocation's
+        background work after it. `value` is absent for the constructor run.
+      required:
+      - error
+      properties:
+        value:
+          $ref: '#/components/schemas/ExternalTypedSchemaValue'
+        error:
+          type: string
     InvocationFailure:
       type: object
       title: InvocationFailure
@@ -6376,12 +6448,26 @@ components:
       - $ref: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
       - $ref: '#/components/schemas/InvocationOutcome_InvocationToolResult'
       - $ref: '#/components/schemas/InvocationOutcome_InvocationFailure'
+      - $ref: '#/components/schemas/InvocationOutcome_InvocationBackgroundFailure'
       discriminator:
         propertyName: type
         mapping:
           Method: '#/components/schemas/InvocationOutcome_InvocationMethodResult'
           Tool: '#/components/schemas/InvocationOutcome_InvocationToolResult'
           Failure: '#/components/schemas/InvocationOutcome_InvocationFailure'
+          BackgroundFailure: '#/components/schemas/InvocationOutcome_InvocationBackgroundFailure'
+    InvocationOutcome_InvocationBackgroundFailure:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - BackgroundFailure
+            example: BackgroundFailure
+      - $ref: '#/components/schemas/InvocationBackgroundFailure'
     InvocationOutcome_InvocationFailure:
       allOf:
       - type: object
@@ -6442,6 +6528,7 @@ components:
       - retrying
       - interrupted
       - completed
+      - background-failed
       - failed
       - cancelled
     InvocationStatus:
@@ -6514,9 +6601,12 @@ components:
       title: LoadSnapshotParameters
       required:
       - snapshot
+      - caller
       properties:
         snapshot:
           $ref: '#/components/schemas/PublicSnapshotData'
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
     LogLevel:
       type: string
       description: Worker log levels including the special stdout and stderr channels
@@ -6545,10 +6635,16 @@ components:
       title: ManualUpdateParameters
       required:
       - targetRevision
+      - requester
       properties:
         targetRevision:
           type: integer
           format: uint64
+        requester:
+          description: Who asked for the update. It is not the caller of the update's snapshot save.
+          allOf:
+          - $ref: '#/components/schemas/PublicCaller'
+          - description: Who asked for the update. It is not the caller of the update's snapshot save.
     MetadataEnvelope:
       type: object
       properties:
@@ -6901,6 +6997,11 @@ components:
       enum:
       - invocation
       - recovery
+    OplogInclude:
+      type: string
+      description: What a reader of an oplog asks to include beyond the default public form.
+      enum:
+      - claims
     OplogRegion:
       type: object
       title: OplogRegion
@@ -7049,6 +7150,27 @@ components:
       - component-agent
       - ephemeral-external-tool
       - oplog-processor
+    Pair:
+      type: object
+      title: Pair
+      description: |-
+        One identity: an issuer and a subject.
+
+        Two pairs are equal exactly when both strings are equal byte for byte. Nothing folds case or
+        normalizes a trailing slash or Unicode text: OpenID Connect compares both as exact strings,
+        so a normalization would merge two users or split one.
+
+        The text form is `("<issuer>","<subject>")` with no spaces.
+        Each string is escaped as RFC 8785 serializes JSON strings, and the parser refuses every other
+        spelling, so two texts are equal exactly when their pairs are equal.
+      required:
+      - issuer
+      - subject
+      properties:
+        issuer:
+          type: string
+        subject:
+          type: string
     PathDirection:
       type: string
       enum:
@@ -7290,16 +7412,34 @@ components:
       title: ProcessOplogEntriesParameters
       required:
       - invocationId
+      - caller
       properties:
         invocationId:
           type: string
           format: uuid
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
     ProcessOplogEntriesResultParameters:
       type: object
       title: ProcessOplogEntriesResultParameters
       properties:
         error:
           type: string
+    PublicAccountPrincipal:
+      type: object
+      title: PublicAccountPrincipal
+      required:
+      - pair
+      - accountId
+      - authentication
+      properties:
+        pair:
+          $ref: '#/components/schemas/Pair'
+        accountId:
+          type: string
+          format: uuid
+        authentication:
+          $ref: '#/components/schemas/AccountAuthentication'
     PublicAgentEntity:
       type: object
       title: PublicAgentEntity
@@ -7322,7 +7462,7 @@ components:
       - $ref: '#/components/schemas/PublicAgentInvocation_AgentInitializationParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_AgentMethodInvocationParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_ExternalToolInvocationParameters'
-      - $ref: '#/components/schemas/PublicAgentInvocation_Empty'
+      - $ref: '#/components/schemas/PublicAgentInvocation_SaveSnapshotParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_LoadSnapshotParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_ProcessOplogEntriesParameters'
       - $ref: '#/components/schemas/PublicAgentInvocation_ManualUpdateParameters'
@@ -7332,7 +7472,7 @@ components:
           AgentInitialization: '#/components/schemas/PublicAgentInvocation_AgentInitializationParameters'
           AgentMethodInvocation: '#/components/schemas/PublicAgentInvocation_AgentMethodInvocationParameters'
           ExternalTool: '#/components/schemas/PublicAgentInvocation_ExternalToolInvocationParameters'
-          SaveSnapshot: '#/components/schemas/PublicAgentInvocation_Empty'
+          SaveSnapshot: '#/components/schemas/PublicAgentInvocation_SaveSnapshotParameters'
           LoadSnapshot: '#/components/schemas/PublicAgentInvocation_LoadSnapshotParameters'
           ProcessOplogEntries: '#/components/schemas/PublicAgentInvocation_ProcessOplogEntriesParameters'
           ManualUpdate: '#/components/schemas/PublicAgentInvocation_ManualUpdateParameters'
@@ -7452,18 +7592,6 @@ components:
             - AgentMethodInvocation
             example: AgentMethodInvocation
       - $ref: '#/components/schemas/AgentMethodInvocationParameters'
-    PublicAgentInvocation_Empty:
-      allOf:
-      - type: object
-        required:
-        - type
-        properties:
-          type:
-            type: string
-            enum:
-            - SaveSnapshot
-            example: SaveSnapshot
-      - $ref: '#/components/schemas/Empty'
     PublicAgentInvocation_ExternalToolInvocationParameters:
       allOf:
       - type: object
@@ -7512,6 +7640,38 @@ components:
             - ProcessOplogEntries
             example: ProcessOplogEntries
       - $ref: '#/components/schemas/ProcessOplogEntriesParameters'
+    PublicAgentInvocation_SaveSnapshotParameters:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - SaveSnapshot
+            example: SaveSnapshot
+      - $ref: '#/components/schemas/SaveSnapshotParameters'
+    PublicAgentPrincipal:
+      type: object
+      title: PublicAgentPrincipal
+      required:
+      - pair
+      - agentId
+      - agentType
+      - environmentId
+      properties:
+        pair:
+          $ref: '#/components/schemas/Pair'
+        agentId:
+          type: string
+          format: uuid
+          description: 'The agent''s ID today: its component and its name.'
+        agentType:
+          type: string
+        environmentId:
+          type: string
+          format: uuid
     PublicAttribute:
       type: object
       title: PublicAttribute
@@ -7543,6 +7703,33 @@ components:
             - String
             example: String
       - $ref: '#/components/schemas/StringAttributeValue'
+    PublicCaller:
+      type: object
+      title: PublicCaller
+      description: |-
+        The public form of a caller. Both roles are always present, also when they are the same
+        principal. It holds no credential, and it holds claims only when the reader asks for them
+        (`include=claims`).
+      required:
+      - original
+      - immediate
+      - tokens
+      properties:
+        original:
+          description: The principal that started the chain.
+          allOf:
+          - $ref: '#/components/schemas/PublicPrincipal'
+          - description: The principal that started the chain.
+        immediate:
+          description: The principal that made this call.
+          allOf:
+          - $ref: '#/components/schemas/PublicPrincipal'
+          - description: The principal that made this call.
+        tokens:
+          type: array
+          description: The tokens that the request presented at the entry point, with their makers.
+          items:
+            $ref: '#/components/schemas/PublicTokenProvenance'
     PublicDurableFunctionType:
       type: object
       oneOf:
@@ -7765,6 +7952,7 @@ components:
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
+      - $ref: '#/components/schemas/PublicOplogEntry_r#AgentInvocationSettledParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
       - $ref: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -7826,6 +8014,7 @@ components:
           AgentInvocationStarted: '#/components/schemas/PublicOplogEntry_r#AgentInvocationStartedParams'
           AgentInvocationFinished: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFinishedParams'
           AgentInvocationFailed: '#/components/schemas/PublicOplogEntry_r#AgentInvocationFailedParams'
+          AgentInvocationSettled: '#/components/schemas/PublicOplogEntry_r#AgentInvocationSettledParams'
           Suspend: '#/components/schemas/PublicOplogEntry_r#SuspendParams'
           Error: '#/components/schemas/PublicOplogEntry_r#ErrorParams'
           RecoverySucceeded: '#/components/schemas/PublicOplogEntry_r#RecoverySucceededParams'
@@ -7962,6 +8151,18 @@ components:
             - AgentInvocationFinished
             example: AgentInvocationFinished
       - $ref: '#/components/schemas/r#AgentInvocationFinishedParams'
+    PublicOplogEntry_r#AgentInvocationSettledParams:
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - AgentInvocationSettled
+            example: AgentInvocationSettled
+      - $ref: '#/components/schemas/r#AgentInvocationSettledParams'
     PublicOplogEntry_r#AgentInvocationStartedParams:
       allOf:
       - type: object
@@ -8665,6 +8866,88 @@ components:
             - Included
             example: Included
       - $ref: '#/components/schemas/PublicOplogEntryWithIndex'
+    PublicPrincipal:
+      type: object
+      description: The public form of one principal, with the details that Golem verified for it.
+      oneOf:
+      - $ref: '#/components/schemas/PublicPrincipal_PublicUserPrincipal'
+      - $ref: '#/components/schemas/PublicPrincipal_PublicAccountPrincipal'
+      - $ref: '#/components/schemas/PublicPrincipal_PublicAgentPrincipal'
+      - $ref: '#/components/schemas/PublicPrincipal_PublicToolPrincipal'
+      - $ref: '#/components/schemas/PublicPrincipal_Empty'
+      discriminator:
+        propertyName: kind
+        mapping:
+          user: '#/components/schemas/PublicPrincipal_PublicUserPrincipal'
+          account: '#/components/schemas/PublicPrincipal_PublicAccountPrincipal'
+          agent: '#/components/schemas/PublicPrincipal_PublicAgentPrincipal'
+          tool: '#/components/schemas/PublicPrincipal_PublicToolPrincipal'
+          anonymous: '#/components/schemas/PublicPrincipal_Empty'
+    PublicPrincipal_Empty:
+      description: The public form of one principal, with the details that Golem verified for it.
+      allOf:
+      - type: object
+        required:
+        - kind
+        properties:
+          kind:
+            type: string
+            enum:
+            - anonymous
+            example: anonymous
+      - $ref: '#/components/schemas/Empty'
+    PublicPrincipal_PublicAccountPrincipal:
+      description: The public form of one principal, with the details that Golem verified for it.
+      allOf:
+      - type: object
+        required:
+        - kind
+        properties:
+          kind:
+            type: string
+            enum:
+            - account
+            example: account
+      - $ref: '#/components/schemas/PublicAccountPrincipal'
+    PublicPrincipal_PublicAgentPrincipal:
+      description: The public form of one principal, with the details that Golem verified for it.
+      allOf:
+      - type: object
+        required:
+        - kind
+        properties:
+          kind:
+            type: string
+            enum:
+            - agent
+            example: agent
+      - $ref: '#/components/schemas/PublicAgentPrincipal'
+    PublicPrincipal_PublicToolPrincipal:
+      description: The public form of one principal, with the details that Golem verified for it.
+      allOf:
+      - type: object
+        required:
+        - kind
+        properties:
+          kind:
+            type: string
+            enum:
+            - tool
+            example: tool
+      - $ref: '#/components/schemas/PublicToolPrincipal'
+    PublicPrincipal_PublicUserPrincipal:
+      description: The public form of one principal, with the details that Golem verified for it.
+      allOf:
+      - type: object
+        required:
+        - kind
+        properties:
+          kind:
+            type: string
+            enum:
+            - user
+            example: user
+      - $ref: '#/components/schemas/PublicUserPrincipal'
     PublicQueuedCardEvent:
       type: object
       oneOf:
@@ -9140,6 +9423,20 @@ components:
             $ref: '#/components/schemas/PublicAttribute'
         kind:
           $ref: '#/components/schemas/PublicSpanKind'
+    PublicTokenProvenance:
+      type: object
+      title: PublicTokenProvenance
+      description: |-
+        A token that the request presented, with the pair of its maker. It never holds the token's
+        value.
+      required:
+      - id
+      properties:
+        id:
+          type: string
+          format: uuid
+        maker:
+          $ref: '#/components/schemas/Pair'
     PublicToolInvocationOperation:
       type: object
       title: PublicToolInvocationOperation
@@ -9174,6 +9471,21 @@ components:
         declaresStderr:
           type: boolean
           description: Whether the tool declares stderr support. Stderr bytes are not recorded in the oplog.
+    PublicToolPrincipal:
+      type: object
+      title: PublicToolPrincipal
+      required:
+      - pair
+      - environmentId
+      - toolName
+      properties:
+        pair:
+          $ref: '#/components/schemas/Pair'
+        environmentId:
+          type: string
+          format: uuid
+        toolName:
+          type: string
     PublicTypedAgentConfigEntry:
       type: object
       title: PublicTypedAgentConfigEntry
@@ -9239,6 +9551,23 @@ components:
             - SnapshotBased
             example: SnapshotBased
       - $ref: '#/components/schemas/SnapshotBasedUpdateParameters'
+    PublicUserPrincipal:
+      type: object
+      title: PublicUserPrincipal
+      required:
+      - pair
+      - authenticatedAt
+      properties:
+        pair:
+          $ref: '#/components/schemas/Pair'
+        authenticatedAt:
+          type: string
+          format: date-time
+        claims:
+          type: object
+          description: |-
+            The verified claims, only when the reader asks for them (`include=claims`). The key is
+            absent otherwise.
     Quantifier:
       type: string
       enum:
@@ -9460,6 +9789,30 @@ components:
             in kind.
           items:
             $ref: '#/components/schemas/StartIdentityField'
+        replayStart:
+          description: |-
+            Where the replay that diverged started; `None` for a divergence outside a recovery replay,
+            such as the replay of an update.
+          allOf:
+          - $ref: '#/components/schemas/ReplayStart'
+          - description: |-
+              Where the replay that diverged started; `None` for a divergence outside a recovery replay,
+              such as the replay of an update.
+    ReplayFullStart:
+      type: object
+      title: ReplayFullStart
+      description: |-
+        A replay without a snapshot. `rejected_snapshots` holds the oplog indexes of the automatic
+        snapshots that the recovery rejected before it, in ascending order; it is empty when no
+        snapshot was involved.
+      required:
+      - rejectedSnapshots
+      properties:
+        rejectedSnapshots:
+          type: array
+          items:
+            type: integer
+            format: uint64
     ReplayHostCall:
       type: object
       title: ReplayHostCall
@@ -9483,6 +9836,10 @@ components:
         observationalOwner:
           type: integer
           format: uint64
+        driver:
+          type: integer
+          format: uint64
+          description: The invocation that drives the call when it is not the invocation the call belongs to.
         carriesRequest:
           type: boolean
           description: |-
@@ -9493,6 +9850,68 @@ components:
           allOf:
           - $ref: '#/components/schemas/TypedSchemaValue'
           - description: The request of the call, when it is known.
+    ReplaySnapshotStart:
+      type: object
+      title: ReplaySnapshotStart
+      description: |-
+        A replay that started from the snapshot at `snapshot_index`. `rejected_snapshots` holds the
+        oplog indexes of the automatic snapshots that the recovery rejected before it, in ascending
+        order.
+      required:
+      - snapshotIndex
+      - rejectedSnapshots
+      properties:
+        snapshotIndex:
+          type: integer
+          format: uint64
+        rejectedSnapshots:
+          type: array
+          items:
+            type: integer
+            format: uint64
+    ReplayStart:
+      type: object
+      description: |-
+        Where a recovery replay started: from a loaded snapshot or without a snapshot, each with
+        the automatic snapshots that the recovery rejected before it.
+      oneOf:
+      - $ref: '#/components/schemas/ReplayStart_ReplaySnapshotStart'
+      - $ref: '#/components/schemas/ReplayStart_ReplayFullStart'
+      discriminator:
+        propertyName: type
+        mapping:
+          Snapshot: '#/components/schemas/ReplayStart_ReplaySnapshotStart'
+          FullReplay: '#/components/schemas/ReplayStart_ReplayFullStart'
+    ReplayStart_ReplayFullStart:
+      description: |-
+        Where a recovery replay started: from a loaded snapshot or without a snapshot, each with
+        the automatic snapshots that the recovery rejected before it.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - FullReplay
+            example: FullReplay
+      - $ref: '#/components/schemas/ReplayFullStart'
+    ReplayStart_ReplaySnapshotStart:
+      description: |-
+        Where a recovery replay started: from a loaded snapshot or without a snapshot, each with
+        the automatic snapshots that the recovery rejected before it.
+      allOf:
+      - type: object
+        required:
+        - type
+        properties:
+          type:
+            type: string
+            enum:
+            - Snapshot
+            example: Snapshot
+      - $ref: '#/components/schemas/ReplaySnapshotStart'
     ReplayStep:
       type: object
       description: |-
@@ -9702,6 +10121,14 @@ components:
             - other
           value:
             type: string
+    SaveSnapshotParameters:
+      type: object
+      title: SaveSnapshotParameters
+      required:
+      - caller
+      properties:
+        caller:
+          $ref: '#/components/schemas/PublicCaller'
     SaveSnapshotResultParameters:
       type: object
       title: SaveSnapshotResultParameters
@@ -11156,6 +11583,7 @@ components:
       - observational-owner
       - request-presence
       - parent
+      - driver
     StoredCard:
       type: object
       oneOf:
@@ -11712,6 +12140,23 @@ components:
         componentRevision:
           type: integer
           format: uint64
+    r#AgentInvocationSettledParams:
+      type: object
+      title: r#AgentInvocationSettledParams
+      required:
+      - timestamp
+      - invocationId
+      - consumedFuel
+      properties:
+        timestamp:
+          type: string
+          format: date-time
+        invocationId:
+          type: string
+          format: uuid
+        consumedFuel:
+          type: integer
+          format: int64
     r#AgentInvocationStartedParams:
       type: object
       title: r#AgentInvocationStartedParams
@@ -12366,6 +12811,7 @@ components:
       - targetRevision
       - description
       - updateAttemptIndex
+      - requester
       properties:
         timestamp:
           type: string
@@ -12378,6 +12824,8 @@ components:
         updateAttemptIndex:
           type: integer
           format: uint64
+        requester:
+          $ref: '#/components/schemas/PublicCaller'
     r#PreCommitRemoteTransactionParams:
       type: object
       title: r#PreCommitRemoteTransactionParams
@@ -12542,6 +12990,9 @@ components:
         invocationId:
           $ref: '#/components/schemas/DurableInvocationId'
         observationalOwner:
+          type: integer
+          format: uint64
+        driver:
           type: integer
           format: uint64
         request:

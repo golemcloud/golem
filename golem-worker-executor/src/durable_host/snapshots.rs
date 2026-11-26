@@ -13,7 +13,7 @@
 // limitations under the License.
 
 use super::*;
-use golem_common::model::caller::Caller;
+use crate::golem_started::GolemStartedWork;
 
 impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
     /// Best-effort mid-invocation clean status checkpoint. Called from `end_durable_function` after
@@ -139,9 +139,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .set_current_idempotency_key(idempotency_key)
             .await;
 
-        // Nothing records this caller: the call is lowered and run directly, with no invocation
-        // entry. It is the value that the guest's caller() returns through its fallback.
-        let caller = Caller::entry(store.as_context().data().durable_ctx().self_principal());
+        let caller = GolemStartedWork::SelfInvocation {
+            agent: store.as_context().data().durable_ctx().self_principal(),
+        }
+        .caller();
         let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
             idempotency_key,
             snapshot: RawSnapshotData { data, mime_type },
@@ -151,6 +152,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             load_snapshot_invocation,
             &component_metadata,
             store.as_context().data().durable_ctx().owner_context(),
+            None,
         )
         .map_err(|err| {
             ManualLoadResult::Failed(format!(
@@ -178,7 +180,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .durable_ctx_mut()
             .begin_call_snapshotting_function();
 
-        let load_result = invoke_observed_and_traced(lowered, store, instance, None).await;
+        let load_result = invoke_observed_and_traced(lowered, store, instance, None, None).await;
         store.as_context_mut().data().set_suspended();
 
         store
@@ -425,9 +427,10 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .set_current_idempotency_key(idempotency_key)
             .await;
 
-        // Nothing records this caller: the call is lowered and run directly, with no invocation
-        // entry. It is the value that the guest's caller() returns through its fallback.
-        let caller = Caller::entry(store.as_context().data().durable_ctx().self_principal());
+        let caller = GolemStartedWork::SelfInvocation {
+            agent: store.as_context().data().durable_ctx().self_principal(),
+        }
+        .caller();
         let load_snapshot_invocation = AgentInvocation::LoadSnapshot {
             idempotency_key,
             snapshot: RawSnapshotData { data, mime_type },
@@ -437,6 +440,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             load_snapshot_invocation,
             &component_metadata,
             store.as_context().data().durable_ctx().owner_context(),
+            None,
         ) {
             Ok(lowered) => lowered,
             Err(err) => {
@@ -475,7 +479,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
             .durable_ctx_mut()
             .begin_call_snapshotting_function();
 
-        let load_result = invoke_observed_and_traced(lowered, store, instance, None).await;
+        let load_result = invoke_observed_and_traced(lowered, store, instance, None, None).await;
         store.as_context_mut().data().set_suspended();
 
         store

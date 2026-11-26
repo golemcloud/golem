@@ -26,10 +26,10 @@ use crate::model::invocation::{
     InvocationCancelView, InvocationGetMatchesView, InvocationGetView, InvocationListView,
 };
 use anyhow::{anyhow, bail};
-use chrono::{DateTime, Utc};
 use golem_client::api::InvocationClient;
 use golem_client::model::{InvocationKind, InvocationState};
 use golem_common::model::{AgentId, OwnedInvocationId};
+use jiff::Timestamp;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -105,8 +105,8 @@ impl InvocationCommandHandler {
         operation: Option<String>,
         status: Vec<InvocationStateArg>,
         kind: Option<InvocationKindArg>,
-        since: Option<DateTime<Utc>>,
-        until: Option<DateTime<Utc>>,
+        since: Option<Timestamp>,
+        until: Option<Timestamp>,
         page_size: Option<u32>,
         cursor: Option<String>,
     ) -> anyhow::Result<()> {
@@ -235,6 +235,7 @@ fn state(state: InvocationStateArg) -> InvocationState {
         InvocationStateArg::Retrying => InvocationState::Retrying,
         InvocationStateArg::Interrupted => InvocationState::Interrupted,
         InvocationStateArg::Completed => InvocationState::Completed,
+        InvocationStateArg::BackgroundFailed => InvocationState::BackgroundFailed,
         InvocationStateArg::Failed => InvocationState::Failed,
         InvocationStateArg::Cancelled => InvocationState::Cancelled,
     }
