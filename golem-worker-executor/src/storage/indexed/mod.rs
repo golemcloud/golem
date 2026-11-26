@@ -471,6 +471,14 @@ pub enum UnsealAgentResult {
 /// whose UUID uses the same canonical spelling. Postgres requires these formats and returns
 /// [`IndexedStorageError::Other`] for other keys; other backends may accept arbitrary strings.
 /// This restriction applies to index keys, not literal scan prefixes or marker bounds.
+///
+/// Indexed data in any namespace is the agent's authority; bare epoch rows and stage reservations
+/// are fences, not presence. Atomic release hands authority to a verified blob seal record;
+/// unseal restores it with a new marker generation. Readers compare whole-agent observations
+/// around reads to detect release/unseal ABA. Resident appends keep their exact-epoch fence.
+/// PostgreSQL serializes whole-agent transitions and unfenced mutations with a per-agent
+/// transaction advisory lock; fenced writers retain their epoch-row lock. SQLite serializes
+/// writers and memory uses one state lock. Redis and multi-SQLite do not support release.
 #[async_trait]
 pub trait IndexedStorage: Debug + Sync {
     /// Whether whole-agent transitions are atomic on this backend. Callers skip seal otherwise.

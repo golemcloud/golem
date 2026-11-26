@@ -148,6 +148,13 @@ fn validate_range(offset: u64, length: u64, total_size: u64) -> Result<(), Error
 /// change that passed that check becomes visible within one deadline; the SQLite backend runs a
 /// dropped statement that already reached its connection within one deadline; and the S3 server
 /// applies a request that it got in full within one deadline.
+///
+/// Seal records use [`Self::put_raw_if_absent_once`] and [`Self::list_page`], not an overwrite
+/// or compare-and-swap protocol. The PUT timeout bounds the client, not server visibility:
+/// tombstone collection separately assumes the configured `server_commit_bound`. Listings must
+/// be lexicographically ordered and supply backend timestamp resolution. A seal is admissible
+/// only when its listed modification time plus that resolution is within its key's deadline.
+/// S3 directory buckets, GCS's S3 interface and Garage do not meet the seal protocol requirements.
 #[async_trait]
 pub trait BlobStorage: sealed::Sealed + Debug + Send + Sync {
     /// Verifies the bytes even on a deduplication hit. A failed stream or digest mismatch

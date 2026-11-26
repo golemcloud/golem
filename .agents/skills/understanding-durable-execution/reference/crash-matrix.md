@@ -230,6 +230,29 @@ stages do not.
 | A deletion step is refused by the fence | whatever the deletion had committed | The attempt fails with `ShardingNotReady` and the generation stays cached in `Deleting` with its completed stages; a retry here is refused at entry, so no remote effect repeats, and stream cleanup confirms the epoch before reaching any other agent, since a re-run elsewhere finds its fenced records already written; the generation is evicted once the shard has left, and the owner finishes the delete | Epoch asserted by the cleanup commits and by the remove, which checks ownership before removing anything and deletes the oplog after everything it can rebuild |
 | The owner opens the same agent | the fenced executor's last accepted entries | Ordinary `prepare_instance` / `replay`, from committed history exactly as it was left | Nothing is acknowledged after the fence latched, and no entry is appended or deleted without the asserted epoch |
 
+## Seal, unseal and tombstone GC (`services/oplog/seal/`, `worker/persistence.rs`)
+
+Indexed data presence wins over records. Bare epoch rows and stage reservations are not presence. Reads revalidate presence and both marker generations around a whole authority attempt; a changed observation retries instead of accepting a release/unseal ABA gap.
+
+| Crash window | Durable state | Recovery and invariant |
+|---|---|---|
+| Seal PUT has no verdict, or its listed timestamp bucket ends after its fixed deadline | Indexed authority remains; a late record may appear | Never mark or release on an unknown or inadmissible PUT. A later attempt chooses sequence above every parsed key; readers ignore an inadmissible seal forever |
+| Seal record durable, before marker | Indexed data plus record | Indexed authority wins; scans can duplicate across stages but cannot lose the agent |
+| Marker written or KV copies partly deleted, before release; release refused | Indexed authority with marker and moved-data record | Rebuild derived caches. KV-first promise reads and rejected-set union fall back to the newest admissible seal of the pinned indexed fingerprint, even above/below a deletion head; reseal merges moved data |
+| Release committed, before old-record cleanup | No indexed rows; admissible seal and chunks | Frozen reads write nothing. Durable activation schedules archival then restores atomically; ephemeral response reads never unseal |
+| Unseal schedule inserted, before transaction | Sealed agent and ArchiveOplog row | Failed unseal leaves the row; archival on a sealed agent is a no-op |
+| Unseal committed but reply lost | Restored manifests, presence, epochs and marker generation | Exact transaction retry is idempotent and preserves the generation; no moved data must be copied back to KV |
+| Create refused by a sealed record, before bare-claim cleanup | Seal remains authoritative; possible epoch-only row | Reads and listing remain frozen. Guarded cleanup removes only own epoch with no data. A crash can leak that fence until a later release, unseal or GC |
+| Delete unsealed stream history but has not completed cascade | Ordinary indexed authority and ArchiveOplog row | Explicit retry finishes deletion; otherwise archival can seal again. Install Deleting under both guards before permitting other admissions; never start an ephemeral guest |
+| CollectTombstone scheduled, before fence or tombstone PUT | GC obligation, possibly a bare fence | No tombstone means GC does nothing, including keeping a pre-PUT fence; this crash-only leak is not timed collection |
+| Tombstone PUT committed, before indexed deletion | Indexed agent still alive, blob head deleted | The delete is not retried automatically after process loss. User must retry. At the bound, GC checks indexed identity then a fresh listing and deletes only the lost tombstone. A marked agent can be missing from both scans until then |
+| Indexed deletion committed, before object cleanup | Tombstone, fence and durable GC row | Frozen absence is authoritative. Late old seal PUTs have bounded validity. A retried old-incarnation delete cannot shadow a recreated head |
+| GC crashes during region/chunk cleanup or fence removal | Tombstone and GC row remain | Retry is idempotent; only keys at or below this tombstone and this fingerprint's chunks are removed. Recreated higher records survive |
+| GC removed fence, before tombstone removal | Tombstone still records deleter epoch | Retry removes the fence conditionally as a no-op, then deletes tombstone last. Deadline bound already excludes former-owner writes |
+| GC completes, before scheduler acknowledgement | No old incarnation keys or fence; action may remain | Redelivery sees no tombstone and succeeds without mutation |
+
+GC waits for listed tombstone time + shard_lease_max_ttl + seal_put_timeout + server_commit_bound + 2 × skew_margin. Lease deadlines are send-anchored and clamped; a held shard and expiry are observed together. A paused old owner cannot extend a fixed record deadline. Unseal checks database time; blob admissibility uses listed modification time plus its resolution. The server commit bound remains a deployment assumption. No scan schedules GC and only GC removes tombstones.
+
 ## Oplog-processor plugins (`services/oplog/plugin.rs`)
 
 | Crash window | Recovery |
