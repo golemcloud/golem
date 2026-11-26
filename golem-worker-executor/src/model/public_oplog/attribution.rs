@@ -99,10 +99,10 @@ impl<'a> PublicOplogAttributionResolver<'a> {
         &mut self,
         index: OplogIndex,
         entry: &OplogEntry,
-    ) -> Result<PublicOplogEntryAttribution, PublicOplogReadError> {
+    ) -> Result<PublicOplogEntryAttribution, WorkerExecutorError> {
         if let Some(start_index) = entry.entity_parent_start_index() {
             if start_index >= index {
-                return Err(PublicOplogReadError::Invalid(format!(
+                return Err(WorkerExecutorError::unknown(format!(
                     "oplog entry {index} has non-causal entity parent Start index {start_index}"
                 )));
             }
@@ -110,12 +110,12 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 return Ok(PublicOplogEntryAttribution::agent());
             }
             let source = self.load_start(start_index).await?.ok_or_else(|| {
-                PublicOplogReadError::Invalid(format!(
+                WorkerExecutorError::unknown(format!(
                     "oplog entry {index} entity parent index {start_index} does not reference a Start"
                 ))
             })?;
             if source.function_name != HostFunctionName::GolemEntityInvoke {
-                return Err(PublicOplogReadError::Invalid(format!(
+                return Err(WorkerExecutorError::unknown(format!(
                     "oplog entry {index} entity parent Start {start_index} is not an entity invocation"
                 )));
             }
@@ -124,7 +124,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 .await?
                 .map(PublicOplogEntryAttribution::entity)
                 .ok_or_else(|| {
-                    PublicOplogReadError::Invalid(format!(
+                    WorkerExecutorError::unknown(format!(
                         "oplog entry {index} entity parent Start {start_index} has no entity attribution"
                     ))
                 });
@@ -295,7 +295,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
     async fn entity_context_for_start(
         &mut self,
         start_index: OplogIndex,
-    ) -> Result<Option<PublicEntityInvocationContext>, PublicOplogReadError> {
+    ) -> Result<Option<PublicEntityInvocationContext>, WorkerExecutorError> {
         let mut path = Vec::new();
         let mut visited = HashSet::new();
         let mut current = start_index;
@@ -304,7 +304,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 break resolved.clone();
             }
             if !visited.insert(current) {
-                return Err(PublicOplogReadError::Invalid(format!(
+                return Err(WorkerExecutorError::unknown(format!(
                     "cyclic oplog Start attribution at index {current}"
                 )));
             }
@@ -320,7 +320,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
                 let invocation = self
                     .load_public_entity_invocation(current, &source)
                     .await
-                    .map_err(PublicOplogReadError::Invalid)?;
+                    .map_err(WorkerExecutorError::unknown)?;
                 let parent = source.parent();
                 path.push(AttributionPathNode::Entity(current, invocation));
                 match parent {
@@ -369,7 +369,7 @@ impl<'a> PublicOplogAttributionResolver<'a> {
     async fn load_start(
         &mut self,
         index: OplogIndex,
-    ) -> Result<Option<OplogStartAttributionSource>, PublicOplogReadError> {
+    ) -> Result<Option<OplogStartAttributionSource>, WorkerExecutorError> {
         if let Some(start) = self.starts.get(&index) {
             return Ok(start.clone());
         }

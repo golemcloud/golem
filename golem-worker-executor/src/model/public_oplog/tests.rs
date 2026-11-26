@@ -4620,14 +4620,11 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         )
     };
     assert_eq!(
-        WorkerExecutorError::from(page_from(3).await.err().expect("expired")),
+        page_from(3).await.err().expect("expired"),
         expired.clone(),
         "a page read below the start keeps the expired error"
     );
-    assert_eq!(
-        WorkerExecutorError::from(page_from(1).await.err().expect("expired")),
-        expired.clone()
-    );
+    assert_eq!(page_from(1).await.err().expect("expired"), expired.clone());
     let search = search_public_oplog_page(
         Arc::new(PanicComponentService),
         oplog_service.clone(),
@@ -4652,8 +4649,7 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
     .err()
     .expect("expired");
     assert_eq!(
-        WorkerExecutorError::from(search),
-        expired,
+        search, expired,
         "a search below the start keeps the expired error"
     );
 
@@ -4675,12 +4671,12 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
         )
     };
     assert_eq!(
-        WorkerExecutorError::from(guest_chunk(1).await.err().expect("expired")),
+        guest_chunk(1).await.err().expect("expired"),
         expired.clone(),
         "a guest chunk of the `Create` entry alone is expired"
     );
     assert_eq!(
-        WorkerExecutorError::from(guest_chunk(2).await.err().expect("expired")),
+        guest_chunk(2).await.err().expect("expired"),
         expired.clone()
     );
 
@@ -4730,6 +4726,12 @@ async fn public_reads_start_at_the_retained_start_and_refuse_an_earlier_start_as
     assert_eq!(
         guest_oplog_read_error(guest_chunk(1).await.err().expect("expired")),
         format!("The oplog of {agent_id} expired: it starts at index 4")
+    );
+    // An entry or a query without a public form keeps its own text, as before the readers
+    // returned `WorkerExecutorError`.
+    assert_eq!(
+        guest_oplog_read_error(WorkerExecutorError::unknown("invalid query")),
+        "invalid query"
     );
     // The guest `get-oplog` reads the retention itself. A new resource at the start finds the
     // revision there and reads from the start; at index 1 it is expired.

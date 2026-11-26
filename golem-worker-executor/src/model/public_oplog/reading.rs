@@ -14,51 +14,12 @@
 
 use super::*;
 use crate::services::golem_config::ScanBudget;
-use crate::services::oplog::UnreadableOplog;
 use crate::services::oplog::retention::{OplogRange, OplogRetention};
 use golem_common::model::oplog::{OplogCursor, OplogScan, OplogScanAllowance};
 use golem_service_base::error::worker_executor::StaleCursorReason;
 use std::collections::BTreeMap;
-use std::fmt::{Display, Formatter};
 use std::num::NonZeroU64;
 use std::time::{Duration, Instant};
-
-/// Why a read of public oplog entries failed.
-#[derive(Debug)]
-pub enum PublicOplogReadError {
-    /// The oplog did not give the entries, for example because the read reaches below the
-    /// retained start.
-    Unreadable(UnreadableOplog),
-    /// The reader cannot give an entry or the query in its public form.
-    Invalid(String),
-}
-
-impl Display for PublicOplogReadError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Unreadable(error) => write!(f, "{error}"),
-            Self::Invalid(details) => write!(f, "{details}"),
-        }
-    }
-}
-
-impl From<UnreadableOplog> for PublicOplogReadError {
-    fn from(error: UnreadableOplog) -> Self {
-        Self::Unreadable(error)
-    }
-}
-
-/// A failed oplog read maps like every [`UnreadableOplog`], so a read below the retained start
-/// keeps its expired error, which names the start. An entry or a query without a public form is
-/// an unknown error with its text.
-impl From<PublicOplogReadError> for WorkerExecutorError {
-    fn from(error: PublicOplogReadError) -> Self {
-        match error {
-            PublicOplogReadError::Unreadable(unreadable) => unreadable.into(),
-            PublicOplogReadError::Invalid(details) => WorkerExecutorError::unknown(details),
-        }
-    }
-}
 
 /// Collects the entries of an oplog chunk in the form that its reader gets.
 trait ChunkBuilder {
@@ -165,7 +126,7 @@ pub async fn get_public_oplog_chunk(
     initial_oplog_index: OplogIndex,
     count: usize,
     claims: ClaimVisibility,
-) -> Result<PublicOplogChunk, PublicOplogReadError> {
+) -> Result<PublicOplogChunk, WorkerExecutorError> {
     let (chunk, _) = read_public_oplog_chunk(
         components,
         oplog_service,
@@ -205,7 +166,7 @@ pub async fn get_public_oplog_page(
     claims: ClaimVisibility,
 ) -> Result<
     PublicOplogChunk<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
-    PublicOplogReadError,
+    WorkerExecutorError,
 > {
     let (chunk, _) = read_public_oplog_chunk(
         components,
@@ -312,7 +273,7 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
     filter: Option<&Query>,
     claims: ClaimVisibility,
     builder: &mut B,
-) -> Result<(PublicOplogChunk<B::Entry>, bool), PublicOplogReadError> {
+) -> Result<(PublicOplogChunk<B::Entry>, bool), WorkerExecutorError> {
     let initial_oplog_index = initial_oplog_index.max(OplogIndex::INITIAL);
     let last_index = oplog_service
         .get_last_index(owned_agent_id, agent_mode)
@@ -364,7 +325,7 @@ async fn read_public_oplog_range<B: ChunkBuilder>(
     filter: Option<&Query>,
     claims: ClaimVisibility,
     builder: &mut B,
-) -> Result<(PublicOplogChunk<B::Entry>, bool), PublicOplogReadError> {
+) -> Result<(PublicOplogChunk<B::Entry>, bool), WorkerExecutorError> {
     let raw_entries = match range {
         Some(range) => {
             oplog_service
@@ -412,7 +373,7 @@ async fn read_public_oplog_range<B: ChunkBuilder>(
             claims,
         )
         .await
-        .map_err(PublicOplogReadError::Invalid)?;
+        .map_err(WorkerExecutorError::unknown)?;
         if filter.is_none_or(|query| entry.matches(query)) {
             let entry = PublicOplogEntryWithIndex {
                 oplog_index: index,
@@ -421,7 +382,7 @@ async fn read_public_oplog_range<B: ChunkBuilder>(
             };
             match builder
                 .admit(entry, entry_component_revision)
-                .map_err(PublicOplogReadError::Invalid)?
+                .map_err(WorkerExecutorError::unknown)?
             {
                 Some(chunk_entry) => entries.push(chunk_entry),
                 None => {
@@ -469,7 +430,7 @@ pub async fn search_public_oplog(
     query: &str,
     budget: ScanBudget,
     claims: ClaimVisibility,
-) -> Result<PublicOplogSearchResult, PublicOplogReadError> {
+) -> Result<PublicOplogSearchResult, WorkerExecutorError> {
     search_public_oplog_with(
         component_service,
         oplog_service,
@@ -511,7 +472,7 @@ pub async fn search_public_oplog_page(
     claims: ClaimVisibility,
 ) -> Result<
     PublicOplogSearchResult<golem_api_grpc::proto::golem::worker::OplogPageEntry>,
-    PublicOplogReadError,
+    WorkerExecutorError,
 > {
     search_public_oplog_with(
         component_service,
@@ -558,7 +519,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     budget: ScanBudget,
     claims: ClaimVisibility,
     mut builder: B,
-) -> Result<PublicOplogSearchResult<B::Entry>, PublicOplogReadError> {
+) -> Result<PublicOplogSearchResult<B::Entry>, WorkerExecutorError> {
     let started = Instant::now();
     let mut scanned = 0u64;
     let mut results = Vec::new();
@@ -566,7 +527,7 @@ async fn search_public_oplog_with<B: ChunkBuilder>(
     let mut current_index = initial_oplog_index;
     let mut current_component_revision = initial_component_revision;
 
-    let query = Query::parse(query).map_err(PublicOplogReadError::Invalid)?;
+    let query = Query::parse(query).map_err(WorkerExecutorError::unknown)?;
 
     loop {
         let to_last = last_oplog_index.map_or(u64::MAX, |last| {
@@ -1154,14 +1115,12 @@ pub async fn search_guest_oplog(
 }
 
 /// The text of a failed guest oplog read. The guest gets it in `internal-error`, because the
-/// guest oplog API has no case for an expired read. An expired read names the expired cause and
-/// the retained start with the same words as for every other caller.
-pub fn guest_oplog_read_error(error: PublicOplogReadError) -> String {
+/// guest oplog API has no case for an expired read. An entry or a query without a public form
+/// gives its own text, and every other error gives its display text, so an expired read names
+/// the expired cause and the retained start.
+pub fn guest_oplog_read_error(error: WorkerExecutorError) -> String {
     match error {
-        PublicOplogReadError::Unreadable(UnreadableOplog {
-            agent_id,
-            error: crate::services::oplog::OplogReadError::Expired { retained_start },
-        }) => WorkerExecutorError::oplog_expired(agent_id, retained_start).to_string(),
+        WorkerExecutorError::Unknown { details } => details,
         other => other.to_string(),
     }
 }
