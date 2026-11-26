@@ -1,6 +1,8 @@
 name: On Demand Benchmark
 on:
-  # Automatic measurement and publication remain paused pending post-merge validation.
+  schedule:
+    # Runs every day at 02:00 UTC when the workflow is enabled.
+    - cron: '0 2 * * *'
   workflow_dispatch:
     inputs:
       publish:
@@ -30,7 +32,7 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
       - name: Check benchmark publisher access
-        if: inputs.publish
+        if: github.event_name == 'schedule' || inputs.publish
         timeout-minutes: 3
         env:
           BENCHMARK_RESULTS_TOKEN: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
@@ -202,7 +204,7 @@ jobs:
       - name: Require a complete canonical result
         run: test -s "$RUNNER_TEMP/github-actions-benchmark-results.json"
       - name: Validate and publish results
-        if: inputs.publish
+        if: github.event_name == 'schedule' || inputs.publish
         env:
           BENCHMARK_RESULTS_TOKEN: ${{ secrets.BENCHMARK_RESULTS_TOKEN }}
           GOLEM_BENCHMARK_RESULTS_INPUT: ${{ runner.temp }}/github-actions-benchmark-results.json

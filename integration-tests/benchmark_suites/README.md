@@ -22,9 +22,11 @@ duplicate entries and missing iteration evidence. It retains each entry's hardwa
 and raw measurements without pooling across runners. The result collection contains one run.
 Recorded benchmark failures remain visible, are preserved as artifacts, and fail the job.
 
-Automatic runs remain paused. The workflow is manual-only and defaults to `publish=false`.
-Deploy the schema-2 reader before enabling publication. Regression/history/waiver/Slack
-policy belongs to the results reader, not the measurement harness. See
+The workflow retains its daily 02:00 UTC schedule and publishes scheduled results. Manual
+runs default to `publish=false`. The workflow remains disabled in GitHub pending post-merge
+validation and rollout approval. Deploy the schema-2 reader before enabling publication.
+Regression/history/waiver/Slack policy belongs to the results reader, not the measurement
+harness. See
 [CI analysis](ci-benchmark-analysis.md) and [paired comparisons](paired-benchmarks.md).
 
 ## Acceptance sequence
