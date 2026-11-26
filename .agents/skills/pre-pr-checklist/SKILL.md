@@ -14,7 +14,8 @@ Inspect all files in the PR, including generated files. A change can belong to m
 | Scope | Minimum local verification |
 |---|---|
 | Root Rust crate(s) | Package-scoped format check, clippy, check/build, and affected tests |
-| Shared Rust API, proc macro, or shared type | Verify the producer and directly affected consumers; identify uncovered contracts before choosing broader checks |
+| Shared Rust API, proc macro, or shared type | `cargo make check-clippy` finds a caller in another crate that no longer compiles; when the behaviour changes, run the existing tests of the callers that exercise that behaviour |
+| Shared contract, as `AGENTS.md` defines it under "Before Submitting a PR" | Verify the producer, then smoke-test the callers: the closest existing tests that run the changed path, one for each affected area (worker executor, services, CLI, each SDK that the contract reaches). The usual form is an integration test that builds, deploys and invokes a component. Build the test components that the selected tests need. When no existing test runs the changed path, say so in the PR description |
 | `dev-tools/` | Use `--manifest-path dev-tools/Cargo.toml`, except the standalone Go generator uses `--manifest-path dev-tools/go-bindgen/Cargo.toml`; do not check the root workspace unless it is also affected |
 | Rust SDK (`sdks/rust/`) | Use that SDK's Cargo workspace checks; do not run root `cargo make fix` or `cargo make build` |
 | TypeScript SDK (`sdks/ts/`) | Check affected packages; rebuild the agent template only when its runtime/WIT inputs changed |
@@ -42,6 +43,14 @@ cargo fmt --manifest-path dev-tools/Cargo.toml -p <crate> -- --check
 cargo clippy --manifest-path dev-tools/Cargo.toml -p <crate> --all-targets --no-deps -- -D warnings
 ```
 
+Then, for any root-workspace Rust change, lint the whole workspace, as `Main validation` does. Package-scoped clippy does not see a caller in another crate that the change did not update, or a lint that the change raises in another crate:
+
+```shell
+cargo make check-clippy
+```
+
+Use the current stable toolchain (`rustup update stable`), as `Main validation` does, because the lints change between toolchains. When the check fails in a crate that the change does not touch, run `cargo clippy --all-targets --keep-going -- --no-deps -Dwarnings`, so that cargo still lints the other crates.
+
 Prefer non-mutating checks for final verification. If fixes are needed, use the equivalent scoped `cargo fmt` or `cargo clippy ... --fix` command and inspect the resulting diff.
 
 Do **not** run `cargo make fix` by default. It formats and applies clippy fixes to the entire root workspace and the separate `dev-tools` workspace, can modify unrelated dirty or staged files, and does not check the SDK workspaces.
@@ -68,7 +77,7 @@ Start with the smallest test that exercises the changed behavior:
 cargo test -p <crate> -- <test_name> --report-time
 ```
 
-Broaden only for a specific affected contract that narrower checks cannot cover, or an explicit user request. The absence of PR tests does not justify full suites:
+Broaden for a changed shared contract (step 1), for a specific affected contract that narrower checks cannot cover, or for an explicit user request. A changed shared contract gets a smoke test of its callers: the closest existing tests that run the changed path, also when they need built test components. The absence of PR tests does not justify full suites:
 
 | Impact | Broader command when needed |
 |---|---|
@@ -115,11 +124,12 @@ git add <specific-files> # Stage only relevant files
 ## Checklist
 
 1. [ ] Every changed area is classified, including generated files and consumers
-2. [ ] Affected code is formatted and linted with native, scope-appropriate checks
+2. [ ] Affected code is formatted and linted with native, scope-appropriate checks, and `cargo make check-clippy` passes for a root-workspace Rust change
 3. [ ] Affected packages build or type-check
 4. [ ] Modified and behaviorally affected tests pass
 5. [ ] Required artifacts are regenerated and their drift checks pass
-6. [ ] Each broader check covers an identified affected contract that narrower checks cannot cover
-7. [ ] Only relevant files are included in the PR
+6. [ ] Each changed shared contract has a smoke test of its callers, and the PR description names the selected tests and each one that could not run
+7. [ ] Each other broader check covers an identified affected contract that narrower checks cannot cover
+8. [ ] Only relevant files are included in the PR
 
 In the completion report, name the checks run, their outcomes and remaining coverage limits. Distinguish local verification from post-merge Main validation; do not imply PR tests will cover omitted checks.
