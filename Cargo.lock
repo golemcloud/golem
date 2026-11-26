@@ -2116,7 +2116,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64"
 version = "0.137.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "cranelift-assembler-x64-meta",
 ]
@@ -2124,7 +2124,7 @@ dependencies = [
 [[package]]
 name = "cranelift-assembler-x64-meta"
 version = "0.137.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "cranelift-srcgen",
 ]
@@ -2132,7 +2132,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bforest"
 version = "0.137.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "cranelift-entity",
  "wasmtime-internal-core",
@@ -2141,7 +2141,7 @@ dependencies = [
 [[package]]
 name = "cranelift-bitset"
 version = "0.137.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "serde",
  "serde_derive",
@@ -2151,7 +2151,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen"
 version = "0.137.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "bumpalo",
  "cranelift-assembler-x64",
@@ -2181,7 +2181,7 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-meta"
 version = "0.137.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "cranelift-assembler-x64-meta",
  "cranelift-codegen-shared",
@@ -2193,12 +2193,12 @@ dependencies = [
 [[package]]
 name = "cranelift-codegen-shared"
 version = "0.137.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 
 [[package]]
 name = "cranelift-control"
 version = "0.137.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "arbitrary",
 ]
@@ -2206,7 +2206,7 @@ dependencies = [
 [[package]]
 name = "cranelift-entity"
 version = "0.137.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "cranelift-bitset",
  "serde",
@@ -2217,7 +2217,7 @@ dependencies = [
 [[package]]
 name = "cranelift-frontend"
 version = "0.137.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "cranelift-codegen",
  "hashbrown 0.17.2",
@@ -2229,12 +2229,12 @@ dependencies = [
 [[package]]
 name = "cranelift-isle"
 version = "0.137.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 
 [[package]]
 name = "cranelift-native"
 version = "0.137.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "cranelift-codegen",
  "libc",
@@ -2245,7 +2245,7 @@ dependencies = [
 [[package]]
 name = "cranelift-srcgen"
 version = "0.137.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 
 [[package]]
 name = "crc"
@@ -8793,7 +8793,7 @@ dependencies = [
 [[package]]
 name = "pulley-interpreter"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "cranelift-bitset",
  "log",
@@ -8804,7 +8804,7 @@ dependencies = [
 [[package]]
 name = "pulley-macros"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -12785,7 +12785,7 @@ dependencies = [
 [[package]]
 name = "wasmtime"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "addr2line 0.26.1",
  "async-trait",
@@ -12838,7 +12838,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-environ"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "anyhow",
  "cpp_demangle 0.5.1",
@@ -12867,7 +12867,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-cache"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "base64 0.22.1",
  "directories-next",
@@ -12886,7 +12886,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-component-macro"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "anyhow",
  "proc-macro2",
@@ -12900,12 +12900,12 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-component-util"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 
 [[package]]
 name = "wasmtime-internal-core"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "anyhow",
  "hashbrown 0.17.2",
@@ -12916,7 +12916,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-cranelift"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "cranelift-codegen",
  "cranelift-control",
@@ -12941,7 +12941,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-fiber"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "cc",
  "libc",
@@ -12954,7 +12954,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-jit-debug"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "cc",
  "object 0.40.0",
@@ -12965,7 +12965,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-jit-icache-coherence"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "libc",
  "wasmtime-internal-core",
@@ -12975,7 +12975,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-unwinder"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "cranelift-codegen",
  "log",
@@ -12986,7 +12986,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-versioned-export-macros"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -12996,7 +12996,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-internal-wit-bindgen"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "anyhow",
  "bitflags 2.13.2",
@@ -13009,7 +13009,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-wasi"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "async-trait",
  "bitflags 2.13.2",
@@ -13030,7 +13030,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-wasi-http"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "async-trait",
  "bytes",
@@ -13057,7 +13057,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-wasi-io"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "async-trait",
  "bytes",
@@ -13069,7 +13069,7 @@ dependencies = [
 [[package]]
 name = "wasmtime-wizer"
 version = "50.0.1"
-source = "git+https://github.com/golemcloud/wasmtime.git?branch=golem-wasmtime-v50.0.1-p3#f8398c358bc965e85476e1e2d5efa87dc9dfe56b"
+source = "git+https://github.com/golemcloud/wasmtime.git?branch=fix-host-call-error-cleanup#e75da49881fc758378d00f9e58e1b12112b50d9e"
 dependencies = [
  "log",
  "rayon",
