@@ -1,0 +1,2743 @@
+{
+  "version": 1,
+  "golemIssuer": "https://id.golem.acme.example",
+  "actors": {
+    "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b": {
+      "provider": "github",
+      "externalId": "1000001",
+      "login": "ana-admin"
+    }
+  },
+  "plans": [
+    {
+      "name": "starter: storage unavailable, finite memory, blob storage at u64::MAX",
+      "plan": {
+        "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+        "name": "starter",
+        "appLimit": 3,
+        "envLimit": 10,
+        "componentLimit": 15,
+        "workerConnectionLimit": 25,
+        "storageLimit": 500000000,
+        "blobStorageLimit": 18446744073709551615,
+        "monthlyUploadLimit": 1000000000,
+        "monthlyComputeGcu": 100,
+        "monthlyMemoryGbSeconds": 10000,
+        "monthlyDurableStorageGbMonth": 50,
+        "monthlyEphemeralStorageGbMonth": 25,
+        "overageAllowedByPlan": false,
+        "maxMemoryPerAgent": {
+          "type": "finite",
+          "value": 1073741824
+        },
+        "maxMemoryPerAgentCeiling": {
+          "type": "finite",
+          "value": 4294967296
+        },
+        "maxMemoryPerAgentUserConfigurable": true,
+        "maxTableElementsPerWorker": 16384,
+        "maxStoragePerAgent": {
+          "type": "disabled",
+          "reason": "managedFilesystemUnavailable"
+        },
+        "maxStoragePerAgentCeiling": {
+          "type": "disabled",
+          "reason": "managedFilesystemUnavailable"
+        },
+        "maxStoragePerAgentUserConfigurable": false,
+        "perInvocationHttpCallLimit": 1000,
+        "perInvocationRpcCallLimit": 1000,
+        "monthlyHttpCallLimit": 10000,
+        "monthlyRpcCallLimit": 10000,
+        "maxConcurrentAgentsPerExecutor": 100,
+        "oplogWritesPerSecond": 1000
+      },
+      "expected": {
+        "owner": "/",
+        "name": "starter",
+        "storageAvailability": "managedFilesystemUnavailable",
+        "overageAllowedByPlan": false,
+        "declarations": {
+          "ApplicationCount": {
+            "min": null,
+            "max": {
+              "finite": 3
+            },
+            "operating": null
+          },
+          "EnvironmentCount": {
+            "min": null,
+            "max": {
+              "finite": 10
+            },
+            "operating": null
+          },
+          "ComponentCount": {
+            "min": null,
+            "max": {
+              "finite": 15
+            },
+            "operating": null
+          },
+          "AgentConnectionCount": {
+            "min": null,
+            "max": {
+              "finite": 25
+            },
+            "operating": null
+          },
+          "RetainedComponentBytes": {
+            "min": null,
+            "max": {
+              "finite": 500000000
+            },
+            "operating": null
+          },
+          "RetainedBlobBytes": {
+            "min": null,
+            "max": {
+              "finite": 18446744073709551615
+            },
+            "operating": null
+          },
+          "MonthlyUploadBytes": {
+            "min": null,
+            "max": {
+              "finite": 1000000000
+            },
+            "operating": null
+          },
+          "MonthlyComputeGcu": {
+            "min": null,
+            "max": {
+              "finite": 100
+            },
+            "operating": null
+          },
+          "MonthlyMemoryGbSeconds": {
+            "min": null,
+            "max": {
+              "finite": 10000
+            },
+            "operating": null
+          },
+          "MonthlyDurableStorageGbMonth": {
+            "min": null,
+            "max": {
+              "finite": 50
+            },
+            "operating": null
+          },
+          "MonthlyEphemeralStorageGbMonth": {
+            "min": null,
+            "max": {
+              "finite": 25
+            },
+            "operating": null
+          },
+          "MonthlyHttpCalls": {
+            "min": null,
+            "max": {
+              "finite": 10000
+            },
+            "operating": null
+          },
+          "MonthlyRpcCalls": {
+            "min": null,
+            "max": {
+              "finite": 10000
+            },
+            "operating": null
+          },
+          "PerInvocationHttpCalls": {
+            "min": null,
+            "max": {
+              "finite": 1000
+            },
+            "operating": null
+          },
+          "PerInvocationRpcCalls": {
+            "min": null,
+            "max": {
+              "finite": 1000
+            },
+            "operating": null
+          },
+          "MaxMemoryPerAgent": {
+            "min": null,
+            "max": {
+              "finite": 4294967296
+            },
+            "operating": {
+              "default": {
+                "finite": 1073741824
+              },
+              "userConfigurable": true
+            }
+          },
+          "MaxTableElementsPerAgent": {
+            "min": null,
+            "max": {
+              "finite": 16384
+            },
+            "operating": null
+          },
+          "MaxConcurrentAgentsPerExecutor": {
+            "min": null,
+            "max": {
+              "finite": 100
+            },
+            "operating": null
+          },
+          "OplogWritesPerSecond": {
+            "min": null,
+            "max": {
+              "finite": 1000
+            },
+            "operating": null
+          }
+        }
+      }
+    },
+    {
+      "name": "pro: storage available, unlimited memory, the concurrency and oplog-rate sentinels",
+      "plan": {
+        "planId": "9e8d7c6b-5a49-4f38-a726-1504f3e2d1c0",
+        "name": "pro",
+        "appLimit": 20,
+        "envLimit": 80,
+        "componentLimit": 200,
+        "workerConnectionLimit": 500,
+        "storageLimit": 5000000000,
+        "blobStorageLimit": 100000000000,
+        "monthlyUploadLimit": 20000000000,
+        "monthlyComputeGcu": 2000,
+        "monthlyMemoryGbSeconds": 500000,
+        "monthlyDurableStorageGbMonth": 1000,
+        "monthlyEphemeralStorageGbMonth": 500,
+        "overageAllowedByPlan": true,
+        "maxMemoryPerAgent": {
+          "type": "unlimited"
+        },
+        "maxMemoryPerAgentCeiling": {
+          "type": "unlimited"
+        },
+        "maxMemoryPerAgentUserConfigurable": false,
+        "maxTableElementsPerWorker": 65536,
+        "maxStoragePerAgent": {
+          "type": "finite",
+          "value": 10737418240
+        },
+        "maxStoragePerAgentCeiling": {
+          "type": "finite",
+          "value": 107374182400
+        },
+        "maxStoragePerAgentUserConfigurable": true,
+        "perInvocationHttpCallLimit": 5000,
+        "perInvocationRpcCallLimit": 5000,
+        "monthlyHttpCallLimit": 1000000,
+        "monthlyRpcCallLimit": 1000000,
+        "maxConcurrentAgentsPerExecutor": 1000000000000000000,
+        "oplogWritesPerSecond": 1000000000000000000
+      },
+      "expected": {
+        "owner": "/",
+        "name": "pro",
+        "storageAvailability": "available",
+        "overageAllowedByPlan": true,
+        "declarations": {
+          "ApplicationCount": {
+            "min": null,
+            "max": {
+              "finite": 20
+            },
+            "operating": null
+          },
+          "EnvironmentCount": {
+            "min": null,
+            "max": {
+              "finite": 80
+            },
+            "operating": null
+          },
+          "ComponentCount": {
+            "min": null,
+            "max": {
+              "finite": 200
+            },
+            "operating": null
+          },
+          "AgentConnectionCount": {
+            "min": null,
+            "max": {
+              "finite": 500
+            },
+            "operating": null
+          },
+          "RetainedComponentBytes": {
+            "min": null,
+            "max": {
+              "finite": 5000000000
+            },
+            "operating": null
+          },
+          "RetainedBlobBytes": {
+            "min": null,
+            "max": {
+              "finite": 100000000000
+            },
+            "operating": null
+          },
+          "MonthlyUploadBytes": {
+            "min": null,
+            "max": {
+              "finite": 20000000000
+            },
+            "operating": null
+          },
+          "MonthlyComputeGcu": {
+            "min": null,
+            "max": {
+              "finite": 2000
+            },
+            "operating": null
+          },
+          "MonthlyMemoryGbSeconds": {
+            "min": null,
+            "max": {
+              "finite": 500000
+            },
+            "operating": null
+          },
+          "MonthlyDurableStorageGbMonth": {
+            "min": null,
+            "max": {
+              "finite": 1000
+            },
+            "operating": null
+          },
+          "MonthlyEphemeralStorageGbMonth": {
+            "min": null,
+            "max": {
+              "finite": 500
+            },
+            "operating": null
+          },
+          "MonthlyHttpCalls": {
+            "min": null,
+            "max": {
+              "finite": 1000000
+            },
+            "operating": null
+          },
+          "MonthlyRpcCalls": {
+            "min": null,
+            "max": {
+              "finite": 1000000
+            },
+            "operating": null
+          },
+          "PerInvocationHttpCalls": {
+            "min": null,
+            "max": {
+              "finite": 5000
+            },
+            "operating": null
+          },
+          "PerInvocationRpcCalls": {
+            "min": null,
+            "max": {
+              "finite": 5000
+            },
+            "operating": null
+          },
+          "MaxMemoryPerAgent": {
+            "min": null,
+            "max": "unlimited",
+            "operating": {
+              "default": "unlimited",
+              "userConfigurable": false
+            }
+          },
+          "MaxStoragePerAgent": {
+            "min": null,
+            "max": {
+              "finite": 107374182400
+            },
+            "operating": {
+              "default": {
+                "finite": 10737418240
+              },
+              "userConfigurable": true
+            }
+          },
+          "MaxTableElementsPerAgent": {
+            "min": null,
+            "max": {
+              "finite": 65536
+            },
+            "operating": null
+          },
+          "MaxConcurrentAgentsPerExecutor": {
+            "min": null,
+            "max": "unlimited",
+            "operating": null
+          },
+          "OplogWritesPerSecond": {
+            "min": null,
+            "max": "unlimited",
+            "operating": null
+          }
+        }
+      }
+    }
+  ],
+  "imports": [
+    {
+      "name": "one GitHub person with two accounts on different plans and modes",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        },
+        {
+          "account": {
+            "id": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+            "revision": 9,
+            "name": "Ana Personal",
+            "email": "ana.personal@acme.example",
+            "planId": "9e8d7c6b-5a49-4f38-a726-1504f3e2d1c0",
+            "roles": [
+              "admin"
+            ],
+            "accountRootCardId": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+          },
+          "segment": "ana-personal",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "allowOverage",
+          "modeHistory": [
+            {
+              "actorAccountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "changedAt": "2026-11-03T10:00:00Z",
+              "source": "owner",
+              "previousMode": "hardLimit",
+              "newMode": "allowOverage"
+            }
+          ],
+          "usage": {
+            "accountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-26T23:59:59Z",
+              "computeGcu": 1999.875,
+              "memoryGbSeconds": 500001,
+              "durableStorageGbMonth": 0.0,
+              "ephemeralStorageGbMonth": 3.25,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "enabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "maxMemoryPerAgent",
+              "value": 18446744073709551615,
+              "reason": "support",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-05T14:00:00Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+              "accountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "createdAt": "2026-06-15T00:00:00Z",
+              "expiresAt": "2026-12-15T00:00:00Z"
+            }
+          ],
+          "shares": [
+            {
+              "id": "4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f7a",
+              "revision": 1,
+              "ownerAccountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "targetAccountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "name": "research-read",
+              "currentCardId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6a",
+              "data": {
+                "lowerPositive": [],
+                "lowerNegative": [],
+                "upperPositive": [
+                  "environment:read"
+                ],
+                "upperNegative": []
+              }
+            }
+          ]
+        }
+      ],
+      "expected": [
+        {
+          "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+          "path": "/acme-research",
+          "depth": 1,
+          "displayName": "Acme Research",
+          "accountPair": "(\"https://id.golem.acme.example\",\"account:3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f\")",
+          "personPair": "(\"https://github.com\",\"583231\")",
+          "personEffects": "mapped",
+          "principalReference": "(\"https://github.com\",\"583231\")",
+          "plan": {
+            "name": "starter",
+            "owner": "/"
+          },
+          "rootManagementCard": {
+            "wallet": "(\"https://github.com\",\"583231\")",
+            "account": "/acme-research",
+            "derivedFrom": "/"
+          },
+          "removedRoles": [],
+          "monthlyUsageMode": "hardLimit",
+          "consentEvidence": "none",
+          "modeHistory": [],
+          "usage": {
+            "period": {
+              "year": 2026,
+              "month": 11
+            },
+            "asOf": "2026-11-17T09:30:00Z",
+            "computeGcu": 12.375,
+            "memoryGbSeconds": 4321,
+            "durableStorageGbMonth": 0.0625,
+            "ephemeralStorageGbMonth": 1.5
+          },
+          "overrides": [
+            {
+              "dimension": "MonthlyComputeGcu",
+              "value": {
+                "finite": 50
+              },
+              "reason": "promotional",
+              "actorPair": "(\"https://github.com\",\"1000001\")",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "authenticates": "(\"https://id.golem.acme.example\",\"account:3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f\")",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        },
+        {
+          "accountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+          "path": "/ana-personal",
+          "depth": 1,
+          "displayName": "Ana Personal",
+          "accountPair": "(\"https://id.golem.acme.example\",\"account:8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d\")",
+          "personPair": "(\"https://github.com\",\"583231\")",
+          "personEffects": "mapped",
+          "principalReference": "(\"https://github.com\",\"583231\")",
+          "plan": {
+            "name": "pro",
+            "owner": "/"
+          },
+          "rootManagementCard": {
+            "wallet": "(\"https://github.com\",\"583231\")",
+            "account": "/ana-personal",
+            "derivedFrom": "/"
+          },
+          "removedRoles": [
+            "admin"
+          ],
+          "monthlyUsageMode": "allowOverage",
+          "consentEvidence": "history",
+          "modeHistory": [
+            {
+              "actorPair": "(\"https://id.golem.acme.example\",\"account:8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d\")",
+              "changedAt": "2026-11-03T10:00:00Z",
+              "source": "owner",
+              "previousMode": "hardLimit",
+              "newMode": "allowOverage"
+            }
+          ],
+          "usage": {
+            "period": {
+              "year": 2026,
+              "month": 11
+            },
+            "asOf": "2026-11-26T23:59:59Z",
+            "computeGcu": 1999.875,
+            "memoryGbSeconds": 500001,
+            "durableStorageGbMonth": 0.0,
+            "ephemeralStorageGbMonth": 3.25
+          },
+          "overrides": [
+            {
+              "dimension": "MaxMemoryPerAgent",
+              "value": "unlimited",
+              "reason": "support",
+              "actorPair": "(\"https://github.com\",\"1000001\")",
+              "grantedAt": "2026-11-05T14:00:00Z",
+              "expiresAt": null
+            }
+          ],
+          "tokens": [
+            {
+              "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+              "authenticates": "(\"https://id.golem.acme.example\",\"account:8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d\")",
+              "expiresAt": "2026-12-15T00:00:00Z"
+            }
+          ],
+          "shares": [
+            {
+              "id": "4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f7a",
+              "owner": "/ana-personal",
+              "target": "/acme-research",
+              "name": "research-read",
+              "data": {
+                "lowerPositive": [],
+                "lowerNegative": [],
+                "upperPositive": [
+                  "environment:read"
+                ],
+                "upperNegative": []
+              },
+              "conversion": "cards"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "an account whose export proves it has no external login",
+      "accounts": [
+        {
+          "account": {
+            "id": "6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e",
+            "revision": 2,
+            "name": "Build Bot",
+            "email": "build-bot@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "7c8d9e0f-1a2b-4c3d-8e4f-5a6b7c8d9e0f"
+          },
+          "segment": "build-bot",
+          "loginMappings": [],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-20T06:15:00Z",
+              "computeGcu": 0.25,
+              "memoryGbSeconds": 17,
+              "durableStorageGbMonth": 0.0,
+              "ephemeralStorageGbMonth": 0.125,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "enabled"
+              }
+            }
+          },
+          "adminGrants": [],
+          "tokens": [
+            {
+              "id": "8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a",
+              "accountId": "6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e",
+              "createdAt": "2026-09-01T00:00:00Z",
+              "expiresAt": "2027-03-01T00:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "expected": [
+        {
+          "accountId": "6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e",
+          "path": "/build-bot",
+          "depth": 1,
+          "displayName": "Build Bot",
+          "accountPair": "(\"https://id.golem.acme.example\",\"account:6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e\")",
+          "personPair": null,
+          "personEffects": "none",
+          "principalReference": "(\"https://id.golem.acme.example\",\"account:6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e\")",
+          "plan": {
+            "name": "starter",
+            "owner": "/"
+          },
+          "rootManagementCard": null,
+          "removedRoles": [],
+          "monthlyUsageMode": "hardLimit",
+          "consentEvidence": "none",
+          "modeHistory": [],
+          "usage": {
+            "period": {
+              "year": 2026,
+              "month": 11
+            },
+            "asOf": "2026-11-20T06:15:00Z",
+            "computeGcu": 0.25,
+            "memoryGbSeconds": 17,
+            "durableStorageGbMonth": 0.0,
+            "ephemeralStorageGbMonth": 0.125
+          },
+          "overrides": [],
+          "tokens": [
+            {
+              "id": "8d9e0f1a-2b3c-4d4e-9f5a-6b7c8d9e0f1a",
+              "authenticates": "(\"https://id.golem.acme.example\",\"account:6b7c8d9e-0f1a-4b2c-9d3e-4f5a6b7c8d9e\")",
+              "expiresAt": "2027-03-01T00:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ]
+    }
+  ],
+  "refusals": [
+    {
+      "name": "an upper-case segment",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "Acme",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "invalidSegment"
+    },
+    {
+      "name": "a double hyphen",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme--research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "invalidSegment"
+    },
+    {
+      "name": "a trailing hyphen",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "invalidSegment"
+    },
+    {
+      "name": "an encoded separator",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme%2fresearch",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "invalidSegment"
+    },
+    {
+      "name": "the reserved publisher path",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "golem",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "reservedPath"
+    },
+    {
+      "name": "two accounts with the same segment",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        },
+        {
+          "account": {
+            "id": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+            "revision": 9,
+            "name": "Ana Personal",
+            "email": "ana.personal@acme.example",
+            "planId": "9e8d7c6b-5a49-4f38-a726-1504f3e2d1c0",
+            "roles": [
+              "admin"
+            ],
+            "accountRootCardId": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "allowOverage",
+          "modeHistory": [
+            {
+              "actorAccountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "changedAt": "2026-11-03T10:00:00Z",
+              "source": "owner",
+              "previousMode": "hardLimit",
+              "newMode": "allowOverage"
+            }
+          ],
+          "usage": {
+            "accountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-26T23:59:59Z",
+              "computeGcu": 1999.875,
+              "memoryGbSeconds": 500001,
+              "durableStorageGbMonth": 0.0,
+              "ephemeralStorageGbMonth": 3.25,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "enabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "maxMemoryPerAgent",
+              "value": 18446744073709551615,
+              "reason": "support",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-05T14:00:00Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+              "accountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "createdAt": "2026-06-15T00:00:00Z",
+              "expiresAt": "2026-12-15T00:00:00Z"
+            }
+          ],
+          "shares": [
+            {
+              "id": "4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f7a",
+              "revision": 1,
+              "ownerAccountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "targetAccountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "name": "research-read",
+              "currentCardId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6a",
+              "data": {
+                "lowerPositive": [],
+                "lowerNegative": [],
+                "upperPositive": [
+                  "environment:read"
+                ],
+                "upperNegative": []
+              }
+            }
+          ]
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "duplicateSibling"
+    },
+    {
+      "name": "one 1.6 account listed twice",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        },
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research-2",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "duplicateMapping"
+    },
+    {
+      "name": "a login name instead of the numeric GitHub user ID",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "octocat",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "invalidMapping"
+    },
+    {
+      "name": "a GitHub user ID with a leading zero",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "0583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "invalidMapping"
+    },
+    {
+      "name": "an OIDC login mapping: only GitHub mappings are imported",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "oidc",
+              "issuer": "https://login.acme.example",
+              "subject": "248289761001"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "invalidMapping"
+    },
+    {
+      "name": "two GitHub mappings for one account",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            },
+            {
+              "provider": "github",
+              "externalId": "1000002",
+              "login": "ana-alt"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "invalidMapping"
+    },
+    {
+      "name": "login evidence missing from the export",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "missingLoginEvidence"
+    },
+    {
+      "name": "login evidence exported as null",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": null,
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "missingLoginEvidence"
+    },
+    {
+      "name": "a share without a parent card",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        },
+        {
+          "account": {
+            "id": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+            "revision": 9,
+            "name": "Ana Personal",
+            "email": "ana.personal@acme.example",
+            "planId": "9e8d7c6b-5a49-4f38-a726-1504f3e2d1c0",
+            "roles": [
+              "admin"
+            ],
+            "accountRootCardId": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+          },
+          "segment": "ana-personal",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "allowOverage",
+          "modeHistory": [
+            {
+              "actorAccountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "changedAt": "2026-11-03T10:00:00Z",
+              "source": "owner",
+              "previousMode": "hardLimit",
+              "newMode": "allowOverage"
+            }
+          ],
+          "usage": {
+            "accountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-26T23:59:59Z",
+              "computeGcu": 1999.875,
+              "memoryGbSeconds": 500001,
+              "durableStorageGbMonth": 0.0,
+              "ephemeralStorageGbMonth": 3.25,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "enabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "maxMemoryPerAgent",
+              "value": 18446744073709551615,
+              "reason": "support",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-05T14:00:00Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+              "accountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "createdAt": "2026-06-15T00:00:00Z",
+              "expiresAt": "2026-12-15T00:00:00Z"
+            }
+          ],
+          "shares": [
+            {
+              "id": "4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f7a",
+              "revision": 1,
+              "ownerAccountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "targetAccountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "name": "research-read",
+              "currentCardId": null,
+              "data": {
+                "lowerPositive": [],
+                "lowerNegative": [],
+                "upperPositive": [
+                  "environment:read"
+                ],
+                "upperNegative": []
+              }
+            }
+          ]
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "parentlessShare"
+    },
+    {
+      "name": "a grant by an unmapped actor",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "0f1e2d3c-4b5a-4968-8776-655443322110",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "unmappedActor"
+    },
+    {
+      "name": "a memory default above its ceiling",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "2c3d4e5f-6a7b-4c8d-9e0f-a1b2c3d4e5f6",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [
+        {
+          "planId": "2c3d4e5f-6a7b-4c8d-9e0f-a1b2c3d4e5f6",
+          "name": "broken",
+          "appLimit": 3,
+          "envLimit": 10,
+          "componentLimit": 15,
+          "workerConnectionLimit": 25,
+          "storageLimit": 500000000,
+          "blobStorageLimit": 18446744073709551615,
+          "monthlyUploadLimit": 1000000000,
+          "monthlyComputeGcu": 100,
+          "monthlyMemoryGbSeconds": 10000,
+          "monthlyDurableStorageGbMonth": 50,
+          "monthlyEphemeralStorageGbMonth": 25,
+          "overageAllowedByPlan": false,
+          "maxMemoryPerAgent": {
+            "type": "finite",
+            "value": 8589934592
+          },
+          "maxMemoryPerAgentCeiling": {
+            "type": "finite",
+            "value": 4294967296
+          },
+          "maxMemoryPerAgentUserConfigurable": true,
+          "maxTableElementsPerWorker": 16384,
+          "maxStoragePerAgent": {
+            "type": "disabled",
+            "reason": "managedFilesystemUnavailable"
+          },
+          "maxStoragePerAgentCeiling": {
+            "type": "disabled",
+            "reason": "managedFilesystemUnavailable"
+          },
+          "maxStoragePerAgentUserConfigurable": false,
+          "perInvocationHttpCallLimit": 1000,
+          "perInvocationRpcCallLimit": 1000,
+          "monthlyHttpCallLimit": 10000,
+          "monthlyRpcCallLimit": 10000,
+          "maxConcurrentAgentsPerExecutor": 100,
+          "oplogWritesPerSecond": 1000
+        }
+      ],
+      "extraActors": {},
+      "refusal": "invalidBounds"
+    },
+    {
+      "name": "an unlimited memory default under a finite ceiling",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [
+        {
+          "planId": "4e5f6a7b-8c9d-4e0f-a1b2-c3d4e5f6a7b8",
+          "name": "unlimited-default",
+          "appLimit": 3,
+          "envLimit": 10,
+          "componentLimit": 15,
+          "workerConnectionLimit": 25,
+          "storageLimit": 500000000,
+          "blobStorageLimit": 18446744073709551615,
+          "monthlyUploadLimit": 1000000000,
+          "monthlyComputeGcu": 100,
+          "monthlyMemoryGbSeconds": 10000,
+          "monthlyDurableStorageGbMonth": 50,
+          "monthlyEphemeralStorageGbMonth": 25,
+          "overageAllowedByPlan": false,
+          "maxMemoryPerAgent": {
+            "type": "unlimited"
+          },
+          "maxMemoryPerAgentCeiling": {
+            "type": "finite",
+            "value": 4294967296
+          },
+          "maxMemoryPerAgentUserConfigurable": true,
+          "maxTableElementsPerWorker": 16384,
+          "maxStoragePerAgent": {
+            "type": "disabled",
+            "reason": "managedFilesystemUnavailable"
+          },
+          "maxStoragePerAgentCeiling": {
+            "type": "disabled",
+            "reason": "managedFilesystemUnavailable"
+          },
+          "maxStoragePerAgentUserConfigurable": false,
+          "perInvocationHttpCallLimit": 1000,
+          "perInvocationRpcCallLimit": 1000,
+          "monthlyHttpCallLimit": 10000,
+          "monthlyRpcCallLimit": 10000,
+          "maxConcurrentAgentsPerExecutor": 100,
+          "oplogWritesPerSecond": 1000
+        }
+      ],
+      "extraActors": {},
+      "refusal": "invalidBounds"
+    },
+    {
+      "name": "a disabled storage default under an enabled ceiling",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "5f6a7b8c-9d0e-4f1a-b2c3-d4e5f6a7b8c9",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [
+        {
+          "planId": "5f6a7b8c-9d0e-4f1a-b2c3-d4e5f6a7b8c9",
+          "name": "half-disabled",
+          "appLimit": 20,
+          "envLimit": 80,
+          "componentLimit": 200,
+          "workerConnectionLimit": 500,
+          "storageLimit": 5000000000,
+          "blobStorageLimit": 100000000000,
+          "monthlyUploadLimit": 20000000000,
+          "monthlyComputeGcu": 2000,
+          "monthlyMemoryGbSeconds": 500000,
+          "monthlyDurableStorageGbMonth": 1000,
+          "monthlyEphemeralStorageGbMonth": 500,
+          "overageAllowedByPlan": true,
+          "maxMemoryPerAgent": {
+            "type": "unlimited"
+          },
+          "maxMemoryPerAgentCeiling": {
+            "type": "unlimited"
+          },
+          "maxMemoryPerAgentUserConfigurable": false,
+          "maxTableElementsPerWorker": 65536,
+          "maxStoragePerAgent": {
+            "type": "disabled",
+            "reason": "managedFilesystemUnavailable"
+          },
+          "maxStoragePerAgentCeiling": {
+            "type": "finite",
+            "value": 107374182400
+          },
+          "maxStoragePerAgentUserConfigurable": true,
+          "perInvocationHttpCallLimit": 5000,
+          "perInvocationRpcCallLimit": 5000,
+          "monthlyHttpCallLimit": 1000000,
+          "monthlyRpcCallLimit": 1000000,
+          "maxConcurrentAgentsPerExecutor": 1000000000000000000,
+          "oplogWritesPerSecond": 1000000000000000000
+        }
+      ],
+      "extraActors": {},
+      "refusal": "invalidBounds"
+    },
+    {
+      "name": "a storage grant at the 1.6 disabled sentinel",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            },
+            {
+              "dimension": "maxStoragePerAgent",
+              "value": 10000000000000000,
+              "reason": "support",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-06T09:00:00Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "invalidBounds"
+    },
+    {
+      "name": "a mode transition by an unmapped actor",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        },
+        {
+          "account": {
+            "id": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+            "revision": 9,
+            "name": "Ana Personal",
+            "email": "ana.personal@acme.example",
+            "planId": "9e8d7c6b-5a49-4f38-a726-1504f3e2d1c0",
+            "roles": [
+              "admin"
+            ],
+            "accountRootCardId": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+          },
+          "segment": "ana-personal",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "allowOverage",
+          "modeHistory": [
+            {
+              "actorAccountId": "0f1e2d3c-4b5a-4968-8776-655443322110",
+              "changedAt": "2026-11-03T10:00:00Z",
+              "source": "administrator",
+              "previousMode": "hardLimit",
+              "newMode": "allowOverage"
+            }
+          ],
+          "usage": {
+            "accountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-26T23:59:59Z",
+              "computeGcu": 1999.875,
+              "memoryGbSeconds": 500001,
+              "durableStorageGbMonth": 0.0,
+              "ephemeralStorageGbMonth": 3.25,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "enabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "maxMemoryPerAgent",
+              "value": 18446744073709551615,
+              "reason": "support",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-05T14:00:00Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+              "accountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "createdAt": "2026-06-15T00:00:00Z",
+              "expiresAt": "2026-12-15T00:00:00Z"
+            }
+          ],
+          "shares": [
+            {
+              "id": "4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f7a",
+              "revision": 1,
+              "ownerAccountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "targetAccountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "name": "research-read",
+              "currentCardId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6a",
+              "data": {
+                "lowerPositive": [],
+                "lowerNegative": [],
+                "upperPositive": [
+                  "environment:read"
+                ],
+                "upperNegative": []
+              }
+            }
+          ]
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "unmappedActor"
+    },
+    {
+      "name": "an actor mapped by login name",
+      "accounts": [
+        {
+          "account": {
+            "id": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "revision": 4,
+            "name": "Acme Research",
+            "email": "ana@acme.example",
+            "planId": "0b7c2d4e-5f60-4a71-8b92-c3d4e5f60718",
+            "roles": [],
+            "accountRootCardId": "1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d"
+          },
+          "segment": "acme-research",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "hardLimit",
+          "modeHistory": [],
+          "usage": {
+            "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-17T09:30:00Z",
+              "computeGcu": 12.375,
+              "memoryGbSeconds": 4321,
+              "durableStorageGbMonth": 0.0625,
+              "ephemeralStorageGbMonth": 1.5,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "disabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "monthlyComputeGcu",
+              "value": 50,
+              "reason": "promotional",
+              "actorAccountId": "0f1e2d3c-4b5a-4968-8776-655443322110",
+              "grantedAt": "2026-11-02T08:00:00Z",
+              "expiresAt": "2026-12-31T23:59:59Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "6f7a8b9c-0d1e-4f2a-8b3c-4d5e6f7a8b9c",
+              "accountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "createdAt": "2026-10-01T12:00:00Z",
+              "expiresAt": "2027-10-01T12:00:00Z"
+            }
+          ],
+          "shares": []
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {
+        "0f1e2d3c-4b5a-4968-8776-655443322110": {
+          "provider": "github",
+          "externalId": "ana-admin",
+          "login": "ana-admin"
+        }
+      },
+      "refusal": "unmappedActor"
+    },
+    {
+      "name": "a share whose target is not imported",
+      "accounts": [
+        {
+          "account": {
+            "id": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+            "revision": 9,
+            "name": "Ana Personal",
+            "email": "ana.personal@acme.example",
+            "planId": "9e8d7c6b-5a49-4f38-a726-1504f3e2d1c0",
+            "roles": [
+              "admin"
+            ],
+            "accountRootCardId": "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+          },
+          "segment": "ana-personal",
+          "loginMappings": [
+            {
+              "provider": "github",
+              "externalId": "583231",
+              "login": "octocat"
+            }
+          ],
+          "monthlyUsageMode": "allowOverage",
+          "modeHistory": [
+            {
+              "actorAccountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "changedAt": "2026-11-03T10:00:00Z",
+              "source": "owner",
+              "previousMode": "hardLimit",
+              "newMode": "allowOverage"
+            }
+          ],
+          "usage": {
+            "accountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+            "usage": {
+              "period": {
+                "year": 2026,
+                "month": 11
+              },
+              "asOf": "2026-11-26T23:59:59Z",
+              "computeGcu": 1999.875,
+              "memoryGbSeconds": 500001,
+              "durableStorageGbMonth": 0.0,
+              "ephemeralStorageGbMonth": 3.25,
+              "metering": {
+                "compute": "enabled",
+                "memory": "enabled",
+                "durableStorage": "enabled",
+                "ephemeralStorage": "enabled"
+              }
+            }
+          },
+          "adminGrants": [
+            {
+              "dimension": "maxMemoryPerAgent",
+              "value": 18446744073709551615,
+              "reason": "support",
+              "actorAccountId": "5e6f7a8b-9c0d-4e1f-8a2b-3c4d5e6f7a8b",
+              "grantedAt": "2026-11-05T14:00:00Z"
+            }
+          ],
+          "tokens": [
+            {
+              "id": "7a8b9c0d-1e2f-4a3b-8c4d-5e6f7a8b9c0d",
+              "accountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "createdAt": "2026-06-15T00:00:00Z",
+              "expiresAt": "2026-12-15T00:00:00Z"
+            }
+          ],
+          "shares": [
+            {
+              "id": "4d5e6f7a-8b9c-4d0e-9f1a-2b3c4d5e6f7a",
+              "revision": 1,
+              "ownerAccountId": "8a9b0c1d-2e3f-4a5b-8c6d-7e8f9a0b1c2d",
+              "targetAccountId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6f",
+              "name": "research-read",
+              "currentCardId": "3c4d5e6f-7a8b-4c9d-8e0f-1a2b3c4d5e6a",
+              "data": {
+                "lowerPositive": [],
+                "lowerNegative": [],
+                "upperPositive": [
+                  "environment:read"
+                ],
+                "upperNegative": []
+              }
+            }
+          ]
+        }
+      ],
+      "extraPlans": [],
+      "extraActors": {},
+      "refusal": "shareOutsideImport"
+    }
+  ]
+}
