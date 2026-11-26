@@ -28,6 +28,8 @@ use std::sync::{Arc, Mutex};
 pub use super::placement::verdict as place;
 
 /// A file store with optional retained states. Only its control handle changes files.
+/// It imitates a file store, not S3: it has no key byte limit, so a test that passes
+/// here does not show how S3 treats a long path.
 #[derive(Debug, Clone)]
 pub struct InMemoryVolume {
     files: Arc<Mutex<Files>>,
