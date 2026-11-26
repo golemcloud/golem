@@ -14,7 +14,7 @@
 
 use crate::config::S3BlobStorageConfig;
 use crate::storage::blob::s3::{
-    S3BlobStorageFactory, S3StartupNamespace, startup_failure, startup_scope,
+    S3BlobStorageFactory, S3StartupNamespace, startup_failure, startup_scopes,
 };
 use crate::storage::blob::{
     BLOB_STREAM_CHUNK_SIZE, BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageBackend,
@@ -23,10 +23,6 @@ use crate::storage::blob::{
 };
 use anyhow::Error;
 use async_trait::async_trait;
-use aws_sdk_s3::config::http::HttpResponse;
-use aws_sdk_s3::error::{ErrorMetadata, SdkError};
-use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error;
-use aws_sdk_s3::primitives::SdkBody;
 use bytes::Bytes;
 use futures::Stream;
 use futures::stream::BoxStream;
@@ -39,29 +35,23 @@ use std::{
 };
 use tokio::sync::RwLock;
 
-/// Creates in-memory storage under an allowed bucket and prefix, or returns a prepared failure.
+/// Returns prepared storage or a prepared failure after configuration validation.
 #[derive(Debug)]
 pub struct InMemoryS3BlobStorageFactory {
-    result:
-        Result<(Box<str>, Box<str>, Arc<InMemoryBlobStorage>), Box<SdkError<ListObjectsV2Error>>>,
+    result: Result<Arc<InMemoryBlobStorage>, Error>,
 }
 
 impl InMemoryS3BlobStorageFactory {
-    pub fn ready(
-        config: &S3BlobStorageConfig,
-        startup_namespace: S3StartupNamespace,
-        storage: Arc<InMemoryBlobStorage>,
-    ) -> Self {
-        let (bucket, prefix) = startup_scope(config, startup_namespace);
+    pub fn ready(storage: Arc<InMemoryBlobStorage>) -> Self {
         Self {
-            result: Ok((bucket.into(), prefix, storage)),
+            result: Ok(storage),
         }
     }
 
-    /// Returns the same prepared SDK failure for each valid configuration.
-    pub fn failed(error: SdkError<ListObjectsV2Error>) -> Self {
+    /// Returns the prepared failure for any valid configuration.
+    pub fn failed(error: impl Into<Error>) -> Self {
         Self {
-            result: Err(Box::new(error)),
+            result: Err(error.into()),
         }
     }
 }
@@ -71,37 +61,13 @@ impl S3BlobStorageFactory for InMemoryS3BlobStorageFactory {
     async fn create(
         self,
         config: S3BlobStorageConfig,
-        startup_namespace: S3StartupNamespace,
+        startup_namespaces: &[S3StartupNamespace],
     ) -> Result<Arc<dyn BlobStorage>, Error> {
         config.validate()?;
-        let (bucket, prefix) = startup_scope(&config, startup_namespace);
-        let (allowed_bucket, allowed_prefix, storage) = self
-            .result
-            .map_err(|error| startup_failure(bucket, *error))?;
-        let (status, error) = if bucket != allowed_bucket.as_ref() {
-            (
-                404_u16,
-                ListObjectsV2Error::NoSuchBucket(
-                    aws_sdk_s3::types::error::NoSuchBucket::builder()
-                        .meta(ErrorMetadata::builder().code("NoSuchBucket").build())
-                        .build(),
-                ),
-            )
-        } else if !prefix.starts_with(allowed_prefix.as_ref()) {
-            (
-                403_u16,
-                ListObjectsV2Error::generic(ErrorMetadata::builder().code("AccessDenied").build()),
-            )
-        } else {
-            return Ok(storage);
-        };
-        Err(startup_failure(
-            bucket,
-            SdkError::service_error(
-                error,
-                HttpResponse::new(status.try_into().unwrap(), SdkBody::empty()),
-            ),
-        ))
+        let scopes = startup_scopes(&config, startup_namespaces)?;
+        self.result
+            .map(|storage| storage as Arc<dyn BlobStorage>)
+            .map_err(|error| startup_failure(scopes[0].0, error))
     }
 }
 

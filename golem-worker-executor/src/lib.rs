@@ -894,8 +894,24 @@ async fn create_worker_executor_impl<
 
     let blob_storage: Arc<dyn BlobStorage> = match &golem_config.blob_storage {
         BlobStorageConfig::S3(config) => {
+            let namespaces: Box<[_]> = [
+                S3StartupNamespace::OplogPayload,
+                S3StartupNamespace::CustomData,
+                S3StartupNamespace::InitialAgentFiles,
+            ]
+            .into_iter()
+            .chain(matches!(
+                golem_config.compiled_component_service,
+                golem_service_base::service::compiled_component::CompiledComponentServiceConfig::Enabled(_)
+            ).then_some(S3StartupNamespace::CompilationCache))
+            .chain((0..golem_config.oplog.blob_storage_layers).map(S3StartupNamespace::CompressedOplog))
+            .chain(matches!(
+                golem_config.filesystem_snapshots,
+                crate::services::golem_config::FilesystemSnapshotsConfig::Enabled(_)
+            ).then_some(S3StartupNamespace::FilesystemSnapshots))
+            .collect();
             blob_storage_factory
-                .create(config.clone(), S3StartupNamespace::OplogPayload)
+                .create(config.clone(), &namespaces)
                 .await?
         }
         BlobStorageConfig::LocalFileSystem(config) => Arc::new(
@@ -1586,11 +1602,9 @@ mod tests {
             }),
             ..Default::default()
         };
-        let failure = aws_sdk_s3::error::SdkError::dispatch_failure(
-            aws_sdk_s3::error::ConnectorError::io(Box::new(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "selected bucket access denied",
-            ))),
+        let failure = std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "selected bucket transport refusal",
         );
         let factory = InMemoryS3BlobStorageFactory::failed(failure);
         let mut tasks = JoinSet::new();
@@ -1616,11 +1630,11 @@ mod tests {
                 .find_map(|cause| cause.downcast_ref::<std::io::Error>())
                 .unwrap()
                 .kind(),
-            std::io::ErrorKind::PermissionDenied
+            std::io::ErrorKind::ConnectionRefused
         );
         assert_eq!(
             error.root_cause().to_string(),
-            "selected bucket access denied"
+            "selected bucket transport refusal"
         );
         assert!(tasks.is_empty(), "services must not start after S3 fails");
     }

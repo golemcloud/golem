@@ -563,6 +563,10 @@ async fn counter_resource_test_1(
     deps: &EnvBasedTestDependencies,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
+    use futures::{StreamExt, TryStreamExt};
+    use golem_service_base::storage::blob::fs::FileSystemBlobStorage;
+    use golem_service_base::storage::blob::{BlobStorage, BlobStorageNamespace};
+
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
     let component = user
@@ -571,6 +575,35 @@ async fn counter_resource_test_1(
         .unique()
         .store()
         .await?;
+
+    // Observe the compiler's write before an executor can compile the component itself.
+    let blobs = FileSystemBlobStorage::attach_existing(
+        &std::env::temp_dir().join("ittest-local-object-store/golem"),
+    )?;
+    let namespace = BlobStorageNamespace::CompilationCache {
+        environment_id: env.id,
+    };
+    let compiled_path = PathBuf::from(format!("{}/{}", component.id, component.revision));
+    let artifacts = tokio_stream::wrappers::IntervalStream::new(tokio::time::interval(
+        Duration::from_millis(50),
+    ))
+    .then(|_| {
+        blobs.list_blobs_below(
+            "settings-test",
+            "compiler-write",
+            namespace.clone(),
+            &compiled_path,
+        )
+    })
+    .try_filter(|blobs| std::future::ready(!blobs.is_empty()));
+    futures::pin_mut!(artifacts);
+    let artifacts = tokio::time::timeout(Duration::from_secs(90), artifacts.next())
+        .await
+        .map_err(|_| {
+            anyhow!("compiler did not write the selected blob root for {compiled_path:?}")
+        })?
+        .expect("artifact polling stream ended")?;
+    assert!(artifacts.iter().all(|blob| blob.size > 0));
 
     let parsed_agent_id = agent_key!("RpcCounter", "counter1");
     let agent_id = user

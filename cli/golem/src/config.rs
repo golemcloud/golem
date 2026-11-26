@@ -833,6 +833,74 @@ pub fn load_server_config(
     )
 }
 
+/// Refuses PostgreSQL state with Litestream without creating state or a repository key.
+pub fn check_litestream_config(args: &RunArgs) -> anyhow::Result<()> {
+    use golem_worker_service::mcp::session::McpSessionStorageConfig;
+
+    let config = load_server_config(None, args, SnapshotRepositoryKeySource::ValidationOnly)?;
+    let key_value = match &config.worker_executor.key_value_storage {
+        KeyValueStorageConfig::Postgres(_) => Some("worker_executor.key_value_storage"),
+        KeyValueStorageConfig::NamespaceRouted(stores) => [
+            (
+                &stores.cache,
+                "worker_executor.key_value_storage.config.cache",
+            ),
+            (
+                &stores.persistent,
+                "worker_executor.key_value_storage.config.persistent",
+            ),
+        ]
+        .into_iter()
+        .find_map(|(store, path)| {
+            matches!(store, KeyValueStorageInnerConfig::Postgres(_)).then_some(path)
+        }),
+        _ => None,
+    };
+    let postgres = [
+        matches!(config.registry_service.db, DbConfig::Postgres(_))
+            .then_some("registry_service.db"),
+        matches!(
+            config.shard_manager.persistence,
+            golem_shard_manager::config::PersistenceConfig::Postgres(_)
+        )
+        .then_some("shard_manager.persistence"),
+        matches!(
+            config.worker_service.gateway_session_storage,
+            SessionStoreConfig::Postgres(_)
+        )
+        .then_some("worker_service.gateway_session_storage"),
+        matches!(
+            config
+                .worker_service
+                .mcp
+                .session
+                .effective_session_storage(&config.worker_service.gateway_session_storage),
+            McpSessionStorageConfig::Postgres(_)
+        )
+        .then_some("worker_service.mcp.session_storage"),
+        key_value,
+        matches!(
+            config.worker_executor.indexed_storage,
+            IndexedStorageConfig::Postgres(_)
+        )
+        .then_some("worker_executor.indexed_storage"),
+        matches!(
+            config.worker_executor.scheduler_storage,
+            SchedulerStorageConfig::Postgres(_)
+        )
+        .then_some("worker_executor.scheduler_storage"),
+    ]
+    .into_iter()
+    .flatten()
+    .next();
+    if let Some(path) = postgres {
+        bail!(
+            "GOLEM_LITESTREAM=true cannot use PostgreSQL state selected by `{path}`; disable Litestream or select SQLite state"
+        );
+    }
+    Ok(())
+}
+
 fn load_server_config_on(
     platform: LocalPlatform,
     local_server: Option<&ResolvedLocalServer>,
@@ -1702,6 +1770,7 @@ mod tests {
     #[test]
     fn server_settings_reach_embedded_and_standalone_services() {
         Jail::expect_with(|jail| {
+            jail.clear_env();
             jail.create_dir("config")?;
             let settings = r#"
                 state_store = "postgres"
@@ -1727,15 +1796,43 @@ mod tests {
                 access_key_id = "test-access-id"
                 secret_access_key = "test-secret-key"
                 provider_name = "settings-test"
+                [logging]
+                file_dir = "/installation/logs"
+                file_name = "installation.log"
+                file_truncate = true
                 [logging.stdout]
                 json = true
+                json_source_location = true
+                [logging.stderr]
+                enabled = true
+                compact = true
+                without_time = true
+                [logging.file]
+                enabled = true
+                pretty = true
+                span_events_full = true
                 [otlp]
+                enabled = true
                 host = "collector.internal"
                 port = 14318
+                service_name = "installation-traces"
                 [cache]
                 enabled = true
                 host = "cache.internal"
                 port = 16379
+                database = 3
+                key_prefix = "installation-cache:"
+                username = "cache-user"
+                password = "synthetic-cache-password"
+                tls = true
+                pool_size = 13
+                tracing = true
+                [cache.retries]
+                max_attempts = 7
+                min_delay = "17ms"
+                max_delay = "11s"
+                multiplier = 3.0
+                max_jitter_factor = 0.3
                 [internal_grpc_tls]
                 enabled = true
                 cert_file = "/certs/service.pem"
@@ -1744,6 +1841,21 @@ mod tests {
                 server_name = "grpc.internal"
                 [filesystem_snapshots]
                 enabled = true
+                storage_call_deadline = "47s"
+                restore_reader_threads = 11
+                save_threads = 5
+                max_concurrent_uploads = 9
+                max_concurrent_restores = 3
+                confirmation_wait = "43s"
+                store_check_limit = "13s"
+                capture_wait = "19s"
+                max_pending_deletes_per_agent = 97
+                [filesystem_snapshots.storage_retry]
+                max_attempts = 6
+                min_delay = "23ms"
+                max_delay = "7s"
+                multiplier = 3.0
+                max_jitter_factor = 0.4
             "#;
             jail.set_env(
                 "GOLEM__FILESYSTEM_SNAPSHOTS__REPOSITORY_KEY",
@@ -1923,12 +2035,42 @@ mod tests {
                     assert_eq!(postgres["max_connections"], 17);
                     assert_eq!(postgres["schema"], "golem_worker_executor");
                     assert_eq!(store["config"]["cache"]["config"]["host"], "cache.internal");
+                    assert_eq!(store["config"]["cache"]["config"]["port"], 16379);
+                    let cache = &store["config"]["cache"]["config"];
+                    assert_eq!(cache["database"], 3);
+                    assert_eq!(cache["key_prefix"], "installation-cache:");
+                    assert_eq!(cache["username"], "cache-user");
+                    assert_eq!(cache["password"], "synthetic-cache-password");
+                    assert_eq!(cache["tls"], true);
+                    assert_eq!(cache["pool_size"], 13);
+                    assert_eq!(cache["tracing"], true);
+                    assert_eq!(cache["retries"]["max_attempts"], 7);
+                    assert_eq!(cache["retries"]["min_delay"], "17ms");
+                    assert_eq!(cache["retries"]["max_delay"], "11s");
+                    assert_eq!(cache["retries"]["multiplier"], 3.0);
+                    assert_eq!(cache["retries"]["max_jitter_factor"], 0.3);
                     let FilesystemSnapshotsConfig::Enabled(snapshots) =
                         &executor.filesystem_snapshots
                     else {
                         panic!("expected enabled snapshots")
                     };
                     assert_eq!(snapshots.uploads().retained_update_snapshots().get(), 7);
+                    let snapshots = serde_json::to_value(snapshots).unwrap();
+                    assert_eq!(snapshots["repository_key"], "2a".repeat(64));
+                    assert_eq!(snapshots["storage_call_deadline"], "47s");
+                    assert_eq!(snapshots["restore_reader_threads"], 11);
+                    assert_eq!(snapshots["save_threads"], 5);
+                    assert_eq!(snapshots["max_concurrent_uploads"], 9);
+                    assert_eq!(snapshots["max_concurrent_restores"], 3);
+                    assert_eq!(snapshots["confirmation_wait"], "43s");
+                    assert_eq!(snapshots["store_check_limit"], "13s");
+                    assert_eq!(snapshots["capture_wait"], "19s");
+                    assert_eq!(snapshots["max_pending_deletes_per_agent"], 97);
+                    assert_eq!(snapshots["storage_retry"]["max_attempts"], 6);
+                    assert_eq!(snapshots["storage_retry"]["min_delay"], "23ms");
+                    assert_eq!(snapshots["storage_retry"]["max_delay"], "7s");
+                    assert_eq!(snapshots["storage_retry"]["multiplier"], 3.0);
+                    assert_eq!(snapshots["storage_retry"]["max_jitter_factor"], 0.4);
                 });
             [&embedded.worker_service, &worker]
                 .into_iter()
@@ -1937,6 +2079,18 @@ mod tests {
                     assert_eq!(store["type"], "Redis");
                     assert_eq!(store["config"]["host"], "cache.internal");
                     assert_eq!(store["config"]["port"], 16379);
+                    assert_eq!(store["config"]["database"], 3);
+                    assert_eq!(store["config"]["key_prefix"], "installation-cache:");
+                    assert_eq!(store["config"]["username"], "cache-user");
+                    assert_eq!(store["config"]["password"], "synthetic-cache-password");
+                    assert_eq!(store["config"]["tls"], true);
+                    assert_eq!(store["config"]["pool_size"], 13);
+                    assert_eq!(store["config"]["tracing"], true);
+                    assert_eq!(store["config"]["retries"]["max_attempts"], 7);
+                    assert_eq!(store["config"]["retries"]["min_delay"], "17ms");
+                    assert_eq!(store["config"]["retries"]["max_delay"], "11s");
+                    assert_eq!(store["config"]["retries"]["multiplier"], 3.0);
+                    assert_eq!(store["config"]["retries"]["max_jitter_factor"], 0.3);
                 });
             [
                 &embedded.registry_service.blob_storage,
@@ -1989,6 +2143,18 @@ mod tests {
             .into_iter()
             .for_each(|config| {
                 assert!(config.stdout.json);
+                assert!(config.stdout.json_source_location);
+                assert!(config.stderr.enabled);
+                assert!(config.stderr.compact);
+                assert!(config.stderr.without_time);
+                assert!(config.file.enabled);
+                assert!(config.file.pretty);
+                assert!(config.file.span_events_full);
+                assert_eq!(config.file_dir.as_deref(), Some("/installation/logs"));
+                assert_eq!(config.file_name.as_deref(), Some("installation.log"));
+                assert!(config.file_truncate);
+                assert!(config.otlp.enabled);
+                assert_eq!(config.otlp.service_name, "installation-traces");
                 assert_eq!(config.otlp.host, "collector.internal");
                 assert_eq!(config.otlp.port, 14318);
             });
@@ -2066,7 +2232,352 @@ mod tests {
     }
 
     #[test]
+    fn advanced_sections_fail_only_their_own_readers() {
+        [
+            "advanced.registry_service",
+            "advanced.shard_manager",
+            "advanced.worker_service",
+            "advanced.worker_executor",
+            "advanced.component_compilation_service",
+            "advanced.server",
+            "advanced",
+            "cache",
+        ]
+        .into_iter()
+        .for_each(|path| {
+            [false, true].into_iter().for_each(|environment| {
+                Jail::expect_with(|jail| {
+                    jail.clear_env();
+                    jail.create_dir("config")?;
+                    let settings = if environment {
+                        let variable = match path.strip_prefix("advanced.") {
+                            Some(service) => format!("GOLEM_ADVANCED__{}", service.to_uppercase()),
+                            None => format!("GOLEM__{}", path.to_uppercase()),
+                        };
+                        jail.set_env(variable, "false");
+                        String::new()
+                    } else {
+                        format!("{path} = false")
+                    };
+                    [
+                        "registry-service",
+                        "shard-manager",
+                        "worker-service",
+                        "worker-executor",
+                        "component-compilation-service",
+                    ]
+                    .into_iter()
+                    .try_for_each(|service| {
+                        jail.create_file(format!("config/{service}.toml"), &settings)
+                            .map(|_| ())
+                    })?;
+                    jail.create_file("settings.toml", &settings)?;
+                    [
+                        (
+                            "registry_service",
+                            golem_registry_service::config::make_config_loader()
+                                .load()
+                                .map(|_| ()),
+                        ),
+                        (
+                            "shard_manager",
+                            golem_shard_manager::config::make_config_loader()
+                                .load()
+                                .map(|_| ()),
+                        ),
+                        (
+                            "worker_service",
+                            golem_worker_service::config::make_worker_service_config_loader()
+                                .load()
+                                .map(|_| ()),
+                        ),
+                        (
+                            "worker_executor",
+                            golem_worker_executor::services::golem_config::make_config_loader()
+                                .load()
+                                .map(|_| ()),
+                        ),
+                        (
+                            "component_compilation_service",
+                            golem_component_compilation_service::config::make_config_loader()
+                                .load()
+                                .map(|_| ()),
+                        ),
+                    ]
+                    .into_iter()
+                    .for_each(|(reader, result)| {
+                        let owns = path == "advanced"
+                            || path == "cache"
+                            || path == format!("advanced.{reader}");
+                        assert_eq!(
+                            result.is_err(),
+                            owns,
+                            "{reader}: {path}, environment={environment}: {result:?}"
+                        );
+                        if let Err(error) = result {
+                            let message = error.to_string();
+                            assert!(message.contains(path), "{message}");
+                            assert!(
+                                message.contains(if environment { "environment" } else { ".toml" }),
+                                "{message}"
+                            );
+                        }
+                    });
+                    let result = load(
+                        None,
+                        &RunArgs {
+                            config: Some("settings.toml".into()),
+                            ..run_args_with_data_dir("/data")
+                        },
+                    );
+                    let error = result.err().expect("embedded reader owns every section");
+                    assert!(format!("{error:#}").contains(path), "{error:#}");
+                    Ok(())
+                });
+            });
+        });
+    }
+
+    #[test]
+    fn advanced_executor_leaf_does_not_change_other_services() {
+        [false, true].into_iter().for_each(|environment| {
+            Jail::expect_with(|jail| {
+                jail.clear_env();
+                jail.create_dir("config")?;
+                let settings = if environment {
+                    jail.set_env(
+                        "GOLEM_ADVANCED__WORKER_EXECUTOR__RUNTIME_METRICS_SAMPLING_INTERVAL",
+                        "37s",
+                    );
+                    ""
+                } else {
+                    "advanced.worker_executor.runtime_metrics_sampling_interval = '37s'"
+                };
+                [
+                    "registry-service",
+                    "shard-manager",
+                    "worker-service",
+                    "worker-executor",
+                    "component-compilation-service",
+                ]
+                .into_iter()
+                .try_for_each(|service| {
+                    jail.create_file(format!("config/{service}.toml"), settings)
+                        .map(|_| ())
+                })?;
+                jail.create_file("settings.toml", settings)?;
+                let embedded = load(
+                    None,
+                    &RunArgs {
+                        config: Some("settings.toml".into()),
+                        ..run_args_with_data_dir("/data")
+                    },
+                )
+                .unwrap();
+                [
+                    golem_registry_service::config::make_config_loader()
+                        .load()?
+                        .runtime_metrics_sampling_interval,
+                    golem_shard_manager::config::make_config_loader()
+                        .load()?
+                        .runtime_metrics_sampling_interval,
+                    golem_worker_service::config::make_worker_service_config_loader()
+                        .load()?
+                        .runtime_metrics_sampling_interval,
+                    golem_component_compilation_service::config::make_config_loader()
+                        .load()?
+                        .runtime_metrics_sampling_interval,
+                    embedded.registry_service.runtime_metrics_sampling_interval,
+                    embedded.shard_manager.runtime_metrics_sampling_interval,
+                    embedded.worker_service.runtime_metrics_sampling_interval,
+                    embedded
+                        .component_compilation_service
+                        .runtime_metrics_sampling_interval,
+                ]
+                .into_iter()
+                .for_each(|interval| assert_eq!(interval, std::time::Duration::from_secs(5)));
+                [
+                    golem_worker_executor::services::golem_config::make_config_loader()
+                        .load()?
+                        .runtime_metrics_sampling_interval,
+                    embedded.worker_executor.runtime_metrics_sampling_interval,
+                ]
+                .into_iter()
+                .for_each(|interval| assert_eq!(interval, std::time::Duration::from_secs(37)));
+                Ok(())
+            });
+        });
+    }
+
+    #[test]
+    fn litestream_checks_every_effective_postgres_state_store_without_writes() {
+        Jail::expect_with(|jail| {
+            jail.clear_env();
+            let data = jail.directory().join("uncreated-state");
+            let pg = GolemServerConfig::postgres_s3_example(&data).unwrap();
+            let pg = serde_json::to_value(pg).unwrap();
+            let mut cases: Vec<(&str, serde_json::Value)> = [
+                "registry_service.db",
+                "shard_manager.persistence",
+                "worker_service.gateway_session_storage",
+                "worker_executor.key_value_storage",
+                "worker_executor.indexed_storage",
+                "worker_executor.scheduler_storage",
+            ]
+            .into_iter()
+            .map(|path| {
+                (
+                    path,
+                    pg.pointer(&format!("/{}", path.replace('.', "/")))
+                        .unwrap()
+                        .clone(),
+                )
+            })
+            .collect();
+            let gateway = &pg["worker_service"]["gateway_session_storage"];
+            cases.push(("worker_service.mcp.session_storage", gateway.clone()));
+            ["cache", "persistent"].into_iter().for_each(|inner| {
+                let other = if inner == "cache" {
+                    "persistent"
+                } else {
+                    "cache"
+                };
+                cases.push((
+                    "worker_executor.key_value_storage",
+                    serde_json::json!({
+                        "type": "NamespaceRouted", "config": {
+                            (inner): pg["worker_executor"]["key_value_storage"].clone(),
+                            (other): {"type": "InMemory", "config": {}}
+                        }
+                    }),
+                ));
+            });
+            cases.into_iter().for_each(|(path, store)| {
+                let advanced = path
+                    .rsplit('.')
+                    .fold(store, |value, key| serde_json::json!({(key): value}));
+                let settings: toml::Value =
+                    Figment::from(Serialized::defaults(serde_json::json!({
+                        "state_store": "sqlite", "cache": {"enabled": false},
+                        "filesystem_snapshots": {"enabled": true}, "advanced": advanced,
+                    })))
+                    .extract()
+                    .unwrap();
+                jail.create_file("litestream.toml", &toml::to_string(&settings).unwrap())
+                    .unwrap();
+                let args = RunArgs {
+                    config: Some("litestream.toml".into()),
+                    data_dir: Some(data.clone()),
+                    clean: true,
+                    ..Default::default()
+                };
+                let loaded =
+                    load_server_config(None, &args, SnapshotRepositoryKeySource::ValidationOnly)
+                        .unwrap();
+                let loaded = serde_json::to_value(loaded).unwrap();
+                let selected = loaded
+                    .pointer(&format!("/{}", path.replace('.', "/")))
+                    .unwrap();
+                assert!(
+                    selected.to_string().contains("Postgres"),
+                    "{path}: {selected}"
+                );
+                let error = check_litestream_config(&args).unwrap_err();
+                assert!(
+                    error.to_string().contains("GOLEM_LITESTREAM=true"),
+                    "{error:#}"
+                );
+                assert!(error.to_string().contains("PostgreSQL"), "{error:#}");
+                assert!(error.to_string().contains(path), "{error:#}");
+                assert!(!data.exists());
+            });
+            Ok(())
+        });
+    }
+
+    #[test]
+    fn litestream_uses_the_normal_configuration_precedence() {
+        [
+            ("state_store='postgres'", Some("sqlite"), true),
+            ("state_store='sqlite'", Some("postgres"), false),
+            (
+                "state_store='sqlite'\n[postgres]\nhost='unused.invalid'",
+                None,
+                true,
+            ),
+            (
+                "state_store='sqlite'\nblob_store='s3'\n[cache]\nenabled=true",
+                None,
+                true,
+            ),
+            ("state_store='invalid'", None, false),
+        ]
+        .into_iter()
+        .for_each(|(settings, state, allowed)| {
+            Jail::expect_with(|jail| {
+                jail.clear_env();
+                jail.create_file("litestream.toml", settings)?;
+                if let Some(state) = state {
+                    jail.set_env("GOLEM__STATE_STORE", state);
+                }
+                let data = jail.directory().join("absent-state");
+                let args = RunArgs {
+                    config: Some("litestream.toml".into()),
+                    data_dir: Some(data.clone()),
+                    ..Default::default()
+                };
+                assert_eq!(
+                    check_litestream_config(&args).is_ok(),
+                    allowed,
+                    "{settings}, {state:?}"
+                );
+                assert!(!data.exists());
+                Ok(())
+            });
+        });
+        [false, true].into_iter().for_each(|replace_with_sqlite| {
+            Jail::expect_with(|jail| {
+                jail.clear_env();
+                let data = jail.directory().join("absent-state");
+                let pg = GolemServerConfig::postgres_s3_example(&data).unwrap();
+                let settings: toml::Value = Figment::from(Serialized::defaults(serde_json::json!({
+                    "state_store": "sqlite",
+                    "advanced": {"worker_executor": {"indexed_storage": pg.worker_executor.indexed_storage}}
+                }))).extract().unwrap();
+                jail.create_file("litestream.toml", &toml::to_string(&settings).unwrap())?;
+                jail.set_env("GOLEM__STATE_STORE", "sqlite");
+                if replace_with_sqlite {
+                    jail.set_env("GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__TYPE", "Sqlite");
+                    jail.set_env("GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__DATABASE", "uncreated/indexed.db");
+                    jail.set_env("GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__MAX_CONNECTIONS", "2");
+                    jail.set_env("GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__CONFIG__FOREIGN_KEYS", "false");
+                }
+                let args = RunArgs { config: Some("litestream.toml".into()), data_dir: Some(data.clone()), ..Default::default() };
+                let loaded = load_server_config(None, &args, SnapshotRepositoryKeySource::ValidationOnly).unwrap();
+                assert_eq!(matches!(loaded.worker_executor.indexed_storage, IndexedStorageConfig::Sqlite(_)), replace_with_sqlite);
+                assert_eq!(check_litestream_config(&args).is_ok(), replace_with_sqlite);
+                assert!(!data.exists());
+                assert!(!Path::new("uncreated").exists());
+                Ok(())
+            });
+        });
+    }
+
+    #[test]
     fn server_settings_examples_load_in_every_binary() {
+        const SECRETS: &[&str] = &[
+            "password",
+            "access_key_id",
+            "secret_access_key",
+            "token",
+            "hmac_key",
+            "repository_key",
+            "key",
+            "private_key",
+            "client_secret",
+            "server_key",
+            "client_key",
+        ];
         fn secret_fields(value: &serde_json::Value, path: &str, found: Vec<String>) -> Vec<String> {
             match value {
                 serde_json::Value::Object(fields) => {
@@ -2076,21 +2587,7 @@ mod tests {
                         } else {
                             format!("{path}.{key}")
                         };
-                        if [
-                            "password",
-                            "access_key_id",
-                            "secret_access_key",
-                            "token",
-                            "hmac_key",
-                            "repository_key",
-                            "key",
-                            "private_key",
-                            "client_secret",
-                        ]
-                        .contains(&key.as_str())
-                            && !value.is_null()
-                            && value != ""
-                        {
+                        if SECRETS.contains(&key.as_str()) && !value.is_null() && value != "" {
                             found.push(path.clone());
                         }
                         secret_fields(value, &path, found)
@@ -2107,19 +2604,50 @@ mod tests {
                 _ => found,
             }
         }
+        let contains_raw_secret = |text: &str| {
+            text.contains("-----BEGIN PRIVATE KEY-----")
+                || text.lines().any(|line| {
+                    let line = line.trim_start_matches([' ', '\t', '#']);
+                    line.split_once('=').is_some_and(|(key, value)| {
+                        SECRETS.contains(&key.trim().rsplit('.').next().unwrap())
+                            && !value.trim().trim_matches(['\'', '"']).is_empty()
+                    })
+                })
+        };
+        ["server_key", "client_key", "password", "secret_access_key"]
+            .into_iter()
+            .for_each(|key| {
+                ["", "# "].into_iter().for_each(|comment| {
+                    assert!(contains_raw_secret(&format!(
+                        "{comment}{key} = 'synthetic-secret'"
+                    )));
+                });
+            });
+        assert!(!contains_raw_secret(
+            "server_key_file = '/certs/key.pem'\nclient_key_file = '/certs/client.pem'"
+        ));
 
         [
-            include_str!("../config/self-host-single-node.toml"),
-            include_str!("../config/self-host-multi-node.toml"),
+            (include_str!("../config/self-host-single-node.toml"), "sqlite"),
+            (include_str!("../config/self-host-multi-node.toml"), "postgres"),
         ]
         .into_iter()
-        .for_each(|settings| {
+        .for_each(|(settings, state)| {
             let example: serde_json::Value = Figment::from(Toml::string(settings)).extract().unwrap();
             assert_eq!(secret_fields(&example, "", Vec::new()), Vec::<String>::new());
+            assert!(!contains_raw_secret(settings));
+            assert_eq!(example["state_store"], state);
+            assert_eq!(example["blob_store"], "s3");
             [
                 ("postgres.password", serde_json::json!({"postgres": {"password": "test-inserted-password"}})),
                 ("advanced.worker_service.invocation_session_tokens.active_key.key", serde_json::json!({
                     "advanced": {"worker_service": {"invocation_session_tokens": {"active_key": {"key": "test-inserted-key"}}}}
+                })),
+                ("advanced.registry_service.grpc.tls.config.server_key", serde_json::json!({
+                    "advanced": {"registry_service": {"grpc": {"tls": {"config": {"server_key": "synthetic-server-key"}}}}}
+                })),
+                ("advanced.worker_service.registry_service.tls.config.client_key", serde_json::json!({
+                    "advanced": {"worker_service": {"registry_service": {"tls": {"config": {"client_key": "synthetic-client-key"}}}}}
                 })),
             ].into_iter().for_each(|(path, secret)| {
                 let with_secret: serde_json::Value = Figment::from(Serialized::defaults(&example))
@@ -2127,6 +2655,7 @@ mod tests {
                 assert_eq!(secret_fields(&with_secret, "", Vec::new()), [path]);
             });
             Jail::expect_with(|jail| {
+                jail.clear_env();
                 jail.create_dir("config")?;
                 [
                     "registry-service",
@@ -2141,7 +2670,7 @@ mod tests {
                         .map(|_| ())
                 })?;
                 jail.create_file("settings.toml", settings)?;
-                load(
+                let embedded = load(
                     None,
                     &RunArgs {
                         config: Some("settings.toml".into()),
@@ -2149,11 +2678,61 @@ mod tests {
                     },
                 )
                 .unwrap();
-                golem_registry_service::config::make_config_loader().load()?;
-                golem_shard_manager::config::make_config_loader().load()?;
-                golem_worker_service::config::make_worker_service_config_loader().load()?;
-                golem_worker_executor::services::golem_config::make_config_loader().load()?;
-                golem_component_compilation_service::config::make_config_loader().load()?;
+                let registry = golem_registry_service::config::make_config_loader().load()?;
+                let shard = golem_shard_manager::config::make_config_loader().load()?;
+                let worker = golem_worker_service::config::make_worker_service_config_loader().load()?;
+                let executor = golem_worker_executor::services::golem_config::make_config_loader().load()?;
+                let compilation = golem_component_compilation_service::config::make_config_loader().load()?;
+                [
+                    &embedded.registry_service.blob_storage, &registry.blob_storage,
+                    &embedded.worker_service.blob_storage, &worker.blob_storage,
+                    &embedded.worker_executor.blob_storage, &executor.blob_storage,
+                    &embedded.component_compilation_service.blob_storage, &compilation.blob_storage,
+                ].into_iter().for_each(|storage| {
+                    let BlobStorageConfig::S3(config) = storage else { panic!("expected S3 in {state} example") };
+                    assert_eq!(config.region, "us-east-1");
+                    assert_eq!(config.components_bucket, "golem-components");
+                    assert_eq!(config.initial_agent_files_bucket, "golem-data");
+                    assert_eq!(config.oplog_payload_bucket, "golem-data");
+                    assert_eq!(config.custom_data_bucket, "golem-data");
+                    assert_eq!(config.compilation_cache_bucket, "golem-data");
+                    assert_eq!(config.filesystem_snapshots_bucket, "golem-data");
+                    assert_eq!(config.compressed_oplog_buckets, ["golem-data"]);
+                    assert!(config.namespace_prefixes);
+                    assert!(config.aws_credentials.is_none());
+                });
+                let expected = if state == "postgres" { "Postgres" } else { "Sqlite" };
+                [
+                    serde_json::to_value(&embedded.registry_service.db).unwrap(), serde_json::to_value(&registry.db).unwrap(),
+                    serde_json::to_value(&embedded.shard_manager.persistence).unwrap(), serde_json::to_value(&shard.persistence).unwrap(),
+                    serde_json::to_value(&embedded.worker_service.gateway_session_storage).unwrap(), serde_json::to_value(&worker.gateway_session_storage).unwrap(),
+                    serde_json::to_value(embedded.worker_service.mcp.session.effective_session_storage(&embedded.worker_service.gateway_session_storage)).unwrap(),
+                    serde_json::to_value(worker.mcp.session.effective_session_storage(&worker.gateway_session_storage)).unwrap(),
+                    serde_json::to_value(&embedded.worker_executor.scheduler_storage).unwrap(), serde_json::to_value(&executor.scheduler_storage).unwrap(),
+                ].into_iter().for_each(|store| {
+                    assert_eq!(store["type"], expected);
+                    if state == "postgres" {
+                        assert_eq!(store["config"]["host"], "postgres.internal");
+                        assert_eq!(store["config"]["port"], 5432);
+                        assert_eq!(store["config"]["database"], "golem");
+                        assert_eq!(store["config"]["username"], "golem");
+                    } else {
+                        assert!(store["config"]["database"].as_str().unwrap().starts_with("/var/lib/golem/"));
+                    }
+                });
+                [&embedded.worker_executor, &executor].into_iter().for_each(|executor| {
+                    let kv = serde_json::to_value(&executor.key_value_storage).unwrap();
+                    let indexed = serde_json::to_value(&executor.indexed_storage).unwrap();
+                    if state == "postgres" {
+                        assert_eq!(kv["type"], "Postgres");
+                        assert_eq!(indexed["type"], "Postgres");
+                        [&kv, &indexed].into_iter().for_each(|store| assert_eq!(store["config"]["host"], "postgres.internal"));
+                    } else {
+                        assert_eq!(kv["type"], "MultiSqlite");
+                        assert_eq!(kv["config"]["root_dir"], "/var/lib/golem/kv-store");
+                        assert_eq!(indexed["type"], "KVStoreMultiSqlite");
+                    }
+                });
                 Ok(())
             });
         });
@@ -2162,33 +2741,68 @@ mod tests {
     #[test]
     fn removed_server_settings_are_rejected_by_both_loaders() {
         [
-            "number_of_shards = 17",
-            "retained_periodic_snapshots = 3",
-            "[filesystem_snapshots]\nretained_periodic_snapshots = 3",
+            "number_of_shards",
+            "retained_periodic_snapshots",
+            "filesystem_snapshots.retained_periodic_snapshots",
         ]
         .into_iter()
-        .for_each(|settings| {
+        .flat_map(|key| [false, true].map(|from_env| (key, from_env)))
+        .for_each(|(key, from_env)| {
             Jail::expect_with(|jail| {
+                jail.clear_env();
                 jail.create_dir("config")?;
-                jail.create_file("config/worker-executor.toml", settings)?;
-                jail.create_file("settings.toml", settings)?;
-                assert!(
+                let base = format!(
+                    "[filesystem_snapshots]\nenabled=true\nrepository_key='{}'\n",
+                    "2a".repeat(64)
+                );
+                let files = [
+                    "config/worker-executor.toml",
+                    "config/shard-manager.toml",
+                    "settings.toml",
+                ];
+                files
+                    .into_iter()
+                    .try_for_each(|file| jail.create_file(file, &base).map(|_| ()))?;
+                let args = RunArgs {
+                    config: Some("settings.toml".into()),
+                    ..run_args_with_data_dir("/data")
+                };
+                let control = load(None, &args).unwrap();
+                assert!(matches!(
+                    control.worker_executor.filesystem_snapshots,
+                    FilesystemSnapshotsConfig::Enabled(_)
+                ));
+                golem_worker_executor::services::golem_config::make_config_loader().load()?;
+                golem_shard_manager::config::make_config_loader().load()?;
+                if from_env {
+                    jail.set_env(
+                        format!("GOLEM__{}", key.replace('.', "__").to_uppercase()),
+                        "17",
+                    );
+                } else {
+                    let settings = if key.starts_with("filesystem_snapshots.") {
+                        format!("{base}retained_periodic_snapshots=17\n")
+                    } else {
+                        format!("{key}=17\n{base}")
+                    };
+                    files
+                        .into_iter()
+                        .try_for_each(|file| jail.create_file(file, &settings).map(|_| ()))?;
+                }
+                [
                     golem_worker_executor::services::golem_config::make_config_loader()
                         .load()
-                        .is_err(),
-                    "standalone loader accepted {settings}"
-                );
-                assert!(
-                    load(
-                        None,
-                        &RunArgs {
-                            config: Some("settings.toml".into()),
-                            ..run_args_with_data_dir("/data")
-                        },
-                    )
-                    .is_err(),
-                    "embedded loader accepted {settings}"
-                );
+                        .map(|_| ()),
+                    golem_shard_manager::config::make_config_loader()
+                        .load()
+                        .map(|_| ()),
+                    load(None, &args).map(|_| ()),
+                ]
+                .into_iter()
+                .for_each(|result| {
+                    let error = result.expect_err("removed surface setting must not load");
+                    assert!(format!("{error:#}").contains(key), "{error:#}");
+                });
                 Ok(())
             });
         });

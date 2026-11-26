@@ -116,7 +116,7 @@ impl Services {
         let blob_storage: Arc<dyn BlobStorage> = match &config.blob_storage {
             BlobStorageConfig::S3(config) => {
                 blob_storage_factory
-                    .create(config.clone(), S3StartupNamespace::InitialAgentFiles)
+                    .create(config.clone(), &[S3StartupNamespace::InitialAgentFiles])
                     .await?
             }
             BlobStorageConfig::LocalFileSystem(config) => {
@@ -455,6 +455,115 @@ mod tests {
     use test_r::test;
 
     #[test]
+    fn sqlite_session_state_is_independent_of_the_blob_root() {
+        [false, true].into_iter().for_each(|independent_mcp| {
+            figment::Jail::expect_with(|jail| {
+                jail.clear_env();
+                let state = jail.directory().join("state/new");
+                let blobs = jail.directory().join("independent-blobs");
+                let mcp_file = jail.directory().join("other/new/mcp.db");
+                let settings = format!(
+                    "state_store = 'sqlite'\nblob_store = 'data_disk'\ndata_dir = {:?}\n[data_disk]\nblob_root = {:?}\n[cache]\nenabled = false\n{}",
+                    state.to_str().unwrap(),
+                    blobs.to_str().unwrap(),
+                    if independent_mcp {
+                        format!(
+                            "[advanced.worker_service.mcp.session_storage]\ntype = 'Sqlite'\n[advanced.worker_service.mcp.session_storage.config]\ncleanup_interval = '1h'\ndatabase = {:?}\nmax_connections = 2\nforeign_keys = false\n",
+                            mcp_file.to_str().unwrap()
+                        )
+                    } else {
+                        String::new()
+                    }
+                );
+                jail.create_file("settings.toml", &settings)?;
+                let config = golem_common::config::ConfigLoader::<crate::config::WorkerServiceConfig>::new(
+                    std::path::Path::new("settings.toml"),
+                )
+                .for_service("worker_service")
+                .load()?;
+                assert!(!state.exists());
+                assert!(!blobs.starts_with(&state));
+                tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .unwrap()
+                    .block_on(async {
+                        use crate::custom_api::oidc::model::PendingOidcLogin;
+                        use crate::mcp::session::store::{McpSessionId, McpSessionRecord};
+                        use golem_common::model::deployment::DeploymentRevision;
+                        use golem_common::model::environment::EnvironmentId;
+                        use golem_common::model::security_scheme::SecuritySchemeId;
+
+                        let issuer = "https://id.acme.example".parse().unwrap();
+                        let services = super::Services::new(&config, issuer).await.unwrap();
+                        let gateway = state.join("gateway-sessions.db");
+                        assert!(gateway.is_file(), "{}", gateway.display());
+                        let selected_mcp = if independent_mcp { &mcp_file } else { &gateway };
+                        assert!(selected_mcp.is_file(), "{}", selected_mcp.display());
+                        services.session_store.store_pending_oidc_login("directory-test", PendingOidcLogin {
+                            scheme_id: SecuritySchemeId(uuid::Uuid::nil()),
+                            original_uri: "/retained-login".to_string(),
+                            nonce: openidconnect::Nonce::new("synthetic-nonce".to_string()),
+                        }).await.unwrap();
+                        let id: McpSessionId = "0123456789abcdef0123456789abcdef".parse().unwrap();
+                        let record = McpSessionRecord {
+                            domain: golem_common::model::domain_registration::Domain("sessions.example".into()),
+                            environment_id: EnvironmentId(uuid::Uuid::nil()),
+                            deployment_revision: DeploymentRevision::INITIAL,
+                        };
+                        assert!(services.mcp_session_store.create(id, &record, Duration::from_secs(3600)).await.unwrap());
+                        drop(services);
+                        let services = super::Services::new(&config, "https://id.acme.example".parse().unwrap()).await.unwrap();
+                        let login = services.session_store.take_pending_oidc_login("directory-test").await.unwrap().unwrap();
+                        assert_eq!(login.original_uri, "/retained-login");
+                        assert_eq!(services.mcp_session_store.get(id, None).await.unwrap(), Some(record));
+                    });
+                Ok(())
+            });
+        });
+    }
+
+    #[test]
+    fn sqlite_session_database_accepts_a_basename_and_keeps_filesystem_errors() {
+        figment::Jail::expect_with(|jail| {
+            jail.clear_env();
+            jail.create_file("blocked", "not a directory")?;
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .unwrap()
+                .block_on(async {
+                    let config = golem_common::config::DbSqliteConfig {
+                        database: "basename-sessions.db".into(),
+                        max_connections: 2,
+                        foreign_keys: false,
+                    };
+                    let pool =
+                        crate::custom_api::oidc::session_store::migrated_sqlite_pool(&config)
+                            .await
+                            .unwrap();
+                    assert!(std::path::Path::new("basename-sessions.db").is_file());
+                    pool.close().await;
+                    let config = golem_common::config::DbSqliteConfig {
+                        database: "blocked/new/sessions.db".into(),
+                        ..config
+                    };
+                    let error =
+                        crate::custom_api::oidc::session_store::migrated_sqlite_pool(&config)
+                            .await
+                            .err()
+                            .expect("a regular-file ancestor must stop initialization");
+                    assert!(
+                        error.downcast_ref::<std::io::Error>().is_some(),
+                        "{error:#}"
+                    );
+                    assert!(!std::path::Path::new("blocked/new/sessions.db").exists());
+                });
+            Ok(())
+        });
+    }
+
+    #[test]
     #[test_r::timeout("5s")]
     async fn s3_startup_failure_stops_worker_service_construction() {
         let config = crate::config::WorkerServiceConfig {
@@ -469,11 +578,9 @@ mod tests {
             ),
             ..Default::default()
         };
-        let failure = aws_sdk_s3::error::SdkError::dispatch_failure(
-            aws_sdk_s3::error::ConnectorError::io(Box::new(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "selected bucket access denied",
-            ))),
+        let failure = std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "selected bucket transport refusal",
         );
         let factory = InMemoryS3BlobStorageFactory::failed(failure);
         let error = super::Services::new_with_blob_storage_factory(
@@ -494,11 +601,11 @@ mod tests {
                 .find_map(|cause| cause.downcast_ref::<std::io::Error>())
                 .unwrap()
                 .kind(),
-            std::io::ErrorKind::PermissionDenied
+            std::io::ErrorKind::ConnectionRefused
         );
         assert_eq!(
             error.root_cause().to_string(),
-            "selected bucket access denied"
+            "selected bucket transport refusal"
         );
     }
 

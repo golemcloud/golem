@@ -736,10 +736,6 @@ mod tests {
             ("etcd.tls = true", "etcd.tls must be a table"),
             ("advanced = true", "advanced must be a table"),
             (
-                "advanced.server = false",
-                "advanced.server must be a table",
-            ),
-            (
                 "advanced.worker_executor = false",
                 "advanced.worker_executor must be a table",
             ),

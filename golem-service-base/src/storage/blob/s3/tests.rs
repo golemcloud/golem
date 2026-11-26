@@ -33,7 +33,7 @@ use aws_sdk_s3::config::timeout::TimeoutConfig;
 use aws_sdk_s3::config::{
     BehaviorVersion, Credentials, Region, RequestChecksumCalculation, StalledStreamProtectionConfig,
 };
-use aws_sdk_s3::error::{ErrorMetadata, ProvideErrorMetadata, SdkError};
+use aws_sdk_s3::error::SdkError;
 use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error;
 use aws_sdk_s3::primitives::SdkBody;
 use aws_smithy_runtime_api::client::http::{
@@ -134,6 +134,7 @@ struct Answer {
     body: String,
     transport_error: Option<ConnectorError>,
     pending: bool,
+    pending_body: bool,
 }
 
 impl Answer {
@@ -148,6 +149,7 @@ impl Answer {
             body: body.into(),
             transport_error: None,
             pending: false,
+            pending_body: false,
         }
     }
 
@@ -233,6 +235,11 @@ impl Answer {
     /// Gives the body as one frame. When `body_reads` is set, a read of that frame adds 1 to
     /// it. Else, when `frame_bytes` is set, gives the body as frames of that number of bytes.
     fn into_body(self) -> SdkBody {
+        if self.pending_body {
+            return SdkBody::from_body_1_x(StreamBody::new(futures::stream::pending::<
+                Result<Frame<Bytes>, Infallible>,
+            >()));
+        }
         match (self.body_reads, self.frame_bytes) {
             (Some(body_reads), _) => SdkBody::from_body_1_x(StreamBody::new(
                 futures::stream::iter([Ok::<_, Infallible>(Frame::data(Bytes::from(self.body)))])
@@ -390,7 +397,7 @@ fn startup_constructor_rejects_a_shared_bucket_layout() {
         let error = runtime.block_on(async {
             tokio::time::timeout(
                 Duration::from_secs(5),
-                S3BlobStorage::new(config, S3StartupNamespace::CompilationCache),
+                S3BlobStorage::new(config, &[S3StartupNamespace::CompilationCache]),
             )
             .await
             .expect("the constructor watchdog expired")
@@ -415,24 +422,13 @@ fn startup_constructor_propagates_the_selected_bucket_check_failure() {
         let error = runtime.block_on(async {
             tokio::time::timeout(
                 Duration::from_secs(5),
-                S3BlobStorage::new(config, S3StartupNamespace::CompilationCache),
+                S3BlobStorage::new(config, &[S3StartupNamespace::CompilationCache]),
             )
             .await
             .expect("the constructor watchdog expired")
             .expect_err("the invalid endpoint must fail")
         });
-        assert_eq!(
-            error.to_string(),
-            "S3 startup check failed for bucket startup-probe-only"
-        );
-        match error.downcast_ref::<SdkError<ListObjectsV2Error>>() {
-            Some(SdkError::DispatchFailure(failure)) => assert!(failure.is_other()),
-            other => panic!("expected an endpoint resolution failure, got {other:?}"),
-        }
-        assert_eq!(
-            error.root_cause().to_string(),
-            "Custom endpoint `abcde://nota#url` was not a valid URI"
-        );
+        assert!(error.to_string().contains("aws_endpoint_url"));
         Ok(())
     });
 }
@@ -487,6 +483,170 @@ fn assert_startup_request(request: &SentRequest, bucket: &str, prefix: &str) {
 }
 
 #[test]
+fn startup_treats_any_response_as_reachable() {
+    [200, 301, 403, 404, 503].into_iter().for_each(|status| {
+        [false, true].into_iter().for_each(|pending_body| {
+            with_startup_constructor(
+                move |_, _| Answer {
+                    pending_body,
+                    ..Answer::new(status, "not an S3 response body")
+                },
+                |config, loader, requests| async move {
+                    ConfiguredS3BlobStorageFactory { loader }
+                        .create(config, &[S3StartupNamespace::CompilationCache])
+                        .await
+                        .expect(
+                            "received headers establish reachability regardless of status or body",
+                        );
+                    assert_eq!(sent(&requests).len(), 1);
+                },
+            );
+        });
+    });
+}
+
+#[test]
+fn startup_recognizes_only_received_header_conversion_failures() {
+    ["received", "nested", "request"]
+        .into_iter()
+        .for_each(|kind| {
+            with_startup_constructor(
+                move |_, _| {
+                    let response = http::Response::builder()
+                        .status(403)
+                        .header(
+                            "x-object-store",
+                            http::HeaderValue::from_bytes(b"\xff").unwrap(),
+                        )
+                        .body(SdkBody::empty())
+                        .unwrap();
+                    let error = HttpResponse::try_from(response).unwrap_err();
+                    Answer::transport_error(match kind {
+                        "received" => ConnectorError::other(Box::new(error), None),
+                        "nested" => {
+                            ConnectorError::other(Box::new(std::io::Error::other(error)), None)
+                        }
+                        "request" => ConnectorError::user(Box::new(error)),
+                        _ => unreachable!(),
+                    })
+                },
+                |config, loader, requests| async move {
+                    let result = ConfiguredS3BlobStorageFactory { loader }
+                        .create(config, &[S3StartupNamespace::CompilationCache])
+                        .await;
+                    assert_eq!(result.is_ok(), kind == "received", "{result:?}");
+                    assert_eq!(sent(&requests).len(), 1);
+                },
+            );
+        });
+}
+
+#[test]
+fn startup_retries_transport_failures_but_not_received_responses() {
+    [false, true].into_iter().for_each(|deadline_in_backoff| {
+        with_startup_constructor(
+            |_, earlier| {
+                if earlier == 0 {
+                    Answer::transport_error(ConnectorError::io(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionRefused,
+                        "transient refusal",
+                    ))))
+                } else {
+                    Answer {
+                        pending_body: true,
+                        ..Answer::new(403, "")
+                    }
+                }
+            },
+            |mut config, loader, requests| async move {
+                config.retries.max_attempts = 3;
+                config.retries.max_jitter_factor = None;
+                config.retries.min_delay =
+                    Duration::from_secs(if deadline_in_backoff { 11 } else { 2 });
+                config.retries.max_delay = config.retries.min_delay;
+                let started = tokio::time::Instant::now();
+                let result = ConfiguredS3BlobStorageFactory { loader }
+                    .create(config, &[S3StartupNamespace::CompilationCache])
+                    .await;
+                if deadline_in_backoff {
+                    let error = result.unwrap_err();
+                    assert!(
+                        error
+                            .downcast_ref::<tokio::time::error::Elapsed>()
+                            .is_some()
+                    );
+                    assert_eq!(started.elapsed(), Duration::from_secs(10));
+                    assert_eq!(sent(&requests).len(), 1);
+                } else {
+                    result.unwrap();
+                    assert_eq!(started.elapsed(), Duration::from_secs(2));
+                    assert_eq!(sent(&requests).len(), 2);
+                }
+            },
+        );
+    });
+}
+
+#[test]
+fn construction_rejects_invalid_endpoints_and_retry_jitter_in_both_adapters() {
+    [false, true].into_iter().for_each(|namespaces| {
+        [
+            "abcde://nota#url",
+            "http://s3.test/a b",
+            "http://s3.test/?query=yes",
+            "http://s3.test/#fragment",
+            "relative",
+            "",
+        ]
+        .into_iter()
+        .for_each(|endpoint| {
+            with_startup_constructor(
+                |_, _| panic!("an invalid endpoint must not reach the connector"),
+                |mut config, loader, requests| async move {
+                    config.namespace_prefixes = namespaces;
+                    config.aws_endpoint_url = Some(endpoint.into());
+                    let real = ConfiguredS3BlobStorageFactory { loader }
+                        .create(config.clone(), &[S3StartupNamespace::CompilationCache])
+                        .await
+                        .unwrap_err();
+                    let memory =
+                        InMemoryS3BlobStorageFactory::ready(Arc::new(InMemoryBlobStorage::new()))
+                            .create(config, &[S3StartupNamespace::CompilationCache])
+                            .await
+                            .unwrap_err();
+                    assert!(real.to_string().contains("aws_endpoint_url"), "{real:#}");
+                    assert_eq!(format!("{real:#}"), format!("{memory:#}"));
+                    assert!(sent(&requests).is_empty());
+                },
+            );
+        });
+    });
+    [0.0, -0.5, f64::NAN, f64::INFINITY]
+        .into_iter()
+        .for_each(|jitter| {
+            with_startup_constructor(
+                |_, _| panic!("invalid retry jitter must not reach the connector"),
+                |mut config, loader, requests| async move {
+                    config.retries.max_attempts = 3;
+                    config.retries.max_jitter_factor = Some(jitter);
+                    let real = ConfiguredS3BlobStorageFactory { loader }
+                        .create(config.clone(), &[S3StartupNamespace::CompilationCache])
+                        .await
+                        .unwrap_err();
+                    let memory =
+                        InMemoryS3BlobStorageFactory::ready(Arc::new(InMemoryBlobStorage::new()))
+                            .create(config, &[S3StartupNamespace::CompilationCache])
+                            .await
+                            .unwrap_err();
+                    assert!(real.to_string().contains("max_jitter_factor"));
+                    assert_eq!(real.to_string(), memory.to_string());
+                    assert!(sent(&requests).is_empty());
+                },
+            );
+        });
+}
+
+#[test]
 fn startup_access_check_uses_the_owned_prefix() {
     with_startup_constructor(
         |request, _| {
@@ -512,9 +672,13 @@ fn startup_access_check_uses_the_owned_prefix() {
             config.namespace_prefixes = true;
             config.compilation_cache_bucket = "startup-probe-only".to_string();
             config.object_prefix = "installation-x".to_string();
-            S3BlobStorage::with_config_loader(config, S3StartupNamespace::CompilationCache, loader)
-                .await
-                .unwrap();
+            S3BlobStorage::with_config_loader(
+                config,
+                &[S3StartupNamespace::CompilationCache],
+                loader,
+            )
+            .await
+            .unwrap();
 
             let requests = sent(&requests);
             assert_eq!(requests.len(), 1);
@@ -576,7 +740,7 @@ fn startup_access_check_uses_the_owned_prefix() {
                     config.initial_agent_files_bucket = "initial-files-only".to_string();
                     config.oplog_payload_bucket = "payload-objects-only".to_string();
                     ConfiguredS3BlobStorageFactory { loader }
-                        .create(config, namespace)
+                        .create(config, &[namespace])
                         .await
                         .unwrap();
                     let requests = sent(&requests);
@@ -589,16 +753,11 @@ fn startup_access_check_uses_the_owned_prefix() {
 }
 
 #[test]
-fn startup_access_check_retains_a_service_refusal() {
+fn startup_access_check_accepts_a_service_refusal() {
     with_startup_constructor(
         |_, _| Answer::new(403, "<Error><Code>AccessDenied</Code></Error>"),
         |config, loader, requests| async move {
-            construction_access_contract(
-                ConfiguredS3BlobStorageFactory { loader },
-                config,
-                Err((403, "AccessDenied")),
-            )
-            .await;
+            construction_access_contract(ConfiguredS3BlobStorageFactory { loader }, config).await;
             let requests = sent(&requests);
             assert_eq!(requests.len(), 1);
             assert_startup_request(
@@ -619,7 +778,9 @@ fn startup_access_check_retains_a_transport_failure() {
                 "selected bucket transport refusal",
             ))))
         },
-        |config, loader, requests| async move {
+        |mut config, loader, requests| async move {
+            config.retries.max_attempts = 3;
+            config.retries.max_jitter_factor = None;
             let error =
                 construction_refusal_contract(ConfiguredS3BlobStorageFactory { loader }, config)
                     .await;
@@ -635,7 +796,7 @@ fn startup_access_check_retains_a_transport_failure() {
             assert_eq!(cause.to_string(), "selected bucket transport refusal");
             assert!(error.to_string().contains("startup-probe-only"));
             let requests = sent(&requests);
-            assert_eq!(requests.len(), 1);
+            assert_eq!(requests.len(), 3);
             assert_startup_request(
                 &requests[0],
                 "startup-probe-only",
@@ -651,7 +812,7 @@ async fn construction_refusal_contract(
 ) -> anyhow::Error {
     let bucket = config.compilation_cache_bucket.clone();
     let error = factory
-        .create(config, S3StartupNamespace::CompilationCache)
+        .create(config, &[S3StartupNamespace::CompilationCache])
         .await
         .expect_err("a construction failure must not return storage");
     assert_eq!(
@@ -676,7 +837,7 @@ fn in_memory_construction_retains_the_startup_error() {
     figment::Jail::expect_with(|jail| {
         let mut config = constructor_config(jail);
         config.aws_endpoint_url = Some("http://s3.test".to_string());
-        let failure =
+        let failure: SdkError<ListObjectsV2Error> =
             SdkError::dispatch_failure(ConnectorError::io(Box::new(std::io::Error::new(
                 std::io::ErrorKind::ConnectionRefused,
                 "selected bucket transport refusal",
@@ -694,57 +855,11 @@ fn in_memory_construction_retains_the_startup_error() {
 async fn construction_access_contract(
     factory: impl S3BlobStorageFactory,
     config: S3BlobStorageConfig,
-    expected: Result<(), (u16, &str)>,
 ) {
-    let bucket = config.compilation_cache_bucket.clone();
-    let result = factory
-        .create(config, S3StartupNamespace::CompilationCache)
-        .await;
-    let (status, code) = match expected {
-        Ok(()) => {
-            result.expect("an authorized prefix must return storage");
-            return;
-        }
-        Err(expected) => expected,
-    };
-    let error = result.expect_err("a service refusal must not return storage");
-    assert_eq!(
-        error.to_string(),
-        format!("S3 startup check failed for bucket {bucket}")
-    );
-    match error.downcast_ref::<SdkError<ListObjectsV2Error>>() {
-        Some(SdkError::ServiceError(failure)) => {
-            assert_eq!(failure.raw().status().as_u16(), status);
-            assert_eq!(failure.err().code(), Some(code));
-            if code == "NoSuchBucket" {
-                assert!(matches!(failure.err(), ListObjectsV2Error::NoSuchBucket(_)));
-            }
-        }
-        other => panic!("expected the retained service refusal, got {other:?}"),
-    }
-}
-
-#[test]
-fn in_memory_construction_retains_a_service_refusal() {
-    figment::Jail::expect_with(|jail| {
-        let mut config = constructor_config(jail);
-        config.aws_endpoint_url = Some("http://s3.test".to_string());
-        let failure = SdkError::service_error(
-            ListObjectsV2Error::generic(ErrorMetadata::builder().code("AccessDenied").build()),
-            Answer::new(403, "").into_http_response(),
-        );
-        let factory = InMemoryS3BlobStorageFactory::failed(failure);
-        tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .unwrap()
-            .block_on(construction_access_contract(
-                factory,
-                config,
-                Err((403, "AccessDenied")),
-            ));
-        Ok(())
-    });
+    factory
+        .create(config, &[S3StartupNamespace::CompilationCache])
+        .await
+        .expect("a received response must return storage");
 }
 
 async fn construction_success_contract(
@@ -752,7 +867,7 @@ async fn construction_success_contract(
     config: S3BlobStorageConfig,
 ) {
     let storage = factory
-        .create(config, S3StartupNamespace::CompilationCache)
+        .create(config, &[S3StartupNamespace::CompilationCache])
         .await
         .unwrap();
     let value = storage
@@ -800,7 +915,7 @@ fn construction_returns_usable_storage() {
 }
 
 #[test]
-fn in_memory_construction_returns_usable_storage_and_rejects_another_bucket() {
+fn in_memory_construction_returns_usable_storage() {
     figment::Jail::expect_with(|jail| {
         let mut config = constructor_config(jail);
         config.aws_endpoint_url = Some("http://s3.test".to_string());
@@ -822,245 +937,92 @@ fn in_memory_construction_returns_usable_storage_and_rejects_another_bucket() {
                     )
                     .await
                     .unwrap();
-                let factory = InMemoryS3BlobStorageFactory::ready(
-                    &config,
-                    S3StartupNamespace::CompilationCache,
-                    storage.clone(),
-                );
-                construction_success_contract(factory, config.clone()).await;
-                let mut prepared = config.clone();
-                prepared.compilation_cache_bucket = "another-bucket".to_string();
-                let wrong_bucket = InMemoryS3BlobStorageFactory::ready(
-                    &prepared,
-                    S3StartupNamespace::CompilationCache,
-                    storage,
-                );
-                construction_access_contract(wrong_bucket, config, Err((404, "NoSuchBucket")))
-                    .await;
+                let factory = InMemoryS3BlobStorageFactory::ready(storage);
+                construction_success_contract(factory, config).await;
             });
         Ok(())
     });
 }
 
 #[test]
-fn construction_enforces_bucket_and_prefix_scopes() {
-    [
-        (
-            "tenant-a",
-            true,
-            "tenant-a/compilation_cache/",
-            "tenant-a",
-            true,
-            "startup-probe-only",
-            Ok(()),
-        ),
-        (
-            "tenant-a",
-            true,
-            "tenant-a/compilation_cache/",
-            "tenant-a/compilation_cache",
-            true,
-            "startup-probe-only",
-            Ok(()),
-        ),
-        (
-            "tenant-a",
-            true,
-            "tenant-a/compilation_cache/",
-            "tenant-a/compilation_cache/child",
-            false,
-            "startup-probe-only",
-            Ok(()),
-        ),
-        (
-            "tenant-a",
-            true,
-            "tenant-a/compilation_cache/",
-            "tenant-b",
-            true,
-            "startup-probe-only",
-            Err((403, "AccessDenied")),
-        ),
-        (
-            "tenant-a",
-            true,
-            "tenant-a/compilation_cache/",
-            "tenant-a",
-            false,
-            "startup-probe-only",
-            Err((403, "AccessDenied")),
-        ),
-        (
-            "tenant-a",
-            true,
-            "tenant-a/compilation_cache/",
-            "tenant-a",
-            true,
-            "absent-startup-bucket",
-            Err((404, "NoSuchBucket")),
-        ),
-        (
-            "",
-            false,
-            "",
-            "tenant-a",
-            true,
-            "startup-probe-only",
-            Ok(()),
-        ),
-        (
-            "tenant-a",
-            true,
-            "tenant-a/compilation_cache/",
-            "",
-            false,
-            "startup-probe-only",
-            Err((403, "AccessDenied")),
-        ),
-        (
-            "tenant-a",
-            true,
-            "tenant-a/compilation_cache/",
-            "tenant-a/compilation_cache-sibling",
-            false,
-            "startup-probe-only",
-            Err((403, "AccessDenied")),
-        ),
-        (
-            "tenant-a",
-            false,
-            "tenant-a/",
-            "tenant-a",
-            true,
-            "startup-probe-only",
-            Ok(()),
-        ),
-    ]
-    .into_iter()
-    .for_each(
-        |(grant_root, grant_namespaces, allowed_prefix, root, namespaces, bucket, expected)| {
-            with_startup_constructor(
-                move |request, _| {
-                    let uri = url::Url::parse(&request.uri).unwrap();
-                    if uri.path() != "/startup-probe-only/" {
-                        return Answer::new(404, "<Error><Code>NoSuchBucket</Code></Error>");
+fn startup_checks_each_required_bucket_authority() {
+    [false, true].into_iter().for_each(|second_reachable| {
+        with_startup_constructor(
+            move |request, _| {
+                let uri = url::Url::parse(&request.uri).unwrap();
+                match uri.host_str().unwrap() {
+                    "component-objects-only.s3.test" => Answer::new(403, ""),
+                    "initial-files-only.s3.test" if second_reachable => Answer::new(404, ""),
+                    "initial-files-only.s3.test" => {
+                        Answer::transport_error(ConnectorError::io(Box::new(std::io::Error::new(
+                            std::io::ErrorKind::ConnectionRefused,
+                            "second bucket unreachable",
+                        ))))
                     }
-                    let prefix = uri
-                        .query_pairs()
-                        .find(|(key, _)| key == "prefix")
-                        .unwrap()
-                        .1;
-                    if prefix.starts_with(allowed_prefix) {
-                        Answer::new(
-                            200,
-                            "<ListBucketResult><IsTruncated>false</IsTruncated></ListBucketResult>",
-                        )
-                    } else {
-                        Answer::new(403, "<Error><Code>AccessDenied</Code></Error>")
-                    }
-                },
-                |mut config, loader, requests| async move {
-                    let mut prepared = config.clone();
-                    prepared.object_prefix = grant_root.to_string();
-                    prepared.namespace_prefixes = grant_namespaces;
-                    config.object_prefix = root.to_string();
-                    config.namespace_prefixes = namespaces;
-                    config.compilation_cache_bucket = bucket.to_string();
-                    construction_access_contract(
-                        ConfiguredS3BlobStorageFactory { loader },
-                        config.clone(),
-                        expected,
-                    )
-                    .await;
-                    construction_access_contract(
-                        InMemoryS3BlobStorageFactory::ready(
-                            &prepared,
-                            S3StartupNamespace::CompilationCache,
-                            Arc::new(InMemoryBlobStorage::new()),
-                        ),
+                    other => panic!("unexpected bucket authority: {other}"),
+                }
+            },
+            |mut config, loader, requests| async move {
+                config.aws_path_style = Some(false);
+                config.initial_agent_files_bucket = "initial-files-only".into();
+                config.retries.max_attempts = 1;
+                let result = ConfiguredS3BlobStorageFactory { loader }
+                    .create(
                         config,
-                        expected,
+                        &[
+                            S3StartupNamespace::Components,
+                            S3StartupNamespace::InitialAgentFiles,
+                            S3StartupNamespace::Components,
+                        ],
                     )
                     .await;
-                    let requests = sent(&requests);
-                    assert_eq!(requests.len(), 1);
-                    assert!(requests[0].is_list_objects());
-                },
-            );
-        },
-    );
+                if second_reachable {
+                    result.unwrap();
+                } else {
+                    let error = result.unwrap_err();
+                    assert!(error.to_string().contains("initial-files-only"));
+                    assert_eq!(error.root_cause().to_string(), "second bucket unreachable");
+                }
+                assert_eq!(sent(&requests).len(), 2);
+            },
+        );
+    });
 }
 
 #[test]
 fn construction_prepared_failures_survive_scope_changes() {
     [
-        None,
-        Some((503, "ServiceUnavailable")),
-        Some((404, "NoSuchBucket")),
+        ("objects-not-the-startup-bucket", "startup-probe-only"),
+        ("changed-prefix", "startup-probe-only"),
+        ("changed-prefix", "changed-bucket"),
     ]
     .into_iter()
-    .for_each(|failure| {
-        [
-            ("objects-not-the-startup-bucket", "startup-probe-only"),
-            ("changed-prefix", "startup-probe-only"),
-            ("changed-prefix", "changed-bucket"),
-        ]
-        .into_iter()
-        .for_each(|(prefix, bucket)| {
-            with_startup_constructor(
-                move |_, _| match failure {
-                    Some((status, code)) => {
-                        Answer::new(status, format!("<Error><Code>{code}</Code></Error>"))
-                    }
-                    None => {
-                        Answer::transport_error(ConnectorError::io(Box::new(std::io::Error::new(
+    .for_each(|(prefix, bucket)| {
+        with_startup_constructor(
+            move |_, _| {
+                Answer::transport_error(ConnectorError::io(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "selected bucket transport refusal",
+                ))))
+            },
+            |mut config, loader, requests| async move {
+                config.object_prefix = prefix.to_string();
+                config.compilation_cache_bucket = bucket.to_string();
+                config.retries.max_attempts = 1;
+                let real = ConfiguredS3BlobStorageFactory { loader };
+                let double = InMemoryS3BlobStorageFactory::failed(
+                    SdkError::<ListObjectsV2Error>::dispatch_failure(ConnectorError::io(Box::new(
+                        std::io::Error::new(
                             std::io::ErrorKind::ConnectionRefused,
                             "selected bucket transport refusal",
-                        ))))
-                    }
-                },
-                |mut config, loader, requests| async move {
-                    config.object_prefix = prefix.to_string();
-                    config.compilation_cache_bucket = bucket.to_string();
-                    let real = ConfiguredS3BlobStorageFactory { loader };
-                    match failure {
-                        Some((status, code)) => {
-                            let error = if code == "NoSuchBucket" {
-                                ListObjectsV2Error::NoSuchBucket(
-                                    aws_sdk_s3::types::error::NoSuchBucket::builder()
-                                        .meta(ErrorMetadata::builder().code(code).build())
-                                        .build(),
-                                )
-                            } else {
-                                ListObjectsV2Error::generic(
-                                    ErrorMetadata::builder().code(code).build(),
-                                )
-                            };
-                            let double =
-                                InMemoryS3BlobStorageFactory::failed(SdkError::service_error(
-                                    error,
-                                    Answer::new(status, "").into_http_response(),
-                                ));
-                            construction_access_contract(real, config.clone(), Err((status, code)))
-                                .await;
-                            construction_access_contract(double, config, Err((status, code))).await;
-                        }
-                        None => {
-                            let double =
-                                InMemoryS3BlobStorageFactory::failed(SdkError::dispatch_failure(
-                                    ConnectorError::io(Box::new(std::io::Error::new(
-                                        std::io::ErrorKind::ConnectionRefused,
-                                        "selected bucket transport refusal",
-                                    ))),
-                                ));
-                            construction_refusal_contract(real, config.clone()).await;
-                            construction_refusal_contract(double, config).await;
-                        }
-                    }
-                    assert_eq!(sent(&requests).len(), 1);
-                },
-            );
-        });
+                        ),
+                    ))),
+                );
+                construction_refusal_contract(real, config.clone()).await;
+                construction_refusal_contract(double, config).await;
+                assert_eq!(sent(&requests).len(), 1);
+            },
+        );
     });
 }
 
@@ -1072,7 +1034,7 @@ async fn construction_validation_contract(
     config.compilation_cache_bucket = "duplicate-constructor-bucket".to_string();
     config.custom_data_bucket = "duplicate-constructor-bucket".to_string();
     let error = factory
-        .create(config, S3StartupNamespace::CompilationCache)
+        .create(config, &[S3StartupNamespace::CompilationCache])
         .await
         .expect_err("invalid configuration must precede the construction result");
     assert_eq!(
@@ -1102,15 +1064,14 @@ fn in_memory_construction_validates_before_returning_its_result() {
             .build()
             .unwrap()
             .block_on(async {
-                let ready = InMemoryS3BlobStorageFactory::ready(
-                    &config,
-                    S3StartupNamespace::Components,
-                    Arc::new(InMemoryBlobStorage::new()),
-                );
+                let ready =
+                    InMemoryS3BlobStorageFactory::ready(Arc::new(InMemoryBlobStorage::new()));
                 construction_validation_contract(ready, config.clone()).await;
-                let failed = InMemoryS3BlobStorageFactory::failed(SdkError::construction_failure(
-                    std::io::Error::other("prepared failure must not hide invalid configuration"),
-                ));
+                let failed = InMemoryS3BlobStorageFactory::failed(
+                    SdkError::<ListObjectsV2Error>::construction_failure(std::io::Error::other(
+                        "prepared failure must not hide invalid configuration",
+                    )),
+                );
                 construction_validation_contract(failed, config).await;
             });
         Ok(())
@@ -1129,8 +1090,8 @@ fn startup_access_check_times_out_at_ten_seconds() {
         |config, loader, requests| async move {
             let started = tokio::time::Instant::now();
             let check = S3BlobStorage::with_config_loader(
-                config,
-                S3StartupNamespace::CompilationCache,
+                config.clone(),
+                &[S3StartupNamespace::CompilationCache],
                 loader,
             );
             tokio::pin!(check);
@@ -1161,6 +1122,16 @@ fn startup_access_check_times_out_at_ten_seconds() {
                 .expect("the access-check deadline must retain the Tokio cause");
             assert!(error.to_string().contains("startup-probe-only"));
             assert_eq!(sent(&requests).len(), 1);
+            let prepared = InMemoryS3BlobStorageFactory::failed(error)
+                .create(config, &[S3StartupNamespace::CompilationCache])
+                .await
+                .unwrap_err();
+            assert!(
+                prepared
+                    .downcast_ref::<tokio::time::error::Elapsed>()
+                    .is_some()
+            );
+            assert!(prepared.to_string().contains("startup-probe-only"));
         },
     );
 }

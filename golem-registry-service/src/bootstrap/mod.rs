@@ -871,7 +871,13 @@ async fn make_blob_storage(
     match blob_storage_config {
         BlobStorageConfig::S3(config) => {
             blob_storage_factory
-                .create(config.clone(), S3StartupNamespace::Components)
+                .create(
+                    config.clone(),
+                    &[
+                        S3StartupNamespace::Components,
+                        S3StartupNamespace::InitialAgentFiles,
+                    ],
+                )
                 .await
         }
         BlobStorageConfig::LocalFileSystem(config) => {
@@ -921,11 +927,9 @@ mod tests {
                 }),
                 ..Default::default()
             };
-            let failure = aws_sdk_s3::error::SdkError::dispatch_failure(
-                aws_sdk_s3::error::ConnectorError::io(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::PermissionDenied,
-                    "selected bucket access denied",
-                ))),
+            let failure = std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "selected bucket transport refusal",
             );
             let factory = InMemoryS3BlobStorageFactory::failed(failure);
             let runtime = tokio::runtime::Builder::new_current_thread()
@@ -953,11 +957,11 @@ mod tests {
                         .find_map(|cause| cause.downcast_ref::<std::io::Error>())
                         .unwrap()
                         .kind(),
-                    std::io::ErrorKind::PermissionDenied
+                    std::io::ErrorKind::ConnectionRefused
                 );
                 assert_eq!(
                     error.root_cause().to_string(),
-                    "selected bucket access denied"
+                    "selected bucket transport refusal"
                 );
                 assert!(
                     tasks.is_empty(),

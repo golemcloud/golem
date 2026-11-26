@@ -36,6 +36,9 @@ case "${replica_url}" in
   *) fail "GOLEM_LITESTREAM_REPLICA_URL must be an s3:// or a file:// URL, not '${replica_url}'" ;;
 esac
 
+# Inspect the original selections before SQLite overrides or restore can change state.
+golem --litestream-preflight "$@"
+
 # The name of each database goes after the path of the URL, and the query, such as
 # `?endpoint=...&region=...`, goes after that name unchanged. Litestream decodes the query. The
 # first `?` of a URL starts its query.

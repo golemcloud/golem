@@ -61,7 +61,7 @@ database. A local database where the app connects as its owner works without any
 | `GOLEM__POSTGRES__PORT` | `5432` | PostgreSQL port. |
 | `GOLEM__POSTGRES__DATABASE` | | Database name. |
 | `GOLEM__POSTGRES__USERNAME` | | Database user. In the hosted deployment, the role of the app (see [Database](#database)). |
-| `GOLEM__POSTGRES__PASSWORD` | | Database password. |
+| `GOLEM__POSTGRES__PASSWORD` | | Required, nonempty database password. Passwordless PostgreSQL is not supported by the billing app. |
 | `GOLEM__POSTGRES__MAX_CONNECTIONS` | `10` | Size of the connection pool. |
 | `GOLEM__STATE_STORE` | `postgres` | Must be `postgres` when set. |
 | `GOLEM_CLOUD_BILLING_DB_SCHEMA` | `billing` | Schema of the app's tables. |

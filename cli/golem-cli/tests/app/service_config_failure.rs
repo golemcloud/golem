@@ -28,11 +28,10 @@ fn config_file_name(binary: &str) -> &'static str {
 
 /// Configures a binary with an empty config file, so only the defaults and `env` apply.
 fn command(binary: &str, args: &[&str], env: &[(&str, &str)], cwd: &Path) -> Command {
-    // The service binaries are in `target/debug` for every test profile.
     let profile = if binary == "golem" {
         test_binary_profile()
     } else {
-        "debug".to_string()
+        std::env::var("GOLEM_TEST_BIN_PROFILE").unwrap_or_else(|_| "debug".to_string())
     };
     let path = test_binary_path(&profile, binary);
     std::fs::create_dir_all(cwd.join("config")).unwrap();
@@ -149,6 +148,21 @@ async fn server_cleanup_preserves_logs_until_the_final_configuration() {
                         std::fs::write(&config, settings("127.0.0.1", "final.log")).unwrap();
                         session.send_line("y").unwrap();
                         session.expect("Tracing initialized").unwrap();
+                        let deadline = std::time::Instant::now() + RUN_TIMEOUT;
+                        std::iter::repeat_with(|| {
+                            assert!(
+                                std::time::Instant::now() < deadline,
+                                "the file log was not initialized"
+                            );
+                            let ready = std::fs::read_to_string(&final_log)
+                                .is_ok_and(|contents| contents.contains("Tracing initialized"));
+                            if !ready {
+                                std::thread::sleep(Duration::from_millis(10));
+                            }
+                            ready
+                        })
+                        .find(|ready| *ready)
+                        .unwrap();
                         session.send(expectrl::ControlCode::ETX).unwrap();
                     }
                     _ => session.send_line("n").unwrap(),
@@ -300,6 +314,7 @@ async fn unreachable_s3_fails_startup_without_local_blob_storage() {
     let grpc_port = grpc.local_addr().unwrap().port().to_string();
     drop((http, grpc));
     let data_dir = registry.path().join("data");
+    std::fs::create_dir(&data_dir).unwrap();
     let log_path = registry.path().join("registry.log");
     let log = std::fs::File::create(&log_path).unwrap();
     let mut registry_process = command(
@@ -362,6 +377,9 @@ async fn unreachable_s3_fails_startup_without_local_blob_storage() {
         (
             "golem",
             &[
+                "--config-dir",
+                "isolated-cli",
+                "--disable-app-manifest-discovery",
                 "server",
                 "run",
                 "--config",
@@ -378,11 +396,15 @@ async fn unreachable_s3_fails_startup_without_local_blob_storage() {
     .for_each(|(binary, args)| async move {
         let cwd = TempDir::new().unwrap();
         let data = cwd.path().join("data");
+        std::fs::create_dir(&data).unwrap();
         let blobs = cwd.path().join("local-blobs");
         let output = run(
             binary,
             args,
             &[
+                ("HOME", cwd.path().to_str().unwrap()),
+                ("GOLEM__STATE_STORE", "sqlite"),
+                ("GOLEM__CACHE__ENABLED", "false"),
                 ("GOLEM__DATA_DIR", data.to_str().unwrap()),
                 ("GOLEM__DATA_DISK__BLOB_ROOT", blobs.to_str().unwrap()),
                 ("GOLEM__BLOB_STORE", "s3"),
@@ -435,6 +457,26 @@ async fn unreachable_s3_fails_startup_without_local_blob_storage() {
             "{} created the default local blob root",
             describe(binary, &output)
         );
+        walkdir::WalkDir::new(&data).into_iter().for_each(|entry| {
+            let entry = entry.unwrap();
+            if entry.file_type().is_file() {
+                let name = entry.file_name().to_str().unwrap();
+                assert!(
+                    [
+                        "registry.db",
+                        "shard_manager.db",
+                        "gateway-sessions.db",
+                        "scheduler.db",
+                    ]
+                    .into_iter()
+                    .any(|db| name == db
+                        || name == format!("{db}-wal")
+                        || name == format!("{db}-shm")),
+                    "unexpected file after {binary} refused S3: {}",
+                    entry.path().display()
+                );
+            }
+        });
     })
     .await;
     registry_process.kill().await.unwrap();
@@ -476,4 +518,135 @@ async fn golem_rejects_an_unknown_dump_flag() {
         describe(binary, &output)
     );
     assert!(!text.contains("panicked"), "{}", describe(binary, &output));
+}
+
+#[cfg(unix)]
+#[test]
+#[timeout("3m")]
+async fn litestream_refuses_postgres_before_overrides_and_restore() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let entrypoint =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../golem/docker/golem-entrypoint.sh");
+    let postgres = "host='db.invalid'\nport=5432\ndatabase='golem'\nusername='synthetic-user'\npassword='synthetic-private-marker'\nmax_connections=2\nschema='litestream_test'\n";
+    futures_util::stream::iter([
+        ("sqlite", "", true),
+        ("postgres", "", false),
+        ("sqlite", "worker_executor.indexed_storage", false),
+        ("sqlite", "worker_executor.key_value_storage", false),
+        ("sqlite", "worker_executor.key_value_storage.config.cache", false),
+        ("sqlite", "worker_executor.key_value_storage.config.persistent", false),
+        ("sqlite", "worker_service.mcp.session_storage", false),
+    ].into_iter().flat_map(|case| [false, true].map(|existing| (case, existing))))
+    .for_each(|((state, selected, allowed), existing)| {
+        let entrypoint = &entrypoint;
+        async move {
+            let cwd = TempDir::new().unwrap();
+            let bin = cwd.path().join("bin");
+            let data = cwd.path().join("new state");
+            let calls = cwd.path().join("litestream-calls");
+            let file = cwd.path().join("settings with 'quotes'.toml");
+            let log = cwd.path().join("must-not-truncate.log");
+            let ports = cwd.path().join("ports.json");
+            std::fs::write(&log, b"existing log").unwrap();
+            if existing {
+                std::fs::create_dir(&data).unwrap();
+                std::fs::write(data.join("old-state"), b"existing state").unwrap();
+                std::fs::write(data.join("filesystem-snapshots.repository-key"), b"existing key").unwrap();
+            }
+            std::fs::create_dir(&bin).unwrap();
+            std::fs::write(bin.join("golem"), r#"#!/bin/bash
+if [[ "$1" != --litestream-preflight ]]; then
+  echo unexpected-server-launch >&2
+  exit 91
+fi
+[[ -z "${GOLEM_ADVANCED__WORKER_EXECUTOR__INDEXED_STORAGE__TYPE:-}" ]] || exit 92
+[[ -z "${GOLEM_ADVANCED__WORKER_EXECUTOR__KEY_VALUE_STORAGE__TYPE:-}" ]] || exit 93
+exec "$GOLEM_REAL" "$@"
+"#).unwrap();
+            std::fs::write(bin.join("litestream"), r#"#!/bin/bash
+printf '%s\n' "$*" >> "$LITESTREAM_CALLS"
+if [[ "$1" == databases ]]; then printf 'path replica\n'; fi
+"#).unwrap();
+            ["golem", "litestream"].into_iter().for_each(|name| {
+                std::fs::set_permissions(bin.join(name), std::fs::Permissions::from_mode(0o755)).unwrap();
+            });
+            let advanced = if selected.is_empty() {
+                String::new()
+            } else if let Some(inner) = selected.strip_prefix("worker_executor.key_value_storage.config.") {
+                let other = if inner == "cache" { "persistent" } else { "cache" };
+                format!("[advanced.worker_executor.key_value_storage]\ntype='NamespaceRouted'\n[advanced.{selected}]\ntype='Postgres'\n[advanced.{selected}.config]\n{postgres}\n[advanced.worker_executor.key_value_storage.config.{other}]\ntype='InMemory'\n[advanced.worker_executor.key_value_storage.config.{other}.config]\n")
+            } else {
+                format!("[advanced.{selected}]\ntype='Postgres'\n[advanced.{selected}.config]\n{}{}", if selected.contains("mcp") { "cleanup_interval='5m'\n" } else { "" }, postgres)
+            };
+            std::fs::write(&file, format!(
+                "state_store='{state}'\nblob_store='data_disk'\n[cache]\nenabled=false\n[filesystem_snapshots]\nenabled=true\n[logging]\nfile_dir='.'\nfile_name='must-not-truncate.log'\nfile_truncate=true\n[logging.file]\nenabled=true\n{advanced}"
+            )).unwrap();
+            let mut command = Command::new("bash");
+            command.arg(entrypoint).args(["--config-dir", "isolated-cli", "server", "run"]);
+            if existing { command.arg(format!("--config={}", file.display())); }
+            else { command.arg("--config").arg(&file); }
+            command.arg("--clean").arg("--ports-file").arg(&ports)
+                .current_dir(cwd.path()).env_clear()
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .env("HOME", cwd.path())
+                .env("GOLEM_REAL", test_binary_path(&test_binary_profile(), "golem"))
+                .env("GOLEM__DATA_DIR", &data)
+                .env("GOLEM_LITESTREAM", "true")
+                .env("GOLEM_LITESTREAM_REPLICA_URL", "file:///unused-replica")
+                .env("LITESTREAM_CALLS", &calls).kill_on_drop(true);
+            let output = tokio::time::timeout(RUN_TIMEOUT, command.output()).await.unwrap().unwrap();
+            let text = format!("{}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(!text.contains("synthetic-private-marker"));
+            if allowed {
+                assert!(output.status.success(), "{}", describe("entrypoint", &output));
+                assert!(std::fs::read_to_string(&calls).unwrap().contains("replicate"));
+            } else {
+                assert_eq!(output.status.code(), Some(1), "{}", describe("entrypoint", &output));
+                assert!(text.contains("GOLEM_LITESTREAM=true") && text.contains("PostgreSQL"), "{text}");
+                assert!(!calls.exists(), "Litestream ran before PostgreSQL refusal");
+                assert_eq!(data.exists(), existing, "preflight created the state directory");
+            }
+            assert_eq!(std::fs::read(&log).unwrap(), b"existing log");
+            assert!(!ports.exists());
+            if existing {
+                assert_eq!(std::fs::read(data.join("old-state")).unwrap(), b"existing state");
+                assert_eq!(std::fs::read(data.join("filesystem-snapshots.repository-key")).unwrap(), b"existing key");
+            } else {
+                assert!(!data.join("filesystem-snapshots.repository-key").exists());
+            }
+        }
+    }).await;
+    futures_util::stream::iter([
+        &["--help"][..],
+        &["--version"][..],
+        &["server", "clean"][..],
+        &["server", "run", "--help"][..],
+        &["server", "run", "--not-real"][..],
+    ])
+    .for_each(|args| async move {
+        let cwd = TempDir::new().unwrap();
+        let output = Command::new(test_binary_path(&test_binary_profile(), "golem"))
+            .arg("--litestream-preflight")
+            .args(args)
+            .current_dir(cwd.path())
+            .env_clear()
+            .env("HOME", cwd.path())
+            .kill_on_drop(true)
+            .output()
+            .await
+            .unwrap();
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "{}",
+            describe("preflight", &output)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("GOLEM_LITESTREAM=true requires a valid `server run` command")
+        );
+        assert_eq!(std::fs::read_dir(cwd.path()).unwrap().count(), 0);
+    })
+    .await;
 }

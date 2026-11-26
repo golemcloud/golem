@@ -43,7 +43,7 @@ pub fn project(service: &str, input: &Figment) -> Figment {
 /// Projects the common settings onto the embedded services and retains launcher settings.
 pub fn all_in_one(input: &Figment) -> figment::Result<Figment> {
     let root: Value = input.extract()?;
-    validate_settings(input, &root)?;
+    validate_settings(input, &root, None)?;
     SERVICES
         .into_iter()
         .chain(["router", "golem_issuer", "ports_file"])
@@ -515,7 +515,7 @@ fn invalid_setting(input: &Figment, path: &str, message: impl Into<String>) -> f
     error
 }
 
-fn validate_settings(input: &Figment, value: &Value) -> figment::Result<()> {
+fn validate_settings(input: &Figment, value: &Value, service: Option<&str>) -> figment::Result<()> {
     [
         "/postgres",
         "/data_disk",
@@ -536,14 +536,22 @@ fn validate_settings(input: &Figment, value: &Value) -> figment::Result<()> {
         "/filesystem_snapshots",
         "/filesystem_snapshots/storage_retry",
         "/advanced",
-        "/advanced/server",
-        "/advanced/registry_service",
-        "/advanced/shard_manager",
-        "/advanced/worker_service",
-        "/advanced/worker_executor",
-        "/advanced/component_compilation_service",
     ]
     .into_iter()
+    .chain(
+        [
+            "/advanced/server",
+            "/advanced/registry_service",
+            "/advanced/shard_manager",
+            "/advanced/worker_service",
+            "/advanced/worker_executor",
+            "/advanced/component_compilation_service",
+        ]
+        .into_iter()
+        .filter(|pointer| {
+            service.is_none_or(|service| pointer.strip_prefix("/advanced/") == Some(service))
+        }),
+    )
     .try_for_each(|pointer| match value.pointer(pointer) {
         Some(value) if !value.is_object() => Err(invalid_setting(
             input,
@@ -600,7 +608,7 @@ fn validate_settings(input: &Figment, value: &Value) -> figment::Result<()> {
 
 fn service_settings(service: &str, input: &Figment) -> figment::Result<Figment> {
     let value: Value = input.extract()?;
-    validate_settings(input, &value)?;
+    validate_settings(input, &value, Some(service))?;
     ["number_of_shards", "retained_periodic_snapshots"]
         .into_iter()
         .try_for_each(|key| {

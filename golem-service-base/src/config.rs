@@ -162,16 +162,37 @@ impl S3BlobStorageConfig {
     /// Without `namespace_prefixes`, refuses two bucket settings that name the same bucket. The
     /// keys of two namespaces, or of two levels of the compressed oplog, can then be the same.
     pub fn validate(&self) -> anyhow::Result<()> {
-        if self.namespace_prefixes {
-            return Ok(());
-        }
-        let mut settings_by_bucket = HashMap::new();
-        for (setting, bucket) in self.bucket_settings() {
-            if let Some(other) = settings_by_bucket.insert(bucket, setting.clone()) {
-                anyhow::bail!(
-                    "blob_storage.config.{other} and blob_storage.config.{setting} both name the bucket \"{bucket}\": give each of them its own bucket, or enable blob_storage.config.namespace_prefixes"
-                );
+        use anyhow::Context;
+        if !self.namespace_prefixes {
+            let mut settings_by_bucket = HashMap::new();
+            for (setting, bucket) in self.bucket_settings() {
+                if let Some(other) = settings_by_bucket.insert(bucket, setting.clone()) {
+                    anyhow::bail!(
+                        "blob_storage.config.{other} and blob_storage.config.{setting} both name the bucket \"{bucket}\": give each of them its own bucket, or enable blob_storage.config.namespace_prefixes"
+                    );
+                }
             }
+        }
+        if let Some(endpoint) = &self.aws_endpoint_url {
+            let uri = endpoint
+                .parse::<http::Uri>()
+                .context("Invalid blob_storage.config.aws_endpoint_url")?;
+            let url = url::Url::parse(endpoint)
+                .context("Invalid blob_storage.config.aws_endpoint_url")?;
+            anyhow::ensure!(
+                matches!(uri.scheme_str(), Some("http" | "https"))
+                    && uri.host().is_some()
+                    && url.host_str().is_some()
+                    && url.query().is_none()
+                    && url.fragment().is_none(),
+                "blob_storage.config.aws_endpoint_url must be an absolute HTTP or HTTPS URL with a host and no query or fragment"
+            );
+        }
+        if let Some(jitter) = self.retries.max_jitter_factor {
+            anyhow::ensure!(
+                jitter.is_finite() && jitter > 0.0,
+                "blob_storage.config.retries.max_jitter_factor must be finite and positive; omit it to disable jitter"
+            );
         }
         Ok(())
     }

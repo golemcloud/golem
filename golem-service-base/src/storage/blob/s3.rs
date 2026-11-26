@@ -35,9 +35,11 @@ use aws_sdk_s3::operation::delete_objects::DeleteObjectsOutput;
 use aws_sdk_s3::operation::get_object::GetObjectError;
 use aws_sdk_s3::operation::get_object::GetObjectError::NoSuchKey;
 use aws_sdk_s3::operation::head_object::{HeadObjectError, HeadObjectOutput};
+use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error;
 use aws_sdk_s3::operation::put_object::PutObjectError;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{Delete, Object, ObjectIdentifier};
+use aws_smithy_runtime_api::http::HttpError;
 use bytes::{Buf, Bytes};
 use futures::stream::BoxStream;
 use futures::{Stream, TryFutureExt, TryStreamExt};
@@ -295,39 +297,82 @@ pub struct S3BlobStorage {
     config: S3BlobStorageConfig,
 }
 
-/// The namespace kind whose prefix is checked at startup.
+/// A namespace that storage must reach at startup.
 #[derive(Debug, Clone, Copy)]
 pub enum S3StartupNamespace {
     Components,
     InitialAgentFiles,
     OplogPayload,
     CompilationCache,
+    CustomData,
+    CompressedOplog(usize),
+    FilesystemSnapshots,
 }
 
-pub(crate) fn startup_scope(
-    config: &S3BlobStorageConfig,
-    namespace: S3StartupNamespace,
-) -> (&str, Box<str>) {
-    let (bucket, kind) = match namespace {
-        S3StartupNamespace::Components => (&config.components_bucket, "component_store"),
-        S3StartupNamespace::InitialAgentFiles => {
-            (&config.initial_agent_files_bucket, "initial_agent_files")
-        }
-        S3StartupNamespace::OplogPayload => (&config.oplog_payload_bucket, "oplog_payload"),
-        S3StartupNamespace::CompilationCache => {
-            (&config.compilation_cache_bucket, "compilation_cache")
-        }
-    };
-    let prefix = join_blob_key(
-        &config.object_prefix,
-        if config.namespace_prefixes { kind } else { "" },
+pub(crate) fn startup_scopes<'a>(
+    config: &'a S3BlobStorageConfig,
+    namespaces: &[S3StartupNamespace],
+) -> Result<Box<[(&'a str, Box<str>)]>, Error> {
+    ensure!(
+        !namespaces.is_empty(),
+        "S3 startup requires at least one namespace"
     );
-    let prefix = if prefix.is_empty() {
-        prefix
-    } else {
-        S3BlobStorage::prefix_with_slash(&prefix)
-    };
-    (bucket, prefix.into_boxed_str())
+    namespaces
+        .iter()
+        .try_fold(
+            Vec::with_capacity(namespaces.len()),
+            |mut scopes, namespace| {
+                let (bucket, kind): (&str, &str) = match namespace {
+                    S3StartupNamespace::Components => {
+                        (&config.components_bucket, "component_store")
+                    }
+                    S3StartupNamespace::InitialAgentFiles => {
+                        (&config.initial_agent_files_bucket, "initial_agent_files")
+                    }
+                    S3StartupNamespace::OplogPayload => {
+                        (&config.oplog_payload_bucket, "oplog_payload")
+                    }
+                    S3StartupNamespace::CompilationCache => {
+                        (&config.compilation_cache_bucket, "compilation_cache")
+                    }
+                    S3StartupNamespace::CustomData => (&config.custom_data_bucket, "custom_data"),
+                    S3StartupNamespace::CompressedOplog(level) => (
+                        config
+                            .compressed_oplog_buckets
+                            .get(*level)
+                            .with_context(|| {
+                                format!(
+                                    "No S3 bucket configured for compressed oplog level {level}"
+                                )
+                            })?,
+                        "compressed_oplog",
+                    ),
+                    S3StartupNamespace::FilesystemSnapshots => {
+                        (&config.filesystem_snapshots_bucket, "filesystem_snapshots")
+                    }
+                };
+                if !scopes.iter().any(|(selected, _)| *selected == bucket) {
+                    let kind = match namespace {
+                        S3StartupNamespace::CompressedOplog(level) if config.namespace_prefixes => {
+                            format!("{kind}/{level}")
+                        }
+                        _ => kind.to_string(),
+                    };
+                    let prefix = join_blob_key(
+                        &config.object_prefix,
+                        if config.namespace_prefixes { &kind } else { "" },
+                    );
+                    let prefix = if prefix.is_empty() {
+                        prefix
+                    } else {
+                        S3BlobStorage::prefix_with_slash(&prefix)
+                    };
+                    scopes.push((bucket, prefix.into_boxed_str()));
+                }
+                Ok::<_, Error>(scopes)
+            },
+        )
+        .map(Vec::into_boxed_slice)
 }
 
 pub(crate) fn startup_failure(bucket: &str, error: impl Into<Error>) -> Error {
@@ -336,14 +381,16 @@ pub(crate) fn startup_failure(bucket: &str, error: impl Into<Error>) -> Error {
         .context(format!("S3 startup check failed for bucket {bucket}"))
 }
 
-/// Creates storage after validating its configuration and checking an owned prefix.
+/// Creates storage after validating its configuration and reaching every required bucket.
+/// Any received response establishes reachability, without a permission or existence check.
+/// Transport failures retry within one ten-second deadline for all required buckets.
 /// A failure returns no storage and retains the concrete cause.
 #[async_trait]
 pub trait S3BlobStorageFactory: Send {
     async fn create(
         self,
         config: S3BlobStorageConfig,
-        startup_namespace: S3StartupNamespace,
+        startup_namespaces: &[S3StartupNamespace],
     ) -> Result<Arc<dyn BlobStorage>, Error>;
 }
 
@@ -364,10 +411,10 @@ impl S3BlobStorageFactory for ConfiguredS3BlobStorageFactory {
     async fn create(
         self,
         config: S3BlobStorageConfig,
-        startup_namespace: S3StartupNamespace,
+        startup_namespaces: &[S3StartupNamespace],
     ) -> Result<Arc<dyn BlobStorage>, Error> {
         Ok(Arc::new(
-            S3BlobStorage::with_config_loader(config, startup_namespace, self.loader).await?,
+            S3BlobStorage::with_config_loader(config, startup_namespaces, self.loader).await?,
         ))
     }
 }
@@ -381,12 +428,15 @@ impl S3BlobStorageFactory for ConfiguredS3BlobStorageFactory {
 /// response that it gets, and `get` gives the status that it stored last. The output comes
 /// from the last attempt, so `get` gives the status of the response of that attempt.
 #[derive(Debug, Clone, Default)]
-struct ResponseStatus(Arc<Mutex<Option<u16>>>);
+struct ResponseStatus {
+    status: Arc<Mutex<Option<u16>>>,
+    stop_before_body: bool,
+}
 
 impl ResponseStatus {
     /// Gives the status that the interceptor stored last, or `None` when it got no response.
     fn get(&self) -> Option<u16> {
-        *self.0.lock().unwrap()
+        *self.status.lock().unwrap()
     }
 }
 
@@ -401,8 +451,12 @@ impl Intercept for ResponseStatus {
         _runtime_components: &RuntimeComponents,
         _cfg: &mut ConfigBag,
     ) -> Result<(), BoxError> {
-        *self.0.lock().unwrap() = Some(context.response().status().as_u16());
-        Ok(())
+        *self.status.lock().unwrap() = Some(context.response().status().as_u16());
+        if self.stop_before_body {
+            Err("S3 startup response headers received".into())
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -487,31 +541,87 @@ fn cut_range(mut blob: Vec<u8>, start: u64, end: u64) -> Result<Vec<u8>, BlobRan
     Ok(blob)
 }
 
-async fn check_startup_access(client: &Client, bucket: &str, prefix: &str) -> Result<(), Error> {
-    tokio::time::timeout(
-        std::time::Duration::from_secs(10),
-        client
-            .list_objects_v2()
-            .bucket(bucket)
-            .prefix(prefix)
-            .max_keys(1)
-            .send(),
+fn received_unrepresentable_headers(error: &SdkError<ListObjectsV2Error>) -> bool {
+    use std::error::Error as _;
+    let SdkError::DispatchFailure(failure) = error else {
+        return false;
+    };
+    let Some(connector) = failure
+        .as_connector_error()
+        .filter(|error| error.is_other())
+    else {
+        return false;
+    };
+    let Some(error) = connector
+        .source()
+        .and_then(|error| error.downcast_ref::<HttpError>())
+    else {
+        return false;
+    };
+    // The pinned connector rejects these received headers before interceptors run.
+    // HttpError exposes its kind only through its diagnostic.
+    let diagnostic = error.to_string();
+    error.source().is_none()
+        && diagnostic.starts_with("header `")
+        && diagnostic.contains("` contains non-UTF8 octet at index ")
+}
+
+async fn check_startup_access(
+    client: &Client,
+    config: &S3BlobStorageConfig,
+    bucket: &str,
+    prefix: &str,
+) -> Result<(), SdkError<ListObjectsV2Error>> {
+    with_retries_customized(
+        "s3",
+        "startup",
+        None,
+        &config.retries,
+        &(client, bucket, prefix),
+        |(client, bucket, prefix)| {
+            Box::pin(async move {
+                let status = ResponseStatus {
+                    stop_before_body: true,
+                    ..Default::default()
+                };
+                let result = client
+                    .list_objects_v2()
+                    .bucket(*bucket)
+                    .prefix(*prefix)
+                    .max_keys(1)
+                    .customize()
+                    .interceptor(status.clone())
+                    .send()
+                    .await;
+                if status.get().is_some()
+                    || result.as_ref().is_err_and(received_unrepresentable_headers)
+                {
+                    Ok(())
+                } else {
+                    result.map(|_| ())
+                }
+            })
+        },
+        |error| match error {
+            SdkError::TimeoutError(_) => true,
+            SdkError::DispatchFailure(error) => error.is_io() || error.is_timeout(),
+            _ => false,
+        },
+        |_| None,
+        true,
     )
     .await
-    .with_context(|| format!("S3 startup check timed out for bucket {bucket}"))?
-    .map_err(|error| startup_failure(bucket, error))?;
-    Ok(())
 }
 
 impl S3BlobStorage {
-    /// Connects to S3 and checks access to the namespace prefix needed at startup.
+    /// Connects to S3 and checks reachability of the required namespace buckets.
     pub async fn new(
         config: S3BlobStorageConfig,
-        startup_namespace: S3StartupNamespace,
+        startup_namespaces: &[S3StartupNamespace],
     ) -> Result<Self, Error> {
         Self::with_config_loader(
             config,
-            startup_namespace,
+            startup_namespaces,
             aws_config::defaults(BehaviorVersion::latest()),
         )
         .await
@@ -519,10 +629,11 @@ impl S3BlobStorage {
 
     async fn with_config_loader(
         config: S3BlobStorageConfig,
-        startup_namespace: S3StartupNamespace,
+        startup_namespaces: &[S3StartupNamespace],
         config_builder: aws_config::ConfigLoader,
     ) -> Result<Self, Error> {
         config.validate()?;
+        startup_scopes(&config, startup_namespaces)?;
         let mut config_builder = config_builder.region(Region::new(config.region.clone()));
 
         if let Some(endpoint_url) = &config.aws_endpoint_url {
@@ -555,8 +666,20 @@ impl S3BlobStorage {
         }
 
         let storage = Self::with_sdk_config(config, s3_config_builder.build());
-        let (bucket, prefix) = startup_scope(&storage.config, startup_namespace);
-        check_startup_access(&storage.client, bucket, &prefix).await?;
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+        let scopes = startup_scopes(&storage.config, startup_namespaces)?;
+        let storage_ref = &storage;
+        futures::stream::iter(scopes.iter().map(Ok::<_, Error>))
+            .try_for_each(|(bucket, prefix)| async move {
+                tokio::time::timeout_at(
+                    deadline,
+                    check_startup_access(&storage_ref.client, &storage_ref.config, bucket, prefix),
+                )
+                .await
+                .map_err(|error| startup_failure(bucket, error))?
+                .map_err(|error| startup_failure(bucket, error))
+            })
+            .await?;
         Ok(storage)
     }
 

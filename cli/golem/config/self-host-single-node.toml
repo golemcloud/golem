@@ -1,11 +1,16 @@
 # Supply credentials through the environment. This file contains no secret values.
 state_store = "sqlite"
-blob_store = "data_disk"
+blob_store = "s3"
 data_dir = "/var/lib/golem"
 retained_update_snapshots = 2
 
 [outbound_sockets]
 enabled = false
+
+[object_storage]
+region = "us-east-1"
+components_bucket = "golem-components"
+data_bucket = "golem-data"
 
 [cache]
 enabled = false

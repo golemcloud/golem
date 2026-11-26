@@ -90,6 +90,14 @@ impl<P> Drop for DbSessionStore<P> {
 /// A pool for a SQLite database that holds the session store tables, with the session store
 /// migrations applied.
 pub async fn migrated_sqlite_pool(config: &DbSqliteConfig) -> anyhow::Result<SqlitePool> {
+    if let Some(parent) = std::path::Path::new(&config.database)
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+    {
+        tokio::fs::create_dir_all(parent)
+            .await
+            .context("Failed to create the SQLite session store directory")?;
+    }
     let migrations = IncludedMigrationsDir::new(&DB_MIGRATIONS);
     golem_service_base::db::sqlite::migrate(config, migrations.sqlite_migrations())
         .await

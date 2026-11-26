@@ -77,7 +77,7 @@ async fn run_with_blob_storage_factory(
     let blob_storage: Arc<dyn BlobStorage + Send + Sync> = match &config.blob_storage {
         BlobStorageConfig::S3(config) => {
             blob_storage_factory
-                .create(config.clone(), S3StartupNamespace::CompilationCache)
+                .create(config.clone(), &[S3StartupNamespace::CompilationCache])
                 .await?
         }
         BlobStorageConfig::LocalFileSystem(config) => Arc::new(
@@ -212,11 +212,9 @@ mod tests {
             }),
             ..Default::default()
         };
-        let failure = aws_sdk_s3::error::SdkError::dispatch_failure(
-            aws_sdk_s3::error::ConnectorError::io(Box::new(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                "selected bucket access denied",
-            ))),
+        let failure = std::io::Error::new(
+            std::io::ErrorKind::ConnectionRefused,
+            "selected bucket transport refusal",
         );
         let factory = InMemoryS3BlobStorageFactory::failed(failure);
         let mut tasks = JoinSet::new();
@@ -234,11 +232,11 @@ mod tests {
                 .find_map(|cause| cause.downcast_ref::<std::io::Error>())
                 .unwrap()
                 .kind(),
-            std::io::ErrorKind::PermissionDenied
+            std::io::ErrorKind::ConnectionRefused
         );
         assert_eq!(
             error.root_cause().to_string(),
-            "selected bucket access denied"
+            "selected bucket transport refusal"
         );
         assert!(tasks.is_empty(), "listeners must not start after S3 fails");
     }

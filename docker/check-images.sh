@@ -73,19 +73,32 @@ for service in "${services[@]}"; do
     [ -z "$privileged" ] || fail "$image has setuid or setgid files: $privileged"
 done
 
-# The entrypoint lists the databases of the Litestream configuration, restores each of them from
-# the empty replica, and runs `golem --version` under `litestream replicate`, all as uid 65534.
+# The entrypoint checks `server run`, restores from the empty replica and starts replication as
+# uid 65534. A real server stays running, so stop the container after the restore checks.
 golem="$tag_prefix/cli/golem"
 echo "== $golem: startup with Litestream on a new volume"
 volume=$("$engine" volume create)
-output=$("$engine" run --rm -v "$volume:/var/lib/golem" -e GOLEM_LITESTREAM=true \
-    -e GOLEM_LITESTREAM_REPLICA_URL=file:///var/lib/golem/replica "$golem" --version 2>&1) ||
-    fail "$golem with GOLEM_LITESTREAM=true: $output"
-"$engine" volume rm "$volume" >/dev/null
+container=$("$engine" create -v "$volume:/var/lib/golem" -e GOLEM_LITESTREAM=true \
+    -e GOLEM_LITESTREAM_REPLICA_URL=file:///var/lib/golem/replica "$golem" server run)
+cleanup_litestream() {
+    "$engine" rm -f "$container" >/dev/null 2>&1 || true
+    "$engine" volume rm "$volume" >/dev/null 2>&1 || true
+}
+trap cleanup_litestream EXIT
+"$engine" start "$container" >/dev/null
 databases=$(grep -c '^  - path:' cli/golem/docker/litestream.yml)
+for _ in $(seq 1 180); do
+    output=$("$engine" logs "$container" 2>&1)
+    restores=$(grep -c "no matching backups found" <<<"$output" || true)
+    [ "$restores" = "$databases" ] && break
+    [ "$("$engine" inspect --format '{{.State.Running}}' "$container")" = true ] || break
+    sleep 1
+done
 restores=$(grep -c "no matching backups found" <<<"$output" || true)
 [ "$restores" = "$databases" ] ||
     fail "$golem with GOLEM_LITESTREAM=true restored $restores databases, not $databases: $output"
+cleanup_litestream
+trap - EXIT
 
 # The entrypoint writes the Envoy configuration from the variables, and Envoy validates it.
 router="$tag_prefix/golem-router"
