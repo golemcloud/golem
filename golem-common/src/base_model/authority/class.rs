@@ -19,8 +19,9 @@ use std::fmt::{Display, Formatter};
 /// with its class, so that no value can pair a verb with another class.
 ///
 /// The binary encoding of a class and of a verb is its position in its list. Add new classes and
-/// verbs at the end of their list, never in the middle. The catalog's golden file test fails on
-/// any other change.
+/// verbs at the end of their list, never in the middle, and then at the end of the same list in
+/// `encoding.order.txt`. A test fails when a recorded class or verb moves, goes or changes its
+/// name, and the catalog's golden file shows every change in review.
 macro_rules! classes {
     ($(
         $(#[$class_doc:meta])*

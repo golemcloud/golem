@@ -1040,3 +1040,111 @@ fn the_catalog_matches_its_golden_file() {
          change against the spec, then run again with GOLEM_UPDATE_GOLDEN=1 to accept it."
     );
 }
+
+/// The committed order of the binary encoding. `GOLEM_UPDATE_GOLDEN` never rewrites it.
+const ENCODING_ORDER: &str = include_str!("encoding.order.txt");
+
+/// The classes, each with its verbs, and the catalog operations, each list in encoding order.
+struct EncodingOrder {
+    classes: Vec<(String, Vec<String>)>,
+    operations: Vec<String>,
+}
+
+fn recorded_encoding_order() -> EncodingOrder {
+    let mut classes = Vec::new();
+    let mut operations = Vec::new();
+    let mut section = "";
+    for line in ENCODING_ORDER
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+    {
+        if line.starts_with('[') {
+            section = line;
+        } else if section == "[classes and their verbs]" {
+            let (class, verbs) = line.split_once(':').unwrap();
+            classes.push((
+                class.to_string(),
+                verbs.split_whitespace().map(str::to_string).collect(),
+            ));
+        } else if section == "[operations]" {
+            operations.push(line.to_string());
+        } else {
+            panic!("encoding.order.txt: a line outside a known section: {line}");
+        }
+    }
+    EncodingOrder {
+        classes,
+        operations,
+    }
+}
+
+fn current_encoding_order() -> EncodingOrder {
+    EncodingOrder {
+        classes: Class::ALL
+            .iter()
+            .map(|class| {
+                (
+                    class.name().to_string(),
+                    class
+                        .verbs()
+                        .iter()
+                        .map(|verb| verb.name().to_string())
+                        .collect(),
+                )
+            })
+            .collect(),
+        operations: CatalogOperation::ALL
+            .iter()
+            .map(|operation| operation.name().to_string())
+            .collect(),
+    }
+}
+
+/// The first recorded entry that the current list does not hold at the same position.
+fn first_change(recorded: &[String], current: &[String]) -> Option<String> {
+    recorded
+        .iter()
+        .enumerate()
+        .find_map(|(index, name)| match current.get(index) {
+            Some(now) if now == name => None,
+            Some(now) => Some(format!("position {index} holds `{now}`, not `{name}`")),
+            None => Some(format!("`{name}` at position {index} is gone")),
+        })
+}
+
+fn class_names(classes: &[(String, Vec<String>)]) -> Vec<String> {
+    classes.iter().map(|(class, _)| class.clone()).collect()
+}
+
+#[test]
+fn classes_verbs_and_operations_only_grow_at_the_end_of_their_lists() {
+    let recorded = recorded_encoding_order();
+    let current = current_encoding_order();
+
+    let mut changes = Vec::new();
+    if let Some(change) = first_change(
+        &class_names(&recorded.classes),
+        &class_names(&current.classes),
+    ) {
+        changes.push(format!("classes: {change}"));
+    }
+    for ((class, recorded_verbs), (_, current_verbs)) in
+        recorded.classes.iter().zip(&current.classes)
+    {
+        if let Some(change) = first_change(recorded_verbs, current_verbs) {
+            changes.push(format!("verbs of `{class}`: {change}"));
+        }
+    }
+    if let Some(change) = first_change(&recorded.operations, &current.operations) {
+        changes.push(format!("operations: {change}"));
+    }
+
+    assert!(
+        changes.is_empty(),
+        "The binary encoding of classes, verbs and operations is their position: add new entries \
+         at the end of their list, never in the middle, and never remove or rename one. Then add \
+         them at the end of the same list in encoding.order.txt by hand. Changed: {}",
+        changes.join("; ")
+    );
+}

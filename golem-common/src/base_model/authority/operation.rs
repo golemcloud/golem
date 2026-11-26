@@ -37,7 +37,9 @@ pub struct PartShape {
 /// Defines [`CatalogOperation`] and the parts of each operation.
 ///
 /// The binary encoding of an operation is its position in this list. Add new operations at the
-/// end of the list, never in the middle. The catalog's golden file test fails on any other change.
+/// end of the list, never in the middle, and then at the end of the operations in
+/// `encoding.order.txt`. A test fails when a recorded operation moves, goes or changes its name,
+/// and the catalog's golden file shows every change in review.
 macro_rules! catalog {
     ($(
         $(#[$doc:meta])*
