@@ -1,3 +1,19 @@
+/*
+ * Copyright 2024-2026 Golem Cloud
+ *
+ * Licensed under the Golem Source License v1.1 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://license.golem.cloud/LICENSE
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package golem.config
 
 import golem.UInt
@@ -28,6 +44,12 @@ object StaticConfigSpec extends ZIOSpecDefault {
     @Modifier.config("golem.config.default", "{\"displayName\":\"head\",\"next\":null}") tree: NativeNode
   ) derives Schema
   final case class Collision(max_chars: Int, maxChars: Int) derives Schema
+  final case class BadInteger(@Modifier.config("golem.config.default", "\"not-an-integer\"") value: BigInt) derives Schema
+  final case class BadDecimals(@Modifier.config("golem.config.default", "[\"1.25\",\"bad\"]") values: List[BigDecimal]) derives Schema
+  final case class NativeNumbers(
+    @Modifier.config("golem.config.default", "\"123456789012345678901234567890\"") integer: BigInt,
+    @Modifier.config("golem.config.default", "[\"1.25\",\"-0.5\"]") decimals: List[BigDecimal]
+  ) derives Schema
 
   private val supplied = Values(
     Settings("creation", UInt(0L)),
@@ -86,9 +108,13 @@ object StaticConfigSpec extends ZIOSpecDefault {
       val settings: Settings = config.settings
       val enabled: Boolean   = config.enabled
       val original           = config.value
+      type Alias = Values
+      val aliased: Config[Alias] = config
+      val aliasedSettings: Settings = aliased.settings
       currentSettings = Settings("updated", UInt(17L))
       assertTrue(
         settings == supplied.settings,
+        aliasedSettings == supplied.settings,
         !enabled,
         config.slots == supplied.slots,
         original == supplied,
@@ -100,6 +126,19 @@ object StaticConfigSpec extends ZIOSpecDefault {
       val wrong   = scala.util.Try(ConfigSchema[Bad].describe(Nil))
       val managed = scala.util.Try(ConfigSchema[Managed].describe(Nil))
       assertTrue(wrong.isFailure, managed.isFailure)
+    },
+    test("validates native numeric defaults inside containers") {
+      val integer  = scala.util.Try(ConfigSchema[BadInteger].describe(Nil))
+      val decimals = scala.util.Try(ConfigSchema[BadDecimals].describe(Nil))
+      val valid    = ConfigSchema[NativeNumbers].describe(Nil)
+      assertTrue(
+        integer.failed.get.getMessage.contains("Invalid config default"),
+        decimals.failed.get.getMessage.contains("Invalid config default"),
+        valid.map(_.defaultValue) == List(
+          Some(SchemaValue.StringValue("123456789012345678901234567890")),
+          Some(SchemaValue.ListValue(List(SchemaValue.StringValue("1.25"), SchemaValue.StringValue("-0.5"))))
+        )
+      )
     },
     test("projects native config names and recursive values without changing ordinary schemas") {
       val declarations  = ConfigSchema[Native].describe(Nil)

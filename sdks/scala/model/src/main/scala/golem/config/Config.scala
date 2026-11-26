@@ -34,7 +34,7 @@ private[golem] object ConfigAccess {
   def access[T: Type](config: Expr[Config[T]], name: Expr[String])(using Quotes): Expr[Any] = {
     import quotes.reflect.*
     val field = name.valueOrAbort
-    if (!TypeRepr.of[T].typeSymbol.caseFields.exists(_.name == field))
+    if (!TypeRepr.of[T].dealias.typeSymbol.caseFields.exists(_.name == field))
       report.errorAndAbort(s"No config field '$field' in ${Type.show[T]}")
     Select.unique('{ $config.value }.asTerm, field).asExpr
   }

@@ -94,12 +94,19 @@ private[golem] object ConfigIntrospection {
             case _ =>
               checkStaticFields(reflect, path, Set.empty)
               val graph = ConfigSchema.canonicalGraph(Derivation.graphOf(new Schema(reflect)))
+              val value = default.map { json =>
+                val value = ConfigSchema.defaultValue(graph, json)
+                Derivation.fromValue(new Schema(reflect), value).fold(
+                  error => throw new IllegalArgumentException(s"Invalid config default at ${path.mkString(".")}: $error"),
+                  _ => value
+                )
+              }
               List(
                 AgentConfigDeclaration(
                   AgentConfigSource.Local,
                   path,
                   graph,
-                  default.map(ConfigSchema.defaultValue(graph, _))
+                  value
                 )
               )
           }

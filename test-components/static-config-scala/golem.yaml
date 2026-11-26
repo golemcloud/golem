@@ -1,0 +1,44 @@
+manifestVersion: 2.0.0
+
+app: static-config-scala
+
+componentTemplates:
+  scala-static-config:
+    guestLanguage: scala
+    presets:
+      release:
+        default: true
+        build:
+        - command: sbt -batch -no-colors -Dsbt.supershell=false "++3.8.2; staticConfigFixture/golemBuildComponent scala:static-config test-static-config/.golem/scala.js test-static-config/.generated/agent_guest.wasm"
+          sources:
+          - test-static-config/src
+          - model/src
+          - core/js/src
+          - macros/src
+          - codegen/src
+          - sbt/src
+          - build.sbt
+          - project
+          - wasm
+          targets:
+          - test-static-config/.golem/scala.js
+          - test-static-config/.generated/agent_guest.wasm
+        - injectToPrebuiltQuickjs: test-static-config/.generated/agent_guest.wasm
+          module: test-static-config/.golem/scala.js
+          into: "{{ golemTempDir }}/agents/scala_static_config.dynamic.wasm"
+        - preinitializeJs: "{{ golemTempDir }}/agents/scala_static_config.dynamic.wasm"
+          into: "{{ golemTempDir }}/agents/scala_static_config.preinitialized.wasm"
+        componentWasm: "{{ golemTempDir }}/agents/scala_static_config.preinitialized.wasm"
+        customCommands:
+          copy:
+          - command: cp "{{ golemTempDir }}/agents/scala_static_config.preinitialized.wasm" "{{ appRootDir }}/../golem_it_static_config_scala.wasm"
+
+components:
+  scala:static-config:
+    dir: ../../sdks/scala
+    templates: scala-static-config
+
+environments:
+  local:
+    server: local
+    componentPresets: release

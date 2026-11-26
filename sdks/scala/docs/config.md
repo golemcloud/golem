@@ -55,14 +55,15 @@ does not recase them.
 
 Options and lists retain their schema shape. `[null,7,"retained"]` has three
 tuple positions, not two. An absent default is different from the explicit JSON
-default `"null"`. Shared and special-field APIs are not introduced here.
+default `"null"`. Metadata export validates defaults against both the config
+schema and the native Scala type, including numeric values inside containers.
 
 ## sbt and Mill
 
 Both plugins use the same source discovery and RPC generator. Static records
 produce one typed creation-override parameter; required groups containing
-Secrets expose only their static fields. The generated `getWithConfig` and
-`newPhantomWithConfig` variants use the existing owner creation-override path.
+Secrets expose only their static fields. The generated `create` method accepts
+these optional overrides and passes them to the host when it creates the agent.
 
 The real consumer in `test-static-config/` is shared by the sbt
 `staticConfigFixture` project and the Mill `staticConfigFixture` module. It reads
@@ -80,5 +81,15 @@ mill staticConfigFixture.golemBuildComponent --component scala:static-config --o
 ```
 
 These tasks build the JavaScript module and prepare the embedded QuickJS runtime.
-Injection and pinned preinitialization are separate component build steps. A
-linked module or a validated WASM does not establish successful hosted execution.
+The maintained `test-components/static-config-scala/golem.yaml` manifest also
+injects and preinitializes the module, then stages the worker-executor fixture:
+
+```sh
+# From test-components/static-config-scala, with the current repository CLI
+golem build --yes -P release
+golem exec --yes -P release copy
+```
+
+The Scala group in `test-components/build-components.sh` builds and stages this
+fixture. A linked module or a validated WASM does not establish successful hosted
+execution.

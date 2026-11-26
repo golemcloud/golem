@@ -177,6 +177,7 @@ object AgentDefinitionMacro {
           readonly
         )
     }
+    val defaultChecks = List.newBuilder[Expr[Unit]]
     def config(
       tpe: TypeRepr,
       path: List[String],
@@ -215,6 +216,20 @@ object AgentDefinitionMacro {
             case error: IllegalArgumentException => report.errorAndAbort(s"${path.mkString(".")}: ${error.getMessage}")
           }
         }
+        value.foreach { value =>
+          val wireValue = compiled.literal(golem.schema.wire.SchemaWire.schemaValueToWit(value))
+          val message   = Expr(s"Invalid config default at ${path.mkString(".")}")
+          tpe.asType match {
+            case '[a] =>
+              defaultChecks += '{
+                try {
+                  val _ = golem.schema.wire.ConcreteCodec.derived[a].decode($wireValue)
+                } catch {
+                  case scala.util.control.NonFatal(error) => throw new IllegalArgumentException($message, error)
+                }
+              }
+          }
+        }
         List(AgentConfigDeclaration(AgentConfigSource.Local, path, schema, value))
     }
     val configTypes = traitType.baseClasses.filter(_.fullName == "golem.config.AgentConfig").flatMap { base =>
@@ -251,7 +266,7 @@ object AgentDefinitionMacro {
     try HttpValidation.validateHttpMountFromMetadata(metadata)
     catch { case error: IllegalArgumentException => report.errorAndAbort(error.getMessage) }
     HttpAgentValidation.validate(metadata).left.foreach(error => report.errorAndAbort(error))
-    compiled.literal(WireAgentMetadata.fromModel(metadata))
+    Expr.block(defaultChecks.result(), compiled.literal(WireAgentMetadata.fromModel(metadata)))
   }
 
   private def impl[T: Type](using Quotes): Expr[AgentMetadata] = {

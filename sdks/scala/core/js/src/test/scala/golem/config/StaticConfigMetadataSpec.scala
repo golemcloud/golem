@@ -1,3 +1,19 @@
+/*
+ * Copyright 2024-2026 Golem Cloud
+ *
+ * Licensed under the Golem Source License v1.1 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://license.golem.cloud/LICENSE
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
 package golem.config
 
 import golem.runtime.annotations.agentDefinition
@@ -28,6 +44,16 @@ object StaticConfigMetadataSpec extends ZIOSpecDefault {
   final class StaticImpl(config: Config[Values]) extends StaticAgent {
     def read(): Future[String] = Future.successful(config.settings.label)
   }
+
+  final case class BadInteger(@Modifier.config("golem.config.default", "\"bad\"") value: BigInt) derives Schema
+  final case class BadDecimals(@Modifier.config("golem.config.default", "[\"1.25\",\"bad\"]") values: List[BigDecimal]) derives Schema
+  final case class NativeNumbers(
+    @Modifier.config("golem.config.default", "\"123456789012345678901234567890\"") integer: BigInt,
+    @Modifier.config("golem.config.default", "[\"1.25\",\"-0.5\"]") decimals: List[BigDecimal]
+  ) derives Schema
+  @agentDefinition() trait BadIntegerAgent extends AgentConfig[BadInteger] { class Id() }
+  @agentDefinition() trait BadDecimalsAgent extends AgentConfig[BadDecimals] { class Id() }
+  @agentDefinition() trait NativeNumbersAgent extends AgentConfig[NativeNumbers] { class Id() }
 
   private val model = AgentDefinitionMacro.generate[StaticAgent].config
   private val wire  = AgentDefinitionMacro.generateWire[StaticAgent].reflected.config
@@ -87,6 +113,22 @@ object StaticConfigMetadataSpec extends ZIOSpecDefault {
           val actual = SchemaFingerprintV1.compute(d.valueType, Some(d.valueType.root))
           actual.isRight && actual == SchemaFingerprintV1.compute(other, Some(other.root))
         }
+      )
+    },
+    test("compiled and reflective metadata reject malformed native numbers before export") {
+      val compiledInteger  = scala.util.Try(AgentDefinitionMacro.generateWire[BadIntegerAgent])
+      val compiledDecimals = scala.util.Try(AgentDefinitionMacro.generateWire[BadDecimalsAgent])
+      val modelInteger     = scala.util.Try(AgentDefinitionMacro.generate[BadIntegerAgent])
+      val modelDecimals    = scala.util.Try(AgentDefinitionMacro.generate[BadDecimalsAgent])
+      val valid            = AgentDefinitionMacro.generateWire[NativeNumbersAgent].reflected.config
+      assertTrue(
+        List(compiledInteger, compiledDecimals, modelInteger, modelDecimals).forall(
+          _.failed.get.getMessage.contains("Invalid config default")
+        ),
+        valid.map(_.defaultValue) == List(
+          Some(SchemaValue.StringValue("123456789012345678901234567890")),
+          Some(SchemaValue.ListValue(List(SchemaValue.StringValue("1.25"), SchemaValue.StringValue("-0.5"))))
+        )
       )
     },
     test("invalid static defaults fail compilation rather than becoming read fallbacks") {
