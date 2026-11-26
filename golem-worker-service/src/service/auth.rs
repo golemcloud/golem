@@ -23,8 +23,8 @@ use golem_common::{SafeDisplay, error_forwarding};
 use golem_service_base::clients::registry::{RegistryService, RegistryServiceError};
 use golem_service_base::model::auth::AuthCtx;
 use golem_service_base::model::auth::AuthorizationError;
+use golem_service_base::service::type_id_resolution::InvalidationGenerations;
 use std::sync::Arc;
-use tokio::sync::RwLock;
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthServiceError {
@@ -80,15 +80,21 @@ impl From<AuthCtxCacheError> for AuthServiceError {
 
 pub struct RemoteAuthService {
     client: Arc<dyn RegistryService>,
-    auth_ctx_cache: Cache<TokenSecret, (), AuthCtx, AuthCtxCacheError>,
-    invalidation: RwLock<u64>,
+    auth_ctx_cache: Cache<TokenSecret, (), FetchedAuthCtx, (u64, AuthCtxCacheError)>,
+    generations: Arc<InvalidationGenerations<AccountId>>,
+}
+
+#[derive(Clone)]
+struct FetchedAuthCtx {
+    generation: u64,
+    auth: AuthCtx,
 }
 
 impl RemoteAuthService {
     pub fn new(client: Arc<dyn RegistryService>, config: &AuthServiceConfig) -> Self {
         Self {
             client,
-            invalidation: RwLock::new(0),
+            generations: Arc::default(),
             auth_ctx_cache: Cache::new(
                 Some(config.auth_ctx_cache_max_capacity),
                 FullCacheEvictionMode::LeastRecentlyUsed(1),
@@ -106,21 +112,15 @@ impl RemoteAuthService {
 #[golem_async_trait::region_simple]
 impl AuthService for RemoteAuthService {
     async fn invalidate_tokens_for_account(&self, account_id: AccountId) {
-        let mut generation = self.invalidation.write().await;
-        *generation += 1;
-        let entries: Vec<TokenSecret> = self
-            .auth_ctx_cache
-            .iter()
-            .await
-            .into_iter()
-            .filter(|(_, auth_ctx)| {
-                auth_ctx.access_account_id() == account_id
-                    || auth_ctx.actor_account_id() == account_id
-            })
-            .map(|(key, _)| key)
-            .collect();
-        for key in entries {
-            self.auth_ctx_cache.remove(&key).await;
+        let generation = self.generations.invalidate(account_id);
+        for (key, fetched) in self.auth_ctx_cache.iter().await {
+            if fetched.auth.access_account_id() == account_id
+                || fetched.auth.actor_account_id() == account_id
+            {
+                self.auth_ctx_cache
+                    .remove_if_cached(&key, |cached| cached.generation < generation)
+                    .await;
+            }
         }
     }
 
@@ -133,46 +133,61 @@ impl AuthService for RemoteAuthService {
     }
 
     async fn clear_all_caches(&self) {
-        let mut generation = self.invalidation.write().await;
-        *generation += 1;
-        let auth_keys = self.auth_ctx_cache.keys().await;
-        for key in auth_keys {
-            self.auth_ctx_cache.remove(&key).await;
+        let generation = self.generations.invalidate_all();
+        for (key, _) in self.auth_ctx_cache.iter().await {
+            self.auth_ctx_cache
+                .remove_if_cached(&key, |cached| cached.generation < generation)
+                .await;
         }
     }
 
     async fn authenticate_token(&self, token: TokenSecret) -> Result<AuthCtx, AuthServiceError> {
-        let generation = {
-            let guard = self.invalidation.read().await;
-            if let Some(auth) = self.auth_ctx_cache.try_get(&token).await {
-                return Ok(self
-                    .auth_ctx_cache
-                    .get_or_insert_simple(&token, async move || Ok(auth))
-                    .await?);
+        let request_generation = self.generations.current();
+        loop {
+            let client = self.client.clone();
+            let generations = self.generations.clone();
+            let lookup_token = token.clone();
+            let fetched = self
+                .auth_ctx_cache
+                .get_or_insert_simple_spawned(&token, move || async move {
+                    let generation = generations.current();
+                    let auth = client
+                        .authenticate_token(&lookup_token)
+                        .await
+                        .map_err(|e| {
+                            let error = match e {
+                                RegistryServiceError::CouldNotAuthenticate(_) => {
+                                    AuthCtxCacheError::CouldNotAuthenticate
+                                }
+                                e => {
+                                    tracing::warn!("Authenticating user token failed: {e}");
+                                    AuthCtxCacheError::Error
+                                }
+                            };
+                            (generation, error)
+                        })?;
+                    Ok(FetchedAuthCtx { generation, auth })
+                })
+                .await;
+            let fetched = match fetched {
+                Ok(fetched) => fetched,
+                // Errors have no account identity. Retry an older shared error after any
+                // invalidation that preceded this request, without discarding unrelated successes.
+                Err((generation, _)) if generation < request_generation => continue,
+                Err((_, error)) => return Err(error.into()),
+            };
+            if self
+                .generations
+                .is_current(fetched.auth.access_account_id(), fetched.generation)
+                && self
+                    .generations
+                    .is_current(fetched.auth.actor_account_id(), fetched.generation)
+            {
+                return Ok(fetched.auth);
             }
-            *guard
-        };
-        let auth = self
-            .client
-            .authenticate_token(&token)
-            .await
-            .map_err(|e| match e {
-                RegistryServiceError::CouldNotAuthenticate(_) => {
-                    AuthCtxCacheError::CouldNotAuthenticate
-                }
-                e => {
-                    tracing::warn!("Authenticating user token failed: {e}");
-                    AuthCtxCacheError::Error
-                }
-            })?;
-        let guard = self.invalidation.read().await;
-        // A lookup started before invalidation may finish, but must not refill the cache.
-        if *guard != generation {
-            return Ok(auth);
+            self.auth_ctx_cache
+                .remove_if_cached(&token, |cached| cached.generation == fetched.generation)
+                .await;
         }
-        Ok(self
-            .auth_ctx_cache
-            .get_or_insert_simple(&token, async move || Ok(auth))
-            .await?)
     }
 }

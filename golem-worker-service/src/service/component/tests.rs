@@ -112,6 +112,8 @@ pub(crate) struct TestRegistry {
     pub(crate) deployed_tools: Mutex<Option<golem_common::model::tool::ToolDeploymentState>>,
     pub(crate) tool_state_reads: std::sync::atomic::AtomicUsize,
     pub(crate) auth_contexts: Mutex<HashMap<TokenSecret, AuthCtx>>,
+    pub(crate) auth_reads: std::sync::atomic::AtomicUsize,
+    pub(crate) resolution_reads: std::sync::atomic::AtomicUsize,
 }
 
 /// Holds the next deployed lookup after it read the registry state, until the test releases it.
@@ -147,6 +149,8 @@ impl TestRegistry {
             deployed_tools: Mutex::new(None),
             tool_state_reads: std::sync::atomic::AtomicUsize::new(0),
             auth_contexts: Mutex::new(HashMap::new()),
+            auth_reads: std::sync::atomic::AtomicUsize::new(0),
+            resolution_reads: std::sync::atomic::AtomicUsize::new(0),
         }
     }
 }
@@ -231,6 +235,8 @@ impl RegistryService for TestRegistry {
         &self,
         token: &TokenSecret,
     ) -> Result<AuthCtx, RegistryServiceError> {
+        self.auth_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let auth = self.auth_contexts.lock().unwrap().get(token).cloned();
         self.pass_lookup_gate().await;
         auth.ok_or_else(|| RegistryServiceError::CouldNotAuthenticate("unknown token".into()))
@@ -325,19 +331,27 @@ impl RegistryService for TestRegistry {
         use golem_common::model::card::{
             AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
         };
+        self.resolution_reads
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let registered = self.deployed_agent_type.lock().unwrap().clone().unwrap();
-        auth.authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
-            owner: AgentOwnerPattern::Agent {
-                account: registered.implemented_by.account_email.clone(),
-                application: app.clone(),
-                environment: env.clone(),
-                component: ComponentName(registered.implemented_by.component_name.clone()),
-                agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent.clone()),
-            },
-            verb: Some(AgentVerb::View),
-            resource: AgentResourcePattern::Empty,
-        }))
-        .map_err(|_| RegistryServiceError::NotFound(agent.0.clone()))?;
+        let authorization = auth
+            .authorize_permission(&PermissionTarget::Agent(ClassPermissionTarget {
+                owner: AgentOwnerPattern::Agent {
+                    account: registered.implemented_by.account_email.clone(),
+                    application: app.clone(),
+                    environment: env.clone(),
+                    component: ComponentName(registered.implemented_by.component_name.clone()),
+                    agent: AgentOwnerLeafPattern::AgentTypeWildcard(agent.clone()),
+                },
+                verb: Some(AgentVerb::View),
+                resource: AgentResourcePattern::Empty,
+            }))
+            .map_err(|_| RegistryServiceError::NotFound(agent.0.clone()));
+        // Hold denied responses too, so tests can exercise permission grants in flight.
+        if let Err(error) = authorization {
+            self.pass_lookup_gate().await;
+            return Err(error);
+        }
         let resolved = ResolvedAgentType {
             registered_agent_type: registered,
             environment_id: self
@@ -843,7 +857,6 @@ async fn cancelled_authentication_does_not_block_other_account_invalidation() {
     assert!(owner.await.unwrap_err().is_cancelled());
 
     // A retry of the cancelled request must not prevent unrelated revocation.
-    *registry.next_lookup.lock().unwrap() = Some(LookupGate::new());
     let retry = service.authenticate_token(token);
     tokio::pin!(retry);
     assert!(futures::poll!(&mut retry).is_pending());
@@ -855,4 +868,6 @@ async fn cancelled_authentication_does_not_block_other_account_invalidation() {
     .await
     .expect("cancelled authentication blocked invalidation for another account");
     assert!(service.authenticate_token(other_token).await.is_err());
+    gate.release.add_permits(1);
+    assert!(retry.await.is_ok());
 }

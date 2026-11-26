@@ -313,6 +313,277 @@ mod tests {
     }
 
     #[test]
+    #[test_r::timeout("30s")]
+    async fn authentication_grant_does_not_join_pre_event_denial() {
+        use crate::service::component::tests::LookupGate;
+        use golem_common::model::account::{AccountEmail, AccountId};
+        use golem_common::model::auth::TokenSecret;
+        use golem_common::model::plan::PlanId;
+        use golem_service_base::model::auth::AuthCtx;
+
+        let registry = Arc::new(TestRegistry::new(vec![], None));
+        let handler = handler(registry.clone());
+        let actor = AccountId::new();
+        let token = TokenSecret::new();
+        // An existing impersonation token can fail authentication while its actor lacks
+        // ImpersonateUser permission, then succeed after that permission is restored.
+        assert!(
+            handler
+                .auth_service
+                .authenticate_token(token.clone())
+                .await
+                .is_err()
+        );
+        let gate = LookupGate::new();
+        *registry.next_lookup.lock().unwrap() = Some(gate.clone());
+        let old = handler.auth_service.authenticate_token(token.clone());
+        tokio::pin!(old);
+        assert!(futures::poll!(&mut old).is_pending());
+        gate.started.acquire().await.unwrap().forget();
+
+        let granted = AuthCtx::admin_impersonation(
+            actor,
+            AccountId::new(),
+            AccountEmail::new("target@test.com"),
+            Default::default(),
+            PlanId::new(),
+            Default::default(),
+        );
+        registry
+            .auth_contexts
+            .lock()
+            .unwrap()
+            .insert(token.clone(), granted.clone());
+        handler
+            .on_event(RegistryInvalidationEvent::AccountTokensInvalidated {
+                event_id: 1,
+                account_id: actor,
+            })
+            .await;
+        let fresh = handler.auth_service.authenticate_token(token.clone());
+        tokio::pin!(fresh);
+        let immediate = futures::poll!(&mut fresh);
+        gate.release.add_permits(1);
+        let _ = old.await;
+        let result = match immediate {
+            std::task::Poll::Ready(result) => result,
+            std::task::Poll::Pending => fresh.await,
+        };
+        // Control: the exact same token authenticates once the obsolete pending entry is gone.
+        assert_eq!(
+            handler
+                .auth_service
+                .authenticate_token(token)
+                .await
+                .unwrap(),
+            granted
+        );
+        assert!(
+            result.is_ok(),
+            "post-event authentication inherited the pre-event denial"
+        );
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn authentication_misses_coalesce_across_unrelated_invalidation() {
+        use crate::service::component::tests::LookupGate;
+        use golem_common::model::account::AccountId;
+        use golem_common::model::auth::TokenSecret;
+        use std::sync::atomic::Ordering;
+
+        let registry = Arc::new(TestRegistry::new(vec![], None));
+        let handler = handler(registry.clone());
+        let token = TokenSecret::new();
+        let auth = user_auth(AccountId::new(), true);
+        registry
+            .auth_contexts
+            .lock()
+            .unwrap()
+            .insert(token.clone(), auth.clone());
+        let gate = LookupGate::new();
+        *registry.next_lookup.lock().unwrap() = Some(gate.clone());
+        let first = handler.auth_service.authenticate_token(token.clone());
+        tokio::pin!(first);
+        assert!(futures::poll!(&mut first).is_pending());
+        gate.started.acquire().await.unwrap().forget();
+        let second = handler.auth_service.authenticate_token(token.clone());
+        tokio::pin!(second);
+        assert!(futures::poll!(&mut second).is_pending());
+        assert_eq!(registry.auth_reads.load(Ordering::SeqCst), 1);
+
+        handler
+            .on_event(RegistryInvalidationEvent::AccountTokensInvalidated {
+                event_id: 1,
+                account_id: AccountId::new(),
+            })
+            .await;
+        gate.release.add_permits(1);
+        assert_eq!(first.await.unwrap(), auth);
+        assert_eq!(second.await.unwrap(), auth);
+        registry.auth_contexts.lock().unwrap().remove(&token);
+        assert_eq!(
+            handler
+                .auth_service
+                .authenticate_token(token)
+                .await
+                .unwrap(),
+            auth
+        );
+        assert_eq!(registry.auth_reads.load(Ordering::SeqCst), 1);
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn granted_caller_joining_old_denial() {
+        use crate::service::component::tests::LookupGate;
+        use golem_common::model::account::AccountId;
+
+        for pinned in [false, true] {
+            let deployed = component();
+            let registry = Arc::new(TestRegistry::new(vec![], Some(deployed.clone())));
+            let handler = handler(registry.clone());
+            let name = AgentTypeName("Cart".into());
+            *registry.deployed_agent_type.lock().unwrap() = Some(registered(&name, 0));
+            let account = AccountId::new();
+            let denied = user_auth(account, false);
+            let allowed = user_auth(account, true);
+            let resolve = |auth| {
+                let cache = handler.agent_resolution_cache.clone();
+                let deployed = deployed.clone();
+                let name = name.clone();
+                async move {
+                    if pinned {
+                        cache
+                            .resolve_pinned(
+                                &deployed.application_name,
+                                &deployed.environment_name,
+                                &name,
+                                DeploymentRevision::INITIAL,
+                                None,
+                                &auth,
+                            )
+                            .await
+                    } else {
+                        cache
+                            .resolve(
+                                &deployed.application_name,
+                                &deployed.environment_name,
+                                &name,
+                                None,
+                                &auth,
+                            )
+                            .await
+                    }
+                }
+            };
+            // Controls: the registry denies the old surface and accepts the granted surface.
+            assert!(resolve(denied.clone()).await.is_err());
+            assert!(resolve(allowed.clone()).await.is_ok());
+            handler.agent_resolution_cache.clear().await;
+            let gate = LookupGate::new();
+            *registry.next_lookup.lock().unwrap() = Some(gate.clone());
+            let old = resolve(denied);
+            tokio::pin!(old);
+            assert!(futures::poll!(&mut old).is_pending());
+            gate.started.acquire().await.unwrap().forget();
+            handler
+                .on_event(RegistryInvalidationEvent::AccountTokensInvalidated {
+                    event_id: 1,
+                    account_id: account,
+                })
+                .await;
+            let fresh = resolve(allowed.clone());
+            tokio::pin!(fresh);
+            // Poll once to ensure the post-event request joins the old pending entry.
+            let immediate = futures::poll!(&mut fresh);
+            gate.release.add_permits(1);
+            assert!(old.await.is_err());
+            let result = match immediate {
+                std::task::Poll::Ready(result) => result,
+                std::task::Poll::Pending => fresh.await,
+            };
+            // A subsequent call with exactly the same auth succeeds; the joined call must too.
+            assert!(resolve(allowed).await.is_ok());
+            assert!(
+                result.is_ok(),
+                "post-event granted caller inherited pre-event denial: {:?}",
+                result.err()
+            );
+        }
+    }
+
+    #[test]
+    #[test_r::timeout("30s")]
+    async fn resolution_misses_coalesce_across_unrelated_invalidation() {
+        use crate::service::component::tests::LookupGate;
+        use golem_common::model::account::AccountId;
+        use std::sync::atomic::Ordering;
+
+        for pinned in [false, true] {
+            let deployed = component();
+            let registry = Arc::new(TestRegistry::new(vec![], Some(deployed.clone())));
+            let handler = handler(registry.clone());
+            let name = AgentTypeName("Cart".into());
+            *registry.deployed_agent_type.lock().unwrap() = Some(registered(&name, 0));
+            let auth = user_auth(AccountId::new(), true);
+            let gate = LookupGate::new();
+            *registry.next_lookup.lock().unwrap() = Some(gate.clone());
+            let resolve = || async {
+                if pinned {
+                    handler
+                        .agent_resolution_cache
+                        .resolve_pinned(
+                            &deployed.application_name,
+                            &deployed.environment_name,
+                            &name,
+                            DeploymentRevision::INITIAL,
+                            None,
+                            &auth,
+                        )
+                        .await
+                } else {
+                    handler
+                        .agent_resolution_cache
+                        .resolve(
+                            &deployed.application_name,
+                            &deployed.environment_name,
+                            &name,
+                            None,
+                            &auth,
+                        )
+                        .await
+                }
+            };
+            let first = resolve();
+            tokio::pin!(first);
+            assert!(futures::poll!(&mut first).is_pending());
+            gate.started.acquire().await.unwrap().forget();
+            let second = resolve();
+            tokio::pin!(second);
+            assert!(futures::poll!(&mut second).is_pending());
+            assert_eq!(registry.resolution_reads.load(Ordering::SeqCst), 1);
+            handler
+                .on_event(RegistryInvalidationEvent::AccountTokensInvalidated {
+                    event_id: 1,
+                    account_id: AccountId::new(),
+                })
+                .await;
+            gate.release.add_permits(1);
+            assert_eq!(first.await.unwrap().environment_id, deployed.environment_id);
+            assert_eq!(
+                second.await.unwrap().environment_id,
+                deployed.environment_id
+            );
+            assert_eq!(
+                resolve().await.unwrap().environment_id,
+                deployed.environment_id
+            );
+            assert_eq!(registry.resolution_reads.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[test]
     async fn permission_events_refresh_auth_and_both_resolution_caches() {
         use golem_common::model::account::AccountId;
         use golem_common::model::auth::TokenSecret;
@@ -604,34 +875,38 @@ mod tests {
                     account_id: account,
                 });
             invalidation.await;
+            let restricted = user_auth(account, false);
+            let result = async {
+                if pinned {
+                    handler
+                        .agent_resolution_cache
+                        .resolve_pinned(
+                            &deployed.application_name,
+                            &deployed.environment_name,
+                            &name,
+                            DeploymentRevision::INITIAL,
+                            None,
+                            &restricted,
+                        )
+                        .await
+                } else {
+                    handler
+                        .agent_resolution_cache
+                        .resolve(
+                            &deployed.application_name,
+                            &deployed.environment_name,
+                            &name,
+                            None,
+                            &restricted,
+                        )
+                        .await
+                }
+            };
+            tokio::pin!(result);
+            assert!(futures::poll!(&mut result).is_pending());
             gate.release.add_permits(1);
             lookup.await.unwrap().unwrap();
-            let restricted = user_auth(account, false);
-            let result = if pinned {
-                handler
-                    .agent_resolution_cache
-                    .resolve_pinned(
-                        &deployed.application_name,
-                        &deployed.environment_name,
-                        &name,
-                        DeploymentRevision::INITIAL,
-                        None,
-                        &restricted,
-                    )
-                    .await
-            } else {
-                handler
-                    .agent_resolution_cache
-                    .resolve(
-                        &deployed.application_name,
-                        &deployed.environment_name,
-                        &name,
-                        None,
-                        &restricted,
-                    )
-                    .await
-            };
-            assert!(result.is_err());
+            assert!(result.await.is_err());
         }
     }
 
