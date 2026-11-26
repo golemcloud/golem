@@ -2965,8 +2965,16 @@ elif equals ${component} python
     licenses = set builtin-tools/python/licenses
     source_notice = set builtin-tools/python/SOURCE.md
     sbom = set ""
+elif equals ${component} yq
+    build_task = set build-yq-tool
+    wasm = set builtin-tools/yq.wasm
+    artifact_id = set yq
+    exports_json = set "{\"tools\":[\"yq@0.1.0\"]}"
+    licenses = set builtin-tools/yq/licenses
+    source_notice = set builtin-tools/yq/SOURCE.md
+    sbom = set ""
 else
-    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, git-tool, javascript-tools, typescript-tools, web-fetch, bash, python"
+    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, git-tool, javascript-tools, typescript-tools, web-fetch, bash, python, yq"
 end
 
 skip_build = get_env BUILTIN_SKIP_BUILD

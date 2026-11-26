@@ -45,6 +45,8 @@ The module resolves `github.com/mikefarah/yq/v4` to the fork
 
 yq is MIT licensed. Its module dependencies are MIT, Apache-2.0, BSD-2-Clause, BSD-3-Clause and,
 for `hashicorp/hcl/v2` only, MPL-2.0.
+`SOURCE.md` lists the license files shipped with the release and the sources of the MPL-2.0 and
+modified modules.
 
 ## Differences from native yq
 
