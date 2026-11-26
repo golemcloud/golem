@@ -22,7 +22,7 @@ use crate::durable_host::p3::http::send::driver::{DriverExit, drive_send};
 use crate::durable_host::p3::http::test_support::{FrameTestOplog, TestHttpCtx};
 use crate::services::oplog::OplogError;
 use async_trait::async_trait;
-use futures::FutureExt;
+use futures::{FutureExt, StreamExt};
 use golem_common::model::{Predicate, PredicateValue, RetryPolicy, RetryPolicyState, Timestamp};
 use golem_service_base::error::worker_executor::InterruptKind;
 use http_body_util::{Empty, Full, StreamBody};
@@ -127,6 +127,26 @@ fn response(status: u16, timing: RequestBodyTiming) -> ScriptedHttpExchange {
         timing,
         Box::new(async { Ok(()) }),
     )
+}
+
+#[test]
+fn key_reservation_consumes_only_enabled_keyless_positions() {
+    [
+        (true, false, Some(317), 318),
+        (true, true, None, 317),
+        (false, false, None, 317),
+    ]
+    .into_iter()
+    .for_each(|(enabled, guest_key, expected, next)| {
+        let counter = std::cell::Cell::new(317);
+        let position = reserve_http_key_position(enabled, guest_key, || {
+            let position = counter.get();
+            counter.set(position + 1);
+            Some(OplogIndex::from_u64(position))
+        });
+        assert_eq!(position, expected.map(OplogIndex::from_u64));
+        assert_eq!(counter.get(), next);
+    });
 }
 
 #[test]
@@ -776,39 +796,58 @@ async fn retry_driver_preserves_body_recording_recovery_error() {
 
 #[test]
 #[timeout("10s")]
-async fn retry_driver_retains_status_fallback_response_and_semantic_override() {
-    let physical = physical_request(&HashMap::new(), request_body(), false);
-    let transport = InMemoryHttpTransport::new([response(503, RequestBodyTiming::BeforeResponse)]);
-    let mut host = retry_host(status_predicate(), 1);
-    host.policies[0].policy = RetryPolicy::TimeBox {
-        limit: Duration::from_secs(60),
-        inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(30))),
-    };
-    let exit = drive_send(
-        &physical,
-        &transport,
-        &mut host,
-        true,
-        ("POST", "http://example.com/charge/93"),
-        || Box::pin(futures::future::pending::<InterruptKind>()),
-        |_| async { panic!("a status fallback must not wait in-function") },
-    )
-    .await;
-    let DriverExit::StatusFallback(fallback) = exit else {
-        panic!("the status fallback was lost")
-    };
-    assert_eq!(fallback.response.response.status(), 503);
-    let payload = fallback
-        .semantic_override
-        .expect("TimeBox fallback must retain its evaluated state");
-    assert_eq!(payload.retry_from, OplogIndex::from_u64(709));
-    assert_eq!(payload.policy_name, "charge-retry");
-    assert!(
-        matches!(payload.verdict, crate::durable_host::durability::SemanticTrapRetryVerdict::Retry(delay) if delay == Duration::from_secs(30))
-    );
-    assert_eq!(host.recorded, 0);
-    assert_eq!(transport.take_requests().len(), 1);
-    assert_eq!(transport.invalidation_count(), 0);
+async fn retry_driver_retains_unreplayable_fallback_and_semantic_override() {
+    futures::stream::iter([false, true]).for_each(|send_failure| async move {
+        let physical = physical_request(&HashMap::new(), request_body(), false);
+        let exchange = if send_failure {
+            ScriptedHttpExchange::send_error_after_request_body(
+                wasmtime_wasi_http::Error::HttpProtocolError,
+            )
+        } else {
+            response(503, RequestBodyTiming::BeforeResponse)
+        };
+        let transport = InMemoryHttpTransport::new([exchange]);
+        let predicate = if send_failure {
+            Predicate::True
+        } else {
+            status_predicate()
+        };
+        let mut host = retry_host(predicate, 1);
+        host.policies[0].policy = RetryPolicy::TimeBox {
+            limit: Duration::from_secs(60),
+            inner: Box::new(RetryPolicy::Periodic(Duration::from_secs(30))),
+        };
+        let exit = drive_send(
+            &physical,
+            &transport,
+            &mut host,
+            true,
+            ("POST", "http://example.com/charge/93"),
+            || Box::pin(futures::future::pending::<InterruptKind>()),
+            |_| async { panic!("an unreplayable body must not wait in-function") },
+        )
+        .await;
+        let semantic_override = match exit {
+            DriverExit::StatusFallback(fallback) if !send_failure => {
+                assert_eq!(fallback.response.response.status(), 503);
+                fallback.semantic_override
+            }
+            DriverExit::HttpError(failure) if send_failure => {
+                assert!(matches!(failure.error, ErrorCode::HttpProtocolError));
+                failure.semantic_override
+            }
+            _ => panic!("the unreplayable fallback was lost"),
+        };
+        let payload = semantic_override.expect("TimeBox fallback must retain its evaluated state");
+        assert_eq!(payload.retry_from, OplogIndex::from_u64(709));
+        assert_eq!(payload.policy_name, "charge-retry");
+        assert!(
+            matches!(payload.verdict, crate::durable_host::durability::SemanticTrapRetryVerdict::Retry(delay) if delay == Duration::from_secs(30))
+        );
+        assert_eq!(host.recorded, 0);
+        assert_eq!(transport.take_requests().len(), 1);
+        assert_eq!(transport.invalidation_count(), 0);
+    }).await;
 }
 
 #[test]
