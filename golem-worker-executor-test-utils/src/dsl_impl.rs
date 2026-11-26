@@ -77,6 +77,27 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::Streaming;
 use uuid::Uuid;
 
+#[derive(Debug)]
+pub struct InvocationSessionRejection {
+    pub reason: golem_api_grpc::proto::golem::worker::InvocationRejectionReason,
+    pub message: String,
+    pub worker_error: Option<WorkerExecutorError>,
+}
+
+impl std::fmt::Display for InvocationSessionRejection {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Agent invocation rejected ({}): {} ({:?})",
+            self.reason.as_str_name(),
+            self.message,
+            self.worker_error
+        )
+    }
+}
+
+impl std::error::Error for InvocationSessionRejection {}
+
 fn proto_agent_key(key: &ParsedAgentKey) -> anyhow::Result<ProtoAgentKey> {
     AgentKey::new(key.agent_type.clone(), key.parameters.clone())
         .map_err(|err| anyhow!("Invalid agent key {key}: {err}"))?
@@ -362,21 +383,16 @@ impl TestWorkerExecutor {
                     | invocation_response::Response::Ready(_),
                 ) => {}
                 Some(invocation_response::Response::Rejected(rejected)) => {
-                    // Kept alongside the message: a rejection is refused before acceptance, and
-                    // the reason says as what.
-                    let reason =
-                        golem_api_grpc::proto::golem::worker::InvocationRejectionReason::try_from(
-                            rejected.reason,
-                        )
-                        .map(|reason| reason.as_str_name())
-                        .unwrap_or("UNKNOWN");
-                    terminal = Some(Err(match &rejected.worker_error {
-                        Some(worker_error) => anyhow!(
-                            "Agent invocation rejected ({reason}): {} ({worker_error:?})",
-                            rejected.error
-                        ),
-                        None => anyhow!("Agent invocation rejected ({reason}): {}", rejected.error),
-                    }));
+                    terminal = Some(Err(InvocationSessionRejection {
+                        reason: rejected.reason.try_into()?,
+                        message: rejected.error,
+                        worker_error: rejected
+                            .worker_error
+                            .map(WorkerExecutorError::try_from)
+                            .transpose()
+                            .map_err(anyhow::Error::msg)?,
+                    }
+                    .into()));
                 }
                 Some(invocation_response::Response::Result(invocation_result)) => {
                     result = Some(invocation_result);
@@ -387,7 +403,15 @@ impl TestWorkerExecutor {
                             .take()
                             .ok_or_else(|| anyhow!("invocation completed without a result")),
                         Some(Outcome::Failure(failure)) => {
-                            Err(anyhow!("Agent invocation failed: {failure:?}"))
+                            let message = format!("Agent invocation failed: {failure:?}");
+                            Err(match failure.worker_error {
+                                Some(error) => anyhow::Error::new(
+                                    WorkerExecutorError::try_from(error)
+                                        .map_err(anyhow::Error::msg)?,
+                                )
+                                .context(message),
+                                None => anyhow!(message),
+                            })
                         }
                         None => Err(anyhow!("invocation completion has no outcome")),
                     });
@@ -999,7 +1023,11 @@ impl TestDsl for TestWorkerExecutor {
         match response.result {
             Some(revert_worker_response::Result::Success(_)) => Ok(()),
             Some(revert_worker_response::Result::Failure(error)) => {
-                Err(anyhow!("Failed to revert worker: {error:?}"))
+                let message = format!("Failed to revert worker: {error:?}");
+                Err(anyhow::Error::new(
+                    WorkerExecutorError::try_from(error).map_err(anyhow::Error::msg)?,
+                )
+                .context(message))
             }
             _ => Err(anyhow!("Failed to revert worker: unknown error")),
         }
@@ -1291,7 +1319,11 @@ impl TestDsl for TestWorkerExecutor {
         match response.result {
             Some(update_worker_response::Result::Success(index)) => Ok(OplogIndex::from_u64(index)),
             Some(update_worker_response::Result::Failure(error)) => {
-                Err(anyhow!("Failed to update worker: {error:?}"))
+                let message = format!("Failed to update worker: {error:?}");
+                Err(anyhow::Error::new(
+                    WorkerExecutorError::try_from(error).map_err(anyhow::Error::msg)?,
+                )
+                .context(message))
             }
             _ => Err(anyhow!("Failed to update worker: unknown error")),
         }
@@ -1701,7 +1733,11 @@ impl TestWorkerExecutor {
                 Ok(target_agent_id)
             }
             Some(workerexecutor::v1::fork_worker_response::Result::Failure(error)) => {
-                Err(anyhow!("Error forking worker: {error:?}"))
+                let message = format!("Error forking worker: {error:?}");
+                Err(anyhow::Error::new(
+                    WorkerExecutorError::try_from(error).map_err(anyhow::Error::msg)?,
+                )
+                .context(message))
             }
             None => Err(anyhow!(
                 "No response from golem-worker-executor fork-worker call"

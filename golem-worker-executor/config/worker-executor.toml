@@ -4,6 +4,7 @@ http_port = 8082
 max_in_function_retry_delay = "20s"
 max_websocket_connections = 100
 runtime_metrics_sampling_interval = "5s"
+standalone_tool_invocation_retention = "7days"
 tracing_file_name_with_port = true
 
 [active_agents]
@@ -467,6 +468,7 @@ without_time = false
 # max_in_function_retry_delay = "20s"
 # max_websocket_connections = 100
 # runtime_metrics_sampling_interval = "5s"
+# standalone_tool_invocation_retention = "7days"
 # tracing_file_name_with_port = true
 #
 # [active_agents]
@@ -932,6 +934,7 @@ without_time = false
 # max_in_function_retry_delay = "20s"
 # max_websocket_connections = 100
 # runtime_metrics_sampling_interval = "5s"
+# standalone_tool_invocation_retention = "7days"
 # tracing_file_name_with_port = true
 #
 # [active_agents]
@@ -1396,6 +1399,7 @@ without_time = false
 # max_in_function_retry_delay = "20s"
 # max_websocket_connections = 100
 # runtime_metrics_sampling_interval = "5s"
+# standalone_tool_invocation_retention = "7days"
 # tracing_file_name_with_port = true
 #
 # [active_agents]

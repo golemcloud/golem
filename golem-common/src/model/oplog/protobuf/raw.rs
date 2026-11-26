@@ -519,6 +519,7 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                     local_agent_config,
                     instance_id,
                     create_request,
+                    standalone_tool,
                     never_live,
                 } = *parameters;
                 Entry::Create(RawCreateParameters {
@@ -550,6 +551,9 @@ impl TryFrom<OplogEntry> for golem_api_grpc::proto::golem::worker::RawOplogEntry
                         .collect::<Result<Vec<_>, _>>()?,
                     instance_id: Some(instance_id.into()),
                     create_request: Some(create_request_to_proto(create_request)),
+                    standalone_tool: standalone_tool
+                        .map(|tool| crate::serialization::serialize(&tool))
+                        .transpose()?,
                     never_live,
                 })
             }
@@ -1223,6 +1227,10 @@ impl TryFrom<golem_api_grpc::proto::golem::worker::RawOplogEntry> for OplogEntry
                         create_request: create_request_from_proto(
                             p.create_request.ok_or("Missing create_request")?,
                         )?,
+                        standalone_tool: p
+                            .standalone_tool
+                            .map(|bytes| crate::serialization::deserialize(&bytes))
+                            .transpose()?,
                         never_live: p.never_live,
                     }),
                 })

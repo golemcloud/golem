@@ -901,6 +901,9 @@ impl AgentCommandHandler {
             .trim()
             .parse::<golem_common::model::OwnedInvocationId>()
             .map_err(|error| anyhow!("stdin contains an invalid invocation ID: {error}"))?;
+        let agent_id = invocation
+            .agent_id()
+            .ok_or_else(|| anyhow!("the REPL requires an agent-owned invocation ID"))?;
 
         let live_output = LiveOutput::new(
             self.ctx.clone(),
@@ -910,8 +913,8 @@ impl AgentCommandHandler {
         );
         live_output
             .accepted(
-                invocation.agent_id(),
-                &agent_id_display(Some(&agent_type_name), invocation.agent_id()),
+                agent_id,
+                &agent_id_display(Some(&agent_type_name), agent_id),
                 invocation.id(),
             )
             .await?;

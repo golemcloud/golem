@@ -34,6 +34,9 @@ before (value) {}
                 oplog::OwnerKind::OplogProcessor => {
                     golem_common::model::agent::OwnerKind::OplogProcessor
                 }
+                oplog::OwnerKind::StandaloneTool => {
+                    golem_common::model::agent::OwnerKind::StandaloneTool
+                }
             },
             agent_mode: match params.agent_mode {
                 oplog::AgentMode::Durable => golem_common::model::agent::AgentMode::Durable,
@@ -76,6 +79,14 @@ before (value) {}
                 params.instance_id.low_bits,
             ),
             never_live: params.never_live,
+            standalone_tool: params.standalone_tool.map(|tool| {
+                Ok::<_, String>(golem_common::model::oplog::PublicStandaloneToolInvocation {
+                    tool_name: tool.tool_name.try_into()?,
+                    command_path: tool.command_path,
+                    invocation_id: golem_common::model::InvocationId(tool.invocation_id.into()),
+                    caller: PublicCaller::new(&requester_from_wit(&tool.caller)?, golem_common::model::caller::ClaimVisibility::Hidden),
+                })
+            }).transpose()?,
         }),
     }) }
     Start { record (params) {
@@ -565,6 +576,7 @@ before (value) {}
                         local_agent_config,
                         instance_id,
                         create_request: _,
+                        standalone_tool,
                         never_live,
                     } = *parameters;
                     Ok(Self::Create(oplog::RawCreateParameters {
@@ -580,6 +592,9 @@ before (value) {}
                             }
                             golem_common::model::agent::OwnerKind::OplogProcessor => {
                                 oplog::OwnerKind::OplogProcessor
+                            }
+                            golem_common::model::agent::OwnerKind::StandaloneTool => {
+                                oplog::OwnerKind::StandaloneTool
                             }
                         },
                         agent_mode: match agent_mode {
@@ -612,6 +627,14 @@ before (value) {}
                             .collect::<Result<_, String>>()?,
                         instance_id: instance_id.into(),
                         never_live,
+                        standalone_tool: standalone_tool.map(|tool| {
+                            Ok::<_, String>(oplog::RawStandaloneToolInvocation {
+                                tool_name: tool.tool_name.to_string(),
+                                command_path: tool.command_path,
+                                invocation_id: tool.invocation_id.0.into(),
+                                caller: requester_to_wit(&tool.caller)?,
+                            })
+                        }).transpose()?,
                     }))
                 } }
     Start { record () => RawStartParameters {

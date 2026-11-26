@@ -408,7 +408,7 @@ impl AgentsApi {
         })
     }
 
-    /// Invoke a tool on an existing agent or a fresh ephemeral component owner
+    /// Invoke a tool on an existing agent or a fresh component baseline owner
     ///
     /// Uses normal invocation permissions, queueing and idempotency. Byte stdin, stdout and stderr
     /// require an attached invocation session rather than this scalar endpoint.
@@ -431,7 +431,6 @@ impl AgentsApi {
             tool_name = %request.tool_name,
             idempotency_key = idempotency_key.0.as_ref().map(|key| key.value.clone())
         );
-        let accepting = !matches!(request.mode, NativeToolInvocationMode::Lookup);
         let response = self
             .worker_service
             .invoke_tool_rest(environment_id.0, request.0, idempotency_key.0, auth)
@@ -439,17 +438,10 @@ impl AgentsApi {
             .await
             .map_err(Into::into);
         record.result(response).map(|result| {
-            let (invocation_id, environment_id) = if accepting {
-                (
-                    Some(invocation_id_header(
-                        &result.agent_id,
-                        result.idempotency_key,
-                    )),
-                    Some(environment_id.0.to_string()),
-                )
-            } else {
-                (None, None)
-            };
+            let (invocation_id, environment_id) = (
+                Some(result.invocation_id.clone()),
+                Some(environment_id.0.to_string()),
+            );
             InvokeToolResponse::Ok(Json(result), invocation_id, environment_id)
         })
     }
@@ -638,8 +630,8 @@ pub struct AgentInvocationResult {
 }
 
 /// Select exactly one target: `agentId` for an existing real owner, or `componentId`
-/// for a fresh ephemeral owner using that deployed component's baseline without constructing an agent.
-/// Input is required for await and schedule, and forbidden for lookup.
+/// for a fresh owner using that deployed component's baseline without constructing an agent.
+/// Component tools use durable owners; host tools use ephemeral owners. Input is required.
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
@@ -677,7 +669,6 @@ pub struct NativeToolDefinition {
 pub enum NativeToolInvocationMode {
     Await,
     Schedule,
-    Lookup,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Object)]
@@ -704,6 +695,7 @@ pub enum NativeToolResult {
 #[oai(rename_all = "camelCase")]
 #[serde(rename_all = "camelCase")]
 pub struct NativeToolInvocationResponse {
+    pub invocation_id: String,
     pub agent_id: AgentId,
     pub idempotency_key: InvocationId,
     pub result: Option<NativeToolResult>,

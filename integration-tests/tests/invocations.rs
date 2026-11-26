@@ -14,25 +14,50 @@
 
 use crate::Tracing;
 use anyhow::anyhow;
-use golem_client::api::{AgentClient, AgentError, InvocationClient, InvocationError};
+use golem_client::api::{
+    AgentClient, AgentError, InvocationClient, InvocationClientLive, InvocationError,
+    RegistryServiceClient,
+};
 use golem_client::model::{
     AgentInvocationMode, AgentInvocationRequest, InvocationKind, InvocationOutcome,
     InvocationState, InvocationSummary,
 };
 use golem_common::base_model::api::error_code;
+use golem_common::model::auth::TokenSecret;
+use golem_common::model::component::{ComponentUpdate, ToolDeploymentConfigUpdate};
+use golem_common::model::permission_share::{
+    PermissionShareCreation, PermissionShareData, PermissionShareName,
+};
 use golem_common::model::{AgentStatus, IdempotencyKey, PromiseId};
-use golem_common::schema::{ExternalSchemaValue, FromSchema, TypedSchemaValue};
+use golem_common::schema::{
+    ExternalSchemaValue, ExternalTypedSchemaValue, FromSchema, IntoSchema, IntoTypedSchemaValue,
+    TypedSchemaValue,
+};
 use golem_common::{agent_key, data_value};
+use golem_test_framework::components::worker_service::{
+    WorkerService, restartable::RestartableWorkerService,
+};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
 use golem_test_framework::dsl::{TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
-use std::collections::HashSet;
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, HashSet};
 use std::time::Duration;
 use test_r::{inherit_test_dep, test, timeout};
 use uuid::Uuid;
 
 inherit_test_dep!(Tracing);
 inherit_test_dep!(EnvBasedTestDependencies);
+
+#[derive(IntoSchema)]
+struct StandaloneToolInput {
+    value: String,
+}
+
+struct ToolInvocationReceipt {
+    invocation_id: String,
+    body: Value,
+}
 
 fn error_code<T: std::fmt::Debug>(
     result: Result<T, golem_client::Error<InvocationError>>,
@@ -48,6 +73,336 @@ fn error_code<T: std::fmt::Debug>(
         },
         other => panic!("expected an invocation error, got {other:?}"),
     }
+}
+
+#[test]
+#[timeout("6m")]
+async fn standalone_tool_invocations_survive_service_restart_and_keep_caller_scope(
+    deps: &EnvBasedTestDependencies,
+) -> anyhow::Result<()> {
+    let user = deps.user().await?;
+    let other = deps.user().await?;
+    let (_, env) = user.app_and_env().await?;
+    let caller = user
+        .component(&env.id, "golem_it_tool_streaming_rust_caller_release")
+        .name("standalone-tool:caller")
+        .store()
+        .await?;
+    let component = user
+        .component(&env.id, "golem_it_tool_streaming_rust_provider_release")
+        .name("standalone-tool:provider")
+        .with_tool_agent_binding("streaming", "ToolStreamingCaller")?
+        .store()
+        .await?;
+    let registry = user.registry_service_client().await;
+    let binding_update = ComponentUpdate {
+        current_revision: component.revision,
+        package_metadata: None,
+        config_schema: None,
+        component_provision_config: None,
+        agent_types: None,
+        agent_type_provision_config_updates: None,
+        tools: None,
+        tool_deployment_config_updates: Some(BTreeMap::from([(
+            "streaming".try_into().unwrap(),
+            ToolDeploymentConfigUpdate {
+                provision: None,
+                environment_binding: Default::default(),
+                component_bindings: Some(BTreeMap::from([(
+                    caller.component_name.clone(),
+                    Default::default(),
+                )])),
+                agent_bindings: None,
+            },
+        )])),
+        tool_middlewares: None,
+        tool_middleware_provision_config_updates: None,
+        allow_incompatible_config: false,
+    };
+    let updated = registry
+        .update_component(
+            &component.id.0,
+            &binding_update,
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+        )
+        .await?;
+    user.deploy_environment(env.id).await?;
+    let agent = user
+        .start_agent(
+            &caller.id,
+            agent_key!("ToolStreamingCaller", "hosted-invocation-list"),
+        )
+        .await?;
+    let prefix = format!(
+        "{}/{}/{}",
+        user.account_email.as_str(),
+        env.application_name.0,
+        env.name.0
+    );
+    registry
+        .create_permission_share(
+            &user.account_id.0,
+            &PermissionShareCreation {
+                target_account_email: other.account_email.clone(),
+                name: PermissionShareName("standalone-tool-invocation-access".into()),
+                data: PermissionShareData {
+                    lower_positive: vec![
+                        format!(
+                            "environment({prefix}) @ {} : view :",
+                            other.account_email.as_str()
+                        ),
+                        format!(
+                            "component({prefix}/*) @ {} : view : *",
+                            other.account_email.as_str()
+                        ),
+                        format!(
+                            "agent({prefix}/*/*) @ {} : view : *",
+                            other.account_email.as_str()
+                        ),
+                        format!(
+                            "agent({prefix}/*/*) @ {} : invoke : *",
+                            other.account_email.as_str()
+                        ),
+                    ],
+                    lower_negative: vec![],
+                    upper_positive: vec![],
+                    upper_negative: vec![],
+                },
+            },
+        )
+        .await?;
+    let service = RestartableWorkerService::start(deps).await?;
+    let http = service.base_http_client().await;
+    let base = format!(
+        "http://{}:{}/v1/runtime/envs/{}",
+        service.http_host(),
+        service.http_port(),
+        env.id
+    );
+    let input: ExternalTypedSchemaValue = StandaloneToolInput {
+        value: "scope-and-restart".into(),
+    }
+    .into_typed_schema_value()?
+    .try_into()
+    .map_err(anyhow::Error::msg)?;
+    let invoke =
+        async |token: &TokenSecret, hosted: bool| -> anyhow::Result<ToolInvocationReceipt> {
+            let response = http
+                .post(format!("{base}/invoke-tool"))
+                .bearer_auth(token.secret())
+                .header("Idempotency-Key", "shared-key")
+                .json(&json!({
+                    "agentId": hosted.then_some(agent.agent_id),
+                    "componentId": (!hosted).then_some(caller.id),
+                    "toolName": "streaming", "commandPath": ["no-stream"],
+                    "input": input, "mode": "await",
+                }))
+                .send()
+                .await?;
+            let status = response.status();
+            if !status.is_success() {
+                anyhow::bail!(
+                    "tool invocation returned {status}: {}",
+                    response.text().await?
+                );
+            }
+            let id = response
+                .headers()
+                .get("Golem-Invocation-Id")
+                .expect("acceptance header")
+                .to_str()?
+                .to_string();
+            Ok(ToolInvocationReceipt {
+                invocation_id: id,
+                body: response.json().await?,
+            })
+        };
+    let ToolInvocationReceipt {
+        invocation_id: id,
+        body: receipt,
+    } = invoke(&user.token, false).await?;
+    // Completed standalone invocation → public tool owner and identical result after restart.
+    assert_eq!(
+        id,
+        format!("streaming.{}", receipt["idempotencyKey"].as_str().unwrap())
+    );
+    let client = service.invocation_http_client(&user.token).await;
+    verify_standalone_result_after_service_restart(&service, &client, env.id.0, &id).await?;
+    let other_client = service.invocation_http_client(&other.token).await;
+    // Same external key, other caller scope → not found, then a distinct invocation.
+    assert_eq!(
+        error_code(
+            other_client
+                .lookup_invocations(
+                    &env.id.0,
+                    None,
+                    Some("streaming"),
+                    Some("no-stream"),
+                    None,
+                    "shared-key"
+                )
+                .await
+        )
+        .0,
+        404
+    );
+    let ToolInvocationReceipt {
+        invocation_id: other_id,
+        ..
+    } = invoke(&other.token, false).await?;
+    assert_ne!(other_id, id);
+    assert_eq!(
+        other_client
+            .lookup_invocations(
+                &env.id.0,
+                None,
+                Some("streaming"),
+                Some("no-stream"),
+                None,
+                "shared-key"
+            )
+            .await?
+            .invocations[0]
+            .invocation_id,
+        other_id
+    );
+    // Hosted invocation → agent-owned identity; standalone owners do not enter agent listing.
+    let ToolInvocationReceipt {
+        invocation_id: hosted_id,
+        ..
+    } = invoke(&user.token, true).await?;
+    assert!(hosted_id.starts_with(&format!("{}.", agent.agent_id)));
+    let hosted = client
+        .list_invocations(
+            &env.id.0,
+            &agent.agent_id.0,
+            None,
+            None,
+            Some(&InvocationKind::Tool),
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
+    assert!(
+        hosted
+            .invocations
+            .iter()
+            .any(|item| item.invocation_id == hosted_id
+                && item.operation.as_deref() == Some("tool:streaming/no-stream")
+                && item.state == InvocationState::Completed)
+    );
+    let agents: Value = http
+        .get(format!("{base}/agent-types/ToolStreamingCaller/agents"))
+        .bearer_auth(user.token.secret())
+        .send()
+        .await?
+        .error_for_status()?
+        .json()
+        .await?;
+    let agents = agents["workers"].as_array().expect("agent listing");
+    assert_eq!(agents.len(), 1);
+    assert_eq!(agents[0]["agentId"], serde_json::to_value(agent.agent_id)?);
+
+    // Tool removed after acceptance → get, cancel and full-key lookup still resolve history.
+    registry
+        .update_component(
+            &component.id.0,
+            &ComponentUpdate {
+                current_revision: updated.revision,
+                tools: Some(vec![]),
+                tool_deployment_config_updates: None,
+                ..binding_update
+            },
+            None::<Vec<u8>>,
+            None::<Vec<u8>>,
+        )
+        .await?;
+    user.deploy_environment(env.id).await?;
+    verify_invocation_history_after_tool_removal(
+        &service,
+        &client,
+        env.id.0,
+        &id,
+        &hosted_id,
+        agent.agent_id.0,
+    )
+    .await
+}
+
+async fn verify_standalone_result_after_service_restart(
+    service: &RestartableWorkerService,
+    client: &InvocationClientLive,
+    environment_id: Uuid,
+    id: &str,
+) -> anyhow::Result<()> {
+    let before = client.get_invocation(&environment_id, id).await?;
+    assert_eq!(before.summary.state, InvocationState::Completed);
+    assert!(matches!(before.result, Some(InvocationOutcome::Tool(_))));
+    service.restart().await;
+    // Completed standalone result → identical public history after service reconstruction.
+    let after = client.get_invocation(&environment_id, id).await?;
+    assert_eq!(after.summary.invocation_id, id);
+    assert_eq!(serde_json::to_value(after)?, serde_json::to_value(before)?);
+    Ok(())
+}
+
+async fn verify_invocation_history_after_tool_removal(
+    service: &RestartableWorkerService,
+    client: &InvocationClientLive,
+    environment_id: Uuid,
+    id: &str,
+    hosted_id: &str,
+    agent_id: Uuid,
+) -> anyhow::Result<()> {
+    service.restart().await;
+    // Tool removed after acceptance → get/cancel/full-key lookup work; partial lookup stays invalid.
+    assert_eq!(
+        client
+            .get_invocation(&environment_id, id)
+            .await?
+            .summary
+            .invocation_id,
+        id
+    );
+    assert_eq!(
+        client
+            .cancel_invocation(&environment_id, id)
+            .await?
+            .invocation_id,
+        id
+    );
+    for (owner, expected) in [(None, id), (Some(&agent_id), hosted_id)] {
+        let found = client
+            .lookup_invocations(
+                &environment_id,
+                owner,
+                Some("streaming"),
+                Some("no-stream"),
+                None,
+                "shared-key",
+            )
+            .await?;
+        assert_eq!(found.invocations[0].invocation_id, expected);
+        assert_eq!(
+            error_code(
+                client
+                    .lookup_invocations(
+                        &environment_id,
+                        owner,
+                        Some("streaming"),
+                        None,
+                        None,
+                        "shared-key"
+                    )
+                    .await
+            ),
+            (400, error_code::TYPE_CHECKER_ERROR.into())
+        );
+    }
+    Ok(())
 }
 
 /// Exercises get, list, lookup and cancel of the environment-scoped invocation API on one agent
@@ -76,7 +431,7 @@ async fn invocation_api_reads_and_cancels_invocations(
         .await;
     let lookup_one = async |key: &IdempotencyKey| -> anyhow::Result<InvocationSummary> {
         let mut found = client
-            .lookup_invocations(&env_id, &agent_uuid, None, &key.value)
+            .lookup_invocations(&env_id, Some(&agent_uuid), None, None, None, &key.value)
             .await?
             .invocations;
         assert_eq!(found.len(), 1, "one invocation per key and agent");
@@ -333,7 +688,14 @@ async fn invocation_api_reads_and_cancels_invocations(
     let awaited_pending = tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             let found = client
-                .lookup_invocations(&env_id, &agent_uuid, None, &awaited_key.value)
+                .lookup_invocations(
+                    &env_id,
+                    Some(&agent_uuid),
+                    None,
+                    None,
+                    None,
+                    &awaited_key.value,
+                )
                 .await;
             if let Ok(mut found) = found {
                 break found.invocations.remove(0);
@@ -430,7 +792,7 @@ async fn invocation_api_reads_and_cancels_invocations(
     assert_eq!(
         error_code(
             client
-                .lookup_invocations(&env_id, &agent_uuid, None, "unused-key")
+                .lookup_invocations(&env_id, Some(&agent_uuid), None, None, None, "unused-key")
                 .await
         ),
         (404, error_code::INVOCATION_NOT_FOUND.to_string())
@@ -610,7 +972,14 @@ async fn a_background_failure_keeps_the_recorded_result(
     assert_eq!(again.into_typed::<String>()?, "returned");
 
     let mut found = client
-        .lookup_invocations(&env_id, &agent_id.agent_id.0, None, &key.value)
+        .lookup_invocations(
+            &env_id,
+            Some(&agent_id.agent_id.0),
+            None,
+            None,
+            None,
+            &key.value,
+        )
         .await?
         .invocations;
     assert_eq!(found.len(), 1, "one invocation per key and agent");

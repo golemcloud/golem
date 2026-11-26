@@ -185,6 +185,7 @@ message RawCreateParameters {
   RawCreateRequest create_request = 18;
   optional string constructor_parameters = 19;
   bool never_live = 20;
+  optional bytes standalone_tool = 21;
 }
 
 enum RawCreateRequestKind {

@@ -186,6 +186,9 @@ pub fn error_to_status(error: AgentError) -> Status {
                 worker_execution_error::Error::InvalidRequest(err) => {
                     format!("Invalid Request: {}", err.details)
                 }
+                worker_execution_error::Error::NotAnAgent(err) => {
+                    format!("Not An Agent: Agent ID = {:?}", err.agent_id)
+                }
                 worker_execution_error::Error::AgentAlreadyExists(err) => {
                     format!("Worker Already Exists: Worker ID = {:?}", err.agent_id)
                 }

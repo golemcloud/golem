@@ -214,8 +214,19 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         self.ensure_worker_belongs_to_this_executor(owned_agent_id)?;
         Self::validate_auth_ctx(auth_ctx)?;
         self.ensure_not_being_deleted(owned_agent_id).await?;
-        self.get_existing_for_management(owned_agent_id, operation)
-            .await
+        let worker = Worker::get_exact_existing_suspended(self, owned_agent_id).await?;
+        match worker.get_initial_worker_metadata().owner_kind {
+            golem_common::model::agent::OwnerKind::StandaloneTool => {}
+            golem_common::model::agent::OwnerKind::EphemeralExternalTool
+                if operation == "get invocation" => {}
+            _ => worker.ensure_component_agent_ingress(operation)?,
+        }
+        if worker.answers_as_deleted().await {
+            return Err(WorkerExecutorError::worker_not_found(
+                owned_agent_id.agent_id(),
+            ));
+        }
+        Ok(worker)
     }
 
     pub(super) async fn get_invocation_internal(

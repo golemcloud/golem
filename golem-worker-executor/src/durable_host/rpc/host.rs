@@ -902,7 +902,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                     return Err(handle.trap(error));
                 }
             };
-            let metadata = invocation_metadata(&invocation_id);
+            let metadata = invocation_metadata(&invocation_id)?;
             let stream_auth_ctx = auth_ctx.clone().unwrap_or_else(|| self.agent_auth_ctx());
             let (streams, origin_invocation) = caller_durable_rpc_streams(
                 self,
@@ -1164,7 +1164,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 return Ok(Err(error.into()));
             }
         };
-        let metadata = invocation_metadata(&invocation_id);
+        let metadata = invocation_metadata(&invocation_id)?;
         match run_invoke_and_await(
             self,
             self_,
@@ -1319,7 +1319,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 return Ok(Err(error.into()));
             }
         };
-        let metadata = invocation_metadata(&invocation_id);
+        let metadata = invocation_metadata(&invocation_id)?;
         match run_invoke(
             self,
             self_,
@@ -1589,7 +1589,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 }
                 Err(error) => return Err(handle.trap(error)),
             };
-            let metadata = invocation_metadata(&invocation_id);
+            let metadata = invocation_metadata(&invocation_id)?;
             let stream_auth_ctx = auth_ctx.clone().unwrap_or_else(|| self.agent_auth_ctx());
             let (streams, origin_invocation) = caller_durable_rpc_streams(
                 self,
@@ -1813,7 +1813,7 @@ impl<Ctx: WorkerCtx> HostWasmRpc for DurableWorkerCtx<Ctx> {
                 return bake_closed_async_error(self.table(), error);
             }
         };
-        let metadata = invocation_metadata(&invocation_id);
+        let metadata = invocation_metadata(&invocation_id)?;
 
         let request = HostRequestGolemRpcInvoke {
             remote_agent_id: remote_agent_id.agent_id(),

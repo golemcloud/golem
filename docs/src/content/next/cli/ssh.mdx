@@ -115,7 +115,7 @@ A command still queued behind another invocation is cancelled before it starts. 
 | `-c` | Display its output and exit with its status, normally 130. |
 | Piped commands | Display its output, skip the remaining commands, and exit with 130. |
 
-If no result arrives within five seconds, or you press Ctrl+C again, the CLI **stops waiting**. It prints a `golem tool invoke --lookup` command to retrieve the result later. The interactive session returns to the prompt with status 130; `-c` and piped sessions exit with 130. Stopping the wait does not confirm that the command stopped.
+If no result arrives within five seconds, or you press Ctrl+C again, the CLI **stops waiting**. It prints a `golem invocation get` command with the full invocation ID to retrieve the result later. The interactive session returns to the prompt with status 130; `-c` and piped sessions exit with 130. Stopping the wait does not confirm that the command stopped.
 
 With a tool that has no optional input stream, including Bash 0.2.x, Ctrl+C only stops waiting and requests cancellation of a queued call. A command that has started continues until it finishes or reaches its time limit. The next command waits behind it, and the CLI prints the lookup command for its result.
 

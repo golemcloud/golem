@@ -77,6 +77,8 @@ pub(super) fn status_core(status: &AgentStatusRecord) -> AgentStatusRecord {
     AgentStatusRecord {
         status: status.status,
         last_error_kind: status.last_error_kind,
+        terminal_failure_at: status.terminal_failure_at,
+        terminal_failure_index: status.terminal_failure_index,
         skipped_regions: DeletedRegions::new(),
         overridden_retry_config: status.overridden_retry_config.clone(),
         pending_invocations: status.pending_invocations.clone(),

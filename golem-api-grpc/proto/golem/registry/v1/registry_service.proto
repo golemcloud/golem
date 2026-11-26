@@ -56,6 +56,8 @@ service RegistryService {
   rpc ResolveTypeId (ResolveTypeIdRequest) returns (ResolveTypeIdResponse);
   // Resolves retained names, including declarations on previous implementing components.
   rpc ResolveAgentTypeName (ResolveAgentTypeNameRequest) returns (ResolveAgentTypeNameResponse);
+  // Resolves a retained tool name, including tools that are no longer deployed.
+  rpc ResolveToolTypeId (ResolveToolTypeIdRequest) returns (ResolveToolTypeIdResponse);
   // Resolves an agent type of the environment's current deployment by name.
   rpc GetDeployedAgentType (GetDeployedAgentTypeRequest) returns (GetDeployedAgentTypeResponse);
 
@@ -476,6 +478,23 @@ message ResolveAgentTypeNameSuccessResponse {
 message ResolveTypeIdRequest {
   golem.common.EnvironmentId environment_id = 1;
   uint32 type_id = 2;
+}
+
+message ResolveToolTypeIdRequest {
+  golem.common.EnvironmentId environment_id = 1;
+  string tool_name = 2;
+}
+
+message ResolveToolTypeIdResponse {
+  oneof result {
+    ResolveToolTypeIdSuccessResponse success = 1;
+    RegistryServiceError error = 2;
+  }
+}
+
+message ResolveToolTypeIdSuccessResponse {
+  // Absent only when the environment never assigned this tool name an ID.
+  optional uint32 type_id = 1;
 }
 
 message ResolveTypeIdResponse {

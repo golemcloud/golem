@@ -90,9 +90,11 @@ async-trait = "0.1.87"
 async_zip = { version = "0.0.17", features = ["tokio", "tokio-fs", "deflate"] }
 auditable-serde = "0.8.0"
 aws-config = "1.5.10"
+aws-credential-types = "1.3.0"
 aws-runtime = "1.9.1"
 aws-sdk-s3 = { version = "1.65.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-smithy-runtime-api = { version = "1.15.0", features = ["client"] }
+aws-smithy-types = { version = "1.6.2", features = ["http-body-1-x"] }
 backtrace-on-stack-overflow = "0.3.0"
 axum = { version = "0.8", features = ["multipart"] }
 base64 = "0.22.1"
@@ -171,8 +173,10 @@ humansize = "2.1.3"
 humantime = "2.3.0"
 humantime-serde = "1.1.1"
 hyper = { version = "1.6.0", features = ["full"] }
+hyper-rustls = { version = "0.27.9", default-features = false, features = ["http1", "ring", "tls12", "webpki-roots"] }
 hyper-util = { version = "0.1.20", features = ["server-auto", "http1", "http2", "tokio"] }
 ident-mash = "0.1.0"
+if-addrs = "0.15.0"
 im = "15.1.0"
 include_dir = "0.7.4"
 indexmap = { version = "2.12.0", features = ["serde"] }

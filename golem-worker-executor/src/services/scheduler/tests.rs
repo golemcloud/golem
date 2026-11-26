@@ -65,11 +65,20 @@ type ExpiryDelivery = (OwnedAgentId, AgentFingerprint, String, InvocationId, u64
 
 struct ExpiryWorkerAccessMock {
     deliveries: Arc<Mutex<Vec<ExpiryDelivery>>>,
+    finish_deadline: Option<jiff::Timestamp>,
 }
 
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for ExpiryWorkerAccessMock {
+    async fn delete_finished_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
+        Ok(self.finish_deadline)
+    }
+
     async fn active_worker_fingerprint(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -128,6 +137,14 @@ impl SchedulerWorkerAccess for ExpiryWorkerAccessMock {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for SchedulerWorkerAccessMock {
+    async fn delete_finished_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
     async fn expire_durable_stream_session(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -217,6 +234,14 @@ impl RecordingActiveWorkerAccess {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for RecordingActiveWorkerAccess {
+    async fn delete_finished_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
     async fn expire_durable_stream_session(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -289,6 +314,14 @@ struct FailingWakeWorkerAccess {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for FailingWakeWorkerAccess {
+    async fn delete_finished_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
     async fn expire_durable_stream_session(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -351,6 +384,14 @@ impl SchedulerWorkerAccess for FailingWakeWorkerAccess {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for ActiveWorkerAccessMock {
+    async fn delete_finished_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
     async fn expire_durable_stream_session(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -432,6 +473,14 @@ struct FailingActivationWorkerAccess {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for FailingActivationWorkerAccess {
+    async fn delete_finished_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
     async fn expire_durable_stream_session(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -496,6 +545,14 @@ struct DelayedActiveWorkerAccessMock {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerWorkerAccess for DelayedActiveWorkerAccessMock {
+    async fn delete_finished_invocation(
+        &self,
+        _owned_agent_id: &OwnedAgentId,
+        _fingerprint: AgentFingerprint,
+    ) -> Result<Option<jiff::Timestamp>, WorkerExecutorError> {
+        unimplemented!()
+    }
+
     async fn expire_durable_stream_session(
         &self,
         _owned_agent_id: &OwnedAgentId,
@@ -654,6 +711,16 @@ struct FlakyInsertSchedulerStorage {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerStorage for FlakyInsertSchedulerStorage {
+    async fn reschedule(
+        &self,
+        id: &ScheduleId,
+        owner: Uuid,
+        due: jiff::Timestamp,
+        now: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.reschedule(id, owner, due, now).await
+    }
+
     async fn insert(
         &self,
         schedule_id: ScheduleId,
@@ -678,6 +745,20 @@ impl SchedulerStorage for FlakyInsertSchedulerStorage {
 
     async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError> {
         self.inner.cancel(schedule_id).await
+    }
+
+    async fn get_action(&self, id: &ScheduleId) -> Result<Option<Vec<u8>>, SchedulerStorageError> {
+        self.inner.get_action(id).await
+    }
+
+    async fn replace_action(
+        &self,
+        id: &ScheduleId,
+        expected: &[u8],
+        action: &[u8],
+        due: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.replace_action(id, expected, action, due).await
     }
 
     async fn claim_due(
@@ -768,6 +849,12 @@ fn promise(agent_id: AgentId, idx: u64) -> PromiseId {
 }
 
 #[derive(Debug, Default)]
+struct RegistrationPause {
+    arrived: CancellationToken,
+    release: CancellationToken,
+}
+
+#[derive(Debug, Default)]
 struct RecordingSchedulerStorage {
     inner: Arc<InMemorySchedulerStorage>,
     failed_ack_ids: Arc<Mutex<HashSet<Uuid>>>,
@@ -780,11 +867,23 @@ struct RecordingSchedulerStorage {
     expire_renewal: AtomicUsize,
     renewal_refused: CancellationToken,
     hold_ack_until_renewal_refused: bool,
+    before_registration_read: Mutex<Option<Arc<RegistrationPause>>>,
+    before_registration_replace: Mutex<Option<Arc<RegistrationPause>>>,
 }
 
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerStorage for RecordingSchedulerStorage {
+    async fn reschedule(
+        &self,
+        id: &ScheduleId,
+        owner: Uuid,
+        due: jiff::Timestamp,
+        now: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        self.inner.reschedule(id, owner, due, now).await
+    }
+
     async fn insert(
         &self,
         schedule_id: ScheduleId,
@@ -799,6 +898,30 @@ impl SchedulerStorage for RecordingSchedulerStorage {
 
     async fn cancel(&self, schedule_id: &ScheduleId) -> Result<(), SchedulerStorageError> {
         self.inner.cancel(schedule_id).await
+    }
+
+    async fn get_action(&self, id: &ScheduleId) -> Result<Option<Vec<u8>>, SchedulerStorageError> {
+        let pause = self.before_registration_read.lock().unwrap().take();
+        if let Some(pause) = pause {
+            pause.arrived.cancel();
+            pause.release.cancelled().await;
+        }
+        self.inner.get_action(id).await
+    }
+
+    async fn replace_action(
+        &self,
+        id: &ScheduleId,
+        expected: &[u8],
+        action: &[u8],
+        due: jiff::Timestamp,
+    ) -> Result<bool, SchedulerStorageError> {
+        let pause = self.before_registration_replace.lock().unwrap().take();
+        if let Some(pause) = pause {
+            pause.arrived.cancel();
+            pause.release.cancelled().await;
+        }
+        self.inner.replace_action(id, expected, action, due).await
     }
 
     async fn claim_due(
@@ -1033,6 +1156,10 @@ fn scheduled_action_variants() -> Vec<ScheduledAction> {
             owned_agent_id: owned_agent_id.clone(),
             target_worker_fingerprint: AgentFingerprint::new(),
         },
+        ScheduledAction::DeleteFinishedInvocation {
+            owned_agent_id,
+            fingerprint: AgentFingerprint::new(),
+        },
     ]
 }
 
@@ -1068,8 +1195,61 @@ async fn assert_storage_roundtrips_all_action_variants(
             claimed_action.action,
             expected.remove(&claimed_action.schedule_id).unwrap()
         );
+        let now = jiff::Timestamp::from_str("2023-07-17T10:06:01Z").unwrap();
+        let later = jiff::Timestamp::from_str("2023-07-17T11:05:00Z").unwrap();
+        assert!(
+            !storage
+                .reschedule(&claimed_action.schedule_id, Uuid::new_v4(), later, now)
+                .await
+                .unwrap()
+        );
+        assert!(
+            storage
+                .reschedule(
+                    &claimed_action.schedule_id,
+                    claimed_action.lease_owner,
+                    later,
+                    now
+                )
+                .await
+                .unwrap()
+        );
+        assert!(
+            !storage
+                .ack(&claimed_action.schedule_id, claimed_action.lease_owner, now)
+                .await
+                .unwrap()
+        );
     }
     assert!(expected.is_empty());
+    let assignment = ShardAssignment::unexpiring(1, [shard_id]);
+    let before = jiff::Timestamp::from_str("2023-07-17T11:04:59Z").unwrap();
+    assert!(
+        storage
+            .claim_due(before, &assignment, 10, Duration::from_secs(30))
+            .await
+            .unwrap()
+            .is_empty()
+    );
+    let due = jiff::Timestamp::from_str("2023-07-17T11:05:00Z").unwrap();
+    let reclaimed = storage
+        .claim_due(due, &assignment, 10, Duration::from_secs(30))
+        .await
+        .unwrap();
+    assert_eq!(reclaimed.len(), scheduled_action_variants().len());
+    for claim in reclaimed {
+        assert!(
+            !storage
+                .reschedule(
+                    &claim.schedule_id,
+                    claim.lease_owner,
+                    due + jiff::SignedDuration::from_hours(1),
+                    due + jiff::SignedDuration::from_secs(30)
+                )
+                .await
+                .unwrap()
+        );
+    }
 }
 
 #[test]
@@ -1746,6 +1926,7 @@ async fn scheduled_stream_expiry_preserves_all_fences() {
     let worker_access: Arc<dyn SchedulerWorkerAccess + Send + Sync> =
         Arc::new(ExpiryWorkerAccessMock {
             deliveries: deliveries.clone(),
+            finish_deadline: None,
         });
     let svc = SchedulerServiceDefault::new(
         storage,
@@ -1787,6 +1968,203 @@ async fn scheduled_stream_expiry_preserves_all_fences() {
             1_689_577_500_000,
         )]
     );
+}
+
+#[test]
+async fn finished_invocation_retention_preserves_its_timer_when_the_lifetime_grows() {
+    let storage = Arc::new(InMemorySchedulerStorage::new());
+    let now = jiff::Timestamp::now();
+    let later = now + jiff::SignedDuration::from_hours(9 * 24);
+    let service = SchedulerServiceDefault::new(
+        storage.clone(),
+        create_shard_service_mock(),
+        Arc::new(ExpiryWorkerAccessMock {
+            deliveries: Default::default(),
+            finish_deadline: Some(later),
+        }),
+        create_oplog_service_mock().await,
+        Duration::from_secs(1000),
+        100,
+        Duration::from_secs(30),
+        10,
+        RetryConfig::max_attempts_3(),
+        64,
+        CancellationToken::new(),
+    );
+    let owned_agent_id = OwnedAgentId::new(EnvironmentId::new(), &agent("retention"));
+    let id = ScheduleId::for_finished_invocation(&owned_agent_id);
+    let action = ScheduledAction::DeleteFinishedInvocation {
+        owned_agent_id,
+        fingerprint: AgentFingerprint::new(),
+    };
+    storage
+        .insert(
+            id,
+            now - jiff::SignedDuration::from_secs(1),
+            ShardId::new(0),
+            &serialize(&action).unwrap(),
+        )
+        .await
+        .unwrap();
+    service.process(now).await.unwrap();
+    let assignment = ShardAssignment::unexpiring(1, [ShardId::new(0)]);
+    assert_eq!(storage.count_due(now, &assignment).await.unwrap(), 0);
+    let claims = storage
+        .claim_due(later, &assignment, 10, Duration::from_secs(30))
+        .await
+        .unwrap();
+    assert_eq!(claims.len(), 1);
+    assert_eq!(claims[0].schedule_id, id);
+    assert_eq!(claims[0].due_at.as_millisecond(), later.as_millisecond());
+    assert_eq!(claims[0].action, action);
+}
+
+#[test]
+#[test_r::timeout("10s")]
+async fn retention_registration_rechecks_authority_after_recreation_and_repairs_stale_rows() {
+    use golem_common::model::agent::OwnerKind;
+    use golem_common::model::caller::Caller;
+    use golem_common::model::component::{ComponentId, ComponentRevision};
+    use golem_common::model::invocation_context::InvocationContextStack;
+    use golem_common::model::oplog::{
+        CreateParameters, CreateRequest, CreateRequestKind, OplogEntry,
+    };
+
+    for pause_before_read in [true, false] {
+        let owner = OwnedAgentId::new(EnvironmentId::new(), &AgentId::from_parts(42, 3));
+        let a = AgentFingerprint::new();
+        let b = AgentFingerprint::new();
+        let old = AgentFingerprint::new();
+        let namespace = IndexedStorageNamespace::OpLog {
+            owned_agent_id: owner.clone(),
+            agent_mode: AgentMode::Durable,
+        };
+        let indexed = Arc::new(InMemoryIndexedStorage::new());
+        let create = |fingerprint: AgentFingerprint| {
+            OplogEntry::create(Box::new(CreateParameters {
+                component_id: ComponentId::new(),
+                agent_type_name: None,
+                canonical_key: None,
+                constructor_parameters: None,
+                agent_id: owner.agent_id,
+                owner_kind: OwnerKind::StandaloneTool,
+                agent_mode: AgentMode::Durable,
+                component_revision: ComponentRevision::INITIAL,
+                env: vec![],
+                environment_id: owner.environment_id,
+                created_by: AccountId::new(),
+                parent: None,
+                component_size: 0,
+                initial_total_linear_memory_size: 0,
+                initial_active_plugins: Default::default(),
+                local_agent_config: vec![],
+                instance_id: fingerprint.0,
+                create_request: CreateRequest::new(
+                    CreateRequestKind::GetOrCreate,
+                    None,
+                    Caller::anonymous(),
+                    &InvocationContextStack::fresh(),
+                ),
+                standalone_tool: Some(Box::new(
+                    golem_common::model::oplog::StandaloneToolInvocation {
+                        tool_name: "registration-race".to_string().try_into().unwrap(),
+                        command_path: vec![],
+                        invocation_id: InvocationId::new(),
+                        caller: Caller::anonymous(),
+                    },
+                )),
+                never_live: false,
+            }))
+        };
+        indexed
+            .append(
+                "test",
+                "create",
+                "oplog",
+                namespace.clone(),
+                &owner.storage_key(),
+                1,
+                serialize(&create(a)).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+        let oplog = Arc::new(
+            PrimaryOplogService::new(
+                indexed.clone(),
+                Arc::new(InMemoryBlobStorage::new()),
+                1,
+                1,
+                1024,
+                32,
+                RetryConfig::default(),
+            )
+            .await,
+        );
+        let storage = Arc::new(RecordingSchedulerStorage::default());
+        let service = create_scheduler_with_oplog(storage.clone(), oplog).await;
+        let id = ScheduleId::for_finished_invocation(&owner);
+        let action = |fingerprint| ScheduledAction::DeleteFinishedInvocation {
+            owned_agent_id: owner.clone(),
+            fingerprint,
+        };
+        let due = jiff::Timestamp::now() + jiff::SignedDuration::from_hours(7 * 24);
+        storage
+            .inner
+            .insert(id, due, ShardId::new(0), &serialize(&action(old)).unwrap())
+            .await
+            .unwrap();
+        let pause = Arc::new(RegistrationPause::default());
+        if pause_before_read {
+            *storage.before_registration_read.lock().unwrap() = Some(pause.clone());
+        } else {
+            *storage.before_registration_replace.lock().unwrap() = Some(pause.clone());
+        }
+        let stale = tokio::spawn({
+            let service = service.clone();
+            let action = action(a);
+            async move { service.schedule_with_id(id, due, action).await }
+        });
+        pause.arrived.cancelled().await;
+        indexed
+            .delete("test", "recreate", namespace.clone(), &owner.storage_key())
+            .await
+            .unwrap();
+        indexed
+            .append(
+                "test",
+                "recreate",
+                "oplog",
+                namespace,
+                &owner.storage_key(),
+                1,
+                serialize(&create(b)).unwrap(),
+                None,
+            )
+            .await
+            .unwrap();
+        // The current incarnation registers while the old registration is paused at storage.
+        service.schedule_with_id(id, due, action(b)).await;
+        pause.release.cancel();
+        stale.await.unwrap();
+        assert_eq!(
+            storage.inner.get_action(&id).await.unwrap(),
+            Some(serialize(&action(b)).unwrap())
+        );
+
+        // A delayed old insertion may occupy an empty row, but the current owner repairs it.
+        storage.inner.cancel(&id).await.unwrap();
+        storage
+            .inner
+            .insert(id, due, ShardId::new(0), &serialize(&action(a)).unwrap())
+            .await
+            .unwrap();
+        service.schedule_with_id(id, due, action(b)).await;
+        assert_eq!(
+            storage.inner.get_action(&id).await.unwrap(),
+            Some(serialize(&action(b)).unwrap())
+        );
+    }
 }
 
 /// Nothing else wakes an agent whose resume was already acknowledged, so an activation that
@@ -2675,6 +3053,16 @@ mod lease_renewal_isolation {
     #[async_trait]
     #[golem_async_trait::region_simple]
     impl SchedulerStorage for SlowRenewalStorage {
+        async fn reschedule(
+            &self,
+            id: &ScheduleId,
+            owner: Uuid,
+            due: jiff::Timestamp,
+            now: jiff::Timestamp,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.reschedule(id, owner, due, now).await
+        }
+
         async fn insert(
             &self,
             id: ScheduleId,
@@ -2687,6 +3075,23 @@ mod lease_renewal_isolation {
 
         async fn cancel(&self, id: &ScheduleId) -> Result<(), SchedulerStorageError> {
             self.inner.cancel(id).await
+        }
+
+        async fn get_action(
+            &self,
+            id: &ScheduleId,
+        ) -> Result<Option<Vec<u8>>, SchedulerStorageError> {
+            self.inner.get_action(id).await
+        }
+
+        async fn replace_action(
+            &self,
+            id: &ScheduleId,
+            expected: &[u8],
+            action: &[u8],
+            due: jiff::Timestamp,
+        ) -> Result<bool, SchedulerStorageError> {
+            self.inner.replace_action(id, expected, action, due).await
         }
 
         async fn claim_due(

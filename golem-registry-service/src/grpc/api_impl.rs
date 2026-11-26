@@ -89,7 +89,8 @@ use golem_api_grpc::proto::golem::registry::v1::{
 };
 use golem_api_grpc::proto::golem::registry::v1::{
     ResolveAgentTypeNameRequest, ResolveAgentTypeNameResponse, ResolveAgentTypeNameSuccessResponse,
-    resolve_agent_type_name_response,
+    ResolveToolTypeIdRequest, ResolveToolTypeIdResponse, ResolveToolTypeIdSuccessResponse,
+    resolve_agent_type_name_response, resolve_tool_type_id_response,
 };
 use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
@@ -896,6 +897,24 @@ impl RegistryServiceGrpcApi {
         })
     }
 
+    async fn resolve_tool_type_id_internal(
+        &self,
+        request: ResolveToolTypeIdRequest,
+    ) -> Result<ResolveToolTypeIdSuccessResponse, GrpcApiError> {
+        let environment_id = request
+            .environment_id
+            .ok_or("missing environment_id field")?
+            .try_into()?;
+        let tool_name = golem_common::model::tool::ToolName::try_from(request.tool_name)?;
+        let type_id = self
+            .deployment_service
+            .resolve_tool_type_id(environment_id, &tool_name)
+            .await?;
+        Ok(ResolveToolTypeIdSuccessResponse {
+            type_id: type_id.map(|id| id.get()),
+        })
+    }
+
     async fn resolve_type_id_internal(
         &self,
         request: ResolveTypeIdRequest,
@@ -1617,6 +1636,30 @@ impl golem_api_grpc::proto::golem::registry::v1::registry_service_server::Regist
         };
 
         Ok(Response::new(ResolveTypeIdResponse {
+            result: Some(response),
+        }))
+    }
+
+    async fn resolve_tool_type_id(
+        &self,
+        request: Request<ResolveToolTypeIdRequest>,
+    ) -> Result<Response<ResolveToolTypeIdResponse>, Status> {
+        let request = request.into_inner();
+        let record = recorded_grpc_api_request!(
+            "resolve_tool_type_id",
+            environment_id = EnvironmentId::render_proto(request.environment_id),
+            tool_name = request.tool_name,
+        );
+        let response = match self
+            .resolve_tool_type_id_internal(request)
+            .instrument(record.span.clone())
+            .await
+            .apply(|r| record.result(r))
+        {
+            Ok(result) => resolve_tool_type_id_response::Result::Success(result),
+            Err(error) => resolve_tool_type_id_response::Result::Error(error.into()),
+        };
+        Ok(Response::new(ResolveToolTypeIdResponse {
             result: Some(response),
         }))
     }
