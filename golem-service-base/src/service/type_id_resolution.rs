@@ -16,6 +16,7 @@ use crate::clients::registry::{RegistryService, RegistryServiceError};
 use golem_common::cache::{BackgroundEvictionMode, Cache, FullCacheEvictionMode, SimpleCache};
 use golem_common::model::agent::RegisteredAgentTypeImplementer;
 use golem_common::model::environment::EnvironmentId;
+use golem_common::model::tool::ToolName;
 use golem_common::model::type_id::{TypeId, TypeIdKind};
 use std::collections::HashMap;
 use std::hash::Hash;
@@ -100,6 +101,7 @@ impl<K: Eq + Hash> InvalidationGenerations<K> {
 pub struct TypeIdResolutionCache {
     registry_service: Arc<dyn RegistryService>,
     names: Cache<Key, (), Arc<(TypeIdKind, String)>, NameLookupError>,
+    tool_ids: Cache<(EnvironmentId, ToolName), (), TypeId, NameLookupError>,
     implementers: Cache<Key, (), FetchedImplementer, RegistryServiceError>,
     generations: Arc<InvalidationGenerations<EnvironmentId>>,
 }
@@ -119,6 +121,12 @@ impl TypeIdResolutionCache {
                 FullCacheEvictionMode::LeastRecentlyUsed(1),
                 BackgroundEvictionMode::None,
                 "type_id_names",
+            ),
+            tool_ids: Cache::new(
+                Some(capacity),
+                FullCacheEvictionMode::LeastRecentlyUsed(1),
+                BackgroundEvictionMode::None,
+                "tool_type_ids",
             ),
             implementers: Cache::new(
                 Some(capacity),
@@ -152,6 +160,37 @@ impl TypeIdResolutionCache {
             .await;
         match result {
             Ok(names) => Ok(Some(names)),
+            Err(NameLookupError::Unassigned) => Ok(None),
+            Err(NameLookupError::Registry(error)) => Err(error),
+        }
+    }
+
+    /// The retained ID of a tool name. An unassigned name is not cached.
+    pub async fn tool_type_id(
+        &self,
+        environment_id: EnvironmentId,
+        tool_name: &ToolName,
+    ) -> Result<Option<TypeId>, RegistryServiceError> {
+        let registry_service = self.registry_service.clone();
+        let name = tool_name.clone();
+        match self
+            .tool_ids
+            .get_or_insert_simple_spawned(
+                &(environment_id, tool_name.clone()),
+                move || async move {
+                    match registry_service
+                        .resolve_tool_type_id(environment_id, &name)
+                        .await
+                    {
+                        Ok(Some(id)) => Ok(id),
+                        Ok(None) => Err(NameLookupError::Unassigned),
+                        Err(error) => Err(NameLookupError::Registry(error)),
+                    }
+                },
+            )
+            .await
+        {
+            Ok(id) => Ok(Some(id)),
             Err(NameLookupError::Unassigned) => Ok(None),
             Err(NameLookupError::Registry(error)) => Err(error),
         }

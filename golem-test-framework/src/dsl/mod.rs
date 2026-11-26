@@ -13,6 +13,7 @@
 // limitations under the License.
 
 pub mod debug_render;
+pub mod oplog_shape;
 
 use self::debug_render::debug_render_oplog_entry;
 use crate::components::redis::Redis;
@@ -1328,6 +1329,7 @@ pub fn is_worker_execution_error(
 
 pub fn worker_error_message(error: &WorkerExecutorError) -> String {
     match error {
+        WorkerExecutorError::NotAnAgent { agent_id } => format!("Not an agent: {agent_id}"),
         WorkerExecutorError::InvalidRequest { details } => details.clone(),
         WorkerExecutorError::PermissionDenied { details } => details.clone(),
         WorkerExecutorError::OplogFenced {

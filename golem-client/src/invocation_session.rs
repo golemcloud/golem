@@ -23,7 +23,7 @@ use golem_common::model::invocation_session_public::{
     PublicStreamDirection, PublicStreamError, PublicStreamMapping, PublicStreamOutcome,
     decode_binary_message, decode_server_text, encode_binary_message, encode_client_text,
 };
-use golem_common::model::{InvocationId, OwnedInvocationId};
+use golem_common::model::{AgentId, InvocationId, OwnedInvocationId};
 use golem_common::schema::public_json::{
     PublicSchemaValueError, PublicStreamReference, PublicStreamReferencePolicy,
     decode_public_schema_value, encode_public_schema_value,
@@ -1666,6 +1666,7 @@ pub struct InvocationSession {
     inputs: Vec<RegisteredInput>,
     attachment_state: AttachmentState,
     execution_ready: bool,
+    accepted_agent_id: Option<AgentId>,
     /// How many times the session has left a connection for a new one.
     reconnects: u64,
     reconnect: ReconnectClock,
@@ -1841,6 +1842,7 @@ impl InvocationSession {
                 exact_retry: pending_operation_is_retry,
             },
             execution_ready: false,
+            accepted_agent_id: None,
             reconnects: 0,
             reconnect,
         })
@@ -2077,6 +2079,7 @@ impl InvocationSession {
                     attempt_id,
                     agent_id,
                     idempotency_key,
+                    invocation_id,
                     mappings,
                     session_token,
                     ..
@@ -2092,13 +2095,19 @@ impl InvocationSession {
                     if operation_attempt_id(&pending) != Some(*attempt_id) {
                         return Err(SessionTransportError::UnexpectedAttempt);
                     }
+                    if invocation_id.id() != *idempotency_key
+                        || invocation_id.agent_id().is_some_and(|id| id != agent_id)
+                    {
+                        return Err(SessionTransportError::UnexpectedAttempt);
+                    }
                     self.deliveries.begin_connection(mappings)?;
                     self.execution_ready = !mappings.is_empty();
+                    self.accepted_agent_id = Some(*agent_id);
                     self.install_input_mappings(mappings, self.execution_ready)?;
                     self.deliveries.set_attachment_state(
                         None,
                         Some(session_token.clone()),
-                        Some(OwnedInvocationId::new(*agent_id, *idempotency_key)),
+                        Some(invocation_id.clone()),
                     )?;
                     self.reconnect.accepted();
                     self.attachment_state = AttachmentState::Accepted {
@@ -2115,10 +2124,18 @@ impl InvocationSession {
                     ..
                 } => {
                     if self.execution_ready
+                        || self.accepted_agent_id.as_ref() != Some(agent_id)
                         || !matches!(self.attachment_state,
                         AttachmentState::Accepted { attempt_id: accepted, .. } if accepted == *attempt_id)
-                        || self.deliveries.snapshot().accepted_invocation.as_ref()
-                            != Some(&OwnedInvocationId::new(*agent_id, *idempotency_key))
+                        || !self
+                            .deliveries
+                            .snapshot()
+                            .accepted_invocation
+                            .as_ref()
+                            .is_some_and(|id| {
+                                id.id() == *idempotency_key
+                                    && id.agent_id().is_none_or(|owner| owner == agent_id)
+                            })
                     {
                         return Err(SessionTransportError::UnexpectedAttempt);
                     }
@@ -5224,6 +5241,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             PublicStreamMapping {
@@ -5514,6 +5535,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![native_output_mapping(12, role, "native-output")],
                         session_token: "native-session".to_string(),
@@ -5649,6 +5674,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             PublicStreamMapping {
@@ -5845,6 +5874,10 @@ mod tests {
                 encode_text(&PublicServerMessage::InvocationAccepted {
                     attempt_id,
                     agent_id: accepted_agent_id(),
+                    invocation_id: OwnedInvocationId::new(
+                        accepted_agent_id(),
+                        InvocationId(uuid::Uuid::from_u128(3)),
+                    ),
                     idempotency_key: InvocationId(uuid::Uuid::from_u128(3)),
                     mappings: vec![
                         PublicStreamMapping {
@@ -6660,6 +6693,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             PublicStreamMapping {
@@ -6799,6 +6836,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             native_output_mapping(
@@ -6929,6 +6970,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             native_output_mapping(
@@ -6995,6 +7040,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id: resumed_attempt,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(2)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(2)),
                         mappings: vec![
                             native_output_mapping(
@@ -7712,6 +7761,10 @@ mod tests {
                         encode_text(&PublicServerMessage::InvocationAccepted {
                             attempt_id,
                             agent_id: accepted_agent_id(),
+                            invocation_id: OwnedInvocationId::new(
+                                accepted_agent_id(),
+                                InvocationId(uuid::Uuid::from_u128(1)),
+                            ),
                             idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                             mappings: vec![PublicStreamMapping {
                                 channel: 4,
@@ -7852,6 +7905,10 @@ mod tests {
                         encode_text(&PublicServerMessage::InvocationAccepted {
                             attempt_id,
                             agent_id: accepted_agent_id(),
+                            invocation_id: OwnedInvocationId::new(
+                                accepted_agent_id(),
+                                InvocationId(uuid::Uuid::from_u128(1)),
+                            ),
                             idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                             mappings: vec![PublicStreamMapping {
                                 channel: 4,
@@ -7941,6 +7998,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 3,
@@ -8313,6 +8374,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
@@ -8437,6 +8502,10 @@ mod tests {
                                 encode_text(&PublicServerMessage::InvocationAccepted {
                                     attempt_id,
                                     agent_id: accepted_agent_id(),
+                                    invocation_id: OwnedInvocationId::new(
+                                        accepted_agent_id(),
+                                        InvocationId(uuid::Uuid::from_u128(1)),
+                                    ),
                                     idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                                     mappings: vec![PublicStreamMapping {
                                         channel,
@@ -8552,6 +8621,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
@@ -8589,6 +8662,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token-2".to_string(),
@@ -8677,6 +8754,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 3,
@@ -8722,6 +8803,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
@@ -8932,6 +9017,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 4,
@@ -8981,6 +9070,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 10,
@@ -9145,6 +9238,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
@@ -9222,6 +9319,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token".to_string(),
@@ -9268,6 +9369,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id: resume_attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: Vec::new(),
                         session_token: "session-token-2".to_string(),
@@ -9341,6 +9446,10 @@ mod tests {
                 PublicServerMessage::InvocationAccepted {
                     attempt_id,
                     agent_id: accepted_agent_id(),
+                    invocation_id: OwnedInvocationId::new(
+                        accepted_agent_id(),
+                        InvocationId(uuid::Uuid::from_u128(1)),
+                    ),
                     idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                     mappings: Vec::new(),
                     session_token: "session-token".to_string(),
@@ -9419,6 +9528,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
@@ -9492,6 +9605,10 @@ mod tests {
                     encode_text(&PublicServerMessage::InvocationAccepted {
                         attempt_id,
                         agent_id: accepted_agent_id(),
+                        invocation_id: OwnedInvocationId::new(
+                            accepted_agent_id(),
+                            InvocationId(uuid::Uuid::from_u128(1)),
+                        ),
                         idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
                         mappings: vec![PublicStreamMapping {
                             channel: 9,
@@ -9681,6 +9798,10 @@ mod tests {
         PublicServerMessage::InvocationAccepted {
             attempt_id,
             agent_id: accepted_agent_id(),
+            invocation_id: OwnedInvocationId::new(
+                accepted_agent_id(),
+                InvocationId(uuid::Uuid::from_u128(1)),
+            ),
             idempotency_key: InvocationId(uuid::Uuid::from_u128(1)),
             mappings,
             session_token: "session-token".to_string(),
@@ -10135,12 +10256,38 @@ mod tests {
     async fn a_retryable_rejection_after_acceptance_resumes() {
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
-        let initial = start_request(uuid::Uuid::new_v4());
+        let initial = tool_start_request(uuid::Uuid::new_v4());
+        let public_id = OwnedInvocationId::new(
+            golem_common::model::InvocationOwner::Tool("native".try_into().unwrap()),
+            InvocationId(uuid::Uuid::from_u128(1)),
+        );
+        let server_id = public_id.clone();
         let server = tokio::spawn(async move {
+            let acceptance = |attempt_id| {
+                let mut message = accepted(attempt_id, Vec::new());
+                let PublicServerMessage::InvocationAccepted { invocation_id, .. } = &mut message
+                else {
+                    unreachable!()
+                };
+                *invocation_id = server_id.clone();
+                message
+            };
             let mut socket = accept_session(&listener).await;
             let start = receive_client_message(&mut socket).await;
             let attempt_id = operation_attempt_id(&start).unwrap();
-            send_server(&mut socket, accepted(attempt_id, Vec::new())).await;
+            send_server(&mut socket, acceptance(attempt_id)).await;
+            send_server(
+                &mut socket,
+                PublicServerMessage::InvocationReady {
+                    attempt_id,
+                    agent_id: accepted_agent_id(),
+                    idempotency_key: server_id.id(),
+                    mappings: Vec::new(),
+                    session_token: "ready-token".into(),
+                    version: 1,
+                },
+            )
+            .await;
             send_server(&mut socket, retryable_rejection(attempt_id)).await;
             socket.close(None).await.unwrap();
 
@@ -10155,7 +10302,7 @@ mod tests {
             ));
             send_server(
                 &mut socket,
-                accepted(operation_attempt_id(&resume).unwrap(), Vec::new()),
+                acceptance(operation_attempt_id(&resume).unwrap()),
             )
             .await;
             socket.close(None).await.unwrap();
@@ -10170,8 +10317,20 @@ mod tests {
         session.receive().await.unwrap();
         assert!(matches!(
             session.receive().await.unwrap().frame(),
+            ServerFrame::Message(PublicServerMessage::InvocationReady { .. })
+        ));
+        assert_eq!(
+            session.delivery_tracker().snapshot().accepted_invocation,
+            Some(public_id.clone())
+        );
+        assert!(matches!(
+            session.receive().await.unwrap().frame(),
             ServerFrame::Message(PublicServerMessage::InvocationAccepted { .. })
         ));
+        assert_eq!(
+            session.delivery_tracker().snapshot().accepted_invocation,
+            Some(public_id)
+        );
         server.await.unwrap();
     }
 

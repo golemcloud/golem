@@ -341,7 +341,7 @@ impl ComponentMetadata {
     ) -> Option<&[InstalledPlugin]> {
         match owner_kind {
             OwnerKind::ComponentAgent => agent_type.and_then(|name| self.agent_type_plugins(name)),
-            OwnerKind::EphemeralExternalTool => {
+            OwnerKind::EphemeralExternalTool | OwnerKind::StandaloneTool => {
                 Some(self.component_provision_config().plugins.as_slice())
             }
             OwnerKind::OplogProcessor => None,

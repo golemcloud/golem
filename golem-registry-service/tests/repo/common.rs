@@ -13527,6 +13527,27 @@ pub async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Dep
         .unwrap()
         .type_id;
     assert_ne!(agent_id, tool_id);
+    assert_eq!(
+        deps.full_deployment_repo
+            .get_environment_tool_type_id(env.environment_id, "shared-name")
+            .await
+            .unwrap()
+            .unwrap()
+            .type_id,
+        tool_id
+    );
+    for (environment_id, name) in [
+        (new_repo_uuid(), "shared-name"),
+        (env.environment_id, "never-allocated"),
+    ] {
+        assert!(
+            deps.full_deployment_repo
+                .get_environment_tool_type_id(environment_id, name)
+                .await
+                .unwrap()
+                .is_none()
+        );
+    }
     for row in &allocations {
         let reverse = deps
             .full_deployment_repo
@@ -13661,6 +13682,15 @@ pub async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Dep
             assert_eq!(retained[0].type_id, Some(agent_id));
             assert_eq!(retained[0].component_id, expected_agent.component_id);
             assert_eq!(retained[0].deployment_revision_id, 2);
+            assert_eq!(
+                deps.full_deployment_repo
+                    .get_environment_tool_type_id(env.environment_id, "shared-name")
+                    .await
+                    .unwrap()
+                    .unwrap()
+                    .type_id,
+                tool_id
+            );
         }
         let retained = deps
             .full_deployment_repo
@@ -13721,6 +13751,28 @@ pub async fn test_environment_type_ids_survive_removal_and_readdition(deps: &Dep
             .iter()
             .all(|declaration| declaration.type_id == Some(agent_id))
     );
+    deps.full_deployment_repo
+        .deploy_current(
+            type_id_deployment(deps, &env, 6, "renamed-tool").await,
+            false,
+        )
+        .await
+        .unwrap()
+        .signal_new_events_available(&deps.test_registry_change_notifier());
+    let old = deps
+        .full_deployment_repo
+        .get_environment_tool_type_id(env.environment_id, "shared-name")
+        .await
+        .unwrap()
+        .unwrap();
+    let renamed = deps
+        .full_deployment_repo
+        .get_environment_tool_type_id(env.environment_id, "renamed-tool")
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(old.type_id, tool_id);
+    assert_ne!(old.type_id, renamed.type_id);
 }
 
 pub async fn test_environment_type_ids_rollback_and_environment_isolation(deps: &Deps) {

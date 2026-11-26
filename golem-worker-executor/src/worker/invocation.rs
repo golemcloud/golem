@@ -533,8 +533,9 @@ async fn invoke_observed<Ctx: WorkerCtx>(
     let invocation_caller = call.caller();
     let durable_ctx = store.data_mut().durable_ctx_mut();
     durable_ctx.set_invocation_caller(Some(invocation_caller));
-    durable_ctx.set_invocation_id(call.has_invocation_id());
+    let invocation_identity = durable_ctx.set_invocation_id(call.has_invocation_id());
     let call_future = async {
+        invocation_identity?;
         let mut at_return_usage = None;
         let mut result = dispatch_call(
             &mut store,
@@ -589,7 +590,7 @@ async fn invoke_observed<Ctx: WorkerCtx>(
         .await;
     let durable_ctx = store.data_mut().durable_ctx_mut();
     durable_ctx.set_invocation_caller(None);
-    durable_ctx.set_invocation_id(false);
+    durable_ctx.set_invocation_id(false)?;
 
     if read_only_method.is_some() {
         store.data_mut().exit_read_only_mode();

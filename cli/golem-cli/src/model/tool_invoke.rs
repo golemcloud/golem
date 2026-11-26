@@ -31,6 +31,7 @@ impl TextOutput for ToolInvokeView {
 #[serde(rename_all = "camelCase")]
 pub struct ToolInvocationSessionView {
     pub target: PublicNativeToolTarget,
+    pub invocation_id: String,
     pub idempotency_key: InvocationId,
     pub result: PublicInvocationResult,
 }

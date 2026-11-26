@@ -55,6 +55,7 @@ impl ServiceFixture {
         );
         let account = AccountId::new();
         let metadata = AgentMetadata {
+            standalone_tool: None,
             agent_id: owner.agent_id,
             component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
             agent_type_name: None,
@@ -79,6 +80,7 @@ impl ServiceFixture {
             ),
         };
         let create = OplogEntry::create(Box::new(golem_common::model::oplog::CreateParameters {
+            standalone_tool: None,
             agent_id: owner.agent_id,
             component_id: golem_common::model::component::ComponentId(uuid::Uuid::nil()),
             agent_type_name: None,
