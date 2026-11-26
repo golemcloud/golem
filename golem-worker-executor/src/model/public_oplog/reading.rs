@@ -705,6 +705,14 @@ enum RevisionScan {
     },
 }
 
+/// A position of a scan for the component revision: `revision` is in effect at `next`, the first
+/// entry that the scan did not read.
+#[derive(Debug, Clone, Copy)]
+struct RevisionScanAt {
+    next: OplogIndex,
+    revision: ComponentRevision,
+}
+
 /// Scans the oplog entries from `next` to before `end` for the component revision in effect at
 /// `end`. `revision` is in effect at `next`. The scan charges the entries that it reads to `scan`.
 /// It reads at least `at_least` entries before it checks the allowance, or all entries up to
@@ -722,46 +730,45 @@ async fn scan_component_revision_from(
 ) -> Result<RevisionScan, WorkerExecutorError> {
     use futures::TryStreamExt;
     const BATCH_SIZE: u64 = 256;
-    let first = next;
-    let outcomes = futures::stream::try_unfold(Some((next, revision, scan)), move |state| {
+    let start = RevisionScanAt { next, revision };
+    // Each item is the position after one batch. The batches stop at `end`, or when the allowance
+    // is spent after the first `at_least` entries.
+    let batches = futures::stream::try_unfold((start, scan), move |(at, scan)| {
         let oplog_service = oplog_service.clone();
         async move {
-            let Some((current, revision, scan)) = state else {
+            let required = at_least.saturating_sub(at.next.as_u64() - start.next.as_u64());
+            if at.next >= end || (required == 0 && scan.is_spent()) {
                 return Ok(None);
-            };
-            let required = at_least.saturating_sub(current.as_u64() - first.as_u64());
-            if current >= end {
-                return Ok(Some((Some(RevisionScan::Found(revision)), None)));
             }
-            if required == 0 && scan.is_spent() {
-                return Ok(Some((
-                    Some(RevisionScan::Spent {
-                        next: current,
-                        revision,
-                    }),
-                    None,
-                )));
-            }
-            let count = (end.as_u64() - current.as_u64())
+            let count = (end.as_u64() - at.next.as_u64())
                 .min(BATCH_SIZE)
                 .min(scan.remaining_entries().max(required));
             let revision = oplog_service
-                .read_exact(owned_agent_id, agent_mode, current, count)
+                .read_exact(owned_agent_id, agent_mode, at.next, count)
                 .await?
                 .into_values()
                 .filter_map(|entry| entry.specifies_component_revision())
                 .next_back()
-                .unwrap_or(revision);
+                .unwrap_or(at.revision);
             scan.charge(count);
-            let next = OplogIndex::from_u64(current.as_u64() + count);
-            Ok::<_, WorkerExecutorError>(Some((None, Some((next, revision, scan)))))
+            let after = RevisionScanAt {
+                next: OplogIndex::from_u64(at.next.as_u64() + count),
+                revision,
+            };
+            Ok::<_, WorkerExecutorError>(Some((after, (after, scan))))
+        }
+    });
+    let last = batches
+        .try_fold(start, |_, after| std::future::ready(Ok(after)))
+        .await?;
+    Ok(if last.next >= end {
+        RevisionScan::Found(last.revision)
+    } else {
+        RevisionScan::Spent {
+            next: last.next,
+            revision: last.revision,
         }
     })
-    .try_filter_map(|outcome| std::future::ready(Ok(outcome)));
-    std::pin::pin!(outcomes)
-        .try_next()
-        .await?
-        .ok_or_else(|| WorkerExecutorError::unknown("the component revision scan gave no result"))
 }
 
 /// The allowance of a scan that has no limit.
