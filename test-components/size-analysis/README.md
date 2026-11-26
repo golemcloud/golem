@@ -66,9 +66,9 @@ nothing.
 ## Reflection retention contracts
 
 The `fixtures` workspace provides named, unstripped empty, non-reflective tool/client, and
-explicit reflection components. `./build-components.sh rust` builds `retention-empty`,
-`retention-non-reflective` and `retention-reflection` into `test-components/`, and the
-`golem-size-analysis` `retention` test checks them:
+explicit reflection components. `./build-components.sh rust` builds `retention-canonical-floor`,
+`retention-empty`, `retention-non-reflective` and `retention-reflection` into `test-components/`,
+and the `golem-size-analysis` `retention` test checks them:
 
 ```sh
 cargo test -p golem-size-analysis --test retention
@@ -76,8 +76,8 @@ cargo test -p golem-size-analysis --test retention
 
 The test rejects reflection host imports and model/reflection helper retention in both negative
 fixtures, and requires `get-agent-type` plus the positive fixture's named reflection method. The
-report runs the same check on its own builds, and also checks that the empty fixture keeps the
-canonical floor's five-interface export contract and imports nothing new.
+test also checks that the empty fixture keeps the canonical floor's five-interface export contract
+and imports nothing new. The report runs the same checks on its own builds.
 
 ## Read the right numbers
 
