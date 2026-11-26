@@ -2930,3 +2930,291 @@ async fn a_rejected_export_fork_copies_no_snapshot_and_two_attempts_of_one_expor
     })
     .await
 }
+
+fn expiring_echo_session_request(
+    component: &golem_common::model::component::ComponentDto,
+    agent: &OwnedAgentId,
+    session: &str,
+    ttl_seconds: u64,
+) -> anyhow::Result<CreateStreamSessionRequest> {
+    use golem_api_grpc::proto::golem::worker::InvocationStart;
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        StreamSessionExpiryPolicy, stream_session_expiry_policy,
+    };
+    use golem_common::schema::{schema_value_to_proto_with_streams, stream::SchemaValueStream};
+    let input = schema_value_to_proto_with_streams(
+        SchemaValue::Record {
+            fields: vec![SchemaValue::Stream(SchemaValueStream::from_host_endpoint(
+                0u64,
+            ))],
+        },
+        |stream| stream.take_host_endpoint::<u64>(),
+    )
+    .map_err(anyhow::Error::msg)?;
+    Ok(CreateStreamSessionRequest {
+        route_scope: "[\"environment\",\"1\",\"route\"]".into(),
+        public_session_id: session.to_owned(),
+        expiry_policy: Some(StreamSessionExpiryPolicy {
+            kind: Some(stream_session_expiry_policy::Kind::TtlSeconds(ttl_seconds)),
+        }),
+        creation_intent: StreamSessionCreationIntent::ExplicitPut as i32,
+        invocation: Some(InvocationStart {
+            target: Some(crate::agent::id_target(agent)),
+            constructor: None,
+            component_id: None,
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(AuthCtx::System.into()),
+            component_owner_account_id: Some(component.account_id.into()),
+            idempotency_key: Some(IdempotencyKey::new(session.to_owned()).into()),
+            method_name: Some("echo".into()),
+            input: Some(input),
+            caller: Some(callers::anonymous().into()),
+            ..Default::default()
+        }),
+    })
+}
+
+async fn wait_echo_session_ready(
+    executor: &TestWorkerExecutor,
+    component: &golem_common::model::component::ComponentDto,
+    agent: AgentId,
+    session: &str,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        ReadStreamSlotRequest, StreamSlotReadAdmission, read_stream_slot_response,
+    };
+    let response = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        executor
+            .client
+            .clone()
+            .read_stream_slot(ReadStreamSlotRequest {
+                route_scope: "[\"environment\",\"1\",\"route\"]".into(),
+                agent_id: Some(agent.into()),
+                environment_id: Some(component.environment_id.into()),
+                auth_ctx: Some(AuthCtx::System.into()),
+                session: session.to_owned(),
+                slot: "input".into(),
+                expected_method: "echo".into(),
+                admission: StreamSlotReadAdmission::WaitReady as i32,
+                ..Default::default()
+            }),
+    )
+    .await??
+    .into_inner()
+    .message()
+    .await?
+    .unwrap();
+    let Some(read_stream_slot_response::Result::Success(ready)) = response.result else {
+        anyhow::bail!("{response:?}");
+    };
+    assert!(!ready.queued);
+    Ok(())
+}
+
+async fn stream_session_records(
+    executor: &TestWorkerExecutor,
+    agent: &OwnedAgentId,
+) -> anyhow::Result<Vec<StreamSessionRecord>> {
+    Ok(executor
+        .get_oplog(agent, OplogIndex::INITIAL)
+        .await?
+        .iter()
+        .filter_map(|entry| {
+            let PublicOplogEntry::StreamSession(session) = &entry.entry else {
+                return None;
+            };
+            StreamSessionRecord::from_value(session.record.value()).ok()
+        })
+        .collect())
+}
+
+async fn wait_stream_session_expired(
+    executor: &TestWorkerExecutor,
+    agent: &OwnedAgentId,
+    key: golem_common::model::InvocationId,
+) -> anyhow::Result<()> {
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            if stream_session_records(executor, agent).await?.iter().any(|record| {
+                matches!(record, StreamSessionRecord::Expired(record) if record.session_key == key)
+            }) {
+                return anyhow::Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("the expiry was not committed"))?
+}
+
+/// The expiry of a public session whose invocation already started cancels the session's streams.
+#[test]
+#[timeout("120s")]
+async fn expiry_of_a_started_session_cancels_its_streams(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::create_stream_session_response;
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_local_resume(deps, &context, true).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .store()
+        .await?;
+    let agent = executor
+        .start_agent(
+            &component.id,
+            agent_key!("DurableStreamAgent", "expiry-started"),
+        )
+        .await?;
+    let session = uuid::Uuid::new_v4().to_string();
+    let created = executor
+        .client
+        .clone()
+        .create_stream_session(expiring_echo_session_request(
+            &component, &agent, &session, 3,
+        )?)
+        .await?
+        .into_inner();
+    let Some(create_stream_session_response::Result::Success(created)) = created.result else {
+        anyhow::bail!("{created:?}");
+    };
+    let key: golem_common::model::InvocationId = created.invocation_key.unwrap().into();
+    // The TTL leaves the free agent time to start the invocation; the `Prepared` assertion below
+    // fails if the expiry came first.
+    wait_echo_session_ready(&executor, &component, agent.agent_id, &session).await?;
+    wait_stream_session_expired(&executor, &agent, key).await?;
+    let records = stream_session_records(&executor, &agent).await?;
+    assert!(records.iter().any(|record| {
+        matches!(record, StreamSessionRecord::Prepared(record) if record.session_key == key)
+    }));
+    assert!(
+        records.iter().any(|record| {
+            matches!(record, StreamSessionRecord::ConsumerCancelIntent(record)
+                if record.consumer_invocation == key)
+        }),
+        "the expiry of a started session did not cancel its input stream"
+    );
+    Ok(())
+}
+
+/// The invocation of a session that expires while it is queued never starts: once the agent is
+/// free, it cancels the pending invocation.
+#[test]
+#[timeout("120s")]
+async fn an_expired_queued_session_never_starts(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("agent_sdk_rust")] component: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_api_grpc::proto::golem::workerexecutor::v1::{
+        AppendToStreamSlotRequest, append_to_stream_slot_response, create_stream_session_response,
+    };
+    use golem_common::model::oplog::PublicAgentInvocation;
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_local_resume(deps, &context, true).await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, component)
+        .store()
+        .await?;
+    let agent = executor
+        .start_agent(
+            &component.id,
+            agent_key!("DurableStreamAgent", "expiry-queued"),
+        )
+        .await?;
+    let busy = uuid::Uuid::new_v4().to_string();
+    let created = executor
+        .client
+        .clone()
+        .create_stream_session(expiring_echo_session_request(
+            &component, &agent, &busy, 3_600,
+        )?)
+        .await?
+        .into_inner();
+    let Some(create_stream_session_response::Result::Success(busy_created)) = created.result else {
+        anyhow::bail!("{created:?}");
+    };
+    let busy_key: golem_common::model::InvocationId = busy_created.invocation_key.unwrap().into();
+    wait_echo_session_ready(&executor, &component, agent.agent_id, &busy).await?;
+    let queued = uuid::Uuid::new_v4().to_string();
+    let created = executor
+        .client
+        .clone()
+        .create_stream_session(expiring_echo_session_request(
+            &component, &agent, &queued, 0,
+        )?)
+        .await?
+        .into_inner();
+    let Some(create_stream_session_response::Result::Success(queued_created)) = created.result
+    else {
+        anyhow::bail!("{created:?}");
+    };
+    let queued_key: golem_common::model::InvocationId =
+        queued_created.invocation_key.unwrap().into();
+    wait_stream_session_expired(&executor, &agent, queued_key).await?;
+    // Close the input of the busy session, so its `echo` ends and the agent is free.
+    let closed = executor
+        .client
+        .clone()
+        .append_to_stream_slot(AppendToStreamSlotRequest {
+            route_scope: "[\"environment\",\"1\",\"route\"]".into(),
+            agent_id: Some(agent.agent_id.into()),
+            environment_id: Some(component.environment_id.into()),
+            auth_ctx: Some(AuthCtx::System.into()),
+            session: busy.clone(),
+            slot: "input".into(),
+            expected_method: "echo".into(),
+            payload: None,
+            close: true,
+            producer: None,
+        })
+        .await?
+        .into_inner();
+    assert!(
+        matches!(
+            closed.result,
+            Some(append_to_stream_slot_response::Result::Accepted(_))
+        ),
+        "{closed:?}"
+    );
+    let started = |entry: &PublicOplogEntry, key: golem_common::model::InvocationId| {
+        matches!(entry, PublicOplogEntry::AgentInvocationStarted(started)
+            if matches!(&started.invocation,
+                PublicAgentInvocation::AgentMethodInvocation(method) if method.invocation_id == key))
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(30), async {
+        loop {
+            let oplog = executor.get_oplog(&agent, OplogIndex::INITIAL).await?;
+            let busy_finished = oplog
+                .iter()
+                .any(|entry| matches!(&entry.entry, PublicOplogEntry::AgentInvocationFinished(_)));
+            let queued_resolved = oplog.iter().any(|entry| {
+                started(&entry.entry, queued_key)
+                    || matches!(&entry.entry, PublicOplogEntry::CancelPendingInvocation(cancel)
+                        if cancel.invocation_id == queued_key)
+            });
+            if busy_finished && queued_resolved {
+                return anyhow::Ok(());
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+    })
+    .await
+    .map_err(|_| anyhow::anyhow!("the agent did not resolve the queued session"))??;
+    let oplog = executor.get_oplog(&agent, OplogIndex::INITIAL).await?;
+    assert!(oplog.iter().any(|entry| started(&entry.entry, busy_key)));
+    assert!(
+        !oplog.iter().any(|entry| started(&entry.entry, queued_key)),
+        "the invocation of an expired queued session started"
+    );
+    assert!(oplog.iter().any(|entry| {
+        matches!(&entry.entry, PublicOplogEntry::CancelPendingInvocation(cancel)
+            if cancel.invocation_id == queued_key)
+    }));
+    Ok(())
+}
