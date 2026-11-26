@@ -926,7 +926,15 @@ mod tests {
         // A read without `from` keeps its start open, so that the executor starts it at the first
         // entry that the oplog holds. The scan allowance of a range read goes to the executor.
         read(None, Some(9), None, Some(allowance)).await.unwrap();
-        assert!(read(Some(5), Some(4), Some("error"), None).await.is_err());
+        // A range that ends before its start is a bad request, with and without a query.
+        assert!(matches!(
+            read(Some(5), Some(4), Some("error"), None).await,
+            Err(ApiEndpointError::BadRequest(_))
+        ));
+        assert!(matches!(
+            read(Some(5), Some(4), None, None).await,
+            Err(ApiEndpointError::BadRequest(_))
+        ));
 
         assert_eq!(
             *harness.oplog_reads.lock().unwrap(),

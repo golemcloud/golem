@@ -20,6 +20,7 @@ use crate::Tracing;
 
 use futures::{StreamExt, TryStreamExt};
 use golem_api_grpc::proto::golem::worker::OplogCursor;
+use golem_api_grpc::proto::golem::worker::v1::{WorkerExecutionError, worker_execution_error};
 use golem_api_grpc::proto::golem::workerexecutor::v1::{
     GetOplogRequest, GetOplogSuccessResponse, SearchOplogRequest, SearchOplogSuccessResponse,
     get_oplog_response, search_oplog_response,
@@ -81,6 +82,13 @@ fn page_entry_index(entry: &PublicOplogPageEntry) -> u64 {
         PublicOplogPageEntry::Included(entry) => entry.oplog_index.as_u64(),
         PublicOplogPageEntry::Omitted(omitted) => omitted.oplog_index.as_u64(),
     }
+}
+
+fn is_invalid_request(failure: &WorkerExecutionError) -> bool {
+    matches!(
+        failure.error,
+        Some(worker_execution_error::Error::InvalidRequest(_))
+    )
 }
 
 async fn get_page(
@@ -391,8 +399,36 @@ async fn range_reads_across_the_oplog_layers_return_every_index_once_in_order(
     assert_eq!(indices(&past_the_end), vec![last - 1, last]);
     let refused = get_page(executor, agent_id, 5, Some(4), None, 10).await?;
     assert!(
-        matches!(refused, get_oplog_response::Result::Failure(_)),
-        "a range that ends before it starts must be refused, got {refused:?}"
+        matches!(
+            &refused,
+            get_oplog_response::Result::Failure(failure) if is_invalid_request(failure)
+        ),
+        "a range that ends before it starts is an invalid request, got {refused:?}"
+    );
+    let refused_search = executor
+        .client
+        .clone()
+        .search_oplog(SearchOplogRequest {
+            agent_id: Some(agent_id.agent_id.into()),
+            environment_id: Some(agent_id.environment_id.into()),
+            cursor: None,
+            count: 10,
+            query: "agent-invocation-started".to_string(),
+            auth_ctx: Some(executor.auth_ctx().into()),
+            claims: ClaimVisibility::Hidden.to_protobuf(),
+            from_oplog_index: Some(5),
+            to_oplog_index: Some(4),
+        })
+        .await?
+        .into_inner()
+        .result;
+    assert!(
+        matches!(
+            &refused_search,
+            Some(search_oplog_response::Result::Failure(failure)) if is_invalid_request(failure)
+        ),
+        "a search of a range that ends before it starts is an invalid request, got \
+         {refused_search:?}"
     );
     Ok(())
 }

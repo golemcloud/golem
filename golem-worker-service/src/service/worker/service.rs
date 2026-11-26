@@ -7549,19 +7549,21 @@ mod tests {
         assert!(search_oplog(Some(8)).await.is_err());
 
         // A cursor before the start of the range is an invalid request, also where the
-        // permission covers the index of the cursor.
-        let cursor_before_the_range = harness
+        // permission covers the index of the cursor. A page and a search both refuse it.
+        let narrow =
+            OplogRange::new(Some(OplogIndex::from_u64(6)), Some(OplogIndex::from_u64(7))).unwrap();
+        let cursor_before_the_range = OplogCursor {
+            next_oplog_index: 5,
+            current_component_revision: 0,
+            query_hash: String::new(),
+            scan_to: None,
+        };
+        let page_before_the_range = harness
             .worker_service
             .get_oplog(
                 &owned,
-                OplogRange::new(Some(OplogIndex::from_u64(6)), Some(OplogIndex::from_u64(7)))
-                    .unwrap(),
-                Some(OplogCursor {
-                    next_oplog_index: 5,
-                    current_component_revision: 0,
-                    query_hash: String::new(),
-                    scan_to: None,
-                }),
+                narrow,
+                Some(cursor_before_the_range.clone()),
                 50,
                 None,
                 None,
@@ -7569,15 +7571,35 @@ mod tests {
                 auth_ctx.clone(),
             )
             .await;
-        assert!(
-            matches!(
-                cursor_before_the_range,
-                Err(WorkerServiceError::GolemError(
-                    WorkerExecutorError::InvalidRequest { .. }
-                ))
-            ),
-            "{cursor_before_the_range:?}"
-        );
+        let search_before_the_range = harness
+            .worker_service
+            .search_oplog(
+                &owned,
+                narrow,
+                Some(OplogCursor {
+                    query_hash: OplogCursor::query_hash(Some("error")),
+                    ..cursor_before_the_range
+                }),
+                50,
+                "error".to_string(),
+                None,
+                ClaimVisibility::Hidden,
+                auth_ctx.clone(),
+            )
+            .await;
+        [page_before_the_range, search_before_the_range]
+            .into_iter()
+            .for_each(|refused| {
+                assert!(
+                    matches!(
+                        refused,
+                        Err(WorkerServiceError::GolemError(
+                            WorkerExecutorError::InvalidRequest { .. }
+                        ))
+                    ),
+                    "{refused:?}"
+                )
+            });
     }
 
     #[test]
