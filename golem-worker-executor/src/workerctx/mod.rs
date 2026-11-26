@@ -73,6 +73,11 @@ use wasmtime::{ResourceLimiterAsync, Store};
 use wasmtime_wasi::WasiView;
 use wasmtime_wasi_http::WasiHttpView;
 
+/// Test-harness coordination after activation selects a cached worker generation.
+#[doc(hidden)]
+pub type ExistingWorkerAcquisitionHook =
+    dyn Fn(OwnedAgentId) -> futures::future::BoxFuture<'static, ()> + Send + Sync;
+
 /// Executable identity used to construct a worker context.
 ///
 /// Native contexts deliberately carry no component metadata or Wasm executable.
@@ -242,6 +247,14 @@ pub trait WorkerCtx:
     /// Supplies optional test-harness coordination for worker deletion stages.
     #[doc(hidden)]
     fn worker_deletion_hook(_extra_deps: &Self::ExtraDeps) -> Option<Arc<dyn WorkerDeletionHook>> {
+        None
+    }
+
+    /// Supplies optional coordination before a selected activation generation is resolved.
+    #[doc(hidden)]
+    fn existing_worker_acquisition_hook(
+        _extra_deps: &Self::ExtraDeps,
+    ) -> Option<Arc<ExistingWorkerAcquisitionHook>> {
         None
     }
 

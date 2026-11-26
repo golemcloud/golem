@@ -77,7 +77,10 @@ use crate::worker::instance::{
 };
 use crate::worker::owner_lane::{EntityCallMode, OwnerInvocationId, OwnerInvocationTicket};
 use crate::worker::status_flusher::AgentStatusFlushQueue;
-use crate::worker::{CreateIntent, NewOwner, RetirementReason, Worker, WorkerCreationMode};
+use crate::worker::{
+    CreateIntent, ExistingWorkerAcquisitionError, NewOwner, RetirementReason, Worker,
+    WorkerCreationMode,
+};
 use crate::worker::{
     EvictionClass, EvictionStopOutcome, FilesystemPressureEligibility, UnloadRequest,
 };
@@ -596,12 +599,31 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
     where
         T: HasAll<Ctx> + Clone + Send + Sync + 'static,
     {
-        let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
-        let worker = active_agent.primary.clone();
-        let result = worker
-            .ensure_existing_with_purpose(expected_fingerprint, purpose)
-            .in_current_span()
-            .await
+        for _ in 0..3 {
+            let active_agent = self.get_or_add_unresolved(deps, owned_agent_id).await?;
+            let worker = active_agent.primary.clone();
+            if matches!(purpose, OplogOpenPurpose::Activation)
+                && let Some(hook) = Ctx::existing_worker_acquisition_hook(&deps.extra_deps())
+            {
+                hook(owned_agent_id.clone()).await;
+            }
+            let result = match worker
+                .ensure_existing_with_purpose(expected_fingerprint, purpose)
+                .in_current_span()
+                .await
+            {
+                Ok(()) => Ok(()),
+                Err(ExistingWorkerAcquisitionError::Executor(error)) => Err(error),
+                Err(ExistingWorkerAcquisitionError::RetiredForSeal) => {
+                    // Retirement marks the old generation before eviction. Wait for its seal
+                    // to finish, rather than selecting that same cached generation again.
+                    let _lifecycle = deps
+                        .oplog_service()
+                        .lock_lifecycle(&owned_agent_id.agent_id)
+                        .await;
+                    continue;
+                }
+            }
             .and_then(|()| {
                 // A worker that was already resolved, or that another caller loaded, has not
                 // been compared with this caller's expected incarnation.
@@ -616,20 +638,22 @@ impl<Ctx: WorkerCtx> ActiveAgents<Ctx> {
                     _ => Ok(()),
                 }
             });
-        if matches!(result, Err(WorkerExecutorError::AgentNotFound { .. }))
-            && Arc::strong_count(&active_agent) == 2
-            && Arc::strong_count(&worker) == 2
-        {
-            let expected = active_agent.clone();
-            self.agents
-                .remove_if_cached(owned_agent_id, move |current| {
-                    Arc::ptr_eq(current, &expected)
-                        && Arc::strong_count(current) == 3
-                        && current.primary.can_discard_unresolved()
-                })
-                .await;
+            if matches!(result, Err(WorkerExecutorError::AgentNotFound { .. }))
+                && Arc::strong_count(&active_agent) == 2
+                && Arc::strong_count(&worker) == 2
+            {
+                let expected = active_agent.clone();
+                self.agents
+                    .remove_if_cached(owned_agent_id, move |current| {
+                        Arc::ptr_eq(current, &expected)
+                            && Arc::strong_count(current) == 3
+                            && current.primary.can_discard_unresolved()
+                    })
+                    .await;
+            }
+            return result.map(|()| active_agent.primary());
         }
-        result.map(|()| active_agent.primary())
+        Err(WorkerExecutorError::ShardingNotReady)
     }
 
     async fn get_or_add_unresolved<T>(

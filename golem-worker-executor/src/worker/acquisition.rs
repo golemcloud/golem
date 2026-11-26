@@ -21,6 +21,11 @@ use golem_common::model::InvocationId;
 use crate::services::oplog::OplogOpenPurpose;
 use crate::worker::*;
 
+pub(crate) enum ExistingWorkerAcquisitionError {
+    RetiredForSeal,
+    Executor(WorkerExecutorError),
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum ConstructionError {
     RequestRejected(WorkerExecutorError),
@@ -832,14 +837,14 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self: &Arc<Self>,
         expected_fingerprint: Option<AgentFingerprint>,
         purpose: OplogOpenPurpose,
-    ) -> Result<(), WorkerExecutorError> {
+    ) -> Result<(), ExistingWorkerAcquisitionError> {
         // Existing-only acquisition resolves identity, not execution readiness. Deletion
         // must still reach the retained cleanup owner after a failed unload.
         let archive = matches!(purpose, OplogOpenPurpose::Archive);
         loop {
             if self.is_resolved() {
                 if self.retired_for_seal() {
-                    return Err(self.retirement_error());
+                    return Err(ExistingWorkerAcquisitionError::RetiredForSeal);
                 }
                 return Ok(());
             }
@@ -906,7 +911,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                     ConstructionError::RequestRejected(_)
                     | ConstructionError::Failed(WorkerExecutorError::AgentNotFound { .. }),
                 ) if !started => continue,
-                result => return result.map(|_| ()).map_err(Into::into),
+                result => {
+                    return result
+                        .map(|_| ())
+                        .map_err(|error| ExistingWorkerAcquisitionError::Executor(error.into()));
+                }
             }
         }
     }

@@ -180,10 +180,11 @@ use golem_worker_executor::worker::{
 };
 pub use golem_worker_executor::workerctx::ReplayAdmissionStage;
 use golem_worker_executor::workerctx::{
-    CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement, ExternalOperations,
-    FileSystemReading, FuelManagement, InvocationContextManagement, InvocationHooks,
-    InvocationManagement, LogEventEmitBehaviour, P3HttpBodyProducerHook, ResultRecordedAt,
-    StatusManagement, UpdateManagement, WorkerCtx, WorkerFilesystemContext,
+    CallCountManagement, EntityInvocationBodyHook, EntityInvocationManagement,
+    ExistingWorkerAcquisitionHook, ExternalOperations, FileSystemReading, FuelManagement,
+    InvocationContextManagement, InvocationHooks, InvocationManagement, LogEventEmitBehaviour,
+    P3HttpBodyProducerHook, ResultRecordedAt, StatusManagement, UpdateManagement, WorkerCtx,
+    WorkerFilesystemContext,
 };
 use golem_worker_executor::{
     Bootstrap, RunDetails, bootstrap_and_run_worker_executor, derive_disjoint_sqlite_config,
@@ -1619,6 +1620,14 @@ impl TestWorkerExecutor {
 
     pub fn set_worker_deletion_hook(&self, hook: Arc<dyn WorkerDeletionHook>) {
         self.additional_test_deps.set_worker_deletion_hook(hook);
+    }
+
+    pub fn set_existing_worker_acquisition_hook(&self, hook: Arc<ExistingWorkerAcquisitionHook>) {
+        *self
+            .additional_test_deps
+            .existing_worker_acquisition_hook
+            .lock()
+            .unwrap() = Some(hook);
     }
 
     /// Rejects one linear-memory growth after the next RPC creation completes.
@@ -4291,6 +4300,16 @@ impl WorkerCtx for TestWorkerCtx {
 
     fn worker_deletion_hook(extra_deps: &Self::ExtraDeps) -> Option<Arc<dyn WorkerDeletionHook>> {
         extra_deps.worker_deletion_hook()
+    }
+
+    fn existing_worker_acquisition_hook(
+        extra_deps: &Self::ExtraDeps,
+    ) -> Option<Arc<ExistingWorkerAcquisitionHook>> {
+        extra_deps
+            .existing_worker_acquisition_hook
+            .lock()
+            .unwrap()
+            .clone()
     }
 
     async fn create(
@@ -7248,6 +7267,7 @@ pub struct AdditionalTestDeps {
     agent_invocation_success_gates:
         Arc<std::sync::Mutex<HashMap<AgentId, Arc<AgentInvocationSuccessGate>>>>,
     worker_deletion_hook: Arc<Mutex<Option<Arc<dyn WorkerDeletionHook>>>>,
+    existing_worker_acquisition_hook: Arc<Mutex<Option<Arc<ExistingWorkerAcquisitionHook>>>>,
     /// Captured once on first call to [`TestWorkerCtx::create`]. Used by the
     /// read-only test helpers (`worker_is_loaded`,
     /// `worker_eviction_class`, `worker_memory_requirement`) to observe
@@ -7322,6 +7342,7 @@ impl AdditionalTestDeps {
             direct_replay_wait_signals: Arc::new(std::sync::Mutex::new(HashMap::new())),
             agent_invocation_success_gates: Arc::new(std::sync::Mutex::new(HashMap::new())),
             worker_deletion_hook: Arc::new(Mutex::new(None)),
+            existing_worker_acquisition_hook: Arc::new(Mutex::new(None)),
             active_agents: Arc::new(std::sync::OnceLock::new()),
             websocket_connection_pool: Arc::new(std::sync::OnceLock::new()),
         }

@@ -1733,7 +1733,19 @@ async fn sealed_cached_worker_is_reacquired_without_reusing_its_old_handle(
     #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    sealed_cached_worker(last_unique_id, deps, host_api_tests, None).await
+    sealed_cached_worker(last_unique_id, deps, host_api_tests, None, false).await
+}
+
+#[test]
+#[timeout("4m")]
+#[tracing::instrument]
+async fn reacquisition_after_seal_does_not_retry_a_shard_refusal(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    sealed_cached_worker(last_unique_id, deps, host_api_tests, None, true).await
 }
 
 #[test]
@@ -1761,7 +1773,7 @@ async fn postgres_seal_preserves_frozen_history_and_reacquires_worker(
         drop_prefix_delete_batch_size: 1024,
         max_concurrent_ops: None,
     };
-    sealed_cached_worker(last_unique_id, deps, host_api_tests, Some(config)).await
+    sealed_cached_worker(last_unique_id, deps, host_api_tests, Some(config), false).await
 }
 
 async fn sealed_cached_worker(
@@ -1769,6 +1781,7 @@ async fn sealed_cached_worker(
     deps: &WorkerExecutorTestDependencies,
     host_api_tests: &PrecompiledComponent,
     postgres: Option<IndexedStoragePostgresConfig>,
+    lose_shard: bool,
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
@@ -1877,6 +1890,37 @@ async fn sealed_cached_worker(
         .get_last_index(&owned, AgentMode::Durable)
         .await?;
     let activator = old.worker_activator();
+    let selected = Arc::new(tokio::sync::Notify::new());
+    let resolve = Arc::new(tokio::sync::Notify::new());
+    let acquisitions = Arc::new(AtomicUsize::new(0));
+    executor.set_existing_worker_acquisition_hook(Arc::new({
+        let owned = owned.clone();
+        let selected = selected.clone();
+        let resolve = resolve.clone();
+        let acquisitions = acquisitions.clone();
+        move |id| {
+            let pause = id == owned && acquisitions.fetch_add(1, Ordering::SeqCst) == 0;
+            let selected = selected.clone();
+            let resolve = resolve.clone();
+            async move {
+                if pause {
+                    selected.notify_one();
+                    resolve.notified().await;
+                }
+            }
+            .boxed()
+        }
+    }));
+    let acquisition = tokio::spawn({
+        let executor = executor.clone();
+        let id = owned.agent_id;
+        async move { executor.attached_agent_status(&id).await }
+    });
+    selected.notified().await;
+    assert!(Arc::ptr_eq(
+        &old,
+        &executor.active_agents().try_get(&owned).await.unwrap()
+    ));
     tokio::time::timeout(Duration::from_secs(30), async {
         loop {
             match activator
@@ -1953,6 +1997,37 @@ async fn sealed_cached_worker(
             .await?
             .has_data
     );
+    shard.check_admission(&owned.agent_id)?;
+    if lose_shard {
+        shard.clear_assignment();
+    }
+    resolve.notify_one();
+    let acquired = acquisition.await?;
+    assert_eq!(acquisitions.load(Ordering::SeqCst), 2);
+    if lose_shard {
+        assert!(
+            acquired
+                .unwrap_err()
+                .to_string()
+                .contains("ShardingNotReady"),
+            "the genuine shard refusal must propagate without reacquisition"
+        );
+        assert!(
+            !indexed
+                .observe_agent("test", "refused_unseal", &owned)
+                .await?
+                .has_data
+        );
+        executor.shutdown_and_wait_for_invocation_loops().await?;
+        return Ok(());
+    }
+    let acquired = acquired?;
+    assert_eq!(acquired.status, AgentStatus::Idle);
+    assert_eq!(acquired.oplog_idx, last);
+    assert!(!Arc::ptr_eq(
+        &old,
+        &executor.active_agents().try_get(&owned).await.unwrap()
+    ));
     let invocation = || AgentInvocation::AgentMethod {
         idempotency_key: InvocationId(uuid::Uuid::new_v4()),
         method_name: "increment".to_string(),

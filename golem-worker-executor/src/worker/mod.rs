@@ -24,6 +24,7 @@ mod startup;
 mod streaming;
 
 use acquisition::ConstructionError;
+pub(crate) use acquisition::ExistingWorkerAcquisitionError;
 #[cfg(test)]
 use acquisition::snapshot_policy_of_mode;
 #[cfg(test)]
