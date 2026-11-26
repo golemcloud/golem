@@ -1,0 +1,442 @@
+{
+  "tier": "pr",
+  "description": "Conformance for the additional coreutils (uu_* backed) plus our own yes/seq/rev/tac.\n\nScripts are written so every comparison is deterministic: nondeterministic commands (mktemp,\nshuf, date's wall clock) are wrapped so only a fixed-content check is printed, never raw output\nthat would differ between the wasm shell and the oracle even when both are \"correct\".",
+  "cases": [
+    {
+      "name": "basename: strips directory and suffix",
+      "script": "basename /usr/bin/sort; basename foo.txt .txt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "dirname: strips the last component",
+      "script": "dirname /usr/bin/sort; dirname a/b/c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "realpath: resolves relative and .. components",
+      "script": "mkdir -p /tmp/rp/a/b; cd /tmp/rp/a/b && realpath ../b && realpath .",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "readlink: prints a symlink target",
+      "script": "printf x > /tmp/rl-target; ln -s rl-target /tmp/rl-link; readlink /tmp/rl-link",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "ln: hard link shares content",
+      "script": "printf hard > /tmp/ln-src; ln /tmp/ln-src /tmp/ln-dst; cat /tmp/ln-dst",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "ln: symlink resolves via readlink",
+      "script": "printf soft > /tmp/lns-target; ln -s lns-target /tmp/lns-link; readlink /tmp/lns-link; cat /tmp/lns-link",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "link: creates a second directory entry for the same file",
+      "script": "printf x > /tmp/link-src; link /tmp/link-src /tmp/link-dst; cat /tmp/link-dst",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "unlink: removes exactly one file",
+      "script": "printf x > /tmp/unlink-f; unlink /tmp/unlink-f; if test -e /tmp/unlink-f; then echo exists; else echo gone; fi",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "rmdir: removes an empty directory",
+      "script": "mkdir /tmp/rmdir-d; rmdir /tmp/rmdir-d; if test -d /tmp/rmdir-d; then echo exists; else echo gone; fi",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "mktemp: creates a fresh file and directory",
+      "script": "f=$(mktemp); if test -f \"$f\"; then echo file-ok; fi; rm -f \"$f\"; d=$(mktemp -d); if test -d \"$d\"; then echo dir-ok; fi; rmdir \"$d\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "truncate: shrinks a file to an exact size",
+      "script": "printf '123456789' > /tmp/trunc-f; truncate -s 4 /tmp/trunc-f; cat /tmp/trunc-f; echo; wc -c < /tmp/trunc-f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "nl: numbers non-blank lines",
+      "script": "printf 'a\\n\\nb\\nc\\n' | nl",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "paste: merges lines of two files column-wise",
+      "script": "printf 'a\\nb\\n' > /tmp/paste-1; printf '1\\n2\\n' > /tmp/paste-2; paste /tmp/paste-1 /tmp/paste-2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "join: merges on a common sorted field",
+      "script": "printf '1 a\\n2 b\\n3 c\\n' > /tmp/join-1; printf '1 x\\n2 y\\n4 z\\n' > /tmp/join-2; join /tmp/join-1 /tmp/join-2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "comm: three-column set comparison",
+      "script": "printf 'a\\nb\\nc\\n' > /tmp/comm-1; printf 'b\\nc\\nd\\n' > /tmp/comm-2; comm /tmp/comm-1 /tmp/comm-2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "fold: wraps at a fixed width",
+      "script": "printf '1234567890\\n' | fold -w4",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "fmt: fills short lines into a paragraph",
+      "script": "printf 'one two three four five six\\n' | fmt -w 10",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expand: tabs become spaces",
+      "script": "printf 'a\\tb\\tc\\n' | expand -t 4",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "unexpand: runs of spaces become tabs",
+      "script": "printf 'a       b\\n' | unexpand -a | cat -A",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tsort: topological order of a DAG",
+      "script": "printf 'a b\\nb c\\na c\\n' | tsort",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "split: splits a file into fixed-size line chunks",
+      "script": "printf '1\\n2\\n3\\n4\\n' > /tmp/split-src; cd /tmp && split -l 2 split-src split-part-; cat split-part-aa; echo ---; cat split-part-ab",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "csplit: splits a file at a line number",
+      "script": "printf '1\\n2\\n3\\n4\\n' > /tmp/csplit-src; cd /tmp && csplit -z csplit-src 3; cat xx00; echo ---; cat xx01",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "base64: round-trips through encode and decode",
+      "script": "printf hello | base64; printf hello | base64 | base64 -d",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "base32: encodes to the expected alphabet",
+      "script": "printf hello | base32",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "basenc: base64 mode matches base64",
+      "script": "printf hello | basenc --base64",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "md5sum: hashes fixed content",
+      "script": "printf hello | md5sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sha1sum: hashes fixed content",
+      "script": "printf hello | sha1sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sha256sum: hashes and self-checks",
+      "script": "printf hello > /tmp/sha-f; sha256sum /tmp/sha-f > /tmp/sha-f.sha256; cd /tmp && sha256sum -c sha-f.sha256",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sha512sum: hashes fixed content",
+      "script": "printf hello | sha512sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "b2sum: hashes fixed content",
+      "script": "printf hello | b2sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "cksum: checksums and counts a file",
+      "script": "printf hello | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "od: dumps bytes as hex with no offset column",
+      "script": "printf AB | od -An -tx1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "date: formats a fixed epoch in UTC",
+      "script": "date -u -d @0 +'%Y-%m-%d %H:%M:%S'; date -u -d @1700000000 +%Y-%m-%d",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "date: +%s round-trips through -d @",
+      "script": "s=$(date -u -d @1700000000 +%s); if test \"$s\" = 1700000000; then echo ok; fi",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "expr: arithmetic and string length",
+      "script": "expr 6 + 3; expr 10 / 3; expr length hello",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "factor: prints the prime factorization",
+      "script": "factor 60",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "numfmt: reformats to human-readable IEC units",
+      "script": "numfmt --to=iec 1500000",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "shuf: permutes without changing the multiset",
+      "script": "seq 1 5 | shuf -n 3 | sort -n | wc -l | tr -d ' '",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "yes: repeats y forever until the reader stops",
+      "script": "yes | head -n 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "yes: repeats the given words",
+      "script": "yes a b c | head -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: default integer range",
+      "script": "seq 1 5",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: single-argument form counts from 1",
+      "script": "seq 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: decimal increment",
+      "script": "seq 1 0.5 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: descending range with a negative increment",
+      "script": "seq 5 -1 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: equal-width zero pads to the widest endpoint",
+      "script": "seq -w 1 10",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: custom separator only appears between terms",
+      "script": "seq -s, 1 5",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: streams instead of materializing a huge range",
+      "script": "seq 1 1000000000 | head -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "rev: reverses ascii lines",
+      "script": "printf 'hello\\nworld\\n' | rev",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "rev: reverses UTF-8 characters, not bytes",
+      "script": "printf 'h\\xc3\\xa9llo\\n' | rev",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "rev: terminates against an endless producer",
+      "script": "while :; do echo x; done | rev | head -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "rev: continues past a missing file without the os-error suffix",
+      "script": "printf 'ab\\n' > /tmp/rev-multi; rev /tmp/rev-multi /nonexist /tmp/rev-multi; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tac: reverses line order",
+      "script": "printf 'a\\nb\\nc\\n' | tac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tac: a missing final newline fuses onto the previous line",
+      "script": "printf 'a\\nb\\nc' | tac",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tac: unsupported regex separator refuses",
+      "script": "printf 'a\\nb\\n' | tac -r",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 2,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "tac: -r/--regex is unsupported in bash-tool (only a fixed-string separator is implemented)\n"
+        },
+        "reason": "bash-tool refuses tac's regex-separator mode; only a fixed-string separator is implemented"
+      }
+    },
+    {
+      "name": "tac: reverses several files independently in operand order",
+      "script": "printf 'a\\nb\\n' > /tmp/tac-t1; printf 'c\\nd\\n' > /tmp/tac-t2; tac /tmp/tac-t1 /tmp/tac-t2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "tac: reports a missing file and keeps going",
+      "script": "printf 'a\\nb\\n' > /tmp/tac-t3; tac /nonexist /tmp/tac-t3; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "yes: reports broken pipe when SIGPIPE is ignored",
+      "script": "trap '' PIPE; yes | head -n 1; echo \"${PIPESTATUS[*]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "yes: default disposition still yields the synthetic 141 status",
+      "script": "set -o pipefail; yes | head -n 2; echo \"$? ${PIPESTATUS[*]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: reports broken pipe when SIGPIPE is ignored",
+      "script": "trap '' PIPE; seq 1 100000 | head -n 1; echo \"${PIPESTATUS[*]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: default disposition still yields the synthetic 141 status",
+      "script": "set -o pipefail; seq 1 100000 | head -n 1; echo \"$? ${PIPESTATUS[*]}\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: -f exponential format matches C printf",
+      "script": "seq -f %e 1 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: -f general format strips trailing zeros",
+      "script": "seq -f %g 1 0.1 1.3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: invalid float argument diagnostic matches GNU",
+      "script": "seq x; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: zero increment diagnostic matches GNU",
+      "script": "seq 1 0 3; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: missing operand diagnostic matches GNU",
+      "script": "seq; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "seq: extra operand diagnostic matches GNU",
+      "script": "seq 1 2 3 4; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "date: --resolution",
+      "script": "date --resolution; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "date: -s cannot set the clock",
+      "script": "date -u -s @0; echo status=$?; date -u -s '2020-01-01'; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sort: -c reports the first disorder",
+      "script": "printf 'a\\nb\\n' | sort -c; echo status=$?; printf 'a\\nc\\nb\\na\\n' | sort -c; echo status=$?; printf 'a\\na\\n' | sort -cu; echo status=$?; sort -c /dev/null; echo status=$?; printf 'x 2\\ny 10\\n' | sort -c -k2n; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sort: -C is silent",
+      "script": "printf 'b\\na\\n' | sort -C; echo status=$?; printf 'a\\nb\\n' | sort -C; echo status=$?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "sort: -m merges sorted inputs",
+      "script": "printf '1\\n3\\n5\\n' >/tmp/a; printf '2\\n3\\n4\\n' >/tmp/b; printf '' >/tmp/e; sort -m /tmp/a /tmp/b /tmp/e; echo status=$?; sort -mu /tmp/a /tmp/b; echo status=$?; printf '5\\n3\\n1\\n' >/tmp/c; sort -m -nr /tmp/c - <<<$'4\\n2'; echo status=$?",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

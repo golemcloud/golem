@@ -15,12 +15,12 @@
 use crate::model::app_raw::{BuiltinServer, Environment, Server};
 use crate::model::format::Format;
 use anyhow::{Context, anyhow, bail};
-use chrono::{DateTime, Utc};
 use golem_client::LOCAL_WELL_KNOWN_TOKEN;
 use golem_client::model::TokenWithSecret;
 use golem_common::model::application::ApplicationName;
 use golem_common::model::environment::EnvironmentName;
 use itertools::Itertools;
+use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -1010,8 +1010,8 @@ impl OAuth2AuthenticationConfig {
 pub struct OAuth2AuthenticationData {
     pub id: Uuid,
     pub account_id: Uuid,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: DateTime<Utc>,
+    pub created_at: Timestamp,
+    pub expires_at: Timestamp,
     pub secret: AuthSecret,
 }
 

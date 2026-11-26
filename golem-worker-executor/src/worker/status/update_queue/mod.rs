@@ -22,11 +22,10 @@
 
 use golem_common::base_model::OplogIndex;
 use golem_common::model::component::ComponentRevision;
-use golem_common::model::oplog::{OplogEntry, OplogPayload, UpdateDescription};
+use golem_common::model::oplog::{OplogEntry, UpdateDescription};
 use golem_common::model::{
-    AgentInvocationPayload, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, Timestamp,
+    InvocationOperation, PendingInvocationRef, PendingUpdateKind, PendingUpdateRef, Timestamp,
 };
-use golem_common::serialization::deserialize;
 use std::collections::VecDeque;
 
 /// A manual update invocation (a `PendingAgentInvocation` entry) that no `PendingUpdate` entry
@@ -56,6 +55,8 @@ pub(crate) struct UpdateQueue {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum UpdateStep {
     Unchanged,
+    /// An invocation other than a manual update was accepted, with its operation.
+    InvocationAdmitted(Option<InvocationOperation>),
     /// A manual update invocation added a manual admission for this target revision.
     ManualAdmitted(ComponentRevision),
     /// A `PendingUpdate` added a queue element. `consumed` is the manual admission that a
@@ -88,6 +89,7 @@ impl UpdateStep {
             | Self::ConsumedInDeletedRegion(index) => Some(*index),
             Self::FailedAdmission(admission) => Some(admission.index),
             Self::Unchanged
+            | Self::InvocationAdmitted(_)
             | Self::ManualAdmitted(_)
             | Self::Admitted { consumed: None }
             | Self::Selected
@@ -101,6 +103,7 @@ impl UpdateStep {
         match self {
             Self::ManualAdmitted(target_revision) => Some(*target_revision),
             Self::Unchanged
+            | Self::InvocationAdmitted(_)
             | Self::Admitted { .. }
             | Self::Selected
             | Self::Succeeded(_)
@@ -115,6 +118,7 @@ impl UpdateStep {
         match self {
             Self::Succeeded(Some(update)) | Self::FailedQueued(Some(update)) => Some(update),
             Self::Unchanged
+            | Self::InvocationAdmitted(_)
             | Self::ManualAdmitted(_)
             | Self::Admitted { .. }
             | Self::Selected
@@ -154,7 +158,7 @@ impl UpdateQueue {
     /// `entry` is in a deleted region: such an entry changes only the manual admissions.
     ///
     /// - A manual update invocation adds a manual admission, and its step carries the target
-    ///   revision, so a later reader of the step need not decode the invocation again.
+    ///   revision.
     /// - A `PendingUpdate` without an attempt index adds a queue element.
     /// - A `SnapshotBased` `PendingUpdate` with an attempt index adds a queue element and pairs
     ///   the manual admission with that index.
@@ -173,14 +177,16 @@ impl UpdateQueue {
     ) -> (Self, UpdateStep) {
         let step = match entry {
             OplogEntry::PendingAgentInvocation {
-                timestamp, payload, ..
-            } => match manual_update_target_revision_of(payload) {
+                timestamp,
+                operation,
+                ..
+            } => match operation.manual_update_target() {
                 Some(target_revision) => self.admit(ManualAdmission {
                     timestamp: *timestamp,
                     index,
                     target_revision,
                 }),
-                None => UpdateStep::Unchanged,
+                None => UpdateStep::InvocationAdmitted(operation.operation()),
             },
             OplogEntry::PendingUpdate {
                 update_attempt_index: Some(attempt_index),
@@ -199,6 +205,7 @@ impl UpdateQueue {
                 timestamp,
                 description,
                 update_attempt_index,
+                requester: _,
             } => self.after_pending_update(index, *timestamp, description, *update_attempt_index),
             OplogEntry::FailedUpdate {
                 target_revision,
@@ -313,49 +320,13 @@ impl UpdateQueue {
     }
 }
 
-#[cfg(test)]
-thread_local! {
-    /// How many invocation payloads this thread decoded to classify them.
-    pub(crate) static INVOCATION_PAYLOAD_DECODES: std::cell::Cell<usize> =
-        const { std::cell::Cell::new(0) };
-}
-
-/// The target revision of a pending agent invocation payload when it is a manual update.
-///
-/// The producer of a manual update invocation keeps its payload in the oplog whatever the payload
-/// limit, so this never needs to download an external payload: an `External` payload is not a
-/// manual update.
-pub(crate) fn manual_update_target_revision_of(
-    payload: &OplogPayload<AgentInvocationPayload>,
-) -> Option<ComponentRevision> {
-    fn target_revision(payload: &AgentInvocationPayload) -> Option<ComponentRevision> {
-        match payload {
-            AgentInvocationPayload::ManualUpdate { target_revision } => Some(*target_revision),
-            _ => None,
-        }
-    }
-
-    match payload {
-        OplogPayload::Inline(p) => target_revision(p),
-        OplogPayload::SerializedInline {
-            cached: Some(v), ..
-        } => target_revision(v),
-        OplogPayload::SerializedInline { bytes, .. } => {
-            #[cfg(test)]
-            INVOCATION_PAYLOAD_DECODES.with(|decodes| decodes.set(decodes.get() + 1));
-            deserialize::<AgentInvocationPayload>(bytes)
-                .map_err(|e| {
-                    tracing::warn!("Failed to deserialize pending agent invocation payload: {e}");
-                    e
-                })
-                .ok()
-                .as_ref()
-                .and_then(target_revision)
-        }
-        OplogPayload::External {
-            cached: Some(v), ..
-        } => target_revision(v),
-        OplogPayload::External { .. } => None,
+/// The operation of the request in a `PendingAgentInvocation` or `AgentInvocationStarted` entry,
+/// for a fold that has no update step of the entry.
+pub(crate) fn request_operation(entry: &OplogEntry) -> Option<InvocationOperation> {
+    match entry {
+        OplogEntry::PendingAgentInvocation { operation, .. }
+        | OplogEntry::AgentInvocationStarted { operation, .. } => operation.operation(),
+        _ => None,
     }
 }
 

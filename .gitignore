@@ -87,3 +87,5 @@ docs/snippets/loop.log
 /sdks/moonbit/.mooncakes
 /sdks/moonbit/scripts/_build
 /sdks/moonbit/scripts/.mooncakes
+
+/.github/main-validation/node_modules/

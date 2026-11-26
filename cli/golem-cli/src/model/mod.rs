@@ -30,6 +30,7 @@ pub mod grant;
 pub mod help;
 pub mod http_api;
 pub mod input;
+pub mod invocation;
 pub mod invoke_result_view;
 pub mod language;
 pub mod masking;

@@ -1407,12 +1407,19 @@ impl ScalaBridgeGenerator {
 
         writer.line(GET_BY_ID_DOC);
         writer.line(format!(
-            "def getById(agentId: {GUEST_AGENT_ID}): {FUTURE}[{remote_name}] ="
+            "def getById(agentId: {GUEST_AGENT_ID}): {remote_name} ="
         ));
         writer.indent();
         writer.line(format!(
-            "{GUEST_AGENT_IDENTITY}.getById(agentTypeName, agentId).map(resolved => bindRemote(resolved))({GUEST_JS_QUEUE})"
+            "{GUEST_AGENT_IDENTITY}.getById(agentTypeName, agentId) match {{"
         ));
+        writer.indent();
+        writer.line("case _root_.scala.Right(resolved) => bindRemote(resolved)");
+        writer.line(format!(
+            "case _root_.scala.Left(err) => throw {GUEST_AGENT_RPC_EXCEPTION}(err)"
+        ));
+        writer.dedent();
+        writer.line("}");
         writer.dedent();
         Ok(())
     }
@@ -1955,7 +1962,7 @@ impl ScalaBridgeGenerator {
         ));
         writer.indent();
         writer.line(format!(
-            "bindRemote({RESOLVED_AGENT}(configuration, agentTypeName, if (keyed) _root_.scala.Some(parameters) else _root_.scala.None, _root_.scala.Some(__response)))"
+            "bindRemote({RESOLVED_AGENT}(configuration, agentTypeName, _root_.scala.None, _root_.scala.Some(__response)))"
         ));
         writer.dedent();
         writer.line("}");
@@ -4253,9 +4260,10 @@ mod tests {
             client_source
                 .contains("_root_.golem.runtime.rpc.CreateOptions(keyed, agentConfig, env)")
         );
-        assert!(client_source.contains(
-            "def getById(agentId: _root_.golem.AgentId): _root_.scala.concurrent.Future[AlphaAgentRemote] ="
-        ));
+        assert!(
+            client_source
+                .contains("def getById(agentId: _root_.golem.AgentId): AlphaAgentRemote =")
+        );
         assert!(client_source.contains(
             "def agentId(): _root_.scala.concurrent.Future[_root_.golem.AgentId] = resolved.agentId()"
         ));

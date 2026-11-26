@@ -9,6 +9,8 @@ use golem_common::schema::metadata::TypeId;
 use golem_common::schema::public_json::encode_public_schema_value;
 use golem_common::schema::tool::*;
 use golem_common::schema::{MetadataEnvelope, NamedFieldType, SchemaTypeDef};
+use proptest::prelude::*;
+use proptest::string::string_regex;
 use test_r::test;
 
 fn body() -> CommandBody {
@@ -195,6 +197,23 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
             .iter()
             .all(|export| export.command_path == ["do-work", "deep"])
     );
+    let description = |mcp_name: &str| {
+        exports
+            .iter()
+            .find(|export| export.mcp_name == mcp_name)
+            .map(|export| export.description.as_str())
+            .unwrap()
+    };
+    assert!(
+        !description("root_do_work_deep").contains("(alias for"),
+        "{}",
+        description("root_do_work_deep")
+    );
+    assert!(
+        description("r_do_work_deep").ends_with(" (alias for root do-work deep)"),
+        "{}",
+        description("r_do_work_deep")
+    );
     let excluded = compile_native_tool_exports(
         ComponentId::new(),
         "test:owner".try_into().unwrap(),
@@ -210,6 +229,13 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
             .map(|e| e.mcp_name.as_str())
             .collect::<Vec<_>>(),
         ["root", "r"]
+    );
+    assert_eq!(
+        excluded
+            .iter()
+            .map(CompiledMcpToolExport::command_label)
+            .collect::<Vec<_>>(),
+        ["tool command `root`", "tool command `r` of tool `root`"]
     );
 
     let mut collision_root = node("root", None);
@@ -230,7 +256,307 @@ fn root_aliases_paths_globs_and_normalized_collisions_are_bounded() {
         },
         schema: SchemaGraph::empty(),
     };
-    assert!(compile(&collision).unwrap_err().contains("collision"));
+    let error = compile(&collision).unwrap_err();
+    assert!(error.contains("`root a-b`"), "{error}");
+    assert!(error.contains("`root a b`"), "{error}");
+    assert!(error.contains("`root_a_b`"), "{error}");
+}
+
+#[test]
+fn an_alias_path_that_collides_with_another_command_is_named_by_its_alias_path() {
+    let mut root = node("root", None);
+    root.subcommands = vec![CommandIndex(1), CommandIndex(2)];
+    let mut parent = node("x", None);
+    parent.aliases.push("a".to_string());
+    parent.subcommands.push(CommandIndex(3));
+    let definition = Tool {
+        version: "1.0.0".to_string(),
+        requires_filesystem: false,
+        http_mount: None,
+        commands: CommandTree {
+            nodes: vec![
+                root,
+                node("a-b", Some(body())),
+                parent,
+                node("b", Some(body())),
+            ],
+        },
+        schema: SchemaGraph::empty(),
+    };
+    assert_eq!(
+        compile(&definition).unwrap_err(),
+        "tool command `root a-b` and tool command `root a b` both project to the MCP tool name `root_a_b`"
+    );
+}
+
+#[test]
+fn names_project_to_snake_case() {
+    ["searchItems", "search-items", "search_items", "SearchItems"]
+        .into_iter()
+        .for_each(|name| assert_eq!(to_snake_case(name), "search_items", "{name}"));
+    assert_eq!(to_snake_case("HTTPServer"), "http_server");
+    assert_eq!(to_snake_case("parseURL"), "parse_url");
+    assert_eq!(to_snake_case("item2Go"), "item2_go");
+    assert_eq!(to_snake_case("v2"), "v2");
+    assert_eq!(
+        projected_tool_name("my-tool", &["searchItems".to_string(), "by-id".to_string()]),
+        "my_tool_search_items_by_id"
+    );
+}
+
+/// The camelCase form of the one-letter word `x` followed by the word `yz` is `xYZ`, which reads
+/// as `x` followed by the acronym `YZ`. The property generator therefore uses words of two or
+/// more characters.
+#[test]
+fn a_one_letter_camel_case_word_is_ambiguous() {
+    assert_eq!(to_snake_case("xYZ"), "x_yz");
+}
+
+fn arb_words() -> BoxedStrategy<Vec<String>> {
+    prop::collection::vec(string_regex("[a-z][a-z0-9]{1,5}").unwrap(), 1..=4).boxed()
+}
+
+fn arb_ascii() -> BoxedStrategy<String> {
+    string_regex("[\\x00-\\x7F]{0,16}").unwrap().boxed()
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig {
+        cases: 256,
+        .. ProptestConfig::default()
+    })]
+
+    #[test]
+    fn proptest_kebab_snake_and_camel_case_words_project_to_the_words_joined_with_underscores(words in arb_words()) {
+        let expected = words.join("_");
+        let camel_case = words
+            .iter()
+            .enumerate()
+            .map(|(i, word)| {
+                if i == 0 {
+                    word.clone()
+                } else {
+                    word[..1].to_uppercase() + &word[1..]
+                }
+            })
+            .collect::<String>();
+        prop_assert_eq!(to_snake_case(&words.join("-")), expected.clone());
+        prop_assert_eq!(to_snake_case(&words.join("_")), expected.clone());
+        prop_assert_eq!(to_snake_case(&camel_case), expected);
+    }
+
+    #[test]
+    fn proptest_snake_case_projection_is_idempotent(name in arb_ascii()) {
+        let once = to_snake_case(&name);
+        prop_assert_eq!(to_snake_case(&once), once);
+    }
+
+    #[test]
+    fn proptest_snake_case_projection_has_no_uppercase_letter_or_hyphen(name in arb_ascii()) {
+        let projected = to_snake_case(&name);
+        prop_assert!(
+            !projected.chars().any(|c| c.is_uppercase() || c == '-'),
+            "{:?} projects to {:?}",
+            name,
+            projected
+        );
+    }
+}
+
+#[test]
+fn arguments_project_to_snake_case_in_the_schema_and_the_call() {
+    let mut command = body();
+    command.options = vec![option(
+        "dry-run",
+        OptionShape::Scalar(SchemaType::string()),
+        true,
+    )];
+    let export = compile(&tool(node("root", Some(command))))
+        .unwrap()
+        .remove(0);
+    let schema = export.input_json_schema().unwrap();
+    assert_eq!(schema["required"], json!(["dry_run"]));
+    assert!(schema["properties"]["dry_run"].is_object(), "{schema:?}");
+    assert!(schema["properties"].get("dry-run").is_none(), "{schema:?}");
+    let (value, _) = export
+        .parse_arguments(Map::from_iter([("dry_run".to_string(), json!("x"))]))
+        .unwrap();
+    assert_eq!(
+        value.value(),
+        &SchemaValue::Record {
+            fields: vec![SchemaValue::String("x".to_string())]
+        }
+    );
+    assert!(
+        export
+            .parse_arguments(Map::from_iter([("dry-run".to_string(), json!("x"))]))
+            .unwrap_err()
+            .contains("unknown argument `dry-run`")
+    );
+}
+
+#[test]
+fn each_reserved_argument_is_rejected_with_the_command_and_the_argument() {
+    [
+        "_stdin",
+        "idempotency-key",
+        "idempotencyKey",
+        "_agent",
+        "_agent_id",
+    ]
+    .into_iter()
+    .for_each(|argument| {
+        let mut command = body();
+        command.options = vec![option(
+            argument,
+            OptionShape::Scalar(SchemaType::string()),
+            true,
+        )];
+        let mut child = node("search", Some(command));
+        child.aliases.clear();
+        let mut root = node("root", None);
+        root.subcommands.push(CommandIndex(1));
+        let definition = Tool {
+            commands: CommandTree {
+                nodes: vec![root, child],
+            },
+            ..tool(node("root", None))
+        };
+        let error =
+            check_reserved_arguments(&definition, 1, "tool command `root search`").unwrap_err();
+        assert!(error.contains("`root search`"), "{argument}: {error}");
+        assert!(
+            error.contains(&format!("`{argument}`")),
+            "{argument}: {error}"
+        );
+    });
+    let mut command = body();
+    command.options = vec![option(
+        "idempotency-keys",
+        OptionShape::Scalar(SchemaType::string()),
+        true,
+    )];
+    assert!(check_reserved_arguments(&tool(node("root", Some(command))), 0, "root").is_ok());
+}
+
+#[test]
+fn the_reserved_argument_check_covers_only_the_selected_commands() {
+    let mut keyed = body();
+    keyed.options = vec![option(
+        "idempotency-key",
+        OptionShape::Scalar(SchemaType::string()),
+        false,
+    )];
+    let mut root = node("root", None);
+    root.subcommands = vec![CommandIndex(1), CommandIndex(2)];
+    let definition = Tool {
+        commands: CommandTree {
+            nodes: vec![
+                root,
+                node("keyed", Some(keyed)),
+                node("plain", Some(body())),
+            ],
+        },
+        ..tool(node("root", None))
+    };
+    let error = compile(&definition).unwrap_err();
+    assert!(error.contains("`root keyed`"), "{error}");
+    assert!(error.contains("`idempotency-key`"), "{error}");
+    assert!(error.contains("`idempotency_key`"), "{error}");
+    let compile_with = |include: Option<&[String]>, exclude: Option<&[String]>| {
+        compile_native_tool_exports(
+            ComponentId::new(),
+            "test:owner".try_into().unwrap(),
+            "root".try_into().unwrap(),
+            &definition,
+            include,
+            exclude,
+        )
+    };
+    let selected = |exports: Vec<CompiledMcpToolExport>| {
+        exports
+            .into_iter()
+            .map(|export| export.mcp_name)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        selected(compile_with(None, Some(&["keyed".to_string()])).unwrap()),
+        ["root_plain"]
+    );
+    assert_eq!(
+        selected(compile_with(Some(&["plain".to_string()]), None).unwrap()),
+        ["root_plain"]
+    );
+}
+
+#[test]
+fn the_constraint_text_uses_the_projected_argument_names() {
+    let mut command = body();
+    command.options = vec![
+        option(
+            "dry-run",
+            OptionShape::OptionalScalar(SchemaType::string()),
+            false,
+        ),
+        OptionSpec {
+            aliases: vec!["all".to_string()],
+            ..option(
+                "force-all",
+                OptionShape::OptionalScalar(SchemaType::string()),
+                false,
+            )
+        },
+        option(
+            "keep-going",
+            OptionShape::OptionalScalar(SchemaType::string()),
+            false,
+        ),
+    ];
+    command.constraints = vec![
+        Constraint::AllOrNone(vec![
+            Ref::Present("dry-run".to_string()),
+            Ref::Present("force-all".to_string()),
+        ]),
+        Constraint::Implies(ImpliesC {
+            lhs_quant: Quantifier::All,
+            lhs: vec![Ref::Present("dry-run".to_string())],
+            rhs_quant: Quantifier::Any,
+            rhs: vec![Ref::Present("force-all".to_string())],
+        }),
+        Constraint::Forbids(ForbidsC {
+            lhs_quant: Quantifier::All,
+            lhs: vec![Ref::Present("all".to_string())],
+            rhs: vec![Ref::Present("keep-going".to_string())],
+        }),
+    ];
+    let export = compile(&tool(node("root", Some(command))))
+        .unwrap()
+        .remove(0);
+    let description = export.description;
+    assert!(description.contains("\"dry_run\""), "{description}");
+    assert!(description.contains("\"force_all\""), "{description}");
+    assert!(!description.contains("dry-run"), "{description}");
+    assert!(!description.contains("force-all"), "{description}");
+    let present = |name: &str| Ref::Present(name.to_string());
+    let expected = serde_json::to_string(&[
+        Constraint::AllOrNone(vec![present("dry_run"), present("force_all")]),
+        Constraint::Implies(ImpliesC {
+            lhs_quant: Quantifier::All,
+            lhs: vec![present("dry_run")],
+            rhs_quant: Quantifier::Any,
+            rhs: vec![present("force_all")],
+        }),
+        Constraint::Forbids(ForbidsC {
+            lhs_quant: Quantifier::All,
+            lhs: vec![present("force_all")],
+            rhs: vec![present("keep_going")],
+        }),
+    ])
+    .unwrap();
+    assert!(
+        description.contains(&format!(" Constraints: {expected}.")),
+        "{description}"
+    );
 }
 
 #[test]

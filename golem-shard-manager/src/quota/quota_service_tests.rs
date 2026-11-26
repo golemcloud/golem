@@ -23,7 +23,6 @@ use super::resource_definition_fetcher::{FetchError, ResourceDefinitionFetcher};
 use crate::config::QuotaServiceConfig;
 use crate::sharding::persistence::ExternalRevision;
 use async_trait::async_trait;
-use chrono::Utc;
 use golem_common::model::Pod;
 use golem_common::model::environment::EnvironmentId;
 use golem_common::model::quota::LeaseEpoch;
@@ -33,6 +32,7 @@ use golem_common::model::quota::{
     ResourceRateLimit, TimePeriod,
 };
 use golem_service_base::repo::Blob;
+use jiff::Timestamp;
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -233,6 +233,18 @@ impl QuotaLease {
                 allocated_amount, ..
             } => *allocated_amount,
             QuotaLease::Unlimited { .. } => panic!("allocated_amount() called on Unlimited lease"),
+        }
+    }
+
+    fn total_available_amount(&self) -> u64 {
+        match self {
+            QuotaLease::Bounded {
+                total_available_amount,
+                ..
+            } => *total_available_amount,
+            QuotaLease::Unlimited { .. } => {
+                panic!("total_available_amount() called on Unlimited lease")
+            }
         }
     }
 }
@@ -1255,10 +1267,375 @@ async fn capacity_limit_does_not_refill() {
     assert_eq!(l2.allocated_amount(), 0);
 }
 
+/// Stores `limit` as the next revision of `definition` and lets the service pick it up.
+async fn update_limit(
+    svc: &QuotaService,
+    fetcher: &InMemoryFetcher,
+    definition: &mut ResourceDefinition,
+    limit: ResourceLimit,
+) {
+    definition.revision = definition.revision.next().unwrap();
+    definition.limit = limit;
+    fetcher.put(definition.clone()).await;
+    svc.on_resource_definition_changed(definition.id).await;
+}
+
+fn rate(value: u64, max: u64) -> ResourceLimit {
+    ResourceLimit::Rate(ResourceRateLimit {
+        value,
+        period: TimePeriod::Hour,
+        max,
+    })
+}
+
+#[test]
+async fn periodic_refresh_of_unchanged_definition_keeps_spent_budget() {
+    for definition in [
+        make_rate_definition(env_id(), "api-calls", 100, TimePeriod::Hour, 100),
+        make_definition(env_id(), "tokens"),
+    ] {
+        let fetcher = Arc::new(InMemoryFetcher::new());
+        fetcher.put(definition.clone()).await;
+        let config = QuotaServiceConfig {
+            definition_staleness_ttl: Duration::ZERO,
+            min_executors: 1,
+            ..test_config()
+        };
+        let svc = QuotaService::new(config, fetcher, test_repo());
+        let pod = test_pod();
+
+        let l1 = svc
+            .acquire_lease(definition.environment_id, definition.name.clone(), pod)
+            .await
+            .unwrap();
+        assert_eq!(l1.allocated_amount(), 100);
+
+        // Every call refreshes the definition, and each renewal reports the grant as spent.
+        let l2 = svc
+            .renew_lease(definition.id, pod, l1.epoch(), 0, vec![])
+            .await
+            .unwrap();
+        let l3 = svc
+            .renew_lease(definition.id, pod, l2.epoch(), 0, vec![])
+            .await
+            .unwrap();
+        assert_eq!(
+            (l2.allocated_amount(), l3.allocated_amount()),
+            (0, 0),
+            "refreshing {:?} refilled the spent budget",
+            definition.limit
+        );
+    }
+}
+
+#[test]
+async fn rate_max_shrink_keeps_spent_budget_and_clamps_to_new_max() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let mut def = make_rate_definition(env, "api-calls", 10, TimePeriod::Hour, 100);
+    fetcher.put(def.clone()).await;
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher.clone(), test_repo());
+
+    let l1 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l1.allocated_amount(), 100);
+    // 30 spent, 70 left in the pool.
+    svc.release_lease(def.id, test_pod(), l1.epoch(), 70)
+        .await
+        .unwrap();
+
+    update_limit(&svc, &fetcher, &mut def, rate(10, 80)).await;
+    let l2 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(
+        l2.allocated_amount(),
+        70,
+        "the spent part of the burst came back"
+    );
+    svc.release_lease(def.id, test_pod(), l2.epoch(), 70)
+        .await
+        .unwrap();
+
+    update_limit(&svc, &fetcher, &mut def, rate(10, 50)).await;
+    let l3 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(
+        l3.allocated_amount(),
+        50,
+        "the balance is above the new max"
+    );
+}
+
+#[test]
+async fn rate_max_shrink_clamps_unused_budget_returned_by_an_older_lease() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let mut def = make_rate_definition(env, "api-calls", 10, TimePeriod::Hour, 100);
+    fetcher.put(def.clone()).await;
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher.clone(), test_repo());
+
+    let l1 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l1.allocated_amount(), 100);
+
+    update_limit(&svc, &fetcher, &mut def, rate(10, 20)).await;
+
+    // The lease granted under the old max returns all of it unused.
+    let l2 = svc
+        .renew_lease(def.id, test_pod(), l1.epoch(), 100, vec![])
+        .await
+        .unwrap();
+    assert_eq!(l2.allocated_amount(), 20);
+}
+
+#[test]
+async fn rate_max_growth_grants_no_new_burst() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let mut def = make_rate_definition(env, "api-calls", 10, TimePeriod::Hour, 100);
+    fetcher.put(def.clone()).await;
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher.clone(), test_repo());
+
+    let l1 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    svc.release_lease(def.id, test_pod(), l1.epoch(), 70)
+        .await
+        .unwrap();
+
+    update_limit(&svc, &fetcher, &mut def, rate(10, 1000)).await;
+    let l2 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l2.allocated_amount(), 70);
+}
+
+#[test]
+async fn capacity_change_keeps_consumed_amount() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let mut def = make_definition(env, "tokens");
+    fetcher.put(def.clone()).await;
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher.clone(), test_repo());
+
+    let l1 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l1.allocated_amount(), 100);
+    // 60 consumed.
+    svc.release_lease(def.id, test_pod(), l1.epoch(), 40)
+        .await
+        .unwrap();
+
+    let mut acquire_after = async |value: u64| {
+        update_limit(
+            &svc,
+            &fetcher,
+            &mut def,
+            ResourceLimit::Capacity(ResourceCapacityLimit { value }),
+        )
+        .await;
+        let lease = svc
+            .acquire_lease(env, def.name.clone(), test_pod())
+            .await
+            .unwrap();
+        let allocated = lease.allocated_amount();
+        svc.release_lease(def.id, test_pod(), lease.epoch(), allocated)
+            .await
+            .unwrap();
+        allocated
+    };
+
+    assert_eq!(acquire_after(150).await, 90);
+    assert_eq!(acquire_after(80).await, 20);
+    assert_eq!(acquire_after(50).await, 0);
+}
+
+#[test]
+async fn capacity_shrink_below_consumed_then_growth_keeps_the_debt() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let mut def = make_definition(env, "tokens");
+    fetcher.put(def.clone()).await;
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher.clone(), test_repo());
+
+    let l1 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l1.allocated_amount(), 100);
+    // 60 consumed, 40 remaining.
+    svc.release_lease(def.id, test_pod(), l1.epoch(), 40)
+        .await
+        .unwrap();
+
+    // The limit drops below the consumed amount and comes back: 60 stays consumed.
+    let capacity = |value| ResourceLimit::Capacity(ResourceCapacityLimit { value });
+    update_limit(&svc, &fetcher, &mut def, capacity(50)).await;
+    update_limit(&svc, &fetcher, &mut def, capacity(100)).await;
+
+    let l2 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l2.allocated_amount(), 40);
+}
+
+#[test]
+async fn concurrency_shrink_below_an_outstanding_lease_caps_its_return() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let mut def = make_concurrency_definition(env, "slots", 10);
+    fetcher.put(def.clone()).await;
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher.clone(), test_repo());
+
+    let l1 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l1.allocated_amount(), 10);
+
+    // The limit shrinks to 5 while the lease holds all 10 slots, and the lease is released: the
+    // pool is the new limit, not the old one.
+    update_limit(
+        &svc,
+        &fetcher,
+        &mut def,
+        ResourceLimit::Concurrency(ResourceConcurrencyLimit { value: 5 }),
+    )
+    .await;
+    svc.release_lease(def.id, test_pod(), l1.epoch(), 0)
+        .await
+        .unwrap();
+
+    let l2 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l2.allocated_amount(), 5);
+}
+
+#[test]
+async fn concurrency_reacquire_by_the_same_pod_counts_its_old_lease_once() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let mut def = make_concurrency_definition(env, "slots", 10);
+    fetcher.put(def.clone()).await;
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher.clone(), test_repo());
+
+    let l1 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l1.allocated_amount(), 10);
+    assert_eq!(l1.total_available_amount(), 10);
+
+    // Without a limit change, a second acquire by the same pod gets the same slots and total.
+    let l2 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l2.allocated_amount(), 10);
+    assert_eq!(l2.total_available_amount(), 10);
+
+    // The limit shrinks to 5 while the lease holds all 10 slots. The second acquire replaces the
+    // old lease, so its slots count once: the grant and the total are the new limit.
+    update_limit(
+        &svc,
+        &fetcher,
+        &mut def,
+        ResourceLimit::Concurrency(ResourceConcurrencyLimit { value: 5 }),
+    )
+    .await;
+    let l3 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l3.allocated_amount(), 5);
+    assert_eq!(l3.total_available_amount(), 5);
+}
+
+#[test]
+async fn capacity_shrink_below_an_outstanding_lease_caps_its_return() {
+    let fetcher = Arc::new(InMemoryFetcher::new());
+    let env = env_id();
+    let mut def = make_definition(env, "tokens");
+    fetcher.put(def.clone()).await;
+    let config = QuotaServiceConfig {
+        min_executors: 1,
+        ..test_config()
+    };
+    let svc = QuotaService::new(config, fetcher.clone(), test_repo());
+
+    let l1 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l1.allocated_amount(), 100);
+
+    // The limit shrinks to 50 while the lease holds all 100, and the lease returns all of it
+    // unused: nothing is consumed, so the pool is the new limit, not the old one.
+    update_limit(
+        &svc,
+        &fetcher,
+        &mut def,
+        ResourceLimit::Capacity(ResourceCapacityLimit { value: 50 }),
+    )
+    .await;
+    svc.release_lease(def.id, test_pod(), l1.epoch(), 100)
+        .await
+        .unwrap();
+
+    let l2 = svc
+        .acquire_lease(env, def.name.clone(), test_pod())
+        .await
+        .unwrap();
+    assert_eq!(l2.allocated_amount(), 50);
+}
+
 /// `count` one-slot leases on a 200-slot concurrency resource, all expired, the `i`-th expiring
 /// `i` milliseconds after the first.
 fn state_with_expired_leases(count: usize) -> QuotaState {
-    let first_expiry = Utc::now() - chrono::Duration::minutes(5);
+    let first_expiry = Timestamp::now() - jiff::SignedDuration::from_mins(5);
     let leases = (0..count)
         .map(|i| {
             let pod = Pod {
@@ -1268,8 +1645,8 @@ fn state_with_expired_leases(count: usize) -> QuotaState {
             let lease = PodLease {
                 epoch: LeaseEpoch(1),
                 allocated: 1,
-                granted_at: first_expiry - chrono::Duration::minutes(1),
-                expires_at: first_expiry + chrono::Duration::milliseconds(i as i64),
+                granted_at: first_expiry - jiff::SignedDuration::from_mins(1),
+                expires_at: first_expiry + jiff::SignedDuration::from_millis(i as i64),
                 pending_reservations: vec![],
             };
             (pod, lease)
@@ -1278,8 +1655,9 @@ fn state_with_expired_leases(count: usize) -> QuotaState {
     QuotaState::from_persisted(
         make_concurrency_definition(env_id(), "slots", 200),
         200 - count as u64,
-        Utc::now(),
-        Utc::now(),
+        0,
+        Timestamp::now(),
+        Timestamp::now(),
         leases,
     )
 }

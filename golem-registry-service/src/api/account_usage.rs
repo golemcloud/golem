@@ -17,7 +17,6 @@ use crate::api::error::ApiError;
 use crate::services::account_resource_override::AccountResourceOverrideService;
 use crate::services::account_usage::AccountUsageService;
 use crate::services::auth::AuthService;
-use chrono::{DateTime, Utc};
 use golem_common::base_model::api;
 use golem_common::model::account::AccountId;
 use golem_common::model::account_usage::{
@@ -26,9 +25,11 @@ use golem_common::model::account_usage::{
     DEFAULT_ACCOUNT_USAGE_HISTORY_PERIODS, MemoryLimit, MonthlyUsageModeTransition,
     SetAdminResourceGrant, SetMemoryLimit, SetMonthlyUsageMode, SetStorageLimit, StorageLimit,
 };
+use golem_common::model::poem::datetime::OpenApiTimestamp;
 use golem_common::recorded_http_api_request;
 use golem_service_base::api_tags::ApiTags;
 use golem_service_base::model::auth::GolemSecurityScheme;
+use jiff::Timestamp;
 use poem_openapi::param::{Path, Query};
 use poem_openapi::payload::Json;
 use poem_openapi::*;
@@ -51,10 +52,10 @@ struct ClearedAdminResourceGrantChange {
     event_type: AdminResourceGrantEventType,
     reason: AdminResourceGrantReason,
     actor_account_id: AccountId,
-    changed_at: DateTime<Utc>,
+    changed_at: OpenApiTimestamp,
     old_value: u64,
     new_value: AdminResourceGrantChangeValue,
-    expires_at: Option<DateTime<Utc>>,
+    expires_at: Option<OpenApiTimestamp>,
 }
 
 impl poem_openapi::types::Example for ClearedAdminResourceGrantChange {
@@ -65,8 +66,9 @@ impl poem_openapi::types::Example for ClearedAdminResourceGrantChange {
             event_type: AdminResourceGrantEventType::OverrideCleared,
             reason: AdminResourceGrantReason::Support,
             actor_account_id: AccountId(uuid::Uuid::from_u128(2)),
-            changed_at: DateTime::from_timestamp(1_700_000_000, 0)
-                .expect("example timestamp is valid"),
+            changed_at: OpenApiTimestamp(
+                Timestamp::new(1_700_000_000, 0).expect("example timestamp is valid"),
+            ),
             old_value: 10,
             new_value: AdminResourceGrantChangeValue::from_raw(
                 AdminResourceGrantDimension::MonthlyComputeGcu,
@@ -85,10 +87,10 @@ impl From<AdminResourceGrantChange> for ClearedAdminResourceGrantChange {
             event_type: value.event_type,
             reason: value.reason,
             actor_account_id: value.actor_account_id,
-            changed_at: value.changed_at,
+            changed_at: OpenApiTimestamp(value.changed_at),
             old_value: value.old_value,
             new_value: value.new_value,
-            expires_at: value.expires_at,
+            expires_at: value.expires_at.map(OpenApiTimestamp),
         }
     }
 }

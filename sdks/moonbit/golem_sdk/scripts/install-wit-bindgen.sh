@@ -3,7 +3,7 @@
 set -euo pipefail
 
 readonly WIT_BINDGEN_REPOSITORY="https://github.com/golemcloud/wit-bindgen"
-readonly WIT_BINDGEN_REVISION="c17d4d08ac9e8fda334425f0267788b873907858"
+readonly WIT_BINDGEN_REVISION="5699b06ba9384a835b0bcfc6e2c9b42fff18ee30"
 SDK_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 readonly SDK_ROOT
 

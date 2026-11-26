@@ -19,11 +19,15 @@ use super::{
 use crate::model::account::{AccountEmail, AccountId};
 use crate::model::agent::AgentTypeName;
 use crate::model::agent_secret::CanonicalAgentSecretPath;
-use crate::model::component::{ComponentId, ComponentName, ComponentRevision};
+use crate::model::component::{
+    ComponentId, ComponentName, ComponentRevision, InstalledPlugin, PluginPriority,
+};
 use crate::model::deployment::DeploymentRevision;
 use crate::model::diff::{Hash, Hashable};
+use crate::model::environment_plugin_grant::EnvironmentPluginGrantId;
 use crate::model::json::NormalizedJsonValue;
 use crate::model::mcp_import::{McpImport, McpImportAuth, McpInlineCredentialKind};
+use crate::model::plugin_registration::PluginRegistrationId;
 use crate::model::security_scheme::SecuritySchemeName;
 use crate::model::tool::{
     ConfigKeyScope, HostToolId, SecretKeyScope, ToolBindingInput, ToolFilesystemAccess, ToolName,
@@ -54,7 +58,7 @@ fn remote_tool() -> RemoteToolDeployment {
         owner_account_email: AccountEmail::new("publisher@example.com"),
         metadata_version: "0.1.0".to_string(),
         metadata_digest: Hash::new(blake3::hash(b"metadata-a")),
-        provision: ToolProvisionConfig::default(),
+        provision: (&ToolProvisionConfig::default()).into(),
         component_bindings: BTreeMap::new(),
         bindings: BTreeMap::new(),
         environment_middleware_binding: None,
@@ -551,6 +555,49 @@ fn remote_host_tool_without_release_identity_is_rejected() {
             .to_string()
             .contains("non-local tool remote has no release id")
     );
+}
+
+#[test]
+fn remote_tool_identity_hash_ignores_the_plugin_installer() {
+    let plugin = InstalledPlugin {
+        environment_plugin_grant_id: EnvironmentPluginGrantId::new(),
+        priority: PluginPriority(0),
+        parameters: BTreeMap::from([("level".to_string(), "info".to_string())]),
+        plugin_registration_id: PluginRegistrationId::new(),
+        plugin_name: "audit".to_string(),
+        plugin_version: "1".to_string(),
+        oplog_processor_component_id: None,
+        oplog_processor_component_revision: None,
+        installed_by: AccountId::new(),
+    };
+    let with_plugin = |plugin: InstalledPlugin| {
+        let mut tool = remote_tool();
+        tool.provision = (&ToolProvisionConfig {
+            plugins: vec![plugin],
+            ..ToolProvisionConfig::default()
+        })
+            .into();
+        tool
+    };
+    let installed_by_a = with_plugin(plugin.clone());
+    let base_hash = deployment_hash(installed_by_a.clone(), false);
+
+    // The same manifest deployed by another account is the same deployment.
+    let mut installed_by_b = installed_by_a.clone();
+    installed_by_b.provision = with_plugin(InstalledPlugin {
+        installed_by: AccountId::new(),
+        ..plugin.clone()
+    })
+    .provision;
+    assert_eq!(base_hash, deployment_hash(installed_by_b, false));
+
+    let mut changed_parameters = installed_by_a;
+    changed_parameters.provision = with_plugin(InstalledPlugin {
+        parameters: BTreeMap::from([("level".to_string(), "debug".to_string())]),
+        ..plugin
+    })
+    .provision;
+    assert_ne!(base_hash, deployment_hash(changed_parameters, false));
 }
 
 #[test]

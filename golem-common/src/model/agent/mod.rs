@@ -17,20 +17,22 @@ mod config;
 pub mod extraction;
 mod invocation;
 mod key;
+mod method_input;
 mod normalisation;
 mod protobuf;
 mod resolved_names;
 mod status;
 
 pub use key::AgentKey;
+pub use method_input::{AgentMethodInput, JsonMethodInput, NativeMethodInput, PublicMethodInput};
 pub use resolved_names::{
     FollowedLookups, MAX_RESOLVED_NAME_LINKS, OpenLookup, ResolvedNameIndex, ResolvedNames,
 };
 
 pub use invocation::{
     AgentInvocation, AgentInvocationKind, AgentInvocationOutput, AgentInvocationPayload,
-    AgentInvocationResult, PendingInvocationRef, RedactedAgentInvocationResult,
-    TimestampedAgentInvocation,
+    AgentInvocationResult, BackgroundFailure, InvocationRequestOperation, PendingInvocationRef,
+    RedactedAgentInvocationResult, StoredAgentInvocationPayload, TimestampedAgentInvocation,
 };
 pub use status::{
     AgentMetadata, AgentStatusRecord, AssistedSelection, AuthoritativeSnapshot,
@@ -38,10 +40,12 @@ pub use status::{
     DEFAULT_INVOCATION_RESULT_BLOOM_HASHES, DEFAULT_RECENT_INVOCATION_RESULTS_CAPACITY,
     DURABLE_STREAM_SESSION_RECENT_CAPACITY, DurableStreamPublicBinding, DurableStreamSessionIndex,
     DurableStreamSessionStatus, EntityReplayBoundary, EntityReplayProgress, ExportForkAdmissions,
-    ExportForkReservation, FailedUpdateRecord, InvocationResultBloom, InvocationResultMembership,
-    InvocationResultPosition, OpenEntityReplayScope, OplogProcessorCheckpointState,
-    PendingCardEventRef, PendingUpdateKind, PendingUpdateRef, SnapshotFiles,
-    SuccessfulUpdateRecord, UsableAutomaticSnapshot,
+    ExportForkReservation, FailedUpdateRecord, InvocationEnd, InvocationOperation,
+    InvocationRequestRef, InvocationResultBloom, InvocationResultMembership,
+    InvocationResultPosition, MAX_INVOCATION_OPERATION_BYTES, OpenEntityReplayScope,
+    OplogProcessorCheckpointState, PendingCardEventRef, PendingUpdateKind, PendingUpdateRef,
+    RunningInvocation, SettlingInvocation, SnapshotFiles, SuccessfulUpdateRecord,
+    UsableAutomaticSnapshot,
 };
 
 #[cfg(test)]
@@ -318,6 +322,26 @@ impl ParsedAgentKey {
         normalisation::normalize_agent_key_text(s)
     }
 
+    /// Checks the constructor parameters against the restrictions of their schema. Only the
+    /// creation of an agent checks them, because an existing agent parses its key again.
+    pub fn validate_restrictions(&self) -> Result<(), String> {
+        crate::schema::validation::validate_value(
+            self.parameters.graph(),
+            self.parameters.root_type(),
+            self.parameters.value(),
+        )
+        .map_err(|errors| {
+            format!(
+                "invalid constructor parameters: {}",
+                errors
+                    .iter()
+                    .map(crate::schema::validation::ValueError::diagnostic)
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            )
+        })
+    }
+
     /// The canonical constructor parameter text, without the agent type name.
     pub fn canonical_parameters(&self) -> Result<String, String> {
         crate::model::agent::structural_format::format_structural_typed(&self.parameters)
@@ -403,6 +427,8 @@ pub enum InvocationStatus {
     Pending,
     /// The invocation has completed (successfully or with an error).
     Complete,
+    /// The invocation was cancelled before it started.
+    Cancelled,
 }
 
 /// An agent ID with the environment that owns it

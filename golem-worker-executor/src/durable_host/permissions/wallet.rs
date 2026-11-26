@@ -52,10 +52,11 @@ pub(super) async fn observe_self_wallet<Ctx: WorkerCtx>(
     // A scope card lent to this invocation is listed only to a holder that may inspect cards;
     // for any other holder it stays sealed: it still authorizes, but is not enumerated. The
     // card is read after the boundary has applied revocations and expiry, so a scope card
-    // invalidated at this boundary is never handed out again.
+    // invalidated at this boundary is never handed out again. Once the invocation's export
+    // returned, the card no longer bounds the calls it makes, and is not listed to them.
     let scope_card = ctx
         .with_agent_authority_at_boundary(|ctx| {
-            let scope_card = ctx.state.authority().admitted_scope_card().cloned()?;
+            let scope_card = ctx.state.authority().bound_scope_card().cloned()?;
             ensure_card_permission(ctx, CardVerb::Inspect, CardResourcePattern::Any)
                 .ok()
                 .map(|()| scope_card)
@@ -112,7 +113,7 @@ impl<Ctx: WorkerCtx> permissions_wallet::Host for DurableWorkerCtx<Ctx> {
             })?;
             let root_card_ids = scope_card.root_card_ids.clone();
             let handle = self.table().push(PermissionCardHandleRep::new(
-                PermissionCardEntry::from_scope(scope_card, invocation_key),
+                PermissionCardEntry::from_scope(scope_card, invocation_key, Default::default()),
             ))?;
             self.state
                 .authority_mut()

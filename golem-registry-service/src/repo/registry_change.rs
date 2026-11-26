@@ -67,6 +67,7 @@ pub enum RegistryEventType {
     ApplicationDeleted = 8,
     EnvironmentDeleted = 9,
     CardRevoked = 10,
+    AccountChanged = 11,
 }
 
 impl TryFrom<i16> for RegistryEventType {
@@ -85,6 +86,7 @@ impl TryFrom<i16> for RegistryEventType {
             8 => Ok(RegistryEventType::ApplicationDeleted),
             9 => Ok(RegistryEventType::EnvironmentDeleted),
             10 => Ok(RegistryEventType::CardRevoked),
+            11 => Ok(RegistryEventType::AccountChanged),
             other => Err(RepoError::InternalError(anyhow::anyhow!(
                 "Unknown registry event type: {other}"
             ))),
@@ -156,6 +158,12 @@ pub enum RegistryChangeEvent {
         event_id: ChangeEventId,
         card_ids: Vec<Uuid>,
     },
+    /// The account's tree node changed: its segment, display name or local lifecycle. Account
+    /// tree caches evict the node; the event is not forwarded to registry invalidation streams.
+    AccountChanged {
+        event_id: ChangeEventId,
+        account_id: Uuid,
+    },
 }
 
 impl RegistryChangeEvent {
@@ -172,6 +180,7 @@ impl RegistryChangeEvent {
             Self::ApplicationDeleted { event_id, .. } => *event_id,
             Self::EnvironmentDeleted { event_id, .. } => *event_id,
             Self::CardRevoked { event_id, .. } => *event_id,
+            Self::AccountChanged { event_id, .. } => *event_id,
         }
     }
 }
@@ -381,6 +390,17 @@ impl TryFrom<RegistryChangeEventRow> for RegistryChangeEvent {
                 Ok(RegistryChangeEvent::CardRevoked {
                     event_id: row.event_id,
                     card_ids: row.card_ids,
+                })
+            }
+            RegistryEventType::AccountChanged => {
+                let account_id = row.account_id.ok_or_else(|| {
+                    RepoError::InternalError(anyhow::anyhow!(
+                        "AccountChanged event missing account_id"
+                    ))
+                })?;
+                Ok(RegistryChangeEvent::AccountChanged {
+                    event_id: row.event_id,
+                    account_id,
                 })
             }
         }
@@ -651,6 +671,25 @@ impl NewRegistryChangeEvent {
             card_ids,
         }
     }
+
+    pub fn account_changed(account_id: Uuid) -> Self {
+        Self {
+            event_type: RegistryEventType::AccountChanged,
+            environment_id: None,
+            deployment_revision_id: None,
+            current_deployment_revision_id: None,
+            account_id: Some(account_id),
+            grantee_account_id: None,
+            domains: Vec::new(),
+            resource_definition_id: None,
+            resource_name: None,
+            application_id: None,
+            app_name: None,
+            environment_ids: Vec::new(),
+            env_name: None,
+            card_ids: Vec::new(),
+        }
+    }
 }
 
 /// Database operations for the registry_change_events outbox table.
@@ -714,6 +753,7 @@ impl<DBP: Pool> DbRegistryChangeRepo<DBP> {
 
 // Postgres implementation.
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
     async fn get_events_since(
         &self,
@@ -794,8 +834,9 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
     }
 
     async fn cleanup_old_events(&self, retention_seconds: i64) -> RepoResult<u64> {
-        let cutoff =
-            SqlDateTime::new(chrono::Utc::now() - chrono::Duration::seconds(retention_seconds));
+        let cutoff = SqlDateTime::new(
+            jiff::Timestamp::now() - jiff::SignedDuration::from_secs(retention_seconds),
+        );
         let result = self
             .with_rw("cleanup_old_events")
             .execute(
@@ -812,6 +853,7 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<PostgresPool> {
 
 // SQLite implementation.
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
     async fn get_events_since(
         &self,
@@ -919,8 +961,9 @@ impl RegistryChangeRepo for DbRegistryChangeRepo<SqlitePool> {
     }
 
     async fn cleanup_old_events(&self, retention_seconds: i64) -> RepoResult<u64> {
-        let cutoff =
-            SqlDateTime::new(chrono::Utc::now() - chrono::Duration::seconds(retention_seconds));
+        let cutoff = SqlDateTime::new(
+            jiff::Timestamp::now() - jiff::SignedDuration::from_secs(retention_seconds),
+        );
         let result = self
             .with_rw("cleanup_old_events")
             .execute(
@@ -1264,6 +1307,23 @@ mod tests {
                 app_name: Some(app_name.clone()),
                 environment_ids: Vec::new(),
                 env_name: Some(env_name.clone()),
+                card_ids: Vec::new(),
+            },
+            RegistryChangeEventRow {
+                event_id,
+                event_type: RegistryEventType::AccountChanged,
+                environment_id: None,
+                deployment_revision_id: None,
+                current_deployment_revision_id: None,
+                account_id: Some(account_id),
+                grantee_account_id: None,
+                domains: Vec::new(),
+                resource_definition_id: None,
+                resource_name: None,
+                application_id: None,
+                app_name: None,
+                environment_ids: Vec::new(),
+                env_name: None,
                 card_ids: Vec::new(),
             },
         ];

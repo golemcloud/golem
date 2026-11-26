@@ -28,15 +28,9 @@ describe('InvocationId', () => {
     expect(text).toBe(`${agentIdText}.${uuidText}`);
 
     const parsed = InvocationId.parse(text);
-    expect(parsed.agentId).toBeInstanceOf(AgentId);
-    expect(parsed.agentId.equals(agentId)).toBe(true);
+    expect(parsed.agentId).toBe(agentId);
     expect(parsed.uuid).toEqual(uuid);
     expect(parsed.toString()).toBe(text);
-  });
-
-  it('accepts a WIT agent-id record', () => {
-    const id = new InvocationId({ uuid: { highBits: agentId.uuid.highBits, lowBits: 4n } }, uuid);
-    expect(id.agentId).toBeInstanceOf(AgentId);
   });
 
   it.each([
@@ -53,16 +47,18 @@ describe('InvocationId', () => {
 });
 
 describe('AgentId', () => {
-  it('has the UUID as its text form', () => {
-    expect(agentId.toString()).toBe(agentIdText);
+  it('is the lower-case UUID text', () => {
+    expect(agentId).toBe(agentIdText);
     expect(JSON.stringify({ agentId })).toBe(`{"agentId":"${agentIdText}"}`);
-    expect(AgentId.parse(agentIdText.toUpperCase()).equals(agentId)).toBe(true);
+    expect(AgentId.parse(agentIdText.toUpperCase())).toBe(agentId);
+    expect(new Map([[agentId, 1]]).get(AgentId.parse(agentIdText))).toBe(1);
   });
 
-  it('wraps a WIT agent-id record and keeps an AgentId as it is', () => {
-    const raw = { uuid: { highBits: agentId.uuid.highBits, lowBits: agentId.uuid.lowBits } };
-    expect(AgentId.from(raw).toString()).toBe(agentIdText);
-    expect(AgentId.from(agentId)).toBe(agentId);
+  it('converts to and from a WIT agent-id record', () => {
+    const raw = AgentId.toWit(AgentId.parse('0123abcd-4567-89ef-fedc-ba9876543210'));
+    expect(raw.uuid.highBits).toBe(0x0123abcd456789efn);
+    expect(raw.uuid.lowBits).toBe(0xfedcba9876543210n);
+    expect(AgentId.fromWit(raw)).toBe('0123abcd-4567-89ef-fedc-ba9876543210');
   });
 
   it.each([['Counter("a")'], ['Counter()[0123abcd-4567-89ef-fedc-ba9876543210]'], ['']])(

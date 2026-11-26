@@ -66,6 +66,18 @@ use tokio::sync::oneshot::Sender;
 use tracing::{Instrument, debug, info};
 use uuid::Uuid;
 
+/// Reads the typed native request projection from a public method invocation.
+/// Stream leaves remain ordinal placeholders, not executable endpoints.
+pub fn original_native_method_input(input: &TypedSchemaValue) -> anyhow::Result<SchemaValue> {
+    use golem_common::model::agent::PublicMethodInput;
+
+    let PublicMethodInput::Native { value, .. } = PublicMethodInput::from_value(input.value())?
+    else {
+        anyhow::bail!("expected a native method request")
+    };
+    Ok(value)
+}
+
 /// Represents a test component whose analysis cache has been pre-warmed
 /// during test-r dependency initialization. Tests that depend on a
 /// `PrecompiledComponent` are guaranteed that the expensive `extract_agent_types`
@@ -169,11 +181,30 @@ impl Drop for LogOutputGuard {
 pub struct AgentResult {
     value: Option<SchemaValue>,
     agent_id: OwnedAgentId,
+    background_failure: Option<String>,
 }
 
 impl AgentResult {
     pub fn new(value: Option<SchemaValue>, agent_id: OwnedAgentId) -> Self {
-        Self { value, agent_id }
+        Self {
+            value,
+            agent_id,
+            background_failure: None,
+        }
+    }
+
+    /// The result with the background failure that the result lookup reported.
+    pub fn with_background_failure(self, background_failure: Option<String>) -> Self {
+        Self {
+            background_failure,
+            ..self
+        }
+    }
+
+    /// The failure of the agent during the background work of the invocation, after it
+    /// recorded this result. Only a later lookup of the result reports it.
+    pub fn background_failure(&self) -> Option<&str> {
+        self.background_failure.as_deref()
     }
 
     pub fn agent_id(&self) -> &OwnedAgentId {
@@ -508,6 +539,14 @@ pub trait TestDsl {
         from: OplogIndex,
     ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
 
+    /// Reads the oplog like [`TestDsl::get_oplog`], and asks for the verified claims of the users
+    /// among the callers.
+    async fn get_oplog_with_claims(
+        &self,
+        agent_id: &OwnedAgentId,
+        from: OplogIndex,
+    ) -> anyhow::Result<Vec<PublicOplogEntryWithIndex>>;
+
     async fn get_oplog_last_index(&self, agent_id: &OwnedAgentId) -> anyhow::Result<u64>;
 
     async fn search_oplog(
@@ -735,6 +774,19 @@ pub trait TestDsl {
         target_revision: ComponentRevision,
         disable_wakeup: bool,
     ) -> anyhow::Result<()>;
+
+    /// Updates an agent as the given caller, which the agent records as the requester of the
+    /// update, and gives the index of the update attempt. Only the worker-executor gRPC DSL can
+    /// send a caller: the REST DSL refuses one, because REST takes the caller from the request's
+    /// credentials.
+    async fn update_worker_as_caller(
+        &self,
+        agent_id: &OwnedAgentId,
+        mode: golem_common::model::agent::AgentUpdateMode,
+        target_revision: ComponentRevision,
+        disable_wakeup: bool,
+        caller: golem_common::model::caller::Caller,
+    ) -> anyhow::Result<OplogIndex>;
 
     async fn delete_worker(&self, agent_id: &OwnedAgentId) -> anyhow::Result<()>;
 
@@ -1375,6 +1427,8 @@ pub fn worker_error_message(error: &WorkerExecutorError) -> String {
             requested_key,
         } => format!("Agent {agent_id} has another key than the requested {requested_key}"),
         WorkerExecutorError::ShardingNotReady => "Sharing not ready".to_string(),
+        error @ (WorkerExecutorError::InvocationCancelled
+        | WorkerExecutorError::CannotCancelRunningInvocation) => error.to_string(),
         WorkerExecutorError::FileSystemError { reason, .. } => {
             format!("File system error: {}", reason)
         }

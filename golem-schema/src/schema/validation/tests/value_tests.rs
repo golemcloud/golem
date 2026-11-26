@@ -32,7 +32,7 @@ use crate::schema::validation::value::PreparedValueValidator;
 use crate::schema::validation::value::{
     ValueError, ValuePathSegment, validate_record_fields, validate_value,
 };
-use chrono::Utc;
+use jiff::Timestamp;
 use proptest::prelude::*;
 use test_r::test;
 
@@ -145,7 +145,9 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
         }),
         Just((
             SchemaType::datetime(),
-            SchemaValue::Datetime { value: Utc::now() }
+            SchemaValue::Datetime {
+                value: Timestamp::now()
+            }
         )),
         any::<i64>().prop_map(|n| (
             SchemaType::duration(),
@@ -170,7 +172,7 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
                 secret_id: uuid::Uuid::nil(),
                 config_key: None,
                 version: 0,
-                resolved_at: Utc::now(),
+                resolved_at: Timestamp::now(),
                 category: None,
             })
         )),
@@ -185,7 +187,7 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
                     resource_name: resource,
                     expected_use: 1,
                     last_credit: 0,
-                    last_credit_at: Utc::now(),
+                    last_credit_at: Timestamp::now(),
                 }),
             )
         }),
@@ -1088,6 +1090,129 @@ fn url_host_allow_list_rejects_missing_host() {
             .any(|e| matches!(e, ValueError::UrlHostMissing { .. })),
         "expected UrlHostMissing, got {errors:?}"
     );
+}
+
+#[test]
+fn text_languages_must_be_bcp47_language_tags() {
+    let ty = SchemaType::text(TextRestrictions::default());
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let text = |language: &str| {
+        SchemaValue::Text(TextValuePayload {
+            text: "hello".into(),
+            language: Some(language.into()),
+        })
+    };
+    for valid in [
+        "en",
+        "en-US",
+        "zh-Hant-TW",
+        "de-CH-1996",
+        "abcdefgh-12345678",
+    ] {
+        validate_value(&graph, &ty, &text(valid)).unwrap_or_else(|errors| {
+            panic!("{valid} was rejected: {errors:?}");
+        });
+    }
+    for invalid in [
+        "",
+        "1en",
+        "en-",
+        "-en",
+        "en--US",
+        "abcdefghi",
+        "en-123456789",
+        "en_US",
+        "é",
+    ] {
+        let errors = validate_value(&graph, &ty, &text(invalid)).unwrap_err();
+        assert!(
+            matches!(errors.as_slice(), [ValueError::TextLanguageInvalid { .. }]),
+            "{invalid}: {errors:?}"
+        );
+    }
+}
+
+#[test]
+#[cfg(feature = "url")]
+fn diagnostics_keep_the_path_and_the_restriction_without_the_value() {
+    let ty = SchemaType::list(url_with_restrictions(UrlRestrictions {
+        allowed_schemes: None,
+        allowed_hosts: Some(vec!["example.com".to_string()]),
+    }));
+    let graph = SchemaGraph::anonymous(ty.clone());
+    let value = SchemaValue::List {
+        elements: vec![
+            url_value("https://example.com/"),
+            url_value("https://user:s3cr3t@leaked.example/"),
+        ],
+    };
+    let errors = validate_value(&graph, &ty, &value).expect_err("unlisted host must fail");
+    let [error @ ValueError::UrlHostNotAllowed { path, .. }] = errors.as_slice() else {
+        panic!("expected one UrlHostNotAllowed, got {errors:?}")
+    };
+    let diagnostic = error.diagnostic();
+    assert!(diagnostic.contains(&path.to_string()), "{diagnostic}");
+    assert!(
+        diagnostic.contains("host not in the allow-list"),
+        "{diagnostic}"
+    );
+    assert!(!diagnostic.contains("leaked"), "{diagnostic}");
+    assert!(error.to_string().contains("leaked"));
+
+    let secret = "s3cr3t-value";
+    let path = crate::schema::validation::value::ValuePath::new();
+    for error in [
+        ValueError::UnionUnknownTag {
+            path: path.clone(),
+            tag: secret.to_string(),
+        },
+        ValueError::TextLanguageNotAllowed {
+            path: path.clone(),
+            language: secret.to_string(),
+        },
+        ValueError::BinaryMimeNotAllowed {
+            path: path.clone(),
+            mime_type: secret.to_string(),
+        },
+        ValueError::PathExtensionNotAllowed {
+            path: path.clone(),
+            extension: secret.to_string(),
+        },
+        ValueError::UrlInvalid {
+            path: path.clone(),
+            url: secret.to_string(),
+            reason: "relative URL without a base".to_string(),
+        },
+        ValueError::UrlSchemeNotAllowed {
+            path: path.clone(),
+            scheme: secret.to_string(),
+        },
+        ValueError::UrlHostNotAllowed {
+            path: path.clone(),
+            host: secret.to_string(),
+        },
+        ValueError::QuantityUnitNotAllowed {
+            path: path.clone(),
+            unit: secret.to_string(),
+        },
+        ValueError::SecretCategoryMismatch {
+            path: path.clone(),
+            expected: "api-key".to_string(),
+            found: Some(secret.to_string()),
+        },
+        ValueError::QuotaTokenResourceMismatch {
+            path: path.clone(),
+            expected: "tokens".to_string(),
+            found: secret.to_string(),
+        },
+    ] {
+        assert!(error.to_string().contains(secret));
+        assert!(
+            !error.diagnostic().contains(secret),
+            "{}",
+            error.diagnostic()
+        );
+    }
 }
 
 #[test]

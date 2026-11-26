@@ -1,3 +1,10 @@
 warnings = "-44"
 
-supported_targets = "+wasm"
+supported_targets = "+wasm+wasm-gc"
+
+// BEGIN generated backend
+#cfg(target = "wasm-gc")
+import {
+  "golemcloud/golem_sdk/gen/cabi" @witCabi,
+}
+// END generated backend

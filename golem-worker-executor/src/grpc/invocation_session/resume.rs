@@ -21,7 +21,7 @@ use super::{
     invocation_response, is_attachment_termination, mpsc, persisted_result_and_finished,
     pre_acceptance_rejection_reason, resumed_input_schema, route_durable_request,
     send_attachment_revocation, send_protocol_failure, send_resumed_finished,
-    until_response_closed,
+    until_response_closed, with_input_server_terminals,
 };
 
 impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 'static>
@@ -37,6 +37,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
         scope: &crate::worker::tasks::TaskScope,
     ) {
         let rejection_identity = (resume.idempotency_key, resume.agent_id);
+        let mut was_queued = false;
+        let mut attachment_ended = false;
+        let mut captured_method_input = None;
         let result = async {
             Self::validate_auth_ctx(&resume.auth_ctx)?;
             let attempt = build_resume_attempt(
@@ -78,12 +81,59 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             scope
                 .bind(&worker.tasks)
                 .map_err(WorkerExecutorError::runtime)?;
+            let method = match worker.accepted_invocation_payload(&attempt.session_key.idempotency_key).await? {
+                Some(golem_common::model::agent::AgentInvocationPayload::AgentMethod { method_name, input, .. }) => {
+                    captured_method_input = Some(golem_common::serialization::serialize(&input).map_err(WorkerExecutorError::runtime)?);
+                    Some(method_name)
+                }
+                _ => None,
+            };
+            if let Some((attached, epoch, streams)) = worker.resume_queued_method(&attempt).await? {
+                let pending = InvocationResponse { response: Some(invocation_response::Response::Accepted(InvocationAccepted {
+                    agent_id: resume.agent_id,
+                    idempotency_key: resume.idempotency_key,
+                    environment_id: resume.environment_id,
+                    callee_fingerprint: resume.expected_callee_fingerprint,
+                    attachment_id: Some(attached.attachment_id.0.into()),
+                    attempt_id: resume.attempt_id,
+                    epoch,
+                    method_name: method,
+                    ..Default::default()
+                })) };
+                protocol_state.validate_response(&pending).map_err(WorkerExecutorError::runtime)?;
+                was_queued = true;
+                *response_lease.lock().unwrap() = streams.response_lease();
+                let wait = async {
+                    outward.send(pending).await.map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                    tokio::select! {
+                        ready = worker.clone().wait_method_session_ready(attempt.session_key.idempotency_key) => ready.map(|_| ()),
+                        _ = outward.closed() => Err(WorkerExecutorError::runtime("queued resume transport closed")),
+                        _ = inbound.message() => Err(WorkerExecutorError::invalid_request("stream controls require execution readiness")),
+                    }
+                }.await;
+                if let Err(error) = wait {
+                    detach_durable_attachment(Some(streams)).await;
+                    return Err(error);
+                }
+                if streams.ensure_current_attachment().await.is_err() {
+                    send_attachment_revocation(&outward, Ok(())).await;
+                    attachment_ended = true;
+                    return Err(WorkerExecutorError::runtime("queued resume attachment was fenced"));
+                }
+            }
             worker.resume_durable_streaming_invocation(attempt).await
         }
         .await;
         let mut acceptance = match result {
             Ok(acceptance) => acceptance,
             Err(error) => {
+                if attachment_ended {
+                    return;
+                }
+                if was_queued {
+                    super::send_worker_failure(&outward, error).await;
+                    return;
+                }
                 tracing::warn!(
                     agent_id = ?resume.agent_id,
                     attempt_id = ?resume.attempt_id,
@@ -220,9 +270,33 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                 return;
             }
         };
+        let stream_mappings = match streams.input_server_terminals().await.and_then(|terminals| {
+            with_input_server_terminals(
+                acceptance
+                    .mappings
+                    .iter()
+                    .map(|mapping| {
+                        durable_stream_mapping_to_proto(
+                            mapping,
+                            high_waters.get(&mapping.transport_stream_id),
+                        )
+                    })
+                    .collect(),
+                &terminals,
+            )
+            .map_err(SessionError::from)
+        }) {
+            Ok(stream_mappings) => stream_mappings,
+            Err(error) => {
+                send_protocol_failure(&responses, error).await;
+                drop(responses);
+                let _ = forwarder.await;
+                return;
+            }
+        };
         if responses
             .send(InvocationResponse {
-                response: Some(invocation_response::Response::Accepted(
+                response: Some((if was_queued { invocation_response::Response::Ready } else { invocation_response::Response::Accepted })(
                     InvocationAccepted {
                         agent_id: resume.agent_id,
                         idempotency_key: resume.idempotency_key,
@@ -237,16 +311,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         attachment_id: Some(acceptance.prepared.attempt.attachment_id.0.into()),
                         attempt_id: resume.attempt_id,
                         epoch: acceptance.epoch,
-                        stream_mappings: acceptance
-                            .mappings
-                            .iter()
-                            .map(|mapping| {
-                                durable_stream_mapping_to_proto(
-                                    mapping,
-                                    high_waters.get(&mapping.transport_stream_id),
-                                )
-                            })
-                            .collect(),
+                        stream_mappings,
                         environment_id: Some(
                             acceptance
                                 .prepared
@@ -277,6 +342,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             PersistedInvocationTarget::AgentMethod { .. } => Vec::new(),
                         },
                         terminal_cursor_stream_ids: terminal_cursor_stream_ids.into_iter().map(|id| id.0.into()).collect(),
+                        captured_method_input,
                     },
                 )),
             })
@@ -389,6 +455,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             status: None,
                             oplog_index: None,
                             agent_fingerprint: resume.expected_callee_fingerprint,
+                            background_failure: None,
                         },
                     )),
                 })

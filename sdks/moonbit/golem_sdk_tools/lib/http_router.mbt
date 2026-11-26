@@ -20,7 +20,8 @@ fn validate_http_type_annotations(
   mount : String?,
 ) -> Unit raise AgentParseError {
   if router ||
-    has_http_annotation(attrs, "mount_phantom_id") ||
+    has_http_annotation(attrs, "mount_agent_id") ||
+    has_http_annotation(attrs, "mount_create") ||
     has_http_annotation(attrs, "static_file") ||
     has_http_annotation(attrs, "expose_files") ||
     has_http_annotation(attrs, "file_response_header") {
@@ -199,7 +200,7 @@ fn validate_http_router(
       }
       let captures = collect_path_variable_names(segments)
       for param in agent.constructor_params {
-        if is_config_type(param.1) {
+        if is_config_type(param.1) || mount.agent_id_binding is Some(_) {
           continue
         }
         if is_invocation_context_type(param.1) ||

@@ -30,12 +30,45 @@
 
 use golem_schema_derive::PoemSchema;
 use poem_openapi::registry::{MetaSchema, MetaSchemaRef, Registry};
-use poem_openapi::types::Type;
+use poem_openapi::types::{ParseFromJSON, ToJSON, Type};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use test_r::test;
 
 test_r::enable!();
+
+#[test]
+fn jiff_timestamps_have_datetime_schemas() {
+    use jiff::Timestamp;
+
+    #[derive(Serialize, Deserialize, PoemSchema)]
+    struct Timestamps {
+        required: Timestamp,
+        optional: Option<jiff::Timestamp>,
+        many: Vec<jiff::Timestamp>,
+    }
+
+    let mut registry = Registry::default();
+    Timestamps::register(&mut registry);
+    let schema = registry.schemas.get("Timestamps").unwrap();
+    let MetaSchemaRef::Inline(required) = &schema.properties[0].1 else {
+        panic!("timestamp schema must be inline");
+    };
+    assert_eq!(required.ty, "string");
+    assert_eq!(required.format, Some("date-time"));
+    let MetaSchemaRef::Inline(optional) = &schema.properties[1].1 else {
+        panic!("optional timestamp schema must be inline");
+    };
+    assert!(optional.nullable);
+    assert_eq!(optional.format, Some("date-time"));
+    let value = serde_json::to_value(Timestamps {
+        required: Timestamp::UNIX_EPOCH,
+        optional: Some(Timestamp::new(-1, 123456789).unwrap()),
+        many: vec![Timestamp::UNIX_EPOCH],
+    })
+    .unwrap();
+    validate(&registry, &Timestamps::schema_ref(), &value).unwrap();
+}
 
 mod recursive_internal_newtype {
     use super::*;
@@ -175,6 +208,12 @@ enum InputLike {
 #[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
 enum NullableContentLike {
     Maybe(Option<String>),
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, PoemSchema)]
+#[serde(tag = "kind", content = "value", rename_all = "kebab-case")]
+enum CharContentLike {
+    Char(char),
 }
 
 /// Internally-tagged enum, mirrors `ResultValuePayload`
@@ -407,6 +446,45 @@ fn adjacent_newtype_variant_over_option_is_nullable() {
         let json = serde_json::to_value(&value).unwrap();
         validate(&registry, &NullableContentLike::schema_ref(), &json)
             .unwrap_or_else(|e| panic!("value {json} did not validate: {e}"));
+    }
+}
+
+#[test]
+fn adjacent_char_content_is_a_single_character_string() {
+    let registry = register::<CharContentLike>();
+    let meta = schema(&registry, "CharContentLike");
+    let branch = inline(&meta.one_of[0]);
+    assert_eq!(branch.required, vec!["kind", "value"]);
+    assert_eq!(inline(prop(branch, "kind")).enum_items, vec![json!("char")]);
+    let content = inline(prop(branch, "value"));
+    assert_eq!(content.ty, "string");
+    assert_eq!(content.min_length, Some(1));
+    assert_eq!(content.max_length, Some(1));
+    let json_schema = serde_json::to_value(content).unwrap();
+    assert_eq!(json_schema["type"], "string");
+    assert_eq!(json_schema["minLength"], 1);
+    assert_eq!(json_schema["maxLength"], 1);
+
+    for character in ['a', '🦀'] {
+        let value = CharContentLike::Char(character);
+        let json = json!({"kind": "char", "value": character.to_string()});
+        assert_eq!(serde_json::to_value(&value).unwrap(), json);
+        assert_eq!(
+            serde_json::from_value::<CharContentLike>(json.clone()).unwrap(),
+            value
+        );
+        assert_eq!(value.to_json(), Some(json.clone()));
+        assert_eq!(
+            CharContentLike::parse_from_json(Some(json.clone())).unwrap(),
+            value
+        );
+        validate(&registry, &CharContentLike::schema_ref(), &json).unwrap();
+    }
+    for invalid in ["", "ab", "🦀🦀"] {
+        let json = json!({"kind": "char", "value": invalid});
+        assert!(serde_json::from_value::<CharContentLike>(json.clone()).is_err());
+        assert!(CharContentLike::parse_from_json(Some(json.clone())).is_err());
+        assert!(validate(&registry, &CharContentLike::schema_ref(), &json).is_err());
     }
 }
 
@@ -694,6 +772,12 @@ fn validate_meta(registry: &Registry, meta: &MetaSchema, value: &Value) -> Resul
                 .ok_or_else(|| format!("expected string, got {value}"))?;
             if !meta.enum_items.is_empty() && !meta.enum_items.iter().any(|e| e == value) {
                 return Err(format!("string `{s}` not in enum {:?}", meta.enum_items));
+            }
+            let length = s.chars().count();
+            if meta.min_length.is_some_and(|min| length < min)
+                || meta.max_length.is_some_and(|max| length > max)
+            {
+                return Err(format!("string `{s}` violates length constraints"));
             }
             Ok(())
         }

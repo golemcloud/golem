@@ -1487,6 +1487,7 @@ fn param_tpe_to_str(original_name: &str, name: &str, tpe: &DataType) -> RustResu
         DataType::Uuid => Ok(unit() + name + ".to_string()"),
         DataType::Int(_) => Ok(unit() + name + ".to_string()"),
         DataType::Boolean => Ok(unit() + name + ".to_string()"),
+        DataType::DateTime => Ok(unit() + name + ".to_string()"),
         DataType::Model(_) => Ok(unit() + name + ".to_string()"),
         _ => Err(Error::unexpected(format!(
             "Unexpected query param type {}: {:?}",

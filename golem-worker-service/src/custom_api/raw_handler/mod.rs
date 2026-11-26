@@ -15,7 +15,7 @@ use super::http_envelope::{
 use super::http_session::{HttpSession, HttpSessionEvent, HttpSessionLimits};
 use super::route_resolver::ResolvedRouteEntry;
 use super::{ResponseBody, RichRequest, RouteExecutionResult};
-use crate::service::worker::{AgentBinding, WorkerService};
+use crate::service::worker::{AcceptedInvocation, AgentBinding, WorkerService};
 use bytes::Bytes;
 use futures::StreamExt;
 use golem_api_grpc::proto::golem::worker::{
@@ -90,6 +90,7 @@ impl RawHandler {
         let mut guard = session.drop_guard();
         let upload_done = Arc::new(AtomicBool::new(false));
         let mut upload = None;
+        let mut accepted = None;
         let response_value = receive_response_head(
             &mut session,
             request.underlying.take_body(),
@@ -98,8 +99,31 @@ impl RawHandler {
             self.limits.request_body_idle_timeout,
             has_request_body,
             version,
+            &mut accepted,
         )
-        .await?;
+        .await;
+        if let Some(accepted) = accepted {
+            request.accepted_invocation = Some(AcceptedInvocation {
+                id: golem_common::model::OwnedInvocationId::new(
+                    accepted
+                        .agent_id
+                        .ok_or(RequestHandlerError::RawBadGateway)?
+                        .try_into()
+                        .map_err(|_| RequestHandlerError::RawBadGateway)?,
+                    accepted
+                        .idempotency_key
+                        .ok_or(RequestHandlerError::RawBadGateway)?
+                        .into(),
+                ),
+                environment_id: accepted
+                    .environment_id
+                    .map(TryInto::try_into)
+                    .transpose()
+                    .map_err(|_| RequestHandlerError::RawBadGateway)?
+                    .unwrap_or(selected.route.environment_id),
+            });
+        }
+        let response_value = response_value?;
         let (status, headers, output_id) = parse_response(response_value)?;
         let response_head = process_response_head(&method, status, &headers)
             .map_err(|_| RequestHandlerError::RawBadGateway)?;
@@ -167,7 +191,8 @@ impl RawHandler {
             .worker_service
             .bound_invocation_target(
                 target.agent.component_id,
-                &constructor,
+                &target.agent.agent_type,
+                Some(&constructor),
                 AgentBinding::Constructor,
                 &request_key,
                 &handler.method_name,
@@ -188,6 +213,7 @@ impl RawHandler {
         let mut start = InvocationStart {
             method_name: Some(handler.method_name.clone()),
             input: Some(input),
+            allow_streams: true,
             request_key: Some(request_key.into()),
             context: Some(context),
             auth_ctx: Some(AuthCtx::System.into()),
@@ -223,6 +249,7 @@ pub(super) async fn receive_response_head(
     idle_timeout: std::time::Duration,
     has_request_body: bool,
     version: HttpVersion,
+    accepted: &mut Option<golem_api_grpc::proto::golem::worker::InvocationAccepted>,
 ) -> Result<ProtoValue, RequestHandlerError> {
     let mut body = Some(body);
     // Before acceptance nothing polls the body, so the HTTP server does not notice a client
@@ -237,7 +264,11 @@ pub(super) async fn receive_response_head(
             None => session.events.recv().await,
         };
         match event.ok_or(RequestHandlerError::RawBadGateway)? {
-            HttpSessionEvent::Accepted(_) => {
+            HttpSessionEvent::QueuedAccepted(identity) => {
+                *accepted = Some(identity);
+            }
+            HttpSessionEvent::Accepted(identity) => {
+                *accepted = Some(identity);
                 acceptance_deadline = None;
                 if upload.is_none() {
                     *upload = Some(start_upload(

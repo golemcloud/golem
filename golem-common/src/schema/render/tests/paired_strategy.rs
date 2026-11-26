@@ -29,7 +29,7 @@ use crate::schema::schema_value::{
     BinaryValuePayload, DurationValuePayload, QuotaTokenValuePayload, ResultValuePayload,
     SchemaValue, SecretValuePayload, TextValuePayload, UnionValuePayload, VariantValuePayload,
 };
-use chrono::{TimeZone, Utc};
+use jiff::Timestamp as JiffTimestamp;
 use proptest::collection::vec;
 use proptest::prelude::*;
 
@@ -102,7 +102,7 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
         (0i64..4_000_000_000i64).prop_map(|s| (
             SchemaType::datetime(),
             SchemaValue::Datetime {
-                value: Utc.timestamp_opt(s, 0).single().unwrap(),
+                value: JiffTimestamp::new(s, 0).unwrap(),
             },
         )),
         any::<i64>().prop_map(|n| (
@@ -128,7 +128,7 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
                 secret_id: uuid::Uuid::nil(),
                 config_key: None,
                 version: 0,
-                resolved_at: Utc.timestamp_opt(0, 0).unwrap(),
+                resolved_at: JiffTimestamp::new(0, 0).unwrap(),
                 category: None,
             }),
         )),
@@ -143,7 +143,7 @@ fn leaf_paired() -> BoxedStrategy<(SchemaType, SchemaValue)> {
                     resource_name: resource,
                     expected_use: 1,
                     last_credit: 0,
-                    last_credit_at: Utc.timestamp_opt(1_700_000_000, 0).single().unwrap(),
+                    last_credit_at: JiffTimestamp::new(1_700_000_000, 0).unwrap(),
                 }),
             )
         }),

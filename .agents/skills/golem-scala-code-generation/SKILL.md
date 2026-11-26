@@ -56,8 +56,8 @@ Both plugins must remain behaviorally aligned. Check their existing task names a
 
 Generation is mode-aware:
 
-- durable clients expose `get` and phantom constructors; config variants exist only when config fields exist;
-- ephemeral clients expose `newPhantom` (and its config variant when applicable), not durable `get`;
+- durable clients expose `upsert`, `create` (keyed or not, with config and env overrides) and `getById`, plus `bindSelf`, which binds the current agent and fails when it has another type;
+- ephemeral clients expose only `upsert`, and every invocation runs on a new one-shot instance;
 - durable `apply` returns `Future[A]`, while ephemeral `apply` returns `Future[InvocationResult[A]]`;
 - durable `cancelable` returns `(Future[A], CancellationToken)`, while ephemeral returns `Future[CancelableAsyncInvocation[A]]`;
 - ephemeral trigger/schedule operations return metadata-bearing receipts; durable variants return `Unit` or a cancellation token as defined in `RpcCodegen.scala`.

@@ -93,6 +93,7 @@ fn host_call(
         parent_start_index: None,
         invocation_id: None,
         observational_owner: None,
+        driver: None,
         carries_request,
         request: request
             .map(|request| Box::new(request.to_string().into_typed_schema_value().unwrap())),
@@ -151,12 +152,14 @@ async fn go_reads_the_requests_of_a_failed_update_divergence(
         expected: host_call(&recorded, &recorded.function_name, true, None),
         actual: host_call(&recorded, "replayed::call", true, Some("replayed-request")),
         mismatched: vec![StartIdentityField::FunctionName],
+        replay_start: None,
     };
     let neither = ReplayDivergence {
         oplog_index: recorded_index,
         expected: host_call(&recorded, "recorded::scope", false, None),
         actual: host_call(&recorded, "recorded::scope", true, None),
         mismatched: vec![StartIdentityField::RequestPresence],
+        replay_start: None,
     };
     let worker_oplog = executor
         .active_agent(&worker_id)

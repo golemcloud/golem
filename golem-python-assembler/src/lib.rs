@@ -235,7 +235,7 @@ fn validate_entry_module(module: &str) -> Result<()> {
 /// Python runtime or another componentize-py build have another identity.
 /// Prepare the assets again and update this value when one of them changes.
 pub const PREPARED_IDENTITY: &str =
-    "c7a7599e3b3446c2a650dec19c0187f1effbe74a77ca0717b7580cf980a9c997";
+    "acd07ba6fde6e783f6a630ee875b42158dfdb94ac30548af052fa294597ea46a";
 
 /// Reads and verifies prepared assets, and checks that they are the assets
 /// that this assembler builds with.

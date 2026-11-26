@@ -24,12 +24,9 @@ use golem_common::model::agent::ParsedAgentKey;
 use golem_common::model::agent::{RevertToOplogIndex, RevertWorkerTarget, UpdateRecord};
 use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath, ComponentRevision};
 use golem_common::model::oplog::{
-    MultipartPartData, OplogEntry, OplogPayload, PublicAgentInvocation, PublicOplogEntry,
-    PublicSnapshotData,
+    MultipartPartData, OplogEntry, PublicAgentInvocation, PublicOplogEntry, PublicSnapshotData,
 };
-use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocationPayload, IdempotencyKey, OplogIndex, OwnedAgentId,
-};
+use golem_common::model::{AgentFingerprint, AgentId, IdempotencyKey, OplogIndex, OwnedAgentId};
 use golem_common::schema::{SchemaValue, TypedSchemaValue};
 use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
@@ -969,7 +966,7 @@ async fn a_late_snapshot_publication_cannot_reach_a_recreated_incarnation(
                 .snapshots
                 .iter()
                 .flatten()
-                .any(|name| &**name == late)
+                .any(|name| **name == late)
         );
         assert!(!records.is_confirmed(&late));
         assert!(records.is_confirmed(&newer));
@@ -1490,7 +1487,7 @@ async fn a_start_on_another_executor_confirms_a_whole_snapshot_and_restores_it(
     .await
 }
 
-/// Changes the tree of `agent` with an upload that takes two seconds, stops the agent while the
+/// Changes the tree of `agent` with a held upload, stops the agent while the
 /// upload runs, and waits until the store holds the whole snapshot and the upload ended. Gives the
 /// tree before the stop and the name of the snapshot.
 async fn stop_during_an_upload(
@@ -1499,7 +1496,7 @@ async fn stop_during_an_upload(
     store: &TestFilesystemSnapshotStore,
     agent: &Agent,
 ) -> anyhow::Result<(Vec<String>, String)> {
-    store.set_save_delay(Duration::from_secs(2));
+    let held = store.hold_next_publication();
     agent
         .apply_all(
             executor,
@@ -1510,13 +1507,15 @@ async fn stop_during_an_upload(
         )
         .await?;
     let live = agent.describe(executor).await?;
-    let named = eventually(Duration::from_secs(30), || async {
-        let records = agent.records(executor).await?;
-        Ok(records.newest_name())
-    })
-    .await?;
+    let named = eventually(Duration::from_secs(30), || async { Ok(held.name()) }).await?;
     let (owned, fingerprint) = agent.incarnation(executor, context).await?;
     agent.stop(executor, context).await?;
+    held.release();
+    eventually(Duration::from_secs(30), || async {
+        Ok(store.publication_result(&named))
+    })
+    .await?
+    .map_err(anyhow::Error::msg)?;
     eventually(Duration::from_secs(30), || async {
         Ok(store
             .snapshot_names(&owned, fingerprint)
@@ -1525,9 +1524,6 @@ async fn stop_during_an_upload(
             .then_some(()))
     })
     .await?;
-    store.set_save_delay(Duration::ZERO);
-    // The upload asks for its confirmation right after the save; give it time to get its answer.
-    tokio::time::sleep(Duration::from_millis(500)).await;
     Ok((live, named))
 }
 
@@ -2755,329 +2751,6 @@ async fn generated_histories_restart_from_a_snapshot_with_the_tree_and_the_resul
     Ok(())
 }
 
-#[cfg(target_os = "linux")]
-fn reflink_xfs_test_root() -> PathBuf {
-    std::env::var_os("GOLEM_REFLINK_XFS_TEST_ROOT")
-        .map(PathBuf::from)
-        .expect("GOLEM_REFLINK_XFS_TEST_ROOT must name the mounted XFS test root without quotas")
-}
-
-#[cfg(target_os = "linux")]
-fn managed_xfs_test_root() -> PathBuf {
-    std::env::var_os("GOLEM_MANAGED_XFS_TEST_ROOT")
-        .map(PathBuf::from)
-        .expect("GOLEM_MANAGED_XFS_TEST_ROOT must name the mounted XFS test root")
-}
-
-/// The settings of the store over the blob storage of the executor.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-fn enabled_snapshots() -> FilesystemSnapshotsConfig {
-    FilesystemSnapshotsConfig::Enabled(Box::new(
-        FilesystemSnapshotStoreConfig::new(&"5a".repeat(64), Duration::from_secs(60), 2, 2)
-            .expect("valid store settings")
-            .with_uploads(uploads(Duration::from_secs(30))),
-    ))
-}
-
-#[cfg(target_os = "linux")]
-const MANAGED_XFS_DISK_SPACE: u64 = 64 * 1024 * 1024;
-
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[timeout("4m")]
-async fn managed_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_worker_executor_test_utils::start_with_filesystem_snapshots_on_managed_xfs;
-
-    let context = TestContext::new(last_unique_id);
-    restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
-        &context,
-        initial_file_system,
-        "managed-xfs-replay",
-        |snapshots| {
-            start_with_filesystem_snapshots_on_managed_xfs(
-                deps,
-                &context,
-                MANAGED_XFS_DISK_SPACE,
-                managed_xfs_test_root(),
-                snapshots,
-            )
-        },
-    )
-    .await
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the unprivileged reflink XFS test runner"]
-#[timeout("4m")]
-async fn reflink_xfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_worker_executor_test_utils::start_with_filesystem_snapshots_on_reflink_xfs;
-
-    let context = TestContext::new(last_unique_id);
-    restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
-        &context,
-        initial_file_system,
-        "reflink-xfs-replay",
-        |snapshots| {
-            start_with_filesystem_snapshots_on_reflink_xfs(
-                deps,
-                &context,
-                reflink_xfs_test_root(),
-                snapshots,
-            )
-        },
-    )
-    .await
-}
-
-#[cfg(target_os = "macos")]
-#[test]
-#[test_r::tag(local_filesystem)]
-#[timeout("4m")]
-async fn apfs_restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_worker_executor_test_utils::start_with_filesystem_snapshots_on_apfs;
-
-    let root = tempfile::tempdir()?;
-    let context = TestContext::new(last_unique_id);
-    restart_from_a_snapshot_gives_the_tree_of_a_full_replay(
-        &context,
-        initial_file_system,
-        "apfs-replay",
-        |snapshots| {
-            start_with_filesystem_snapshots_on_apfs(
-                deps,
-                &context,
-                Box::from(root.path()),
-                snapshots,
-            )
-        },
-    )
-    .await
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the unprivileged reflink XFS test runner"]
-#[timeout("2m")]
-async fn reflink_xfs_with_filesystem_metering_fails_at_startup(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_worker_executor_test_utils::start_with_filesystem_metering_on_reflink_xfs;
-
-    let context = TestContext::new(last_unique_id);
-    match start_with_filesystem_metering_on_reflink_xfs(deps, &context, reflink_xfs_test_root())
-        .await
-    {
-        Ok(_) => Err(anyhow!(
-            "the executor started with filesystem metering on XFS storage without project quotas"
-        )),
-        Err(error) => {
-            let message = format!("{error:#}");
-            assert!(
-                message.contains("filesystem metering requires XFS storage with project quotas"),
-                "{message}"
-            );
-            Ok(())
-        }
-    }
-}
-
-/// Starts the agent `name` with read-only and read-write initial files on executors that `start`
-/// makes, changes its files with a write, renames, a hard link and a symlink, and checks that a
-/// restart from a snapshot and a restart with a full replay both give the tree of the live agent.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
-async fn restart_from_a_snapshot_gives_the_tree_of_a_full_replay<F>(
-    context: &TestContext,
-    initial_file_system: &PrecompiledComponent,
-    name: &str,
-    start: impl Fn(FilesystemSnapshotsConfig) -> F,
-) -> anyhow::Result<()>
-where
-    F: std::future::Future<Output = anyhow::Result<TestWorkerExecutor>>,
-{
-    let executor = start(enabled_snapshots()).await?;
-    let agent = Agent::start(
-        &executor,
-        context,
-        initial_file_system,
-        name,
-        &[
-            entry("foo.txt", "/ro-renamed.txt", AgentFilePermissions::ReadOnly),
-            entry(
-                "bar.txt",
-                "/dir/ro-in-dir.txt",
-                AgentFilePermissions::ReadOnly,
-            ),
-            entry(
-                "baz.txt",
-                "/rw-modified.txt",
-                AgentFilePermissions::ReadWrite,
-            ),
-        ],
-    )
-    .await?;
-    agent
-        .apply_all(
-            &executor,
-            &[
-                Operation::Write {
-                    path: "rw-modified.txt",
-                    content: "modified by the agent",
-                },
-                Operation::Rename {
-                    from: "ro-renamed.txt",
-                    to: "renamed.txt",
-                },
-                Operation::Rename {
-                    from: "dir",
-                    to: "moved-dir",
-                },
-                Operation::Write {
-                    path: "agent.txt",
-                    content: "agent data",
-                },
-                Operation::Link {
-                    existing: "agent.txt",
-                    link: "agent-alias.txt",
-                },
-                Operation::Symlink {
-                    link: "pointer",
-                    target: "agent.txt",
-                },
-            ],
-        )
-        .await?;
-    agent.confirmed(&executor).await?;
-    let live = agent.describe(&executor).await?;
-    executor.release().await?;
-
-    let restarted = start(enabled_snapshots()).await?;
-    let mut events = restarted.capture_output(&agent.worker_id).await?;
-    let restored = agent.describe(&restarted).await?;
-    assert_snapshot_recovery_loaded(&mut events).await;
-    let restored_shape = invocation_shape(&restarted.stored_oplog(&agent.worker_id.agent_id).await);
-    restarted.release().await?;
-    let replaying = start(FilesystemSnapshotsConfig::default()).await?;
-    let replayed = agent.describe(&replaying).await?;
-    let replayed_shape = invocation_shape(&replaying.stored_oplog(&agent.worker_id.agent_id).await);
-
-    assert_eq!(restored, live);
-    assert_eq!(replayed, live);
-    let settled = || InvocationShape {
-        applied: 6,
-        ..InvocationShape::settled()
-    };
-    assert_eq!(restored_shape, settled());
-    assert_eq!(replayed_shape, settled());
-    Ok(())
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-#[ignore = "requires the privileged managed XFS test runner"]
-#[timeout("4m")]
-async fn managed_xfs_manual_update_brings_the_files_into_the_target_revision(
-    last_unique_id: &LastUniqueId,
-    deps: &WorkerExecutorTestDependencies,
-    #[tagged_as("initial_file_system")] initial_file_system: &PrecompiledComponent,
-    _tracing: &Tracing,
-) -> anyhow::Result<()> {
-    use golem_worker_executor_test_utils::start_with_filesystem_snapshots_on_managed_xfs;
-
-    let context = TestContext::new(last_unique_id);
-    let start = || {
-        start_with_filesystem_snapshots_on_managed_xfs(
-            deps,
-            &context,
-            MANAGED_XFS_DISK_SPACE,
-            managed_xfs_test_root(),
-            enabled_snapshots(),
-        )
-    };
-    let executor = start().await?;
-    let agent = Agent::start(
-        &executor,
-        &context,
-        initial_file_system,
-        "managed-xfs-manual-update",
-        &[entry(
-            "foo.txt",
-            "/ro-old.txt",
-            AgentFilePermissions::ReadOnly,
-        )],
-    )
-    .await?;
-    agent
-        .apply_all(
-            &executor,
-            &[
-                Operation::Mkdir { path: "work" },
-                Operation::Write {
-                    path: "work/state.db",
-                    content: "rows",
-                },
-            ],
-        )
-        .await?;
-    agent.confirmed(&executor).await?;
-    let updated = executor
-        .update_component_with_files(
-            &agent.component.id,
-            AGENT_TYPE,
-            "it_initial_file_system_release",
-            vec![entry(
-                "bar.txt",
-                "/ro-new.txt",
-                AgentFilePermissions::ReadOnly,
-            )],
-        )
-        .await?;
-    executor
-        .manual_update_worker(&agent.worker_id, updated.revision, false)
-        .await?;
-    executor
-        .wait_for_component_revision(&agent.worker_id, updated.revision, Duration::from_secs(60))
-        .await?;
-    let updated_agent = Agent {
-        component: updated,
-        agent: agent.agent.clone(),
-        worker_id: agent.worker_id.clone(),
-    };
-    let after_update = updated_agent.describe(&executor).await?;
-    executor.release().await?;
-    let restarted = start().await?;
-
-    assert_eq!(
-        after_update,
-        [
-            r#"ro-new.txt file links=1 writable=false content="bar\n""#,
-            "work dir",
-            r#"work/state.db file links=1 writable=true content="rows""#,
-        ]
-        .map(String::from)
-    );
-    assert_eq!(updated_agent.describe(&restarted).await?, after_update);
-    Ok(())
-}
-
 #[test]
 #[timeout("4m")]
 async fn a_manual_update_during_an_upload_waits_for_the_upload_and_succeeds(
@@ -3666,20 +3339,10 @@ async fn a_terminal_interrupt_ends_a_manual_update_that_waits_for_an_upload(
 
 /// The target revision of a manual-update invocation entry.
 fn manual_update_target(entry: &OplogEntry) -> Option<ComponentRevision> {
-    let OplogEntry::PendingAgentInvocation { payload, .. } = entry else {
+    let OplogEntry::PendingAgentInvocation { operation, .. } = entry else {
         return None;
     };
-    let payload = match payload {
-        OplogPayload::Inline(payload) => (**payload).clone(),
-        OplogPayload::SerializedInline { bytes, .. } => {
-            golem_common::serialization::deserialize::<AgentInvocationPayload>(bytes).ok()?
-        }
-        OplogPayload::External { .. } => return None,
-    };
-    match payload {
-        AgentInvocationPayload::ManualUpdate { target_revision } => Some(target_revision),
-        _ => None,
-    }
+    operation.manual_update_target()
 }
 
 /// The incarnation of the shard manager that the test executors trust.
@@ -7037,3 +6700,12 @@ async fn a_revert_or_a_delete_during_the_wait_of_an_automatic_update_for_an_uplo
     })
     .await
 }
+
+#[cfg(target_os = "linux")]
+mod linux;
+
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+mod native;
+
+#[cfg(target_os = "macos")]
+mod macos;

@@ -1,0 +1,1542 @@
+{
+  "tier": "sweep",
+  "description": "Edge inputs: very large but bounded data generated inside the script (seq, yes, printf loops,\nbrace expansion), around the 64 KiB pipe buffer and well past it, with small checked output\n(wc, tail, cksum, sha256sum).\n\nGenerated from fixed tables with plain loops, so every Python 3 produces the same scripts.",
+  "cases": [
+    {
+      "name": "edge large: cat seq 100k",
+      "script": "seq 100000 | cat | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sort seq 100k",
+      "script": "seq 100000 | sort | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sort -n seq 100k",
+      "script": "seq 100000 | sort -n | tail -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sort -rn seq 100k",
+      "script": "seq 100000 | sort -rn | head -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sort -u seq 100k",
+      "script": "seq 100000 | sort -u | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sort -t -k seq 100k",
+      "script": "seq 100000 | sort -t 0 -k 2 | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: uniq -c seq 100k",
+      "script": "seq 100000 | cut -c1 | sort | uniq -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: tac seq 100k",
+      "script": "seq 100000 | tac | head -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: tail -n seq 100k",
+      "script": "seq 100000 | tail -n 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: tail -c seq 100k",
+      "script": "seq 100000 | tail -c 20",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: head -n seq 100k",
+      "script": "seq 100000 | head -n 3 | cut -c1-40",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: wc seq 100k",
+      "script": "seq 100000 | wc",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: md5sum seq 100k",
+      "script": "seq 100000 | md5sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sha256sum seq 100k",
+      "script": "seq 100000 | sha256sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sha512sum seq 100k",
+      "script": "seq 100000 | sha512sum | cut -c1-32",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: b2sum seq 100k",
+      "script": "seq 100000 | b2sum | cut -c1-32",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: grep -c seq 100k",
+      "script": "seq 100000 | grep -c 7",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: grep -v seq 100k",
+      "script": "seq 100000 | grep -v 1 | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: grep -o seq 100k",
+      "script": "seq 100000 | grep -o 99 | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: grep -E seq 100k",
+      "script": "seq 100000 | grep -E -c '^(12|34)+'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: grep -F seq 100k",
+      "script": "seq 100000 | grep -F -c 555",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sed s///g seq 100k",
+      "script": "seq 100000 | sed 's/1/X/g' | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sed -n $p seq 100k",
+      "script": "seq 100000 | sed -n '$p' | cut -c1-40",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sed range seq 100k",
+      "script": "seq 100000 | sed -n '500,510p' | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sed hold seq 100k",
+      "script": "seq 100000 | sed -n 'H;${x;s/\\n/,/g;p}' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: tr seq 100k",
+      "script": "seq 100000 | tr 0-9 a-j | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: tr -d seq 100k",
+      "script": "seq 100000 | tr -d '\\n' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: cut -c seq 100k",
+      "script": "seq 100000 | cut -c 2-4 | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: cut -f seq 100k",
+      "script": "seq 100000 | cut -d ' ' -f 3 | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: rev seq 100k",
+      "script": "seq 100000 | rev | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: fold seq 100k",
+      "script": "seq 100000 | fold -w 7 | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: nl seq 100k",
+      "script": "seq 100000 | nl | tail -n 1 | cut -c1-30",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: paste -s seq 100k",
+      "script": "seq 100000 | paste -s -d + | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: od seq 100k",
+      "script": "seq 100000 | od -An -tx1 | tail -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: base64 seq 100k",
+      "script": "seq 100000 | base64 | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: base64 round trip seq 100k",
+      "script": "seq 100000 | base64 | base64 -d | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: base32 round trip seq 100k",
+      "script": "seq 100000 | base32 | base32 -d | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: xargs seq 100k",
+      "script": "seq 100000 | xargs | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: xargs -n seq 100k",
+      "script": "seq 100000 | xargs -n 1000 echo | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: jq -R seq 100k",
+      "script": "seq 100000 | jq -R 'length' | sort -n | tail -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: jq -s seq 100k",
+      "script": "seq 100000 | jq -R . | jq -s 'length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: expand seq 100k",
+      "script": "seq 100000 | sed 's/ /\\t/' | expand | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: fmt seq 100k",
+      "script": "seq 100000 | fmt -w 60 | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: tee seq 100k",
+      "script": "seq 100000 | tee /tmp/copy | wc -c; cksum < /tmp/copy",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: while read seq 100k",
+      "script": "seq 100000 | { n=0; while read -r l; do n=$((n+1)); done; echo $n; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: mapfile seq 100k",
+      "script": "seq 100000 | { mapfile -t a; echo ${#a[@]}; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: command substitution seq 100k",
+      "script": "seq 100000 | { x=$(cat); echo ${#x}; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: read -d empty seq 100k",
+      "script": "seq 100000 | { IFS= read -r -d '' x; echo ${#x}; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: split seq 100k",
+      "script": "seq 100000 | { cd /tmp && split -l 999 && ls x* | wc -l && cat x* | cksum; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: file seq 100k",
+      "script": "seq 100000 | file -",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: cat long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | cat | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sort long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | sort | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sort -n long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | sort -n | tail -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sort -rn long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | sort -rn | head -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sort -u long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | sort -u | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sort -t -k long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | sort -t 0 -k 2 | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: uniq -c long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | cut -c1 | sort | uniq -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: tac long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | tac | head -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: tail -n long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | tail -n 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: tail -c long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | tail -c 20",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: head -n long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | head -n 3 | cut -c1-40",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: wc long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | wc",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: md5sum long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | md5sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sha256sum long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | sha256sum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sha512sum long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | sha512sum | cut -c1-32",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: b2sum long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | b2sum | cut -c1-32",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: grep -c long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | grep -c 7",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: grep -v long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | grep -v 1 | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: grep -o long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | grep -o 99 | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: grep -E long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | grep -E -c '^(12|34)+'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: grep -F long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | grep -F -c 555",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sed s///g long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | sed 's/1/X/g' | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sed -n $p long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | sed -n '$p' | cut -c1-40",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sed range long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | sed -n '500,510p' | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sed hold long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | sed -n 'H;${x;s/\\n/,/g;p}' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: tr long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | tr 0-9 a-j | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: tr -d long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | tr -d '\\n' | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: cut -c long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | cut -c 2-4 | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: cut -f long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | cut -d ' ' -f 3 | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: rev long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | rev | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: fold long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | fold -w 7 | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: nl long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | nl | tail -n 1 | cut -c1-30",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: paste -s long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | paste -s -d + | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: od long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | od -An -tx1 | tail -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: base64 long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | base64 | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: base64 round trip long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | base64 | base64 -d | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: base32 round trip long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | base32 | base32 -d | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: xargs long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | xargs | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: xargs -n long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | xargs -n 1000 echo | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: jq -R long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | jq -R 'length' | sort -n | tail -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: jq -s long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | jq -R . | jq -s 'length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: expand long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | sed 's/ /\\t/' | expand | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: fmt long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | fmt -w 60 | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: tee long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | tee /tmp/copy | wc -c; cksum < /tmp/copy",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: while read long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | { n=0; while read -r l; do n=$((n+1)); done; echo $n; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: mapfile long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | { mapfile -t a; echo ${#a[@]}; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: command substitution long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | { x=$(cat); echo ${#x}; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: read -d empty long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | { IFS= read -r -d '' x; echo ${#x}; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: split long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | { cd /tmp && split -l 999 && ls x* | wc -l && cat x* | cksum; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: file long lines",
+      "script": "seq 2000 | paste -s -d ' ' | sed 'p;p;p;p' | file -",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: yes head -c 65535",
+      "script": "yes | head -c 65535 | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: cat chain 65535",
+      "script": "yes abcdefg | head -c 65535 | cat | cat | cat | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: tee chain 65535",
+      "script": "yes | head -c 65535 | tee /tmp/t | wc -c; wc -c < /tmp/t",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: command substitution 65535",
+      "script": "x=$(yes | head -c 65535); echo ${#x}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: file round trip 65535",
+      "script": "yes | head -c 65535 > /tmp/f; wc -c < /tmp/f; cat /tmp/f | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: yes head -c 65536",
+      "script": "yes | head -c 65536 | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: cat chain 65536",
+      "script": "yes abcdefg | head -c 65536 | cat | cat | cat | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: tee chain 65536",
+      "script": "yes | head -c 65536 | tee /tmp/t | wc -c; wc -c < /tmp/t",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: command substitution 65536",
+      "script": "x=$(yes | head -c 65536); echo ${#x}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: file round trip 65536",
+      "script": "yes | head -c 65536 > /tmp/f; wc -c < /tmp/f; cat /tmp/f | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: yes head -c 65537",
+      "script": "yes | head -c 65537 | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: cat chain 65537",
+      "script": "yes abcdefg | head -c 65537 | cat | cat | cat | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: tee chain 65537",
+      "script": "yes | head -c 65537 | tee /tmp/t | wc -c; wc -c < /tmp/t",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: command substitution 65537",
+      "script": "x=$(yes | head -c 65537); echo ${#x}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: file round trip 65537",
+      "script": "yes | head -c 65537 > /tmp/f; wc -c < /tmp/f; cat /tmp/f | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: yes head -c 131072",
+      "script": "yes | head -c 131072 | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: cat chain 131072",
+      "script": "yes abcdefg | head -c 131072 | cat | cat | cat | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: tee chain 131072",
+      "script": "yes | head -c 131072 | tee /tmp/t | wc -c; wc -c < /tmp/t",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: command substitution 131072",
+      "script": "x=$(yes | head -c 131072); echo ${#x}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: file round trip 131072",
+      "script": "yes | head -c 131072 > /tmp/f; wc -c < /tmp/f; cat /tmp/f | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: yes head -c 1048577",
+      "script": "yes | head -c 1048577 | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: cat chain 1048577",
+      "script": "yes abcdefg | head -c 1048577 | cat | cat | cat | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: tee chain 1048577",
+      "script": "yes | head -c 1048577 | tee /tmp/t | wc -c; wc -c < /tmp/t",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: command substitution 1048577",
+      "script": "x=$(yes | head -c 1048577); echo ${#x}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large pipe: file round trip 1048577",
+      "script": "yes | head -c 1048577 > /tmp/f; wc -c < /tmp/f; cat /tmp/f | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: wc",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | wc",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: sed",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | sed 's/x/y/g' | cksum",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: grep -c",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | grep -c x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: cut -c",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | cut -c 299990-300005",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: sort",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | sort | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: tail -c",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | tail -c 5",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: rev",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | rev | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: fold",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | fold -w 1000 | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: read",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | { read -r l; echo $? ${#l}; }",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: uniq",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | uniq | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: tr",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | tr x y | tail -c 3",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: head -n",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | head -n 1 | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: jq -R",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | jq -R length",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: od",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | od -An -c | tail -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large long line: nl",
+      "script": "yes x | head -n 300000 | tr -d '\\n' | nl | cut -c1-12",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: brace expansion count",
+      "script": "echo {1..100000} | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: brace expansion nested",
+      "script": "echo {a..z}{a..z}{0..9} | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: printf many arguments",
+      "script": "printf '%s\\n' {1..100000} | tail -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: set many positional",
+      "script": "set -- $(seq 50000); echo $# ${50000}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: shift many",
+      "script": "set -- $(seq 20000); shift 19999; echo $# $1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: array many",
+      "script": "a=($(seq 50000)); echo ${#a[@]} ${a[49999]}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: array append loop",
+      "script": "a=(); for ((i=0;i<20000;i++)); do a+=($i); done; echo ${#a[@]} ${a[-1]}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: array sparse",
+      "script": "a=(); a[1000000]=x; a[5]=y; echo ${#a[@]} ${!a[@]}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: assoc many",
+      "script": "declare -A m; for ((i=0;i<10000;i++)); do m[k$i]=$i; done; echo ${#m[@]} ${m[k9999]}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: string concat loop",
+      "script": "s=; for ((i=0;i<20000;i++)); do s+=x; done; echo ${#s}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: string replace large",
+      "script": "s=$(printf '%*s' 50000 ''); s=${s// /ab}; echo ${#s}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: string substring large",
+      "script": "s=$(seq 100000 | tr -d '\\n'); echo ${s:488885:10}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: string trim large",
+      "script": "s=$(seq 3000 | tr '\\n' /); t=${s##*/1999}; echo ${#t}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: string length large",
+      "script": "s=$(yes abc | head -n 100000); echo ${#s}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: string upper large",
+      "script": "s=$(yes abc | head -n 20000 | tr -d '\\n'); u=${s^^}; echo ${u:0:6} ${#u}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: word split large",
+      "script": "s=$(seq 30000); set -- $s; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: IFS split large",
+      "script": "s=$(seq 30000 | tr '\\n' ,); IFS=,; set -- $s; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: arith loop",
+      "script": "n=0; for ((i=1;i<=100000;i++)); do ((n+=i)); done; echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: while loop",
+      "script": "i=0; while ((i<50000)); do ((i++)); done; echo $i",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: until loop",
+      "script": "i=0; until [ $i -ge 20000 ]; do i=$((i+1)); done; echo $i",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: for in large list",
+      "script": "n=0; for x in $(seq 30000); do n=$((n+1)); done; echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: case in loop",
+      "script": "n=0; for ((i=0;i<20000;i++)); do case $((i%3)) in 0) ((n++));; esac; done; echo $n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: function calls",
+      "script": "f() { :; }; for ((i=0;i<20000;i++)); do f; done; echo done",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: recursion depth",
+      "script": "f() { if (( $1 > 0 )); then f $(( $1 - 1 )); else echo bottom; fi; }; f 1000",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 1,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: line 1: f: maximum function nesting level exceeded (75): deeper nesting is unsupported in bash-tool\n"
+        },
+        "reason": "bash-tool's limit (README, Limits: Nesting): function calls and `$( )` share Wasmtime's 512 KiB native stack, so recursion ends with the nesting error (about 75 levels through an `if`, 150 bare, about 50 through `$( )`); bash has no such limit"
+      }
+    },
+    {
+      "name": "edge large: recursion return",
+      "script": "f() { (( $1 == 0 )) && return 0; f $(( $1 - 1 )); return $(( $? + 0 )); }; f 800; echo $?",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 1,
+        "stdout": {
+          "text": ""
+        },
+        "stderr": {
+          "text": "bash: line 1: f: maximum function nesting level exceeded (150): deeper nesting is unsupported in bash-tool\n"
+        },
+        "reason": "bash-tool's limit (README, Limits: Nesting): function calls and `$( )` share Wasmtime's 512 KiB native stack, so recursion ends with the nesting error (about 75 levels through an `if`, 150 bare, about 50 through `$( )`); bash has no such limit"
+      }
+    },
+    {
+      "name": "edge large: recursion with locals",
+      "script": "f() { local d=$1; (( d == 0 )) && { echo 0; return; }; echo $(( $(f $((d-1))) + 1 )); }; r=$(f 60 2>/tmp/e); (( r <= 60 )) && echo bounded; grep -q 'deeper nesting is unsupported in bash-tool' /tmp/e && echo refused",
+      "tags": [],
+      "options": {},
+      "expected": {
+        "status": 0,
+        "stdout": {
+          "text": "bounded\nrefused\n"
+        },
+        "stderr": {
+          "text": ""
+        },
+        "reason": "bash-tool's limit (README, Limits: Nesting): function calls and `$( )` share Wasmtime's 512 KiB native stack, so recursion ends with the nesting error (about 75 levels through an `if`, 150 bare, about 50 through `$( )`); bash has no such limit"
+      }
+    },
+    {
+      "name": "edge large: nested subshells",
+      "script": "x=$( ( ( ( ( ( ( ( ( ( echo deep ) ) ) ) ) ) ) ) ) ); echo $x",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: nested command substitution",
+      "script": "echo $(echo $(echo $(echo $(echo $(echo $(echo $(echo nested)))))))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: long pipeline",
+      "script": "echo x | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat | cat",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: long pipeline status",
+      "script": "set -o pipefail; true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | true | false; echo $? ${#PIPESTATUS[@]}",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: many redirections",
+      "script": "for i in $(seq 200); do echo $i >> /tmp/f; done; wc -l < /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: many heredoc lines",
+      "script": "cat <<EOF | wc -l\n$(seq 30000)\nEOF",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: here string large",
+      "script": "x=$(seq 50000); wc -l <<< \"$x\"",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: eval large",
+      "script": "s=; for ((i=0;i<2000;i++)); do s+=\"x$i=$i;\"; done; eval \"$s\"; echo $x1999",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: declare many variables",
+      "script": "for ((i=0;i<5000;i++)); do declare v$i=$i; done; echo $v4999; compgen -v v | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: many functions",
+      "script": "for ((i=0;i<2000;i++)); do eval \"f$i() { echo $i; }\"; done; f1999; declare -F | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: arith big numbers",
+      "script": "echo $(( 2**62 )) $(( 2**63 )) $(( 2**64 )) $(( -2**63 ))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: arith overflow multiply",
+      "script": "echo $(( 9223372036854775807 + 1 )) $(( 3037000500 * 3037000500 ))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: arith min divide",
+      "script": "echo $(( -9223372036854775808 / -1 ))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: arith min modulo",
+      "script": "echo $(( -9223372036854775808 % -1 ))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: arith large literal",
+      "script": "echo $(( 99999999999999999999 ))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: arith base 36",
+      "script": "echo $(( 36#zzzzzzzzzzzz ))",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: printf large integer",
+      "script": "printf '%d\\n' 9223372036854775807; printf '%d\\n' 9223372036854775808; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: printf negative overflow",
+      "script": "printf '%d\\n' -9223372036854775809; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: printf unsigned",
+      "script": "printf '%u %x %o\\n' -1 -1 -1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: printf large width",
+      "script": "printf '%5000s' x | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: printf large precision",
+      "script": "printf '%.3000d' 7 | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: printf float large",
+      "script": "printf '%.2f\\n' 1e300 | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: test large integer",
+      "script": "[ 9223372036854775807 -gt 9223372036854775806 ] && echo gt",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: test overflowing integer",
+      "script": "[ 99999999999999999999 -gt 1 ]; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: seq large range",
+      "script": "seq 999999990 1000000000 | tail -n 2",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: seq large step count",
+      "script": "seq 0 7 700000 | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: seq float",
+      "script": "seq 0 0.1 1000 | tail -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: seq big integers",
+      "script": "seq 18446744073709551614 18446744073709551616",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: seq -w large",
+      "script": "seq -w 99998 100000",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: factor large",
+      "script": "factor 9223372036854775807 18446744073709551615",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: factor 128-bit",
+      "script": "factor 340282366920938463463374607431768211455",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: expr large",
+      "script": "expr 9223372036854775807 + 0; expr 9223372036854775807 + 1; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: expr huge",
+      "script": "expr 99999999999999999999 + 1; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sort -n huge numbers",
+      "script": "printf '%s\\n' 1e3 99999999999999999999 -99999999999999999999 1 | sort -n",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sort -g",
+      "script": "printf '%s\\n' 1e3 2e2 inf -inf nan 5 | sort -g",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: sort -h",
+      "script": "printf '%s\\n' 1G 2K 3M 512 1T | sort -h",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: numfmt large",
+      "script": "numfmt --to=iec 9223372036854775807 1073741824",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: numfmt from",
+      "script": "numfmt --from=iec 8E 1K",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: head -c large count",
+      "script": "printf abc | head -c 99999999999999999999 | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: tail -n large count",
+      "script": "seq 3 | tail -n 99999999999999999999",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: cut large position",
+      "script": "echo abc | cut -c 99999999999999999999-",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: fold large width",
+      "script": "echo abc | fold -w 99999999999999999999",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: many files",
+      "script": "cd /tmp && for i in $(seq 1000); do : > f$i; done; ls | wc -l; ls | sort -V | tail -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: many files glob",
+      "script": "cd /tmp && for i in $(seq 1000); do : > f$i; done; set -- *; echo $#",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: many files find",
+      "script": "cd /tmp && for i in $(seq 1000); do : > f$i; done; find . -type f | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: many files rm",
+      "script": "cd /tmp && for i in $(seq 1000); do : > f$i; done; rm f*; ls | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: many files xargs",
+      "script": "cd /tmp && seq 500 | xargs touch; ls | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: many files grep -r",
+      "script": "mkdir /tmp/g && cd /tmp/g && for i in $(seq 300); do echo $i > f$i; done; grep -rl 7 . | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: deep directories",
+      "script": "cd /tmp && mkdir -p $(printf 'd/%.0s' $(seq 100)) && find . -type d | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: deep cd",
+      "script": "cd /tmp && mkdir -p $(printf 'd/%.0s' $(seq 60)) && cd $(printf 'd/%.0s' $(seq 60)) && pwd | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: deep rm -r",
+      "script": "cd /tmp && mkdir -p $(printf 'd/%.0s' $(seq 80)) && rm -r d && ls | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: long file name",
+      "script": "cd /tmp && n=$(printf 'x%.0s' $(seq 255)); : > $n && ls | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file wc",
+      "script": "seq 200000 > /tmp/f; wc /tmp/f; cksum /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file cp",
+      "script": "seq 200000 > /tmp/f; cp /tmp/f /tmp/g; cmp /tmp/f /tmp/g && echo same",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file diff",
+      "script": "seq 50000 > /tmp/a; seq 50000 | sed '25000s/.*/X/' > /tmp/b; diff /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file diff -q",
+      "script": "seq 50000 > /tmp/a; seq 50001 > /tmp/b; diff -q /tmp/a /tmp/b; echo $?",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file cmp",
+      "script": "seq 50000 > /tmp/a; seq 50000 | sed '40000s/0/o/' > /tmp/b; cmp /tmp/a /tmp/b",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file comm",
+      "script": "seq 30000 | sort > /tmp/a; seq 2 2 40000 | sort > /tmp/b; comm -12 /tmp/a /tmp/b | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file join",
+      "script": "seq 20000 | sed 's/$/ a/' | sort > /tmp/a; seq 20000 | sed 's/$/ b/' | sort > /tmp/b; join /tmp/a /tmp/b | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file paste",
+      "script": "seq 50000 > /tmp/a; paste /tmp/a /tmp/a | tail -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file sed -i",
+      "script": "seq 100000 > /tmp/f; sed -i 's/0/o/g' /tmp/f; cksum /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file truncate",
+      "script": "seq 100000 > /tmp/f; truncate -s 1000 /tmp/f; wc -c /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file split -b",
+      "script": "cd /tmp && seq 100000 > f && split -b 65536 f p && ls p* | wc -l && cat p* | cmp - f && echo same",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file csplit",
+      "script": "cd /tmp && seq 1000 > f && csplit -s f 250 500 750 && wc -l xx*",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file tail -c +",
+      "script": "seq 100000 > /tmp/f; tail -c +588890 /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file head -c -",
+      "script": "seq 100000 > /tmp/f; head -c -588880 /tmp/f | wc -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file od -N",
+      "script": "seq 100000 > /tmp/f; od -An -c -j 588880 -N 8 /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file grep -m",
+      "script": "seq 100000 > /tmp/f; grep -m 3 -n 9999 /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file sort -o in place",
+      "script": "seq 100000 > /tmp/f; sort -r -o /tmp/f /tmp/f; head -n 1 /tmp/f",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file uniq",
+      "script": "seq 100000 | sed 's/.$//' > /tmp/f; uniq /tmp/f | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large file jq",
+      "script": "seq 20000 | jq -s 'add'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large json object",
+      "script": "seq 5000 | jq -R '{(.): 1}' | jq -s 'add | length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large json nested",
+      "script": "printf '%.0s[' $(seq 500) > /tmp/j; printf '%.0s]' $(seq 500) >> /tmp/j; jq -c 'flatten' /tmp/j",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large json string",
+      "script": "yes a | head -n 100000 | tr -d '\\n' | jq -R 'length'",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large xargs input",
+      "script": "seq 100000 | xargs -n 5000 echo | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large xargs -I",
+      "script": "seq 2000 | xargs -I{} echo x{} | tail -n 1",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large find -exec",
+      "script": "mkdir /tmp/e && cd /tmp/e && seq 200 | xargs touch && find . -type f -exec echo {} + | wc -w",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large tsort",
+      "script": "seq 2000 | sed 'N;s/\\n/ /' | tsort | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large shuf -n0",
+      "script": "seq 100000 | shuf -n 0 | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large tr classes",
+      "script": "seq 100000 | tr '[:digit:]' '[:alpha:]' | sort -u | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large background output",
+      "script": "{ seq 100000 > /tmp/bg; } & wait; wc -l < /tmp/bg",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large process substitution",
+      "script": "wc -l < <(seq 100000); cat <(seq 50000) <(seq 50000) | wc -l",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large process substitution output",
+      "script": "seq 100000 > >(wc -l)",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large yes lines",
+      "script": "yes 'a long line of text' | head -n 200000 | uniq -c",
+      "tags": [],
+      "options": {}
+    },
+    {
+      "name": "edge large: large printf repeat",
+      "script": "printf 'ab%.0s' $(seq 50000) | wc -c",
+      "tags": [],
+      "options": {}
+    }
+  ]
+}

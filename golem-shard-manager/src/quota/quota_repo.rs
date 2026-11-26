@@ -18,7 +18,6 @@ use crate::sharding::etcd_retry::{ReadRetry, retry_retriable_until, send_again_w
 use crate::sharding::leader_election::LeaderFence;
 use crate::sharding::persistence::{ExternalRevision, NO_REVISION};
 use async_trait::async_trait;
-use chrono::{DateTime, Utc};
 use conditional_trait_gen::trait_gen;
 use desert_rust::BinaryCodec;
 use etcd_client::{
@@ -35,6 +34,7 @@ use golem_service_base::db::{LabelledPoolApi, Pool, PoolApi};
 use golem_service_base::model::quota_lease::PendingReservation;
 use golem_service_base::repo::{Blob, NumericU64, RepoError, SqlDateTime};
 use indoc::indoc;
+use jiff::Timestamp;
 use std::fmt::Debug;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::Arc;
@@ -67,6 +67,7 @@ pub struct QuotaResourceRecord {
     pub resource_definition_id: Uuid,
     pub definition: Blob<ResourceDefinition>,
     pub remaining: NumericU64,
+    pub deficit: NumericU64,
     pub last_refilled_at: SqlDateTime,
     pub last_refreshed_at: SqlDateTime,
 }
@@ -305,9 +306,9 @@ impl<DBP: Pool> DbQuotaRepo<DBP> {
 /// is the refusal a create-only write owes.
 const INSERT_RESOURCE_SQL: &str = indoc! { r#"
     INSERT INTO quota_resources
-        (resource_definition_id, revision, definition, remaining,
+        (resource_definition_id, revision, definition, remaining, deficit,
          last_refilled_at, last_refreshed_at)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     ON CONFLICT (resource_definition_id) DO NOTHING
 "#};
 
@@ -318,9 +319,10 @@ const UPDATE_RESOURCE_SQL: &str = indoc! { r#"
     SET revision = $2,
         definition = $3,
         remaining = $4,
-        last_refilled_at = $5,
-        last_refreshed_at = $6
-    WHERE resource_definition_id = $1 AND revision = $7
+        deficit = $5,
+        last_refilled_at = $6,
+        last_refreshed_at = $7
+    WHERE resource_definition_id = $1 AND revision = $8
 "#};
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
@@ -448,7 +450,7 @@ impl QuotaRepo for DbQuotaRepo<PostgresPool> {
             .pool
             .with_ro(SVC_NAME, "get_all_resources")
             .fetch_all_as(sqlx::query_as(indoc! { r#"
-                SELECT resource_definition_id, revision, definition, remaining,
+                SELECT resource_definition_id, revision, definition, remaining, deficit,
                        last_refilled_at, last_refreshed_at
                 FROM quota_resources
             "#}))
@@ -476,7 +478,7 @@ impl QuotaRepo for DbQuotaRepo<PostgresPool> {
             .with_ro(SVC_NAME, "get_resource")
             .fetch_optional_as(
                 sqlx::query_as(indoc! { r#"
-                    SELECT resource_definition_id, revision, definition, remaining,
+                    SELECT resource_definition_id, revision, definition, remaining, deficit,
                            last_refilled_at, last_refreshed_at
                     FROM quota_resources
                     WHERE resource_definition_id = $1
@@ -548,6 +550,7 @@ impl DbQuotaRepo<PostgresPool> {
                 .bind(next_revision)
                 .bind(&record.definition)
                 .bind(record.remaining)
+                .bind(record.deficit)
                 .bind(record.last_refilled_at.clone())
                 .bind(record.last_refreshed_at.clone())
         } else {
@@ -556,6 +559,7 @@ impl DbQuotaRepo<PostgresPool> {
                 .bind(next_revision)
                 .bind(&record.definition)
                 .bind(record.remaining)
+                .bind(record.deficit)
                 .bind(record.last_refilled_at.clone())
                 .bind(record.last_refreshed_at.clone())
                 .bind(previous_revision)
@@ -640,8 +644,9 @@ const READ_COMPACTED_RESTARTS: u32 = 3;
 struct QuotaResourceState {
     definition: ResourceDefinition,
     remaining: u64,
-    last_refilled_at: DateTime<Utc>,
-    last_refreshed_at: DateTime<Utc>,
+    last_refilled_at: Timestamp,
+    last_refreshed_at: Timestamp,
+    deficit: u64,
 }
 
 /// The value stored at a lease's key. The resource and the pod it belongs to are in the key.
@@ -650,8 +655,8 @@ struct QuotaResourceState {
 struct QuotaLeaseState {
     epoch: u64,
     allocated: u64,
-    granted_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
+    granted_at: Timestamp,
+    expires_at: Timestamp,
     pending_reservations: Vec<PendingReservation>,
 }
 
@@ -801,6 +806,7 @@ impl EtcdQuotaRepo {
         encode(&QuotaResourceState {
             definition: record.definition.value().clone(),
             remaining: record.remaining.get(),
+            deficit: record.deficit.get(),
             last_refilled_at: *record.last_refilled_at.as_utc(),
             last_refreshed_at: *record.last_refreshed_at.as_utc(),
         })
@@ -938,6 +944,7 @@ impl EtcdQuotaRepo {
                             resource_definition_id: id,
                             definition: Blob::new(resource.definition),
                             remaining: resource.remaining.into(),
+                            deficit: resource.deficit.into(),
                             last_refilled_at: resource.last_refilled_at.into(),
                             last_refreshed_at: resource.last_refreshed_at.into(),
                         },

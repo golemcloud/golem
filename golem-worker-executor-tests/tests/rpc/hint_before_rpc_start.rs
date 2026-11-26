@@ -78,11 +78,11 @@ impl Rpc for DispatchThenHangRpc {
         target: &OwnedAgentId,
         key: golem_common::model::InvocationId,
         receipt: golem_common::model::ScheduleId,
-        owner: &AgentId,
+        canceller: &golem_common::model::caller::Principal,
         auth: &AuthCtx,
     ) -> Result<bool, RpcError> {
         self.inner
-            .cancel_scheduled_invocation(target, key, receipt, owner, auth)
+            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
             .await
     }
 
@@ -92,7 +92,8 @@ impl Rpc for DispatchThenHangRpc {
         expected_fingerprint: golem_common::model::AgentFingerprint,
         request_key: golem_common::model::InvocationRequestKey,
         invocation: golem_common::model::AgentInvocation,
-        scheduled_at: chrono::DateTime<chrono::Utc>,
+        scheduled_at: jiff::Timestamp,
+        self_agent_id: &golem_common::model::AgentId,
         auth_ctx: &AuthCtx,
     ) -> Result<golem_common::model::ScheduleId, RpcError> {
         self.inner
@@ -102,6 +103,7 @@ impl Rpc for DispatchThenHangRpc {
                 request_key,
                 invocation,
                 scheduled_at,
+                self_agent_id,
                 auth_ctx,
             )
             .await
@@ -111,6 +113,7 @@ impl Rpc for DispatchThenHangRpc {
         &self,
         agent: ResolvedTarget,
         method: &str,
+        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
         created_by: AccountId,
         caller: &AgentId,
         env: &[(String, String)],
@@ -125,6 +128,7 @@ impl Rpc for DispatchThenHangRpc {
             .create_demand(
                 agent,
                 method,
+                invocation,
                 created_by,
                 caller,
                 env,

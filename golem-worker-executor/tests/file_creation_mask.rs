@@ -23,54 +23,53 @@ test_r::enable!();
 mod file_creation_mask;
 
 #[cfg(unix)]
-use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-#[cfg(unix)]
-use std::path::Path;
-#[cfg(unix)]
-use test_r::test;
+mod unix {
+    use super::file_creation_mask;
+    use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+    use std::path::Path;
+    use test_r::test;
 
-/// Creates the file at `path` with the requested mode 0666, and gives the mode that it got.
-#[cfg(unix)]
-fn created_mode(path: &Path) -> u32 {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o666)
-        .open(path)
-        .unwrap();
-    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
-}
-
-/// The process inherits the mask 077. The fallback sets its probe mask, another thread creates a
-/// file before the fallback sets the mask again, and a third file comes after. No file gets a
-/// group or other permission, and the mask of the process stays 077.
-#[cfg(unix)]
-#[test]
-fn the_fallback_never_gives_a_group_or_other_permission_that_the_inherited_mask_takes_away() {
-    let directory = tempfile::tempdir().unwrap();
-    // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
-    unsafe {
-        libc::umask(0o077);
+    /// Creates the file at `path` with the requested mode 0666, and gives the mode that it got.
+    fn created_mode(path: &Path) -> u32 {
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .mode(0o666)
+            .open(path)
+            .unwrap();
+        std::fs::metadata(path).unwrap().permissions().mode() & 0o777
     }
-    let before = created_mode(&directory.path().join("before"));
 
-    let mut during = None;
-    file_creation_mask::keep_owner_write_permission_with(|| {
-        let mask = file_creation_mask::probed_file_creation_mask();
-        let path = directory.path().join("during");
-        during = Some(
-            std::thread::spawn(move || created_mode(&path))
-                .join()
-                .unwrap(),
+    /// The process inherits the mask 077. The fallback sets its probe mask, another thread creates a
+    /// file before the fallback sets the mask again, and a third file comes after. No file gets a
+    /// group or other permission, and the mask of the process stays 077.
+    #[test]
+    fn the_fallback_never_gives_a_group_or_other_permission_that_the_inherited_mask_takes_away() {
+        let directory = tempfile::tempdir().unwrap();
+        // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
+        unsafe {
+            libc::umask(0o077);
+        }
+        let before = created_mode(&directory.path().join("before"));
+
+        let mut during = None;
+        file_creation_mask::keep_owner_write_permission_with(|| {
+            let mask = file_creation_mask::probed_file_creation_mask();
+            let path = directory.path().join("during");
+            during = Some(
+                std::thread::spawn(move || created_mode(&path))
+                    .join()
+                    .unwrap(),
+            );
+            mask
+        });
+        let after = created_mode(&directory.path().join("after"));
+        // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
+        let mask = unsafe { libc::umask(0o077) };
+
+        assert_eq!(
+            (before, during, after, mask),
+            (0o600, Some(0o600), 0o600, 0o077)
         );
-        mask
-    });
-    let after = created_mode(&directory.path().join("after"));
-    // SAFETY: `umask` only replaces the mask of the process. It cannot fail.
-    let mask = unsafe { libc::umask(0o077) };
-
-    assert_eq!(
-        (before, during, after, mask),
-        (0o600, Some(0o600), 0o600, 0o077)
-    );
+    }
 }

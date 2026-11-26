@@ -170,15 +170,13 @@ pub fn from_json(value: &Value) -> Result<PermissionCardValuePayload, ParseError
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{DateTime, TimeZone, Utc};
+    use jiff::Timestamp;
     use proptest::prelude::*;
     use test_r::test;
 
-    fn datetime_strategy() -> impl Strategy<Value = DateTime<Utc>> {
-        (0i64..253_402_214_400i64, 0u32..1_000_000_000).prop_map(|(s, n)| {
-            Utc.timestamp_opt(s, n)
-                .single()
-                .expect("strategy bounds keep timestamps valid")
+    fn datetime_strategy() -> impl Strategy<Value = Timestamp> {
+        (0i64..=Timestamp::MAX.as_second(), 0u32..1_000_000_000).prop_map(|(s, n)| {
+            Timestamp::new(s, n as i32).expect("strategy bounds keep timestamps valid")
         })
     }
 

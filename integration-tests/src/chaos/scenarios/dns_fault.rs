@@ -94,7 +94,7 @@ use crate::chaos::summary::{
 };
 use crate::chaos::workload::{PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig, probe, resolution, workload};
-use chrono::Utc;
+
 use golem_test_framework::config::BenchmarkTestDependencies;
 use golem_test_framework::dsl::TestDsl;
 use std::time::Duration;
@@ -134,7 +134,7 @@ pub async fn run(
     signals: &FaultSignals,
     outputs: &OutputPaths,
 ) -> anyhow::Result<ChaosResult> {
-    let started_at = Utc::now();
+    let started_at = jiff::Timestamp::now();
     let workload_config = config.require_workload()?;
     let resolution_config = config.require_resolution()?;
     // Only MF2 has one. `require_composed` is the loud version, used once the
@@ -304,14 +304,14 @@ pub async fn run(
         "{code}: baseline phase, mixed workload for {:?}",
         config.phases.baseline()
     );
-    phases.baseline = Some(PhaseWindow::started(Utc::now()));
+    phases.baseline = Some(PhaseWindow::started(jiff::Timestamp::now()));
     let mixed = workload::start(ctx.clone(), workload_config);
     tokio::time::sleep(config.phases.baseline()).await;
     routing_snapshots.push(snapshot_routing(deps, "before-fault").await);
     ownership.push(sample_ownership(deps, "before-fault", ownership.last(), false).await);
 
     if let Some(window) = phases.baseline.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
 
     let baseline_operations = history.confirmed_in_phase(Phase::Baseline);
@@ -355,7 +355,7 @@ pub async fn run(
     );
     signals.write_baseline_ready(&BaselineReady {
         scenario_code: code.as_str().to_string(),
-        ready_at: Utc::now(),
+        ready_at: jiff::Timestamp::now(),
         baseline_operations,
         fault_target: Some(FaultTarget {
             pod_address: split.pod_address.clone(),
@@ -441,9 +441,9 @@ pub async fn run(
     // above has already spent part of the window: sleeping the full fraction
     // again would run past the heal and take the "during-fault" sample after
     // the fault.
-    let elapsed = Utc::now()
-        .signed_duration_since(injected.injected_at)
-        .to_std()
+    let elapsed = jiff::Timestamp::now()
+        .duration_since(injected.injected_at)
+        .try_into()
         .unwrap_or(Duration::ZERO);
     let sample_at = config.phases.fault().mul_f64(OWNERSHIP_SAMPLE_FRACTION);
     if let Some(wait) = sample_at.checked_sub(elapsed) {
@@ -490,7 +490,7 @@ pub async fn run(
 
     // ── Recovery ────────────────────────────────────────────────────────────
     ctx.phase.set(Phase::Recovery);
-    phases.recovery = Some(PhaseWindow::started(Utc::now()));
+    phases.recovery = Some(PhaseWindow::started(jiff::Timestamp::now()));
     info!(
         "{code}: recovery phase, running for {:?}",
         config.phases.recovery()
@@ -499,7 +499,7 @@ pub async fn run(
 
     mixed.stop().await;
     if let Some(window) = phases.recovery.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
     routing_snapshots.push(snapshot_routing(deps, "after-recovery").await);
     ownership.push(sample_ownership(deps, "after-recovery", ownership.last(), true).await);

@@ -383,7 +383,7 @@ func BeginCustomDurableInvocation(functionName string, request golem_core_types.
 		panic("unreachable")
 	}
 	wasm_import_begin_custom_durable_invocation(uintptr(utf8), uint32(len(functionName)), uintptr(result), length, uintptr(result1), length2, ((request).Graph).Root, uintptr(result4), length5, ((request).Value).Root, variant, returnArea)
-	result6 := wasm_lift_1_t941(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result6 := wasm_lift_1_t962(unsafe.Add(unsafe.Pointer(returnArea), 0))
 	result7 := result6
 	return result7
 
@@ -406,7 +406,7 @@ func BeginCustomDurableInvocationAsync(functionName string, request golem_core_t
 	wasm_lower_1_t246(nil, functionType, unsafe.Add(unsafe.Pointer(unsafe.Add(unsafe.Pointer(params), (10*4))), 0))
 
 	witAsync.SubtaskWait(uint32(wasm_import_begin_custom_durable_invocation_async(uintptr(params), returnArea)))
-	result := wasm_lift_1_t941(unsafe.Add(unsafe.Pointer(returnArea), 0))
+	result := wasm_lift_1_t962(unsafe.Add(unsafe.Pointer(returnArea), 0))
 
 	return result
 
@@ -736,7 +736,7 @@ func wasm_lower_1_t81(pinner *runtime.Pinner, value golem_core_types.TypedSchema
 }
 
 //go:noinline
-func wasm_lift_1_t941(src unsafe.Pointer) CustomDurableInvocation {
+func wasm_lift_1_t962(src unsafe.Pointer) CustomDurableInvocation {
 	var variant CustomDurableInvocation
 	switch uint8(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 0))) {
 	case 0:
@@ -744,7 +744,7 @@ func wasm_lift_1_t941(src unsafe.Pointer) CustomDurableInvocation {
 		variant = MakeCustomDurableInvocationLive(LiveCustomDurableInvocationFromOwnHandle(int32(uintptr(*(*int32)(unsafe.Add(unsafe.Pointer(src), 8))))))
 
 	case 1:
-		result := wasm_lift_1_t939(unsafe.Add(unsafe.Pointer(src), 8))
+		result := wasm_lift_1_t960(unsafe.Add(unsafe.Pointer(src), 8))
 
 		variant = MakeCustomDurableInvocationReplayed(result)
 
@@ -1460,7 +1460,7 @@ func wasm_lower_1_t80(pinner *runtime.Pinner, value golem_core_types.SchemaValue
 }
 
 //go:noinline
-func wasm_lift_1_t939(src unsafe.Pointer) PersistedDurableFunctionInvocation {
+func wasm_lift_1_t960(src unsafe.Pointer) PersistedDurableFunctionInvocation {
 	result := wasm_lift_1_t113(unsafe.Add(unsafe.Pointer(src), 0))
 	value0 := unsafe.String((*uint8)(unsafe.Pointer(uintptr(*(*uint32)(unsafe.Add(unsafe.Pointer(src), 16))))), *(*uint32)(unsafe.Add(unsafe.Pointer(src), (16 + 1*4))))
 	result1 := wasm_lift_1_t81(unsafe.Add(unsafe.Pointer(src), (16 + 2*4)))

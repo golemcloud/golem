@@ -309,9 +309,14 @@ pub(super) fn installed_card_matches_request(
                 && actual.lower_negative == requested.lower_negative
                 && actual.upper_positive == requested.upper_positive
                 && actual.upper_negative == requested.upper_negative
-                && actual.created_at.timestamp_micros() == requested.created_at.timestamp_micros()
-                && actual.expires_at.map(|value| value.timestamp_micros())
-                    == requested.expires_at.map(|value| value.timestamp_micros())
+                && actual.created_at.as_nanosecond().div_euclid(1_000)
+                    == requested.created_at.as_nanosecond().div_euclid(1_000)
+                && actual
+                    .expires_at
+                    .map(|value| value.as_nanosecond().div_euclid(1_000))
+                    == requested
+                        .expires_at
+                        .map(|value| value.as_nanosecond().div_euclid(1_000))
                 && actual.system_card == requested.system_card
                 && actual.managed_by == provenance.cloned().map(CardManagedBy::RuntimeDerived)
                 && requested.managed_by.is_none()

@@ -30,11 +30,14 @@ use test_r::test;
 async fn shared_pending_and_started_payloads_rehome_independently() {
     use golem_common::model::card::{InvocationWalletPin, WalletVersionToken};
     use golem_common::model::invocation_context::InvocationContextStack;
-    use golem_common::model::{AgentInvocationPayload, Timestamp};
+    use golem_common::model::{
+        InvocationRequestOperation, StoredAgentInvocationPayload, Timestamp,
+    };
 
     let source_id = PayloadId::new();
     let source_hash = vec![7; 16];
-    let payload: OplogPayload<AgentInvocationPayload> = OplogPayload::External {
+    let operation = InvocationRequestOperation::SaveSnapshot;
+    let payload: OplogPayload<StoredAgentInvocationPayload> = OplogPayload::External {
         payload_id: source_id.clone(),
         md5_hash: source_hash.clone(),
         cached: None,
@@ -44,6 +47,7 @@ async fn shared_pending_and_started_payloads_rehome_independently() {
         OplogEntry::pending_agent_invocation(
             None,
             test_invocation_id("shared".to_string()),
+            Box::new(operation.clone()),
             payload.clone(),
             context.trace_id.clone(),
             context.trace_states.clone(),
@@ -52,6 +56,7 @@ async fn shared_pending_and_started_payloads_rehome_independently() {
         OplogEntry::AgentInvocationStarted {
             timestamp: Timestamp::now_utc(),
             invocation_id: test_invocation_id("shared".to_string()),
+            operation: Box::new(operation),
             payload,
             trace_id: context.trace_id,
             trace_states: context.trace_states,
@@ -198,6 +203,7 @@ async fn visits_every_stream_payload_and_snapshot_update() {
                 filesystem_snapshot: None,
             },
             None,
+            Box::new(golem_common::model::caller::Caller::anonymous()),
         ),
     ];
     for entry in &mut entries {

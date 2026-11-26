@@ -122,6 +122,7 @@ impl<Repo: McpDeploymentRepo> LoggedMcpDeploymentRepo<Repo> {
 }
 
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl<Repo: McpDeploymentRepo> McpDeploymentRepo for LoggedMcpDeploymentRepo<Repo> {
     async fn create(
         &self,
@@ -266,6 +267,7 @@ impl<DBP: Pool> DbMcpDeploymentRepo<DBP> {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl McpDeploymentRepo for DbMcpDeploymentRepo<PostgresPool> {
     async fn create(
         &self,
@@ -594,6 +596,7 @@ trait McpDeploymentRepoInternal: McpDeploymentRepo {
 
 #[trait_gen(PostgresPool -> PostgresPool, SqlitePool)]
 #[async_trait]
+#[golem_async_trait::region_simple]
 impl McpDeploymentRepoInternal for DbMcpDeploymentRepo<PostgresPool> {
     type Db = <PostgresPool as Pool>::Db;
     type Tx = <<PostgresPool as Pool>::LabelledApi as LabelledPoolApi>::LabelledTransaction;
