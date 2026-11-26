@@ -50,10 +50,10 @@ use golem_common::model::oplog::{
 };
 use golem_common::model::{NamedRetryPolicy, OwnedAgentId, RetryContext, RetryProperties};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
+use golem_service_base::headers::TraceContextHeaders;
 use http::HeaderMap;
 use http_body_util::BodyExt as _;
 use http_body_util::combinators::UnsyncBoxBody;
-use std::collections::HashMap;
 use std::future::Future;
 use std::marker::PhantomData;
 use std::num::NonZeroU64;
@@ -342,14 +342,38 @@ where
         .map_err(HttpError::trap)?;
     handle.close_span_on_cancellation(span.span_id.clone());
 
-    let injected_headers = golem_outgoing_http_headers::<Ctx, U>(
-        store,
-        &span.span_id,
-        send_start_index,
-        &serialized_request.headers,
-        &key_position,
-    )
-    .map_err(HttpError::trap)?;
+    let injected_headers = store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        let trace_headers = if ctx.state.forward_trace_context_headers {
+            let span_id = &span.span_id;
+            let invocation_context = ctx
+                .state
+                .invocation_state()
+                .invocation_context
+                .get_stack(span_id)
+                .map_err(|err| {
+                    HttpError::trap(WorkerExecutorError::runtime(format!(
+                        "span {span_id} missing from the invocation context while injecting trace context headers: {err}"
+                    )))
+                })?;
+            TraceContextHeaders::from_invocation_context(invocation_context).to_raw_headers_map()
+        } else {
+            Vec::new()
+        };
+        let set_outgoing_http_idempotency_key = ctx.state.set_outgoing_http_idempotency_key;
+        let view = wasi_http_view::<Ctx, U>(access.data_mut());
+        let request = view.table.get(&Resource::<wasmtime_wasi_http::p3::Request>::new_borrow(req.rep()))
+            .map_err(|err| HttpError::trap(WorkerExecutorError::runtime(format!(
+                "failed to get outgoing p3 HTTP request from table: {err}"
+            ))))?;
+        Ok::<_, HttpError>(golem_outgoing_http_headers(
+            request,
+            trace_headers,
+            set_outgoing_http_idempotency_key,
+            send_start_index,
+            &key_position,
+        ))
+    })?;
     let mut restored_body = None;
     let mut restored_transmission = None;
     if !handle.is_live() {
@@ -667,7 +691,11 @@ where
     // Fresh sends and incomplete-call repair use the same prepared headers.
     let (retry_method, retry_uri) = {
         let request_head = serialize_request::<Ctx, U>(store, borrow_resource(&req))?;
-        apply_headers_to_request_resource::<Ctx, U>(store, &req, &injected_headers)
+        let http_store = store.with_getter::<WasiHttp>(wasi_http_view::<Ctx, U>);
+        http_store
+            .with(|mut access| {
+                apply_headers_to_request_resource(access.get(), &req, &injected_headers)
+            })
             .map_err(HttpError::trap)?;
         (
             request_head.method.to_string(),
