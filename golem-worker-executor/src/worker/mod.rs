@@ -605,6 +605,12 @@ enum DeletionRuntime {
 /// If the queue is empty, the service can trigger invocations directly as an optimization.
 ///
 /// Every worker invocation should be done through this service.
+#[cfg(any(test, feature = "test-utils"))]
+type UpdateActivationGate = (
+    tokio::sync::oneshot::Sender<()>,
+    tokio::sync::oneshot::Receiver<()>,
+);
+
 pub struct Worker<Ctx: WorkerCtx> {
     owned_agent_id: OwnedAgentId,
     deps: All<Ctx>,
@@ -702,6 +708,8 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     snapshot_policy: SnapshotPolicy,
 
     last_resume_request: Mutex<Timestamp>,
+    #[cfg(any(test, feature = "test-utils"))]
+    update_activation_gate: StdMutex<Option<UpdateActivationGate>>,
     /// The automatic snapshot entries that the starts of the agent exclude.
     snapshot_exclusions: StdMutex<SnapshotExclusions>,
     startup_linear_memory_bytes: AtomicU64,

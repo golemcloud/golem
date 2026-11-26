@@ -392,6 +392,50 @@ async fn an_update_requested_while_a_never_live_generation_stops_runs_in_a_later
     Ok(())
 }
 
+/// An automatic update requested while a never-live generation runs is applied by that
+/// generation, which unloads before the request activates the worker. The activation then finds
+/// no pending update, and the request still succeeds, because the outcome of its update is
+/// recorded.
+#[test]
+#[timeout("4m")]
+async fn an_update_applied_before_its_activation_is_accepted(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    let context = TestContext::new(last_unique_id);
+    let executor = start_with_overrides(deps, &context, overrides()).await?;
+    let component = store_component(&executor, &context, host_api_tests).await?;
+    let fork = idle_fork(&executor, &component, "applied-before-activation").await?;
+
+    let (prepared, release_generation) = executor.gate_next_prepared_instance(&fork.agent_id);
+    executor
+        .auto_update_worker(&fork, component.revision, false)
+        .await?;
+    tokio::time::timeout(Duration::from_secs(60), prepared).await??;
+
+    let (entered, release_activation) = executor.gate_next_update_activation(&fork).await?;
+    let second = {
+        let executor = executor.clone();
+        let fork = fork.clone();
+        let revision = component.revision;
+        tokio::spawn(async move { executor.auto_update_worker(&fork, revision, false).await })
+    };
+    tokio::time::timeout(Duration::from_secs(60), entered).await??;
+
+    let _ = release_generation.send(());
+    let outcomes = wait_for_outcomes(&executor, &fork, 2).await?;
+    assert_eq!(outcomes.len(), 2, "{outcomes:?}");
+    assert_all_successful(&outcomes);
+
+    let _ = release_activation.send(());
+    tokio::time::timeout(Duration::from_secs(60), second).await???;
+    assert_eq!(update_outcomes(&executor, &fork).await?.len(), 2);
+    assert_sandboxed(&executor, &fork, AgentStatus::Idle).await?;
+    Ok(())
+}
+
 /// E11: the mark is part of a fork request's identity. A never-live fork and an unmarked fork of
 /// the same source, cut and target conflict in both orders; two concurrent opposite requests have
 /// one winner, whose mark the target carries; and a retry of a never-live request, as after a

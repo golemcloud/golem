@@ -1859,6 +1859,24 @@ impl TestWorkerExecutor {
         (entered_rx, release_tx)
     }
 
+    /// Holds the next automatic update request of the cached worker after its `PendingUpdate`
+    /// is committed and before the worker is activated for it. The receiver resolves when the
+    /// request reaches the gate; sending on the sender releases it.
+    pub async fn gate_next_update_activation(
+        &self,
+        owned_agent_id: &OwnedAgentId,
+    ) -> anyhow::Result<(
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<()>,
+    )> {
+        let worker = self
+            .additional_test_deps
+            .try_get_worker(owned_agent_id)
+            .await
+            .ok_or_else(|| anyhow::anyhow!("{owned_agent_id} is not cached"))?;
+        Ok(worker.test_gate_next_update_activation())
+    }
+
     /// Appends a buffered lifecycle hint after the next source commit has flushed.
     pub fn append_after_next_oplog_commit(&self, agent_id: &AgentId) {
         self.additional_test_deps
