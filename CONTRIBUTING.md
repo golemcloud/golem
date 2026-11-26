@@ -152,6 +152,8 @@ For sharding-related tests with file logging:
 cargo make sharding-tests-debug
 ```
 
+The `sharding-tests-debug`, `integration-tests-group6` and `integration-tests-group6-rest` tasks set `GOLEM_TEST_BIN_PROFILE` to `debug` only when it is unset. They keep an explicit profile value.
+
 #### Using a debugger
 When using a debugger with the tests, make sure to pass the `--nocapture` option to the test runner, otherwise the debugger will not be usable (when capturing is on, the test framework spawns child processes to run the actual tests).
 

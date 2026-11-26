@@ -964,7 +964,7 @@ exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integr
 [tasks.integration-tests-group6]
 description = "Runs integration tests (group 6/11 - sharding)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s", "GOLEM_TEST_BIN_PROFILE" = { value = "debug", condition = { env_not_set = ["GOLEM_TEST_BIN_PROFILE"] } } }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test sharding -- --nocapture --report-time %{JUNIT_OPTS}
@@ -984,7 +984,7 @@ exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integr
 [tasks.integration-tests-group6-rest]
 description = "Runs integration tests (group 6/11 - sharding, everything except the coordinated scenarios)"
 dependencies = ["build-bins-non-ci"]
-env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s" }
+env = { "RUST_LOG" = "info", "RUST_BACKTRACE" = "1", "QUIET" = "true", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_ATTEMPTS" = "20", "GOLEM__WORKER_EXECUTOR_RETRIES__MAX_DELAY" = "1s", "GOLEM_TEST_BIN_PROFILE" = { value = "debug", condition = { env_not_set = ["GOLEM_TEST_BIN_PROFILE"] } } }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error %{TEST_R_COMMAND} run %{TEST_R_BUILD_OPTS} --package integration-tests --test sharding -- --skip coordinated_scenario --nocapture --report-time %{JUNIT_OPTS}
@@ -1189,6 +1189,7 @@ args = [
 
 [tasks.sharding-tests-debug]
 dependencies = ["build-bins-non-ci"]
+env = { "GOLEM_TEST_BIN_PROFILE" = { value = "debug", condition = { env_not_set = ["GOLEM_TEST_BIN_PROFILE"] } } }
 script_runner = "@duckscript"
 script = '''
 exec --fail-on-error rm -rf logs data
