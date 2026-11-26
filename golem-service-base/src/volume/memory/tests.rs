@@ -1229,7 +1229,12 @@ async fn multipart_requires_ordered_existing_parts_then_assembles_their_bytes() 
         .await
         .unwrap();
     let small = volume
-        .upload_part(WriteTarget::File("a"), &upload, 1, Bytes::from("short"))
+        .upload_part(
+            WriteTarget::File("a"),
+            &upload,
+            1,
+            Bytes::from(vec![b'a'; first_size - 1]),
+        )
         .await
         .unwrap();
     assert_eq!(
@@ -1333,6 +1338,15 @@ async fn invalid_read_references_fail_even_when_the_key_is_missing() {
         etag: "\"valid\"".into(),
         version_id: None,
     };
+    assert_eq!(volume.stat("", None).await, Err(VolumeError::NotFound));
+    assert_eq!(
+        volume.read("", &valid, None).await.unwrap_err(),
+        VolumeError::NotFound
+    );
+    assert_eq!(
+        volume.read("", &weak, None).await.unwrap_err(),
+        VolumeError::InvalidRequest
+    );
     assert_eq!(
         volume.read("../invalid", &valid, None).await.unwrap_err(),
         VolumeError::InvalidRequest
