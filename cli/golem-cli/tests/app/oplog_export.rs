@@ -1598,8 +1598,8 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
 
     // A query combines with a range: only the matches in the range are exported.
     const QUERY: &str = "agent-invocation-started";
-    let plain = plain_dump(&ctx, PROBE).await;
-    let started = plain
+    let probe_plain = plain_dump(&ctx, PROBE).await;
+    let started = probe_plain
         .iter()
         .filter(|document| document["entry"]["type"] == "AgentInvocationStarted")
         .map(|document| document["index"].as_u64().unwrap())
@@ -1632,7 +1632,7 @@ async fn oplog_jsonl_export_writes_the_entries_of_its_range_in_order() {
         .collect::<Vec<_>>();
     assert_eq!(
         exported,
-        plain
+        probe_plain
             .iter()
             .filter(|document| started[2..=3].contains(&document["index"].as_u64().unwrap()))
             .cloned()
