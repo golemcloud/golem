@@ -98,7 +98,9 @@ impl ChunkBuilder for InProcessChunk {
 
 /// The chunk of a guest, which gets each entry with its index and without attribution. The guest
 /// form of an entry has no attribution, and the oplog grant of the guest covers only the indexes
-/// of its batch.
+/// of its batch. The chunk does not read the expected request of a replay divergence outside its
+/// batch; [`unread_expected_requests`] names these divergences, and the caller reads their
+/// requests with [`read_expected_requests`] after the grant check covers them.
 struct GuestChunk {
     /// The indexes that the grant check of the batch covers.
     window: RangeInclusive<OplogIndex>,
@@ -112,6 +114,52 @@ impl GuestChunk {
             .saturating_add((count as u64).saturating_sub(1));
         Self {
             window: start..=OplogIndex::from_u64(end),
+        }
+    }
+}
+
+/// The indexes of the replay divergences in `entries`, a guest batch of `count` indexes from
+/// `start`, that lie outside the batch. The batch did not read their expected requests.
+pub fn unread_expected_requests(
+    entries: &[(OplogIndex, PublicOplogEntry)],
+    start: OplogIndex,
+    count: usize,
+) -> Vec<OplogIndex> {
+    let window = GuestChunk::new(start, count).window;
+    let mut indexes = entries
+        .iter()
+        .filter_map(|(_, entry)| match entry {
+            PublicOplogEntry::FailedUpdate(params) => params.divergence.as_deref(),
+            _ => None,
+        })
+        .map(|divergence| divergence.oplog_index)
+        .filter(|index| !window.contains(index))
+        .collect::<Vec<_>>();
+    indexes.sort();
+    indexes.dedup();
+    indexes
+}
+
+/// Reads the expected request of each replay divergence in `entries` whose index is in
+/// `indexes`.
+pub async fn read_expected_requests(
+    entries: &mut [(OplogIndex, PublicOplogEntry)],
+    indexes: &[OplogIndex],
+    oplog_service: &Arc<dyn OplogService>,
+    owned_agent_id: &OwnedAgentId,
+    agent_mode: AgentMode,
+) {
+    for (_, entry) in entries.iter_mut() {
+        let PublicOplogEntry::FailedUpdate(params) = entry else {
+            continue;
+        };
+        if let Some(divergence) = params
+            .divergence
+            .take_if(|divergence| indexes.contains(&divergence.oplog_index))
+        {
+            params.divergence = Some(
+                with_expected_request(divergence, oplog_service, owned_agent_id, agent_mode).await,
+            );
         }
     }
 }
@@ -241,8 +289,8 @@ pub async fn get_public_oplog_chunk(
 
 /// Reads an oplog chunk of `count` indexes from `initial_oplog_index` for a guest, whose grant
 /// check covers these indexes. The chunk holds no attribution, so it reads no owning `Start`
-/// outside the chunk, and it holds the expected request of a replay divergence only for a
-/// divergence inside the chunk.
+/// outside the chunk, and it reads the expected request of a replay divergence only for a
+/// divergence inside the chunk; [`unread_expected_requests`] names the others.
 pub async fn get_guest_oplog_chunk(
     components: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,
@@ -476,8 +524,9 @@ async fn read_public_oplog_chunk<B: ChunkBuilder>(
 /// passes the `last_index` of its first result, so that its own entries, which every page adds,
 /// do not move the end of the search. The grant check of the guest covers `count` indexes from
 /// `initial_oplog_index`. The result holds no attribution, so the search reads no owning `Start`
-/// outside the chunks that it scans, and it holds the expected request of a replay divergence
-/// only for a divergence inside the indexes that the grant check covers.
+/// outside the chunks that it scans, and it reads the expected request of a replay divergence
+/// only for a divergence inside the indexes that the grant check covers;
+/// [`unread_expected_requests`] names the others.
 pub async fn search_guest_oplog(
     component_service: Arc<dyn ComponentService>,
     oplog_service: Arc<dyn OplogService>,

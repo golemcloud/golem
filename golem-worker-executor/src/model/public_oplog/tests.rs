@@ -4243,10 +4243,11 @@ fn a_range_read_never_gets_more_than_the_configured_allowance() {
 }
 
 /// The public form of a `FailedUpdate` reads the recorded `Start` at the index of its divergence
-/// for the expected request. A guest batch holds that request only when the grant check of the
-/// batch covers the index of the divergence; a remote reader always holds it.
+/// for the expected request. A guest batch reads that request itself only when the batch covers
+/// the index of the divergence. It names a divergence outside it, so that the caller can check
+/// the grant for the index before it reads the request. A remote reader always holds it.
 #[test]
-async fn a_guest_batch_holds_the_expected_request_of_a_divergence_only_inside_its_window() {
+async fn a_guest_batch_names_the_divergences_outside_it_and_reads_their_requests_on_demand() {
     let (oplog_service, owned_agent_id, oplog) = open_test_oplog("divergence-window").await;
     let function_name = HostFunctionName::Custom("divergent-call".to_string());
     let divergence_start = oplog
@@ -4336,10 +4337,22 @@ async fn a_guest_batch_holds_the_expected_request_of_a_divergence_only_inside_it
             .expect("the batch holds the failed update")
     };
 
-    let outside = guest_chunk(after_start, 2).await.unwrap();
+    let mut outside = guest_chunk(after_start, 2).await.unwrap();
     assert!(!has_expected_request(&failed_update_of(&outside.entries)));
+    let unread = unread_expected_requests(&outside.entries, after_start, 2);
+    assert_eq!(unread, vec![divergence_start]);
+    read_expected_requests(
+        &mut outside.entries,
+        &unread,
+        &(oplog_service.clone() as Arc<dyn OplogService>),
+        &owned_agent_id,
+        AgentMode::Durable,
+    )
+    .await;
+    assert!(has_expected_request(&failed_update_of(&outside.entries)));
     let inside = guest_chunk(divergence_start, 3).await.unwrap();
     assert!(has_expected_request(&failed_update_of(&inside.entries)));
+    assert!(unread_expected_requests(&inside.entries, divergence_start, 3).is_empty());
 
     let search = |from: OplogIndex, count: usize| {
         search_guest_oplog(
@@ -4359,10 +4372,22 @@ async fn a_guest_batch_holds_the_expected_request_of_a_divergence_only_inside_it
             ClaimVisibility::Hidden,
         )
     };
-    let outside = search(after_start, 2).await.unwrap();
+    let mut outside = search(after_start, 2).await.unwrap();
     assert!(!has_expected_request(&failed_update_of(&outside.entries)));
+    let unread = unread_expected_requests(&outside.entries, after_start, 2);
+    assert_eq!(unread, vec![divergence_start]);
+    read_expected_requests(
+        &mut outside.entries,
+        &unread,
+        &(oplog_service.clone() as Arc<dyn OplogService>),
+        &owned_agent_id,
+        AgentMode::Durable,
+    )
+    .await;
+    assert!(has_expected_request(&failed_update_of(&outside.entries)));
     let inside = search(divergence_start, 3).await.unwrap();
     assert!(has_expected_request(&failed_update_of(&inside.entries)));
+    assert!(unread_expected_requests(&inside.entries, divergence_start, 3).is_empty());
 
     let remote = get_public_oplog_chunk(
         Arc::new(PanicComponentService),

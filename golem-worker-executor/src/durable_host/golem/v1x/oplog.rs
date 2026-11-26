@@ -22,7 +22,9 @@ use crate::durable_host::concurrent::NotCancellable;
 use crate::durable_host::concurrent::ResolvedCall;
 use crate::model::public_oplog::PublicOplogEntryOps;
 use crate::model::public_oplog::get_guest_oplog_chunk;
+use crate::model::public_oplog::read_expected_requests;
 use crate::model::public_oplog::search_guest_oplog;
+use crate::model::public_oplog::unread_expected_requests;
 use crate::preview2::golem_api_1_x;
 use crate::preview2::golem_api_1_x::oplog::Host as OplogHost;
 use crate::preview2::golem_api_1_x::oplog::HostGetOplog;
@@ -102,6 +104,44 @@ async fn oplog_entries_denied<Ctx: WorkerCtx>(
         return Ok(true);
     };
     Ok(ctx.authorize_live_permissions(&targets).await?.is_err())
+}
+
+/// Reads the expected requests of the replay divergences in a guest batch of `count` indexes
+/// from `start` that lie outside the batch, which the grant check of the batch does not cover.
+/// Like `enrich-oplog-entries`, it checks the grant for each of these indexes first, and returns
+/// `true` without reading them when the grant denies one.
+async fn guest_divergences_denied<Ctx: WorkerCtx>(
+    ctx: &mut DurableWorkerCtx<Ctx>,
+    owned_agent_id: &OwnedAgentId,
+    entries: &mut [(OplogIndex, PublicOplogEntry)],
+    start: OplogIndex,
+    count: usize,
+) -> Result<bool, WorkerExecutorError> {
+    let indexes = unread_expected_requests(entries, start, count);
+    if indexes.is_empty() {
+        return Ok(false);
+    }
+    if oplog_entries_denied(ctx, owned_agent_id, &indexes).await? {
+        return Ok(true);
+    }
+    let agent_mode = ctx
+        .state
+        .worker_service
+        .resolve_agent_identity(owned_agent_id)
+        .await?
+        .ok_or_else(|| {
+            WorkerExecutorError::unknown(format!("agent {owned_agent_id} does not exist"))
+        })?
+        .agent_mode;
+    read_expected_requests(
+        entries,
+        &indexes,
+        &ctx.state.oplog_service(),
+        owned_agent_id,
+        agent_mode,
+    )
+    .await;
+    Ok(false)
 }
 
 /// The oplog indexes that enriching `entries` reads: the index of each entry, and the index of
@@ -415,7 +455,19 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
                 }
             };
 
-            let result = get_oplog_chunk(self, &entry).await;
+            let mut result = get_oplog_chunk(self, &entry).await;
+            if let Ok(chunk) = &mut result
+                && guest_divergences_denied(
+                    self,
+                    &entry.owned_agent_id,
+                    &mut chunk.entries,
+                    entry.next_oplog_index,
+                    entry.page_size,
+                )
+                .await?
+            {
+                result = Err(AGENT_OPERATION_PERMISSION_DENIED.to_string());
+            }
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
                     let entries = chunk
@@ -604,7 +656,19 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
                 }
             };
 
-            let result = get_search_oplog_chunk(self, &entry).await;
+            let mut result = get_search_oplog_chunk(self, &entry).await;
+            if let Ok(chunk) = &mut result
+                && guest_divergences_denied(
+                    self,
+                    &entry.owned_agent_id,
+                    &mut chunk.entries,
+                    entry.next_oplog_index,
+                    entry.page_size,
+                )
+                .await?
+            {
+                result = Err(AGENT_OPERATION_PERMISSION_DENIED.to_string());
+            }
             let response = match result {
                 Ok(chunk) if chunk.next_oplog_index != entry.next_oplog_index => {
                     HostResponseGolemApiOplogChunk {

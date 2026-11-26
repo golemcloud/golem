@@ -29,7 +29,7 @@ pub use reading::{
     PublicOplogRangePage, check_oplog_cursor_query, find_component_revision_at,
     get_guest_oplog_chunk, get_public_oplog_chunk, get_public_oplog_entry, get_public_oplog_page,
     get_public_oplog_range_page, oplog_page_cursor, oplog_page_start, oplog_range_allowance,
-    search_guest_oplog, search_public_oplog_page,
+    read_expected_requests, search_guest_oplog, search_public_oplog_page, unread_expected_requests,
 };
 use snapshots::raw_snapshot_to_public;
 

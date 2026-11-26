@@ -4436,9 +4436,11 @@ the scan budget for that call to the window size before reading entries. A batch
 cursor without finding a match. The first batch pins the oplog end separately, and each new live
 batch checks the grant for its own window. Completed calls replay their recorded results. Guest
 `get-oplog` and `search-oplog` batches hold no attribution, because the guest form of an entry has
-none, so they read no owning `Start` outside the window. A `FailedUpdate` in a guest batch holds the
-expected request of its divergence only when the window covers the divergence index. A `get-oplog`
-resource that starts at index 0 starts at index 1, so its grant check covers the indexes it reads.
+none, so they read no owning `Start` outside the window. When a `FailedUpdate` in a guest batch has
+its divergence index outside the window, the batch also checks the grant for that index, as
+`enrich-oplog-entries` does, and is refused with `permission-denied` when the grant does not cover
+it. A `get-oplog` resource that starts at index 0 starts at index 1, so its grant check covers the
+indexes it reads.
 A guest batch that starts after index 1 takes the component revision at its start from the latest
 status of the agent, not from a scan of the entries before its start.
 

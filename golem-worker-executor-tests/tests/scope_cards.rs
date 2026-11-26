@@ -6505,6 +6505,196 @@ async fn a_later_guest_oplog_batch_decodes_with_the_revision_at_its_start(
     Ok(())
 }
 
+/// A `FailedUpdate` in a guest oplog batch shows the expected request of its divergence, which the
+/// recorded `Start` at the divergence index holds. When that index lies outside the batch, the
+/// batch also needs the grant for it, as `enrich-oplog-entries` does: without the grant the batch
+/// is refused and the `Start` is not read, and with it the batch reads the `Start`. The target
+/// holds a failed update at 100, which the first search batch (1 to 100) holds, and one at 250,
+/// which a `get-oplog` batch from 201 holds; both name the `Start` at 150.
+#[test]
+#[timeout("2m")]
+#[tracing::instrument]
+async fn a_guest_oplog_batch_needs_the_grant_for_a_divergence_index_outside_it(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host_api_tests: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    use golem_common::model::oplog::{
+        DurableFunctionType, OplogPayload, ReplayDivergence, ReplayHostCall, ReplayStep,
+        UpdateFailureClass,
+    };
+
+    let context = TestContext::new(last_unique_id);
+    let authority = Arc::new(ScopeCardAuthority::default());
+    let executor = start_scope_card_executor(deps, &context, authority.clone()).await?;
+    let target_component = executor
+        .component_dep(&context.default_environment_id, host_api_tests)
+        .store()
+        .await?;
+    let target_agent = agent_key!("GolemHostApi", "divergence-grant-target");
+    configure_scope_card_root(&authority, &target_component, &target_agent)?;
+    let target = executor
+        .start_agent(&target_component.id, target_agent.clone())
+        .await?;
+
+    let divergence_index = OplogIndex::from_u64(150);
+    let function_name = HostFunctionName::Custom("divergent-call".to_string());
+    let tip = executor.get_oplog_last_index(&target).await?;
+    assert!(tip < 99);
+    for index in (tip + 1)..=260 {
+        let entry = match index {
+            100 | 250 => OplogEntry::FailedUpdate {
+                timestamp: golem_common::model::Timestamp::now_utc(),
+                target_revision: target_component.revision,
+                details: None,
+                snapshot_assisted_details: None,
+                update_attempt_index: None,
+                snapshot_fault: None,
+                failure_class: UpdateFailureClass::Divergence,
+                divergence: Some(Box::new(ReplayDivergence {
+                    oplog_index: divergence_index,
+                    expected: ReplayStep::HostCall(ReplayHostCall {
+                        function_name: function_name.to_string(),
+                        durable_function_type: DurableFunctionType::ReadLocal.into(),
+                        parent_start_index: None,
+                        invocation_id: None,
+                        observational_owner: None,
+                        driver: None,
+                        carries_request: true,
+                        request: None,
+                    }),
+                    actual: ReplayStep::EndOfHistory(golem_schema::Empty {}),
+                    mismatched: vec![],
+                    replay_start: None,
+                })),
+            },
+            150 => OplogEntry::Start {
+                timestamp: golem_common::model::Timestamp::now_utc(),
+                parent_start_index: None,
+                function_name: function_name.clone(),
+                invocation_id: None,
+                observational_owner: None,
+                driver: None,
+                request: Some(OplogPayload::Inline(Box::new(
+                    golem_common::model::oplog::HostRequestNoInput {}.into(),
+                ))),
+                durable_function_type: DurableFunctionType::ReadLocal,
+                span_started: None,
+                denial: None,
+            },
+            _ => OplogEntry::Log {
+                timestamp: golem_common::model::Timestamp::now_utc(),
+                parent_start_index: None,
+                level: golem_common::model::oplog::LogLevel::Stderr,
+                context: String::new(),
+                message: "filler".to_string(),
+                trace_context: None,
+            },
+        };
+        let added = executor
+            .add_and_commit_oplog_entry(&target.agent_id(), entry)
+            .await?;
+        assert_eq!(added.as_u64(), index);
+    }
+
+    let mut results = Vec::new();
+    for (name, grants) in [
+        (
+            "divergence-ungranted",
+            &["start=1:end=100", "start=201:end=300"][..],
+        ),
+        (
+            "divergence-granted",
+            &["start=1:end=100", "start=201:end=300", "start=150:end=150"][..],
+        ),
+    ] {
+        let reader = executor
+            .component_dep(&context.default_environment_id, host_api_tests)
+            .name(name)
+            .without_default_host_permissions("GolemHostApi")
+            .try_update_agent_provision_config("GolemHostApi", |config| {
+                for grant in grants {
+                    config.initial_permissions.lower_bound.positive.push(
+                        parse_polymorphic_permission(&format!(
+                            "oplog(?env/*/*) @ * : read : {grant}"
+                        ))?,
+                    );
+                }
+                Ok::<_, golem_common::model::card::CardParseError>(())
+            })?
+            .store()
+            .await?;
+        let reader_agent = agent_key!("GolemHostApi", name);
+        // The target keeps its card as the reader's card becomes the root card.
+        authority.add_card(
+            authority
+                .root_card()
+                .expect("the previous card is the root card"),
+        );
+        configure_scope_card_root(&authority, &reader, &reader_agent)?;
+        executor
+            .start_agent(&reader.id, reader_agent.clone())
+            .await?;
+
+        let reads = executor.oplog_service_reads(&target.agent_id()).len();
+        let search = executor
+            .invoke_and_await_agent(
+                &reader,
+                &reader_agent,
+                "search_oplog_result",
+                data_value!(target.agent_id(), "failed-update"),
+            )
+            .await?
+            .into_typed::<Result<Option<Vec<u64>>, String>>()?;
+        let search_read_the_start = executor.oplog_service_reads(&target.agent_id())[reads..]
+            .contains(&(divergence_index, 1));
+
+        let reads = executor.oplog_service_reads(&target.agent_id()).len();
+        let batch = executor
+            .invoke_and_await_agent(
+                &reader,
+                &reader_agent,
+                "read_oplog_batch_size",
+                data_value!(target.agent_id(), 201u64),
+            )
+            .await?
+            .into_typed::<Result<Option<u64>, String>>()?;
+        let batch_read_the_start = executor.oplog_service_reads(&target.agent_id())[reads..]
+            .contains(&(divergence_index, 1));
+        results.push((
+            name,
+            search,
+            search_read_the_start,
+            batch,
+            batch_read_the_start,
+        ));
+    }
+
+    let denied = "OplogReadError::PermissionDenied".to_string();
+    let last = executor.get_oplog_last_index(&target).await?;
+    assert_eq!(
+        results,
+        vec![
+            (
+                "divergence-ungranted",
+                Err(denied.clone()),
+                false,
+                Err(denied),
+                false
+            ),
+            (
+                "divergence-granted",
+                Ok(Some(vec![100])),
+                true,
+                Ok(Some((last - 200).min(100))),
+                true
+            ),
+        ]
+    );
+    Ok(())
+}
+
 /// `enrich-oplog-entries` reads the recorded `Start` at the divergence index of a raw failed
 /// update, which the guest supplies, so the oplog grant must cover that index as well as the
 /// index of the entry. A grant for the entry's index alone refuses a forged divergence outside it.
