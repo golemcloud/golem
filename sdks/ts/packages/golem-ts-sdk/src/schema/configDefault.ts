@@ -1,5 +1,5 @@
 import { SchemaRef, type JsonValue } from './ref';
-import { graphMayContainCapability, type SchemaCodec } from './codec';
+import { graphMayContainCapability, sourceValueIsCanonical, type SchemaCodec } from './codec';
 import { canonicalConfigGraph, canonicalConfigName } from './config';
 
 export function collectConfigDefault(
@@ -83,5 +83,9 @@ export function nativeConfigDefault(
     );
   }
   const native = portableDefault(descriptor.value);
-  return new SchemaRef(canonicalConfigGraph(codec.graph)).unpackJson(codec.toValue(native));
+  const encoded = codec.toValue(native);
+  if (!sourceValueIsCanonical(codec, native, encoded)) {
+    throw new TypeError('Native config default changes during encoding');
+  }
+  return new SchemaRef(canonicalConfigGraph(codec.graph)).unpackJson(encoded);
 }

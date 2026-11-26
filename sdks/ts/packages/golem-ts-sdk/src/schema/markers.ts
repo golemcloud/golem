@@ -100,7 +100,10 @@ export const WIT_MARKER: unique symbol = Symbol('golem.witMarker');
  * Standard Schema (the same `compileSchema` callback the vendor walkers use), so
  * capability wrappers (e.g. `s.secret(inner)`) can descend into their payload.
  */
-export type MarkerDescriptor = (recurse: (child: unknown) => SchemaCodec) => SchemaCodec;
+export type MarkerDescriptor = (
+  recurse: (child: unknown) => SchemaCodec,
+  context?: { readonly config?: boolean },
+) => SchemaCodec;
 
 /**
  * Type-level wire classification used by HTTP binding checks. Scalars bind
@@ -1332,7 +1335,7 @@ export const s = {
         }
         return { issues: [{ message: 'No union branch accepts the value' }] };
       },
-      (recurse) => {
+      (recurse, context) => {
         const codecs = branches.map((branch) => recurse(branch.schema));
         const graph = {
           defs: mergeGraphDefs(codecs.map((codec) => codec.graph)),
@@ -1348,10 +1351,15 @@ export const s = {
         };
         return {
           graph,
+          unionBranches: codecs.map((codec, index) => ({ tag: branches[index].tag, codec })),
           toValue: (value) => {
             for (const [index, branch] of branches.entries()) {
-              const validation = branch.schema['~standard'].validate(value);
-              if (validation instanceof Promise || validation.issues) continue;
+              if (context?.config) {
+                if (!discriminatorMatches(branch.discriminator, value as JsonValue)) continue;
+              } else {
+                const validation = branch.schema['~standard'].validate(value);
+                if (validation instanceof Promise || validation.issues) continue;
+              }
               const encoded = codecs[index].toValue(value);
               const json = toCanonicalJson(codecs[index].graph, codecs[index].graph.root, encoded);
               if (discriminatorMatches(branch.discriminator, json))

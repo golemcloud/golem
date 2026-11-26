@@ -85,6 +85,9 @@ const nestedDef = defineAgent({
   config: {
     top: z.string(),
     tags: z.array(z.string()),
+    rows: z.array(z.object({ label: z.string() })),
+    optionalRows: z.array(z.object({ label: z.string() })).optional(),
+    readonlyRows: z.array(z.object({ label: z.string() })).readonly(),
     nested: z.object({
       a: z.string(),
       b: z.number(),
@@ -107,6 +110,15 @@ void nestedDef.implement({
       // Top-level primitive + array read whole.
       const top: string = this.config.top;
       const tags: string[] = this.config.tags;
+      const row: string = this.config.rows[0].label;
+      const optionalRow: string | undefined = this.config.optionalRows?.[0].label;
+      const readonlyRow: string = this.config.readonlyRows[0].label;
+      // @ts-expect-error an array does not expose its element's fields directly
+      void this.config.rows.label;
+      // @ts-expect-error optional arrays retain their array shape
+      void this.config.optionalRows?.label;
+      // @ts-expect-error readonly arrays retain their array shape
+      void this.config.readonlyRows.label;
       // @ts-expect-error 'typo' is not a field of the nested object
       void this.config.nested.typo;
       void a;
@@ -115,6 +127,9 @@ void nestedDef.implement({
       void cv;
       void top;
       void tags;
+      void row;
+      void optionalRow;
+      void readonlyRow;
       return 'ok';
     },
   },
@@ -216,6 +231,24 @@ const wholeRecord: ConfigOverrides<typeof overrideConfig> = {
   optionalService: { timeout: 19 },
 };
 void wholeRecord;
+void defineAgent({
+  name: 'OptionalManagedConfig',
+  id: {},
+  config: overrideConfig,
+  methods: {},
+}).implement({
+  init: ({ config }) => {
+    const timeout: number | undefined = config.optionalService?.timeout;
+    const key: string | undefined = config.optionalService?.apiKey.get();
+    // @ts-expect-error an optional managed group may be absent
+    const required: number = config.optionalService.timeout;
+    void timeout;
+    void key;
+    void required;
+    return {};
+  },
+  methods: {},
+});
 const partialRecord: ConfigOverrides<typeof overrideConfig> = {
   // @ts-expect-error a static record is one declaration, not a partial namespace
   settings: { label: 'incomplete' },

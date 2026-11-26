@@ -3,9 +3,15 @@ import { type SchemaGraph, type SchemaType, type SchemaTypeBody } from '../inter
 /** Config names are canonical; catalog selectors are values and never pass through this function. */
 export function canonicalConfigName(name: string): string {
   if (name.startsWith('$')) throw new TypeError("Config field names cannot have a leading '$'");
-  return name
-    .replace(/[_-]+([a-zA-Z0-9])/g, (_, char: string) => char.toUpperCase())
-    .replace(/^[A-Z]/, (char) => char.toLowerCase());
+  const words = name
+    .replace(/([A-Z])([A-Z][a-z])/g, '$1 $2')
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .split(/[^\p{L}\p{N}]+/u)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase());
+  return words
+    .map((word, index) => (index === 0 ? word : word[0].toUpperCase() + word.slice(1)))
+    .join('');
 }
 
 /** Keep source codecs positional while projecting their record and discriminator names. */

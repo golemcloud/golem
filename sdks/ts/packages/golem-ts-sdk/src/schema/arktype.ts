@@ -38,6 +38,7 @@ import {
   v,
 } from '../internal/schema-model';
 import { SchemaCodec, SchemaWalker } from './codec';
+import type { StandardSchemaV1 } from './standardSchema';
 import { buildUnionVariantCodec, matchesSchemaType } from './union';
 import { registerSchemaWalker } from './adapter';
 import { RecursionRegistry } from './recursion';
@@ -355,12 +356,15 @@ function walkStructure(node: Node, reg: RecursionRegistry): SchemaCodec {
       optional: false,
     })),
     ...optional.map((o) => {
-      const codec = optionCodec(walkNode(nodeOf(o.value), reg));
+      const inner = walkNode(nodeOf(o.value), reg);
+      const codec = optionCodec(inner);
+      const configDefault = reg.config ? nativeConfigDefault(o.inner, 'default', codec) : undefined;
+      if (reg.config && configDefault === undefined) collectConfigDefault(codec, [inner]);
       return {
         name: o.key as string,
         codec: {
           ...codec,
-          configDefault: reg.config ? nativeConfigDefault(o.inner, 'default', codec) : undefined,
+          configDefault,
         },
         optional: true,
       };
@@ -441,7 +445,11 @@ function walkSequence(node: Node, reg: RecursionRegistry): SchemaCodec {
   ) {
     const itemCodecs = [
       ...(inner.prefix ?? []).map((item: Node) => walkNode(nodeOf(item), reg)),
-      ...(inner.optionals ?? []).map((item: Node) => optionCodec(walkNode(nodeOf(item), reg))),
+      ...(inner.optionals ?? []).map((item: Node) => {
+        const child = walkNode(nodeOf(item), reg);
+        const wrapped = optionCodec(child);
+        return reg.config ? collectConfigDefault(wrapped, [child]) : wrapped;
+      }),
       ...(inner.postfix ?? []).map((item: Node) => walkNode(nodeOf(item), reg)),
     ] as SchemaCodec[];
     const defs = mergeGraphDefs(itemCodecs.map((c) => c.graph));
@@ -466,7 +474,17 @@ const arktypeWalker: SchemaWalker = (schema, _recurse, context): SchemaCodec => 
   // One registry per top-level compile: ArkType recurses over its node tree
   // internally, so it drives its own cycle detection rather than the adapter's
   // `recurse`.
-  return walkNode(nodeOf(schema), new RecursionRegistry(context?.config));
+  const codec = walkNode(nodeOf(schema), new RecursionRegistry(context?.config));
+  return context?.config
+    ? {
+        ...codec,
+        validateConfigContainer: (value) => {
+          const result = (schema as StandardSchemaV1)['~standard'].validate(value);
+          if (result instanceof Promise || result.issues)
+            throw new TypeError('Invalid static config default');
+        },
+      }
+    : codec;
 };
 
 registerSchemaWalker('arktype', arktypeWalker);

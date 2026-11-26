@@ -198,6 +198,18 @@ function leaf(
 
 function validateConfigContainer(schema: any, value: unknown): void {
   const payload = { value, issues: [] };
+  if (schema._def?.effect?.type === 'refinement') {
+    const result = schema._def.effect.refinement(value, {
+      addIssue: () => {
+        throw new TypeError('Invalid static config default');
+      },
+      path: [],
+    });
+    if (result instanceof Promise) {
+      void result.catch(() => {});
+      throw new TypeError('Static config defaults cannot use asynchronous validation');
+    }
+  }
   for (const check of schema._zod?.def.checks ?? []) {
     if (check._zod.def.check === 'overwrite')
       throw new TypeError('Static config defaults cannot use Zod overwrites');
@@ -249,7 +261,11 @@ const zodWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
     getter,
   } = normalize(schema);
 
-  if (context?.config && ['default', 'prefault', 'catch', 'effects', 'pipe'].includes(kind)) {
+  if (
+    context?.config &&
+    (['default', 'prefault', 'catch', 'pipe'].includes(kind) ||
+      (kind === 'effects' && (schema as any)._def?.effect?.type !== 'refinement'))
+  ) {
     throw new TypeError(
       `Cannot extract Zod ${kind} as static config; use s.default(schema, JSON data)`,
     );
@@ -503,7 +519,11 @@ const zodWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
         const lit = litSchema ? normalize(litSchema).literalValues?.[0] : undefined;
         if (lit !== undefined) discToIndex.set(lit, i);
       });
-      if (context?.config) return buildConfigUnionCodec(optCodecs, disc, [...discToIndex.keys()]);
+      if (context?.config)
+        return {
+          ...buildConfigUnionCodec(optCodecs, disc, [...discToIndex.keys()]),
+          validateConfigContainer: validateContainer,
+        };
       return {
         graph: { defs, root: t.variant(cases) },
         toValue: (value) => {

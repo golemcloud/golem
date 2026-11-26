@@ -133,6 +133,8 @@ export interface SchemaCodec {
   readonly mapValue?: SchemaCodec;
   readonly mapKind?: 'record' | 'map';
   readonly tupleItems?: readonly SchemaCodec[];
+  /** Selected branch codecs for canonical config unions. */
+  readonly unionBranches?: ReadonlyArray<{ readonly tag: string; readonly codec: SchemaCodec }>;
   /** Arms for a WIT result. */
   readonly resultOk?: SchemaCodec;
   readonly resultErr?: SchemaCodec;
@@ -746,6 +748,13 @@ function freezeCodec(
       Object.freeze(entry);
     });
     Object.freeze(codec.fields);
+  }
+  if (codec.unionBranches) {
+    codec.unionBranches.forEach((entry) => {
+      freezeCodec(entry.codec, seenCodecs, seenGraphValues);
+      Object.freeze(entry);
+    });
+    Object.freeze(codec.unionBranches);
   }
   [codec.optionInner, codec.listItem, codec.mapKey, codec.mapValue, codec.secretInner].forEach(
     (child) => {

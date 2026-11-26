@@ -25,7 +25,7 @@ import type { AgentId } from './agentId';
 import type { InvocationContext } from './caller';
 import type { RejectLiveValues } from './liveValues';
 import { registerAgentInitiator, registerAgentType, RegisteredAgent } from './runtime';
-import { ConfigSpec } from './config';
+import { ConfigSpec, type ConfigObjectShapeOf } from './config';
 import { HttpMountSpec } from './http';
 import type { MountSpecCovering, WebhookVarsValid } from './httpTypes';
 import type { DefaultInnerOf, MarkerKindOf, SecretInnerOf } from './schema/markers';
@@ -48,22 +48,6 @@ type MethodsHaveHttp<Methods extends MethodsRecord> = true extends {
   : false;
 
 /**
- * Recover the field-schema record of an OBJECT schema, or `never` for a
- * non-object. Vendor-agnostic structural detection: Zod exposes the field
- * schemas under `.shape`, Valibot under `.entries`, Effect Schema under
- * `.fields`. Non-object schemas (primitives, arrays, unions, maps, markers)
- * carry none of these, so they resolve to `never` and are typed by their
- * `InferOutput` (read whole), matching the runtime flattening scope.
- */
-type ConfigObjectShapeOf<S> = S extends { readonly shape: infer Sh }
-  ? Sh
-  : S extends { readonly entries: infer Sh }
-    ? Sh
-    : S extends { readonly fields: infer Sh }
-      ? Sh
-      : never;
-
-/**
  * Deep view of a single config field's schema `S`:
  * - a secret marker (at any depth) → a lazy {@link Secret} handle over its inner
  *   type (call `.get()` for the value);
@@ -76,9 +60,13 @@ type ConfigFieldView<S> = [DefaultInnerOf<S>] extends [never]
     ? Secret<SecretInnerOf<S>>
     : [ConfigObjectShapeOf<S>] extends [never]
       ? OutputOf<S>
-      : {
-          readonly [K in keyof ConfigObjectShapeOf<S>]: ConfigFieldView<ConfigObjectShapeOf<S>[K]>;
-        }
+      :
+          | {
+              readonly [K in keyof ConfigObjectShapeOf<S>]: ConfigFieldView<
+                ConfigObjectShapeOf<S>[K]
+              >;
+            }
+          | Extract<OutputOf<S>, null | undefined>
   : ConfigFieldView<DefaultInnerOf<S>>;
 
 /** `InferOutput` guarded for the unconstrained recursion parameter. */

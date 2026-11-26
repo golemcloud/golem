@@ -48,6 +48,23 @@ import { releaseGuestSecretHandle } from './internal/schema-model/secretHandle';
  */
 export type ConfigSpec = Record<string, StandardSchemaV1>;
 
+/** Recover a vendor object's fields through wrappers, without unwrapping array elements. */
+export type ConfigObjectShapeOf<S> = unknown extends S
+  ? never
+  : S extends StandardSchemaV1<unknown, readonly unknown[] | null | undefined>
+    ? never
+    : S extends { readonly shape: infer Shape }
+      ? Shape
+      : S extends { readonly entries: infer Shape }
+        ? Shape
+        : S extends { readonly fields: infer Shape }
+          ? Shape
+          : S extends { unwrap(): infer Inner }
+            ? ConfigObjectShapeOf<Inner>
+            : S extends { readonly wrapped: infer Inner }
+              ? ConfigObjectShapeOf<Inner>
+              : never;
+
 /**
  * A single compiled config field. `graph` is the *declaration* graph the host
  * is told about (inner type for `local`, `secret<inner>` for `secret`,
@@ -166,7 +183,10 @@ function buildLeafDeclaration(
   let defaultValue: SchemaValue | undefined;
   if (codec.configDefault !== undefined) {
     const ref = new SchemaRef(graph);
-    const packed = ref.packJson(codec.configDefault);
+    const innerDefault = new SchemaRef(canonicalConfigGraph(codec.graph)).packJson(
+      codec.configDefault,
+    );
+    const packed = declCodec === codec ? innerDefault : v.option(innerDefault);
     const decoded = declCodec.fromValue(packed);
     validateConfigDefault(declCodec, packed);
     const json = ref.unpackJson(packed);
@@ -195,6 +215,9 @@ function validateConfigDefault(codec: SchemaCodec, value: SchemaValue): void {
     codec.tupleItems.forEach((item, index) => validateConfigDefault(item, value.elements[index]));
   } else if (value.tag === 'list' && codec.listItem) {
     value.elements.forEach((item) => validateConfigDefault(codec.listItem!, item));
+  } else if (value.tag === 'union' && codec.unionBranches) {
+    const branch = codec.unionBranches.find((branch) => branch.tag === value.unionTag)!;
+    validateConfigDefault(branch.codec, value.body);
   } else {
     const result = codec.sourceSchema?.['~standard'].validate(codec.fromValue(value));
     if (result instanceof Promise || result?.issues)

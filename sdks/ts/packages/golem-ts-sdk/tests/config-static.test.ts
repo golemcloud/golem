@@ -278,6 +278,130 @@ describe('static config', () => {
     });
   });
 
+  it('rejects native defaults that lose or rewrite source data', () => {
+    for (const value of [{ kind: 'wrong' }, {}, { kind: 'fixed', extra: 7 }]) {
+      expect(() =>
+        compileConfig({
+          value: valibot.optional(valibot.object({ kind: valibot.literal('fixed') }), value as any),
+        }),
+      ).toThrow(/default/);
+    }
+  });
+
+  it('canonicalizes acronym paths and rejects collisions', () => {
+    expect(
+      compileConfig({ API_KEY: z.string(), HTTPServer: z.string(), baseURL: z.string() }).map(
+        (entry) => entry.path,
+      ),
+    ).toEqual([['apiKey'], ['httpServer'], ['baseUrl']]);
+    expect(() => compileConfig({ API_KEY: z.string(), apiKey: z.string() })).toThrow(
+      /Duplicate canonical/,
+    );
+  });
+
+  it('validates selected union branches and container constraints with SDK markers', () => {
+    const schemas = [
+      z
+        .discriminatedUnion('kind', [
+          z.object({ kind: z.literal('a'), count: s.u32() }),
+          z.object({ kind: z.literal('b'), label: z.string() }),
+        ])
+        .refine((value) => value.kind !== 'a' || value.count > 10),
+      z3
+        .discriminatedUnion('kind', [
+          z3.object({ kind: z3.literal('a'), count: s.u32() as any }),
+          z3.object({ kind: z3.literal('b'), label: z3.string() }),
+        ])
+        .refine((value) => value.kind !== 'a' || value.count > 10),
+      valibot.pipe(
+        valibot.variant('kind', [
+          valibot.object({ kind: valibot.literal('a'), count: s.u32() as any }),
+          valibot.object({ kind: valibot.literal('b'), label: valibot.string() }),
+        ]),
+        valibot.check((value) => value.kind !== 'a' || value.count > 10),
+      ),
+      ...[
+        z.object({ kind: z.literal('a'), count: s.u32() }).refine((value) => value.count > 10),
+        z3
+          .object({ kind: z3.literal('a'), count: s.u32() as any })
+          .refine((value) => value.count > 10),
+        valibot.pipe(
+          valibot.object({ kind: valibot.literal('a'), count: s.u32() as any }),
+          valibot.check((value) => value.count > 10),
+        ),
+      ].map((schema) =>
+        s.union([
+          {
+            tag: 'a',
+            schema,
+            discriminator: { tag: 'field-equals', val: { fieldName: 'kind', literal: 'a' } },
+          },
+          {
+            tag: 'b',
+            schema: z.object({ kind: z.literal('b'), label: z.string() }),
+            discriminator: { tag: 'field-equals', val: { fieldName: 'kind', literal: 'b' } },
+          },
+        ]),
+      ),
+    ];
+    for (const schema of schemas) {
+      for (const value of [
+        { kind: 'a', count: 11 },
+        { kind: 'b', label: 'other' },
+      ]) {
+        const [entry] = compileConfig({ choice: s.default(schema, value) });
+        expect(new SchemaRef(entry.graph).unpackJson(entry.defaultValue!)).toEqual(value);
+      }
+      for (const count of [10, -1]) {
+        expect(() => compileConfig({ choice: s.default(schema, { kind: 'a', count }) })).toThrow();
+      }
+    }
+  });
+
+  it('preserves a present nullable default below an optional managed group', () => {
+    const [entry] = compileConfig({
+      service: z
+        .object({ value: s.default(z.string().nullable(), null), key: s.secret(z.string()) })
+        .optional(),
+    });
+    expect(entry.defaultValue).toEqual({
+      tag: 'option',
+      value: { tag: 'option', value: undefined },
+    });
+    expect(entry.codec.fromValue(entry.defaultValue!)).toBeNull();
+  });
+
+  it('allows refinement and identity wrappers without executing transformations', () => {
+    const calls = vi.fn((value: string) => value);
+    expect(() =>
+      compileConfig({
+        value: s.default(
+          valibot.pipe(
+            valibot.pipe(valibot.string(), valibot.transform(calls)),
+            valibot.minLength(1),
+          ),
+          'valid',
+        ),
+      }),
+    ).toThrow(/transformation/);
+    expect(calls).not.toHaveBeenCalled();
+    for (const schema of [
+      z3.string().refine((value) => value.length > 2),
+      valibot.pipe(valibot.string(), valibot.brand('Name'), valibot.readonly()),
+    ]) {
+      expect(compileConfig({ value: schema })).toHaveLength(1);
+      expect(compileConfig({ value: s.default(schema, 'valid') })).toHaveLength(1);
+    }
+    expect(() =>
+      compileConfig({
+        value: s.default(
+          z3.string().refine((value) => value.length > 2),
+          'x',
+        ),
+      }),
+    ).toThrow(/Invalid static config default/);
+  });
+
   it('never calls opaque factories or getters, and rejects unsupported defaults clearly', () => {
     const callback = vi.fn(() => 'unsafe');
     const schemas = [
@@ -331,6 +455,9 @@ describe('static config', () => {
       /Nested config defaults/,
     );
     expect(() =>
+      compileConfig({ values: type({ 'limits?': { max_chars: 'number = 13' } }) }),
+    ).toThrow(/Nested config defaults/);
+    expect(() =>
       compileConfig({
         value: valibot.object({
           count: valibot.optional(valibot.number(), 31),
@@ -352,6 +479,7 @@ describe('static config', () => {
         .min(1)
         .max(2),
       valibot.pipe(valibot.array(s.u32() as any), valibot.minLength(1), valibot.maxLength(2)),
+      type('number[] >= 1').atMostLength(2),
     ];
     for (const schema of bounded) {
       for (const invalid of [[], [2, 7, 9]]) {

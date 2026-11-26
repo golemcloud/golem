@@ -62,6 +62,7 @@ export function buildConfigUnionCodec(
   }
   const tags = literals as string[];
   return {
+    unionBranches: codecs.map((codec, index) => ({ tag: tags[index], codec })),
     graph: {
       defs: mergeGraphDefs(codecs.map((codec) => codec.graph)),
       root: schemaType({

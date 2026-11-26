@@ -32,7 +32,7 @@ import {
   schemaValueFromWit,
 } from './internal/schema-model';
 import type { SchemaGraph, SchemaType, SchemaValue } from './internal/schema-model';
-import { compileConfigTree, ConfigGroupNode } from './config';
+import { compileConfigTree, ConfigGroupNode, type ConfigObjectShapeOf } from './config';
 import { AgentId } from './agentId';
 import { compileSchema } from './schema/adapter';
 import { SchemaCodec, SchemaValueWriter, SchemaValueReader } from './schema/codec';
@@ -163,20 +163,6 @@ export type RemoteClient<
     ? EphemeralRemoteMethodFor<Methods[K]>
     : DurableRemoteMethodFor<Methods[K]>;
 } & (Mode extends 'ephemeral' ? unknown : RemoteAgentIdAccessor);
-
-type ConfigObjectShapeOf<S> = unknown extends S
-  ? never
-  : S extends { readonly shape: infer Shape }
-    ? Shape
-    : S extends { readonly entries: infer Shape }
-      ? Shape
-      : S extends { readonly fields: infer Shape }
-        ? Shape
-        : S extends { unwrap(): infer Inner }
-          ? ConfigObjectShapeOf<Inner>
-          : S extends { readonly wrapped: infer Inner }
-            ? ConfigObjectShapeOf<Inner>
-            : never;
 
 type ConfigSecretFields<S> =
   MarkerKindOf<S> extends 'secret'

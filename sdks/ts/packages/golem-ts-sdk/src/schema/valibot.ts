@@ -132,7 +132,8 @@ function validateConfigContainer(schema: any, value: unknown): void {
   let dataset: any = { typed: true, value };
   for (const actions of pipelines) {
     for (const action of actions) {
-      if (action.kind === 'metadata') continue;
+      if (action.kind === 'metadata' || action.type === 'brand' || action.type === 'readonly')
+        continue;
       if (action.async || action.kind !== 'validation')
         throw new TypeError('Static config defaults require synchronous Valibot validation');
       dataset = action['~run'](dataset, {});
@@ -145,14 +146,24 @@ const valibotWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
   const validateContainer = context?.config
     ? (value: unknown) => validateConfigContainer(schema, value)
     : undefined;
-  if (
-    context?.config &&
-    ('fallback' in (schema as object) ||
-      (schema as any).pipe?.some((action: any) => action.kind === 'transformation'))
-  ) {
-    throw new TypeError(
-      'Cannot extract a Valibot fallback or transformation as static config; use s.default(schema, JSON data)',
-    );
+  if (context?.config) {
+    let current: any = schema;
+    while (current) {
+      if ('fallback' in current) throw new TypeError('Static config cannot use a Valibot fallback');
+      if (
+        current.pipe?.some(
+          (action: any) =>
+            action.kind === 'transformation' &&
+            action.type !== 'brand' &&
+            action.type !== 'readonly',
+        )
+      ) {
+        throw new TypeError('Static config cannot use a Valibot transformation');
+      }
+      const base = current.pipe?.[0];
+      if (!base || base === current) break;
+      current = base;
+    }
   }
   const {
     kind,
@@ -424,7 +435,11 @@ const valibotWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
         const lit = litSchema ? normalize(litSchema).literalValues?.[0] : undefined;
         if (lit !== undefined) discToIndex.set(lit, i);
       });
-      if (context?.config) return buildConfigUnionCodec(optCodecs, disc, [...discToIndex.keys()]);
+      if (context?.config)
+        return {
+          ...buildConfigUnionCodec(optCodecs, disc, [...discToIndex.keys()]),
+          validateConfigContainer: validateContainer,
+        };
       return {
         graph: { defs, root: t.variant(cases) },
         toValue: (value) => {

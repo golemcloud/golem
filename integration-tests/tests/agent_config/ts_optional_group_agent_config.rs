@@ -21,7 +21,7 @@ use golem_common::model::agent::AgentConfigEntryDto;
 use golem_common::schema::SchemaValue;
 use golem_common::{agent_key, data_value};
 use golem_test_framework::config::{EnvBasedTestDependencies, TestDependencies};
-use golem_test_framework::dsl::{TestDsl, TestDslExtended};
+use golem_test_framework::dsl::{StoreComponentBuilder, TestDsl, TestDslExtended};
 use pretty_assertions::assert_eq;
 use pretty_assertions::assert_matches;
 use serde_json::json;
@@ -36,6 +36,44 @@ inherit_test_dep!(
     Arc<dyn TestContext>
 );
 
+fn with_required_static_config<Dsl: TestDsl + ?Sized>(
+    mut component: StoreComponentBuilder<'_, Dsl>,
+) -> StoreComponentBuilder<'_, Dsl> {
+    for (agent_type, config) in [
+        (
+            "NativeConfigAgent",
+            json!({ "maxChars": 32, "displayRecord": { "displayName": "fixture" } }),
+        ),
+        (
+            "ConfigAgent",
+            json!({ "foo": 1, "bar": "fixture", "nested.a": true, "nested.b": [], "aliasedNested": {} }),
+        ),
+        (
+            "LocalConfigAgent",
+            json!({ "foo": 1, "bar": "fixture", "nested": { "a": true, "b": [] }, "aliasedNested": {} }),
+        ),
+        ("RpcLocalConfigAgent", json!({ "foo": 1 })),
+        (
+            "OptionalGroupConfigAgent",
+            json!({ "required": "deployment" }),
+        ),
+    ] {
+        component = component.with_agent_config(
+            agent_type,
+            config
+                .as_object()
+                .unwrap()
+                .iter()
+                .map(|(name, value)| AgentConfigEntryDto {
+                    path: name.split('.').map(str::to_string).collect(),
+                    value: value.clone().into(),
+                })
+                .collect(),
+        );
+    }
+    component
+}
+
 #[test]
 #[tracing::instrument]
 #[timeout("8m")]
@@ -46,11 +84,12 @@ async fn optional_group_present_with_all_fields(
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user
-        .component(&env.id, ctx.test_component_file())
-        .name(ctx.test_component_name())
-        .store()
-        .await?;
+    let component = with_required_static_config(
+        user.component(&env.id, ctx.test_component_file())
+            .name(ctx.test_component_name()),
+    )
+    .store()
+    .await?;
 
     let agent_id = agent_key!("OptionalGroupConfigAgent", "test-agent");
     user.start_agent_with(
@@ -108,11 +147,12 @@ async fn optional_group_present_with_required_field_only(
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user
-        .component(&env.id, ctx.test_component_file())
-        .name(ctx.test_component_name())
-        .store()
-        .await?;
+    let component = with_required_static_config(
+        user.component(&env.id, ctx.test_component_file())
+            .name(ctx.test_component_name()),
+    )
+    .store()
+    .await?;
 
     let agent_id = agent_key!("OptionalGroupConfigAgent", "test-agent");
     user.start_agent_with(
@@ -169,11 +209,12 @@ async fn all_optional_group_is_absent_when_not_provided(
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user
-        .component(&env.id, ctx.test_component_file())
-        .name(ctx.test_component_name())
-        .store()
-        .await?;
+    let component = with_required_static_config(
+        user.component(&env.id, ctx.test_component_file())
+            .name(ctx.test_component_name()),
+    )
+    .store()
+    .await?;
 
     let agent_id = agent_key!("AllOptionalGroupConfigAgent", "test-agent");
     user.start_agent_with(&component.id, agent_id.clone(), HashMap::new(), vec![])
@@ -193,7 +234,7 @@ async fn all_optional_group_is_absent_when_not_provided(
     let_assert!(SchemaValue::String(config) = response);
     let parsed: serde_json::Value = serde_json::from_str(&config)?;
 
-    assert_eq!(parsed, json!({}));
+    assert_eq!(parsed, json!({ "allOptionalGroup": null }));
 
     Ok(())
 }
@@ -209,11 +250,12 @@ async fn all_optional_group_present_when_child_provided(
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user
-        .component(&env.id, ctx.test_component_file())
-        .name(ctx.test_component_name())
-        .store()
-        .await?;
+    let component = with_required_static_config(
+        user.component(&env.id, ctx.test_component_file())
+            .name(ctx.test_component_name()),
+    )
+    .store()
+    .await?;
 
     let agent_id = agent_key!("AllOptionalGroupConfigAgent", "test-agent");
     user.start_agent_with(
@@ -256,11 +298,12 @@ async fn optional_group_rejects_a_record_missing_a_required_nested_field(
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user
-        .component(&env.id, ctx.test_component_file())
-        .name(ctx.test_component_name())
-        .store()
-        .await?;
+    let component = with_required_static_config(
+        user.component(&env.id, ctx.test_component_file())
+            .name(ctx.test_component_name()),
+    )
+    .store()
+    .await?;
 
     let agent_id = agent_key!("NestedRequiredGroupConfigAgent", "test-agent");
     let result = user
@@ -294,11 +337,12 @@ async fn optional_group_present_when_required_nested_child_provided(
     let user = deps.user().await?;
     let (_, env) = user.app_and_env().await?;
 
-    let component = user
-        .component(&env.id, ctx.test_component_file())
-        .name(ctx.test_component_name())
-        .store()
-        .await?;
+    let component = with_required_static_config(
+        user.component(&env.id, ctx.test_component_file())
+            .name(ctx.test_component_name()),
+    )
+    .store()
+    .await?;
 
     let agent_id = agent_key!("NestedRequiredGroupConfigAgent", "test-agent");
     user.start_agent_with(

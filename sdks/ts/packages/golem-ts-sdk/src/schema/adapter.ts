@@ -82,7 +82,7 @@ function compileSchemaWith(
   // can express WIT kinds Standard Schema can't. Intercept them BEFORE the
   // vendor dispatch; non-markers fall through to the per-vendor walker path.
   if (isMarkerSchema(schema)) {
-    return withSourceSchema(finish(schema[WIT_MARKER](recurse)), schema);
+    return withSourceSchema(finish(schema[WIT_MARKER](recurse, options)), schema);
   }
   if (!isStandardSchema(schema)) {
     throw new Error(
