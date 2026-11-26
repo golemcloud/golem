@@ -136,12 +136,6 @@ pub enum OplogExportError {
     /// that an earlier read of the export saw.
     #[error("A read of the agent found the position of the export stale")]
     StaleCursor,
-    /// A read reached below the retained start of the oplog. The text is fixed, because the error
-    /// text of the service names the agent.
-    #[error(
-        "The oplog of the agent starts after the requested index. Export again from a later index"
-    )]
-    Expired,
     #[error("The range must have 1 <= from <= to, but it is from {from} to {to}")]
     RangeInvalid { from: u64, to: u64 },
     #[error("The range ends at {to}, after the last oplog index {last_index} of the agent")]

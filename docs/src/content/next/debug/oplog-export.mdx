@@ -28,7 +28,6 @@ A part without a rule is a token. Nothing is kept because a heuristic judged it 
 - The document holds `header` (the fields of the export header, and `from` and `to`), `entries` in index order, and the `coverage` of the whole range. `filtered` is always `false`. An entry that the CLI cannot read in full stays an `omitted` marker with a coverage item, as in a CLI export.
 - The reads of the range share one scan budget of the server, the same budget that limits an oplog search. The first read gets the configured budget. Each later read takes only what the reads before it left, and a read that fails is not repeated with the same budget. When the budget runs out before `to`, the call fails with `scan-budget-exceeded`.
 - When the complete document with its newline is larger than the result limit of 4 MiB, the call fails with `output-too-large` and `limit_bytes`. The error has `matched_entries` only when the CLI read the whole range. The CLI stops reading as soon as the report cannot fit.
-- When `from` is below the retained start of the oplog, the call fails with `oplog-expired`. Call again with a later `from`.
 - A failed call returns no part of the report. Narrow `from` and `to`, or run `golem agent oplog --obfuscate` in a terminal.
 
 The scan budget limits the scan of the oplog on the server. It is not a time limit of the call: the reads of the root, of omitted entries and of `Start` entries are outside it.

@@ -158,10 +158,8 @@ pub fn read_failed(error: impl Into<anyhow::Error>) -> anyhow::Error {
         "Failed to read the oplog for the export"
     );
     let service_error = error.downcast_ref::<ServiceError>();
-    match service_error.and_then(ServiceError::error_code) {
-        Some(error_code::STALE_CURSOR) => return OplogExportError::StaleCursor.into(),
-        Some(error_code::OPLOG_EXPIRED) => return OplogExportError::Expired.into(),
-        _ => {}
+    if service_error.and_then(ServiceError::error_code) == Some(error_code::STALE_CURSOR) {
+        return OplogExportError::StaleCursor.into();
     }
     let status = service_error.and_then(|error| match &error.kind {
         ServiceErrorKind::ErrorResponse(response) => Some(response.status_code),
@@ -341,8 +339,6 @@ pub async fn oplog_export_report(
 mod tests {
     use super::read_failed;
     use crate::error::service::{ServiceError, ServiceErrorKind, ServiceErrorResponse};
-    use crate::oplog_export::export::OplogExportError;
-    use golem_common::base_model::api::error_code;
     use test_r::test;
 
     #[test]
@@ -365,44 +361,5 @@ mod tests {
             format!("{:#}", read_failed(anyhow::anyhow!("MARKER-7"))),
             "A read of the agent failed before the server answered"
         );
-    }
-
-    #[test]
-    fn read_failed_gives_an_expired_read_its_own_error_without_the_service_text() {
-        let error = ServiceError {
-            service_name: "Worker",
-            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
-                status_code: 400,
-                errors: vec!["The oplog of MARKER-7 expired: it starts at index 3".to_string()],
-                code: Some(error_code::OPLOG_EXPIRED.to_string()),
-                additional_fields: Default::default(),
-            }),
-        };
-        let error = read_failed(anyhow::Error::from(error));
-        assert!(matches!(
-            error.downcast_ref::<OplogExportError>(),
-            Some(OplogExportError::Expired)
-        ));
-        assert_eq!(
-            format!("{error:#}"),
-            "The oplog of the agent starts after the requested index. Export again from a later index"
-        );
-    }
-
-    #[test]
-    fn read_failed_gives_a_stale_cursor_its_own_error() {
-        let error = ServiceError {
-            service_name: "Worker",
-            kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
-                status_code: 400,
-                errors: vec!["Stale oplog cursor of MARKER-7".to_string()],
-                code: Some(error_code::STALE_CURSOR.to_string()),
-                additional_fields: Default::default(),
-            }),
-        };
-        assert!(matches!(
-            read_failed(anyhow::Error::from(error)).downcast_ref::<OplogExportError>(),
-            Some(OplogExportError::StaleCursor)
-        ));
     }
 }

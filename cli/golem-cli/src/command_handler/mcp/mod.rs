@@ -2205,7 +2205,6 @@ mod tests {
             "invalid-arguments"
         );
         assert_eq!(failure(OplogExportError::StaleCursor).0, "stale-cursor");
-        assert_eq!(failure(OplogExportError::Expired).0, "oplog-expired");
         assert_eq!(failure(OplogExportError::RootChanged).0, "command-failed");
         assert!(super::oplog_export::export_failure(&anyhow::anyhow!("other")).is_none());
     }
