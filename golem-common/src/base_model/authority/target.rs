@@ -19,7 +19,7 @@ use crate::base_model::application::ApplicationId;
 use crate::base_model::durable_stream::StreamId;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::tool::ToolName;
-use crate::base_model::{AgentFingerprint, AgentId, InvocationId, PromiseId};
+use crate::base_model::{AgentFingerprint, AgentId, InvocationId};
 use serde::{Deserialize, Serialize};
 
 /// The governed thing that one part of a request names: the owner side of a grant.
@@ -90,7 +90,7 @@ impl Target {
             | Target::Artifact(entity)
             | Target::Package(entity) => Some(entity.owner.kind()),
             Target::Stream(_) => Some(OwnerKind::Invocation),
-            Target::Promise(_) => Some(OwnerKind::Agent),
+            Target::Promise(promise) => Some(promise.owner.kind()),
             Target::Agent(_)
             | Target::Tool(_)
             | Target::Account(_)
@@ -115,6 +115,15 @@ impl InvocationOwner {
         match self {
             InvocationOwner::Agent(_) => OwnerKind::Agent,
             InvocationOwner::Tool(_) => OwnerKind::Tool,
+        }
+    }
+}
+
+impl PromiseOwner {
+    pub fn kind(&self) -> OwnerKind {
+        match self {
+            PromiseOwner::Agent(_) => OwnerKind::Agent,
+            PromiseOwner::Invocation(_) => OwnerKind::Invocation,
         }
     }
 }
@@ -209,14 +218,25 @@ pub struct StreamTarget {
     pub owner: InvocationTarget,
 }
 
-/// A promise and the agent that created it.
+/// A promise and its owner. The ID is the promise's canonical text form, as a grant names it,
+/// because the promise ID type of today names only an agent owner.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 #[cfg_attr(feature = "full", desert(evolution()))]
 #[serde(rename_all = "camelCase")]
 pub struct PromiseTarget {
-    pub promise_id: PromiseId,
-    pub owner: AgentTarget,
+    pub id: EntityIdText,
+    pub owner: PromiseOwner,
+}
+
+/// The owner of a promise: an agent, or a durable tool invocation.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+#[serde(rename_all = "camelCase", tag = "kind", content = "owner")]
+pub enum PromiseOwner {
+    Agent(AgentTarget),
+    Invocation(InvocationTarget),
 }
 
 /// An entity whose ID is known only by its text form here: a webhook, an artifact, a package or

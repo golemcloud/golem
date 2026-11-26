@@ -58,9 +58,9 @@ use golem_common::model::agent::{
 };
 use golem_common::model::application::ApplicationName;
 use golem_common::model::authority::{
-    AgentTarget as DecisionAgentTarget, AuthorizationRequest, CatalogOperation, EnvironmentTarget,
-    Grantors, InvocationOwner, InvocationTarget, Operation, OperationShapeError, PromiseTarget,
-    Resource, Target as DecisionTarget, ToolTarget,
+    AgentTarget as DecisionAgentTarget, AuthorizationRequest, CatalogOperation, EntityIdText,
+    EnvironmentTarget, Grantors, InvocationOwner, InvocationTarget, Operation, OperationShapeError,
+    PromiseOwner, PromiseTarget, Resource, Target as DecisionTarget, ToolTarget,
 };
 use golem_common::model::caller::{Caller, ClaimVisibility};
 use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern};
@@ -626,8 +626,8 @@ impl AgentAccess {
                     self.operation,
                     self.resource.clone(),
                     DecisionTarget::Promise(PromiseTarget {
-                        promise_id: promise_id.clone(),
-                        owner: agent,
+                        id: EntityIdText(promise_id.to_string()),
+                        owner: PromiseOwner::Agent(agent),
                     }),
                 )?,
                 vec![checks],
