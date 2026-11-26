@@ -129,7 +129,6 @@ async fn ambient_catalog_is_compiled_into_first_deployment_and_stale_plan_is_rej
             ComponentCreation {
                 package_metadata: None,
                 component_name: caller_component_name.clone(),
-                config_schema: Default::default(),
                 component_provision_config: Default::default(),
                 agent_types: vec![caller_agent],
                 agent_type_provision_configs: BTreeMap::from([(

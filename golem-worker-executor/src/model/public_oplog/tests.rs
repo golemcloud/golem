@@ -610,7 +610,7 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
                 component.revision = revision;
                 component.metadata = component
                     .metadata
-                    .with_component_config(Default::default(), ComponentProvisionConfig::default());
+                    .with_component_provision_config(ComponentProvisionConfig::default());
             }
             Ok(component)
         }
@@ -665,13 +665,10 @@ async fn checkpoint_after_plugin_removal_uses_recorded_source_revision() {
             Vec::new(),
             BTreeMap::new(),
         )
-        .with_component_config(
-            Default::default(),
-            ComponentProvisionConfig {
-                plugins: vec![plugin.clone()],
-                ..Default::default()
-            },
-        ),
+        .with_component_provision_config(ComponentProvisionConfig {
+            plugins: vec![plugin.clone()],
+            ..Default::default()
+        }),
         created_at: jiff::Timestamp::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
         package_metadata: None,
@@ -854,23 +851,20 @@ async fn public_oplog_enrichment_uses_authoritative_kind_without_rewriting_creat
             Vec::new(),
             BTreeMap::new(),
         )
-        .with_component_config(
-            Default::default(),
-            ComponentProvisionConfig {
-                plugins: vec![InstalledPlugin {
-                    environment_plugin_grant_id: grant_id,
-                    priority: golem_common::model::component::PluginPriority(0),
-                    parameters: BTreeMap::new(),
-                    plugin_registration_id: PluginRegistrationId::new(),
-                    plugin_name: "component-plugin".to_string(),
-                    plugin_version: "1.0".to_string(),
-                    oplog_processor_component_id: Some(ComponentId::new()),
-                    oplog_processor_component_revision: Some(revision),
-                    installed_by: golem_common::model::account::AccountId::new(),
-                }],
-                ..Default::default()
-            },
-        ),
+        .with_component_provision_config(ComponentProvisionConfig {
+            plugins: vec![InstalledPlugin {
+                environment_plugin_grant_id: grant_id,
+                priority: golem_common::model::component::PluginPriority(0),
+                parameters: BTreeMap::new(),
+                plugin_registration_id: PluginRegistrationId::new(),
+                plugin_name: "component-plugin".to_string(),
+                plugin_version: "1.0".to_string(),
+                oplog_processor_component_id: Some(ComponentId::new()),
+                oplog_processor_component_revision: Some(revision),
+                installed_by: golem_common::model::account::AccountId::new(),
+            }],
+            ..Default::default()
+        }),
         created_at: jiff::Timestamp::now(),
         wasm_hash: golem_common::model::diff::Hash::empty(),
         package_metadata: None,

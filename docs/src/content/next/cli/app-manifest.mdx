@@ -88,9 +88,11 @@ golem component manifest-trace
 ```
 
 The command prints the property trace for every component. By default it reads
-only the manifest. Config appears as ordered `properties.configInputs` with its
-source file, path and layer. These are inputs, not schema-validated effective
-values: a catalog selector or a union case can replace inherited config.
+only the manifest, even when a Wasm file already exists. The output sets
+`manifestOnly` to `true` and includes no agent metadata. Config appears in
+`properties.config`, with its layer history. This is a manifest property trace,
+not schema-validated effective config: a catalog selector or a union case can
+replace inherited config.
 
 Add `--build` to incrementally build the components and include schema-validated
 static config values and their provenance, including code defaults:
@@ -100,6 +102,8 @@ golem component manifest-trace --build
 ```
 
 Both modes show the same manifest inputs and traces for other properties.
+With `--build`, `manifestOnly` is `false` and `agents` contains the resolved
+properties of the exported agent types.
 `resolvedConfig` is `null` in the default mode and an array in resolved mode,
 including an empty array if there are no static declarations. Resolved mode uses
 local built component metadata and evaluates manifest environment substitutions,
@@ -111,7 +115,7 @@ Each component's trace is printed when ready; a later failure can leave partial 
 Config payloads are masked by default. `--show-secrets` reveals them; use it only
 in a trusted terminal and do not share credential-bearing output.
 
-Static config is stored in each prepared component or agent revision. A new
+Static config is stored for each agent type in the prepared component revision. A new
 declarative preparation resolves the current code defaults below the manifest
 layers; it does not reuse the previous revision's values as overrides. Existing
 revisions keep their values. Agent creation overrides remain separately recorded.

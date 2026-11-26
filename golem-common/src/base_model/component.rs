@@ -30,7 +30,7 @@ use crate::model::card::recipient::RecipientPattern;
 use crate::model::card::{
     PolymorphicCard, PolymorphicPermissionPattern, default_agent_initial_permission_grants,
 };
-use crate::schema::agent::{AgentTypeSchema, ComponentConfigSchema};
+use crate::schema::agent::AgentTypeSchema;
 use crate::schema::tool::Tool;
 use crate::{
     declare_enums, declare_revision, declare_structs, declare_transparent_newtypes, declare_unions,
@@ -170,9 +170,6 @@ declare_structs! {
         pub package_metadata: Option<ComponentPackageMetadata>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
-        pub config_schema: ComponentConfigSchema,
-        #[serde(default)]
-        #[cfg_attr(feature = "full", oai(default))]
         pub component_provision_config: ComponentProvisionConfigCreation,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
@@ -199,7 +196,6 @@ declare_structs! {
         /// Only valid with a Wasm upload. A new Wasm upload without this field clears the origin.
         #[serde(skip_serializing_if = "Option::is_none")]
         pub package_metadata: Option<ComponentPackageMetadata>,
-        pub config_schema: Option<ComponentConfigSchema>,
         pub component_provision_config: Option<ComponentProvisionConfigCreation>,
         pub agent_types: Option<Vec<AgentTypeSchema>>,
         #[serde(default)]
@@ -254,9 +250,6 @@ declare_structs! {
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub env: BTreeMap<String, String>,
-        #[serde(default)]
-        #[cfg_attr(feature = "full", oai(default))]
-        pub config: Vec<ConfigBindingDto>,
         #[serde(default)]
         #[cfg_attr(feature = "full", oai(default))]
         pub plugin_installations: Vec<PluginInstallation>,
@@ -554,22 +547,7 @@ mod tests {
         let creation = ComponentCreation {
             package_metadata: None,
             component_name: ComponentName("counter:ts-main".to_string()),
-            config_schema: Default::default(),
-            component_provision_config: ComponentProvisionConfigCreation {
-                config: vec![
-                    ConfigBindingDto {
-                        path: vec!["attempts".into()],
-                        value: serde_json::json!(3).into(),
-                        origins: None,
-                    },
-                    ConfigBindingDto {
-                        path: vec!["settings".into()],
-                        value: serde_json::json!({"timeout": 1500}).into(),
-                        origins: Some(vec![origin]),
-                    },
-                ],
-                ..Default::default()
-            },
+            component_provision_config: ComponentProvisionConfigCreation::default(),
             agent_types: Vec::new(),
             agent_type_provision_configs: BTreeMap::from([(
                 AgentTypeName("CounterAgent".to_string()),
@@ -588,7 +566,18 @@ mod tests {
                         },
                     ),
                     env: BTreeMap::new(),
-                    config: Vec::new(),
+                    config: vec![
+                        ConfigBindingDto {
+                            path: vec!["attempts".into()],
+                            value: serde_json::json!(3).into(),
+                            origins: None,
+                        },
+                        ConfigBindingDto {
+                            path: vec!["settings".into()],
+                            value: serde_json::json!({"timeout": 1500}).into(),
+                            origins: Some(vec![origin]),
+                        },
+                    ],
                     plugin_installations: Vec::new(),
                     files: BTreeMap::new(),
                 },
@@ -603,10 +592,12 @@ mod tests {
             poem_openapi::types::ToJSON::to_json(&creation).unwrap(),
         ] {
             assert!(
-                value["componentProvisionConfig"]["config"][0]
+                value["agentTypeProvisionConfigs"]["CounterAgent"]["config"][0]
                     .get("origins")
                     .is_none()
             );
+            assert!(value.get("configSchema").is_none());
+            assert!(value["componentProvisionConfig"].get("config").is_none());
             let parsed =
                 <ComponentCreation as poem_openapi::types::ParseFromJSON>::parse_from_json(Some(
                     value.clone(),
@@ -615,8 +606,8 @@ mod tests {
             let serde_parsed: ComponentCreation = serde_json::from_value(value).unwrap();
             for parsed in [parsed, serde_parsed] {
                 assert_eq!(
-                    parsed.component_provision_config.config,
-                    creation.component_provision_config.config
+                    parsed.agent_type_provision_configs,
+                    creation.agent_type_provision_configs
                 );
             }
         }

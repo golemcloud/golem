@@ -18,7 +18,7 @@ use crate::command::config::ConfigSubcommand;
 use crate::command_handler::Handlers;
 use crate::command_handler::template::EnvVarRenderer;
 use crate::context::Context;
-use crate::model::app::{Application, BuildConfig};
+use crate::model::app::{Application, ApplicationComponentSelectMode, BuildConfig};
 use crate::model::config::resolver::{ConfigLayer, ConfigSchemaResolution, ConfigSourcePlan};
 use crate::model::config::{
     ConfigGetView, ConfigListView, StaticConfigFieldView, StaticConfigSource,
@@ -60,7 +60,7 @@ impl ConfigCommandHandler {
         component: Option<ComponentName>,
         agent_type: Option<AgentTypeName>,
     ) -> anyhow::Result<()> {
-        let fields = self.prepare_fields(component, agent_type, false).await?;
+        let fields = self.prepare_fields(component, agent_type).await?;
         self.ctx
             .log_handler()
             .log_output(ConfigListView { fields })?;
@@ -68,21 +68,12 @@ impl ConfigCommandHandler {
     }
 
     async fn cmd_get(&self, field: String, component: Option<ComponentName>) -> anyhow::Result<()> {
-        let (agent_type, path) = if component.is_some() {
-            (None, crate::args::parse_agent_config_path(&field)?)
-        } else {
-            let Some((owner, path)) = field.split_once('.') else {
-                bail!("Use an exact agent-type.field path, or --component NAME FIELD");
-            };
-            (
-                Some(AgentTypeName(owner.into())),
-                crate::args::parse_agent_config_path(path)?,
-            )
+        let Some((owner, path)) = field.split_once('.') else {
+            bail!("Use an exact agent-type.field path");
         };
-        let component_only = agent_type.is_none();
-        let fields = self
-            .prepare_fields(component, agent_type, component_only)
-            .await?;
+        let agent_type = Some(AgentTypeName(owner.into()));
+        let path = crate::args::parse_agent_config_path(path)?;
+        let fields = self.prepare_fields(component, agent_type).await?;
         let mut matches = fields.into_iter().filter(|field| field.path == path);
         let Some(field) = matches.next() else {
             bail!("No static config declaration at '{}'", path.join("."));
@@ -98,23 +89,21 @@ impl ConfigCommandHandler {
         &self,
         component_name: Option<ComponentName>,
         agent_type_name: Option<AgentTypeName>,
-        component_only: bool,
     ) -> anyhow::Result<Vec<StaticConfigFieldView>> {
+        self.ctx
+            .app_handler()
+            .must_select_components(
+                component_name.into_iter().collect(),
+                &ApplicationComponentSelectMode::All,
+            )
+            .await?;
         let mut app_ctx = self.ctx.app_context_lock_mut().await?;
         let app_ctx = app_ctx.some_or_err_mut()?;
         let components = app_ctx
-            .application()
-            .component_names()
-            .filter(|name| {
-                component_name
-                    .as_ref()
-                    .is_none_or(|selected| selected == *name)
-            })
+            .selected_component_names()
+            .iter()
             .cloned()
             .collect::<Vec<_>>();
-        if components.is_empty() {
-            bail!("No matching component in the application");
-        }
         let mut fields = Vec::new();
         let mut owner_found = agent_type_name.is_none();
         for name in &components {
@@ -131,8 +120,8 @@ impl ConfigCommandHandler {
                 name,
                 &agent_types,
                 |owner| match agent_type_name.as_ref() {
-                    Some(selected) => owner == Some(selected),
-                    None => !component_only || owner.is_none(),
+                    Some(selected) => owner == selected,
+                    None => true,
                 },
             )?);
         }
@@ -148,14 +137,14 @@ pub(crate) fn prepare_static_config(
     app: &Application,
     component_name: &ComponentName,
     agent_types: &[AgentTypeSchema],
-    include_owner: impl Fn(Option<&AgentTypeName>) -> bool,
+    include_owner: impl Fn(&AgentTypeName) -> bool,
 ) -> anyhow::Result<Vec<StaticConfigFieldView>> {
     let component = app.component(component_name);
     let renderer = EnvVarRenderer::new();
     let empty_catalog = Default::default();
     let catalog = app.config_catalog().unwrap_or(&empty_catalog);
     let mut fields = Vec::new();
-    let mut resolve = |agent_type: Option<&AgentTypeName>,
+    let mut resolve = |agent_type: &AgentTypeName,
                        graph: &SchemaGraph,
                        declarations: &[AgentConfigDeclarationSchema],
                        layers: &[ConfigLayer]|
@@ -163,21 +152,10 @@ pub(crate) fn prepare_static_config(
         if !include_owner(agent_type) {
             return Ok(());
         }
-        let code_origin = match agent_type {
-            Some(_) => ConfigOrigin {
-                file: component.wasm(),
-                path: vec!["config".into()],
-                layer: "code".into(),
-            },
-            None => component
-                .layer_properties()
-                .config_schema_origin
-                .clone()
-                .unwrap_or_else(|| ConfigOrigin {
-                    file: component.source().to_path_buf(),
-                    path: vec!["configSchema".into()],
-                    layer: "code".into(),
-                }),
+        let code_origin = ConfigOrigin {
+            file: component.wasm(),
+            path: vec!["config".into()],
+            layer: "code".into(),
         };
         let mut schema = ConfigSchema::from_declarations(graph, declarations, &code_origin)?;
         schema.fields.retain(|field| {
@@ -215,7 +193,7 @@ pub(crate) fn prepare_static_config(
             );
             fields.push(StaticConfigFieldView {
                 component: component_name.clone(),
-                agent_type: agent_type.cloned(),
+                agent_type: agent_type.clone(),
                 path: plan.path,
                 schema: value.graph().clone(),
                 fill: fill.into(),
@@ -229,13 +207,6 @@ pub(crate) fn prepare_static_config(
         }
         Ok(())
     };
-    resolve(
-        None,
-        &component.config_schema().schema,
-        &component.config_schema().declarations,
-        &component.layer_properties().config_layers,
-    )
-    .with_context(|| format!("Invalid static config for component {component_name}"))?;
     let mapping = agent_types
         .iter()
         .map(|agent| (agent.type_name.clone(), component_name.clone()))
@@ -243,7 +214,7 @@ pub(crate) fn prepare_static_config(
     let agents = app.resolve_agents(&mapping)?;
     for agent in agent_types {
         resolve(
-            Some(&agent.type_name),
+            &agent.type_name,
             &agent.schema,
             &agent.config,
             agents.agent(&agent.type_name).unwrap().config_layers(),

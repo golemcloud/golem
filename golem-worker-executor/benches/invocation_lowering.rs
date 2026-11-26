@@ -180,7 +180,7 @@ fn bench_lower_invocation(c: &mut Criterion) {
     let metadata = component_metadata();
     let owner_context = ResolvedOwnerContext::Agent(Box::new(parsed_agent_id()));
     let invocation = agent_method_invocation();
-    lower_invocation(invocation.clone(), &metadata, &owner_context)
+    lower_invocation(invocation.clone(), &metadata, &owner_context, None)
         .expect("the benchmark invocation must lower successfully");
 
     c.bench_function("lower_invocation/agent_method", |b| {

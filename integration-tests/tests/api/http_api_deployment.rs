@@ -79,7 +79,6 @@ async fn registry_rejects_raw_id_mount_metadata_and_implicit_query_collision(
                 &ComponentUpdate {
                     current_revision: component.revision,
                     package_metadata: None,
-                    config_schema: None,
                     component_provision_config: None,
                     agent_types: Some(agents),
                     agent_type_provision_config_updates: None,

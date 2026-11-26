@@ -417,18 +417,21 @@ async fn a_deploy_blocked_by_a_strict_following_grant_names_the_grant() {
 
 #[test]
 #[timeout("120s")]
-async fn component_config_defaults_are_resolved_only_when_config_is_supplied() {
-    use golem_common::model::agent::{AgentConfigSource, TypedAgentConfigEntry};
+async fn agent_config_defaults_are_resolved_only_when_config_is_supplied() {
+    use golem_common::model::agent::{
+        AgentConfigSource, AgentMode, AgentTypeName, Snapshotting, TypedAgentConfigEntry,
+    };
     use golem_common::model::component::{
-        ComponentId, ComponentProvisionConfigCreation, ComponentRevision, ComponentUpdate,
+        AgentTypeProvisionConfigUpdate, ComponentId, ComponentRevision, ComponentUpdate,
         ConfigBindingDto,
     };
     use golem_common::model::component_metadata::{
-        ComponentProvisionConfig, ConfigBindingOrigin, ConfigOriginLocation,
+        AgentTypeProvisionConfig, ConfigBindingOrigin, ConfigOriginLocation,
     };
     use golem_common::model::json::NormalizedJsonValue;
     use golem_common::schema::agent::{
-        AgentConfigDeclarationSchema, ComponentConfigSchema, typed_schema_value_with_projected_defs,
+        AgentConfigDeclarationSchema, AgentConstructorSchema, AgentTypeKind, AgentTypeSchema,
+        InputSchema, typed_schema_value_with_projected_defs,
     };
     use golem_common::schema::{SchemaType, SchemaValue};
 
@@ -476,9 +479,25 @@ async fn component_config_defaults_are_resolved_only_when_config_is_supplied() {
         value_type: SchemaType::u32(),
         default_value: Some(SchemaValue::U32(default.parse().unwrap())),
     };
-    let schema = ComponentConfigSchema {
+    let agent_type_name = AgentTypeName("ConfigOwner".into());
+    let mut schema = AgentTypeSchema {
+        kind: AgentTypeKind::Regular,
+        type_name: agent_type_name.clone(),
+        description: String::new(),
+        source_language: String::new(),
         schema: SchemaGraph::empty(),
-        declarations: vec![declaration("timeout", "10")],
+        constructor: AgentConstructorSchema {
+            name: None,
+            description: String::new(),
+            prompt_hint: None,
+            input_schema: InputSchema::parameters([]),
+        },
+        methods: vec![],
+        dependencies: vec![],
+        mode: AgentMode::Durable,
+        http_mount: None,
+        snapshotting: Snapshotting::Disabled(Empty {}),
+        config: vec![declaration("timeout", "10")],
     };
     let initial_config = vec![
         golem_common::model::component_metadata::ConfigBinding::from(TypedAgentConfigEntry {
@@ -490,15 +509,23 @@ async fn component_config_defaults_are_resolved_only_when_config_is_supplied() {
             ),
         }),
     ];
-    let metadata =
-        ComponentMetadata::from_parts(KnownExports::default(), vec![], vec![], BTreeMap::new())
-            .with_component_config(
-                schema,
-                ComponentProvisionConfig {
-                    config: initial_config.clone(),
-                    ..Default::default()
-                },
-            );
+    let metadata = ComponentMetadata::from_parts(
+        KnownExports::default(),
+        vec![],
+        vec![schema.clone()],
+        BTreeMap::from([(
+            agent_type_name.clone(),
+            AgentTypeProvisionConfig {
+                initial_permissions:
+                    golem_common::model::component::AgentTypeInitialPermissions::default()
+                        .to_polymorphic_card(),
+                env: BTreeMap::new(),
+                config: initial_config.clone(),
+                plugins: vec![],
+                files: vec![],
+            },
+        )]),
+    );
     let component_id = ComponentId(Uuid::new_v4());
     let pool = SqlitePool::configured(&db).await.unwrap();
     let repo = DbComponentRepo::logged(pool.clone());
@@ -522,42 +549,47 @@ async fn component_config_defaults_are_resolved_only_when_config_is_supplied() {
     .unwrap();
     pool.close().await;
 
-    let schema = ComponentConfigSchema {
-        schema: SchemaGraph::empty(),
-        declarations: vec![declaration("timeout", "20"), declaration("attempts", "3")],
-    };
-    let update = |current_revision, config_schema, component_provision_config| ComponentUpdate {
-        current_revision,
-        config_schema: Some(config_schema),
-        component_provision_config,
-        agent_types: None,
-        agent_type_provision_config_updates: None,
-        tools: None,
-        tool_deployment_config_updates: None,
-        tool_middlewares: None,
-        tool_middleware_provision_config_updates: None,
-        allow_incompatible_config: false,
-        package_metadata: None,
-    };
+    schema.config = vec![declaration("timeout", "20"), declaration("attempts", "3")];
+    let update =
+        |current_revision, schema, config: Option<Vec<ConfigBindingDto>>| ComponentUpdate {
+            current_revision,
+            component_provision_config: None,
+            agent_types: Some(vec![schema]),
+            agent_type_provision_config_updates: config.map(|config| {
+                BTreeMap::from([(
+                    agent_type_name.clone(),
+                    AgentTypeProvisionConfigUpdate {
+                        config: Some(config),
+                        ..Default::default()
+                    },
+                )])
+            }),
+            tools: None,
+            tool_deployment_config_updates: None,
+            tool_middlewares: None,
+            tool_middleware_provision_config_updates: None,
+            allow_incompatible_config: false,
+            package_metadata: None,
+        };
     let retained = services
         .component_write_service
         .update(
             component_id,
             update(ComponentRevision::INITIAL, schema.clone(), None),
-            None,
+            Some(b"\0asm\r\0\x01\0".to_vec()),
             None,
             &auth,
         )
         .await
         .unwrap();
     assert_eq!(
-        retained.metadata.component_provision_config().config,
+        retained.metadata.agent_type_provision_configs()[&agent_type_name].config,
         initial_config
     );
 
     // A type-compatible JSON number must not silently retype a retained u32 value.
     let mut incompatible = schema.clone();
-    incompatible.declarations[0].value_type = SchemaType::u64();
+    incompatible.config[0].value_type = SchemaType::u64();
     assert!(
         services
             .component_write_service
@@ -601,23 +633,14 @@ async fn component_config_defaults_are_resolved_only_when_config_is_supplied() {
             .component_write_service
             .update(
                 component_id,
-                update(
-                    revision,
-                    schema.clone(),
-                    Some(ComponentProvisionConfigCreation {
-                        config,
-                        ..Default::default()
-                    }),
-                ),
+                update(revision, schema.clone(), Some(config)),
                 None,
                 None,
                 &auth,
             )
             .await
             .unwrap();
-        let stored = staged
-            .metadata
-            .component_provision_config()
+        let stored = staged.metadata.agent_type_provision_configs()[&agent_type_name]
             .config
             .iter()
             .map(|entry| {
@@ -638,7 +661,7 @@ async fn component_config_defaults_are_resolved_only_when_config_is_supplied() {
             .get_component_revision(component_id, staged.revision, &auth)
             .await
             .unwrap();
-        for binding in &persisted.metadata.component_provision_config().config {
+        for binding in &persisted.metadata.agent_type_provision_configs()[&agent_type_name].config {
             if binding.path == ["timeout"] && expected_timeout == 15 {
                 assert_eq!(binding.origins, origins);
             } else {
@@ -653,7 +676,7 @@ async fn component_config_defaults_are_resolved_only_when_config_is_supplied() {
         .await
         .unwrap();
     assert_eq!(
-        original.metadata.component_provision_config().config,
+        original.metadata.agent_type_provision_configs()[&agent_type_name].config,
         initial_config
     );
 }
