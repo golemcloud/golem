@@ -96,10 +96,13 @@ private[golem] object ConfigIntrospection {
               val graph = ConfigSchema.canonicalGraph(Derivation.graphOf(new Schema(reflect)))
               val value = default.map { json =>
                 val value = ConfigSchema.defaultValue(graph, json)
-                Derivation.fromValue(new Schema(reflect), value).fold(
-                  error => throw new IllegalArgumentException(s"Invalid config default at ${path.mkString(".")}: $error"),
-                  _ => value
-                )
+                Derivation
+                  .fromValue(new Schema(reflect), value)
+                  .fold(
+                    error =>
+                      throw new IllegalArgumentException(s"Invalid config default at ${path.mkString(".")}: $error"),
+                    _ => value
+                  )
               }
               List(
                 AgentConfigDeclaration(

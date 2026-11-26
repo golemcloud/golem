@@ -44,8 +44,10 @@ object StaticConfigSpec extends ZIOSpecDefault {
     @Modifier.config("golem.config.default", "{\"displayName\":\"head\",\"next\":null}") tree: NativeNode
   ) derives Schema
   final case class Collision(max_chars: Int, maxChars: Int) derives Schema
-  final case class BadInteger(@Modifier.config("golem.config.default", "\"not-an-integer\"") value: BigInt) derives Schema
-  final case class BadDecimals(@Modifier.config("golem.config.default", "[\"1.25\",\"bad\"]") values: List[BigDecimal]) derives Schema
+  final case class BadInteger(@Modifier.config("golem.config.default", "\"not-an-integer\"") value: BigInt)
+      derives Schema
+  final case class BadDecimals(@Modifier.config("golem.config.default", "[\"1.25\",\"bad\"]") values: List[BigDecimal])
+      derives Schema
   final case class NativeNumbers(
     @Modifier.config("golem.config.default", "\"123456789012345678901234567890\"") integer: BigInt,
     @Modifier.config("golem.config.default", "[\"1.25\",\"-0.5\"]") decimals: List[BigDecimal]
@@ -69,8 +71,18 @@ object StaticConfigSpec extends ZIOSpecDefault {
         declarations.map(_.path) == List("settings", "slots", "cleared", "omitted", "recursive", "enabled").map(
           List(_)
         ),
-        settings.defaultValue.contains(SchemaValue.RecordValue(List(SchemaValue.StringValue("code-default"), SchemaValue.U32Value(31)))),
-        byPath("slots").defaultValue.contains(SchemaValue.TupleValue(List(SchemaValue.OptionValue(None), SchemaValue.OptionValue(Some(SchemaValue.S32Value(7))), SchemaValue.StringValue("retained")))),
+        settings.defaultValue.contains(
+          SchemaValue.RecordValue(List(SchemaValue.StringValue("code-default"), SchemaValue.U32Value(31)))
+        ),
+        byPath("slots").defaultValue.contains(
+          SchemaValue.TupleValue(
+            List(
+              SchemaValue.OptionValue(None),
+              SchemaValue.OptionValue(Some(SchemaValue.S32Value(7))),
+              SchemaValue.StringValue("retained")
+            )
+          )
+        ),
         byPath("cleared").defaultValue.contains(SchemaValue.OptionValue(None)),
         byPath("omitted").defaultValue.isEmpty,
         settings.valueType == IntoSchema[Settings].graph,
@@ -109,7 +121,7 @@ object StaticConfigSpec extends ZIOSpecDefault {
       val enabled: Boolean   = config.enabled
       val original           = config.value
       type Alias = Values
-      val aliased: Config[Alias] = config
+      val aliased: Config[Alias]    = config
       val aliasedSettings: Settings = aliased.settings
       currentSettings = Settings("updated", UInt(17L))
       assertTrue(

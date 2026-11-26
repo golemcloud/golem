@@ -46,13 +46,14 @@ object StaticConfigMetadataSpec extends ZIOSpecDefault {
   }
 
   final case class BadInteger(@Modifier.config("golem.config.default", "\"bad\"") value: BigInt) derives Schema
-  final case class BadDecimals(@Modifier.config("golem.config.default", "[\"1.25\",\"bad\"]") values: List[BigDecimal]) derives Schema
+  final case class BadDecimals(@Modifier.config("golem.config.default", "[\"1.25\",\"bad\"]") values: List[BigDecimal])
+      derives Schema
   final case class NativeNumbers(
     @Modifier.config("golem.config.default", "\"123456789012345678901234567890\"") integer: BigInt,
     @Modifier.config("golem.config.default", "[\"1.25\",\"-0.5\"]") decimals: List[BigDecimal]
   ) derives Schema
-  @agentDefinition() trait BadIntegerAgent extends AgentConfig[BadInteger] { class Id() }
-  @agentDefinition() trait BadDecimalsAgent extends AgentConfig[BadDecimals] { class Id() }
+  @agentDefinition() trait BadIntegerAgent    extends AgentConfig[BadInteger]    { class Id() }
+  @agentDefinition() trait BadDecimalsAgent   extends AgentConfig[BadDecimals]   { class Id() }
   @agentDefinition() trait NativeNumbersAgent extends AgentConfig[NativeNumbers] { class Id() }
 
   private val model = AgentDefinitionMacro.generate[StaticAgent].config
