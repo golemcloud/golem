@@ -90,6 +90,8 @@ export interface SchemaCodec {
   readonly invocationDirect?: DirectSchemaCodec;
   /** Source validator retained for metadata literals whose constraints are not representable in WIT. */
   readonly sourceSchema?: StandardSchemaV1;
+  /** Native container checks, without parsing structural children that may be SDK markers. */
+  readonly validateConfigContainer?: (value: unknown) => void;
   /** Portable canonical JSON default, exported as metadata, never applied by the codec. */
   readonly configDefault?: import('./ref').JsonValue;
   /**

@@ -1,5 +1,5 @@
 import type { JsonValue } from './ref';
-import type { SchemaCodec } from './codec';
+import { graphMayContainCapability, type SchemaCodec } from './codec';
 import { canonicalConfigName } from './config';
 
 export function collectConfigDefault(
@@ -7,6 +7,7 @@ export function collectConfigDefault(
   children: readonly SchemaCodec[],
 ): SchemaCodec {
   if (codec.configDefault !== undefined) return codec;
+  if (codec.fields && graphMayContainCapability(codec.graph)) return codec;
   if (!children.some((child) => child.configDefault !== undefined)) return codec;
   if (codec.fields && codec.graph.root.body.tag === 'record') {
     const values: Record<string, JsonValue> = {};

@@ -122,7 +122,29 @@ function leaf(
   return { graph: { defs: new Map(), root }, toValue, fromValue };
 }
 
+function validateConfigContainer(schema: any, value: unknown): void {
+  const pipelines: any[][] = [];
+  let current = schema;
+  while (Array.isArray(current.pipe) && current.pipe.length > 0 && current.pipe[0] !== current) {
+    pipelines.unshift(current.pipe.slice(1));
+    current = current.pipe[0];
+  }
+  let dataset: any = { typed: true, value };
+  for (const actions of pipelines) {
+    for (const action of actions) {
+      if (action.kind === 'metadata') continue;
+      if (action.async || action.kind !== 'validation')
+        throw new TypeError('Static config defaults require synchronous Valibot validation');
+      dataset = action['~run'](dataset, {});
+      if (dataset.issues) throw new TypeError('Invalid static config default');
+    }
+  }
+}
+
 const valibotWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
+  const validateContainer = context?.config
+    ? (value: unknown) => validateConfigContainer(schema, value)
+    : undefined;
   if (
     context?.config &&
     ('fallback' in (schema as object) ||
@@ -169,6 +191,7 @@ const valibotWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
               innerCodec.graph.root.body.tag !== 'option');
     const optionCodec: SchemaCodec = {
       graph: { defs: innerCodec.graph.defs, root },
+      validateConfigContainer: validateContainer,
       configDefault: context?.config
         ? nativeConfigDefault(unwrapPipe(schema), 'default')
         : undefined,
@@ -228,6 +251,7 @@ const valibotWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
       const elemCodec = recurse(element);
       return {
         graph: { defs: elemCodec.graph.defs, root: t.list(elemCodec.graph.root) },
+        validateConfigContainer: validateContainer,
         listItem: elemCodec,
         toValue: (value) => v.list((value as unknown[]).map((e) => elemCodec.toValue(e))),
         fromValue: (sv) =>
@@ -244,6 +268,7 @@ const valibotWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
       const defs = mergeGraphDefs(fieldCodecs.map((f) => f.codec.graph));
       return {
         graph: { defs, root: t.record(fields) },
+        validateConfigContainer: validateContainer,
         toValue: (value) =>
           v.record(
             fieldCodecs.map((f) => f.codec.toValue((value as Record<string, unknown>)[f.name])),
@@ -267,6 +292,7 @@ const valibotWalker: SchemaWalker = (schema, recurse, context): SchemaCodec => {
       const defs = mergeGraphDefs(itemCodecs.map((c) => c.graph));
       return {
         graph: { defs, root: t.tuple(itemCodecs.map((c) => c.graph.root)) },
+        validateConfigContainer: validateContainer,
         tupleItems: itemCodecs,
         toValue: (value) => v.tuple((value as unknown[]).map((e, i) => itemCodecs[i].toValue(e))),
         fromValue: (sv) =>

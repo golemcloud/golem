@@ -188,23 +188,18 @@ function buildLeafDeclaration(
 function validateConfigDefault(codec: SchemaCodec, value: SchemaValue): void {
   if (value.tag === 'option' && codec.optionInner) {
     if (value.value) validateConfigDefault(codec.optionInner, value.value);
-    return;
-  }
-  if (value.tag === 'record' && codec.fields) {
+  } else if (value.tag === 'record' && codec.fields) {
     codec.fields.forEach((field, index) => validateConfigDefault(field.codec, value.fields[index]));
-    return;
-  }
-  if (value.tag === 'tuple' && codec.tupleItems) {
+  } else if (value.tag === 'tuple' && codec.tupleItems) {
     codec.tupleItems.forEach((item, index) => validateConfigDefault(item, value.elements[index]));
-    return;
-  }
-  if (value.tag === 'list' && codec.listItem) {
+  } else if (value.tag === 'list' && codec.listItem) {
     value.elements.forEach((item) => validateConfigDefault(codec.listItem!, item));
-    return;
+  } else {
+    const result = codec.sourceSchema?.['~standard'].validate(codec.fromValue(value));
+    if (result instanceof Promise || result?.issues)
+      throw new TypeError('Invalid static config default');
   }
-  const result = codec.sourceSchema?.['~standard'].validate(codec.fromValue(value));
-  if (result instanceof Promise || result?.issues)
-    throw new TypeError('Invalid static config default');
+  codec.validateConfigContainer?.(codec.fromValue(value));
 }
 
 /** Build a presence-tree node (leaf or group) for a compiled field `codec` at `path`. */

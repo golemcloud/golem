@@ -305,6 +305,110 @@ describe('static config', () => {
     ).toThrow(/partial nested config default/);
   });
 
+  it('validates container constraints on static defaults', () => {
+    const bounded = [
+      z.array(z.number()).min(1).max(2),
+      z
+        .array(s.u32() as any)
+        .min(1)
+        .max(2),
+      z3
+        .array(s.u32() as any)
+        .min(1)
+        .max(2),
+      valibot.pipe(valibot.array(s.u32() as any), valibot.minLength(1), valibot.maxLength(2)),
+    ];
+    for (const schema of bounded) {
+      for (const invalid of [[], [2, 7, 9]]) {
+        expect(() => compileConfig({ values: s.default(schema, invalid) })).toThrow(
+          /Invalid static config default/,
+        );
+      }
+      const [valid] = compileConfig({ values: s.default(schema, [2, 7]) });
+      expect(new SchemaRef(valid.graph).unpackJson(valid.defaultValue!)).toEqual([2, 7]);
+    }
+    const ordered = z
+      .object({ lower: s.u32(), upper: s.u32() })
+      .refine(({ lower, upper }) => lower < upper);
+    expect(() => compileConfig({ range: s.default(ordered, { lower: 9, upper: 2 }) })).toThrow(
+      /Invalid static config default/,
+    );
+    const [valid] = compileConfig({ range: s.default(ordered, { lower: 2, upper: 9 }) });
+    expect(new SchemaRef(valid.graph).unpackJson(valid.defaultValue!)).toEqual({
+      lower: 2,
+      upper: 9,
+    });
+    const readonlyOrdered = z
+      .object({ lower: s.u32(), upper: s.u32() })
+      .readonly()
+      .refine(({ lower, upper }) => lower < upper);
+    expect(() =>
+      compileConfig({ range: s.default(readonlyOrdered, { lower: 9, upper: 2 }) }),
+    ).toThrow(/Invalid static config default/);
+    const [readonlyValid] = compileConfig({
+      range: s.default(readonlyOrdered, { lower: 2, upper: 9 }),
+    });
+    expect(new SchemaRef(readonlyValid.graph).unpackJson(readonlyValid.defaultValue!)).toEqual({
+      lower: 2,
+      upper: 9,
+    });
+    const piped = valibot.pipe(
+      valibot.pipe(
+        valibot.object({ lower: s.u32(), upper: s.u32() }),
+        valibot.check(({ lower, upper }) => lower < upper),
+      ),
+      valibot.check(({ upper }) => upper < 10),
+    );
+    for (const invalid of [
+      { lower: 9, upper: 2 },
+      { lower: 2, upper: 10 },
+    ]) {
+      expect(() => compileConfig({ range: s.default(piped, invalid) })).toThrow(
+        /Invalid static config default/,
+      );
+    }
+    const [pipedValid] = compileConfig({ range: s.default(piped, { lower: 2, upper: 9 }) });
+    expect(new SchemaRef(pipedValid.graph).unpackJson(pipedValid.defaultValue!)).toEqual({
+      lower: 2,
+      upper: 9,
+    });
+    expect(() =>
+      compileConfig({
+        values: s.default(
+          z.array(z.number()).overwrite(() => []),
+          [2, 7],
+        ),
+      }),
+    ).toThrow(/overwrites/);
+    expect(() =>
+      compileConfig({
+        values: s.default(
+          z.array(z.number()).refine(async () => true),
+          [2, 7],
+        ),
+      }),
+    ).toThrow(/asynchronous validation/);
+  });
+
+  it('exports independent static child defaults beside managed fields', () => {
+    const [timeout, apiKey] = compileConfig({
+      service: z.object({
+        timeout: s.default(z.number(), 30),
+        apiKey: s.secret(z.string()),
+      }),
+    });
+    expect(timeout.path).toEqual(['service', 'timeout']);
+    expect(new SchemaRef(timeout.graph).unpackJson(timeout.defaultValue!)).toBe(30);
+    expect(apiKey.path).toEqual(['service', 'apiKey']);
+    expect(apiKey.source).toBe('secret');
+    expect(apiKey.defaultValue).toBeUndefined();
+    expect(() =>
+      compileConfig({
+        service: s.default(z.object({ apiKey: s.secret(z.string()) }), { apiKey: 'secret' }),
+      }),
+    ).toThrow(/managed fields/);
+  });
+
   it('reads the host value at the canonical path with no SDK-local default fallback', () => {
     const tree = compileConfigTree({ max_chars: s.default(z.number().optional(), 31) });
     const [declaration] = compileConfig({ max_chars: s.default(z.number().optional(), 31) });
