@@ -194,15 +194,6 @@ async fn oplog_enrichment_denial<Ctx: WorkerCtx>(
     Ok(Some((request, denial)))
 }
 
-/// A denied oplog read does not advance the resource: its response carries the position of the
-/// recorded request, which does not hold the resource's component revision before the first read.
-fn is_denied_oplog_read(response: &HostResponseGolemApiOplogChunk) -> bool {
-    response
-        .result
-        .as_ref()
-        .is_err_and(|error| error == AGENT_OPERATION_PERMISSION_DENIED)
-}
-
 type SerializedOplogEntries = Vec<(u64, Vec<u8>)>;
 type OplogEntryConversion = Result<Vec<(u64, OplogEnrichmentEntry)>, String>;
 
@@ -500,17 +491,10 @@ impl<Ctx: WorkerCtx> HostGetOplog for DurableWorkerCtx<Ctx> {
             handle.complete(self, response).await?
         };
 
-        let denied = is_denied_oplog_read(&response);
-        self.as_wasi_view().table().get_mut(&self_).map(|entry| {
-            if denied {
-                entry.update(entry.next_oplog_index, entry.current_component_revision);
-            } else {
-                entry.update(
-                    response.next_oplog_index,
-                    response.current_component_revision,
-                );
-            }
-        })?;
+        self.as_wasi_view()
+            .table()
+            .get_mut(&self_)
+            .map(|entry| entry.advance(&response))?;
         match response.result {
             Ok(Some(entries)) => {
                 let entries: Vec<PublicOplogEntry> = serde_json::from_slice(&entries)
@@ -564,13 +548,15 @@ impl GetOplogEntry {
         }
     }
 
-    pub fn update(
-        &mut self,
-        next_oplog_index: OplogIndex,
-        current_component_revision: ComponentRevision,
-    ) {
-        self.next_oplog_index = next_oplog_index;
-        self.current_component_revision = current_component_revision;
+    /// Moves the reader past the batch of `response`. A failed batch, such as a denied one, leaves
+    /// the reader as it was, so a later call reads the same batch and again finds the component
+    /// revision at its start.
+    pub fn advance(&mut self, response: &HostResponseGolemApiOplogChunk) {
+        if response.result.is_err() {
+            return;
+        }
+        self.next_oplog_index = response.next_oplog_index;
+        self.current_component_revision = response.current_component_revision;
         self.initialized = true;
     }
 }
@@ -696,22 +682,10 @@ impl<Ctx: WorkerCtx> HostSearchOplog for DurableWorkerCtx<Ctx> {
             handle.complete(self, response).await?
         };
 
-        let denied = is_denied_oplog_read(&response);
-        self.as_wasi_view().table().get_mut(&self_).map(|entry| {
-            if denied {
-                entry.update(
-                    entry.next_oplog_index,
-                    entry.current_component_revision,
-                    entry.last_oplog_index,
-                );
-            } else {
-                entry.update(
-                    response.next_oplog_index,
-                    response.current_component_revision,
-                    response.last_oplog_index,
-                );
-            }
-        })?;
+        self.as_wasi_view()
+            .table()
+            .get_mut(&self_)
+            .map(|entry| entry.advance(&response))?;
         match response.result {
             Ok(Some(entries)) => {
                 let entries: Vec<(OplogIndex, PublicOplogEntry)> = serde_json::from_slice(&entries)
@@ -779,15 +753,16 @@ impl SearchOplogEntry {
         }
     }
 
-    pub fn update(
-        &mut self,
-        next_oplog_index: OplogIndex,
-        current_component_revision: ComponentRevision,
-        last_oplog_index: Option<OplogIndex>,
-    ) {
-        self.next_oplog_index = next_oplog_index;
-        self.current_component_revision = current_component_revision;
-        self.last_oplog_index = last_oplog_index;
+    /// Moves the reader past the batch of `response`. A failed batch, such as a denied one, leaves
+    /// the reader as it was, so a later call reads the same batch and again finds the component
+    /// revision at its start.
+    pub fn advance(&mut self, response: &HostResponseGolemApiOplogChunk) {
+        if response.result.is_err() {
+            return;
+        }
+        self.next_oplog_index = response.next_oplog_index;
+        self.current_component_revision = response.current_component_revision;
+        self.last_oplog_index = response.last_oplog_index;
         self.initialized = true;
     }
 }
@@ -1009,5 +984,77 @@ mod tests {
         let indexes =
             enrichment_read_indexes(&[(9, failed_update(Some(1))), (10, failed_update(None))]);
         assert_eq!(indexes, [9, 1, 10].map(OplogIndex::from_u64).to_vec());
+    }
+
+    /// A reader finds the component revision at its start before its first batch, and uses the
+    /// revision of the previous batch after it. A failed first batch, such as one without the
+    /// grant, is not a previous batch: a later call that the grant allows must find the revision
+    /// at the start again, not use the revision of the reading agent.
+    #[test]
+    fn a_failed_batch_leaves_the_oplog_readers_as_they_were() {
+        let owned_agent_id = OwnedAgentId::new(
+            golem_common::model::environment::EnvironmentId(uuid::Uuid::from_u128(1)),
+            &AgentId::from_parts(7, 1),
+        );
+        let start = OplogIndex::from_u64(201);
+        let reader_revision = ComponentRevision::new(5).unwrap();
+        let mut get = GetOplogEntry::new(owned_agent_id.clone(), start, reader_revision, 100);
+        let mut search = SearchOplogEntry::new(
+            owned_agent_id,
+            start,
+            reader_revision,
+            100,
+            "failed-update".to_string(),
+        );
+        for error in [AGENT_OPERATION_PERMISSION_DENIED, "agent does not exist"] {
+            let failed = HostResponseGolemApiOplogChunk {
+                result: Err(error.to_string()),
+                next_oplog_index: start,
+                current_component_revision: reader_revision,
+                last_oplog_index: None,
+            };
+            get.advance(&failed);
+            search.advance(&failed);
+        }
+        assert_eq!((get.next_oplog_index, get.initialized), (start, false));
+        assert_eq!(
+            (
+                search.next_oplog_index,
+                search.last_oplog_index,
+                search.initialized
+            ),
+            (start, None, false)
+        );
+
+        let read = HostResponseGolemApiOplogChunk {
+            result: Ok(None),
+            next_oplog_index: OplogIndex::from_u64(301),
+            current_component_revision: ComponentRevision::new(2).unwrap(),
+            last_oplog_index: Some(OplogIndex::from_u64(300)),
+        };
+        get.advance(&read);
+        search.advance(&read);
+        assert_eq!(
+            (
+                get.next_oplog_index,
+                get.current_component_revision,
+                get.initialized
+            ),
+            (read.next_oplog_index, read.current_component_revision, true)
+        );
+        assert_eq!(
+            (
+                search.next_oplog_index,
+                search.current_component_revision,
+                search.last_oplog_index,
+                search.initialized
+            ),
+            (
+                read.next_oplog_index,
+                read.current_component_revision,
+                read.last_oplog_index,
+                true
+            )
+        );
     }
 }

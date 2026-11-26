@@ -4439,7 +4439,8 @@ batch checks the grant for its own window. Completed calls replay their recorded
 none, so they read no owning `Start` outside the window. When a `FailedUpdate` in a guest batch has
 its divergence index outside the window, the batch also checks the grant for that index, as
 `enrich-oplog-entries` does, and is refused with `permission-denied` when the grant does not cover
-it. A `get-oplog` resource that starts at index 0 starts at index 1, so its grant check covers the
+it. A failed batch, such as a refused one, leaves the resource as it was, also its component
+revision. A `get-oplog` resource that starts at index 0 starts at index 1, so its grant check covers the
 indexes it reads.
 A guest batch that starts after index 1 takes the component revision at its start from the latest
 status of the agent, not from a scan of the entries before its start.
