@@ -359,6 +359,9 @@ struct PendingInput {
 struct AdapterError {
     code: PublicErrorCode,
     message: String,
+    /// The error comes only from the private response and the pinned schemas, so a resume
+    /// receives the same response and fails the same way.
+    repeats_on_resume: bool,
 }
 
 impl AdapterError {
@@ -366,11 +369,19 @@ impl AdapterError {
         Self {
             code,
             message: message.into(),
+            repeats_on_resume: false,
         }
     }
 
     fn protocol(message: impl Into<String>) -> Self {
         Self::new(PublicErrorCode::ProtocolError, message)
+    }
+
+    fn unresolvable_stream_schema(message: impl Into<String>) -> Self {
+        Self {
+            repeats_on_resume: true,
+            ..Self::protocol(message)
+        }
     }
 }
 
@@ -811,12 +822,18 @@ impl AdapterState {
                 search,
                 SchemaFingerprintV1(private.schema_fingerprint),
             )
-            .map_err(|_| AdapterError::protocol("stream schema fingerprint is invalid"))?
+            .map_err(|_| {
+                AdapterError::unresolvable_stream_schema("stream schema fingerprint is invalid")
+            })?
             .map(|graph| graph.root)
-            .ok_or_else(|| AdapterError::protocol("stream schema is not in the pinned graph"))?
+            .ok_or_else(|| {
+                AdapterError::unresolvable_stream_schema("stream schema is not in the pinned graph")
+            })?
         };
         let expected_fingerprint = schema_fingerprint_v1(graph, Some(&schema))
-            .map_err(|_| AdapterError::protocol("stream schema cannot be fingerprinted"))?
+            .map_err(|_| {
+                AdapterError::unresolvable_stream_schema("stream schema cannot be fingerprinted")
+            })?
             .0;
         if expected_fingerprint != private.schema_fingerprint {
             return Err(AdapterError::new(
@@ -2132,9 +2149,18 @@ async fn handle_private_responses<S>(
                     error = ?error,
                     "Invocation session response translation failed"
                 );
-                // A resume receives the same private response and fails the same way, so the
-                // attempt ends with a rejection that the client does not retry. The invocation
-                // itself continues on the agent.
+                if !error.repeats_on_resume {
+                    fail_session(
+                        &outbound,
+                        &state,
+                        attempt_id,
+                        PublicErrorCode::InternalError,
+                    )
+                    .await;
+                    return;
+                }
+                // A resume would fail the same way, so the attempt ends with a rejection that
+                // the client does not retry. The invocation itself continues on the agent.
                 send_rejection(
                     &outbound,
                     Some(attempt_id),
@@ -5542,33 +5568,11 @@ mod tests {
         }
     }
 
-    /// Every resume receives the same private response, so a response that cannot be translated
-    /// ends the attempt with a rejection that the client does not retry, also after acceptance.
-    #[test]
-    async fn an_untranslatable_response_ends_the_attempt_without_a_retry() {
-        let attempt_id = method_attempt_id();
-        // No stream of the method has this element schema.
-        let unknown = private_mapping(
-            8,
-            StreamMappingRole::Output,
-            stream_fingerprint(SchemaType::bool()),
-        );
-        let responses = vec![
-            Ok(InvocationResponse {
-                response: Some(invocation_response::Response::Accepted(method_acceptance(
-                    attempt_id,
-                    None,
-                    Vec::new(),
-                ))),
-            }),
-            Ok(InvocationResponse {
-                response: Some(invocation_response::Response::Ready(method_acceptance(
-                    attempt_id,
-                    Some(12),
-                    vec![unknown],
-                ))),
-            }),
-        ];
+    /// The messages that the adapter sends for `responses` on a method session.
+    async fn messages_for_responses(
+        attempt_id: Uuid,
+        responses: Vec<Result<InvocationResponse, tonic::Status>>,
+    ) -> Vec<Message> {
         let state = Arc::new(Mutex::new(selected_method_state()));
         let (sender, mut receiver) = mpsc::channel(8);
         let outbound = Outbound {
@@ -5579,27 +5583,66 @@ mod tests {
             futures::stream::iter(responses),
             None,
             outbound,
-            state.clone(),
+            state,
             Arc::new(keyring()),
             token_bindings(&AuthCtx::system()),
             keyring().active_key_id().to_string(),
             attempt_id,
         )
         .await;
+        let mut messages = Vec::new();
+        while let Some(queued) = receiver.recv().await {
+            messages.push(queued.message);
+        }
+        messages
+    }
 
-        let decode = |message: Message| {
-            let Message::Text(text) = message else {
-                panic!("expected a text message, got {message:?}")
-            };
-            golem_common::model::invocation_session_public::decode_server_text(text.as_bytes())
-                .unwrap()
+    fn decode_public(message: &Message) -> PublicServerMessage {
+        let Message::Text(text) = message else {
+            panic!("expected a text message, got {message:?}")
         };
+        golem_common::model::invocation_session_public::decode_server_text(text.as_bytes()).unwrap()
+    }
+
+    /// A stream schema that the pinned schemas do not contain makes every resume fail the same
+    /// way, so the attempt ends with a rejection that the client does not retry, also after
+    /// acceptance.
+    #[test]
+    async fn an_unresolvable_stream_schema_ends_the_attempt_without_a_retry() {
+        let attempt_id = method_attempt_id();
+        // No stream of the method has this element schema.
+        let unknown = private_mapping(
+            8,
+            StreamMappingRole::Output,
+            stream_fingerprint(SchemaType::bool()),
+        );
+        let messages = messages_for_responses(
+            attempt_id,
+            vec![
+                Ok(InvocationResponse {
+                    response: Some(invocation_response::Response::Accepted(method_acceptance(
+                        attempt_id,
+                        None,
+                        Vec::new(),
+                    ))),
+                }),
+                Ok(InvocationResponse {
+                    response: Some(invocation_response::Response::Ready(method_acceptance(
+                        attempt_id,
+                        Some(12),
+                        vec![unknown],
+                    ))),
+                }),
+            ],
+        )
+        .await;
+
+        assert_eq!(messages.len(), 3, "{messages:?}");
         assert!(matches!(
-            decode(receiver.recv().await.unwrap().message),
+            decode_public(&messages[0]),
             PublicServerMessage::InvocationAccepted { .. }
         ));
-        assert!(state.lock().await.tokens.is_some());
-        match decode(receiver.recv().await.unwrap().message) {
+        match decode_public(&messages[1]) {
             PublicServerMessage::InvocationRejected {
                 attempt_id: rejected_attempt,
                 code,
@@ -5613,10 +5656,61 @@ mod tests {
             other => panic!("expected a rejection, got {other:?}"),
         }
         assert!(matches!(
-            receiver.recv().await.unwrap().message,
+            &messages[2],
             Message::Close(Some((CloseCode::Error, _)))
         ));
-        assert!(receiver.recv().await.is_none());
+    }
+
+    /// A translation error that comes from the state of this connection need not repeat on a
+    /// resume, so after acceptance the adapter closes the socket for a resume and sends no
+    /// rejection.
+    #[test]
+    async fn a_connection_state_error_after_acceptance_lets_the_client_resume() {
+        let attempt_id = method_attempt_id();
+        let output = private_mapping(
+            8,
+            StreamMappingRole::Output,
+            stream_fingerprint(SchemaType::f64()),
+        );
+        let mut rebound = output.clone();
+        rebound.handle.as_mut().unwrap().stream_id = Some(proto_uuid(999));
+        let messages = messages_for_responses(
+            attempt_id,
+            vec![
+                Ok(InvocationResponse {
+                    response: Some(invocation_response::Response::Accepted(method_acceptance(
+                        attempt_id,
+                        Some(12),
+                        vec![output],
+                    ))),
+                }),
+                Ok(InvocationResponse {
+                    response: Some(invocation_response::Response::Result(
+                        InvocationSessionResult {
+                            result: Some(invocation_session_result::Result::MethodResult(
+                                stream_value(8),
+                            )),
+                            component_revision: Some(12),
+                            agent_id: Some(proto_agent_id()),
+                            idempotency_key: idempotency_key(),
+                            new_stream_mappings: vec![rebound],
+                            ..Default::default()
+                        },
+                    )),
+                }),
+            ],
+        )
+        .await;
+
+        assert_eq!(messages.len(), 2, "{messages:?}");
+        assert!(matches!(
+            decode_public(&messages[0]),
+            PublicServerMessage::InvocationAccepted { .. }
+        ));
+        assert!(matches!(
+            &messages[1],
+            Message::Close(Some((CloseCode::Error, reason))) if reason == "session attachment failed"
+        ));
     }
 
     #[test]

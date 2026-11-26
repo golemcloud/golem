@@ -435,6 +435,13 @@ The server closes with code 1002 after the diagnostic. Normal stream-terminal
 and `invocationFinished` guarantees do not apply to this protocol-violation
 close.
 
+After acceptance, the server also sends this variant with code
+`internal-error` and `retryable` `false` when it cannot translate an agent
+response for the attempt and a resume would fail the same way, for example
+because a stream schema is not in the selected method's schemas. The server
+then closes with code 1011. The invocation continues on the agent. The server
+does not terminalize open streams and sends no `invocationFinished`.
+
 ### 6.3 `invocationResult`
 
 A value result is:
@@ -850,8 +857,10 @@ The v1 code set is frozen:
 Handshake failures use the existing public HTTP error envelope. Before
 acceptance, expected application errors use `invocationRejected`. After
 acceptance, stream-local failures use `outputStreamEnd`; fatal failures
-terminalize open streams and use `invocationFinished`. A framing or state
-violation sends a safe `invocationRejected` when enough of the message and
+terminalize open streams and use `invocationFinished`. A response translation
+failure that a resume would repeat sends `invocationRejected` with
+`internal-error` and closes with code 1011 instead (section 6.2). A framing or
+state violation sends a safe `invocationRejected` when enough of the message and
 attempt identity are available and then closes the WebSocket with code 1002;
 otherwise it closes directly with code 1002. Oversized input closes with code
 1009.
