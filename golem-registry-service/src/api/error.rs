@@ -48,9 +48,12 @@ use crate::services::tool_middleware_release::ToolMiddlewareReleaseError;
 use crate::services::tool_release::ToolReleaseError;
 use golem_common::base_model::api;
 use golem_common::metrics::api::ApiErrorDetails;
-use golem_common::model::error::{ErrorBody, ErrorsBody};
+use golem_common::model::authority::GrantText;
+use golem_common::model::error::{ErrorBody, ErrorsBody, ForbiddenErrorBody};
+use golem_common::model::security_scheme::SecuritySchemeId;
 use golem_common::{IntoAnyhow, SafeDisplay};
 use golem_service_base::model::auth::AuthorizationError;
+use golem_service_base::model::auth::denial::{DenialRenderer, FORBIDDEN_MESSAGE, UnknownId};
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
 use std::sync::Arc;
@@ -65,7 +68,7 @@ pub enum ApiError {
     Unauthorized(Json<ErrorBody>),
     /// Forbidden Request
     #[oai(status = 403)]
-    Forbidden(Json<ErrorBody>),
+    Forbidden(Json<ForbiddenErrorBody>),
     /// Entity not found
     #[oai(status = 404)]
     NotFound(Json<ErrorBody>),
@@ -97,9 +100,10 @@ impl ApiError {
     }
 
     pub fn forbidden(code: &str, message: String) -> Self {
-        Self::Forbidden(Json(ErrorBody {
+        Self::Forbidden(Json(ForbiddenErrorBody {
             error: message,
             code: code.to_string(),
+            missing_grant: None,
             cause: None,
         }))
     }
@@ -346,10 +350,42 @@ impl From<anyhow::Error> for ApiError {
 }
 
 impl From<AuthorizationError> for ApiError {
+    /// A denied permission is the renderer's `403`, so the two cannot drift apart. The other
+    /// variants keep their own texts, which name an action and no account.
     fn from(value: AuthorizationError) -> Self {
-        Self::Forbidden(Json(ErrorBody {
-            error: value.to_string(),
+        match value {
+            AuthorizationError::PermissionNotAllowed(_)
+            | AuthorizationError::PermissionEvaluationFailed { .. } => {
+                RegistryDenials.forbidden(None)
+            }
+            other => Self::forbidden(api::error_code::AUTH_FORBIDDEN, other.to_safe_string()),
+        }
+    }
+}
+
+/// The registry's REST renderer of denials (5.3 Rule 21).
+pub struct RegistryDenials;
+
+impl DenialRenderer for RegistryDenials {
+    type Response = ApiError;
+
+    fn unknown(&self, id: &UnknownId) -> ApiError {
+        ApiError::not_found(id.code(), id.message())
+    }
+
+    fn forbidden(&self, missing_grant: Option<&GrantText>) -> ApiError {
+        ApiError::Forbidden(Json(ForbiddenErrorBody {
+            error: FORBIDDEN_MESSAGE.to_string(),
             code: api::error_code::AUTH_FORBIDDEN.to_string(),
+            missing_grant: missing_grant.map(|grant| grant.0.clone()),
+            cause: None,
+        }))
+    }
+
+    fn sign_in_required(&self, _scheme: Option<&SecuritySchemeId>) -> ApiError {
+        ApiError::Unauthorized(Json(ErrorBody {
+            error: "Sign-in required".to_string(),
+            code: api::error_code::AUTH_UNAUTHORIZED.to_string(),
             cause: None,
         }))
     }
@@ -1490,8 +1526,10 @@ impl From<McpImportResolverError> for ApiError {
                             *message = format!("MCP import {import_index}: {message}");
                         }
                     }
+                    Self::Forbidden(body) => {
+                        body.0.error = format!("MCP import {import_index}: {}", body.0.error);
+                    }
                     Self::Unauthorized(body)
-                    | Self::Forbidden(body)
                     | Self::NotFound(body)
                     | Self::Conflict(body)
                     | Self::LimitExceeded(body)
@@ -2424,5 +2462,129 @@ mod tests {
             code,
             api::error_code::TOOL_MIDDLEWARE_PUBLICATION_MIDDLEWARE_NOT_FOUND
         );
+    }
+
+    /// A 1.6 permission target whose text holds the owner's account.
+    fn target_of_another_account() -> Box<golem_common::model::card::PermissionTarget> {
+        use golem_common::model::account::AccountEmail;
+        use golem_common::model::card::owner::AgentOwnerPattern;
+        use golem_common::model::card::{
+            AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
+        };
+
+        Box::new(PermissionTarget::Agent(ClassPermissionTarget {
+            owner: AgentOwnerPattern::AccountAgents {
+                account: AccountEmail::new("owner@example.com"),
+            },
+            verb: Some(AgentVerb::Invoke),
+            resource: AgentResourcePattern::Any,
+        }))
+    }
+
+    #[test]
+    fn a_denied_permission_is_a_403_that_shows_no_target() {
+        use golem_service_base::model::auth::denial::FORBIDDEN_MESSAGE;
+
+        for error in [
+            ApiError::from(AuthorizationError::PermissionNotAllowed(
+                target_of_another_account(),
+            )),
+            ApiError::from(DeploymentError::Unauthorized(
+                AuthorizationError::PermissionNotAllowed(target_of_another_account()),
+            )),
+        ] {
+            match error {
+                ApiError::Forbidden(body) => {
+                    assert_eq!(body.0.code, api::error_code::AUTH_FORBIDDEN);
+                    assert_eq!(body.0.error, FORBIDDEN_MESSAGE);
+                }
+                other => panic!("expected 403, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn a_denied_permission_gets_the_bytes_of_the_registry_renderers_403() {
+        use golem_common::model::card::CardAlgebraError;
+        use golem_service_base::model::auth::denial::{DenialRenderer, FORBIDDEN_MESSAGE};
+
+        fn body(error: ApiError) -> serde_json::Value {
+            match error {
+                ApiError::Forbidden(body) => serde_json::to_value(&body.0).unwrap(),
+                other => panic!("expected 403, got {other:?}"),
+            }
+        }
+
+        let rendered = body(RegistryDenials.forbidden(None));
+        assert_eq!(
+            rendered,
+            serde_json::json!({"code": api::error_code::AUTH_FORBIDDEN, "error": FORBIDDEN_MESSAGE})
+        );
+        for error in [
+            AuthorizationError::PermissionNotAllowed(target_of_another_account()),
+            AuthorizationError::PermissionEvaluationFailed {
+                target: target_of_another_account(),
+                error: CardAlgebraError::InvalidOwnerPath("owner@example.com/app".to_string()),
+            },
+        ] {
+            assert_eq!(body(ApiError::from(error)), rendered);
+        }
+    }
+
+    #[test]
+    fn the_registry_renderer_names_a_grant_only_when_the_authorizer_gives_one() {
+        use golem_common::model::authority::{Denial, GrantText};
+        use golem_service_base::model::auth::denial::{DenialRenderer, FORBIDDEN_MESSAGE};
+
+        for (missing_grant, expected) in [
+            (None, None),
+            (
+                Some(GrantText("tool(E/grep) : invoke".to_string())),
+                Some("tool(E/grep) : invoke"),
+            ),
+        ] {
+            match RegistryDenials.render(&Denial::Forbidden { missing_grant }, &[]) {
+                ApiError::Forbidden(body) => {
+                    assert_eq!(body.0.code, api::error_code::AUTH_FORBIDDEN);
+                    assert_eq!(body.0.error, FORBIDDEN_MESSAGE);
+                    assert_eq!(body.0.missing_grant.as_deref(), expected);
+                }
+                other => panic!("expected 403, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn every_designated_kind_answers_the_registry_with_its_own_not_found() {
+        use golem_common::model::authority::{Denial, DesignatedKind};
+        use golem_service_base::model::auth::denial::{DenialRenderer, UnknownId};
+
+        for kind in [
+            DesignatedKind::Agent,
+            DesignatedKind::Invocation,
+            DesignatedKind::Task,
+            DesignatedKind::Stream,
+            DesignatedKind::Promise,
+            DesignatedKind::Webhook,
+            DesignatedKind::Artifact,
+        ] {
+            let id = UnknownId::new(kind, "id-7");
+            match RegistryDenials.render(&Denial::LooksUnknown { kind }, std::slice::from_ref(&id))
+            {
+                ApiError::NotFound(body) => {
+                    assert_eq!(body.0.code, id.code(), "{kind:?}");
+                    assert_eq!(body.0.error, id.message(), "{kind:?}");
+                }
+                other => panic!("{kind:?}: expected 404, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn an_unknown_tool_stays_not_found() {
+        let tool_name = golem_common::model::tool::ToolName::try_from("grep").unwrap();
+        let (status, code) = status_and_code(DeploymentError::ToolNotFound(tool_name).into());
+        assert_eq!(status, "not_found");
+        assert_eq!(code, api::error_code::TOOL_NOT_FOUND);
     }
 }

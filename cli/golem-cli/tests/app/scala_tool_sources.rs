@@ -94,8 +94,8 @@ async fn scala_generated_client_invokes_ambient_native_tool_through_golem() {
         ])
         .await;
     assert!(denied.success_or_dump());
-    assert!(denied.stdout_contains("permission target Tool"));
-    assert!(denied.stdout_contains("is not allowed"));
+    assert!(denied.stdout_contains("Access denied"));
+    assert!(!denied.stdout_contains("permission target"));
     assert!(!denied.stdout_contains("agentAuthorized"));
 }
 

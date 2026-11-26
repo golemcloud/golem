@@ -19,6 +19,7 @@ mod agent_secret;
 mod application;
 mod auth;
 mod component;
+mod denials;
 mod deployment;
 mod domain_registration;
 mod environment;

@@ -1213,15 +1213,16 @@ async fn management_endpoints_deny_strangers_and_report_unknown_agents_to_the_ow
     let existing = owner.start_agent(&component.id, key.clone()).await?;
     let unknown = AgentId::random(counter_type);
 
+    // A denial on an agent named by its ID is the answer of an unknown ID (5.3 Rule 21).
     let strangers = worker_client(&stranger).await;
     assert_all(
         management_statuses(&strangers, environment, existing.agent_id.0, revision).await,
-        403,
+        404,
         "a stranger on an existing agent",
     );
     assert_all(
         management_statuses(&strangers, environment, unknown.0, revision).await,
-        403,
+        404,
         "a stranger on an unknown agent",
     );
     assert!(owner.get_worker_metadata_opt(&existing).await?.is_some());

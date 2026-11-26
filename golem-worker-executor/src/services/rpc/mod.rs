@@ -635,6 +635,7 @@ pub struct DirectWorkerInvocationRpc<Ctx: WorkerCtx> {
     leak_sentinel: Arc<()>,
 }
 
+pub mod denials;
 mod dependencies;
 mod direct;
 mod remote;

@@ -96,9 +96,11 @@ impl From<&'static str> for GrpcApiError {
 }
 
 impl From<AuthorizationError> for GrpcApiError {
+    /// The worker service relays this text in its own REST answers, so it is the safe text: it
+    /// names no permission target, whose text holds the owner's account.
     fn from(value: AuthorizationError) -> Self {
         Self::Unauthorized(ErrorBody {
-            error: value.to_string(),
+            error: value.to_safe_string(),
             code: api::error_code::AUTH_UNAUTHORIZED.to_string(),
             cause: None,
         })
@@ -654,5 +656,37 @@ mod tests {
             "private-secret"
         )));
         assert!(!internal.to_string().contains("private-secret"));
+    }
+
+    /// The worker service relays this text in its own REST answers, so it holds no permission
+    /// target: a 1.6 target holds the owner's account.
+    #[test]
+    fn a_denied_permission_reaches_the_worker_service_without_its_target() {
+        use golem_common::model::account::AccountEmail;
+        use golem_common::model::card::owner::AgentOwnerPattern;
+        use golem_common::model::card::{
+            AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
+        };
+
+        let denied = AuthorizationError::PermissionNotAllowed(Box::new(PermissionTarget::Agent(
+            ClassPermissionTarget {
+                owner: AgentOwnerPattern::AccountAgents {
+                    account: AccountEmail::new("owner@example.com"),
+                },
+                verb: Some(AgentVerb::Invoke),
+                resource: AgentResourcePattern::Any,
+            },
+        )));
+        let wire: golem_api_grpc::proto::golem::registry::v1::RegistryServiceError =
+            GrpcApiError::from(denied).into();
+        let received = RegistryServiceError::from(wire);
+        assert!(
+            matches!(received, RegistryServiceError::Unauthorized(_)),
+            "{received:?}"
+        );
+        assert!(
+            !received.to_string().contains("owner@example.com"),
+            "{received}"
+        );
     }
 }

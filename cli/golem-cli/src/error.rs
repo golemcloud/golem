@@ -258,6 +258,12 @@ pub mod service {
             self.additional_field_as("workerError")
         }
 
+        /// The grant that a `403` names. The server names one only for a target that the caller
+        /// may view.
+        pub fn missing_grant(&self) -> Option<String> {
+            self.additional_field_as("missingGrant")
+        }
+
         pub fn is_status_code(&self, status_code: u16) -> bool {
             self.status_code == status_code
         }
@@ -410,6 +416,13 @@ pub mod service {
                             result
                         }
                     };
+
+                    if let Some(missing_grant) = response.missing_grant() {
+                        result.push_str("\n\n");
+                        result.push_str(&"Missing grant:".bright_black().to_string());
+                        result.push('\n');
+                        result.push_str(&missing_grant);
+                    }
 
                     if let Some(agent_error) = response.agent_error() {
                         if !agent_error.stderr.trim().is_empty() {
@@ -804,6 +817,48 @@ pub mod service {
 
             assert!(previous_invocation_failed.is_previous_invocation_failed());
             assert!(!unrelated_failure.is_previous_invocation_failed());
+        }
+
+        fn forbidden(missing_grant: Option<&str>) -> ServiceError {
+            let mut additional_fields = Map::new();
+            if let Some(grant) = missing_grant {
+                additional_fields.insert("missingGrant".to_string(), json!(grant));
+            }
+            ServiceError {
+                service_name: "Agent",
+                kind: ServiceErrorKind::ErrorResponse(ServiceErrorResponse {
+                    status_code: 403,
+                    errors: vec!["Access denied".to_string()],
+                    code: Some("AUTH_FORBIDDEN".to_string()),
+                    additional_fields,
+                }),
+            }
+        }
+
+        #[test]
+        fn a_forbidden_answer_shows_the_missing_grant_that_it_names() {
+            let rendered =
+                strip_ansi_escapes::strip_str(forbidden(Some("tool(E/grep) : invoke")).render());
+
+            assert!(
+                rendered.contains("Access denied (AUTH_FORBIDDEN)"),
+                "{rendered}"
+            );
+            assert!(
+                rendered.contains("Missing grant:\ntool(E/grep) : invoke"),
+                "{rendered}"
+            );
+        }
+
+        #[test]
+        fn a_forbidden_answer_without_a_grant_names_none() {
+            let rendered = strip_ansi_escapes::strip_str(forbidden(None).render());
+
+            assert!(
+                rendered.contains("Access denied (AUTH_FORBIDDEN)"),
+                "{rendered}"
+            );
+            assert!(!rendered.contains("Missing grant"), "{rendered}");
         }
     }
 }

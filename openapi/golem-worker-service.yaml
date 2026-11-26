@@ -121,7 +121,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -230,7 +230,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -327,7 +327,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -435,7 +435,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -530,7 +530,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -631,7 +631,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -794,7 +794,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -918,7 +918,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -1020,7 +1020,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -1118,7 +1118,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -1221,7 +1221,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -1328,7 +1328,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -1435,7 +1435,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -1537,7 +1537,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -1641,7 +1641,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -1732,7 +1732,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -1834,7 +1834,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -1980,7 +1980,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -2073,7 +2073,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -2168,7 +2168,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -2285,7 +2285,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -2404,7 +2404,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -2512,7 +2512,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -2597,7 +2597,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -2684,7 +2684,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -2834,7 +2834,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -2943,7 +2943,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -3029,7 +3029,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -3120,7 +3120,7 @@ paths:
           content:
             application/json; charset=utf-8:
               schema:
-                $ref: '#/components/schemas/ErrorBody'
+                $ref: '#/components/schemas/ForbiddenErrorBody'
         '404':
           description: ''
           content:
@@ -6119,6 +6119,23 @@ components:
         env_var:
           type: string
           nullable: true
+    ForbiddenErrorBody:
+      type: object
+      title: ForbiddenErrorBody
+      description: |-
+        The body of a `403`. It names the missing grant only when the authorizer gives one, which it
+        does only for a target that the caller may view (5.3 Rule 21).
+      required:
+      - code
+      - error
+      properties:
+        code:
+          type: string
+        error:
+          type: string
+        missingGrant:
+          type: string
+          description: The grant that would allow the request, in its text form.
     ForbidsC:
       type: object
       required:

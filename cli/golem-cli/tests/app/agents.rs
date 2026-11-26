@@ -4012,8 +4012,8 @@ async fn rust_ambient_native_client_executes_through_golem() {
         .await;
     assert!(denied.success_or_dump());
     assert!(
-        denied.stdout_contains("permission target Tool")
-            && denied.stdout_contains("is not allowed")
+        denied.stdout_contains("Access denied")
+            && !denied.stdout_contains("permission target")
             && !denied.stdout_contains("Evidence { value: \"denied\""),
         "the unauthorized agent must return a tool permission denial without native fixture evidence"
     );

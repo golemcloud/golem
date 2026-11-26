@@ -21,11 +21,15 @@ use crate::service::worker::{CallWorkerExecutorError, WorkerServiceError};
 use golem_common::SafeDisplay;
 use golem_common::base_model::api;
 use golem_common::metrics::api::ApiErrorDetails;
+use golem_common::model::authority::{DesignatedKind, GrantText};
 use golem_common::model::error::ErrorBody;
 use golem_common::model::error::ErrorsBody;
+use golem_common::model::error::ForbiddenErrorBody;
+use golem_common::model::security_scheme::SecuritySchemeId;
 use golem_service_base::clients::registry::RegistryServiceError;
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::model::auth::AuthorizationError;
+use golem_service_base::model::auth::denial::{DenialRenderer, FORBIDDEN_MESSAGE, UnknownId};
 use poem_openapi::ApiResponse;
 use poem_openapi::payload::Json;
 use serde::{Deserialize, Serialize};
@@ -55,7 +59,7 @@ pub enum ApiEndpointError {
     #[oai(status = 401)]
     Unauthorized(Json<ErrorBody>),
     #[oai(status = 403)]
-    Forbidden(Json<ErrorBody>),
+    Forbidden(Json<ForbiddenErrorBody>),
     #[oai(status = 404)]
     NotFound(Json<ErrorBody>),
     #[oai(status = 409)]
@@ -135,9 +139,10 @@ impl ApiEndpointError {
     }
 
     pub fn forbidden<T: SafeDisplay>(code: &str, error: T) -> Self {
-        Self::Forbidden(Json(ErrorBody {
+        Self::Forbidden(Json(ForbiddenErrorBody {
             error: error.to_safe_string(),
             code: code.to_string(),
+            missing_grant: None,
             cause: None,
         }))
     }
@@ -215,6 +220,39 @@ impl ApiEndpointError {
     }
 }
 
+/// The REST renderer of denials. The real "not found" answers of designated kinds come from
+/// [`RestDenials::unknown`] too, so a denial and an unknown ID give the same bytes.
+pub struct RestDenials;
+
+impl DenialRenderer for RestDenials {
+    type Response = ApiEndpointError;
+
+    fn unknown(&self, id: &UnknownId) -> ApiEndpointError {
+        ApiEndpointError::NotFound(Json(ErrorBody {
+            error: id.message(),
+            code: id.code().to_string(),
+            cause: None,
+        }))
+    }
+
+    fn forbidden(&self, missing_grant: Option<&GrantText>) -> ApiEndpointError {
+        ApiEndpointError::Forbidden(Json(ForbiddenErrorBody {
+            error: FORBIDDEN_MESSAGE.to_string(),
+            code: api::error_code::AUTH_FORBIDDEN.to_string(),
+            missing_grant: missing_grant.map(|grant| grant.0.clone()),
+            cause: None,
+        }))
+    }
+
+    fn sign_in_required(&self, _scheme: Option<&SecuritySchemeId>) -> ApiEndpointError {
+        ApiEndpointError::Unauthorized(Json(ErrorBody {
+            error: "Sign-in required".to_string(),
+            code: api::error_code::AUTH_UNAUTHORIZED.to_string(),
+            cause: None,
+        }))
+    }
+}
+
 impl From<WorkerServiceError> for ApiEndpointError {
     fn from(error: WorkerServiceError) -> Self {
         match error {
@@ -245,14 +283,13 @@ impl From<WorkerServiceError> for ApiEndpointError {
             WorkerServiceError::AccountIdNotFound(_) => {
                 Self::not_found(api::error_code::ACCOUNT_NOT_FOUND, error)
             }
-            WorkerServiceError::AgentNotFound(_) => {
-                Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
+            // A denied agent answers as an unknown one (5.3 Rule 21).
+            WorkerServiceError::AgentNotFound(agent_id)
+            | WorkerServiceError::AgentAccessDenied(agent_id) => {
+                RestDenials.unknown(&UnknownId::new(DesignatedKind::Agent, agent_id))
             }
-            WorkerServiceError::InvocationNotFound(_) => {
-                Self::not_found(api::error_code::INVOCATION_NOT_FOUND, error)
-            }
-            WorkerServiceError::AgentAccessDenied(_) => {
-                Self::forbidden(api::error_code::AUTH_FORBIDDEN, error)
+            WorkerServiceError::InvocationNotFound(invocation_id) => {
+                RestDenials.unknown(&UnknownId::new(DesignatedKind::Invocation, invocation_id))
             }
             WorkerServiceError::GolemError(inner) => inner.into(),
             WorkerServiceError::Component(inner) => inner.into(),
@@ -324,8 +361,11 @@ impl From<WorkerExecutorError> for ApiEndpointError {
             WorkerExecutorError::StaleCursor { .. } => {
                 Self::bad_request(api::error_code::STALE_CURSOR, error)
             }
-            WorkerExecutorError::AgentNotFound { .. } => {
-                Self::not_found(api::error_code::AGENT_NOT_FOUND, error)
+            WorkerExecutorError::AgentNotFound { agent_id } => {
+                RestDenials.unknown(&UnknownId::new(DesignatedKind::Agent, agent_id))
+            }
+            WorkerExecutorError::PromiseNotFound { promise_id } => {
+                RestDenials.unknown(&UnknownId::new(DesignatedKind::Promise, promise_id))
             }
             WorkerExecutorError::AgentAlreadyExists { .. } => {
                 Self::conflict(api::error_code::AGENT_ALREADY_EXISTS, error)
@@ -402,12 +442,14 @@ impl From<WorkerExecutorError> for ApiEndpointError {
 }
 
 impl From<AuthorizationError> for ApiEndpointError {
+    /// A denied permission is the renderer's `403`, so the two cannot drift apart. The other
+    /// variants keep their own texts, which name an action and no account.
     fn from(value: AuthorizationError) -> Self {
-        Self::Forbidden(Json(ErrorBody {
-            error: value.to_string(),
-            code: api::error_code::AUTH_FORBIDDEN.to_string(),
-            cause: None,
-        }))
+        match value {
+            AuthorizationError::PermissionNotAllowed(_)
+            | AuthorizationError::PermissionEvaluationFailed { .. } => RestDenials.forbidden(None),
+            other => Self::forbidden(api::error_code::AUTH_FORBIDDEN, other),
+        }
     }
 }
 
@@ -863,6 +905,210 @@ mod tests {
                     decorated.into_body().into_vec().await.unwrap()
                 );
             }
+        }
+    }
+
+    /// The status, the headers and the body bytes that a caller receives for `error`.
+    async fn wire(
+        error: ApiEndpointError,
+    ) -> (poem::http::StatusCode, Vec<(String, Vec<u8>)>, Vec<u8>) {
+        let response = error.into_response();
+        let status = response.status();
+        let headers = response
+            .headers()
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.as_bytes().to_vec()))
+            .collect();
+        (
+            status,
+            headers,
+            response.into_body().into_vec().await.unwrap(),
+        )
+    }
+
+    fn json(body: &[u8]) -> serde_json::Value {
+        serde_json::from_slice(body).unwrap()
+    }
+
+    /// A 1.6 permission target whose text holds the owner's account.
+    fn target_of_another_account() -> Box<golem_common::model::card::PermissionTarget> {
+        use golem_common::model::account::AccountEmail;
+        use golem_common::model::card::owner::AgentOwnerPattern;
+        use golem_common::model::card::{
+            AgentResourcePattern, AgentVerb, ClassPermissionTarget, PermissionTarget,
+        };
+
+        Box::new(PermissionTarget::Agent(ClassPermissionTarget {
+            owner: AgentOwnerPattern::AccountAgents {
+                account: AccountEmail::new("owner@example.com"),
+            },
+            verb: Some(AgentVerb::Invoke),
+            resource: AgentResourcePattern::Any,
+        }))
+    }
+
+    #[test]
+    async fn a_denied_agent_is_byte_identical_to_an_unknown_agent() {
+        use golem_common::model::AgentId;
+
+        let agent_id = AgentId::from_parts(7, 3);
+        let unknown = wire(WorkerServiceError::AgentNotFound(agent_id).into()).await;
+        assert_eq!(unknown.0, poem::http::StatusCode::NOT_FOUND);
+        assert_eq!(
+            json(&unknown.2),
+            serde_json::json!({
+                "code": api::error_code::AGENT_NOT_FOUND,
+                "error": format!("Worker not found: {agent_id}"),
+            })
+        );
+
+        let denied = wire(WorkerServiceError::AgentAccessDenied(agent_id).into()).await;
+        assert_eq!(
+            denied, unknown,
+            "a denial must not differ from an unknown ID"
+        );
+
+        let unknown_in_the_executor = wire(
+            WorkerServiceError::GolemError(WorkerExecutorError::AgentNotFound { agent_id }).into(),
+        )
+        .await;
+        assert_eq!(unknown_in_the_executor, unknown);
+    }
+
+    #[test]
+    async fn an_unknown_promise_is_a_404_with_its_own_code() {
+        use golem_common::model::{AgentFingerprint, AgentId, OplogIndex, PromiseId};
+
+        let promise_id = PromiseId {
+            agent_id: AgentId::from_parts(7, 3),
+            fingerprint: AgentFingerprint::new(),
+            oplog_idx: OplogIndex::from_u64(5),
+        };
+        let (status, _, body) = wire(
+            WorkerServiceError::GolemError(WorkerExecutorError::PromiseNotFound {
+                promise_id: promise_id.clone(),
+            })
+            .into(),
+        )
+        .await;
+        assert_eq!(status, poem::http::StatusCode::NOT_FOUND);
+        assert_eq!(
+            json(&body),
+            serde_json::json!({
+                "code": api::error_code::PROMISE_NOT_FOUND,
+                "error": format!("Promise not found: {promise_id}"),
+            })
+        );
+    }
+
+    #[test]
+    async fn every_designated_kind_renders_as_a_404_with_its_own_code() {
+        use golem_common::model::authority::{Denial, DesignatedKind};
+        use golem_service_base::model::auth::denial::{DenialRenderer, UnknownId};
+
+        for kind in [
+            DesignatedKind::Agent,
+            DesignatedKind::Invocation,
+            DesignatedKind::Task,
+            DesignatedKind::Stream,
+            DesignatedKind::Promise,
+            DesignatedKind::Webhook,
+            DesignatedKind::Artifact,
+        ] {
+            let id = UnknownId::new(kind, "id-7");
+            let (status, _, body) =
+                wire(RestDenials.render(&Denial::LooksUnknown { kind }, std::slice::from_ref(&id)))
+                    .await;
+            assert_eq!(status, poem::http::StatusCode::NOT_FOUND, "{kind:?}");
+            assert_eq!(
+                json(&body),
+                serde_json::json!({"code": id.code(), "error": id.message()}),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
+    async fn a_denied_permission_gets_the_bytes_of_the_renderers_403() {
+        use golem_common::model::card::CardAlgebraError;
+
+        let rendered = wire(RestDenials.forbidden(None)).await;
+        assert_eq!(rendered.0, poem::http::StatusCode::FORBIDDEN);
+        assert_eq!(
+            json(&rendered.2),
+            serde_json::json!({"code": api::error_code::AUTH_FORBIDDEN, "error": FORBIDDEN_MESSAGE})
+        );
+        for error in [
+            AuthorizationError::PermissionNotAllowed(target_of_another_account()),
+            AuthorizationError::PermissionEvaluationFailed {
+                target: target_of_another_account(),
+                error: CardAlgebraError::InvalidOwnerPath("owner@example.com/app".to_string()),
+            },
+        ] {
+            assert_eq!(wire(error.into()).await, rendered);
+        }
+    }
+
+    #[test]
+    async fn forbidden_names_the_missing_grant_only_when_the_authorizer_gives_one() {
+        use golem_common::model::authority::{Denial, GrantText};
+        use golem_service_base::model::auth::denial::{DenialRenderer, FORBIDDEN_MESSAGE};
+
+        let (status, _, body) = wire(RestDenials.render(
+            &Denial::Forbidden {
+                missing_grant: None,
+            },
+            &[],
+        ))
+        .await;
+        assert_eq!(status, poem::http::StatusCode::FORBIDDEN);
+        assert_eq!(
+            json(&body),
+            serde_json::json!({"code": api::error_code::AUTH_FORBIDDEN, "error": FORBIDDEN_MESSAGE})
+        );
+
+        let grant = GrantText("tool(E/grep) : invoke".to_string());
+        let (status, _, body) = wire(RestDenials.render(
+            &Denial::Forbidden {
+                missing_grant: Some(grant),
+            },
+            &[],
+        ))
+        .await;
+        assert_eq!(status, poem::http::StatusCode::FORBIDDEN);
+        assert_eq!(
+            json(&body),
+            serde_json::json!({
+                "code": api::error_code::AUTH_FORBIDDEN,
+                "error": FORBIDDEN_MESSAGE,
+                "missingGrant": "tool(E/grep) : invoke",
+            })
+        );
+    }
+
+    #[test]
+    async fn a_denied_permission_is_a_403_that_shows_no_target() {
+        use golem_service_base::model::auth::denial::FORBIDDEN_MESSAGE;
+
+        for error in [
+            ApiEndpointError::from(AuthorizationError::PermissionNotAllowed(
+                target_of_another_account(),
+            )),
+            ApiEndpointError::from(WorkerServiceError::AuthError(
+                AuthServiceError::Unauthorized(AuthorizationError::PermissionNotAllowed(
+                    target_of_another_account(),
+                )),
+            )),
+        ] {
+            let (status, _, body) = wire(error).await;
+            assert_eq!(status, poem::http::StatusCode::FORBIDDEN);
+            assert_eq!(
+                json(&body),
+                serde_json::json!({
+                    "code": api::error_code::AUTH_FORBIDDEN,
+                    "error": FORBIDDEN_MESSAGE,
+                })
+            );
         }
     }
 }

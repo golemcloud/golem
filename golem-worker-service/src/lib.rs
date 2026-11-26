@@ -16,6 +16,7 @@ pub mod api;
 pub mod bootstrap;
 pub mod config;
 pub mod custom_api;
+pub mod denials;
 pub mod grpcapi;
 pub mod ingress;
 pub mod invocation_session_token;

@@ -416,10 +416,12 @@ async fn public_oplog_shows_claims_only_on_request_to_an_oplog_reader(
             None,
         )
         .await;
+    // A denial on an agent named by its ID is the answer of an unknown ID, whatever the verb
+    // (5.3 Rule 21).
     assert!(
         matches!(
             result,
-            Err(golem_client::Error::Item(WorkerError::Error403(_)))
+            Err(golem_client::Error::Item(WorkerError::Error404(_)))
         ),
         "{result:?}"
     );
