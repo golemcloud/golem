@@ -69,6 +69,7 @@ The `build` section is a list of steps. Each step can be:
 - `command:` — a shell command to execute
 - `injectToPrebuiltQuickjs:` — injects a JS bundle into a QuickJS WASM (TypeScript/Effect/Scala only)
 - `preinitializeJs:` — preinitializes the JS runtime in the WASM (TypeScript/Effect/Scala only)
+- `assemblePython:` — links the application's Python modules with the prepared Python runtime and pre-initializes the component (Python only)
 
 Each step can specify `sources` and `targets` for incremental builds, `dir` for the working directory, and `env` for environment variables.
 

@@ -236,6 +236,9 @@ pub fn tool_requirements_for_language(language: GuestLanguage) -> &'static [Tool
         GuestLanguage::Scala => SCALA_TOOL_REQUIREMENTS,
         GuestLanguage::MoonBit => MOONBIT_TOOL_REQUIREMENTS,
         GuestLanguage::Go => GO_TOOL_REQUIREMENTS,
+        // The CLI builds Python components from the SDK wheel with its linked
+        // assembler, so no Python, uv or C toolchain is needed.
+        GuestLanguage::Python => &[],
     }
 }
 

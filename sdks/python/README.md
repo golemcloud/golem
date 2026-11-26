@@ -11,6 +11,65 @@ prepared runtime:
   Discovery constructs no agents.
 - `tests`: native tests of agent declarations and dispatch.
 
+## Getting started
+
+The Golem CLI builds Python components from the `golem-py-sdk` wheel. The
+wheel is not published yet, so build it in a Golem checkout first and point
+the CLI at it:
+
+```shell
+cargo make python-sdk-wheel
+export GOLEM_PYTHON_SDK_WHEEL="$PWD/sdks/python/target/wheel/golem_py_sdk-0.0.0-py3-none-any.whl"
+```
+
+Then create, deploy and call an application with a local server:
+
+```shell
+golem new counter --template python
+cd counter
+golem deploy --yes
+golem agent invoke --yes 'CounterAgent("c")' add 7
+golem agent invoke --yes 'CounterAgent("c")' value
+```
+
+The `python` template has one component. Its `src/counter_agent.py` declares
+`CounterAgent`, and `src/main.py`, the entry module, imports it. The
+component's `assemblePython` build step names the source directory, the
+entry modules and the `pyproject.toml`:
+
+```yaml
+build:
+- assemblePython: "{{ componentDir }}/src"
+  modules:
+  - main
+  pyproject: "{{ componentDir }}/pyproject.toml"
+  into: "{{ golemTempDir }}/agents/{{ component_name | to_snake_case }}.wasm"
+```
+
+The step runs no Python, uv or C compiler on the host. It skips the assembly
+when the sources, the `pyproject.toml`, the wheel and the step itself did not
+change; adding, editing, removing or renaming a source file, or changing the
+entry modules, assembles again. A failed
+build keeps the last component that it assembled. The build fails, with the
+cause, when:
+
+- `GOLEM_PYTHON_SDK_WHEEL` is not set or names a wheel that does not match
+  the CLI (another version, another prepared runtime or a corrupt file);
+- `project.dependencies` lists anything other than the exact
+  `golem-py-sdk==<version>` that the CLI builds with;
+- `pyproject.toml` declares a package source, such as a `[tool.uv.sources]`
+  path or Git entry or a uv index. The SDK always comes from the wheel that
+  `GOLEM_PYTHON_SDK_WHEEL` names. The error names the setting but not its
+  value, because a source URL can contain credentials;
+- an entry module or a module that it imports raises, with the original
+  traceback;
+- a declaration is invalid, with the file and line of each one;
+- the component declares agent or tool `dependencies`. Python guest bridges
+  are not generated yet.
+
+`cargo make cli-integration-tests-python` builds the wheel and runs the CLI
+integration tests of the template. No CI job runs them yet.
+
 ## Agents
 
 ```python

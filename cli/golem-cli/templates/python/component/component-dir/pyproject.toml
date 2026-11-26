@@ -1,0 +1,6 @@
+[project]
+name = "component-name"
+version = "0.0.0"
+requires-python = ">=3.14"
+# Python components may depend only on the SDK for now.
+dependencies = ["golem-py-sdk==GOLEM_PYTHON_SDK_VERSION"]

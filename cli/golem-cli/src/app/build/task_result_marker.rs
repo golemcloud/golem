@@ -19,7 +19,8 @@ use crate::log::log_warn_action;
 use crate::model::app::BridgeSdkTargetSource;
 use crate::model::app_raw;
 use crate::model::app_raw::{
-    GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs, PreinitializeJs,
+    AssemblePython, GenerateQuickJSCrate, GenerateQuickJSDTS, InjectToPrebuiltQuickJs,
+    PreinitializeJs,
 };
 use crate::model::language::GuestLanguage;
 use anyhow::{Context, anyhow, bail};
@@ -242,6 +243,38 @@ impl TaskResultMarkerHashSource for PreinitializeJsCommandMarkerHash<'_> {
 
     fn id(&self) -> anyhow::Result<Option<String>> {
         Ok(None)
+    }
+
+    fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {
+        Ok(HashFromString(serde_json::to_string(self)?))
+    }
+}
+
+#[derive(Serialize)]
+pub struct AssemblePythonCommandMarkerHash<'a> {
+    pub build_dir: &'a Path,
+    pub command: &'a AssemblePython,
+    /// The files of the source directory, so that removing or renaming one
+    /// reruns the assembly.
+    pub source_files: &'a [String],
+    /// The SHA-256 of the SDK wheel, which contains the SDK sources and the
+    /// prepared runtime and bindings.
+    pub sdk_wheel: &'a str,
+    pub prepared_identity: &'a str,
+}
+
+impl TaskResultMarkerHashSource for AssemblePythonCommandMarkerHash<'_> {
+    fn kind() -> &'static str {
+        "AssemblePythonCommandMarkerHash"
+    }
+
+    /// Builds with other modules, sources or wheels write the same output, so
+    /// the output alone identifies the task.
+    fn id(&self) -> anyhow::Result<Option<String>> {
+        Ok(Some(serde_json::to_string(&(
+            self.build_dir,
+            &self.command.into,
+        ))?))
     }
 
     fn source(&self) -> anyhow::Result<TaskResultMarkerHashSourceKind> {

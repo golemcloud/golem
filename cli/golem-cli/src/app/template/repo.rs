@@ -437,6 +437,15 @@ mod tests {
                 .keys()
                 .map(|name| name.name())
                 .collect::<BTreeSet<_>>();
+            // The Python SDK supports only primitive synchronous methods so far.
+            if *language == GuestLanguage::Python {
+                assert_eq!(
+                    actual,
+                    BTreeSet::from(["default"]),
+                    "template set for {language}"
+                );
+                continue;
+            }
             let mut expected =
                 BTreeSet::from(["default", "human-in-the-loop", "json", "streaming"]);
             // Go snapshot recovery is not supported.
@@ -465,6 +474,7 @@ mod tests {
                 ("go", GuestLanguage::Go),
                 ("effect", GuestLanguage::Effect),
                 ("moonbit", GuestLanguage::MoonBit),
+                ("python", GuestLanguage::Python),
                 ("rust", GuestLanguage::Rust),
                 ("scala", GuestLanguage::Scala),
                 ("ts", GuestLanguage::TypeScript),

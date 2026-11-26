@@ -1,0 +1,6 @@
+*.wasm
+golem-temp/
+.golem/
+.golem-local/
+__pycache__/
+.venv/

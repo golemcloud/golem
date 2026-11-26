@@ -419,6 +419,7 @@ impl SecretCommandHandler {
                     GuestLanguage::Scala => SourceLanguage::Scala,
                     GuestLanguage::MoonBit => SourceLanguage::MoonBit,
                     GuestLanguage::Go => SourceLanguage::Go,
+                    GuestLanguage::Python => SourceLanguage::Other("python".to_string()),
                 };
             }
         }

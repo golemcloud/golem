@@ -344,6 +344,7 @@ pub fn preferred_source_language_for_setup(
         Some(GuestLanguage::Scala) => SourceLanguage::Scala,
         Some(GuestLanguage::MoonBit) => SourceLanguage::MoonBit,
         Some(GuestLanguage::Go) => SourceLanguage::Go,
+        Some(GuestLanguage::Python) => SourceLanguage::Other("python".to_string()),
         None => SourceLanguage::Other(String::new()),
     }
 }

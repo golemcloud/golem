@@ -34,8 +34,9 @@ const GOLEM_MOONBIT_SDK_PATH: &str = "GOLEM_MOONBIT_SDK_PATH";
 const GOLEM_MOONBIT_SDK_VERSION: &str = "GOLEM_MOONBIT_SDK_VERSION";
 const GOLEM_GO_PATH: &str = "GOLEM_GO_PATH";
 const GOLEM_GO_VERSION: &str = "GOLEM_GO_VERSION";
+const GOLEM_PYTHON_SDK_WHEEL: &str = "GOLEM_PYTHON_SDK_WHEEL";
 
-const SDK_OVERRIDE_KEYS: [&str; 12] = [
+const SDK_OVERRIDE_KEYS: [&str; 13] = [
     GOLEM_PATH,
     GOLEM_RUST_PATH,
     GOLEM_RUST_VERSION,
@@ -48,9 +49,19 @@ const SDK_OVERRIDE_KEYS: [&str; 12] = [
     GOLEM_MOONBIT_SDK_VERSION,
     GOLEM_GO_PATH,
     GOLEM_GO_VERSION,
+    GOLEM_PYTHON_SDK_WHEEL,
 ];
 
 pub const SDK_OVERRIDES_FILE_NAME: &str = ".golem-sdk-overrides";
+
+/// The path of the `golem-py-sdk` wheel that `cargo make python-sdk-wheel`
+/// builds, relative to the Golem repository root.
+fn python_sdk_wheel_path() -> String {
+    format!(
+        "sdks/python/target/wheel/golem_py_sdk-{}-py3-none-any.whl",
+        golem_python_assembler::SDK_VERSION
+    )
+}
 
 /// Module path of the Go SDK, as required/replaced in a generated `go.mod`.
 pub const GO_SDK_MODULE: &str = "github.com/golemcloud/golem/sdks/go/golem";
@@ -91,6 +102,7 @@ pub struct SdkOverrides {
     pub moonbit_sdk_version: Option<String>,
     pub go_sdk_path: Option<String>,
     pub go_sdk_version: Option<String>,
+    pub python_sdk_wheel: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -128,6 +140,9 @@ impl SdkOverrides {
             moonbit_sdk_version: None,
             go_sdk_path: Some(fs::path_to_str(&workspace_dir.join("sdks/go/golem"))?.to_string()),
             go_sdk_version: None,
+            python_sdk_wheel: Some(
+                fs::path_to_str(&workspace_dir.join(python_sdk_wheel_path()))?.to_string(),
+            ),
         }
         .to_env_vars())
     }
@@ -393,6 +408,9 @@ impl SdkOverrides {
     ) -> anyhow::Result<HashMap<String, String>> {
         Ok(Self {
             go_sdk_path: Some(fs::path_to_str(&workspace_dir.join("sdks/go/golem"))?.to_string()),
+            python_sdk_wheel: Some(
+                fs::path_to_str(&workspace_dir.join(python_sdk_wheel_path()))?.to_string(),
+            ),
             ..Default::default()
         }
         .to_env_vars())
@@ -455,6 +473,12 @@ impl SdkOverrides {
                 "sdks/go/golem",
             )?,
             go_sdk_version: get_normalized_value_by_key(&values, GOLEM_GO_VERSION),
+            python_sdk_wheel: resolved_path_override(
+                &values,
+                GOLEM_PYTHON_SDK_WHEEL,
+                golem_path.as_deref(),
+                &python_sdk_wheel_path(),
+            )?,
         })
     }
 
@@ -492,6 +516,9 @@ impl SdkOverrides {
         }
         if let Some(value) = &self.go_sdk_version {
             values.insert(GOLEM_GO_VERSION.to_string(), value.clone());
+        }
+        if let Some(value) = &self.python_sdk_wheel {
+            values.insert(GOLEM_PYTHON_SDK_WHEEL.to_string(), value.clone());
         }
         values
     }
@@ -639,6 +666,7 @@ fn is_path_override_key(key: &str) -> bool {
             | GOLEM_TS_PACKAGES_PATH
             | GOLEM_EFFECT_GOLEM_PATH
             | GOLEM_MOONBIT_SDK_PATH
+            | GOLEM_PYTHON_SDK_WHEEL
     )
 }
 
@@ -832,6 +860,7 @@ mod tests {
             moonbit_sdk_version: None,
             go_sdk_path: None,
             go_sdk_version: None,
+            python_sdk_wheel: None,
         };
 
         assert_eq!(
@@ -868,6 +897,7 @@ mod tests {
             moonbit_sdk_version: None,
             go_sdk_path: None,
             go_sdk_version: None,
+            python_sdk_wheel: None,
         }
         .to_env_vars();
 

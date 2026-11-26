@@ -44,6 +44,8 @@ pub enum GuestLanguage {
     MoonBit,
     #[value(alias = "golang")]
     Go,
+    #[value(alias = "py")]
+    Python,
 }
 
 impl GuestLanguage {
@@ -55,6 +57,7 @@ impl GuestLanguage {
             "scala" => Some(GuestLanguage::Scala),
             "moonbit" => Some(GuestLanguage::MoonBit),
             "go" | "golang" => Some(GuestLanguage::Go),
+            "py" | "python" => Some(GuestLanguage::Python),
             _ => None,
         }
     }
@@ -67,6 +70,7 @@ impl GuestLanguage {
             "scala" => Some(GuestLanguage::Scala),
             "moonbit" => Some(GuestLanguage::MoonBit),
             "go" => Some(GuestLanguage::Go),
+            "python" => Some(GuestLanguage::Python),
             _ => None,
         }
     }
@@ -79,6 +83,7 @@ impl GuestLanguage {
             GuestLanguage::Scala => "scala",
             GuestLanguage::MoonBit => "moonbit",
             GuestLanguage::Go => "go",
+            GuestLanguage::Python => "python",
         }
     }
 
@@ -90,6 +95,7 @@ impl GuestLanguage {
             GuestLanguage::Scala => "Scala",
             GuestLanguage::MoonBit => "MoonBit",
             GuestLanguage::Go => "Go",
+            GuestLanguage::Python => "Python",
         }
     }
 }

@@ -284,7 +284,7 @@
         "guestLanguage": {
           "description": "The guest language of the components built with this template. The CLI uses it for language specific features, such as dependency checks, bridge generation and the REPL. Components get it from their applied templates, and applied templates must not declare different languages.",
           "type": "string",
-          "enum": ["ts", "effect", "rust", "scala", "moonbit", "go"]
+          "enum": ["ts", "effect", "rust", "scala", "moonbit", "go", "python"]
         },
         "toolsMergeMode": {
           "$ref": "#/definitions/mapMergeMode"
@@ -1628,6 +1628,9 @@
         },
         {
           "$ref": "#/definitions/preinitializeJsCommand"
+        },
+        {
+          "$ref": "#/definitions/assemblePythonCommand"
         }
       ]
     },
@@ -1778,6 +1781,38 @@
       },
       "required": [
         "preinitializeJs",
+        "into"
+      ]
+    },
+    "assemblePythonCommand": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Assemble a Python component from the application's modules and the golem-py-sdk wheel",
+      "properties": {
+        "assemblePython": {
+          "type": "string",
+          "description": "Path to the directory that contains the application's Python modules"
+        },
+        "modules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "The entry modules that pre-initialization imports, in order"
+        },
+        "pyproject": {
+          "type": "string",
+          "description": "Path to the pyproject.toml that declares the application's dependencies; it may list only golem-py-sdk"
+        },
+        "into": {
+          "type": "string",
+          "description": "Path to the output WASM component"
+        }
+      },
+      "required": [
+        "assemblePython",
+        "modules",
+        "pyproject",
         "into"
       ]
     },

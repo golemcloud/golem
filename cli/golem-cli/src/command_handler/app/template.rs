@@ -942,6 +942,18 @@ impl TemplateHandler {
                     }
                 }
             }
+            GuestLanguage::Python => {
+                let target_root = application_path.join(new_component_dir);
+
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_dir(
+                    application_path.join("src"),
+                    target_root.join("src"),
+                ));
+                upgrade_plan.add(MultiComponentLayoutUpgradePlanStep::move_file(
+                    application_path.join("pyproject.toml"),
+                    target_root.join("pyproject.toml"),
+                ));
+            }
         }
 
         Ok(upgrade_plan)
