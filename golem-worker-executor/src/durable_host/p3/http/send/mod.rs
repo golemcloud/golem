@@ -149,30 +149,17 @@ where
     // Reserve before the first await, in guest import order. Admission, completion and
     // cancellation can finish in another order on replay. A denied send reserves too,
     // but a guest key or disabled injection consumes no logical position.
-    let key_position = store
-        .with(|mut access| {
-            let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
-            if ctx.state.forward_trace_context_headers {
-                let invocation = ctx.state.invocation_state();
-                invocation
-                    .invocation_context
-                    .get_stack(&invocation.current_span_id)
-                    .map_err(|err| {
-                        WorkerExecutorError::runtime(format!(
-                            "parent span missing while reserving outgoing HTTP key position: {err}"
-                        ))
-                    })?;
-            }
-            let logical = if ctx.state.set_outgoing_http_idempotency_key
-                && !serialized_request.headers.contains_key("idempotency-key")
-            {
-                ctx.state.take_logical_key_position()
-            } else {
-                None
-            };
-            Ok::<_, WorkerExecutorError>(ctx.idempotency_key_position(logical))
-        })
-        .map_err(HttpError::trap)?;
+    let key_position = store.with(|mut access| {
+        let ctx = durable_worker_ctx::<Ctx, U>(access.data_mut());
+        let logical = if ctx.state.set_outgoing_http_idempotency_key
+            && !serialized_request.headers.contains_key("idempotency-key")
+        {
+            ctx.state.take_logical_key_position()
+        } else {
+            None
+        };
+        ctx.idempotency_key_position(logical)
+    });
     // Concurrent sends are told apart by their invocation id.
     let host_request = HostRequestP3HttpClientSend {
         request: serialized_request.clone(),
