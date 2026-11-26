@@ -359,6 +359,39 @@
       "fixture": "numbers",
       "args": ["-15"],
       "expected": {"error": "unknown short option -5"}
+    },
+    {
+      "id": "env-count-variable-with-a-plus-sign",
+      "fixture": "env",
+      "args": [],
+      "variables": {"TOKEN": "t", "LEVEL": "+1"},
+      "expected": {"invoke": {"path": [], "input": {"token": "t", "port": 80, "path": [], "debug": false, "level": 1}}}
+    },
+    {
+      "id": "env-bool-word-folds-only-ascii-letters",
+      "fixture": "env",
+      "args": [],
+      "variables": {"TOKEN": "t", "DEBUG": "yeſ"},
+      "expected": {"error": "--debug from variable DEBUG: invalid value \"yeſ\": expected true, yes, on, y, t or 1, or false, no, off, n, f or 0"}
+    },
+    {
+      "id": "deploy-enum-case-folds-only-ascii-letters",
+      "fixture": "deploy",
+      "args": ["prod", "-p", "releaſe"],
+      "expected": {"errorPrefix": "invalid value \"releaſe\": "}
+    },
+    {
+      "id": "env-negative-zero-for-an-unsigned-option",
+      "fixture": "env",
+      "args": [],
+      "variables": {"TOKEN": "t", "PORT": "-0"},
+      "expected": {"errorPrefix": "--port from variable PORT: invalid value \"-0\": "}
+    },
+    {
+      "id": "numbers-negative-zero",
+      "fixture": "numbers",
+      "args": ["-0"],
+      "expected": {"errorPrefix": "invalid value \"-0\": "}
     }
   ]
 }

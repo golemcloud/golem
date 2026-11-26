@@ -1011,13 +1011,14 @@ func hasField(fields []NamedField, name string) bool {
 func jsonInt(value any, path string, min, max int64) (int64, error) {
 	switch v := value.(type) {
 	case json.Number:
+		// JSON reads -0 as a float, so it is not an integer.
 		n, err := v.Int64()
-		if err != nil {
+		if err != nil || v.String() == "-0" {
 			return 0, fmt.Errorf("%s: %q is not an integer", pathOrRoot(path), v.String())
 		}
 		return boundsCheck(n, min, max, path)
 	case float64:
-		if v != math.Trunc(v) {
+		if v != math.Trunc(v) || (v == 0 && math.Signbit(v)) {
 			return 0, fmt.Errorf("%s: %v is not an integer", pathOrRoot(path), v)
 		}
 		// Converting a float beyond the int64 range is implementation-defined,
