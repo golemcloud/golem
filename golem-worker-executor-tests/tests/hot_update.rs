@@ -54,9 +54,10 @@ use golem_worker_executor::services::golem_config::{
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
-    BlobStorageDecorator, BlobStorageInner, LastUniqueId, PrecompiledComponent, TestContext,
-    TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies, WrappedBlobStorage,
-    start, start_customized, start_with_overrides, start_with_snapshot_policy,
+    BlobStorageDecorator, BlobStorageInner, EmulatedWorkerService, LastUniqueId,
+    PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
+    WorkerExecutorTestDependencies, WorkerServiceOptions, WrappedBlobStorage, start,
+    start_customized, start_with_overrides, start_with_snapshot_policy,
 };
 use http::StatusCode;
 use log::info;
@@ -1267,6 +1268,10 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
     for revoke in [false, true] {
         let context = TestContext::new(last_unique_id);
         let service = Arc::new(SaveHookCardService::default());
+        let worker_service = EmulatedWorkerService::start(
+            WorkerServiceOptions::default().accept_card_transfers_without_delivery(),
+        )
+        .await?;
         let overrides = TestExecutorOverrides {
             configure: Some(Arc::new(|config| {
                 config.oplog.default_snapshotting = SnapshotPolicy::EveryNInvocation { count: 1 };
@@ -1275,10 +1280,10 @@ async fn gol838_save_hook_mutations_publish_owner_wallet_before_snapshot(
                 let service = service.clone();
                 move || service.clone()
             })),
-            // This proves source-side transfer, not target-side delivery.
-            wrap_worker_proxy: Some(Arc::new(crate::api::accepting_card_transfer_proxy)),
             ..Default::default()
-        };
+        }
+        // This proves source-side transfer, not target-side delivery.
+        .with_worker_service(&worker_service);
         let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
         let component = executor
             .component_dep(&context.default_environment_id, agent_update_v1)

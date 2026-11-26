@@ -39,7 +39,7 @@ use golem_common::model::oplog::{
     PublicOplogEntryWithIndex, PublicQueuedCardEvent,
 };
 use golem_common::model::{
-    AgentId, AgentStatus, IdempotencyKey, OwnedAgentId, PendingCardEventRef, PromiseId,
+    AgentStatus, IdempotencyKey, OwnedAgentId, PendingCardEventRef, PromiseId,
 };
 use golem_common::schema::{FromSchema, SchemaGraph, SchemaType, SchemaValue};
 use golem_common::{agent_key, data_value};

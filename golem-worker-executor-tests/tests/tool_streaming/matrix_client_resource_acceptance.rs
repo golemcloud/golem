@@ -13,6 +13,7 @@ use golem_common::model::agent_secret::{
 use golem_common::model::card::parse_polymorphic_permission;
 use golem_service_base::model::agent_secret::AgentSecret;
 use golem_worker_executor_test_utils::callers;
+use golem_worker_executor_test_utils::{EmulatedWorkerService, WorkerServiceOptions};
 use test_r::{test, timeout};
 
 #[derive(Debug, FromSchema)]
@@ -1335,7 +1336,11 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
             let context = TestContext::new(last_unique_id);
             let environment = Arc::new(TestEnvironmentStateService::default());
             let cards = Arc::new(crate::hot_update::SaveHookCardService::default());
-            let deliveries = Arc::new(std::sync::Mutex::new(Vec::new()));
+            // Count source sends; the target does not execute in this test.
+            let worker_service = EmulatedWorkerService::start(
+                WorkerServiceOptions::default().accept_card_transfers_without_delivery(),
+            )
+            .await?;
             let overrides = TestExecutorOverrides {
                 configure: Some(Arc::new(move |config| {
                     config.oplog.default_snapshotting = if snapshot {
@@ -1349,18 +1354,9 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
                     let cards = cards.clone();
                     move || cards.clone()
                 })),
-                // Count source sends; the target does not execute in this test.
-                wrap_worker_proxy: Some(Arc::new({
-                    let deliveries = deliveries.clone();
-                    move |inner| {
-                        crate::api::recording_accepting_card_transfer_proxy(
-                            inner,
-                            deliveries.clone(),
-                        )
-                    }
-                })),
                 ..Default::default()
-            };
+            }
+            .with_worker_service(&worker_service);
             let executor = start_with_overrides(deps, &context, overrides.clone()).await?;
             let provider_component = executor
                 .component_dep(&context.default_environment_id, provider)
@@ -1602,7 +1598,7 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
                 assert_eq!(pin.wallet_token.generation, 2);
                 assert!(!pin.pinned_card_ids.contains(&id));
             }
-            let sends = deliveries.lock().unwrap().len();
+            let sends = worker_service.card_transfers().len();
             let revokes = cards.revoke_calls.load(Ordering::SeqCst);
             assert_eq!(sends, usize::from(!revoke));
             assert_eq!(revokes, usize::from(revoke));
@@ -1638,7 +1634,7 @@ async fn gol838_entity_mutations_reconstruct_from_oplog_and_exact_snapshot(
             executor.commit_oplog(&worker.agent_id).await?;
             let recovered = executor.stored_oplog(&worker.agent_id).await;
             assert_eq!(&recovered[..recorded.len()], &recorded);
-            assert_eq!(deliveries.lock().unwrap().len(), sends);
+            assert_eq!(worker_service.card_transfers().len(), sends);
             assert_eq!(cards.revoke_calls.load(Ordering::SeqCst), revokes);
         }
     }

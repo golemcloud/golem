@@ -20,54 +20,24 @@
 use crate::Tracing;
 use async_trait::async_trait;
 
-use golem_api_grpc::proto::golem::worker::UpdateMode;
-use golem_api_grpc::proto::golem::workerexecutor::v1::worker_executor_client::WorkerExecutorClient;
-use golem_api_grpc::proto::golem::workerexecutor::v1::{
-    DeliverCardTransferRequest, deliver_card_transfer_response,
-};
-use golem_common::model::account::AccountId;
-use golem_common::model::agent::{AgentConfigEntryDto, ResolvedRevert, RevertWorkerTarget};
-use golem_common::model::agent::{
-    AgentInvocationMode, AgentTypeName, InvocationFreshnessDisposition,
-};
+use golem_common::model::agent::AgentTypeName;
 use golem_common::model::card::{
-    CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, ScopeCard, StoredCard,
+    CardId, CardManagedByRuntimeDerived, PolymorphicPermissionPattern, StoredCard,
     parse_polymorphic_permission,
 };
-use golem_common::model::component::ComponentId;
-use golem_common::model::component::ComponentRevision;
-use golem_common::model::durable_stream::{
-    DurableStreamReadRequest, StreamAttachmentControlRequest,
-};
-use golem_common::model::environment::EnvironmentId;
-use golem_common::model::invocation_context::InvocationContextStack;
-use golem_common::model::oplog::OplogIndex;
-use golem_common::model::{
-    AgentFingerprint, AgentId, AgentInvocationOutput, IdempotencyKey, InvocationStatus,
-    OwnedAgentId, PromiseId,
-};
-use golem_common::schema::SchemaValue;
 use golem_common::{agent_key, data_value};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::model::auth::AuthCtx;
 use golem_test_framework::dsl::TestDsl;
 use golem_worker_executor::services::card::{
     CardRevokeResult, CardService, CardState, RuntimeCardCreation,
 };
-use golem_worker_executor::services::rpc::DurableStreamRemoteError;
-use golem_worker_executor::services::worker_proxy::{
-    InvocationRequestStream, InvocationResponseStream, WorkerProxy, WorkerProxyError,
-};
-use golem_worker_executor::worker::target::ResolvedTarget;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
-    WorkerExecutorTestDependencies, start_with_overrides,
+    EmulatedWorkerService, LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides,
+    WorkerExecutorTestDependencies, WorkerServiceOptions, start_with_overrides,
 };
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, OnceLock, RwLock};
+use std::sync::{Arc, RwLock};
 use test_r::{inherit_test_dep, test, timeout};
-use tonic::transport::Channel;
-use tonic_tracing_opentelemetry::middleware::client::OtelGrpcService;
 
 inherit_test_dep!(WorkerExecutorTestDependencies);
 inherit_test_dep!(LastUniqueId);
@@ -190,325 +160,6 @@ impl CardService for RegistryCardService {
     }
 }
 
-type ExecutorClient = WorkerExecutorClient<OtelGrpcService<Channel>>;
-
-/// The executor's worker proxy, delivering installed cards to this executor
-/// directly: the test has no worker service to route them through.
-struct LocalCardDeliveryProxy {
-    inner: Arc<dyn WorkerProxy>,
-    executor: Arc<OnceLock<ExecutorClient>>,
-}
-
-#[async_trait]
-impl WorkerProxy for LocalCardDeliveryProxy {
-    async fn prepare(
-        &self,
-        target: &ResolvedTarget,
-        method_name: &str,
-        invocation: Option<golem_api_grpc::proto::golem::worker::InvocationStart>,
-        caller_agent_id: &AgentId,
-        caller_env: HashMap<String, String>,
-        caller_stack: InvocationContextStack,
-        config: Vec<AgentConfigEntryDto>,
-        caller: golem_common::model::caller::Caller,
-        auth_ctx: &AuthCtx,
-        idempotency_key: Option<IdempotencyKey>,
-        freshness_disposition: golem_common::model::agent::InvocationFreshnessDisposition,
-    ) -> Result<AgentFingerprint, WorkerProxyError> {
-        self.inner
-            .prepare(
-                target,
-                method_name,
-                invocation,
-                caller_agent_id,
-                caller_env,
-                caller_stack,
-                config,
-                caller,
-                auth_ctx,
-                idempotency_key,
-                freshness_disposition,
-            )
-            .await
-    }
-
-    async fn create(
-        &self,
-        target: &ResolvedTarget,
-        exclusive: bool,
-        caller_agent_id: &AgentId,
-        caller_env: HashMap<String, String>,
-        caller_stack: InvocationContextStack,
-        config: Vec<AgentConfigEntryDto>,
-        caller: golem_common::model::caller::Caller,
-        auth_ctx: &AuthCtx,
-        idempotency_key: Option<IdempotencyKey>,
-    ) -> Result<AgentFingerprint, WorkerProxyError> {
-        self.inner
-            .create(
-                target,
-                exclusive,
-                caller_agent_id,
-                caller_env,
-                caller_stack,
-                config,
-                caller,
-                auth_ctx,
-                idempotency_key,
-            )
-            .await
-    }
-
-    async fn invoke_agent(
-        &self,
-        target: &ResolvedTarget,
-        method_name: String,
-        method_parameters: SchemaValue,
-        mode: AgentInvocationMode,
-        schedule_at: Option<jiff::Timestamp>,
-        idempotency_key: Option<IdempotencyKey>,
-        freshness_disposition: InvocationFreshnessDisposition,
-        expected_callee_fingerprint: Option<AgentFingerprint>,
-        caller_agent_id: AgentId,
-        caller_env: HashMap<String, String>,
-        caller_stack: InvocationContextStack,
-        config: Vec<AgentConfigEntryDto>,
-        caller: golem_common::model::caller::Caller,
-        environment_id: EnvironmentId,
-        auth_ctx: &AuthCtx,
-        scope_card: Option<ScopeCard>,
-    ) -> Result<AgentInvocationOutput, WorkerProxyError> {
-        self.inner
-            .invoke_agent(
-                target,
-                method_name,
-                method_parameters,
-                mode,
-                schedule_at,
-                idempotency_key,
-                freshness_disposition,
-                expected_callee_fingerprint,
-                caller_agent_id,
-                caller_env,
-                caller_stack,
-                config,
-                caller,
-                environment_id,
-                auth_ctx,
-                scope_card,
-            )
-            .await
-    }
-
-    async fn invoke_agent_session(
-        &self,
-        request: InvocationRequestStream,
-    ) -> Result<InvocationResponseStream, WorkerProxyError> {
-        self.inner.invoke_agent_session(request).await
-    }
-
-    async fn control_durable_stream_attachment(
-        &self,
-        request: StreamAttachmentControlRequest,
-        auth_ctx: &AuthCtx,
-    ) -> Result<bool, DurableStreamRemoteError<WorkerProxyError>> {
-        self.inner
-            .control_durable_stream_attachment(request, auth_ctx)
-            .await
-    }
-
-    async fn read_durable_stream_segment(
-        &self,
-        request: DurableStreamReadRequest,
-        auth_ctx: &AuthCtx,
-    ) -> Result<Vec<u8>, DurableStreamRemoteError<WorkerProxyError>> {
-        self.inner
-            .read_durable_stream_segment(request, auth_ctx)
-            .await
-    }
-
-    async fn deliver_card_transfer(
-        &self,
-        target_agent_id: &AgentId,
-        environment_id: EnvironmentId,
-        transfer_id: uuid::Uuid,
-        source_card_id: CardId,
-        card: &StoredCard,
-    ) -> Result<(), WorkerProxyError> {
-        let internal = |message: String| {
-            WorkerProxyError::InternalError(WorkerExecutorError::unknown(message))
-        };
-        let mut client = self
-            .executor
-            .get()
-            .cloned()
-            .ok_or_else(|| internal("the executor client is not connected".to_string()))?;
-        let response = client
-            .deliver_card_transfer(DeliverCardTransferRequest {
-                target_agent_id: Some((*target_agent_id).into()),
-                environment_id: Some(environment_id.into()),
-                transfer_id: Some(transfer_id.into()),
-                card: desert_rust::serialize_to_byte_vec(card)
-                    .map_err(|error| internal(error.to_string()))?,
-                auth_ctx: Some(AuthCtx::System.into()),
-                source_card_id: Some(source_card_id.0.into()),
-            })
-            .await?
-            .into_inner();
-        match response.result {
-            Some(deliver_card_transfer_response::Result::Success(_)) => Ok(()),
-            Some(deliver_card_transfer_response::Result::Failure(error)) => {
-                Err(WorkerProxyError::InternalError(
-                    WorkerExecutorError::try_from(error).map_err(internal)?,
-                ))
-            }
-            None => Err(internal("card delivery returned no result".to_string())),
-        }
-    }
-
-    async fn update(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        target_revision: ComponentRevision,
-        mode: UpdateMode,
-        disable_wakeup: bool,
-        requester: golem_common::model::caller::Caller,
-        auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner
-            .update(
-                owned_agent_id,
-                target_revision,
-                mode,
-                disable_wakeup,
-                requester,
-                auth_ctx,
-            )
-            .await
-    }
-
-    async fn resume(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        force: bool,
-        auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner.resume(owned_agent_id, force, auth_ctx).await
-    }
-
-    async fn fork_worker(
-        &self,
-        source_agent_id: &OwnedAgentId,
-        target_agent_id: &AgentId,
-        oplog_index_cutoff: &OplogIndex,
-        caller: golem_common::model::caller::Caller,
-        auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner
-            .fork_worker(
-                source_agent_id,
-                target_agent_id,
-                oplog_index_cutoff,
-                caller,
-                auth_ctx,
-            )
-            .await
-    }
-
-    async fn revert(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        target: RevertWorkerTarget,
-        resolved_revert: Option<ResolvedRevert>,
-        auth_ctx: &AuthCtx,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner
-            .revert(owned_agent_id, target, resolved_revert, auth_ctx)
-            .await
-    }
-
-    async fn complete_promise(
-        &self,
-        environment_id: EnvironmentId,
-        promise_id: PromiseId,
-        data: Vec<u8>,
-        auth_ctx: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        self.inner
-            .complete_promise(environment_id, promise_id, data, auth_ctx)
-            .await
-    }
-
-    async fn cancel_invocation(
-        &self,
-        owned_agent_id: &OwnedAgentId,
-        idempotency_key: golem_common::model::InvocationId,
-        auth_ctx: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        self.inner
-            .cancel_invocation(owned_agent_id, idempotency_key, auth_ctx)
-            .await
-    }
-
-    async fn cancel_scheduled_invocation(
-        &self,
-        target: &golem_common::model::OwnedAgentId,
-        key: golem_common::model::InvocationId,
-        receipt: golem_common::model::agent::ScheduleId,
-        canceller: &golem_common::model::caller::Principal,
-        auth: &AuthCtx,
-    ) -> Result<bool, WorkerProxyError> {
-        self.inner
-            .cancel_scheduled_invocation(target, key, receipt, canceller, auth)
-            .await
-    }
-
-    async fn lookup_invocation_status(
-        &self,
-        agent_id: &AgentId,
-        idempotency_key: golem_common::model::InvocationId,
-        environment_id: Option<EnvironmentId>,
-        auth_ctx: &AuthCtx,
-    ) -> Result<InvocationStatus, WorkerProxyError> {
-        self.inner
-            .lookup_invocation_status(agent_id, idempotency_key, environment_id, auth_ctx)
-            .await
-    }
-
-    async fn process_oplog_entries(
-        &self,
-        target_agent_id: &AgentId,
-        environment_id: EnvironmentId,
-        component_id: ComponentId,
-        component_revision: ComponentRevision,
-        idempotency_key: golem_common::model::InvocationId,
-        account_id: AccountId,
-        config: Vec<(String, String)>,
-        metadata: golem_api_grpc::proto::golem::worker::AgentMetadata,
-        first_entry_index: OplogIndex,
-        entries: Vec<golem_api_grpc::proto::golem::worker::RawOplogEntry>,
-        auth_ctx: &AuthCtx,
-        caller: &golem_common::model::caller::Caller,
-    ) -> Result<(), WorkerProxyError> {
-        self.inner
-            .process_oplog_entries(
-                target_agent_id,
-                environment_id,
-                component_id,
-                component_revision,
-                idempotency_key,
-                account_id,
-                config,
-                metadata,
-                first_entry_index,
-                entries,
-                auth_ctx,
-                caller,
-            )
-            .await
-    }
-}
-
 fn card_grant(verb: &str) -> PolymorphicPermissionPattern {
     parse_polymorphic_permission(&format!("card(*) @ * : {verb} : *"))
         .expect("valid card permission")
@@ -528,7 +179,7 @@ async fn go_permission_cards_derive_lend_install_and_revoke(
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let registry = Arc::new(CardRegistry::default());
-    let executor_client = Arc::new(OnceLock::new());
+    let worker_service = EmulatedWorkerService::start(WorkerServiceOptions::default()).await?;
     let executor = start_with_overrides(
         deps,
         &context,
@@ -537,20 +188,11 @@ async fn go_permission_cards_derive_lend_install_and_revoke(
                 let registry = registry.clone();
                 move || Arc::new(RegistryCardService(registry.clone()))
             })),
-            wrap_worker_proxy: Some(Arc::new({
-                let executor_client = executor_client.clone();
-                move |inner| {
-                    Arc::new(LocalCardDeliveryProxy {
-                        inner,
-                        executor: executor_client.clone(),
-                    })
-                }
-            })),
             ..Default::default()
-        },
+        }
+        .with_worker_service(&worker_service),
     )
     .await?;
-    let _ = executor_client.set(executor.client.clone());
 
     let component = executor
         .component_dep(&context.default_environment_id, agent_sdk_go)

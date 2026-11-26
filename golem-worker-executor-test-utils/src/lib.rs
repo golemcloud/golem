@@ -23,6 +23,7 @@ pub mod callers;
 pub mod component_service;
 pub mod component_writer;
 pub mod dsl_impl;
+pub mod emulated_worker_service;
 pub mod invocation_error;
 pub mod oplog_shape;
 pub mod oplog_view;
@@ -31,6 +32,9 @@ pub mod standalone_tool;
 
 pub use blob_storage_decorator::{
     BlobStorageDecorator, BlobStorageInner, DecoratedBlobStorage, WrappedBlobStorage,
+};
+pub use emulated_worker_service::{
+    EmulatedWorkerService, RecordedCardTransfer, WorkerServiceOptions,
 };
 pub use invocation_error::{InvocationError, InvocationErrorExt};
 pub use oplog_shape::OplogShape;
@@ -3067,6 +3071,9 @@ pub struct TestExecutorOverrides {
         golem_worker_executor::filesystem_snapshot_testing::TestFilesystemSnapshotStore,
         golem_worker_executor::services::golem_config::FilesystemSnapshotUploadConfig,
     )>,
+    /// The worker service that the executor calls; see
+    /// [`TestExecutorOverrides::with_worker_service`].
+    pub worker_service: Option<EmulatedWorkerService>,
 }
 
 impl TestExecutorOverrides {
@@ -3085,6 +3092,25 @@ impl TestExecutorOverrides {
                 }
                 config.agent_sockets.enabled = true;
             })),
+            ..self
+        }
+    }
+
+    /// Points the executor's `public_worker_api` at `worker_service`, after any `configure`
+    /// already set, and connects the service to the executor on each start, including
+    /// `restart`.
+    pub fn with_worker_service(self, worker_service: &EmulatedWorkerService) -> Self {
+        let configure = self.configure.clone();
+        let port = worker_service.port();
+        Self {
+            configure: Some(Arc::new(move |config| {
+                if let Some(configure) = &configure {
+                    configure(config);
+                }
+                config.public_worker_api.host = "127.0.0.1".to_string();
+                config.public_worker_api.port = port;
+            })),
+            worker_service: Some(worker_service.clone()),
             ..self
         }
     }
@@ -3501,6 +3527,7 @@ async fn start_executor_with_config(
     // mutate per-worker test-only state, e.g. eviction).
     let additional_test_deps = AdditionalTestDeps::new();
     let services = Arc::new(Mutex::new(None));
+    let worker_service = overrides.worker_service.clone();
 
     context.wait_for_shut_down_executors().await?;
     // The future of an executor start is large. It lives on the heap, so a test that starts
@@ -3536,6 +3563,9 @@ async fn start_executor_with_config(
             let client = WorkerExecutorClient::new(otel_channel)
                 .max_decoding_message_size(32 * 1024 * 1024)
                 .max_encoding_message_size(32 * 1024 * 1024);
+            if let Some(worker_service) = &worker_service {
+                worker_service.attach(client.clone());
+            }
             break Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
                 _run_details: details,
@@ -5338,6 +5368,7 @@ async fn run_production_context_bootstrap(
     let additional_deps = NoAdditionalDeps::new();
     let test_oplog_deps = AdditionalTestDeps::new();
     let oplog = Arc::new(std::sync::OnceLock::new());
+    let worker_service = overrides.worker_service.clone();
     context.wait_for_shut_down_executors().await?;
     let details = bootstrap_and_run_worker_executor(
         &ProductionContextTestServerBootstrap {
@@ -5385,6 +5416,9 @@ async fn run_production_context_bootstrap(
             let client = WorkerExecutorClient::new(otel_channel)
                 .max_decoding_message_size(32 * 1024 * 1024)
                 .max_encoding_message_size(32 * 1024 * 1024);
+            if let Some(worker_service) = &worker_service {
+                worker_service.attach(client.clone());
+            }
             return Ok(TestWorkerExecutor {
                 _join_set: Arc::new(join_set),
                 _run_details: details,

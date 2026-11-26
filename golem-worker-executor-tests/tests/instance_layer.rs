@@ -89,8 +89,9 @@ use golem_worker_executor::workerctx::{
 };
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestCardService, TestContext, TestExecutorOverrides,
-    TestWorkerCtx, WorkerExecutorTestDependencies, registry_test_card, start, start_with_overrides,
+    EmulatedWorkerService, LastUniqueId, PrecompiledComponent, TestCardService, TestContext,
+    TestExecutorOverrides, TestWorkerCtx, WorkerExecutorTestDependencies, WorkerServiceOptions,
+    registry_test_card, start, start_with_overrides,
 };
 use std::collections::{BTreeSet, HashMap};
 use std::future::Future;
@@ -637,15 +638,16 @@ async fn cross_store_wallet_change(
     use golem_worker_executor::preview2::golem::permissions::{types, wallet};
 
     let context = TestContext::new(last_unique_id);
+    // Only delivery is stubbed. Source authorization, membership removal, durable intent,
+    // confirmation, and the sibling's later authorization use the production paths.
+    let worker_service = EmulatedWorkerService::start(
+        WorkerServiceOptions::default().accept_card_transfers_without_delivery(),
+    )
+    .await?;
     let executor = start_with_overrides(
         deps,
         &context,
-        TestExecutorOverrides {
-            // Only delivery is stubbed. Source authorization, membership removal, durable intent,
-            // confirmation, and the sibling's later authorization use the production paths.
-            wrap_worker_proxy: Some(Arc::new(crate::api::accepting_card_transfer_proxy)),
-            ..Default::default()
-        },
+        TestExecutorOverrides::default().with_worker_service(&worker_service),
     )
     .await?;
     let component = executor
