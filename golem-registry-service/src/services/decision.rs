@@ -381,6 +381,19 @@ mod tests {
     /// A revoke is one decision with today's two checks. A caller that may not see the token
     /// gets "token not found", as for an unknown token; one that may see it but not revoke it
     /// gets a 403; one that may do both is allowed. These are today's answers.
+    /// An audit sink that stores nothing and never fails, for the decision tests.
+    struct KeepsNoRecord;
+
+    #[async_trait::async_trait]
+    impl golem_service_base::model::auth::audit::AuditSink for KeepsNoRecord {
+        async fn record(
+            &self,
+            _record: golem_service_base::model::auth::audit::AuditRecord,
+        ) -> Result<(), golem_service_base::model::auth::audit::AuditSinkError> {
+            Ok(())
+        }
+    }
+
     #[test]
     async fn a_revoke_is_one_decision_with_todays_answers() {
         use crate::services::token::{TokenError, decide_revoke};
@@ -391,7 +404,13 @@ mod tests {
         let account_id = AccountId::new();
         let email = AccountEmail::new("acme");
         let token_id = TokenId::new();
-        let decisions = super::Decisions::new("https://golem.test".parse().unwrap());
+        let decisions = super::Decisions::new(
+            "https://golem.test".parse().unwrap(),
+            golem_service_base::model::auth::audit::DecisionAudit::new(
+                std::sync::Arc::new(KeepsNoRecord),
+                std::time::Duration::from_secs(5),
+            ),
+        );
         let view = format!("account.token(acme) @ acme : view : {token_id}");
         let delete = format!("account.token(acme) @ acme : delete : {token_id}");
         let today = |auth: &AuthCtx| {

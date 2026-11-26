@@ -3656,6 +3656,7 @@ impl WorkerService {
                     &component,
                     &target,
                     &AgentAccess::invoke(&method_name),
+                    surface,
                 )
                 .await?;
                 (target, component, None)
@@ -12059,7 +12060,7 @@ mod tests {
         /// A harness whose agent type also has `older_type_id`'s registration, and a caller that
         /// may see the harness's own component and invoke its keyed agent.
         async fn harness_with_a_hidden_older_registration(
-            sink: TestAuditSink,
+            sink: Arc<TestAuditSink>,
         ) -> (RestHarness, AuthCtx) {
             let mut harness = RestHarness::new(AgentMode::Durable);
             harness.worker_service.audit = audit_into(sink);
@@ -12526,6 +12527,7 @@ mod tests {
                     Box::pin(stream::empty()),
                     AuthCtx::system(),
                     |_, _| panic!("stream-free input"),
+                    Surface::Attach,
                 )
                 .await
                 .unwrap_or_else(|error| panic!("{target}: {error:?}"));
