@@ -629,27 +629,27 @@ impl DefaultWorkerService {
     ///
     /// `core` is always written (it carries the `oplog_idx` marker that versions the whole record).
     /// `membership`/`regions`/`updates`/`resolved-names`/`followed-lookups` are written only when
-    /// they differ from `delta_base`. Received and source card transfers and the entity-replay
-    /// fields are written per key (only newly added/changed keys).
+    /// they differ from `previous_status`. Received and source card transfers and the
+    /// entity-replay fields are written per key (only newly added/changed keys).
     ///
-    /// Publication compares the exact serialized `core` of the delta base and atomically applies
-    /// all sets, stale-field deletions, and the expiry of the namespace of `target`. The status
-    /// baseline has no expiry (see [`KeyValueStorageNamespace::expiry`]). A mismatch reloads one
-    /// complete hash snapshot and retries with a full reconciliation guarded by that snapshot's
-    /// raw core. Thus an expired hash or a concurrent publisher can never leave auxiliary fields
-    /// from a different core generation.
+    /// Publication compares the exact serialized baseline `core` and atomically applies all sets,
+    /// stale-field deletions, and the expiry of the namespace of `target`. The status baseline has
+    /// no expiry (see [`KeyValueStorageNamespace::expiry`]). A mismatch reloads one complete hash
+    /// snapshot and retries with a full reconciliation guarded by that snapshot's raw core. Thus an
+    /// expired hash or a concurrent publisher can never leave auxiliary fields from a different
+    /// core generation.
     async fn write_status_fields(
         &self,
         owned_agent_id: &OwnedAgentId,
         target: &SplitStatusTarget,
-        delta_base: Option<&AgentStatusRecord>,
+        previous_status: Option<&AgentStatusRecord>,
         core: &AgentStatusRecord,
         parts: &SplitStatusParts,
     ) -> Result<(), String> {
         let namespace = &target.namespace;
         let (mut expected_core, mut existing_fields, mut use_delta) =
-            if let Some(delta_base) = delta_base {
-                let expected = serialize(&status_core(delta_base)).map_err(|err| {
+            if let Some(previous) = previous_status {
+                let expected = serialize(&status_core(previous)).map_err(|err| {
                     format!("failed to serialize agent status for {owned_agent_id}: {err}")
                 })?;
                 (Some(expected), Vec::new(), true)
@@ -671,8 +671,8 @@ impl DefaultWorkerService {
             };
 
         loop {
-            let delta = use_delta.then_some(delta_base).flatten();
-            let (sets, dels) = compute_status_field_writes(delta, &existing_fields, core, parts)
+            let baseline = use_delta.then_some(previous_status).flatten();
+            let (sets, dels) = compute_status_field_writes(baseline, &existing_fields, core, parts)
                 .map_err(|err| {
                     format!("failed to serialize agent status for {owned_agent_id}: {err}")
                 })?;
@@ -711,7 +711,7 @@ impl DefaultWorkerService {
                 record_status_cache_publication(target.label, "reconciliation_fallback");
             }
 
-            // The remembered delta base is stale or the hash expired. Reconcile a complete record
+            // The remembered baseline is stale or the hash expired. Reconcile a complete record
             // against one atomic snapshot and guard that snapshot's exact core on publication.
             let snapshot = self
                 .key_value_storage
@@ -731,14 +731,14 @@ impl DefaultWorkerService {
     }
 
     /// Splits `status_value` and writes it to `hash`, sending only the changed parts (delta
-    /// against `delta_base` when provided). Returns the reassembled record, the delta base of the
-    /// next write. No-op for ephemeral workers (their status is never persisted), returning the
-    /// value unchanged.
+    /// against `previous_status` when provided). Returns the reassembled record so the caller can
+    /// use it as the baseline for the next delta. No-op for ephemeral workers (their status is
+    /// never persisted), returning the value unchanged.
     pub(super) async fn write_split_status(
         &self,
         owned_agent_id: &OwnedAgentId,
         hash: SplitStatusHash<'_>,
-        delta_base: Option<&AgentStatusRecord>,
+        previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
     ) -> Result<AgentStatusRecord, String> {
         if status_value.agent_mode == AgentMode::Ephemeral {
@@ -753,14 +753,14 @@ impl DefaultWorkerService {
         self.write_status_fields(
             owned_agent_id,
             &split_status_target(hash),
-            delta_base,
+            previous_status,
             &core,
             &parts,
         )
         .await?;
 
         // Reassemble the record (moving the parts back into `core`, no clone) so the caller gets
-        // back a complete delta base for the next write.
+        // back a complete baseline for computing the next delta.
         let mut reassembled = core;
         reassembled.invocation_results = parts.invocation_results;
         reassembled.skipped_regions = parts.skipped_regions;

@@ -999,7 +999,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-        delta_base: Option<&AgentStatusRecord>,
+        previous_status: Option<&AgentStatusRecord>,
         status_value: AgentStatusRecord,
     ) -> Result<AgentStatusRecord, WorkerExecutorError> {
         record_worker_call("write_status");
@@ -1031,7 +1031,7 @@ impl WorkerService for DefaultWorkerService {
                 owned_agent_id,
                 fingerprint,
             },
-            delta_base,
+            previous_status,
             status_value,
         )
         .await
@@ -1066,7 +1066,7 @@ impl WorkerService for DefaultWorkerService {
         &self,
         owned_agent_id: &OwnedAgentId,
         fingerprint: AgentFingerprint,
-        delta_base: Option<&AgentStatusRecord>,
+        previous_checkpoint: Option<&AgentStatusRecord>,
         checkpoint: AgentStatusRecord,
     ) -> Result<AgentStatusRecord, WorkerExecutorError> {
         record_worker_call("write_status_checkpoint");
@@ -1093,7 +1093,7 @@ impl WorkerService for DefaultWorkerService {
                 owned_agent_id,
                 fingerprint,
             },
-            delta_base,
+            previous_checkpoint,
             checkpoint,
         )
         .await

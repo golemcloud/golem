@@ -15,8 +15,8 @@
 //! Persistence of the durable status baseline: the *clean* [`AgentStatusRecord`] checkpoint.
 //!
 //! The live cached status blob (see [`crate::worker::status_flusher`]) is written in the background
-//! and is allowed to advance into replay/deleted oplog regions. That makes it useless as a start
-//! status after a jump: a replay-time `Jump` deletes the region the cached status' own oplog index
+//! and is allowed to advance into replay/deleted oplog regions. That makes it useless as a fold
+//! baseline after a jump: a replay-time `Jump` deletes the region the cached status' own oplog index
 //! sits in, so the status recompute can no longer fold forward and has to re-read the whole oplog
 //! from index 1.
 //!
@@ -70,10 +70,10 @@ impl CheckpointReason {
     }
 }
 
-/// The delta base state guarded by the checkpoint lock.
+/// Baseline state guarded by the checkpoint lock.
 struct CheckpointState {
-    /// The last status successfully written to the checkpoint, used both as the delta base of the
-    /// next write and as the throttle reference (its `oplog_idx`). `None` until the first
+    /// The last status successfully written to the checkpoint, used both as the delta baseline for
+    /// the next write and as the throttle reference (its `oplog_idx`). `None` until the first
     /// successful write of this worker incarnation, forcing a full reconcile write.
     last_written: Option<AgentStatusRecord>,
 }

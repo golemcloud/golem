@@ -80,14 +80,13 @@ where
     .await
 }
 
-/// Calculates the latest worker status, folding forward from the freshest usable start status
-/// and, on a fold failure, from the *clean* status checkpoint read from `this`'s [`WorkerService`].
+/// Calculates the latest worker status, folding forward from the freshest usable baseline and, on a
+/// fold failure, from the *clean* status checkpoint read from `this`'s [`WorkerService`].
 ///
 /// This is the variant production callers should use: the checkpoint is read from
 /// `this.worker_service()`, so callers no longer pass a checkpoint-read closure. The read still
-/// happens lazily (only when the live cached status cannot be folded), so the common path pays no
-/// extra read. See [`calculate_last_known_status_with_checkpoint_reader`] for the order of the
-/// start statuses.
+/// happens lazily (only when the live cache baseline cannot be folded), so the common path pays no
+/// extra read. See [`calculate_last_known_status_with_checkpoint_reader`] for the baseline order.
 ///
 /// [`WorkerService`]: crate::services::worker::WorkerService
 pub async fn calculate_last_known_status_with_checkpoint<T>(
@@ -125,7 +124,7 @@ where
     .await
 }
 
-/// Calculates the latest worker status, trying start statuses in order of decreasing freshness:
+/// Calculates the latest worker status, trying baselines in order of decreasing freshness:
 ///
 /// 1. the live cached status (`last_known`), folded forward — the common cold-load path;
 /// 2. on a fold failure (e.g. a jump deleted the cached index), the *clean* status checkpoint
@@ -133,7 +132,7 @@ where
 ///    avoids re-reading the whole oplog;
 /// 3. a full recompute from the start of the oplog.
 ///
-/// The checkpoint read happens only when the live cached status is absent or its fold is
+/// The checkpoint read happens only when the live cache baseline is absent or its fold is
 /// impossible, so the common path pays no extra read.
 ///
 /// Most callers should use [`calculate_last_known_status_with_checkpoint`], which sources the
@@ -178,7 +177,7 @@ where
         return Ok(Some(status));
     }
 
-    // 2. Live cached status missing or its fold was impossible (e.g. a jump deleted the cached
+    // 2. Live cache baseline missing or its fold was impossible (e.g. a jump deleted the cached
     //    index, or a revert moved the oplog behind it): try folding from the clean checkpoint.
     if let Some(checkpoint) = read_checkpoint().await
         && let Some(status) = try_fold_status_from_reader(this, reader, checkpoint).await?
