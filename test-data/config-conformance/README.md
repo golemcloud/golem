@@ -33,27 +33,30 @@ The copied output is `test-components/golem_it_agent_sdk_rust_release.wasm`.
 From the repository root, run:
 
 ```sh
-cargo test -p golem-common --test config_conformance -- --report-time
+cargo test -p golem-cli --lib -- model::config::conformance --report-time
 RUST_MIN_STACK=33554432 cargo test -p golem-worker-executor-tests --test integration -- static_config_defaults_and_creation_overrides_survive_reconstruction --report-time
 ```
 
-The common runner checks all static cases and compares actual guest metadata
+The CLI runner checks all static cases and compares actual guest metadata
 with the reference graph using cross-graph type equivalence. The executor test
 deploys that component, reads through the guest host API, destroys and recreates
-the executor over the same storage, and checks the captured result and settled
+the executor over the same storage, and checks the static result and settled
 oplog. Neither test builds components or launches external tools.
 
 ## Source forms are not managed runtime acceptance
 
 `sourceCases` checks only the resolver's source plans. An omitted Shared optional
-captures absence; adding a catalog entry alone does not attach it. An explicitly
+retains absence; adding a catalog entry alone does not attach it. An explicitly
 bound entry containing null remains live. Omission preserves an inherited
 binding. A supplied broken selector, anonymous null, wrong catalog kind, missing
 Shared list binding or missing Secret binding fails rather than becoming absence.
 
 Those checks do not execute Shared reads, catalog edits, revision updates or
-special-field operations. [Later runtime scenarios](managed-and-special.md)
-assign those checks to the units that deliver them.
+special-field operations. The [development plan, Revision 3](https://linear.app/golem-cloud/document/typed-config-and-bindings-development-plan-revision-3-a70a29fa0e27)
+assigns runtime acceptance to the delivering units: Shared reads and identity
+retention (TC-02/03/04/27/29), File/Tool/RetryPolicy/Secret/Quota (TC-08 through
+TC-14), readiness (TC-28), SDK consumers, and assembled acceptance (TC-15/16/44).
+Source-plan checks do not complete those units.
 
 ## SDK entrypoints
 
@@ -73,7 +76,7 @@ and pinned generators before running its commands.
 | MoonBit / TC-22    | `sdks/moonbit/golem_sdk`     | `bash scripts/run-sdk-tests.sh agents config reflection`; `moon check --target wasm`; build an actual foreign-library guest with the pinned bindings |
 | Python / TC-23     | Not present in this checkout | Requires the actual backend and its announced entrypoint; no placeholder runner                                                                      |
 
-The common commands above remain runnable without AI schemas, managed-resource
+The commands above remain runnable without AI schemas, managed-resource
 authorities or special-field suppliers. A failure to extract a portable default
 must be an explicit producer error, not silent loss of the default or an SDK-local
 fallback at read time.

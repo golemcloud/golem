@@ -85,7 +85,7 @@ use crate::chaos::summary::{
 };
 use crate::chaos::workload::{PhaseMarker, WorkloadContext};
 use crate::chaos::{ScenarioCode, ScenarioConfig, probe, scheduled, skew, workload};
-use chrono::Utc;
+
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use golem_test_framework::dsl::TestDsl;
 use std::collections::BTreeSet;
@@ -120,7 +120,7 @@ pub async fn run(
     signals: &FaultSignals,
     outputs: &OutputPaths,
 ) -> anyhow::Result<ChaosResult> {
-    let started_at = Utc::now();
+    let started_at = jiff::Timestamp::now();
     let workload_config = config.require_workload()?;
     let scheduled_config = config.require_scheduled()?;
     let skew_config = config.require_skew()?;
@@ -336,7 +336,7 @@ pub async fn run(
         targets.len(),
         config.phases.baseline()
     );
-    phases.baseline = Some(PhaseWindow::started(Utc::now()));
+    phases.baseline = Some(PhaseWindow::started(jiff::Timestamp::now()));
     let mixed = workload::start(ctx.clone(), workload_config);
     let registrations = scheduled::start(ctx.clone(), &targets, scheduled_config);
     tokio::time::sleep(config.phases.baseline()).await;
@@ -351,7 +351,7 @@ pub async fn run(
     probes.extend(skew::probe_round(&ctx, &split, skew_config.probes_per_round).await);
 
     if let Some(window) = phases.baseline.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
 
     let baseline_operations = history.confirmed_in_phase(Phase::Baseline);
@@ -418,7 +418,7 @@ pub async fn run(
     );
     signals.write_baseline_ready(&BaselineReady {
         scenario_code: ScenarioCode::S19.as_str().to_string(),
-        ready_at: Utc::now(),
+        ready_at: jiff::Timestamp::now(),
         baseline_operations,
         fault_target: Some(FaultTarget {
             pod_address: split.pod_address.clone(),
@@ -517,7 +517,7 @@ pub async fn run(
 
     // ── Recovery ────────────────────────────────────────────────────────────
     ctx.phase.set(Phase::Recovery);
-    phases.recovery = Some(PhaseWindow::started(Utc::now()));
+    phases.recovery = Some(PhaseWindow::started(jiff::Timestamp::now()));
     info!(
         "S19: recovery phase, running for {:?}",
         config.phases.recovery()
@@ -528,7 +528,7 @@ pub async fn run(
     mixed.stop().await;
     registrations.stop().await;
     if let Some(window) = phases.recovery.as_mut() {
-        window.end(Utc::now());
+        window.end(jiff::Timestamp::now());
     }
     if skipped > 0 {
         attention_extra.push(Note::attention(format!(

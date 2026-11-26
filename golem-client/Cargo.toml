@@ -20,9 +20,9 @@ golem-schema = { workspace = true }
 
 async-trait = { workspace = true }
 bytes = { workspace = true }
-chrono = { workspace = true }
 futures-util = { workspace = true }
 http = { workspace = true }
+jiff = { workspace = true }
 reqwest = { workspace = true }
 reqwest-middleware = { workspace = true }
 rustls = { workspace = true }

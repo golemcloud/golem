@@ -499,6 +499,74 @@ fn any_entry_moves_the_oplog_index() {
     assert_ne!(folded, baseline);
 }
 
+/// Only a settlement leaves the state index: a result's validator, the index of its
+/// `AgentInvocationFinished`, stays current when its background work ends, while work after the
+/// result, other hints and the next invocation move the index, in one fold or incremental folds.
+#[test]
+fn only_a_settlement_leaves_the_state_index() {
+    let retry = RetryConfig::default();
+    let idx = OplogIndex::from_u64;
+    let read = InvocationId(Uuid::new_v4());
+    let write = InvocationId(Uuid::new_v4());
+    let fold = |baseline: &AgentStatusRecord, entries: Vec<(u64, OplogEntry)>| {
+        update_status_with_new_entries(
+            AgentMode::Durable,
+            baseline.clone(),
+            entries.into_iter().map(|(i, e)| (idx(i), e)).collect(),
+            &retry,
+        )
+        .unwrap()
+    };
+    let baseline = AgentStatusRecord {
+        oplog_idx: idx(10),
+        state_oplog_idx: idx(10),
+        ..AgentStatusRecord::default()
+    };
+    let settled = || OplogEntry::agent_invocation_settled(read, 0);
+
+    let finished = fold(
+        &baseline,
+        vec![
+            (11, started_invocation(&read)),
+            (12, finished_awaiting(&read)),
+        ],
+    );
+    assert_eq!(finished.state_oplog_idx, idx(12));
+
+    let incremental = fold(&finished, vec![(13, settled())]);
+    let whole = fold(
+        &baseline,
+        vec![
+            (11, started_invocation(&read)),
+            (12, finished_awaiting(&read)),
+            (13, settled()),
+        ],
+    );
+    for status in [&incremental, &whole] {
+        assert_eq!(
+            (status.oplog_idx, status.state_oplog_idx),
+            (idx(13), idx(12))
+        );
+    }
+
+    let drained = fold(
+        &finished,
+        vec![(13, OplogEntry::grow_memory(8)), (14, settled())],
+    );
+    assert_eq!(
+        (drained.oplog_idx, drained.state_oplog_idx),
+        (idx(14), idx(13))
+    );
+
+    let next = fold(
+        &finished,
+        vec![(13, settled()), (14, started_invocation(&write))],
+    );
+    assert_eq!(next.state_oplog_idx, idx(14));
+    let after_settled = fold(&incremental, vec![(14, OplogEntry::interrupted())]);
+    assert_eq!(after_settled.state_oplog_idx, idx(14));
+}
+
 /// The execution-begun bit is set by a `Restart` and survives later folds without one.
 #[test]
 fn restart_sets_ephemeral_execution_begun_permanently() {
@@ -5808,6 +5876,7 @@ impl TestCaseBuilder {
             component_size: 100,
             total_linear_memory_size: 200,
             oplog_idx: OplogIndex::INITIAL,
+            state_oplog_idx: OplogIndex::INITIAL,
             export_fork_admissions: golem_common::model::ExportForkAdmissions {
                 owner_fingerprint: Some(AgentFingerprint(instance_id)),
                 ..Default::default()
@@ -5869,6 +5938,9 @@ impl TestCaseBuilder {
         update: impl FnOnce(AgentStatusRecord) -> AgentStatusRecord,
     ) -> Self {
         self.previous_status_record.oplog_idx = self.previous_status_record.oplog_idx.next();
+        if !matches!(entry, OplogEntry::AgentInvocationSettled { .. }) {
+            self.previous_status_record.state_oplog_idx = self.previous_status_record.oplog_idx;
+        }
         self.previous_status_record = update(self.previous_status_record);
         self.entries.push(TestEntry {
             oplog_entry: entry,
@@ -7761,7 +7833,7 @@ fn test_card(card_id: golem_common::model::card::CardId) -> golem_common::model:
         lower_negative: Vec::new(),
         upper_positive: Vec::new(),
         upper_negative: Vec::new(),
-        created_at: chrono::Utc::now(),
+        created_at: jiff::Timestamp::now(),
         expires_at: None,
         system_card: false,
         managed_by: None,

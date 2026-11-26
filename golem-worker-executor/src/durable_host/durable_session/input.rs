@@ -653,6 +653,35 @@ impl StreamSession {
         Ok(result)
     }
 
+    /// Returns the input terminals that the host or the session protocol selected, by transport
+    /// stream. A client that resumes gets them with its high-waters.
+    pub async fn input_server_terminals(
+        &self,
+    ) -> Result<HashMap<u64, StreamTerminal>, SessionError> {
+        let mappings = self
+            .mappings
+            .read()
+            .expect("durable stream mapping lock poisoned")
+            .clone();
+        let mut result = HashMap::new();
+        for (transport_stream_id, mapping) in mappings {
+            if mapping.role.direction() != SessionStreamRole::Input
+                || !self.producer.owns_handle_identity(&mapping.handle)
+            {
+                continue;
+            }
+            if let Some(terminal) = self
+                .producer
+                .input_server_terminal(mapping.handle.stream_id)
+                .await
+                .map_err(SessionError::from)?
+            {
+                result.insert(transport_stream_id, terminal);
+            }
+        }
+        Ok(result)
+    }
+
     pub(crate) fn retain_input_recording(
         value: &SchemaValue,
         graph: &SchemaGraph,

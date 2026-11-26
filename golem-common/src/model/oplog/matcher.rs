@@ -1019,7 +1019,7 @@ impl PublicOplogEntry {
                 Self::string_match(&value.to_string(), path_stack, query_path, query)
             }
             SchemaValue::Datetime { value } => {
-                Self::string_match(&value.to_rfc3339(), path_stack, query_path, query)
+                Self::string_match(&value.to_string(), path_stack, query_path, query)
             }
             SchemaValue::Duration(payload) => Self::string_match(
                 &payload.nanoseconds.to_string(),

@@ -548,3 +548,9 @@ test_component!(
     "golem_it_agent_sdk_moonbit",
     "golem-it:agent-sdk-moonbit"
 );
+test_component!(
+    agent_sdk_moonbit_gc,
+    "agent_sdk_moonbit_gc",
+    "golem_it_agent_sdk_moonbit_gc",
+    "golem-it:agent-sdk-moonbit"
+);

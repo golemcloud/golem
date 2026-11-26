@@ -214,7 +214,7 @@ pub(crate) async fn prepare_revision_update(
                 initial_agent_config,
                 provision_config
                     .as_ref()
-                    .map(|config| config.config.captures())
+                    .map(|config| config.config.clone())
                     .unwrap_or_default(),
                 &agent_type.config,
             );

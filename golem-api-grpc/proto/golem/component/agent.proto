@@ -7,7 +7,7 @@ import "golem/common/empty.proto";
 import "golem/common/environment.proto";
 import "golem/common/uuid.proto";
 import "golem/component/agent_files.proto";
-import "golem/component/owner_config.proto";
+import "golem/component/config_binding.proto";
 import "golem/component/plugin.proto";
 import "golem/http/http.proto";
 import "golem/worker/worker_id.proto";
@@ -34,7 +34,7 @@ message CachePolicy {
 
 message AgentTypeProvisionConfig {
   map<string, string> env = 1;
-  OwnerConfig config = 2;
+  repeated ConfigBinding config = 2;
   repeated golem.component.PluginInstallation plugins = 3;
   repeated golem.component.InitialAgentFile files = 4;
   bytes initial_permissions = 5;

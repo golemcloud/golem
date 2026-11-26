@@ -573,7 +573,7 @@ fn projected_helper_keeps_defs_reachable_from_secret_inner() {
         secret_id: uuid::Uuid::nil(),
         config_key: None,
         version: 0,
-        resolved_at: chrono::DateTime::from_timestamp(0, 0).unwrap(),
+        resolved_at: jiff::Timestamp::new(0, 0).unwrap(),
         category: None,
     });
 

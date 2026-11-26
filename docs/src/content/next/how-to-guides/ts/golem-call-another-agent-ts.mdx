@@ -47,8 +47,8 @@ and `.unwrapErr()` rather than catching it as an RPC failure.
 For durable agents, `await Def.client.create(id)` creates a new agent with a new agent
 ID (a UUID) and no key, even when another agent has the same id record. Read its ID
 with `await client.agentId()`, save it, and reconnect later with
-`await Def.client.getById(agentId)`. `getById` never creates an agent: an unknown ID
-rejects with a `not-found` `RemoteCallError`. See the
+`Def.client.getById(agentId)`. `getById` never creates an agent: an unknown ID
+throws a `not-found` `RemoteCallError`. See the
 [`golem-multi-instance-agent-ts`](/next/how-to-guides/ts/golem-multi-instance-agent-ts) guide.
 
 ## Different Component: Generated Guest Client

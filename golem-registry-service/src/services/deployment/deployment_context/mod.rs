@@ -111,7 +111,7 @@ impl DeploymentContext {
                 None,
                 &component_schema.schema,
                 component_schema.declarations.as_slice(),
-                metadata.component_provision_config().config.captures(),
+                metadata.component_provision_config().config.clone(),
             ))
             .chain(metadata.agent_types().iter().map(|agent| {
                 (
@@ -123,7 +123,7 @@ impl DeploymentContext {
                         .unwrap_or_default(),
                 )
             }));
-            for (agent_type, graph, declarations, captures) in owners {
+            for (agent_type, graph, declarations, bindings) in owners {
                 let origin = ConfigOrigin {
                     file: component.component_name.to_string().into(),
                     path: vec!["config".into()],
@@ -140,30 +140,31 @@ impl DeploymentContext {
                         for field in &schema.fields {
                             for length in 1..field.path.len() {
                                 let group = &field.path[..length];
-                                if !captures.iter().any(|entry| entry.path.starts_with(group)) {
+                                if !bindings.iter().any(|entry| entry.path.starts_with(group)) {
                                     return Err(format!(
                                         "missing required config group '{}'",
                                         group.join(".")
                                     ));
                                 }
                             }
-                            if let Some(capture) =
-                                captures.iter().find(|entry| entry.path == field.path)
+                            if let Some(binding) =
+                                bindings.iter().find(|entry| entry.path == field.path)
                             {
+                                let golem_common::model::component_metadata::ConfigBindingSource::Static(value) = &binding.value_source;
                                 if !is_equivalent_cross_graph(
                                     graph,
                                     &field.value_type,
-                                    capture.value.graph(),
-                                    capture.value.root_type(),
+                                    value.graph(),
+                                    value.root_type(),
                                 ) {
                                     return Err(format!(
-                                        "incompatible capture at '{}'",
+                                        "incompatible static binding at '{}'",
                                         field.path.join(".")
                                     ));
                                 }
-                                validate_value(graph, &field.value_type, capture.value.value())
+                                validate_value(graph, &field.value_type, value.value())
                                     .map_err(|_| {
-                                        format!("invalid capture at '{}'", field.path.join("."))
+                                        format!("invalid static binding at '{}'", field.path.join("."))
                                     })?;
                             } else if !matches!(
                                 graph.resolve_ref(&field.value_type),

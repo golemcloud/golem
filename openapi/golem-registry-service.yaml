@@ -12429,7 +12429,7 @@ components:
       example:
         accountId: 00000000-0000-0000-0000-000000000001
         actorAccountId: 00000000-0000-0000-0000-000000000002
-        changedAt: 2023-11-14T22:13:20+00:00
+        changedAt: 2023-11-14T22:13:20Z
         dimension: monthlyComputeGcu
         eventType: override_granted
         newValue:
@@ -12525,19 +12525,6 @@ components:
           allOf:
           - $ref: '#/components/schemas/SchemaValue'
           - nullable: true
-    AgentConfigEntryDto:
-      type: object
-      title: AgentConfigEntryDto
-      required:
-      - path
-      - value
-      properties:
-        path:
-          type: array
-          items:
-            type: string
-        value:
-          $ref: '#/components/schemas/NormalizedJsonValue'
     AgentConfigSource:
       type: string
       enum:
@@ -12830,7 +12817,9 @@ components:
           additionalProperties:
             type: string
         config:
-          $ref: '#/components/schemas/OwnerConfig'
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigBinding'
         plugins:
           type: array
           items:
@@ -12856,7 +12845,7 @@ components:
           type: array
           default: []
           items:
-            $ref: '#/components/schemas/AgentConfigEntryDto'
+            $ref: '#/components/schemas/ConfigBindingDto'
         pluginInstallations:
           type: array
           default: []
@@ -12884,7 +12873,7 @@ components:
         config:
           type: array
           items:
-            $ref: '#/components/schemas/AgentConfigEntryDto'
+            $ref: '#/components/schemas/ConfigBindingDto'
         pluginUpdates:
           type: array
           default: []
@@ -13983,7 +13972,7 @@ components:
       example:
         accountId: 00000000-0000-0000-0000-000000000001
         actorAccountId: 00000000-0000-0000-0000-000000000002
-        changedAt: 2023-11-14T22:13:20+00:00
+        changedAt: 2023-11-14T22:13:20Z
         dimension: monthlyComputeGcu
         eventType: override_cleared
         newValue:
@@ -14389,7 +14378,9 @@ components:
           additionalProperties:
             type: string
         config:
-          $ref: '#/components/schemas/OwnerConfig'
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigBinding'
         plugins:
           type: array
           items:
@@ -14415,7 +14406,7 @@ components:
           type: array
           default: []
           items:
-            $ref: '#/components/schemas/AgentConfigEntryDto'
+            $ref: '#/components/schemas/ConfigBindingDto'
         pluginInstallations:
           type: array
           default: []
@@ -14491,6 +14482,81 @@ components:
         allowIncompatibleConfig:
           type: boolean
           default: false
+    ConfigBinding:
+      type: object
+      title: ConfigBinding
+      required:
+      - path
+      - valueSource
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        valueSource:
+          $ref: '#/components/schemas/ConfigBindingSource'
+        origins:
+          type: array
+          description: Audit information, not an input to value resolution, authorization or deployment hashing.
+          default: []
+          items:
+            $ref: '#/components/schemas/ConfigBindingOrigin'
+    ConfigBindingDto:
+      type: object
+      title: ConfigBindingDto
+      description: Provisioning input; the owner schema determines the stored value's type.
+      required:
+      - path
+      - value
+      properties:
+        path:
+          type: array
+          items:
+            type: string
+        value:
+          $ref: '#/components/schemas/NormalizedJsonValue'
+        origins:
+          type: array
+          items:
+            $ref: '#/components/schemas/ConfigBindingOrigin'
+    ConfigBindingOrigin:
+      type: object
+      title: ConfigBindingOrigin
+      required:
+      - valuePath
+      - location
+      - sourcePath
+      - layer
+      properties:
+        valuePath:
+          type: array
+          description: Relative to the binding's value; an empty path addresses the whole value.
+          items:
+            type: string
+        location:
+          $ref: '#/components/schemas/ConfigOriginLocation'
+        sourcePath:
+          type: array
+          description: Position in the supplying document or component metadata.
+          items:
+            type: string
+        layer:
+          type: string
+          description: Display label only; consumers must not parse it to recover layer semantics.
+    ConfigBindingSource:
+      type: object
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - value
+        properties:
+          kind:
+            type: string
+            enum:
+            - static
+          value:
+            $ref: '#/components/schemas/TypedSchemaValue'
     ConfigKeyScope:
       type: object
       oneOf:
@@ -14518,23 +14584,28 @@ components:
               title: Canonical representation of an agent config path (segments are each camelCase)
               items:
                 type: string
-    ConfigSourceMetadata:
+    ConfigOriginLocation:
       type: object
-      title: ConfigSourceMetadata
-      required:
-      - source
-      - path
-      - layer
-      properties:
-        source:
-          type: string
-          description: Portable source label, not a local absolute path or initializer contents.
-        path:
-          type: array
-          items:
+      oneOf:
+      - type: object
+        required:
+        - kind
+        - file
+        properties:
+          kind:
             type: string
-        layer:
-          type: string
+            enum:
+            - manifest
+          file:
+            type: string
+      - type: object
+        required:
+        - kind
+        properties:
+          kind:
+            type: string
+            enum:
+            - componentMetadata
     Constraint:
       type: object
       oneOf:
@@ -17752,7 +17823,7 @@ components:
         activeAdminGrant:
           actorAccountId: 00000000-0000-0000-0000-000000000002
           dimension: maxMemoryPerAgent
-          grantedAt: 2023-11-14T22:13:20+00:00
+          grantedAt: 2023-11-14T22:13:20Z
           reason: support
           value: 2147483648
         ceiling:
@@ -17962,7 +18033,7 @@ components:
           $ref: '#/components/schemas/MonthlyUsageMode'
       example:
         actorAccountId: 00000000-0000-0000-0000-000000000001
-        changedAt: 2023-11-14T22:13:20+00:00
+        changedAt: 2023-11-14T22:13:20Z
         newMode: hardLimit
         previousMode: allowOverage
         source: owner
@@ -18312,54 +18383,6 @@ components:
             - single
           value:
             $ref: '#/components/schemas/SchemaType'
-    OwnerConfig:
-      type: object
-      title: OwnerConfig
-      description: |-
-        Revisioned operational config. Source metadata is optional audit information;
-        consumers must not use it to resolve or authorize a value.
-      required:
-      - entries
-      properties:
-        entries:
-          type: array
-          items:
-            $ref: '#/components/schemas/OwnerConfigEntry'
-        sourceMeta:
-          type: object
-          description: |-
-            JSON Pointer keys address fields and nested members without conflating
-            record member names, dotted declaration paths, or list indices.
-          default: {}
-          additionalProperties:
-            $ref: '#/components/schemas/ConfigSourceMetadata'
-    OwnerConfigEntry:
-      type: object
-      title: OwnerConfigEntry
-      required:
-      - path
-      - source
-      properties:
-        path:
-          type: array
-          items:
-            type: string
-        source:
-          $ref: '#/components/schemas/OwnerConfigSource'
-    OwnerConfigSource:
-      type: object
-      oneOf:
-      - type: object
-        required:
-        - kind
-        - value
-        properties:
-          kind:
-            type: string
-            enum:
-            - captured
-          value:
-            $ref: '#/components/schemas/TypedSchemaValue'
     Page_AccountSummaryReport:
       type: object
       title: Page_AccountSummaryReport
@@ -21442,7 +21465,7 @@ components:
         activeAdminGrant:
           actorAccountId: 00000000-0000-0000-0000-000000000002
           dimension: maxStoragePerAgent
-          grantedAt: 2023-11-14T22:13:20+00:00
+          grantedAt: 2023-11-14T22:13:20Z
           reason: support
           value: 2147483648
         ceiling:

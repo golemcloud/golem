@@ -137,7 +137,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .metadata
                         .component_provision_config()
                         .config
-                        .captures(),
+                        .clone(),
                     &schema.declarations,
                 )
                 .into_iter()

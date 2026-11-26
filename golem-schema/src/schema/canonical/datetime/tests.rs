@@ -13,17 +13,14 @@
 // limitations under the License.
 
 use super::*;
-use chrono::{NaiveDate, TimeZone};
+use jiff::civil::date;
 use proptest::prelude::*;
 use test_r::test;
 
-fn datetime_strategy() -> impl Strategy<Value = DateTime<Utc>> {
-    // RFC 3339 only encodes years 0000-9999, with a four-digit, non-negative
-    // year field, so cap the strategy at year 9999.
-    (0i64..253_402_214_400i64, 0u32..1_000_000_000).prop_map(|(s, n)| {
-        Utc.timestamp_opt(s, n)
-            .single()
-            .expect("strategy bounds keep timestamps valid")
+fn datetime_strategy() -> impl Strategy<Value = Timestamp> {
+    // Keep generated instants within both RFC 3339 and Jiff's ranges.
+    (0i64..=Timestamp::MAX.as_second(), 0u32..1_000_000_000).prop_map(|(s, n)| {
+        Timestamp::new(s, n as i32).expect("strategy bounds keep timestamps valid")
     })
 }
 
@@ -59,6 +56,40 @@ fn garbage_text_rejected() {
 }
 
 #[test]
+fn leap_seconds_are_rejected_without_changing_the_instant() {
+    for input in [
+        "2016-12-31T23:59:60Z",
+        "2016-12-31T23:59:60.123456789Z",
+        "2017-01-01T00:59:60+01:00",
+    ] {
+        assert!(matches!(from_text(input), Err(ParseError::BadFormat(_))));
+        assert!(from_json(&Value::String(input.into())).is_err());
+    }
+    let previous = "2016-12-31T23:59:59.123456789Z";
+    assert_eq!(to_text(&from_text(previous).unwrap()).unwrap(), previous);
+    assert_eq!(
+        from_text(&to_text(&Timestamp::MAX).unwrap()).unwrap(),
+        Timestamp::MAX
+    );
+}
+
+#[test]
+fn non_rfc3339_iso8601_forms_rejected() {
+    for input in [
+        "2025-04-12T13:14Z",
+        "-000001-04-12T13:14:15Z",
+        "2025-04-12T13:14:15Z[UTC]",
+        "2025-04-12T13:14:15+0200",
+        "2025-04-12T13:14:15.Z",
+        "2025-04-12T13:14:15+24:00",
+        "2025-04-12T13:14:15-24:00",
+        "2025-04-12T13:14:15+23:60",
+    ] {
+        assert!(from_text(input).is_err(), "accepted {input}");
+    }
+}
+
+#[test]
 fn json_wrong_type() {
     assert_eq!(
         from_json(&Value::Number(serde_json::Number::from(1u64))),
@@ -72,12 +103,15 @@ fn json_wrong_type() {
 #[test]
 fn accepts_non_utc_offset_and_converts() {
     let v = from_text("2025-04-12T13:14:15+02:00").expect("parse");
-    assert_eq!(v.timezone(), Utc);
+    assert_eq!(to_text(&v).unwrap(), "2025-04-12T11:14:15.000000000Z");
 }
 
-fn dt_at_year(year: i32) -> DateTime<Utc> {
-    let date = NaiveDate::from_ymd_opt(year, 1, 1).expect("valid date");
-    date.and_hms_opt(0, 0, 0).expect("valid time").and_utc()
+fn dt_at_year(year: i16) -> Timestamp {
+    date(year, 1, 1)
+        .at(0, 0, 0, 0)
+        .to_zoned_datetime(jiff::tz::TimeZone::UTC)
+        .unwrap()
+        .timestamp()
 }
 
 #[test]
@@ -103,7 +137,5 @@ fn negative_year_rejected() {
 
 #[test]
 fn year_above_max_rejected() {
-    let dt = dt_at_year(10_000);
-    assert_eq!(to_text(&dt), Err(ParseError::OutOfRange("datetime year")));
-    assert_eq!(to_json(&dt), Err(ParseError::OutOfRange("datetime year")));
+    assert!("+010000-01-01T00:00:00Z".parse::<Timestamp>().is_err());
 }

@@ -238,7 +238,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                     (
                         agent_type_provision_configs
                             .as_ref()
-                            .map(|c| c.config.captures())
+                            .map(|c| c.config.clone())
                             .unwrap_or_default(),
                         &agent_type.config,
                     )
@@ -250,7 +250,7 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                             .metadata
                             .component_provision_config()
                             .config
-                            .captures(),
+                            .clone(),
                         &schema.declarations,
                     )
                 }

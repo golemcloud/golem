@@ -56,7 +56,7 @@ use crate::chaos::summary::{
     AgentReadback, ChaosSummary, ExactlyOnceReport, Note, RoutingSnapshot, TerminationReason,
 };
 use crate::chaos::workload::{self, WorkloadContext};
-use chrono::{DateTime, Utc};
+
 use golem_test_framework::benchmark::RunMetadata;
 use golem_test_framework::config::{BenchmarkTestDependencies, TestDependencies};
 use std::collections::BTreeMap;
@@ -78,10 +78,10 @@ pub struct OutputPaths {
 /// them — and a positional call site makes it far too easy to swap two
 /// `Option<DateTime>`s and never notice.
 pub struct ScenarioOutcome {
-    pub started_at: DateTime<Utc>,
+    pub started_at: jiff::Timestamp,
     pub phases: Phases,
-    pub fault_injected_at: Option<DateTime<Utc>>,
-    pub fault_recovered_at: Option<DateTime<Utc>>,
+    pub fault_injected_at: Option<jiff::Timestamp>,
+    pub fault_recovered_at: Option<jiff::Timestamp>,
     pub fault_id: Option<String>,
     /// What the workflow reported it aimed at — a pod name for a pinned
     /// scenario, a deployment name otherwise.
@@ -119,7 +119,7 @@ pub fn build_result(config: &ScenarioConfig, outcome: ScenarioOutcome) -> ChaosR
         completed: !outcome.termination_reason.is_failure(),
         termination_reason: outcome.termination_reason,
         started_at: outcome.started_at,
-        ended_at: Some(Utc::now()),
+        ended_at: Some(jiff::Timestamp::now()),
         phases: outcome.phases,
         fault_injected_at: outcome.fault_injected_at,
         fault_recovered_at: outcome.fault_recovered_at,
@@ -211,7 +211,7 @@ pub async fn snapshot_routing(deps: &BenchmarkTestDependencies, at: &str) -> Rou
                 .collect();
             RoutingSnapshot {
                 at: at.to_string(),
-                taken_at: Utc::now(),
+                taken_at: jiff::Timestamp::now(),
                 shards_per_executor: Some(shards_per_executor),
                 unavailable_reason: None,
             }
@@ -220,7 +220,7 @@ pub async fn snapshot_routing(deps: &BenchmarkTestDependencies, at: &str) -> Rou
             warn!("Chaos: routing table unavailable at {at}: {e:#}");
             RoutingSnapshot {
                 at: at.to_string(),
-                taken_at: Utc::now(),
+                taken_at: jiff::Timestamp::now(),
                 shards_per_executor: None,
                 unavailable_reason: Some(format!("{e:#}")),
             }

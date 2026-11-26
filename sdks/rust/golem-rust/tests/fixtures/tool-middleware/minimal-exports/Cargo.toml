@@ -18,4 +18,4 @@ golem-rust = { path = "../../../..", features = ["export_golem_agentic"] }
 middleware-definition = { path = "../definition" }
 
 [dev-dependencies]
-test-r = "3.0.9"
+test-r = "3.0.16"

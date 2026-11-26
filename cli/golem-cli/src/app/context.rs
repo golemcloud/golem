@@ -31,8 +31,8 @@ use crate::model::app::{
     includes_from_yaml_file,
 };
 use crate::model::app_raw;
+use crate::model::cli_config::server::ToFormattedServerContext;
 use crate::model::component::format_component_applied_layers;
-use crate::model::config::server::ToFormattedServerContext;
 use crate::model::deploy::log_unified_diff_for_path;
 use crate::model::format::Format;
 use crate::model::language::GuestLanguage;
@@ -490,16 +490,20 @@ impl ApplicationContext {
                     let mut expanded =
                         golem_package::expand(&pins, &lock, dir.path(), &mut effects).await?;
                     for installed in expanded.components.values_mut() {
-                        // The lock is a local locator, not the source label sent to the registry.
-                        let source = fs::absolute_lexical_path_from_base_dir(
-                            Path::new(&installed.package_metadata.source),
-                            &loaded.app_root_dir,
-                        );
-                        installed.package_metadata.source =
-                            match source.strip_prefix(&loaded.app_root_dir) {
-                                Ok(relative) => fs::path_to_unix_str(relative)?,
-                                Err(_) => fs::file_name_to_str(&source)?.to_owned(),
-                            };
+                        if let golem_package::PackageSource::File(path) =
+                            golem_package::PackageSource::parse(&installed.package_metadata.source)
+                        {
+                            // Do not send absolute local paths to the registry.
+                            let source = fs::absolute_lexical_path_from_base_dir(
+                                Path::new(path),
+                                &loaded.app_root_dir,
+                            );
+                            installed.package_metadata.source =
+                                match source.strip_prefix(&loaded.app_root_dir) {
+                                    Ok(relative) => fs::path_to_unix_str(relative)?,
+                                    Err(_) => fs::file_name_to_str(&source)?.to_owned(),
+                                };
+                        }
                     }
                     let mut package_app = package_manifest(dir.path(), &expanded.declarations)?;
                     for app in &loaded.raw_apps {

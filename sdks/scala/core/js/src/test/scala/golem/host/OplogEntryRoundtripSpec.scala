@@ -68,10 +68,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
         tag = "agent",
         `val` = js.Dynamic.literal(
           pair = pairJs("https://golem.example", "agent:relay"),
-          agentId = js.Dynamic.literal(
-            componentId = js.Dynamic.literal(uuid = uuidJs(3L, 4L)),
-            agentId = "Relay(\"r\")"
-          ),
+          agentId = js.Dynamic.literal(uuid = uuidJs(3L, 4L)),
           agentType = "Relay",
           environmentId = js.Dynamic.literal(uuid = uuidJs(5L, 6L))
         )
@@ -89,8 +86,7 @@ object OplogEntryRoundtripSpec extends ZIOSpecDefault {
     ),
     immediate = PublicPrincipal.Agent(
       PublicPrincipalRef("https://golem.example", "agent:relay"),
-      new java.util.UUID(3L, 4L),
-      "Relay(\"r\")",
+      golem.AgentId(new java.util.UUID(3L, 4L)),
       "Relay",
       new java.util.UUID(5L, 6L)
     ),

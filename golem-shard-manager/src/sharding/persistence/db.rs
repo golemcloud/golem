@@ -286,15 +286,15 @@ mod tests {
 
     use super::*;
     use crate::sharding::model::{ExecutorAddr, ExecutorId, ShardAssignmentEntry, ShardEpoch};
-    use chrono::{DateTime, Utc};
     use golem_common::model::ShardId;
+    use jiff::Timestamp;
     use std::net::Ipv4Addr;
     use std::time::Duration;
 
     const TTL: Duration = Duration::from_secs(60);
 
-    fn t0() -> DateTime<Utc> {
-        DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+    fn t0() -> Timestamp {
+        Timestamp::new(1_700_000_000, 0).unwrap()
     }
 
     fn addr(last_octet: u8, port: u16) -> ExecutorAddr {
@@ -337,7 +337,7 @@ mod tests {
         assert_eq!(leases[0].granted_at, SqlDateTime::new(t0()));
         assert_eq!(
             leases[0].expires_at,
-            SqlDateTime::new(t0() + chrono::Duration::from_std(TTL).unwrap())
+            SqlDateTime::new(t0() + jiff::SignedDuration::try_from(TTL).unwrap())
         );
         assert_eq!(leases[0].pod_name.as_deref(), Some("worker-executor-0"));
         assert_eq!(leases[1].pod_name, None);

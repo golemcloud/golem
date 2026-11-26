@@ -117,6 +117,7 @@ use forwarding::{
 };
 pub use forwarding::{
     durable_stream_mapping_from_proto, durable_stream_mapping_to_proto, strip_streams,
+    with_input_server_terminals,
 };
 #[cfg(test)]
 use input_producer::durable_stream_cancel_error;

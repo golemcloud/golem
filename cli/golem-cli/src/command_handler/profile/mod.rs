@@ -24,8 +24,8 @@ use crate::context::Context;
 use crate::error::NonSuccessfulExit;
 use crate::log::log_error;
 use crate::log::{LogColorize, log_action, logln};
-use crate::model::config::ProfileView;
-use crate::model::config::profile::{
+use crate::model::cli_config::ProfileView;
+use crate::model::cli_config::profile::{
     ProfileCreateResult, ProfileDeleteView, ProfileListView, ProfileSwitchResult,
 };
 use crate::model::format::Format;

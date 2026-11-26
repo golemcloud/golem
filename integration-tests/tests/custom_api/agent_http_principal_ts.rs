@@ -289,12 +289,15 @@ async fn public_oplog_shows_claims_only_on_request_to_an_oplog_reader(
     use golem_test_framework::config::TestDependencies;
     use golem_test_framework::dsl::TestDsl;
 
+    // A key of its own: the other tests of this context call the same method on `test-agent`
+    // with other callers.
+    let agent_name = format!("oplog-claims-{}", uuid::Uuid::new_v4());
     let response = agent
         .client
         .get(
             agent
                 .base_url
-                .join("/principal-agent/test-agent/authed-principal")?,
+                .join(&format!("/principal-agent/{agent_name}/authed-principal"))?,
         )
         .header(
             "x-golem-test-session",
@@ -305,7 +308,7 @@ async fn public_oplog_shows_claims_only_on_request_to_an_oplog_reader(
     assert_eq!(response.status(), reqwest::StatusCode::OK);
 
     // The agent that the route created, found by its key.
-    let key = golem_common::agent_key!("PrincipalAgent", "test-agent");
+    let key = golem_common::agent_key!("PrincipalAgent", agent_name.clone());
     let reference = agent
         .user
         .deps

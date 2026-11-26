@@ -2169,6 +2169,140 @@ func TestAnItemTheCallCannotSendFailsTheCall(t *testing.T) {
 	}
 }
 
+// An input that the server ends with a failure, such as at an item that does
+// not satisfy its element schema, fails the call with a StreamItemError that
+// names the item. A consumer cancellation of an input only stops the input.
+func TestAnInputTheServerEndsWithAFailureFailsTheCall(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		outcome map[string]any
+		fails   bool
+	}{
+		{
+			name: "failed",
+			outcome: map[string]any{"kind": "failed", "error": map[string]any{
+				"kind": "interrupted", "message": "input item 1 does not satisfy the element schema",
+			}},
+			fails: true,
+		},
+		{
+			name:    "consumer cancelled",
+			outcome: map[string]any{"kind": "consumer-cancelled", "details": "consumer-drop"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			server := newFakeServer(t, func(c *fakeConn) {
+				start := c.expect("invocationStart")
+				refs := provisionalRefs(t, start)
+				accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+				c.expect("inputStreamItem")
+				ack(c, 1, 1, false)
+				c.expect("inputStreamItem")
+				c.send("stream-end", map[string]any{
+					"channel": 1, "direction": "input", "sequence": "1", "outcome": tc.outcome,
+				})
+				if !tc.fails {
+					noResult(c)
+					finished(c)
+				}
+				for c.readUntilClose().kind != "" {
+				}
+			})
+			err := InvokeStreaming(ctxT(t), server.agent(t), "consume",
+				streamParams(EncodeStream(EncodeU32)(StreamOf[uint32](1, 2))))
+			if !tc.fails {
+				if err != nil {
+					t.Fatalf("a consumer cancellation failed the call: %v", err)
+				}
+				return
+			}
+			var rejected *StreamItemError
+			var failure *StreamError
+			if !errors.As(err, &rejected) || !errors.As(err, &failure) || failure.Kind != StreamErrorInterrupted ||
+				!strings.Contains(err.Error(), "item 1") ||
+				!strings.Contains(err.Error(), "does not satisfy the element schema") {
+				t.Fatalf("got %v, want a *StreamItemError naming item 1", err)
+			}
+		})
+	}
+}
+
+// A client that resumes after the server ended its input gets the outcome on
+// the input's high-water: a failure fails the call, a consumer cancellation
+// only stops the input. Items the server did not accept are dropped.
+func TestAResumedInputGetsTheOutcomeTheServerSelected(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		outcome map[string]any
+		fails   bool
+	}{
+		{
+			name: "failed",
+			outcome: map[string]any{"kind": "failed", "error": map[string]any{
+				"kind": "interrupted", "message": "input item 1 does not satisfy the element schema",
+			}},
+			fails: true,
+		},
+		{
+			name:    "consumer cancelled",
+			outcome: map[string]any{"kind": "consumer-cancelled", "details": "consumer-drop"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var key any
+			server := newFakeServer(t,
+				func(c *fakeConn) {
+					start := c.expect("invocationStart")
+					key = start.m["idempotencyKey"]
+					refs := provisionalRefs(t, start)
+					accept(c, start, "sess", inputMapping(1, refs[0], "in", 0, false))
+					c.expect("inputStreamItem")
+					ack(c, 1, 1, false)
+					c.expect("inputStreamItem")
+					// The server ends the input at item 1; the connection is lost
+					// before the stream-end reaches the client.
+					c.drop()
+				},
+				func(c *fakeConn) {
+					resume := c.expect("resumeAttach")
+					mapping := inputMapping(9, "", "in", 1, true)
+					mapping["inputHighWater"].(map[string]any)["outcome"] = tc.outcome
+					acceptAs(c, resume, key, "sess2", mapping)
+					if !tc.fails {
+						noResult(c)
+						finished(c)
+					}
+					for r := c.readUntilClose(); r.kind != ""; r = c.readUntilClose() {
+						if r.kind == "inputStreamItem" || r.kind == "stream-end" {
+							t.Errorf("the client sent %s after the server ended its input", r.kind)
+						}
+					}
+				},
+			)
+			source := ProduceStream(func(w *AgentStreamWriter[uint32]) error {
+				for i := uint32(0); ; i++ {
+					if err := w.Write(i); err != nil {
+						return err
+					}
+				}
+			})
+			err := InvokeStreaming(ctxT(t), server.agent(t), "consume", streamParams(EncodeStream(EncodeU32)(source)))
+			if !tc.fails {
+				if err != nil {
+					t.Fatalf("a consumer cancellation failed the call: %v", err)
+				}
+				return
+			}
+			var rejected *StreamItemError
+			var failure *StreamError
+			if !errors.As(err, &rejected) || !errors.As(err, &failure) || failure.Kind != StreamErrorInterrupted ||
+				!strings.Contains(err.Error(), "does not satisfy the element schema") {
+				t.Fatalf("got %v, want a *StreamItemError with the interrupted failure", err)
+			}
+		})
+	}
+}
+
 // A source that fails only makes its input unavailable: the server decides
 // what that means for the call, and here it still completes it.
 func TestAFailingSourceDoesNotFailTheCall(t *testing.T) {

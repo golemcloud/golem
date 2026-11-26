@@ -4557,7 +4557,6 @@
         "$type",
         "deploymentDiff",
         "environmentSetup",
-        "staticConfig",
         "toolPublications"
       ],
       "properties": {
@@ -4569,10 +4568,6 @@
         },
         "toolPublications": {
           "$ref": "#/definitions/ToolPublicationPlan"
-        },
-        "staticConfig": {
-          "type": "array",
-          "items": { "$ref": "#/definitions/StaticConfigFieldView" }
         },
         "environmentSetup": {
           "oneOf": [
@@ -4791,8 +4786,8 @@
     },
     "component.manifest-trace": {
       "type": "object",
-      "description": "Manifest property traces and ordered config inputs. resolvedConfig is null by default; --resolved adds schema-validated static values and provenance from local built components, not deployed state.",
-      "x-golem-output-mode": "single",
+      "description": "Manifest property traces and ordered config inputs. resolvedConfig is null by default; --build incrementally builds components and adds schema-validated static values and provenance from local component metadata, not deployed state.",
+      "x-golem-output-mode": "stream",
       "x-golem-command": "component manifest-trace",
       "required": ["$type", "componentName", "properties", "resolvedConfig"],
       "properties": {
@@ -7272,7 +7267,10 @@
           "type": "object",
           "additionalProperties": { "type": "string" }
         },
-        "config": { "$ref": "#/definitions/OwnerConfig" },
+        "config": {
+          "type": "array",
+          "items": { "$ref": "#/definitions/ConfigBinding" }
+        },
         "plugins": {
           "type": "array",
           "items": { "$ref": "#/definitions/InstalledPlugin" }
@@ -7285,50 +7283,54 @@
       },
       "additionalProperties": false
     },
-    "OwnerConfig": {
+    "ConfigBinding": {
       "type": "object",
-      "required": ["entries"],
+      "required": ["path", "valueSource"],
       "properties": {
-        "entries": {
+        "path": { "type": "array", "items": { "type": "string" } },
+        "valueSource": { "$ref": "#/definitions/ConfigBindingSource" },
+        "origins": {
           "type": "array",
-          "items": { "$ref": "#/definitions/OwnerConfigEntry" }
-        },
-        "sourceMeta": {
-          "type": "object",
-          "additionalProperties": {
-            "$ref": "#/definitions/ConfigSourceMetadata"
-          }
+          "items": { "$ref": "#/definitions/ConfigBindingOrigin" }
         }
       },
       "additionalProperties": false
     },
-    "OwnerConfigEntry": {
-      "type": "object",
-      "required": ["path", "source"],
-      "properties": {
-        "path": { "type": "array", "items": { "type": "string" } },
-        "source": { "$ref": "#/definitions/OwnerConfigSource" }
-      },
-      "additionalProperties": false
-    },
-    "OwnerConfigSource": {
+    "ConfigBindingSource": {
       "type": "object",
       "required": ["kind", "value"],
       "properties": {
-        "kind": { "const": "captured" },
+        "kind": { "const": "static" },
         "value": { "$ref": "#/definitions/TypedSchemaValue" }
       },
       "additionalProperties": false
     },
-    "ConfigSourceMetadata": {
+    "ConfigBindingOrigin": {
       "type": "object",
-      "required": ["source", "path", "layer"],
+      "required": ["valuePath", "location", "sourcePath", "layer"],
       "properties": {
-        "source": { "type": "string" },
-        "path": { "type": "array", "items": { "type": "string" } },
+        "valuePath": { "type": "array", "items": { "type": "string" } },
+        "location": { "$ref": "#/definitions/ConfigOriginLocation" },
+        "sourcePath": { "type": "array", "items": { "type": "string" } },
         "layer": { "type": "string" }
       },
       "additionalProperties": false
+    },
+    "ConfigOriginLocation": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind", "file"],
+          "properties": { "kind": { "const": "manifest" }, "file": { "type": "string" } },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["kind"],
+          "properties": { "kind": { "const": "componentMetadata" } },
+          "additionalProperties": false
+        }
+      ]
     },
     "TypedAgentConfigEntry": {
       "type": "object",
@@ -7608,6 +7610,7 @@
         "agentId",
         "agentType",
         "agentKey",
+        "origin",
         "fingerprint",
         "createdBy",
         "environmentId",
@@ -7630,6 +7633,7 @@
         "agentId": { "type": "string", "format": "uuid" },
         "agentType": { "type": ["string", "null"] },
         "agentKey": { "type": ["string", "null"] },
+        "origin": { "type": "string", "enum": ["keyed", "created", "forked"] },
         "fingerprint": { "type": "string", "format": "uuid" },
         "createdBy": { "type": "string" },
         "environmentId": { "type": "string" },

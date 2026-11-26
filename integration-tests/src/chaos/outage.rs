@@ -128,7 +128,7 @@ use crate::chaos::split::{
     FaultWindow, Window, longest_silence_ms, round2, window_end, window_secs, window_start,
 };
 use crate::chaos::summary::LatencyStats;
-use chrono::{DateTime, Utc};
+
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -404,7 +404,7 @@ struct Tally {
     /// Keyed on the window a confirmation *landed* in rather than the one its
     /// operation was offered in, which is the only way either of the numbers
     /// derived from it means what it says.
-    served_at: Vec<DateTime<Utc>>,
+    served_at: Vec<jiff::Timestamp>,
 }
 
 impl StorageFaultReport {
@@ -423,8 +423,8 @@ impl StorageFaultReport {
         recovery_budget: Duration,
     ) -> Self {
         let mut tallies: BTreeMap<(Stream, Window), Tally> = BTreeMap::new();
-        let mut first_submitted: Option<DateTime<Utc>> = None;
-        let mut last_completed: Option<DateTime<Utc>> = None;
+        let mut first_submitted: Option<jiff::Timestamp> = None;
+        let mut last_completed: Option<jiff::Timestamp> = None;
 
         for record in records {
             let window = Window::of(record.submitted_at, fault);
@@ -563,8 +563,8 @@ impl StorageFaultReport {
     fn judge_outage(
         &mut self,
         fault: Option<FaultWindow>,
-        first_submitted: Option<DateTime<Utc>>,
-        last_completed: Option<DateTime<Utc>>,
+        first_submitted: Option<jiff::Timestamp>,
+        last_completed: Option<jiff::Timestamp>,
     ) {
         if fault.is_none() {
             return;
@@ -827,10 +827,9 @@ impl StorageFaultReport {
                 .filter(|at| *at >= recovered)
                 .min();
 
-            let first_confirmed_ms =
-                first.map(|at| (at - recovered).num_milliseconds().max(0) as u64);
+            let first_confirmed_ms = first.map(|at| (at - recovered).as_millis().max(0) as u64);
             let over_budget = first
-                .map(|at| (at - recovered).num_milliseconds() > budget_ms)
+                .map(|at| (at - recovered).as_millis() > i128::from(budget_ms))
                 .unwrap_or(false);
 
             if first.is_none() {
@@ -1094,30 +1093,28 @@ fn count_of(records: &[&OperationRecord], outcome: Outcome) -> u64 {
 mod tests {
     use super::*;
     use crate::chaos::history::{AttemptRecord, Phase};
-    use chrono::TimeDelta;
+
     use test_r::test;
 
     const ENDPOINT: &str = "golem-postgres-dev-keyvalue.cluster-example.rds.amazonaws.com";
     const QUIET_FLOOR: f64 = 50.0;
     const AGENT: &str = "chaos-s16-durable-0000";
 
-    fn t0() -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339("2026-08-25T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc)
+    fn t0() -> jiff::Timestamp {
+        str::parse::<jiff::Timestamp>("2026-08-25T12:00:00Z").unwrap()
     }
 
     fn fault() -> FaultWindow {
         FaultWindow {
             injected_at: t0(),
-            recovered_at: Some(t0() + TimeDelta::seconds(180)),
+            recovered_at: Some(t0() + jiff::SignedDuration::from_secs(180)),
         }
     }
 
     /// One operation, submitted `offset` seconds from the moment the storage
     /// was taken away. Negative offsets are the baseline.
     fn op(stream: Stream, offset_secs: i64, outcome: Outcome) -> OperationRecord {
-        let submitted_at = t0() + TimeDelta::seconds(offset_secs);
+        let submitted_at = t0() + jiff::SignedDuration::from_secs(offset_secs);
         OperationRecord {
             op_id: 0,
             stream,
@@ -1126,7 +1123,7 @@ mod tests {
             method: "increment".to_string(),
             idempotency_key: format!("{stream}-{offset_secs}"),
             submitted_at,
-            completed_at: Some(submitted_at + TimeDelta::milliseconds(20)),
+            completed_at: Some(submitted_at + jiff::SignedDuration::from_millis(20)),
             attempts: 1,
             outcome,
             duration_ms: 20,
@@ -1151,7 +1148,7 @@ mod tests {
     fn stalled(stream: Stream, offset_secs: i64) -> OperationRecord {
         let mut record = op(stream, offset_secs, Outcome::Indeterminate);
         record.duration_ms = 245_000;
-        record.completed_at = Some(record.submitted_at + TimeDelta::seconds(245));
+        record.completed_at = Some(record.submitted_at + jiff::SignedDuration::from_secs(245));
         record.returned_value = None;
         record.attempts = 2;
         record.error_class = Some(ErrorClass::Transport);
@@ -1295,7 +1292,7 @@ mod tests {
         let mut record = op(stream, offset_secs, Outcome::Confirmed);
         record.duration_ms = duration_ms;
         record.completed_at =
-            Some(record.submitted_at + TimeDelta::milliseconds(duration_ms as i64));
+            Some(record.submitted_at + jiff::SignedDuration::from_millis(duration_ms as i64));
         record
     }
 
@@ -1736,7 +1733,7 @@ mod tests {
             &records,
             Some(FaultWindow {
                 injected_at: t0(),
-                recovered_at: Some(t0() + TimeDelta::seconds(fault_secs)),
+                recovered_at: Some(t0() + jiff::SignedDuration::from_secs(fault_secs)),
             }),
             ENDPOINT,
             OutageExpectation::WholeWorkload {
@@ -1924,7 +1921,7 @@ mod tests {
         for second in 0..120 {
             let mut record = op(Stream::Durable, second, Outcome::Confirmed);
             // Offered inside the outage, answered once the storage returned.
-            record.completed_at = Some(t0() + TimeDelta::seconds(181));
+            record.completed_at = Some(t0() + jiff::SignedDuration::from_secs(181));
             record.duration_ms = (181 - second) as u64 * 1_000;
             records.push(record);
         }

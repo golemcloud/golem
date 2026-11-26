@@ -20,44 +20,36 @@ const UUID_PATTERN =
 
 /**
  * Names an agent within its environment. Golem issues it as an opaque version 8 UUID; it does not
- * encode the agent type's name or the constructor parameters. Its text form is the UUID.
+ * encode the agent type's name or the constructor parameters.
  *
- * Structurally compatible with the WIT `agent-id` record, so it can be passed to host functions
- * directly.
+ * An agent ID is its lower-case hyphenated UUID text, branded so that other strings are not
+ * accepted where an agent ID is expected. Compare IDs with `===`, use them as `Map` keys, and
+ * store them as text; `AgentId.parse` reads the text back.
  */
-export class AgentId {
-  readonly uuid: Uuid;
+// The brand is a string key, not a unique symbol, so that the type is the same in every bundled
+// declaration entrypoint.
+export type AgentId = string & { readonly __brand: 'golem.AgentId' };
 
-  constructor(uuid: Uuid) {
-    this.uuid = Uuid.from(uuid);
-  }
-
-  /** Wraps a WIT `agent-id`. An `AgentId` is returned as it is. */
-  static from(value: RawAgentId): AgentId {
-    if (value instanceof AgentId) {
-      return value;
-    }
-    return new AgentId(Uuid.from(value.uuid));
-  }
-
-  /** Parses the text form, a hyphenated UUID. */
-  static parse(value: string): AgentId {
+export const AgentId = {
+  /**
+   * Parses the text form, a hyphenated UUID. Upper-case hex is accepted and the result is lower
+   * case. Throws a `TypeError` for other text. The parse checks only the text form: whether an
+   * agent has the ID is known only to Golem, for example through a client's `getById`.
+   */
+  parse(value: string): AgentId {
     if (!UUID_PATTERN.test(value)) {
       throw new TypeError(`Invalid agent ID: ${value} is not a UUID`);
     }
-    return new AgentId(Uuid.parse(value));
-  }
+    return value.toLowerCase() as AgentId;
+  },
 
-  /** The text form: the hyphenated UUID. */
-  toString(): string {
-    return this.uuid.toString();
-  }
+  /** The agent ID of a WIT `agent-id` record. */
+  fromWit(value: RawAgentId): AgentId {
+    return AgentId.parse(Uuid.from(value.uuid).toString());
+  },
 
-  toJSON(): string {
-    return this.toString();
-  }
-
-  equals(other: RawAgentId): boolean {
-    return this.uuid.highBits === other.uuid.highBits && this.uuid.lowBits === other.uuid.lowBits;
-  }
-}
+  /** The WIT `agent-id` record of an agent ID, for a call of a host function. */
+  toWit(value: AgentId): RawAgentId {
+    return { uuid: Uuid.parse(value) };
+  },
+};

@@ -6,7 +6,7 @@ import { getAgentTypeByAgentId, type Datetime } from 'golem:agent/host@2.0.0';
 import type { CancelableScheduledInvocationReceipt, InvocationMetadata } from './invocationId';
 import { getRemoteAgentById, RemoteCallError, type RemoteAgentHandle } from './bridge/agent';
 import { type SchemaValue } from './internal/schema-model';
-import type { AgentId } from './agentId';
+import { AgentId } from './agentId';
 import type { ScopeCard } from './host/permissions';
 
 export interface DynamicInvocation<T> {
@@ -40,11 +40,11 @@ export class DynamicAgentClient implements DynamicAgentClientSurface {
 
   /**
    * Connects to the existing agent with this ID; its type comes from the ID's type tag. Never
-   * creates the agent: an ID whose tag names no deployed agent type, or an unknown agent, rejects
-   * with a `not-found` {@link RemoteCallError}.
+   * creates the agent: an ID whose tag names no deployed agent type, or an unknown agent, throws
+   * a `not-found` {@link RemoteCallError}.
    */
-  static async getById(agentId: AgentId): Promise<DynamicAgentClient> {
-    const registered = getAgentTypeByAgentId(agentId);
+  static getById(agentId: AgentId): DynamicAgentClient {
+    const registered = getAgentTypeByAgentId(AgentId.toWit(agentId));
     if (registered === undefined) {
       throw new RemoteCallError(`Failed to connect to remote agent ${agentId.toString()}`, {
         tag: 'not-found',
@@ -53,7 +53,7 @@ export class DynamicAgentClient implements DynamicAgentClientSurface {
     }
     return new DynamicAgentClient(
       agentId,
-      await getRemoteAgentById(registered.agentType.typeName, agentId),
+      getRemoteAgentById(registered.agentType.typeName, agentId),
     );
   }
 
