@@ -17,6 +17,7 @@ use crate::durable_host::durable_stream::tests::TestOplog;
 use crate::services::oplog::{OplogReadError, UnreadableOplog};
 use golem_common::base_model::durable_stream::StreamError;
 use golem_common::model::AgentId;
+use golem_common::model::durable_stream::SessionFailure;
 use golem_common::model::oplog::OplogIndex;
 use test_r::test;
 
@@ -558,7 +559,11 @@ async fn local_session(oplog: Arc<TestOplog>) -> StreamSession {
 /// outputs, and the session terminal it left in the history.
 async fn end_attachment(
     error: SessionError,
-) -> (Vec<InvocationResponse>, bool, Option<Result<(), Vec<u8>>>) {
+) -> (
+    Vec<InvocationResponse>,
+    bool,
+    Option<Result<(), SessionFailure>>,
+) {
     let streams = local_session(Arc::default()).await;
     let (responses, mut received) = mpsc::channel(8);
     let drained = std::sync::atomic::AtomicBool::new(false);
@@ -646,7 +651,10 @@ async fn only_a_protocol_violation_records_a_failed_session_terminal() {
     assert_eq!(failure.kind, InvocationFailureKind::Protocol as i32);
     assert_eq!(failure.message, violation);
     assert!(drained);
-    assert_eq!(terminal, Some(Err(violation.as_bytes().to_vec())));
+    assert_eq!(
+        terminal,
+        Some(Err(SessionFailure::Protocol(violation.into())))
+    );
 }
 
 #[test]

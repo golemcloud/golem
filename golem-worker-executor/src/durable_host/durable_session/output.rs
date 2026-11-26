@@ -1767,7 +1767,7 @@ impl StreamSession {
 
     pub(super) async fn finish(
         &self,
-        result: Result<(), Vec<u8>>,
+        result: Result<(), SessionFailure>,
         authored_by: StreamTerminalAuthor,
         input_terminal: StreamTerminal,
     ) -> Result<(), SessionError> {
@@ -1775,7 +1775,8 @@ impl StreamSession {
             return Ok(());
         }
         let session = self.clone();
-        let retained_bytes = DurableStreamStore::finish_session_retained_bytes(&result);
+        let retained_bytes =
+            DurableStreamStore::finish_session_retained_bytes(&result, &input_terminal)?;
         let outcome = self
             .producer
             .run_admitted_accounted(
@@ -1847,19 +1848,9 @@ impl StreamSession {
     }
 
     /// Records a failed session terminal after cancelling remaining stream work.
-    pub async fn fail(&self, details: String) -> Result<(), SessionError> {
+    pub async fn fail(&self, cause: SessionFailure, details: String) -> Result<(), SessionError> {
         self.finish(
-            Err(details.clone().into_bytes()),
-            StreamTerminalAuthor::Host,
-            StreamTerminal::Failed(StreamError::Trapped(details)),
-        )
-        .await
-    }
-
-    /// Finalizes streams with invocation-failed semantics and records session failure.
-    pub async fn fail_invocation(&self, details: String) -> Result<(), SessionError> {
-        self.finish(
-            Err(details.clone().into_bytes()),
+            Err(cause),
             StreamTerminalAuthor::Host,
             StreamTerminal::Failed(StreamError::Trapped(details)),
         )
@@ -1869,7 +1860,7 @@ impl StreamSession {
     /// Finalizes streams with protocol-error semantics and records session failure.
     pub async fn fail_protocol(&self, details: String) -> Result<(), SessionError> {
         self.finish(
-            Err(details.clone().into_bytes()),
+            Err(SessionFailure::Protocol(details.clone())),
             StreamTerminalAuthor::Protocol,
             StreamTerminal::Failed(StreamError::Interrupted(details)),
         )
@@ -1948,7 +1939,9 @@ impl StreamSession {
     }
 
     /// Reads the committed session terminal without waiting.
-    pub async fn persisted_finished(&self) -> Result<Option<Result<(), Vec<u8>>>, SessionError> {
+    pub async fn persisted_finished(
+        &self,
+    ) -> Result<Option<Result<(), SessionFailure>>, SessionError> {
         let index = self.current_control_metadata().await?.finished_position();
         let Some(index) = index else {
             return Ok(None);
@@ -1964,7 +1957,9 @@ impl StreamSession {
     }
 
     /// Waits until successful or failed session completion is durable.
-    pub async fn wait_persisted_finished(&self) -> Result<Result<(), Vec<u8>>, SessionError> {
+    pub async fn wait_persisted_finished(
+        &self,
+    ) -> Result<Result<(), SessionFailure>, SessionError> {
         loop {
             let changed = self.producer.session_records_changed().notified();
             tokio::pin!(changed);

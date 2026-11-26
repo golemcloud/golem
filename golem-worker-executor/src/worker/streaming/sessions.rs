@@ -14,7 +14,7 @@
 
 use golem_common::model::InvocationId;
 use golem_common::model::caller::{Caller, Principal};
-use golem_common::model::durable_stream::StreamInvocationId;
+use golem_common::model::durable_stream::{SessionFailure, StreamInvocationId};
 
 use crate::worker::*;
 
@@ -525,7 +525,11 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         idempotency_key: &InvocationId,
         details: String,
     ) -> Result<(), WorkerExecutorError> {
-        self.finish_durable_streaming_session(idempotency_key, Err(details))
+        let cause = match self.lookup_invocation_result(idempotency_key).await {
+            LookupResult::Complete(Err(_)) => SessionFailure::Invocation,
+            _ => SessionFailure::Protocol(details.clone()),
+        };
+        self.finish_durable_streaming_session(idempotency_key, Err((cause, details)))
             .await
     }
     /// Records a successful terminal for the invocation's durable stream session.
@@ -536,10 +540,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         self.finish_durable_streaming_session(idempotency_key, Ok(()))
             .await
     }
-    pub(in crate::worker) async fn finish_durable_streaming_session(
+    pub(crate) async fn finish_durable_streaming_session(
         &self,
         idempotency_key: &InvocationId,
-        result: Result<(), String>,
+        result: Result<(), (SessionFailure, String)>,
     ) -> Result<(), WorkerExecutorError> {
         let Some(status) = self.durable_stream_session_status(idempotency_key).await? else {
             return Ok(());
@@ -586,7 +590,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         .with_auth_ctx(self.durable_stream_consumer_auth_ctx()?);
         match result {
             Ok(()) => streams.complete_or_defer_for_forwarded_inputs().await,
-            Err(details) => streams.fail(details).await,
+            Err((cause, details)) => streams.fail(cause, details).await,
         }
         .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         Ok(())

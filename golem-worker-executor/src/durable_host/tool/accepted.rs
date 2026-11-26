@@ -1737,7 +1737,12 @@ where
                     .is_some()
             {
                 result_streams
-                    .fail("tool invocation was cancelled".to_string())
+                    .fail(
+                        golem_common::model::durable_stream::SessionFailure::Interrupted(
+                            InterruptKind::EntityCancellation,
+                        ),
+                        "tool invocation was cancelled".to_string(),
+                    )
                     .await
                     .map_err(SessionError::into_trap)?;
             }

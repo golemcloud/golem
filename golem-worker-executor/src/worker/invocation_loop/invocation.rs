@@ -4,6 +4,7 @@ use crate::durable_host::durability::DurabilityHost;
 use crate::worker::MethodFailureSettlementError;
 use crate::worker::invocation::{ReturnRecorded, ReturnRecorder, record_result_at_return};
 use golem_common::model::InvocationId;
+use golem_common::model::durable_stream::SessionFailure;
 use std::future::Future;
 use std::pin::Pin;
 use wasmtime::StoreContextMut;
@@ -772,7 +773,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
                     && !matches!(kind, InterruptKind::Jump)
                     && let Err(error) = self
                         .parent
-                        .fail_durable_streaming_session(idempotency_key, kind.to_string())
+                        .finish_durable_streaming_session(
+                            idempotency_key,
+                            Err((SessionFailure::Interrupted(kind), kind.to_string())),
+                        )
                         .await
                 {
                     if self.parent.retire_if_shard_lost(&error) {
@@ -973,6 +977,10 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
             trap_type,
             Some(TrapType::Interrupt(InterruptKind::ShardLost))
         );
+        let interrupt = match &trap_type {
+            Some(TrapType::Interrupt(kind)) => Some(*kind),
+            _ => None,
+        };
         let (decision, rejection_persisted) = match trap_type {
             Some(trap_type) => match self
                 .store
@@ -996,10 +1004,21 @@ impl<Ctx: WorkerCtx> Invocation<'_, Ctx> {
 
         if self.uses_streams
             && decision == RetryDecision::None
-            && let Err(error) = self
-                .parent
-                .fail_durable_streaming_session(idempotency_key, details)
-                .await
+            && let Err(error) = match interrupt {
+                Some(kind) => {
+                    self.parent
+                        .finish_durable_streaming_session(
+                            idempotency_key,
+                            Err((SessionFailure::Interrupted(kind), details)),
+                        )
+                        .await
+                }
+                None => {
+                    self.parent
+                        .fail_durable_streaming_session(idempotency_key, details)
+                        .await
+                }
+            }
         {
             if self.parent.retire_if_shard_lost(&error) {
                 return CommandOutcome::BreakInnerLoop(RetryDecision::None);

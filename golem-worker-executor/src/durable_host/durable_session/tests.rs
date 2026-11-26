@@ -14023,7 +14023,7 @@ async fn finalization_after_retirement_requires_matching_committed_finished() {
                         } else {
                             StreamRegistrationInvocation::Remote(finished_key)
                         },
-                        result: Err(vec![1, 2, 3]),
+                        result: Err(SessionFailure::Invocation),
                     },
                 ))),
                 summary: None,
@@ -14046,7 +14046,9 @@ async fn finalization_after_retirement_requires_matching_committed_finished() {
             [],
         )
         .with_consumer_journal(journal.clone());
-        let result = streams.fail_invocation("execution failed".into()).await;
+        let result = streams
+            .fail(SessionFailure::Invocation, "execution failed".into())
+            .await;
         assert_eq!(result.is_ok(), committed && same_fingerprint, "{result:?}");
         assert_eq!(oplog.current_oplog_index().await, index);
         assert_eq!(
@@ -14088,7 +14090,7 @@ async fn finished_in_raw_suffix_is_visible_and_cached() {
                     session_key: StreamRegistrationInvocation::Local(
                         identity.invocation.idempotency_key,
                     ),
-                    result: Err(vec![1, 2, 3]),
+                    result: Err(SessionFailure::Protocol("invalid frame".into())),
                 },
             ))),
             summary: None,
@@ -14098,14 +14100,115 @@ async fn finished_in_raw_suffix_is_visible_and_cached() {
 
     assert_eq!(
         streams.persisted_finished().await.unwrap(),
-        Some(Err(vec![1, 2, 3]))
+        Some(Err(SessionFailure::Protocol("invalid frame".into())))
     );
     assert_eq!(oplog.take_read_ranges(), vec![(index, 1)]);
     assert_eq!(
         streams.persisted_finished().await.unwrap(),
-        Some(Err(vec![1, 2, 3]))
+        Some(Err(SessionFailure::Protocol("invalid frame".into())))
     );
     assert!(oplog.take_read_ranges().is_empty());
+}
+
+#[test]
+#[test_r::timeout("30s")]
+async fn session_failure_cause_survives_reconstruction_and_late_start_failure() {
+    for cause in [
+        SessionFailure::Invocation,
+        SessionFailure::Interrupted(InterruptKind::Interrupt(Timestamp::now_utc().rounded())),
+        SessionFailure::Interrupted(InterruptKind::EntityCancellation),
+        SessionFailure::Protocol("input 7 arrived after its terminal".into()),
+    ] {
+        let identity = identity();
+        let oplog = Arc::new(TestOplog::default());
+        let producer = DurableStreamStore::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams = StreamSession::new(
+            producer.clone(),
+            oplog.clone(),
+            StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+            [],
+        )
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
+        match &cause {
+            SessionFailure::Protocol(details) => {
+                streams.fail_protocol(details.clone()).await.unwrap()
+            }
+            _ => streams
+                .fail(cause.clone(), "the invocation's authoritative error".into())
+                .await
+                .unwrap(),
+        }
+        let finished_index = oplog.current_oplog_index().await;
+        // Both start.rs failure paths may run after the invocation loop selected Invocation.
+        streams
+            .fail(
+                SessionFailure::Protocol("late notification failure".into()),
+                "late notification failure".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(oplog.current_oplog_index().await, finished_index);
+        assert_eq!(
+            streams.persisted_finished().await.unwrap(),
+            Some(Err(cause.clone()))
+        );
+        drop(streams);
+        drop(producer);
+
+        let reconstructed = DurableStreamStore::load(
+            oplog.clone(),
+            identity.environment_id,
+            identity.agent_id,
+            identity.fingerprint,
+            None,
+        )
+        .await
+        .unwrap();
+        let streams = StreamSession::new(
+            reconstructed,
+            oplog.clone(),
+            StreamRegistrationInvocation::Local(identity.invocation.idempotency_key),
+            [],
+        )
+        .with_consumer_journal(Arc::new(TestConsumerJournal(oplog.clone())));
+        assert_eq!(
+            streams.persisted_finished().await.unwrap(),
+            Some(Err(cause.clone()))
+        );
+        streams
+            .fail(
+                SessionFailure::Protocol("late failure after reconstruction".into()),
+                "late failure after reconstruction".into(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(streams.wait_persisted_finished().await.unwrap(), Err(cause));
+        assert_eq!(oplog.current_oplog_index().await, finished_index);
+        let mut finished_count = 0;
+        for (_, entry) in oplog
+            .read_exact(OplogIndex::INITIAL, finished_index.as_u64())
+            .await
+            .unwrap()
+        {
+            if let OplogEntry::StreamSession { record, .. } = entry
+                && matches!(
+                    oplog.download_payload(record).await.unwrap(),
+                    StreamSessionRecord::Finished(_)
+                )
+            {
+                finished_count += 1;
+            }
+        }
+        assert_eq!(finished_count, 1);
+    }
 }
 
 #[test]

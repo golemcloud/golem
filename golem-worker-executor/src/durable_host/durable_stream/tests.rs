@@ -1228,7 +1228,10 @@ async fn session_finish_holds_its_lock_and_reserves_terminal_batch_bytes() {
     );
     let lock = live.session_lock(&identity.invocation);
     let guard = lock.lock().await;
-    let mut finish = Box::pin(session.fail("x".repeat(300 * 1024)));
+    let mut finish = Box::pin(session.fail(
+        golem_common::model::durable_stream::SessionFailure::Invocation,
+        "x".repeat(300 * 1024),
+    ));
     assert!(futures::poll!(finish.as_mut()).is_pending());
     // A 300 KiB error copied across the maximum terminal batch exhausts the byte lane.
     assert_eq!(live.lifecycle_operation_bytes.available_permits(), 0);
@@ -9156,7 +9159,11 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
             None,
             identity.invocation.clone(),
             None,
-            Err(error.clone()),
+            Err(
+                golem_common::model::durable_stream::SessionFailure::Protocol(
+                    String::from_utf8_lossy(&error).into_owned(),
+                ),
+            ),
             StreamTerminalAuthor::Host,
             StreamTerminal::Failed(StreamError::Trapped(
                 String::from_utf8_lossy(&error).into_owned(),
@@ -9183,7 +9190,11 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
                 session_key: StreamRegistrationInvocation::Local(
                     identity.invocation.idempotency_key,
                 ),
-                result: Err(error.clone()),
+                result: Err(
+                    golem_common::model::durable_stream::SessionFailure::Protocol(
+                        String::from_utf8_lossy(&error).into_owned()
+                    )
+                ),
             })
         );
         assert!(
@@ -9217,7 +9228,11 @@ async fn session_finish_reserves_repeated_terminal_errors_before_appending() {
                     None,
                     identity.invocation.clone(),
                     None,
-                    Err(vec![99; error_len]),
+                    Err(
+                        golem_common::model::durable_stream::SessionFailure::Protocol(
+                            "c".repeat(error_len),
+                        ),
+                    ),
                     StreamTerminalAuthor::Host,
                     StreamTerminal::Failed(StreamError::Trapped("invocation failed".into())),
                 ),
@@ -9268,7 +9283,7 @@ async fn session_finish_reserves_batch_memory_for_maximum_stream_count() {
         None,
         identity.invocation.clone(),
         None,
-        Err(vec![83; 128]),
+        Err(golem_common::model::durable_stream::SessionFailure::Protocol("S".repeat(128))),
         StreamTerminalAuthor::Host,
         StreamTerminal::Failed(StreamError::Trapped("invocation failed".into())),
     ));
@@ -9366,7 +9381,7 @@ async fn multistream_lifecycle_batches_release_admission_before_delivery() {
                         None,
                         session,
                         None,
-                        Err(vec![19, 31]),
+                        Err(golem_common::model::durable_stream::SessionFailure::Invocation),
                         StreamTerminalAuthor::Host,
                         StreamTerminal::Failed(StreamError::Trapped(
                             String::from_utf8_lossy(&[19, 31]).into_owned(),
@@ -9959,7 +9974,7 @@ async fn session_finish_serializes_with_nested_topology_and_fences_later_events(
                     None,
                     session_key,
                     None,
-                    Err(b"failed".to_vec()),
+                    Err(golem_common::model::durable_stream::SessionFailure::Invocation),
                     StreamTerminalAuthor::Host,
                     StreamTerminal::Failed(StreamError::Trapped("invocation failed".into())),
                 )
@@ -10526,7 +10541,7 @@ async fn session_finish_retains_exact_terminal_fences_and_item_retries() {
                 None,
                 identity.invocation.clone(),
                 None,
-                Err(b"failed".to_vec()),
+                Err(golem_common::model::durable_stream::SessionFailure::Invocation),
                 StreamTerminalAuthor::Host,
                 StreamTerminal::Failed(StreamError::Trapped("invocation failed".into())),
             )

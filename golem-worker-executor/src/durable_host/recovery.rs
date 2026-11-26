@@ -14,6 +14,7 @@
 
 use super::*;
 use crate::worker::invocation::{ReturnRecorded, record_result_at_return};
+use golem_common::model::durable_stream::SessionFailure;
 use std::future::Future;
 use std::pin::Pin;
 use wasmtime::StoreContextMut;
@@ -525,13 +526,21 @@ impl<Ctx: WorkerCtx> DurableWorkerCtx<Ctx> {
                                             {
                                                 // A refused write means the shard has moved:
                                                 // record it before the startup result is published.
-                                                if let Err(error) = worker
-                                                    .fail_durable_streaming_session(
-                                                        &idempotency_key,
-                                                        details,
-                                                    )
-                                                    .await
-                                                {
+                                                let finished = match trap_type {
+                                                    TrapType::Interrupt(kind) => worker
+                                                        .finish_durable_streaming_session(
+                                                            &idempotency_key,
+                                                            Err((SessionFailure::Interrupted(kind), details)),
+                                                        )
+                                                        .await,
+                                                    _ => worker
+                                                        .fail_durable_streaming_session(
+                                                            &idempotency_key,
+                                                            details,
+                                                        )
+                                                        .await,
+                                                };
+                                                if let Err(error) = finished {
                                                     worker.retire_if_shard_lost(&error);
                                                 }
                                             }

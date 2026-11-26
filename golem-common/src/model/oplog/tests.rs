@@ -321,7 +321,7 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
     let failed_session = StreamSessionRecord::Finished(StreamSessionFinishedRecord {
         format_version: 1,
         session_key: session_key.clone(),
-        result: Err(vec![8]),
+        result: Err(crate::model::durable_stream::SessionFailure::Invocation),
     });
     let session_result = StreamSessionRecord::RemoteResult(StreamSessionRemoteResultRecord {
         format_version: 1,
@@ -469,6 +469,101 @@ fn durable_stream_summaries_binary_and_raw_protobuf_roundtrip_without_cached_pay
                 entry.clone().try_into().unwrap();
             assert_eq!(OplogEntry::try_from(proto).unwrap(), entry);
         }
+    }
+}
+
+#[test]
+fn session_failure_binary_schema_and_raw_public_protobuf_roundtrip() {
+    use crate::model::InterruptKind;
+    use crate::model::durable_stream::{
+        SessionFailure, StreamRegistrationInvocation, StreamSessionFinishedRecord,
+        StreamSessionRecord,
+    };
+    use crate::model::oplog::public_oplog_entry::StreamSessionParams;
+    use crate::model::oplog::raw_types::DurableStreamEventSummary;
+    use crate::schema::wit::{decode_typed, encode_typed};
+    use crate::schema::{FromSchema, IntoSchema};
+
+    let timestamp: Timestamp = "2026-11-26T19:23:41.123Z".parse().unwrap();
+    let causes = [
+        SessionFailure::Invocation,
+        SessionFailure::Interrupted(InterruptKind::Interrupt(timestamp)),
+        SessionFailure::Interrupted(InterruptKind::Restart),
+        SessionFailure::Interrupted(InterruptKind::Suspend(timestamp)),
+        SessionFailure::Interrupted(InterruptKind::Jump),
+        SessionFailure::Interrupted(InterruptKind::EntityCancellation),
+        SessionFailure::Interrupted(InterruptKind::ShardLost),
+        SessionFailure::Protocol("input 7 ended before item 19 — invalid frame".into()),
+    ];
+    // Invocation has no payload in the schema, unlike Protocol, whose text exists only here.
+    assert_eq!(
+        causes[0].to_value(),
+        SchemaValue::Variant(VariantValuePayload {
+            case: 0,
+            payload: None,
+        })
+    );
+    let precise_timestamp = "2026-11-26T19:23:41.123456789Z".parse().unwrap();
+    for kind in [
+        InterruptKind::Interrupt(precise_timestamp),
+        InterruptKind::Suspend(precise_timestamp),
+    ] {
+        let original = SessionFailure::Interrupted(kind);
+        assert_eq!(
+            SessionFailure::from_value(&original.to_value()).unwrap(),
+            original
+        );
+    }
+    for cause in causes {
+        let record = StreamSessionRecord::Finished(StreamSessionFinishedRecord {
+            format_version: 1,
+            session_key: StreamRegistrationInvocation::Local(crate::model::InvocationId::new()),
+            result: Err(cause),
+        });
+        let bytes = crate::serialization::serialize(&record).unwrap();
+        assert_eq!(
+            crate::serialization::deserialize::<StreamSessionRecord>(&bytes).unwrap(),
+            record
+        );
+        let typed = record.clone().into_typed_schema_value().unwrap();
+        let wire = encode_typed(&typed).unwrap();
+        let decoded = decode_typed(&wire).unwrap();
+        assert_eq!(
+            StreamSessionRecord::from_value(decoded.value()).unwrap(),
+            record
+        );
+
+        let public = PublicOplogEntry::StreamSession(StreamSessionParams {
+            timestamp,
+            record: typed,
+        });
+        let proto: golem_api_grpc::proto::golem::worker::OplogEntry =
+            public.clone().try_into().unwrap();
+        assert_eq!(PublicOplogEntry::try_from(proto).unwrap(), public);
+        let super::OplogEnrichmentEntry::Other(raw) =
+            super::OplogEnrichmentEntry::try_from(public).unwrap()
+        else {
+            panic!("expected a stream session record");
+        };
+        let expected = OplogEntry::StreamSession {
+            timestamp,
+            entity_parent_start_index: None,
+            record: OplogPayload::Inline(Box::new(record.clone())),
+            summary: DurableStreamEventSummary::session(&record),
+        };
+        assert_eq!(raw, expected);
+        let raw = OplogEntry::StreamSession {
+            timestamp,
+            entity_parent_start_index: None,
+            record: OplogPayload::SerializedInline {
+                bytes,
+                cached: None,
+            },
+            summary: DurableStreamEventSummary::session(&record),
+        };
+        let proto: golem_api_grpc::proto::golem::worker::RawOplogEntry =
+            raw.clone().try_into().unwrap();
+        assert_eq!(OplogEntry::try_from(proto).unwrap(), raw);
     }
 }
 

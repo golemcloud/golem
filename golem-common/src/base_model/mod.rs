@@ -117,6 +117,32 @@ impl FromStr for Timestamp {
     }
 }
 
+impl golem_schema::schema::IntoSchema for Timestamp {
+    fn type_id() -> golem_schema::schema::TypeId {
+        golem_schema::schema::TypeId::new("golem_common.base_model.Timestamp")
+    }
+
+    fn register_in(
+        builder: &mut golem_schema::schema::SchemaBuilder,
+    ) -> golem_schema::schema::SchemaType {
+        <String as golem_schema::schema::IntoSchema>::register_in(builder)
+    }
+
+    fn to_value(&self) -> golem_schema::schema::SchemaValue {
+        golem_schema::schema::IntoSchema::to_value(&self.0.format_nanoseconds().to_string())
+    }
+}
+
+impl golem_schema::schema::FromSchema for Timestamp {
+    fn from_value(
+        value: &golem_schema::schema::SchemaValue,
+    ) -> Result<Self, golem_schema::schema::FromSchemaError> {
+        <String as golem_schema::schema::FromSchema>::from_value(value)?
+            .parse()
+            .map_err(golem_schema::schema::FromSchemaError::custom)
+    }
+}
+
 impl serde::Serialize for Timestamp {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where

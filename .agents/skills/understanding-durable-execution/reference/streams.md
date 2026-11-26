@@ -467,6 +467,8 @@ does not distinguish close from drop. Session finalization closes unread inputs 
 before appending its `Finished` record. A stream failing locally does not fail sibling streams or the invocation
 (`tests/rpc.rs::stream_local_output_failure_does_not_fail_sibling_or_invocation`).
 
+The session's `Finished` stores `Result<(), SessionFailure>`, separate from each stream's terminal. `Invocation` carries no text and is valid only when `lookup_invocation_result` returns `Complete(Err(..))`; resume and joined observers read that authoritative failure. `Interrupted(kind)` retains the interrupt kind, including entity cancellation for a cancelled tool body. `Protocol(text)` retains the message because no invocation record holds it. Start-side failure observers check the invocation lookup before choosing `Invocation`, since admission or startup can fail without an invocation failure record. The first session terminal wins across reconstruction.
+
 The resident live bus carries `Item` or `Terminal { authored_by, terminal }`. It forwards the
 same typed terminal through projections and output drains. Consumer terminal observations retain
 the author as well as the outcome, so replaying a projection needs no producer lookup and keeps

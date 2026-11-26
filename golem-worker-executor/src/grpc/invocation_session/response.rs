@@ -19,6 +19,12 @@ use super::{
     WorkerExecutionError, WorkerExecutorError, decode_recursive_stream_value, invocation_response,
     invocation_session_completion, invocation_session_result, mpsc,
 };
+use crate::model::LookupResult;
+use crate::services::HasAll;
+use crate::worker::Worker;
+use crate::workerctx::WorkerCtx;
+use golem_common::model::OwnedAgentId;
+use golem_common::model::durable_stream::SessionFailure;
 
 pub(super) async fn persisted_invocation_result(
     streams: &StreamSession,
@@ -68,7 +74,7 @@ pub(super) async fn persisted_result_and_finished(
             invocation_session_result::Result,
             Vec<golem_api_grpc::proto::golem::worker::DurableStreamMapping>,
         )>,
-        Option<Result<(), Vec<u8>>>,
+        Option<Result<(), SessionFailure>>,
     ),
     SessionError,
 > {
@@ -98,18 +104,89 @@ pub(super) async fn send_attachment_revocation(
     }
 }
 
-pub(super) async fn send_resumed_finished(
+async fn lookup_session_invocation_result<
+    Ctx: WorkerCtx,
+    D: HasAll<Ctx> + Clone + Send + Sync + 'static,
+>(
+    deps: &D,
+    streams: &StreamSession,
+) -> Result<LookupResult, WorkerExecutorError> {
+    let key = streams.session_key();
+    let (worker, _lease) = Worker::<Ctx>::get_exact_existing_suspended_for_response(
+        deps,
+        &OwnedAgentId::new(key.callee_environment_id, &key.callee),
+        Some(key.callee_fingerprint),
+    )
+    .await?;
+    Ok(worker.lookup_invocation_result(&key.idempotency_key).await)
+}
+
+pub(super) async fn session_failure_cause<
+    Ctx: WorkerCtx,
+    D: HasAll<Ctx> + Clone + Send + Sync + 'static,
+>(
+    deps: &D,
+    streams: &StreamSession,
+    error: &WorkerExecutorError,
+) -> SessionFailure {
+    if let WorkerExecutorError::Interrupted { kind } = error {
+        return SessionFailure::Interrupted(*kind);
+    }
+    match lookup_session_invocation_result::<Ctx, _>(deps, streams).await {
+        Ok(LookupResult::Complete(Err(_))) => SessionFailure::Invocation,
+        _ => SessionFailure::Protocol(error.to_string()),
+    }
+}
+
+pub(super) async fn session_failure_error<
+    Ctx: WorkerCtx,
+    D: HasAll<Ctx> + Clone + Send + Sync + 'static,
+>(
+    deps: &D,
+    streams: &StreamSession,
+    failure: SessionFailure,
+) -> WorkerExecutorError {
+    match failure {
+        SessionFailure::Invocation => {
+            match lookup_session_invocation_result::<Ctx, _>(deps, streams).await {
+                Ok(LookupResult::Complete(Err(error))) | Err(error) => error,
+                _ => WorkerExecutorError::runtime(
+                    "session failed without a recorded invocation failure",
+                ),
+            }
+        }
+        SessionFailure::Interrupted(kind) => kind.into(),
+        SessionFailure::Protocol(details) => WorkerExecutorError::runtime(details),
+    }
+}
+
+pub(super) async fn send_resumed_finished<
+    Ctx: WorkerCtx,
+    D: HasAll<Ctx> + Clone + Send + Sync + 'static,
+>(
+    deps: &D,
     responses: &mpsc::Sender<InvocationResponse>,
-    result: Result<(), Vec<u8>>,
+    streams: &StreamSession,
+    result: Result<(), SessionFailure>,
 ) {
     let outcome = match result {
         Ok(()) => invocation_session_completion::Outcome::Success(
             golem_schema::proto::golem::common::Empty {},
         ),
-        Err(details) => invocation_session_completion::Outcome::Failure(InvocationFailure {
+        Err(SessionFailure::Protocol(message)) => {
+            invocation_session_completion::Outcome::Failure(InvocationFailure {
+                kind: InvocationFailureKind::Protocol as i32,
+                code: "persisted-invocation-failure".to_string(),
+                message,
+                worker_error: None,
+            })
+        }
+        Err(failure) => invocation_session_completion::Outcome::Failure(InvocationFailure {
             kind: InvocationFailureKind::Execution as i32,
             code: "persisted-invocation-failure".to_string(),
-            message: String::from_utf8_lossy(&details).into_owned(),
+            message: session_failure_error::<Ctx, D>(deps, streams, failure)
+                .await
+                .to_string(),
             worker_error: None,
         }),
     };

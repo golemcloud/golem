@@ -15,7 +15,7 @@
 use crate::base_model::component::ComponentRevision;
 use crate::base_model::environment::EnvironmentId;
 use crate::base_model::regions::OplogRegion;
-use crate::base_model::{AgentFingerprint, AgentId, InvocationId, OplogIndex};
+use crate::base_model::{AgentFingerprint, AgentId, InterruptKind, InvocationId, OplogIndex};
 use golem_schema::schema::{
     FromSchema as FromSchemaTrait, FromSchemaError, IntoSchema as IntoSchemaTrait, SchemaBuilder,
     SchemaFingerprintV1, SchemaType, SchemaValue, TypeId,
@@ -1394,7 +1394,16 @@ pub struct StreamSessionRemoteResultRecord {
 pub struct StreamSessionFinishedRecord {
     pub format_version: u8,
     pub session_key: StreamRegistrationInvocation,
-    pub result: Result<(), Vec<u8>>,
+    pub result: Result<(), SessionFailure>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]
+#[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
+#[cfg_attr(feature = "full", desert(evolution()))]
+pub enum SessionFailure {
+    Invocation,
+    Interrupted(InterruptKind),
+    Protocol(String),
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, IntoSchema, FromSchema)]

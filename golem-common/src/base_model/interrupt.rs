@@ -13,11 +13,22 @@
 // limitations under the License.
 
 use crate::base_model::Timestamp;
+use golem_schema_derive::{FromSchema, IntoSchema};
 use std::error::Error;
 use std::fmt::{Display, Formatter};
 
 #[derive(
-    Debug, Copy, Clone, PartialOrd, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize,
+    Debug,
+    Copy,
+    Clone,
+    PartialOrd,
+    PartialEq,
+    Eq,
+    Hash,
+    serde::Serialize,
+    serde::Deserialize,
+    IntoSchema,
+    FromSchema,
 )]
 #[cfg_attr(feature = "full", derive(desert_rust::BinaryCodec))]
 pub enum InterruptKind {

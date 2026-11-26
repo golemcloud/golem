@@ -16,6 +16,7 @@ use super::index::registration_coordinate_depth;
 use super::registration::registration_record;
 use super::*;
 use futures::future::BoxFuture;
+use golem_common::model::durable_stream::SessionFailure;
 use golem_common::model::oplog::DurableStreamEventSummary;
 
 /// Admission and serialized payload retained until the guest consumes a native input read.
@@ -1123,15 +1124,22 @@ impl DurableStreamStore {
     }
 
     /// Bounds terminal copies and serialization buffers retained during session finalization.
-    pub fn finish_session_retained_bytes(result: &Result<(), Vec<u8>>) -> usize {
+    pub fn finish_session_retained_bytes(
+        result: &Result<(), SessionFailure>,
+        input_terminal: &StreamTerminal,
+    ) -> Result<usize, StreamStoreError> {
         let terminal_bytes = result
             .as_ref()
             .err()
-            .map_or(0, |bytes| bytes.len())
-            .max(b"output stream ended without a terminal".len());
-        terminal_bytes
+            .map_or(0, |failure| match failure {
+                SessionFailure::Protocol(details) => details.len(),
+                _ => 0,
+            })
+            .max(b"output stream ended without a terminal".len())
+            .max(super::terminals::terminal_retained_bytes(input_terminal)?);
+        Ok(terminal_bytes
             .saturating_mul(MAX_DURABLE_STREAMS_PER_SESSION + 1)
-            .saturating_mul(4)
+            .saturating_mul(4))
     }
 
     /// Records the session terminal after all required stream finalization is durable.
@@ -1141,7 +1149,7 @@ impl DurableStreamStore {
         context: Option<&StreamWriteContext>,
         session_key: StreamSessionKey,
         entity_parent_start_index: Option<OplogIndex>,
-        result: Result<(), Vec<u8>>,
+        result: Result<(), SessionFailure>,
         authored_by: StreamTerminalAuthor,
         input_terminal: StreamTerminal,
     ) -> Result<(), StreamStoreError> {
@@ -1153,11 +1161,7 @@ impl DurableStreamStore {
         {
             return Ok(());
         }
-        let memory = Self::finish_session_retained_bytes(&result).max(
-            super::terminals::terminal_retained_bytes(&input_terminal)?
-                .saturating_mul(MAX_DURABLE_STREAMS_PER_SESSION + 1)
-                .saturating_mul(4),
-        );
+        let memory = Self::finish_session_retained_bytes(&result, &input_terminal)?;
         self.run_lifecycle(context, memory, move |owner, context| async move {
             owner
                 .finish_session_owned(
@@ -1178,7 +1182,7 @@ impl DurableStreamStore {
         context: &StreamWriteContext,
         session_key: StreamSessionKey,
         entity_parent_start_index: Option<OplogIndex>,
-        result: Result<(), Vec<u8>>,
+        result: Result<(), SessionFailure>,
         authored_by: StreamTerminalAuthor,
         input_terminal: StreamTerminal,
     ) -> Result<(), StreamStoreError> {

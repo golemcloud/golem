@@ -535,7 +535,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             }
         }
         if let Some(result) = already_finished {
-            send_resumed_finished(&responses, result).await;
+            send_resumed_finished::<Ctx, _>(self, &responses, &streams, result).await;
             drop(responses);
             let _ = forwarder.await;
             return;
@@ -575,7 +575,7 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             return;
         }
         match result {
-            Ok(result) => send_resumed_finished(&responses, result).await,
+            Ok(result) => send_resumed_finished::<Ctx, _>(self, &responses, &streams, result).await,
             Err(error) => send_protocol_failure(&responses, error).await,
         }
         drop(responses);

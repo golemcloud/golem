@@ -450,7 +450,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         if let Some(result) = streams.persisted_result().await.map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))? {
                             break result;
                         }
-                        outcome.map_err(|details| WorkerExecutorError::runtime(String::from_utf8_lossy(&details).into_owned()))?;
+                        if let Err(failure) = outcome {
+                            return Err(super::response::session_failure_error::<Ctx, _>(self, streams, failure).await);
+                        }
                         return Err(WorkerExecutorError::runtime("session finished successfully without a persisted result"));
                     }
                     if let Some(output) = completed.take() {
@@ -490,8 +492,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                             })),
                         }).await;
                     }
-                    Err(details) => send_worker_failure(&responses,
-                        WorkerExecutorError::runtime(String::from_utf8_lossy(&details).into_owned())).await,
+                    Err(failure) => send_worker_failure(&responses,
+                        super::response::session_failure_error::<Ctx, _>(self, streams, failure).await).await,
                 }
                 Ok(())
             };
@@ -663,7 +665,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                     unreachable!("completed output was checked to contain an error");
                 };
                 let details = error.to_string();
-                if let Err(finish_error) = durable_streams.fail_invocation(details).await {
+                let cause = super::response::session_failure_cause::<Ctx, _>(self, durable_streams, &error).await;
+                if let Err(finish_error) = durable_streams.fail(cause, details).await {
                     send_protocol_failure(&responses, finish_error).await;
                     return;
                 }
@@ -726,8 +729,9 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
                         },
                         Err(error) => {
                             let details = error.to_string();
+                            let cause = super::response::session_failure_cause::<Ctx, _>(self, durable_streams, &error).await;
                             if let Err(finish_error) = durable_streams
-                                .fail_invocation(details)
+                                .fail(cause, details)
                                 .await
                             {
                                 send_protocol_failure(&responses, finish_error).await;
@@ -818,8 +822,8 @@ impl<Ctx: WorkerCtx, Svcs: HasAll<Ctx> + UsesAllDeps<Ctx = Ctx> + Send + Sync + 
             };
             match outcome {
                 Ok(Ok(())) => {}
-                Ok(Err(details)) => {
-                    send_worker_failure(&responses, WorkerExecutorError::runtime(String::from_utf8_lossy(&details).into_owned())).await;
+                Ok(Err(failure)) => {
+                    send_worker_failure(&responses, super::response::session_failure_error::<Ctx, _>(self, durable_streams, failure).await).await;
                     return;
                 }
                 Err(error) => {

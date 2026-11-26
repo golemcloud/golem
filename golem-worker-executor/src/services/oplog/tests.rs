@@ -3983,7 +3983,7 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                         session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
                             invocation_id.idempotency_key,
                         ),
-                        result: Err(vec![57; 1024]),
+                        result: Err(golem_common::model::durable_stream::SessionFailure::Protocol("9".repeat(1024))),
                     })),
                 ),
             ]
@@ -4030,7 +4030,14 @@ async fn durable_stream_batch_uses_payload_threshold_for_each_record(_tracing: &
                 else {
                     panic!("expected finished session");
                 };
-                assert_eq!(record.result, Err(vec![57; 1024]));
+                assert_eq!(
+                    record.result,
+                    Err(
+                        golem_common::model::durable_stream::SessionFailure::Protocol(
+                            "9".repeat(1024)
+                        )
+                    )
+                );
             }
             _ => panic!("durable stream batch appended a non-stream entry"),
         }
@@ -4120,7 +4127,7 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
                     Box::new(StreamSessionRecord::Finished(StreamSessionFinishedRecord {
                         format_version: 1,
                         session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Local(session_key.idempotency_key),
-                        result: Err(vec![91; 1024]),
+                        result: Err(golem_common::model::durable_stream::SessionFailure::Protocol("[".repeat(1024))),
                     })),
                 ),
             ]
@@ -4161,7 +4168,10 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
     else {
         panic!("persisted terminal batch must end with Finished");
     };
-    assert_eq!(finished.result, Err(vec![91; 1024]));
+    assert_eq!(
+        finished.result,
+        Err(golem_common::model::durable_stream::SessionFailure::Protocol("[".repeat(1024)))
+    );
     assert!(matches!(
         &added[0].1,
         OplogEntry::StreamTerminal {
@@ -4181,7 +4191,10 @@ async fn ephemeral_durable_stream_batch_keeps_terminals_inline_atomically(_traci
     else {
         panic!("expected finished session");
     };
-    assert_eq!(finished.result, Err(vec![91; 1024]));
+    assert_eq!(
+        finished.result,
+        Err(golem_common::model::durable_stream::SessionFailure::Protocol("[".repeat(1024)))
+    );
 }
 
 #[test]
@@ -4292,7 +4305,7 @@ async fn blocked_durable_stream_batch_prepares_before_atomic_commit_and_append(_
                                 session_key: golem_common::model::durable_stream::StreamRegistrationInvocation::Local(
                                     session_key.idempotency_key,
                                 ),
-                                result: Err(vec![73; 1024]),
+                                result: Err(golem_common::model::durable_stream::SessionFailure::Protocol("I".repeat(1024))),
                             })),
                         )
                     }))
