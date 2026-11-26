@@ -27,14 +27,16 @@ use golem_common::redis::RedisPool;
 use golem_service_base::config::{S3BlobStorageConfig, S3BlobStorageCredentialsConfig};
 use golem_service_base::storage::blob::memory::InMemoryBlobStorage;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageBackend, BlobStorageNamespace,
-    ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent, agent_path_segment, s3,
+    BlobMetadata, BlobRangeStream, BlobStorage, BlobStorageNamespace, ExistsResult, ListedBlob,
+    NormalizedBlobPath, agent_path_segment, s3,
 };
 use golem_test_framework::components::s3::{DockerRustFs, S3Server};
 use golem_worker_executor::services::oplog::{BlobOplogArchiveService, OplogArchiveService};
 use golem_worker_executor::storage::indexed::memory::InMemoryIndexedStorage;
 use golem_worker_executor::storage::indexed::redis::RedisIndexedStorage;
-use golem_worker_executor_test_utils::WorkerExecutorTestDependencies;
+use golem_worker_executor_test_utils::{
+    BlobStorageDecorator, BlobStorageInner, DecoratedBlobStorage, WorkerExecutorTestDependencies,
+};
 use pretty_assertions::assert_eq;
 use std::collections::BTreeSet;
 use std::fmt::Debug;
@@ -518,50 +520,49 @@ async fn blob_chunk_listed_by_an_append_with_a_lost_reply_stays_readable(
     relay.server.abort();
 }
 
-/// A blob storage that counts the calls that read `inner`: reads of a blob or of its metadata,
+/// Counts the calls that read the S3 storage it decorates: reads of a blob or of its metadata,
 /// `exists`, and listings.
-#[derive(Debug)]
-struct ReadCounting<B> {
-    inner: B,
+#[derive(Debug, Default)]
+struct ReadCounter {
     reads: AtomicUsize,
 }
 
-impl<B> ReadCounting<B> {
-    fn read(&self) -> &B {
+impl ReadCounter {
+    fn read(&self) {
         self.reads.fetch_add(1, Ordering::SeqCst);
-        &self.inner
     }
 }
 
 #[async_trait]
-impl<B: BlobStorageBackend> BlobStorageBackend for ReadCounting<B> {
+impl BlobStorageDecorator<s3::S3BlobStorage> for ReadCounter {
     async fn get_raw_at(
         &self,
+        inner: &s3::S3BlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.read()
-            .get_raw_at(target_label, op_label, namespace, path)
-            .await
+        self.read();
+        BlobStorageInner::get_raw_at(inner, target_label, op_label, namespace, path).await
     }
 
     async fn get_stream_at(
         &self,
+        inner: &s3::S3BlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<futures::stream::BoxStream<'static, anyhow::Result<bytes::Bytes>>>>
     {
-        self.read()
-            .get_stream_at(target_label, op_label, namespace, path)
-            .await
+        self.read();
+        BlobStorageInner::get_stream_at(inner, target_label, op_label, namespace, path).await
     }
 
     async fn get_range_stream_at(
         &self,
+        inner: &s3::S3BlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
@@ -569,13 +570,22 @@ impl<B: BlobStorageBackend> BlobStorageBackend for ReadCounting<B> {
         offset: u64,
         length: u64,
     ) -> anyhow::Result<Option<BlobRangeStream>> {
-        self.read()
-            .get_range_stream_at(target_label, op_label, namespace, path, offset, length)
-            .await
+        self.read();
+        BlobStorageInner::get_range_stream_at(
+            inner,
+            target_label,
+            op_label,
+            namespace,
+            path,
+            offset,
+            length,
+        )
+        .await
     }
 
     async fn get_raw_slice_at(
         &self,
+        inner: &s3::S3BlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
@@ -583,152 +593,77 @@ impl<B: BlobStorageBackend> BlobStorageBackend for ReadCounting<B> {
         start: u64,
         end: u64,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.read()
-            .get_raw_slice_at(target_label, op_label, namespace, path, start, end)
-            .await
+        self.read();
+        BlobStorageInner::get_raw_slice_at(
+            inner,
+            target_label,
+            op_label,
+            namespace,
+            path,
+            start,
+            end,
+        )
+        .await
     }
 
     async fn get_metadata_at(
         &self,
+        inner: &s3::S3BlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<BlobMetadata>> {
-        self.read()
-            .get_metadata_at(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn put_raw_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        data: &[u8],
-    ) -> anyhow::Result<()> {
-        self.inner
-            .put_raw_at(target_label, op_label, namespace, path, data)
-            .await
-    }
-
-    async fn put_raw_if_absent_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        data: &[u8],
-    ) -> anyhow::Result<PutIfAbsent> {
-        self.inner
-            .put_raw_if_absent_at(target_label, op_label, namespace, path, data)
-            .await
-    }
-
-    async fn delete_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .delete_at(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn delete_many_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        paths: &[NormalizedBlobPath<'_>],
-    ) -> anyhow::Result<()> {
-        self.inner
-            .delete_many_at(target_label, op_label, namespace, paths)
-            .await
-    }
-
-    async fn create_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .create_dir_at(target_label, op_label, namespace, path)
-            .await
+        self.read();
+        BlobStorageInner::get_metadata_at(inner, target_label, op_label, namespace, path).await
     }
 
     async fn list_dir_at(
         &self,
+        inner: &s3::S3BlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Vec<std::path::PathBuf>> {
-        self.read()
-            .list_dir_at(target_label, op_label, namespace, path)
-            .await
+        self.read();
+        BlobStorageInner::list_dir_at(inner, target_label, op_label, namespace, path).await
     }
 
     async fn list_blobs_below_at(
         &self,
+        inner: &s3::S3BlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Box<[ListedBlob]>> {
-        self.read()
-            .list_blobs_below_at(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn delete_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Option<u64>> {
-        self.inner
-            .delete_dir_at(target_label, op_label, namespace, path)
-            .await
+        self.read();
+        BlobStorageInner::list_blobs_below_at(inner, target_label, op_label, namespace, path).await
     }
 
     async fn exists_at(
         &self,
+        inner: &s3::S3BlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<ExistsResult> {
-        self.read()
-            .exists_at(target_label, op_label, namespace, path)
-            .await
+        self.read();
+        BlobStorageInner::exists_at(inner, target_label, op_label, namespace, path).await
     }
 
-    async fn copy_between_at(
+    /// The S3 backend deletes many objects in one request.
+    async fn delete_many_at(
         &self,
+        inner: &s3::S3BlobStorage,
         target_label: &'static str,
         op_label: &'static str,
-        from_namespace: BlobStorageNamespace,
-        from: &NormalizedBlobPath<'_>,
-        to_namespace: BlobStorageNamespace,
-        to: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<bool> {
-        self.inner
-            .copy_between_at(
-                target_label,
-                op_label,
-                from_namespace,
-                from,
-                to_namespace,
-                to,
-            )
-            .await
+        namespace: BlobStorageNamespace,
+        paths: &[NormalizedBlobPath<'_>],
+    ) -> anyhow::Result<()> {
+        BlobStorageInner::delete_many_at(inner, target_label, op_label, namespace, paths).await
     }
 }
 
@@ -740,10 +675,10 @@ impl<B: BlobStorageBackend> BlobStorageBackend for ReadCounting<B> {
 async fn an_unlisted_blob_object_is_never_read_on_s3() {
     // The test keeps the RustFS container of the storage until it ends.
     let s3 = new_s3_test();
-    let storage = Arc::new(ReadCounting {
-        inner: s3.s3_storage().await,
-        reads: AtomicUsize::new(0),
-    });
+    let storage = Arc::new(DecoratedBlobStorage::new(
+        Arc::new(ReadCounter::default()),
+        Arc::new(s3.s3_storage().await),
+    ));
     let owned_agent_id = crate::fresh_owned_agent_id();
     let environment_id = owned_agent_id.environment_id;
     let agent_id = owned_agent_id.agent_id;

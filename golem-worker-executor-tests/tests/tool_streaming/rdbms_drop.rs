@@ -2,11 +2,11 @@ use super::snapshot_attachments::DisposalScheduleComponentService;
 use super::*;
 use golem_common::model::card::parse_polymorphic_permission;
 use golem_common::model::oplog::{OplogEntry, OplogPayload};
-use golem_service_base::storage::blob::{
-    BlobMetadata, BlobMissingError, BlobRangeStream, BlobStorage, BlobStorageBackend,
-    BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
-};
+use golem_service_base::storage::blob::{BlobStorageNamespace, NormalizedBlobPath};
 use golem_test_framework::components::rdb::docker_postgres::DockerPostgresRdb;
+use golem_worker_executor_test_utils::{
+    BlobStorageDecorator, BlobStorageInner, WrappedBlobStorage,
+};
 use std::path::PathBuf;
 use test_r::{test, test_dep};
 
@@ -54,7 +54,6 @@ async fn transaction_drop_disposal(
     let schedule = Arc::new(AtomicUsize::new(0));
     let selected_schedule = schedule.clone();
     let terminal_read = Arc::new(TerminalReadGate::default());
-    let storage_gate = terminal_read.clone();
     let bytes = Arc::new(
         tokio::fs::read(
             deps.component_directory
@@ -71,12 +70,7 @@ async fn transaction_drop_disposal(
                 schedule: selected_schedule.clone(),
             })
         })),
-        wrap_blob_storage: Some(Arc::new(move |inner| {
-            Arc::new(TerminalReadStorage {
-                inner,
-                gate: storage_gate.clone(),
-            })
-        })),
+        wrap_blob_storage: Some(terminal_read.clone().wrap_blob_storage()),
         configure: Some(Arc::new(|config| {
             config.oplog.max_payload_size = 0;
             config.retry.max_attempts = 0;
@@ -310,16 +304,11 @@ struct TerminalReadGate {
     release: tokio::sync::Notify,
 }
 
-#[derive(Debug)]
-struct TerminalReadStorage {
-    inner: Arc<dyn BlobStorage>,
-    gate: Arc<TerminalReadGate>,
-}
-
 #[async_trait::async_trait]
-impl BlobStorageBackend for TerminalReadStorage {
+impl BlobStorageDecorator for TerminalReadGate {
     async fn get_raw_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
@@ -327,179 +316,26 @@ impl BlobStorageBackend for TerminalReadStorage {
     ) -> anyhow::Result<Option<Vec<u8>>> {
         let terminal = matches!(&namespace, BlobStorageNamespace::OplogPayload { .. })
             && self
-                .gate
                 .path
                 .get()
                 .is_some_and(|terminal| terminal.as_path() == path.as_ref());
-        let bytes = self
-            .inner
-            .get_raw(target_label, op_label, namespace, path)
+        let bytes = inner
+            .get_raw_at(target_label, op_label, namespace, path)
             .await?;
-        if terminal && self.gate.armed.load(Ordering::SeqCst) {
-            if self.gate.reads.fetch_add(1, Ordering::SeqCst) == 0 {
+        if terminal && self.armed.load(Ordering::SeqCst) {
+            if self.reads.fetch_add(1, Ordering::SeqCst) == 0 {
                 // Install the settlement observer after the Store exists, before the guest
                 // receives its reconstructed transaction handle.
-                self.gate.entered.notify_one();
-                self.gate.reconstruct.notified().await;
+                self.entered.notify_one();
+                self.reconstruct.notified().await;
             } else {
                 // Guest settlement stops driving accessor tasks. The retained context must
                 // finish this read; dropping the pending table would silently lose its error.
-                self.gate.release.notified().await;
-                self.gate.failed.store(true, Ordering::SeqCst);
+                self.release.notified().await;
+                self.failed.store(true, Ordering::SeqCst);
                 anyhow::bail!(TERMINAL_READ_FAILURE);
             }
         }
         Ok(bytes)
-    }
-
-    async fn get_range_stream_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        offset: u64,
-        length: u64,
-    ) -> anyhow::Result<Option<BlobRangeStream>> {
-        self.inner
-            .get_range_stream(target_label, op_label, namespace, path, offset, length)
-            .await
-    }
-
-    async fn get_metadata_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Option<BlobMetadata>> {
-        self.inner
-            .get_metadata(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn put_raw_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        data: &[u8],
-    ) -> anyhow::Result<()> {
-        self.inner
-            .put_raw(target_label, op_label, namespace, path, data)
-            .await
-    }
-
-    async fn put_raw_if_absent_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        data: &[u8],
-    ) -> anyhow::Result<PutIfAbsent> {
-        self.inner
-            .put_raw_if_absent(target_label, op_label, namespace, path, data)
-            .await
-    }
-
-    async fn delete_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .delete(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn create_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .create_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn list_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Vec<PathBuf>> {
-        self.inner
-            .list_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn list_blobs_below_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Box<[ListedBlob]>> {
-        self.inner
-            .list_blobs_below(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn delete_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Option<u64>> {
-        self.inner
-            .delete_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn exists_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<ExistsResult> {
-        self.inner
-            .exists(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn copy_between_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        from_namespace: BlobStorageNamespace,
-        from: &NormalizedBlobPath<'_>,
-        to_namespace: BlobStorageNamespace,
-        to: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<bool> {
-        match self
-            .inner
-            .copy_between(
-                target_label,
-                op_label,
-                from_namespace,
-                from,
-                to_namespace,
-                to,
-            )
-            .await
-        {
-            Ok(()) => Ok(true),
-            Err(error) if error.is::<BlobMissingError>() => Ok(false),
-            Err(error) => Err(error),
-        }
     }
 }

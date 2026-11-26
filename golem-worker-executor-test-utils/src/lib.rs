@@ -18,6 +18,7 @@
 #![recursion_limit = "256"]
 
 pub mod agent_deployments_service;
+pub mod blob_storage_decorator;
 pub mod callers;
 pub mod component_service;
 pub mod component_writer;
@@ -28,6 +29,9 @@ pub mod oplog_view;
 pub mod restart;
 pub mod standalone_tool;
 
+pub use blob_storage_decorator::{
+    BlobStorageDecorator, BlobStorageInner, DecoratedBlobStorage, WrappedBlobStorage,
+};
 pub use invocation_error::{InvocationError, InvocationErrorExt};
 pub use oplog_shape::OplogShape;
 pub use oplog_view::{CallRecord, InvocationRecord, OplogView};

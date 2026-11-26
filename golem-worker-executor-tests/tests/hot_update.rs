@@ -41,9 +41,7 @@ use golem_common::model::component::{AgentFilePermissions, CanonicalFilePath};
 use golem_service_base::error::worker_executor::WorkerExecutorError;
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobMissingError, BlobRangeStream, BlobRefusal, BlobRefusedError, BlobStorage,
-    BlobStorageBackend, BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath,
-    PutIfAbsent,
+    BlobRefusal, BlobRefusedError, BlobStorageNamespace, NormalizedBlobPath,
 };
 use golem_test_framework::model::IFSEntry;
 use golem_worker_executor::filesystem_snapshot_testing::{
@@ -56,9 +54,9 @@ use golem_worker_executor::services::golem_config::{
 use golem_worker_executor::services::key_value::KeyValueService;
 use golem_worker_executor_test_utils::callers;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, start, start_customized, start_with_overrides,
-    start_with_snapshot_policy,
+    BlobStorageDecorator, BlobStorageInner, LastUniqueId, PrecompiledComponent, TestContext,
+    TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies, WrappedBlobStorage,
+    start, start_customized, start_with_overrides, start_with_snapshot_policy,
 };
 use http::StatusCode;
 use log::info;
@@ -6759,17 +6757,11 @@ async fn a_transient_initial_file_download_at_a_host_call_update_point_retries_a
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let outage = Arc::new(InitialFileOutage::default());
-    let wrapper_outage = outage.clone();
     let executor = start_with_overrides(
         deps,
         &context,
         TestExecutorOverrides {
-            wrap_blob_storage: Some(Arc::new(move |inner| {
-                Arc::new(FlakyInitialFileStorage {
-                    inner,
-                    outage: wrapper_outage.clone(),
-                })
-            })),
+            wrap_blob_storage: Some(outage.clone().wrap_blob_storage()),
             ..Default::default()
         },
     )
@@ -6887,19 +6879,13 @@ async fn cold_initial_file_starts_wait_for_an_outage_but_fail_for_a_refusal(
     for (permanent, component_unavailable) in [(false, false), (true, false), (false, true)] {
         let context = TestContext::new(last_unique_id);
         let outage = Arc::new(InitialFileOutage::default());
-        let wrapper_outage = outage.clone();
         let component_outage = Arc::new(Outage::default());
         let wrapper_component_outage = component_outage.clone();
         let executor = start_with_overrides(
             deps,
             &context,
             TestExecutorOverrides {
-                wrap_blob_storage: Some(Arc::new(move |inner| {
-                    Arc::new(FlakyInitialFileStorage {
-                        inner,
-                        outage: wrapper_outage.clone(),
-                    })
-                })),
+                wrap_blob_storage: Some(outage.clone().wrap_blob_storage()),
                 wrap_component_service: Some(Arc::new(move |inner| {
                     Arc::new(FlakyComponentService {
                         inner,
@@ -7032,17 +7018,11 @@ async fn refusing_initial_files_of_both_revisions_fails_the_update_then_the_sour
 ) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let outage = Arc::new(InitialFileOutage::default());
-    let wrapper_outage = outage.clone();
     let executor = start_with_overrides(
         deps,
         &context,
         TestExecutorOverrides {
-            wrap_blob_storage: Some(Arc::new(move |inner| {
-                Arc::new(FlakyInitialFileStorage {
-                    inner,
-                    outage: wrapper_outage.clone(),
-                })
-            })),
+            wrap_blob_storage: Some(outage.clone().wrap_blob_storage()),
             ..Default::default()
         },
     )
@@ -7137,17 +7117,11 @@ async fn a_manual_update_whose_target_initial_file_does_not_load_fails_only_the_
     for missing in [false, true] {
         let context = TestContext::new(last_unique_id);
         let outage = Arc::new(InitialFileOutage::default());
-        let wrapper_outage = outage.clone();
         let executor = start_with_overrides(
             deps,
             &context,
             TestExecutorOverrides {
-                wrap_blob_storage: Some(Arc::new(move |inner| {
-                    Arc::new(FlakyInitialFileStorage {
-                        inner,
-                        outage: wrapper_outage.clone(),
-                    })
-                })),
+                wrap_blob_storage: Some(outage.clone().wrap_blob_storage()),
                 ..Default::default()
             },
         )
@@ -7345,15 +7319,6 @@ async fn an_update_to_an_initial_file_under_another_declared_file_fails_only_the
     Ok(())
 }
 
-/// A blob storage that cannot give the content of an initial file while it is down, as a blob
-/// storage whose outage outlived the retry budget of its backend cannot. Every other operation
-/// goes to the storage that it wraps.
-#[derive(Debug)]
-struct FlakyInitialFileStorage {
-    inner: Arc<dyn BlobStorage>,
-    outage: Arc<InitialFileOutage>,
-}
-
 #[derive(Debug)]
 enum InitialFileFailure {
     Unavailable,
@@ -7364,7 +7329,9 @@ enum InitialFileFailure {
     Missing,
 }
 
-/// The failure of a [`FlakyInitialFileStorage`] and the initial-file reads it observed.
+/// A blob storage that cannot give the content of an initial file while it is down, as a blob
+/// storage whose outage outlived the retry budget of its backend cannot: the failure, and the
+/// initial-file reads it observed. Every other operation goes to the storage that it decorates.
 #[derive(Debug, Default)]
 struct InitialFileOutage {
     failure: std::sync::Mutex<Option<InitialFileFailure>>,
@@ -7439,53 +7406,42 @@ impl InitialFileOutage {
 }
 
 #[async_trait::async_trait]
-impl BlobStorageBackend for FlakyInitialFileStorage {
+impl BlobStorageDecorator for InitialFileOutage {
     async fn get_raw_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        if !self.outage.check(&namespace, path)? {
+        if !self.check(&namespace, path)? {
             return Ok(None);
         }
-        self.inner
-            .get_raw(target_label, op_label, namespace, path)
+        inner
+            .get_raw_at(target_label, op_label, namespace, path)
             .await
     }
 
     async fn get_stream_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<BoxStream<'static, anyhow::Result<Bytes>>>> {
-        if !self.outage.check(&namespace, path)? {
+        if !self.check(&namespace, path)? {
             return Ok(None);
         }
-        self.inner
-            .get_stream(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn get_range_stream_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        offset: u64,
-        length: u64,
-    ) -> anyhow::Result<Option<BlobRangeStream>> {
-        self.inner
-            .get_range_stream(target_label, op_label, namespace, path, offset, length)
+        inner
+            .get_stream_at(target_label, op_label, namespace, path)
             .await
     }
 
     async fn get_raw_slice_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
@@ -7493,175 +7449,36 @@ impl BlobStorageBackend for FlakyInitialFileStorage {
         start: u64,
         end: u64,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.inner
-            .get_raw_slice(target_label, op_label, namespace, path, start, end)
-            .await
-    }
-
-    async fn get_metadata_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Option<BlobMetadata>> {
-        self.inner
-            .get_metadata(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn put_raw_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        data: &[u8],
-    ) -> anyhow::Result<()> {
-        self.inner
-            .put_raw(target_label, op_label, namespace, path, data)
-            .await
-    }
-
-    async fn put_raw_if_absent_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        data: &[u8],
-    ) -> anyhow::Result<PutIfAbsent> {
-        self.inner
-            .put_raw_if_absent(target_label, op_label, namespace, path, data)
+        inner
+            .get_raw_slice_at(target_label, op_label, namespace, path, start, end)
             .await
     }
 
     async fn put_stream_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
         stream: &dyn ErasedReplayableStream<Item = anyhow::Result<Vec<u8>>, Error = anyhow::Error>,
     ) -> anyhow::Result<()> {
-        self.inner
-            .put_stream(target_label, op_label, namespace, path, stream)
-            .await
-    }
-
-    async fn delete_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .delete(target_label, op_label, namespace, path)
+        inner
+            .put_stream_at(target_label, op_label, namespace, path, stream)
             .await
     }
 
     async fn delete_many_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         paths: &[NormalizedBlobPath<'_>],
     ) -> anyhow::Result<()> {
-        let paths = paths
-            .iter()
-            .map(|path| path.to_path_buf())
-            .collect::<Vec<_>>();
-        self.inner
-            .delete_many(target_label, op_label, namespace, &paths)
+        inner
+            .delete_many_at(target_label, op_label, namespace, paths)
             .await
-    }
-
-    async fn create_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .create_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn list_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Vec<PathBuf>> {
-        self.inner
-            .list_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn list_blobs_below_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Box<[ListedBlob]>> {
-        self.inner
-            .list_blobs_below(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn delete_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Option<u64>> {
-        self.inner
-            .delete_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn exists_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<ExistsResult> {
-        self.inner
-            .exists(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn copy_between_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        from_namespace: BlobStorageNamespace,
-        from: &NormalizedBlobPath<'_>,
-        to_namespace: BlobStorageNamespace,
-        to: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<bool> {
-        match self
-            .inner
-            .copy_between(
-                target_label,
-                op_label,
-                from_namespace,
-                from,
-                to_namespace,
-                to,
-            )
-            .await
-        {
-            Ok(()) => Ok(true),
-            Err(error) if error.is::<BlobMissingError>() => Ok(false),
-            Err(error) => Err(error),
-        }
     }
 }
 

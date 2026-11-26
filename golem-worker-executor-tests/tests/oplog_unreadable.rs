@@ -34,9 +34,7 @@ use golem_common::model::{
 use golem_common::{agent_key, data_value};
 use golem_service_base::replayable_stream::ErasedReplayableStream;
 use golem_service_base::storage::blob::{
-    BlobMetadata, BlobMissingError, BlobRangeStream, BlobStorage, BlobStorageBackend,
-    BlobStorageNamespace, ExistsResult, ListedBlob, NormalizedBlobPath, PutIfAbsent,
-    agent_path_segment,
+    BlobStorageNamespace, NormalizedBlobPath, PutIfAbsent, agent_path_segment,
 };
 use golem_test_framework::dsl::{AgentResult, TestDsl};
 use golem_worker_executor::model::LookupResult;
@@ -49,14 +47,14 @@ use golem_worker_executor::storage::keyvalue::{KeyValueStorage, KeyValueStorageN
 use golem_worker_executor::storage::scheduler::SchedulerStorage;
 use golem_worker_executor::storage::scheduler::sqlite::SqliteSchedulerStorage;
 use golem_worker_executor_test_utils::{
-    LastUniqueId, PrecompiledComponent, TestContext, TestExecutorOverrides, TestWorkerExecutor,
-    WorkerExecutorTestDependencies, agent_oplog_length, archived_oplog_chunks,
-    scheduler_sqlite_storage_config, sqlite_storage_config, start_with_oplog_config,
-    start_with_overrides, truncate_archived_oplog_chunk,
+    BlobStorageDecorator, BlobStorageInner, LastUniqueId, PrecompiledComponent, TestContext,
+    TestExecutorOverrides, TestWorkerExecutor, WorkerExecutorTestDependencies, WrappedBlobStorage,
+    agent_oplog_length, archived_oplog_chunks, scheduler_sqlite_storage_config,
+    sqlite_storage_config, start_with_oplog_config, start_with_overrides,
+    truncate_archived_oplog_chunk,
 };
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicU8, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
@@ -483,7 +481,6 @@ async fn an_ephemeral_constructor_completes_while_its_archive_write_is_pending(
         write_release: Some(release.clone()),
         ..Default::default()
     });
-    let wrapper_fault = fault.clone();
     let executor = start_with_overrides(
         deps,
         &context,
@@ -495,12 +492,7 @@ async fn an_ephemeral_constructor_completes_while_its_archive_write_is_pending(
                 config.invocation_results.bloom_bits = 1;
                 config.invocation_results.bloom_hashes = 1;
             })),
-            wrap_blob_storage: Some(Arc::new(move |inner| {
-                Arc::new(FlakyArchiveStorage {
-                    inner,
-                    fault: wrapper_fault.clone(),
-                })
-            })),
+            wrap_blob_storage: Some(fault.clone().wrap_blob_storage()),
             ..Default::default()
         },
     )
@@ -538,8 +530,8 @@ const ARCHIVE_UNAVAILABLE: u8 = 1;
 const ARCHIVE_CORRUPT: u8 = 2;
 const ARCHIVE_UNKNOWN_VERSION: u8 = 3;
 
-/// How a [`FlakyArchiveStorage`] answers the reads of archived oplog chunks, and how many error
-/// entries it archived since the history failed.
+/// How the blob storage that an `ArchiveFault` decorates answers the reads of archived oplog
+/// chunks, and how many error entries it archived since the history failed.
 ///
 /// The fault applies only to the history: the chunks whose last entry is at or before
 /// `history_end`. A status rebuild reads that history.
@@ -643,59 +635,42 @@ impl ArchiveFault {
     }
 }
 
-/// A blob storage whose archived oplog chunks fail to read on demand. Every other operation goes
-/// to the storage that it wraps.
-#[derive(Debug)]
-struct FlakyArchiveStorage {
-    inner: Arc<dyn BlobStorage>,
-    fault: Arc<ArchiveFault>,
-}
-
+/// Archived oplog chunks fail to read on demand. Every other operation goes to the storage that
+/// the decorator wraps.
 #[async_trait::async_trait]
-impl BlobStorageBackend for FlakyArchiveStorage {
+impl BlobStorageDecorator for ArchiveFault {
     async fn get_raw_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        if let Some(answer) = self.fault.read(&namespace, path) {
+        if let Some(answer) = self.read(&namespace, path) {
             return answer;
         }
-        self.inner
-            .get_raw(target_label, op_label, namespace, path)
+        inner
+            .get_raw_at(target_label, op_label, namespace, path)
             .await
     }
 
     async fn get_stream_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
     ) -> anyhow::Result<Option<BoxStream<'static, anyhow::Result<Bytes>>>> {
-        self.inner
-            .get_stream(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn get_range_stream_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-        offset: u64,
-        length: u64,
-    ) -> anyhow::Result<Option<BlobRangeStream>> {
-        self.inner
-            .get_range_stream(target_label, op_label, namespace, path, offset, length)
+        inner
+            .get_stream_at(target_label, op_label, namespace, path)
             .await
     }
 
     async fn get_raw_slice_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
@@ -703,177 +678,66 @@ impl BlobStorageBackend for FlakyArchiveStorage {
         start: u64,
         end: u64,
     ) -> anyhow::Result<Option<Vec<u8>>> {
-        self.inner
-            .get_raw_slice(target_label, op_label, namespace, path, start, end)
-            .await
-    }
-
-    async fn get_metadata_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Option<BlobMetadata>> {
-        self.inner
-            .get_metadata(target_label, op_label, namespace, path)
+        inner
+            .get_raw_slice_at(target_label, op_label, namespace, path, start, end)
             .await
     }
 
     async fn put_raw_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> anyhow::Result<()> {
-        self.fault.observe_write(&namespace, data).await;
-        self.inner
-            .put_raw(target_label, op_label, namespace, path, data)
+        self.observe_write(&namespace, data).await;
+        inner
+            .put_raw_at(target_label, op_label, namespace, path, data)
             .await
     }
 
     async fn put_raw_if_absent_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
         data: &[u8],
     ) -> anyhow::Result<PutIfAbsent> {
-        self.fault.observe_write(&namespace, data).await;
-        self.inner
-            .put_raw_if_absent(target_label, op_label, namespace, path, data)
+        self.observe_write(&namespace, data).await;
+        inner
+            .put_raw_if_absent_at(target_label, op_label, namespace, path, data)
             .await
     }
 
     async fn put_stream_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         path: &NormalizedBlobPath<'_>,
         stream: &dyn ErasedReplayableStream<Item = anyhow::Result<Vec<u8>>, Error = anyhow::Error>,
     ) -> anyhow::Result<()> {
-        self.inner
-            .put_stream(target_label, op_label, namespace, path, stream)
-            .await
-    }
-
-    async fn delete_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .delete(target_label, op_label, namespace, path)
+        inner
+            .put_stream_at(target_label, op_label, namespace, path, stream)
             .await
     }
 
     async fn delete_many_at(
         &self,
+        inner: &WrappedBlobStorage,
         target_label: &'static str,
         op_label: &'static str,
         namespace: BlobStorageNamespace,
         paths: &[NormalizedBlobPath<'_>],
     ) -> anyhow::Result<()> {
-        let paths = paths
-            .iter()
-            .map(|path| path.to_path_buf())
-            .collect::<Vec<_>>();
-        self.inner
-            .delete_many(target_label, op_label, namespace, &paths)
+        inner
+            .delete_many_at(target_label, op_label, namespace, paths)
             .await
-    }
-
-    async fn create_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<()> {
-        self.inner
-            .create_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn list_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Vec<PathBuf>> {
-        self.inner
-            .list_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn list_blobs_below_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Box<[ListedBlob]>> {
-        self.inner
-            .list_blobs_below(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn delete_dir_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<Option<u64>> {
-        self.inner
-            .delete_dir(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn exists_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        namespace: BlobStorageNamespace,
-        path: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<ExistsResult> {
-        self.inner
-            .exists(target_label, op_label, namespace, path)
-            .await
-    }
-
-    async fn copy_between_at(
-        &self,
-        target_label: &'static str,
-        op_label: &'static str,
-        from_namespace: BlobStorageNamespace,
-        from: &NormalizedBlobPath<'_>,
-        to_namespace: BlobStorageNamespace,
-        to: &NormalizedBlobPath<'_>,
-    ) -> anyhow::Result<bool> {
-        match self
-            .inner
-            .copy_between(
-                target_label,
-                op_label,
-                from_namespace,
-                from,
-                to_namespace,
-                to,
-            )
-            .await
-        {
-            Ok(()) => Ok(true),
-            Err(error) if error.is::<BlobMissingError>() => Ok(false),
-            Err(error) => Err(error),
-        }
     }
 }
 
@@ -897,7 +761,6 @@ impl ArchiveFaultAgent {
     ) -> anyhow::Result<Self> {
         let context = TestContext::new(last_unique_id);
         let fault = Arc::new(ArchiveFault::default());
-        let wrapper_fault = fault.clone();
         let executor = start_with_overrides(
             deps,
             &context,
@@ -908,12 +771,7 @@ impl ArchiveFaultAgent {
                         config.invocation_results.hydrated_cache_capacity = capacity;
                     }
                 })),
-                wrap_blob_storage: Some(Arc::new(move |inner| {
-                    Arc::new(FlakyArchiveStorage {
-                        inner,
-                        fault: wrapper_fault.clone(),
-                    })
-                })),
+                wrap_blob_storage: Some(fault.clone().wrap_blob_storage()),
                 ..Default::default()
             },
         )
