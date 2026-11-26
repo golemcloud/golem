@@ -406,15 +406,15 @@ async fn invocation_api_reads_and_cancels_invocations(
         .0,
         404
     );
-    // A caller cannot read agents in an environment it cannot view, including a missing one.
+    // An environment that the caller cannot view, including a missing one, gives the answer of an
+    // unknown agent (5.3 Rule 21).
     assert_eq!(
         error_code(
             client
                 .get_invocation(&Uuid::new_v4(), &waiting.invocation_id)
                 .await
-        )
-        .0,
-        403
+        ),
+        (404, error_code::AGENT_NOT_FOUND.to_string())
     );
     assert_eq!(
         error_code(

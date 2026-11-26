@@ -191,6 +191,20 @@ mod tests {
         Denial::LooksUnknown { kind }
     }
 
+    const ALL_KINDS: [DesignatedKind; 7] = [
+        DesignatedKind::Agent,
+        DesignatedKind::Invocation,
+        DesignatedKind::Task,
+        DesignatedKind::Stream,
+        DesignatedKind::Promise,
+        DesignatedKind::Webhook,
+        DesignatedKind::Artifact,
+    ];
+
+    fn unknown_of(kind: DesignatedKind) -> UnknownId {
+        UnknownId::new(kind, "id-7")
+    }
+
     /// A 1.6 denial as the worker service sees it today.
     fn denied_permission() -> WorkerServiceError {
         WorkerServiceError::AuthError(AuthServiceError::Unauthorized(
@@ -223,6 +237,25 @@ mod tests {
     }
 
     #[test]
+    async fn every_designated_kind_answers_an_http_route_with_its_own_not_found() {
+        for kind in ALL_KINDS {
+            let id = unknown_of(kind);
+            let (status, body) =
+                wire(HttpRouteDenials.render(&looks_unknown(kind), std::slice::from_ref(&id)))
+                    .await;
+            assert_eq!(status, poem::http::StatusCode::NOT_FOUND, "{kind:?}");
+            assert_eq!(
+                serde_json::from_str::<serde_json::Value>(&body).unwrap(),
+                serde_json::json!({
+                    "code": id.code(),
+                    "error": format!("Invocation failed: {}", id.message()),
+                }),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
     async fn an_http_route_forbidden_answer_names_no_target() {
         let (status, body) = wire(HttpRouteDenials.render(
             &Denial::Forbidden {
@@ -239,9 +272,8 @@ mod tests {
     #[test]
     fn a_stream_read_denial_answers_as_a_read_of_an_unknown_stream() {
         let real = crate::custom_api::durable_streams::response(poem::http::StatusCode::NOT_FOUND);
-        for kind in [DesignatedKind::Stream, DesignatedKind::Agent] {
-            let rendered =
-                StreamReadDenials.render(&looks_unknown(kind), &[UnknownId::new(kind, "id-7")]);
+        for kind in ALL_KINDS {
+            let rendered = StreamReadDenials.render(&looks_unknown(kind), &[unknown_of(kind)]);
             assert_eq!(rendered.status, real.status, "{kind:?}");
             assert_eq!(rendered.headers, real.headers, "{kind:?}");
             assert!(
@@ -263,6 +295,18 @@ mod tests {
             AttachDenials.render(&looks_unknown(DesignatedKind::Agent), &[unknown_agent()]),
             real
         );
+    }
+
+    #[test]
+    fn every_designated_kind_answers_an_attach_with_its_own_not_found() {
+        for kind in ALL_KINDS {
+            let id = unknown_of(kind);
+            assert_eq!(
+                AttachDenials.render(&looks_unknown(kind), std::slice::from_ref(&id)),
+                (PublicErrorCode::NotFound, id.message()),
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]
@@ -292,6 +336,21 @@ mod tests {
     }
 
     #[test]
+    fn every_designated_kind_answers_an_internal_call_with_its_own_not_found() {
+        for kind in ALL_KINDS {
+            let id = unknown_of(kind);
+            assert_eq!(
+                InternalCallDenials.render(&looks_unknown(kind), std::slice::from_ref(&id)),
+                agent_error::Error::NotFound(ErrorBody {
+                    error: id.message(),
+                    code: id.code().to_string(),
+                }),
+                "{kind:?}"
+            );
+        }
+    }
+
+    #[test]
     fn an_internal_call_forbidden_answer_is_todays_answer_to_a_denied_permission() {
         let real = agent_error::Error::from(denied_permission());
         assert_eq!(
@@ -305,8 +364,8 @@ mod tests {
         );
     }
 
-    /// Aditya, 2026-11-24 (Q-1272-4): JSON-RPC "invalid params", as MCP answers an unknown tool,
-    /// with the text and the code of the other surfaces.
+    /// JSON-RPC "invalid params", as MCP answers an unknown tool, with the text and the code of
+    /// the other surfaces.
     #[test]
     fn an_mcp_denial_is_an_invalid_params_error_with_the_shared_text() {
         let error = McpDenials.render(&looks_unknown(DesignatedKind::Agent), &[unknown_agent()]);
@@ -316,6 +375,25 @@ mod tests {
             error.data,
             Some(serde_json::json!({"code": unknown_agent().code()}))
         );
+    }
+
+    #[test]
+    fn every_designated_kind_answers_mcp_with_its_own_not_found() {
+        for kind in ALL_KINDS {
+            let id = unknown_of(kind);
+            let error = McpDenials.render(&looks_unknown(kind), std::slice::from_ref(&id));
+            assert_eq!(
+                error.code,
+                rmcp::model::ErrorCode::INVALID_PARAMS,
+                "{kind:?}"
+            );
+            assert_eq!(error.message, id.message(), "{kind:?}");
+            assert_eq!(
+                error.data,
+                Some(serde_json::json!({"code": id.code()})),
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]

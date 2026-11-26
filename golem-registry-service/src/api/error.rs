@@ -2520,6 +2520,32 @@ mod tests {
     }
 
     #[test]
+    fn every_designated_kind_answers_the_registry_with_its_own_not_found() {
+        use golem_common::model::authority::{Denial, DesignatedKind};
+        use golem_service_base::model::auth::denial::{DenialRenderer, UnknownId};
+
+        for kind in [
+            DesignatedKind::Agent,
+            DesignatedKind::Invocation,
+            DesignatedKind::Task,
+            DesignatedKind::Stream,
+            DesignatedKind::Promise,
+            DesignatedKind::Webhook,
+            DesignatedKind::Artifact,
+        ] {
+            let id = UnknownId::new(kind, "id-7");
+            match RegistryDenials.render(&Denial::LooksUnknown { kind }, std::slice::from_ref(&id))
+            {
+                ApiError::NotFound(body) => {
+                    assert_eq!(body.0.code, id.code(), "{kind:?}");
+                    assert_eq!(body.0.error, id.message(), "{kind:?}");
+                }
+                other => panic!("{kind:?}: expected 404, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
     fn an_unknown_tool_stays_not_found() {
         let tool_name = golem_common::model::tool::ToolName::try_from("grep").unwrap();
         let (status, code) = status_and_code(DeploymentError::ToolNotFound(tool_name).into());
