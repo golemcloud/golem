@@ -86,7 +86,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                         .worker_service()
                         .seal_generation(metadata, epoch, worker.retire_for_seal().boxed())
                         .await?;
-                    Ok(Some(!sealed))
+                    Ok(Some(sealed == Some(false)))
                 })
                 .await
                 .map_err(|error| {

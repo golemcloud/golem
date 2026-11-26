@@ -23,8 +23,9 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
     /// No deletion state or lost-shard reason is installed for this disposable generation.
     pub(in crate::worker) async fn retire_for_seal(
         self: &Arc<Self>,
-    ) -> Result<AgentMetadata, WorkerExecutorError> {
+    ) -> Result<Option<AgentMetadata>, WorkerExecutorError> {
         let mut cleanup = self.owner_cleanup.lock().await;
+        let active_agent = self.active_agent_for_this_owner().await;
         let instance = self.instance.lock().await;
         instance.ensure_not_deleting()?;
         if self.owner_retirement_requested.is_cancelled()
@@ -35,7 +36,15 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         let status = self.get_repaired_status().await?;
         if !crate::services::worker::seal_status_is_eligible(&status) {
-            return Err(WorkerExecutorError::ShardingNotReady);
+            return Ok(None);
+        }
+        if !self.is_resident_idle_for_seal(&instance).await
+            || active_agent
+                .as_ref()
+                .is_some_and(|agent| agent.try_fence_idle_entity_bodies().is_none())
+        {
+            self.seal_waiting_for_idle.store(true, Ordering::Release);
+            return Ok(None);
         }
         self.state_actor.retire_for_seal();
         self.owner_retirement_requested.cancel();
@@ -60,10 +69,10 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         if self.oplog.fence().is_some() {
             return Err(WorkerExecutorError::ShardingNotReady);
         }
-        Ok(AgentMetadata {
+        Ok(Some(AgentMetadata {
             last_known_status: self.last_known_status.load_full().as_ref().clone(),
             ..self.get_initial_worker_metadata()
-        })
+        }))
     }
 
     /// Records retirement without taking the lifecycle lock. Owner writes stop immediately;

@@ -264,7 +264,7 @@ impl<Ctx: WorkerCtx> InvocationLoop<Ctx> {
                     let sealed = async {
                         let metadata = worker.try_get_latest_worker_metadata().await?;
                         if !crate::services::worker::seal_status_is_eligible(&metadata.last_known_status) {
-                            return Ok(false);
+                            return Ok(None);
                         }
                         worker
                             .worker_service()

@@ -690,6 +690,8 @@ pub struct ResolvedWorkerData<Ctx: WorkerCtx> {
     /// Prevents weak-reference background work from starting while an unloaded
     /// worker is being conditionally removed from `ActiveAgents`.
     cache_retirement_in_progress: AtomicBool,
+    /// A declined seal waits for the resident runtime to become idle, not for another timer.
+    seal_waiting_for_idle: AtomicBool,
     startup_attempt: StartupAttemptTracker,
     linear_memory_grant: StdMutex<Option<Arc<StdMutex<MemoryGrant>>>>,
     /// Lifecycle request shared across resident worker generations. A terminal request is retained

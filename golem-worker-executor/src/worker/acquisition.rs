@@ -1297,6 +1297,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 }
             }),
             cache_retirement_in_progress: AtomicBool::new(false),
+            seal_waiting_for_idle: AtomicBool::new(false),
             startup_attempt: StartupAttemptTracker::default(),
             linear_memory_grant: StdMutex::new(None),
             interrupt_signal: Arc::default(),

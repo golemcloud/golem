@@ -274,14 +274,15 @@ pub trait WorkerService: Send + Sync {
     ) -> Result<bool, WorkerExecutorError>;
 
     /// Retires one worker generation and seals its drained state while excluding local metadata
-    /// readers and promise writers. `false` leaves archival scheduled for another attempt.
+    /// readers and promise writers. `Some(false)` retries storage work; `None` waits for the
+    /// resident runtime's idle transition instead of registering an archive polling loop.
     async fn seal_generation<'a>(
         &self,
         _metadata: AgentMetadata,
         _epoch: ShardEpoch,
-        _retire: BoxFuture<'a, Result<AgentMetadata, WorkerExecutorError>>,
-    ) -> Result<bool, WorkerExecutorError> {
-        Ok(false)
+        _retire: BoxFuture<'a, Result<Option<AgentMetadata>, WorkerExecutorError>>,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
+        Ok(Some(false))
     }
 
     /// Deletes every cached status blob for the worker (live cache, clean checkpoint, the legacy

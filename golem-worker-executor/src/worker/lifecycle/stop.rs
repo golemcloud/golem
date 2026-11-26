@@ -94,6 +94,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
             && let Some(startup_attempt) = startup_attempt
         {
             self.complete_startup(startup_attempt, Err(startup_error));
+            self.schedule_seal_after_resident_idle().await;
         }
     }
     pub(in crate::worker) async fn acknowledge_startup_interruption(&self, kind: InterruptKind) {
@@ -326,6 +327,7 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
                 notify.set();
             }
         }
+        self.schedule_seal_after_resident_idle().await;
     }
     /// Resolves resident waiters for the final state that a stop installed.
     async fn resolve_pending_queue_on_stop(

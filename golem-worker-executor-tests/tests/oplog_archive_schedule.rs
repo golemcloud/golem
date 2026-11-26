@@ -1722,6 +1722,216 @@ async fn fully_archived_running_agent_stops_scheduling_and_seals_when_idle(
     Ok(())
 }
 
+#[test]
+#[timeout("3m")]
+async fn seal_declines_a_suspended_generation_waiting_for_permit(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    seal_declines_starting_generation(last_unique_id, deps, host, false).await
+}
+
+#[test]
+#[timeout("3m")]
+async fn seal_declines_a_suspended_generation_replaying(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    #[tagged_as("host_api_tests")] host: &PrecompiledComponent,
+    _tracing: &Tracing,
+) -> anyhow::Result<()> {
+    seal_declines_starting_generation(last_unique_id, deps, host, true).await
+}
+
+async fn seal_declines_starting_generation(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    host: &PrecompiledComponent,
+    replay: bool,
+) -> anyhow::Result<()> {
+    use golem_common::model::account::AccountId;
+    use golem_worker_executor::services::resource_limits::{AtomicResourceEntry, ResourceLimits};
+    use golem_worker_executor::worker::Worker;
+    use golem_worker_executor_test_utils::ReplayAdmissionStage;
+
+    struct Limits(Arc<AtomicResourceEntry>);
+
+    #[async_trait::async_trait]
+    impl ResourceLimits for Limits {
+        async fn initialize_account(
+            &self,
+            _account_id: AccountId,
+        ) -> Result<Arc<AtomicResourceEntry>, WorkerExecutorError> {
+            Ok(self.0.clone())
+        }
+    }
+
+    let context = TestContext::new(last_unique_id);
+    let shard = Arc::new(OnceLock::<Arc<dyn ShardService>>::new());
+    let limits = Arc::new(AtomicResourceEntry::new(
+        u64::MAX,
+        usize::MAX,
+        usize::MAX,
+        u64::MAX,
+        1,
+    ));
+    let executor = start_with_overrides(
+        deps,
+        &context,
+        TestExecutorOverrides {
+            resource_limits: Some(Arc::new(Limits(limits.clone()))),
+            configure: Some(Arc::new(|config| {
+                config.oplog.indexed_storage_layers = 1;
+                config.oplog.blob_storage_layers = 1;
+                config.oplog.entry_count_limit = 1_000_000;
+                config.oplog.archive_interval = Duration::from_millis(100);
+                config.oplog.shard_lease_max_ttl = Duration::from_secs(300);
+                config.oplog.skew_margin = Duration::from_secs(1);
+                config.scheduler.refresh_interval = Duration::from_millis(25);
+                config.suspend.suspend_after = Duration::from_millis(100);
+                config.suspend.wait_suspend_grace = Duration::from_millis(100);
+                config.suspend.wait_suspend_check_interval = Duration::from_millis(25);
+            })),
+            wrap_shard_service: Some(Arc::new({
+                let shard = shard.clone();
+                move |inner| {
+                    assert!(shard.set(inner.clone()).is_ok());
+                    inner
+                }
+            })),
+            ..Default::default()
+        },
+    )
+    .await?;
+    let component = executor
+        .component_dep(&context.default_environment_id, host)
+        .store()
+        .await?;
+    let key = agent_key!("GolemHostApi", "seal-starting-generation");
+    let id = executor.start_agent(&component.id, key.clone()).await?;
+    let promise = executor
+        .invoke_and_await_agent(&component, &key, "create_promise", data_value!())
+        .await?
+        .into_return_value()
+        .unwrap();
+    executor
+        .invoke_agent(
+            &component,
+            &key,
+            "local_calls_then_await_promise",
+            crate::raw_params(vec![SchemaValue::U64(2), promise]),
+        )
+        .await?;
+    executor
+        .wait_for_status(&id, AgentStatus::Suspended, Duration::from_secs(30))
+        .await?;
+    let worker = executor.active_agents().try_get(&id).await.unwrap();
+    worker.await_ready_to_process_commands().await?;
+    assert!(!worker.is_loaded().await);
+    // The harness grant has no expiry, so maintenance can fully archive without sealing.
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while scheduled_action_count(deps, &context).await? != 0 {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    let shard = shard.get().unwrap();
+    let assignment = shard.current_assignment()?;
+    shard.update_lease(
+        &assignment.shard_epochs,
+        ShardLeaseClock {
+            sent_at: Instant::now(),
+            wall_anchor: SystemTime::now(),
+            ttl: Duration::from_secs(300),
+        },
+        ShardLeaseRevision {
+            incarnation: uuid::Uuid::new_v4(),
+            number: 1,
+        },
+        assignment.executor_count,
+    )?;
+    let held_permit = if replay {
+        None
+    } else {
+        Some(
+            executor
+                .active_agents()
+                .register_account_concurrency(context.account_id, limits)
+                .await
+                .acquire(id.agent_id)
+                .await,
+        )
+    };
+    let mut queued = crate::scheduler_waits::queued(&context.account_id, &id.agent_id);
+    let mut replay_gate = replay.then(|| {
+        executor.gate_next_replay_access_admission(
+            &id.agent_id,
+            "golem::api::create_promise",
+            ReplayAdmissionStage::BeforeScope,
+        )
+    });
+    Worker::start_if_needed(worker.clone()).await?;
+    if let Some(gate) = replay_gate.as_mut() {
+        tokio::time::timeout(Duration::from_secs(15), gate.entered()).await?;
+    } else {
+        tokio::time::timeout(Duration::from_secs(15), queued.entered()).await??;
+    }
+    assert_eq!(
+        worker.get_last_known_status().await.status,
+        AgentStatus::Suspended
+    );
+    let last = worker
+        .oplog_service()
+        .get_last_index(&id, AgentMode::Durable)
+        .await?;
+    assert_eq!(
+        worker
+            .worker_activator()
+            .archive_oplog(&id, last, ArchiveWait::Finished)
+            .await?,
+        Some(false),
+        "busy resident admission must decline without a routing error"
+    );
+    assert!(Arc::ptr_eq(
+        &worker,
+        &executor.active_agents().try_get(&id).await.unwrap()
+    ));
+    assert!(!worker.oplog().is_retired());
+    assert_eq!(scheduled_action_count(deps, &context).await?, 0);
+    let readiness = tokio::spawn({
+        let worker = worker.clone();
+        async move { worker.await_ready_to_process_commands().await }
+    });
+    drop(held_permit);
+    if let Some(gate) = replay_gate {
+        gate.release();
+    }
+    tokio::time::timeout(Duration::from_secs(30), readiness).await???;
+    let indexed_config =
+        derive_disjoint_sqlite_config(&sqlite_storage_config(deps, &context), "indexed");
+    let indexed = SqliteIndexedStorage::configured(&indexed_config).await?;
+    tokio::time::timeout(Duration::from_secs(30), async {
+        while indexed
+            .observe_agent("test", "idle_retrigger", &id)
+            .await?
+            .has_data
+        {
+            tokio::time::sleep(Duration::from_millis(25)).await;
+        }
+        anyhow::Ok(())
+    })
+    .await??;
+    assert!(!executor.worker_is_cached(&id).await);
+    assert_eq!(
+        executor.get_worker_metadata(&id).await?.status,
+        AgentStatus::Suspended
+    );
+    executor.shutdown_and_wait_for_invocation_loops().await?;
+    Ok(())
+}
+
 /// A sealed owner must lose its cached Worker, not just its Store. Reusing that Worker after
 /// restoration at the same shard epoch must refuse both invocation admission and oplog writes.
 #[test]

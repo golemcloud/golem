@@ -463,8 +463,8 @@ impl WorkerService for DefaultWorkerService {
         &self,
         metadata: AgentMetadata,
         epoch: ShardEpoch,
-        retire: BoxFuture<'a, Result<AgentMetadata, WorkerExecutorError>>,
-    ) -> Result<bool, WorkerExecutorError> {
+        retire: BoxFuture<'a, Result<Option<AgentMetadata>, WorkerExecutorError>>,
+    ) -> Result<Option<bool>, WorkerExecutorError> {
         let id = metadata.owned_agent_id();
         let lifecycle_gate = self.lifecycle_gate(&id.agent_id);
         let _lifecycle_guard = lifecycle_gate.gate.write().await;
@@ -473,10 +473,10 @@ impl WorkerService for DefaultWorkerService {
             .seal_service()
             .filter(|seal| seal.can_seal_mode(metadata.agent_mode))
         else {
-            return Ok(false);
+            return Ok(Some(false));
         };
         if seal.deadline(&id, epoch).is_none() {
-            return Ok(false);
+            return Ok(Some(false));
         }
         let assignment = self.shard_service.current_assignment()?;
         let shard_id = ShardId::from_agent_id(&id.agent_id, assignment.number_of_shards);
@@ -493,14 +493,16 @@ impl WorkerService for DefaultWorkerService {
             Ok::<_, WorkerExecutorError>(members.iter().any(|member| member.owned_agent_id == id))
         };
         if has_running_member().await? {
-            return Ok(false);
+            return Ok(None);
         }
-        let metadata = retire.await?;
+        let Some(metadata) = retire.await? else {
+            return Ok(None);
+        };
         if !seal_status_is_eligible(&metadata.last_known_status) || has_running_member().await? {
-            return Ok(false);
+            return Ok(None);
         }
         let Some(pending) = seal.prepare(metadata, epoch).await? else {
-            return Ok(false);
+            return Ok(Some(false));
         };
         self.remove_cached_status(&id, pending.record.fingerprint)
             .await?;
@@ -509,7 +511,7 @@ impl WorkerService for DefaultWorkerService {
             .await
             .map_err(|error| error.into_worker_executor_error(WorkerExecutorError::runtime))?;
         seal.remove_moved_copies(&pending).await?;
-        seal.release(&pending).await
+        seal.release(&pending).await.map(Some)
     }
 
     async fn remove_cached_status(
