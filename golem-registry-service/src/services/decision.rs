@@ -44,8 +44,8 @@ impl Decisions {
     ) -> Result<Grantors, AuthorizationError> {
         match operation {
             Ok(operation) => {
-                let caller = auth.entry_caller(self.golem_issuer.to_string());
-                decide_with_todays_checks(auth, caller, operation, vec![vec![check]]).await
+                let request = auth.entry_request(self.golem_issuer.to_string(), operation);
+                decide_with_todays_checks(auth, request, vec![vec![check]]).await
             }
             Err(shape) => {
                 error!("Registry operation has no valid decision request: {shape}");

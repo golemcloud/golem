@@ -485,6 +485,9 @@ pub(crate) struct AgentAccess {
     /// the tool of a hosted exec.
     other: AccessTarget,
     permissions: Vec<AgentPermission>,
+    /// The caller that the request names, such as the calling agent of a fork or an update that
+    /// an agent asks for. Without it, the decision names the account of the request's token.
+    caller: Option<Caller>,
 }
 
 #[derive(Clone, Debug)]
@@ -512,6 +515,25 @@ impl AgentAccess {
             resource,
             other: AccessTarget::Agent,
             permissions: permissions.into_iter().collect(),
+            caller: None,
+        }
+    }
+
+    /// The same access, decided for `caller` when the request names one.
+    fn called_by(self, caller: Option<Caller>) -> Self {
+        Self { caller, ..self }
+    }
+
+    /// The decision request of `operation`: the caller that the request names asks on its own
+    /// authority, else `entry` gives the request of the account of the request's token.
+    fn decision_request(
+        &self,
+        operation: Operation,
+        entry: impl FnOnce(Operation) -> AuthorizationRequest,
+    ) -> AuthorizationRequest {
+        match &self.caller {
+            Some(caller) => AuthorizationRequest::new(caller.clone(), operation),
+            None => entry(operation),
         }
     }
 
@@ -535,6 +557,26 @@ impl AgentAccess {
                 AgentResourcePattern::Any,
             )],
         )
+    }
+
+    /// A fork of the agent, decided for the caller that the request names.
+    fn fork(caller: Option<Caller>) -> Self {
+        Self::agent(
+            CatalogOperation::ForkAgent,
+            AgentVerb::Fork,
+            AgentResourcePattern::Empty,
+        )
+        .called_by(caller)
+    }
+
+    /// An update of the agent's revision, decided for the requester that the request names.
+    fn update_revision(requester: Option<Caller>) -> Self {
+        Self::agent(
+            CatalogOperation::UpdateAgentRevision,
+            AgentVerb::UpdateRevision,
+            AgentResourcePattern::Empty,
+        )
+        .called_by(requester)
     }
 
     /// An invocation in `mode`: a lookup views the agent, a method call invokes it, and a start
@@ -902,7 +944,7 @@ impl WorkerService {
                 agent_type.clone(),
                 vec![agent_type_check(component, agent_type)],
             )]);
-        let request = AuthorizationRequest::new(self.rest_caller(auth), listing);
+        let request = self.entry_request(auth, listing);
         authorizer
             .scope(&request)
             .await
@@ -915,16 +957,27 @@ impl WorkerService {
         auth.entry_caller(self.golem_issuer.to_string())
     }
 
-    /// Decides `operation` for the caller of `auth` from the card checks that the call site makes
-    /// today, one list for each part. A denial is the error that today's checks give.
-    /// `AuthCtx::System` skips the decision, as today.
+    /// The decision request of `operation` for a request that an account token authenticated:
+    /// the acting account asks, which under admin impersonation is the admin, on the authority of
+    /// the access account.
+    fn entry_request(&self, auth: &AuthCtx, operation: Operation) -> AuthorizationRequest {
+        auth.entry_request(self.golem_issuer.to_string(), operation)
+    }
+
+    /// Decides `operation` of `access` from the card checks that the call site makes today, one
+    /// list for each part, for the caller that the access names, else for the account of `auth`.
+    /// A denial is the error that today's checks give. `AuthCtx::System` skips the decision, as
+    /// today.
     async fn decide(
         &self,
         auth: &AuthCtx,
+        access: &AgentAccess,
         operation: Operation,
         checks: Vec<Vec<PermissionTarget>>,
     ) -> Result<Grantors, AuthorizationError> {
-        decide_with_todays_checks(auth, self.rest_caller(auth), operation, checks).await
+        let request =
+            access.decision_request(operation, |operation| self.entry_request(auth, operation));
+        decide_with_todays_checks(auth, request, checks).await
     }
 
     /// Decides `access` on one agent. An owner without an agent type has no decision target, so
@@ -953,7 +1006,10 @@ impl WorkerService {
             fingerprint: agent.fingerprint,
         };
         match access.decision(target, &agent.owner) {
-            Ok((operation, checks)) => self.decide(auth, operation, checks).await.map(|_| ()),
+            Ok((operation, checks)) => self
+                .decide(auth, access, operation, checks)
+                .await
+                .map(|_| ()),
             Err(error) => {
                 tracing::error!(
                     "Agent access {:?} has no valid decision request: {error}",
@@ -1032,7 +1088,7 @@ impl WorkerService {
             });
         let result = match operation {
             Ok(operation) if access.operation != CatalogOperation::ViewAgent => self
-                .decide(auth_ctx, operation, vec![checks])
+                .decide(auth_ctx, access, operation, vec![checks])
                 .await
                 .map(|_| ()),
             other => {
@@ -1681,7 +1737,7 @@ impl WorkerService {
                     rows.iter()
                         .map(|(target, check, ..)| (target.clone(), vec![check.clone()])),
                 );
-            let request = AuthorizationRequest::new(self.rest_caller(&auth_ctx), listing);
+            let request = self.entry_request(&auth_ctx, listing);
             authorizer
                 .filter(
                     &request,
@@ -1748,11 +1804,7 @@ impl WorkerService {
                 agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &AgentAccess::agent(
-                    CatalogOperation::UpdateAgentRevision,
-                    AgentVerb::UpdateRevision,
-                    AgentResourcePattern::Empty,
-                ),
+                &AgentAccess::update_revision(requester.clone()),
             )
             .await?;
 
@@ -2256,11 +2308,7 @@ impl WorkerService {
                 source_agent_id,
                 expected_fingerprint,
                 &auth_ctx,
-                &AgentAccess::agent(
-                    CatalogOperation::ForkAgent,
-                    AgentVerb::Fork,
-                    AgentResourcePattern::Empty,
-                ),
+                &AgentAccess::fork(caller.clone()),
             )
             .await?;
 
@@ -11044,6 +11092,55 @@ mod tests {
             );
             let typeless = super::authorize_typeless_owner_with_1_6_check(&auth, &owner, &access);
             assert_eq!(typeless.is_ok(), today.is_ok(), "{grant}");
+        }
+    }
+
+    /// A fork or an update that an agent asks for over gRPC names the calling agent, which asks
+    /// on its own authority. Without a named caller, the account of the request's token asks.
+    #[test]
+    fn a_fork_or_an_update_is_decided_for_the_caller_that_the_request_names() {
+        use golem_common::model::authority::{CatalogOperation, Operation, Resource, Target};
+        use golem_common::model::caller::{AgentPrincipal, Principal};
+
+        let target = super::DecisionAgentTarget {
+            environment_id: EnvironmentId(Uuid::from_u128(1)),
+            agent_type: AgentTypeName("Counter".to_string()),
+            agent_id: AgentId::from_parts(0, 9),
+            fingerprint: Some(AgentFingerprint(Uuid::from_u128(0xf1))),
+        };
+        let calling_agent = Caller::entry(Principal::Agent(AgentPrincipal {
+            issuer: "golem".to_string(),
+            agent_id: Uuid::from_u128(0xa1),
+            address: AgentId::from_parts(0, 10),
+            fingerprint: AgentFingerprint(Uuid::from_u128(0xf2)),
+            agent_type: AgentTypeName("Caller".to_string()),
+            environment_id: EnvironmentId(Uuid::from_u128(1)),
+        }));
+        let auth = AuthCtx::agent_with_effective_surface(
+            AccountId(Uuid::from_u128(3)),
+            AccountEmail::new("acme@example.com".to_string()),
+            EffectiveSurface::default(),
+        );
+        let entry = |operation| auth.entry_request("golem", operation);
+        let accesses: [(CatalogOperation, fn(Option<Caller>) -> super::AgentAccess); 2] = [
+            (CatalogOperation::ForkAgent, super::AgentAccess::fork),
+            (
+                CatalogOperation::UpdateAgentRevision,
+                super::AgentAccess::update_revision,
+            ),
+        ];
+        for (operation, access) in accesses {
+            let operation =
+                Operation::single(operation, Resource::None, Target::Agent(target.clone()))
+                    .unwrap();
+
+            let named =
+                access(Some(calling_agent.clone())).decision_request(operation.clone(), entry);
+            assert_eq!(named.caller, calling_agent);
+            assert!(named.principal.same_record(&calling_agent.immediate));
+
+            let unnamed = access(None).decision_request(operation, entry);
+            assert_eq!(unnamed.caller, auth.entry_caller("golem"));
         }
     }
 }
