@@ -230,7 +230,8 @@ fn generate_compatibility_equals_effective_surface_tests(r: &mut DynamicTestRegi
                 let surface = surface(case.lower, case.lower_negative, case.upper);
                 let check = (case.check)();
                 let today = surface.authorize(&check).unwrap();
-                let decision = decide_with_checks(&surface, &(case.operation)(), &[vec![check]]);
+                let decision =
+                    decide_with_checks(&surface, &(case.operation)(), &[vec![check].into()]);
                 assert_eq!(is_allowed(&decision), today, "{decision:?}");
             }
         );
@@ -244,7 +245,7 @@ fn answers(
     check: PermissionTarget,
 ) -> (bool, bool) {
     let today = surface.authorize(&check).unwrap();
-    let decision = decide_with_checks(surface, operation, &[vec![check]]);
+    let decision = decide_with_checks(surface, operation, &[vec![check].into()]);
     (today, is_allowed(&decision))
 }
 
@@ -409,7 +410,11 @@ fn agent_exec_is_allowed_exactly_where_invoke_star_is() {
         let invoke_star = surface.authorize(&check("agent", "invoke", "*")).unwrap();
         let exec = exec_check(agent_owner());
         assert_eq!(exec, check("agent", "invoke", "*"), "{lower:?}");
-        let decision = decide_with_checks(&surface, &hosted_exec(), &[vec![exec], vec![]]);
+        let decision = decide_with_checks(
+            &surface,
+            &hosted_exec(),
+            &[vec![exec].into(), PartChecks::NotCheckedToday],
+        );
         assert_eq!(
             is_allowed(&decision),
             invoke_star,
@@ -430,7 +435,10 @@ fn a_hosted_exec_needs_both_parts() {
         decide_with_checks(
             &agent_only,
             &hosted_exec(),
-            &[vec![exec_check(agent_owner())], vec![tool_check.clone()]]
+            &[
+                vec![exec_check(agent_owner())].into(),
+                vec![tool_check.clone()].into()
+            ]
         ),
         Decision::Deny(Denial::Forbidden {
             missing_grant: None
@@ -442,7 +450,10 @@ fn a_hosted_exec_needs_both_parts() {
         decide_with_checks(
             &tool_only,
             &hosted_exec(),
-            &[vec![exec_check(agent_owner())], vec![tool_check]]
+            &[
+                vec![exec_check(agent_owner())].into(),
+                vec![tool_check].into()
+            ]
         ),
         Decision::Deny(Denial::LooksUnknown {
             kind: DesignatedKind::Agent
@@ -457,7 +468,7 @@ fn a_denied_agent_part_looks_like_an_unknown_agent() {
         decide_with_checks(
             &surface,
             &invoke_increment(),
-            &[vec![check("agent", "invoke", "increment")]]
+            &[vec![check("agent", "invoke", "increment")].into()]
         ),
         Decision::Deny(Denial::LooksUnknown {
             kind: DesignatedKind::Agent
@@ -472,10 +483,10 @@ fn every_check_of_a_part_must_allow() {
         Resource::Path("/data".to_string()),
     );
     let checks = || {
-        vec![vec![
+        vec![PartChecks::from(vec![
             check("filesystem", "stat", "/data"),
             check("filesystem", "list", "/data"),
-        ]]
+        ])]
     };
     let stat_only = surface(
         &["filesystem(acme/shop/prod/cart/*) @ acme : stat : /**"],
@@ -511,7 +522,7 @@ fn a_check_that_does_not_belong_to_the_part_is_refused() {
     assert!(!is_allowed(&decide_with_checks(
         &surface,
         &invoke_increment(),
-        &[vec![check("agent", "delete", "")]]
+        &[vec![check("agent", "delete", "")].into()]
     )));
     assert!(!check_belongs_to_part(
         v2::Verb::Agent(v2::AgentVerb::Invoke),
@@ -529,7 +540,35 @@ fn a_missing_part_check_list_denies() {
     assert!(!is_allowed(&decide_with_checks(
         &surface,
         &hosted_exec(),
-        &[vec![exec_check(agent_owner())]]
+        &[vec![exec_check(agent_owner())].into()]
+    )));
+}
+
+/// A part that today's code checks with no check at all would allow every caller, so an empty
+/// check list denies. Only `PartChecks::NotCheckedToday` allows a part without a check.
+#[test]
+fn an_empty_check_list_denies() {
+    let surface = surface(&["agent(acme/shop/prod/cart/*) @ acme : * : *"], &[], &[]);
+    assert!(!is_allowed(&decide_with_checks(
+        &surface,
+        &invoke_increment(),
+        &[PartChecks::Checks(Vec::new())]
+    )));
+    assert!(!is_allowed(&decide_with_checks(
+        &surface,
+        &hosted_exec(),
+        &[
+            vec![exec_check(agent_owner())].into(),
+            PartChecks::Checks(Vec::new())
+        ]
+    )));
+    assert!(is_allowed(&decide_with_checks(
+        &surface,
+        &hosted_exec(),
+        &[
+            vec![exec_check(agent_owner())].into(),
+            PartChecks::NotCheckedToday
+        ]
     )));
 }
 
@@ -542,7 +581,7 @@ fn an_allow_names_the_card_whose_grant_allowed() {
         decide_with_checks(
             &surface,
             &invoke_increment(),
-            &[vec![check("agent", "invoke", "increment")]]
+            &[vec![check("agent", "invoke", "increment")].into()]
         ),
         Decision::Allow(Grantors {
             cards: vec![GrantorCard {

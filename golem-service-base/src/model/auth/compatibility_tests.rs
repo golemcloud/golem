@@ -25,8 +25,8 @@ use golem_common::model::authority::{
 use golem_common::model::card::owner::AgentOwnerPattern;
 use golem_common::model::card::recipient::RecipientPattern;
 use golem_common::model::card::{
-    AgentResourcePattern, AgentVerb, ClassPermissionTarget, EffectiveSurface, PermissionTarget,
-    parse_permission,
+    AgentResourcePattern, AgentVerb, ClassPermissionTarget, EffectiveSurface, PartChecks,
+    PermissionTarget, parse_permission,
 };
 use golem_common::model::environment::EnvironmentId;
 use test_r::test;
@@ -113,7 +113,8 @@ fn invoke(n: u128) -> AuthorizationRequest {
 
 #[test]
 async fn the_system_context_is_allowed_without_checks() {
-    let authorizer = CompatibilityAuthorizer::new(AuthCtx::System, vec![vec![]]);
+    let authorizer =
+        CompatibilityAuthorizer::new(AuthCtx::System, vec![PartChecks::Checks(Vec::new())]);
     assert!(matches!(
         authorizer.decide(&invoke(1)).await,
         Decision::Allow(_)
@@ -125,7 +126,7 @@ async fn decide_answers_from_the_checks_of_the_call_site() {
     let auth = user(&["agent(acme/shop/prod/cart/*) @ acme : invoke : increment"]);
     let allowed = CompatibilityAuthorizer::new(
         auth.clone(),
-        vec![vec![check(1, AgentVerb::Invoke, method("increment"))]],
+        vec![vec![check(1, AgentVerb::Invoke, method("increment"))].into()],
     );
     assert!(matches!(
         allowed.decide(&invoke(1)).await,
@@ -134,7 +135,7 @@ async fn decide_answers_from_the_checks_of_the_call_site() {
 
     let denied = CompatibilityAuthorizer::new(
         auth,
-        vec![vec![check(1, AgentVerb::Invoke, method("decrement"))]],
+        vec![vec![check(1, AgentVerb::Invoke, method("decrement"))].into()],
     );
     assert_eq!(
         denied.decide(&invoke(1)).await,
@@ -261,7 +262,7 @@ async fn under_impersonation_the_admin_is_the_caller_and_the_target_account_deci
     assert_eq!(auth.entry_caller("golem"), caller());
     let authorizer = CompatibilityAuthorizer::new(
         auth,
-        vec![vec![check(1, AgentVerb::Invoke, method("increment"))]],
+        vec![vec![check(1, AgentVerb::Invoke, method("increment"))].into()],
     );
     assert!(matches!(
         authorizer.decide(&request).await,
@@ -280,7 +281,7 @@ fn without_impersonation_the_account_asks_on_its_own_authority() {
 async fn todays_error_is_the_error_of_the_first_refused_check() {
     let auth = user(&["agent(acme/shop/prod/cart/*) @ acme : invoke : increment"]);
     let refused = check(1, AgentVerb::Invoke, method("decrement"));
-    let authorizer = CompatibilityAuthorizer::new(auth.clone(), vec![vec![refused.clone()]]);
+    let authorizer = CompatibilityAuthorizer::new(auth.clone(), vec![vec![refused.clone()].into()]);
     let request = invoke(1);
     assert!(matches!(
         authorizer.decide(&request).await,
@@ -296,7 +297,7 @@ async fn todays_error_is_the_error_of_the_first_refused_check() {
 async fn todays_error_names_a_check_that_does_not_belong_to_its_part() {
     let auth = user(&["agent(acme/shop/prod/cart/*) @ acme : * : *"]);
     let delete = check(1, AgentVerb::Delete, AgentResourcePattern::Empty);
-    let authorizer = CompatibilityAuthorizer::new(auth, vec![vec![delete.clone()]]);
+    let authorizer = CompatibilityAuthorizer::new(auth, vec![vec![delete.clone()].into()]);
     assert_eq!(
         authorizer.todays_error(&invoke(1)).to_string(),
         AuthorizationError::PermissionNotAllowed(Box::new(delete)).to_string()

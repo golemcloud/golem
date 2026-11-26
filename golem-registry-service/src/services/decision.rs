@@ -45,7 +45,7 @@ impl Decisions {
         match operation {
             Ok(operation) => {
                 let request = auth.entry_request(self.golem_issuer.to_string(), operation);
-                decide_with_todays_checks(auth, request, vec![vec![check]]).await
+                decide_with_todays_checks(auth, request, vec![vec![check].into()]).await
             }
             Err(shape) => {
                 error!("Registry operation has no valid decision request: {shape}");

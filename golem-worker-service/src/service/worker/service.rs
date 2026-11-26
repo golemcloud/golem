@@ -67,7 +67,8 @@ use golem_common::model::card::owner::{AgentOwnerLeafPattern, AgentOwnerPattern}
 use golem_common::model::card::{
     AgentInvocationIdPattern, AgentMethodName, AgentPluginName, AgentResourcePattern, AgentVerb,
     CardId, ClassPermissionTarget, FilesystemPathPattern, FilesystemResourcePattern,
-    FilesystemVerb, OplogResourcePattern, OplogVerb, PermissionTarget, StoredCard, exec_check,
+    FilesystemVerb, OplogResourcePattern, OplogVerb, PartChecks, PermissionTarget, StoredCard,
+    exec_check,
 };
 use golem_common::model::component::{
     CanonicalFilePath, ComponentId, ComponentRevision, PluginPriority,
@@ -670,7 +671,7 @@ impl AgentAccess {
         &self,
         agent: DecisionAgentTarget,
         owner: &AgentOwnerPattern,
-    ) -> Result<(Operation, Vec<Vec<PermissionTarget>>), OperationShapeError> {
+    ) -> Result<(Operation, Vec<PartChecks>), OperationShapeError> {
         let checks = self
             .permissions
             .iter()
@@ -683,7 +684,7 @@ impl AgentAccess {
                     self.resource.clone(),
                     DecisionTarget::Agent(agent),
                 )?,
-                vec![checks],
+                vec![checks.into()],
             )),
             AccessTarget::Promise(promise_id) => Ok((
                 Operation::single(
@@ -694,7 +695,7 @@ impl AgentAccess {
                         owner: PromiseOwner::Agent(agent),
                     }),
                 )?,
-                vec![checks],
+                vec![checks.into()],
             )),
             AccessTarget::Invocation(invocation_id) => Ok((
                 Operation::single(
@@ -705,7 +706,7 @@ impl AgentAccess {
                         owner: InvocationOwner::Agent(agent),
                     }),
                 )?,
-                vec![checks],
+                vec![checks.into()],
             )),
             AccessTarget::HostedExec { tool, command } => {
                 let tool = ToolTarget {
@@ -714,7 +715,10 @@ impl AgentAccess {
                 };
                 Ok((
                     Operation::hosted_exec(agent, tool, command.clone())?,
-                    vec![vec![exec_check(owner.clone())], Vec::new()],
+                    vec![
+                        vec![exec_check(owner.clone())].into(),
+                        PartChecks::NotCheckedToday,
+                    ],
                 ))
             }
         }
@@ -973,7 +977,7 @@ impl WorkerService {
         auth: &AuthCtx,
         access: &AgentAccess,
         operation: Operation,
-        checks: Vec<Vec<PermissionTarget>>,
+        checks: Vec<PartChecks>,
     ) -> Result<Grantors, AuthorizationError> {
         let request =
             access.decision_request(operation, |operation| self.entry_request(auth, operation));
@@ -1088,7 +1092,7 @@ impl WorkerService {
             });
         let result = match operation {
             Ok(operation) if access.operation != CatalogOperation::ViewAgent => self
-                .decide(auth_ctx, access, operation, vec![checks])
+                .decide(auth_ctx, access, operation, vec![checks.into()])
                 .await
                 .map(|_| ()),
             other => {
@@ -11248,16 +11252,28 @@ mod tests {
         ]
     }
 
-    /// Asserts that each check of `checks` is a check of its part of `operation`. A check that is
-    /// not would deny every caller of its call site.
+    /// Asserts that each part of `operation` has checks, and that each check is a check of its
+    /// part. A part without a check, or with a check of another part, would deny every caller of
+    /// its call site. Only the tool part of a hosted exec is not checked today.
     fn assert_checks_belong_to_parts(
         site: &str,
         operation: &golem_common::model::authority::Operation,
-        checks: &[Vec<PermissionTarget>],
+        checks: &[PartChecks],
     ) {
+        use golem_common::model::authority::{CatalogOperation, ToolVerb, Verb};
+
         let parts = operation.parts();
         assert_eq!(parts.len(), checks.len(), "{site}");
         for (part, part_checks) in parts.iter().zip(checks) {
+            let PartChecks::Checks(part_checks) = part_checks else {
+                assert!(
+                    operation.name() == CatalogOperation::HostedExec
+                        && part.verb == Verb::Tool(ToolVerb::Invoke),
+                    "{site}: only the tool part of a hosted exec is not checked today"
+                );
+                continue;
+            };
+            assert!(!part_checks.is_empty(), "{site}: a part without a check");
             for check in part_checks {
                 assert!(
                     golem_common::model::card::check_belongs_to_part(part.verb, check),
@@ -11370,11 +11386,11 @@ mod tests {
         assert_checks_belong_to_parts(
             "tool call on a fresh owner",
             &tool_call,
-            &[vec![fresh_owner_check]],
+            &[vec![fresh_owner_check].into()],
         );
 
         let listing = super::list_agents(&component).unwrap();
         let type_check = super::agent_type_check(&component, &agent_type);
-        assert_checks_belong_to_parts("list agents", &listing, &[vec![type_check]]);
+        assert_checks_belong_to_parts("list agents", &listing, &[vec![type_check].into()]);
     }
 }

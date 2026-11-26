@@ -27,18 +27,34 @@ use crate::base_model::authority::{
     self as decision, Decision, Denial, GrantorCard, Grantors, Operation, OperationPart, Verb,
 };
 
+/// Today's card checks for one part of an operation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PartChecks {
+    /// The card checks that the call site makes for the part today. An empty list denies.
+    Checks(Vec<PermissionTarget>),
+    /// The entry point checks nothing for the part today, as for the tool part of a hosted exec.
+    NotCheckedToday,
+}
+
+impl From<Vec<PermissionTarget>> for PartChecks {
+    fn from(checks: Vec<PermissionTarget>) -> Self {
+        Self::Checks(checks)
+    }
+}
+
 /// Decides `operation` from today's checks. `checks[i]` holds the card checks that the call site
 /// makes today for part `i` of the operation.
 ///
-/// A part is allowed when each of its checks belongs to the part (`check_belongs_to_part`) and
-/// `surface` allows it. A part with no check is allowed: the entry point checks nothing for it
-/// today. The operation is allowed when every part is allowed; otherwise the denial is the denial
-/// of the first part that fails, in the operation's order. An error inside the evaluation, or a
-/// check list that does not match the parts, denies.
+/// A part is allowed when it has checks, each of its checks belongs to the part
+/// (`check_belongs_to_part`) and `surface` allows it. A part that today's code does not check
+/// (`PartChecks::NotCheckedToday`) is allowed. The operation is allowed when every part is
+/// allowed; otherwise the denial is the denial of the first part that fails, in the operation's
+/// order. An error inside the evaluation, an empty check list, or a check list that does not
+/// match the parts, denies.
 pub fn decide_with_checks(
     surface: &EffectiveSurface,
     operation: &Operation,
-    checks: &[Vec<PermissionTarget>],
+    checks: &[PartChecks],
 ) -> Decision {
     let parts = operation.parts();
     if checks.len() != parts.len() {
@@ -49,6 +65,9 @@ pub fn decide_with_checks(
 
     let mut cards: Vec<CardId> = Vec::new();
     for (part, part_checks) in parts.iter().zip(checks) {
+        let PartChecks::Checks(part_checks) = part_checks else {
+            continue;
+        };
         match allowing_cards(surface, part.verb, part_checks) {
             Ok(Some(allowing)) => {
                 for card in allowing {
@@ -208,13 +227,16 @@ pub fn checks_allow(surface: &EffectiveSurface, verb: Verb, checks: &[Permission
     matches!(allowing_cards(surface, verb, checks), Ok(Some(_)))
 }
 
-/// The cards that allow every check of a part with `verb`, or `None` when one check does not
-/// belong to the part or is not allowed.
+/// The cards that allow every check of a part with `verb`, or `None` when the part has no check,
+/// or one check does not belong to the part or is not allowed.
 fn allowing_cards(
     surface: &EffectiveSurface,
     verb: Verb,
     checks: &[PermissionTarget],
 ) -> Result<Option<Vec<CardId>>, CardAlgebraError> {
+    if checks.is_empty() {
+        return Ok(None);
+    }
     let mut cards = Vec::new();
     for check in checks {
         if !check_belongs_to_part(verb, check) || !surface.authorize(check)? {
