@@ -2570,8 +2570,27 @@ dependencies = ["wit"]
 description = "Builds the built-in TypeScript tool component"
 run_task = "builtin-javascript-typescript-build"
 
+[tasks.build-yq-tool]
+extend = "builtin-artifact-build"
+private = false
+description = "Builds the optional built-in yq tool component from Golem's yq fork"
+script_runner = "@duckscript"
+script = '''
+golem = get_env GOLEM_CLI
+if is_empty ${golem}
+    exec --fail-on-error cargo build -p golem-cli --bin golem-cli
+    golem = set "${CARGO_MAKE_CRATE_TARGET_DIRECTORY}/debug/golem-cli"
+end
+cd builtin-tools/yq
+# Relative to the tool's go.mod, so the build keeps its checked-in replace directives.
+set_env GOLEM_GO_PATH ../../sdks/go/golem
+exec --fail-on-error ${golem} build -P release --force-build --yes
+exec --fail-on-error ${golem} exec -P release copy
+cd ../..
+'''
+
 [tasks.build-builtin-tools]
-dependencies = ["build-filesystem-tools", "build-git-tool", "build-javascript-typescript-tools", "build-web-fetch", "build-bash-tool", "build-python-tool"]
+dependencies = ["build-filesystem-tools", "build-git-tool", "build-javascript-typescript-tools", "build-web-fetch", "build-bash-tool", "build-python-tool", "build-yq-tool"]
 description = "Builds all built-in tool components"
 
 [tasks.ensure-builtin-artifacts]
@@ -2946,8 +2965,16 @@ elif equals ${component} python
     licenses = set builtin-tools/python/licenses
     source_notice = set builtin-tools/python/SOURCE.md
     sbom = set ""
+elif equals ${component} yq
+    build_task = set build-yq-tool
+    wasm = set builtin-tools/yq.wasm
+    artifact_id = set yq
+    exports_json = set "{\"tools\":[\"yq@0.1.0\"]}"
+    licenses = set builtin-tools/yq/licenses
+    source_notice = set builtin-tools/yq/SOURCE.md
+    sbom = set ""
 else
-    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, git-tool, javascript-tools, typescript-tools, web-fetch, bash, python"
+    trigger_error "BUILTIN_COMPONENT must be one of: otlp-exporter, filesystem-tools, git-tool, javascript-tools, typescript-tools, web-fetch, bash, python, yq"
 end
 
 skip_build = get_env BUILTIN_SKIP_BUILD

@@ -1,6 +1,6 @@
 # Built-in artifacts
 
-`builtin-artifacts.json` lists the eight components, output paths, build tasks,
+`builtin-artifacts.json` lists the nine components, output paths, build tasks,
 and source inputs. Development builds use local files. The cargo-make task
 conditions compare source modification times with each output and ignore
 Git-ignored build directories. `cargo make ensure-builtin-artifacts` builds missing or changed

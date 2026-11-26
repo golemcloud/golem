@@ -49,6 +49,11 @@ filesystem. See [its CLI contract and limitations](python/README.md). Its descri
 pin use the same registry provisioning path as the other built-ins. The new releases remain
 unpublished during team review; CI artifact downloads stay red until publication.
 
+The yq tool is implemented in Go under `builtin-tools/yq/` and built with the release preset of
+`builtin-tools/yq/golem.yaml` into `builtin-tools/yq.wasm` (`cargo make build-yq-tool`). It is the
+first [optional built-in](#optional-built-in-tools). The `yq` component provides the `yq` tool:
+Mike Farah's yq v4.54.3 from Golem's fork `golemcloud/yq`; see [its contract and source](yq/README.md).
+
 The Git tool is implemented in TypeScript under `builtin-tools/git/`, backed by pinned
 `isomorphic-git`, and built into `builtin-tools/git-tool.wasm`. The source implements local
 `init`, `status`, `diff`, `log`, `branch`, `add`, `commit`, `checkout`, and repository-local `config`,
