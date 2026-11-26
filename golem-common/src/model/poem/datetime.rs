@@ -120,8 +120,13 @@ macro_rules! datetime_object {
             impl poem_openapi::types::ToJSON for Original {
                 fn to_json(&self) -> Option<serde_json::Value> {
                     let value = serde_json::to_value(self).expect("domain object must serialize");
-                    let boundary: $name = serde_json::from_value(value).expect("OpenAPI boundary must match the domain object");
-                    poem_openapi::types::ToJSON::to_json(&boundary)
+                    // The boundary only adapts timestamp fields. Stored data can fail today's
+                    // validation (for example a name written before a stricter rule), so a failed
+                    // conversion returns the domain's own JSON instead of panicking.
+                    match <$name as serde::Deserialize>::deserialize(&value) {
+                        Ok(boundary) => poem_openapi::types::ToJSON::to_json(&boundary),
+                        Err(_) => Some(value),
+                    }
                 }
             }
             impl poem_openapi::types::ParseFromXML for Original {

@@ -67,7 +67,7 @@ pub fn tool_metadata(export: &CompiledMcpToolExport) -> Result<Tool, ErrorData> 
 fn invocation_auth(
     deployment: &CompiledMcp,
     export: &CompiledMcpToolExport,
-    key: &IdempotencyKey,
+    owner: AgentId,
 ) -> AuthCtx {
     let target = PermissionTarget::Agent(ClassPermissionTarget {
         owner: AgentOwnerPattern::Agent {
@@ -75,14 +75,7 @@ fn invocation_auth(
             application: deployment.application_name.clone(),
             environment: deployment.environment_name.clone(),
             component: export.owner_component_name.clone(),
-            agent: AgentOwnerLeafPattern::agent(
-                AgentId::external_tool_owner(
-                    deployment.environment_id,
-                    export.owner_component_id,
-                    key,
-                ),
-                None,
-            ),
+            agent: AgentOwnerLeafPattern::agent(owner, None),
         },
         verb: Some(AgentVerb::Invoke),
         resource: AgentResourcePattern::Any,
@@ -118,10 +111,20 @@ pub async fn invoke(
         .definition
         .canonical_command_path(&export.command_path)
         .ok_or_else(|| invalid("the exported command path does not name a command".to_string()))?;
-    let owner_key = request_key.owner_key(
-        &golem_common::model::InvocationOperation::tool_operation(&export.tool_name, &command_path),
-    );
-    let auth = invocation_auth(deployment, export, &owner_key);
+    let component = worker_service
+        .creating_component(deployment.environment_id, Some(export.owner_component_id))
+        .await
+        .map_err(|e| invalid(format!("native tool component resolution failed: {e:?}")))?;
+    let (owner, _) = worker_service
+        .standalone_tool_owner(
+            &component,
+            export.tool_name.as_str(),
+            &command_path,
+            &request_key,
+        )
+        .await
+        .map_err(|e| invalid(format!("native tool owner resolution failed: {e:?}")))?;
+    let auth = invocation_auth(deployment, export, owner);
     let input = PublicTypedValue {
         graph: input.graph().clone(),
         value: encode_public_schema_value(
@@ -517,6 +520,7 @@ mod tests {
 
     fn empty_session() -> StartedPublicAgentSession {
         StartedPublicAgentSession {
+            standalone_tool: false,
             responses: Box::pin(stream::pending()),
             initial_request: InvocationRequest {
                 request: Some(invocation_request::Request::Start(InvocationStart {
@@ -1210,7 +1214,7 @@ mod tests {
 
     #[test]
     #[timeout("10s")]
-    async fn native_invoke_uses_a_supplied_idempotency_key() {
+    async fn native_invoke_without_a_scope_uses_distinct_tool_owners() {
         use crate::mcp::invoke::test_support::InvocationHarness;
         use golem_common::model::agent::AgentMode;
         use golem_common::model::deployment::DeploymentRevision;
@@ -1233,10 +1237,7 @@ mod tests {
         .await;
 
         assert!(refused.is_err(), "the harness refuses the session");
-        assert_eq!(
-            harness.native_session_keys(),
-            [Arc::from(key.value.clone())]
-        );
+        assert_eq!(harness.native_session_keys().len(), 1);
         let (input, stdin) = export.parse_arguments(Default::default()).unwrap();
         assert!(
             invoke(
@@ -1259,5 +1260,17 @@ mod tests {
         assert!(matches!(first, InvocationRequestKey::Unkeyed(_)));
         assert_ne!(first, second);
         assert_ne!(starts[0].target, starts[1].target);
+        for start in starts {
+            let InvocationRequestKey::Unkeyed(uuid) =
+                InvocationRequestKey::try_from(start.request_key.clone().unwrap()).unwrap()
+            else {
+                panic!("MCP must be unkeyed")
+            };
+            assert_eq!(
+                start.idempotency_key.as_ref().unwrap().value,
+                uuid.to_string()
+            );
+            assert!(start.target_agent_id().unwrap().value.is_some());
+        }
     }
 }

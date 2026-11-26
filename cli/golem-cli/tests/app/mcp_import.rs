@@ -11,6 +11,71 @@ use test_r::{test, timeout};
 
 #[test]
 #[timeout("5 minutes")]
+async fn standalone_host_result_is_readable_on_tag_zero() {
+    let mut ctx = TestContext::new();
+    ctx.enable_native_conformance_tool();
+    ctx.start_server().await;
+    let wasm = crate::workspace_path()
+        .join("test-components/golem_it_tool_streaming_rust_caller_release.wasm");
+    fs::write_str(
+        ctx.cwd_path_join("golem.yaml"),
+        formatdoc! {r#"
+        manifestVersion: {version}
+        app: tag-zero-results
+        environments:
+          local:
+            server: local
+            tools:
+              defaults: []
+        components:
+          tag-zero-results:owner:
+            componentWasm: {wasm}
+            tools:
+              native-conformance: {{}}
+        "#, version = versions::sdk::MANIFEST, wasm = wasm.display()},
+    )
+    .unwrap();
+    assert!(ctx.cli([flag::YES, cmd::DEPLOY]).await.success_or_dump());
+    let output = ctx
+        .cli_with_input(
+            [
+                flag::YES,
+                "--format",
+                "json",
+                "tool",
+                "invoke",
+                "--component",
+                "tag-zero-results:owner",
+                "--idempotency-key",
+                "tag-zero-read-control",
+                "native-conformance",
+                "--",
+                "structured",
+                "host-asymmetric",
+                "17",
+            ],
+            &[],
+        )
+        .await;
+    assert!(output.success(), "{}", output.stderr_text());
+    let document: Value = serde_json::from_slice(output.stdout()).unwrap();
+    let receipt = &document["response"];
+    let owner: golem_common::model::AgentId =
+        serde_json::from_value(receipt["agentId"].clone()).unwrap();
+    assert!(owner.type_id().is_none(), "{receipt}");
+    let id = format!("{owner}.{}", receipt["idempotencyKey"].as_str().unwrap());
+    let found = ctx
+        .cli(["--format", "json", "invocation", "get", &id])
+        .await;
+    assert!(found.success_or_dump());
+    let found = found.stdout_json::<Value>().pop().unwrap();
+    assert_eq!(found["summary"]["invocationId"], id);
+    assert_eq!(found["result"]["result"], receipt["result"]);
+    assert!(found.to_string().contains("host-asymmetric"), "{found}");
+}
+
+#[test]
+#[timeout("5 minutes")]
 async fn mcp_import_selectors_target_the_matching_deployment() {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();

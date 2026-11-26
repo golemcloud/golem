@@ -15,14 +15,10 @@
 //! Policy for durable outgoing HTTP: transparent retries,
 //! Golem-managed headers and Range-based response-body resumption.
 
-use crate::durable_host::DurableWorkerCtx;
+use crate::durable_host::IdempotencyKeyPosition;
 use crate::durable_host::durability::{DurableExecutionState, HostFailureKind};
-use crate::workerctx::WorkerCtx;
-use golem_common::model::invocation_context::SpanId;
 use golem_common::model::oplog::OplogIndex;
 use golem_common::model::oplog::types::SerializableHttpErrorCode;
-use golem_service_base::error::worker_executor::WorkerExecutorError;
-use golem_service_base::headers::TraceContextHeaders;
 use http::{HeaderName, HeaderValue};
 use wasmtime_wasi_http::FieldMap;
 
@@ -173,40 +169,19 @@ pub(crate) fn classify_resume_response(
     }
 }
 
-/// Computes the Golem-managed headers to inject into an outgoing HTTP request:
-/// the trace-context headers of the request's invocation span (when
-/// `forward_trace_context_headers` is enabled) and an `idempotency-key`
-/// derived from the send's own `Start` index (when
-/// `set_outgoing_http_idempotency_key` is enabled and the guest did not set
-/// the header itself). The send's `Start` index is stable across live execution
-/// and replay, so a retried send reuses the same key.
-pub(crate) fn golem_managed_http_headers<Ctx: WorkerCtx>(
-    ctx: &mut DurableWorkerCtx<Ctx>,
-    span_id: &SpanId,
-    start_index: OplogIndex,
+/// Adds a key from the reserved position unless the guest supplied one or injection is disabled.
+pub(crate) fn golem_managed_http_headers(
+    mut headers: Vec<(String, String)>,
+    set_outgoing_http_idempotency_key: bool,
     guest_has_idempotency_key: bool,
-) -> Result<Vec<(String, String)>, WorkerExecutorError> {
-    let mut headers = Vec::new();
-    if ctx.state.forward_trace_context_headers {
-        let invocation_context =
-            ctx.state
-                .invocation_state()
-                .invocation_context
-                .get_stack(span_id)
-                .map_err(|err| {
-                    WorkerExecutorError::runtime(format!(
-                        "span {span_id} missing from the invocation context while injecting trace context headers: {err}"
-                    ))
-                })?;
-        let trace_context_headers =
-            TraceContextHeaders::from_invocation_context(invocation_context);
-        headers.extend(trace_context_headers.to_raw_headers_map());
-    }
-    if ctx.state.set_outgoing_http_idempotency_key && !guest_has_idempotency_key {
-        let idempotency_key = ctx.derive_idempotency_key(start_index);
+    start_index: OplogIndex,
+    key_position: &IdempotencyKeyPosition,
+) -> Vec<(String, String)> {
+    if set_outgoing_http_idempotency_key && !guest_has_idempotency_key {
+        let idempotency_key = key_position.derive(start_index);
         headers.push(("idempotency-key".to_string(), idempotency_key.to_string()));
     }
-    Ok(headers)
+    headers
 }
 
 /// Applies the Golem-managed headers to a request's header map, replacing any

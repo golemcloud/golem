@@ -3323,6 +3323,7 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             initial_active_plugins: BTreeSet::from_iter([plugin(0)]),
             instance_id: Uuid::parse_str("33a5c8d4-f05e-4e23-b982-f4d413e181cb").unwrap(),
             never_live: true,
+            standalone_tool: None,
         }),
         PublicOplogEntry::Start(StartParams {
             timestamp: timestamp(),
@@ -3800,6 +3801,17 @@ fn sample_public_oplog_entries() -> Vec<golem_common::model::oplog::PublicOplogE
             ..create.clone()
         }));
     }
+    entries.push(PublicOplogEntry::Create(CreateParams {
+        owner_kind: golem_common::model::agent::OwnerKind::StandaloneTool,
+        agent_type_name: None,
+        standalone_tool: Some(golem_common::model::oplog::PublicStandaloneToolInvocation {
+            tool_name: golem_common::model::tool::ToolName::try_from("weather").unwrap(),
+            command_path: vec!["forecast".to_string()],
+            invocation_id: InvocationId(Uuid::from_u128(4)),
+            caller: account_caller(),
+        }),
+        ..create
+    }));
     entries
 }
 
@@ -4513,6 +4525,7 @@ fn arb_tool_invoke_result() -> OutputDocumentStrategy {
         .prop_map(|key| {
             to_structured_output_value(crate::model::tool_invoke::ToolInvokeView {
                 response: NativeToolInvocationResponse {
+                    invocation_id: format!("weather.{}", uuid::Uuid::from_u128(key)),
                     agent_id: AgentId::from_parts(7, 1).0,
                     idempotency_key: uuid::Uuid::from_u128(key),
                     result: None,
@@ -4552,6 +4565,13 @@ fn arb_tool_invoke_session_result() -> OutputDocumentStrategy {
                 target: PublicNativeToolTarget::Component {
                     component_id: uuid::Uuid::nil(),
                 },
+                invocation_id: golem_common::model::OwnedInvocationId::new(
+                    golem_common::model::InvocationOwner::Tool(
+                        golem_common::model::tool::ToolName::try_from("tool").unwrap(),
+                    ),
+                    InvocationId(uuid::Uuid::from_u128(key)),
+                )
+                .to_string(),
                 idempotency_key: InvocationId(uuid::Uuid::from_u128(key)),
                 result: if success {
                     PublicInvocationResult::ToolSuccess {
@@ -7167,14 +7187,17 @@ fn arb_manifest_build_command() -> BoxedStrategy<crate::model::app_raw::BuildCom
                 )
             }
         ),
-        (arb_small_string(), arb_small_string()).prop_map(|(preinitialize_js, into)| {
-            crate::model::app_raw::BuildCommand::PreinitializeJs(
-                crate::model::app_raw::PreinitializeJs {
-                    preinitialize_js,
-                    into,
-                },
-            )
-        }),
+        (arb_small_string(), arb_small_string(), arb_small_string()).prop_map(
+            |(preinitialize_js, module, into)| {
+                crate::model::app_raw::BuildCommand::PreinitializeJs(
+                    crate::model::app_raw::PreinitializeJs {
+                        preinitialize_js,
+                        module,
+                        into,
+                    },
+                )
+            }
+        ),
     ]
     .boxed()
 }

@@ -856,7 +856,7 @@ func (s *session) handleText(c *sessionConn, data []byte) error {
 	}
 	switch kind {
 	case "invocationAccepted", "invocationReady":
-		if err := m.members(kind, []string{"attemptId", "agentId", "idempotencyKey", "mappings", "sessionToken"}); err != nil {
+		if err := m.members(kind, []string{"attemptId", "agentId", "idempotencyKey", "mappings", "sessionToken"}, "invocationId"); err != nil {
 			return err
 		}
 		return s.accept(c, m, kind == "invocationReady")

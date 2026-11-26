@@ -323,6 +323,7 @@ struct StatusState<Ctx: WorkerCtx> {
     fingerprint: AgentFingerprint,
     agent_mode: AgentMode,
     created_by: AccountId,
+    standalone_invocation_id: Option<InvocationId>,
     oplog: Arc<dyn Oplog>,
     /// The published worker status. Written only by this task (and during worker construction,
     /// before the actor exists); read lock-free everywhere else.
@@ -388,6 +389,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
         fingerprint: AgentFingerprint,
         agent_mode: AgentMode,
         created_by: AccountId,
+        standalone_invocation_id: Option<InvocationId>,
         oplog: Arc<dyn Oplog>,
         last_known_status: Arc<ArcSwap<AgentStatusRecord>>,
         detached: Arc<AtomicBool>,
@@ -418,6 +420,7 @@ impl<Ctx: WorkerCtx> WorkerStateActor<Ctx> {
             fingerprint,
             agent_mode,
             created_by,
+            standalone_invocation_id,
             oplog,
             last_known_status,
             invocation_start_status: arc_swap::ArcSwapOption::empty(),
@@ -1535,6 +1538,14 @@ impl<Ctx: WorkerCtx> StatusState<Ctx> {
             }
             self.schedule_oplog_archive_if_needed(&old_status, &updated_status)
                 .await;
+            super::retention::schedule(
+                &self.deps,
+                &self.owned_agent_id,
+                self.fingerprint,
+                self.standalone_invocation_id,
+                &updated_status,
+            )
+            .await;
             true
         } else {
             false

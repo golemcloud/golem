@@ -101,6 +101,32 @@ async fn sse_source_without_ids_fails_explicitly_after_a_crash_mid_read(
     _tracing: &Tracing,
     #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
 ) -> anyhow::Result<()> {
+    recover_event_source(last_unique_id, deps, http_tests, None).await
+}
+
+#[test]
+#[test_r::timeout("3m")]
+async fn incomplete_response_body_recovery_preserves_guest_key(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    _tracing: &Tracing,
+    #[tagged_as("http_tests")] http_tests: &PrecompiledComponent,
+) -> anyhow::Result<()> {
+    recover_event_source(
+        last_unique_id,
+        deps,
+        http_tests,
+        Some("event-read-order-42"),
+    )
+    .await
+}
+
+async fn recover_event_source(
+    last_unique_id: &LastUniqueId,
+    deps: &WorkerExecutorTestDependencies,
+    http_tests: &PrecompiledComponent,
+    guest_key: Option<&str>,
+) -> anyhow::Result<()> {
     let context = TestContext::new(last_unique_id);
     let executor = start(deps, &context).await?;
 
@@ -127,6 +153,7 @@ async fn sse_source_without_ids_fails_explicitly_after_a_crash_mid_read(
         .await?;
     let mut env = HashMap::new();
     env.insert("PORT".to_string(), port.to_string());
+    env.extend(guest_key.map(|key| ("SSE_IDEMPOTENCY_KEY".to_string(), key.to_string())));
     let agent_id = agent_key!("HttpClient4");
     let worker_id = executor
         .start_agent_with(&component.id, agent_id.clone(), env, Vec::new())
@@ -214,6 +241,9 @@ async fn sse_source_without_ids_fails_explicitly_after_a_crash_mid_read(
         "the resend asks to continue after the delivered bytes"
     );
     assert!(requests[0].idempotency_key.is_some());
+    if let Some(key) = guest_key {
+        assert_eq!(requests[0].idempotency_key.as_deref(), Some(key));
+    }
     assert_eq!(
         requests[1].idempotency_key, requests[0].idempotency_key,
         "the resend is the recorded request, not a new one"

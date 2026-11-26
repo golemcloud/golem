@@ -43,7 +43,7 @@ cursor|string|No|-
 }
 ```
 
-## Find the invocations that the caller started on an agent with an idempotency key
+## Find the invocations that the caller started with an idempotency key
 
 Path|Method|Protected
 ---|---|---
@@ -54,12 +54,16 @@ command the agent ran, including those a later revision removed. A removed metho
 found only while one of its invocations has the method name outside an external payload;
 otherwise pass `operation`. A caller without a scope, and a key used through an HTTP
 route, find nothing. No match is `404`.
+With `tool`, match each currently deployed command, or only `command` when given.
+With both `agent` and `tool`, match hosted tool invocations on that agent.
 
 **Query Parameters**
 
 Name|Type|Required|Description
 ---|---|---|---
-agent|string|Yes|The agent ID
+agent|string|No|The agent ID
+tool|string|No|The tool name; with an agent, finds invocations hosted on that agent
+command|string|No|Only this command path; without it, finds every command of the tool
 operation|string|No|Only the invocation of this method name or `tool:<tool>/<command path>`
 
 **Example Response JSON**

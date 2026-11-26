@@ -1,11 +1,13 @@
 name: streaming
 benchmarks:
   - name: streaming-tool
+    version: 1
     iterations: 3
     clusterSize: [1]
     size: [1, 10]
     length: [512]
   - name: streaming-rpc
+    version: 1
     iterations: 3
     clusterSize: [1]
     size: [1, 10]

@@ -306,9 +306,15 @@ journal. Replaying changed bytes, terminals, channel identities, or structured r
 An `ExternalTool` result invalidates read-only method caches even when it contains a tool error:
 the body may have mutated owner state before returning that error.
 
-Virtual owners persist `OwnerKind::EphemeralExternalTool` and use a reserved name derived from the
-idempotency key, scoped by the actual component and environment. They use the resolved component
-baseline, never an arbitrary exported agent schema. `RunningWorker::create_instance` reads owner
+Tool owners use the resolved component baseline, never an arbitrary exported agent schema. A
+component-implemented standalone invocation persists `OwnerKind::StandaloneTool` (wire value 3)
+and a non-reserved tool type tag. Its T3 address derives from the environment, registered tool
+type ID and invocation's unique part; that unique part is also its `InvocationId`. `Create`
+records the tool name, command path, invocation ID and caller. The accepted pending payload pins
+the activation, and `Create` pins the component revision. Another component or argument set at
+the same address is an idempotency conflict, not another invocation.
+
+`RunningWorker::create_instance` reads owner
 metadata and instantiates that component through `InstanceHost::instantiate`, with normal executable,
 linear-memory, filesystem and concurrent-agent admission. Component/core initializers run, but no
 agent type or constructor parameters are selected and no `AgentInitialization` is queued.
@@ -316,7 +322,25 @@ Ephemeral preparation replays initialization only for a resolved typed agent own
 because the component exports agent schemas. The pending external-tool invocation starts once,
 through the normal live queue after preparation.
 
-Virtual owners follow ordinary ephemeral admission, unloading and retention: one accepted key,
+Standalone owners use durable mode, the normal recovery index, pending queue and scheduled wakes.
+Their primary Store and tool bodies reconstruct after loss; completed host effects replay from
+the oplog. Pending and scheduled invocations can be cancelled. Fork, update, revert and snapshots
+are refused; management reports `NotAnAgent` for both kinds of tool owner.
+
+A permanent primary startup failure can leave the accepted standalone invocation without an
+`AgentInvocationStarted` entry. Public invocation summaries report that invocation as failed,
+and result reads expose the recorded startup failure, before and after reconstruction. The status
+fold retains the failure's timestamp and oplog index, so later hints do not move its summary.
+Ordinary agent recovery failures leave their queued invocations pending.
+
+Finished standalone owners schedule `DeleteFinishedInvocation` under an address-derived UUIDv5
+schedule ID, and loading a finished owner repairs that timer. Delivery checks the fingerprint
+and finish timestamp plus the current `standalone_tool_invocation_retention` (default seven days),
+then uses normal `Worker::delete`. A larger lifetime atomically reschedules the claimed action;
+a smaller lifetime does not pull existing timers forward. An archive action on a deleted owner
+does nothing.
+
+Host and MCP-imported tools keep `OwnerKind::EphemeralExternalTool`, tag 0 and ordinary ephemeral admission, unloading and retention: one accepted key,
 concurrent same-key convergence, and no restart of accepted incomplete work after Store or executor
 loss. During core initialization as well as tool execution, the invocation loop turns recovery
 decisions into a terminal interruption and closes the owner rather than starting a replacement Store.

@@ -153,7 +153,12 @@ impl<Ctx: WorkerCtx> Worker<Ctx> {
         }
         crate::metrics::workers::record_invocation_listing(results.len());
 
-        Ok(merge_invocations(&status, results, Timestamp::now_utc()))
+        Ok(merge_invocations(
+            &status,
+            results,
+            Timestamp::now_utc(),
+            self.standalone_invocation_id(),
+        ))
     }
 
     /// The listed invocation with `key`, or `None` when the agent has none.
@@ -402,6 +407,7 @@ pub(crate) fn merge_invocations(
     status: &AgentStatusRecord,
     mut results: HashMap<InvocationId, InvocationResultPosition>,
     now: Timestamp,
+    standalone_invocation_id: Option<InvocationId>,
 ) -> Vec<InvocationListEntry> {
     let mut entries: Vec<InvocationListEntry> = Vec::new();
     if let Some(running) = &status.running
@@ -424,6 +430,22 @@ pub(crate) fn merge_invocations(
     }
     for (key, position) in results {
         entries.push(InvocationListEntry::of_result(key, position));
+    }
+    // A standalone owner's permanent startup failure can precede the invocation's start.
+    // Unlike an ordinary agent, it cannot recover to execute the accepted work later.
+    if status.status == AgentStatus::Failed
+        && let Some(key) = standalone_invocation_id
+        && let Some(failed_at) = status.terminal_failure_at
+        && let Some(failure_index) = status.terminal_failure_index
+        && let Some(entry) = entries.iter_mut().find(|entry| entry.key == key)
+        && matches!(
+            entry.state,
+            InvocationState::Pending | InvocationState::Scheduled | InvocationState::Running
+        )
+    {
+        entry.state = InvocationState::Failed;
+        entry.changed_at = failed_at.rounded();
+        entry.last_change = failure_index;
     }
     entries.sort_by(|left, right| {
         right

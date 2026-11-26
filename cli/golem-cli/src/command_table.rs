@@ -453,8 +453,8 @@ pub const COMMAND_TABLE: &[CommandRow] = &[
         destructive: false,
     },
     // `agent : view` describes the tool: on the agent with `--agent`, on the
-    // component's agents with `--component`. `--lookup` checks only view; an
-    // invocation checks invoke on the agent or on the new owner. `--stdin`
+    // component's agents with `--component`. An invocation checks invoke
+    // on the agent or on the new owner. `--stdin`
     // reads a host file, or the process's stdin when its value is `-`; the
     // raw output flags write to stdout or to host files.
     CommandRow {

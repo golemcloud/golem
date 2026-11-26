@@ -26,7 +26,14 @@ impl<Ctx: WorkerCtx> Host for DurableWorkerCtx<Ctx> {
         Ok(self
             .current_invocation_id()
             .map(|invocation_id| CurrentInvocationId {
-                owner: wire::InvocationOwner::Agent((*invocation_id.agent_id()).into()),
+                owner: match invocation_id.owner() {
+                    golem_common::model::InvocationOwner::Agent(agent) => {
+                        wire::InvocationOwner::Agent((*agent).into())
+                    }
+                    golem_common::model::InvocationOwner::Tool(tool) => {
+                        wire::InvocationOwner::Tool(tool.to_string())
+                    }
+                },
                 id: invocation_id.uuid().into(),
             }))
     }
