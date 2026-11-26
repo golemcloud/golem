@@ -30,6 +30,7 @@ use aws_sdk_s3::error::{ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::types::{BucketVersioningStatus, ExpirationStatus};
 use aws_smithy_runtime_api::client::http::{SharedHttpConnector, http_client_fn};
 use aws_smithy_types::retry::RetryConfig;
+use aws_smithy_types::timeout::TimeoutConfig;
 use futures::TryStreamExt;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -37,6 +38,7 @@ use std::error::Error;
 use std::fmt::{Debug, Formatter};
 use std::ops::{Range, RangeInclusive};
 use std::sync::Arc;
+use std::time::Duration;
 use tracing::instrument::WithSubscriber;
 use tracing::subscriber::NoSubscriber;
 
@@ -318,7 +320,12 @@ impl S3Volume {
             .credentials_provider(credentials.0)
             .force_path_style(true)
             .http_client(http_client_fn(move |_, _| transport.clone()))
-            .retry_config(RetryConfig::disabled());
+            .retry_config(RetryConfig::disabled())
+            .timeout_config(
+                TimeoutConfig::builder()
+                    .operation_timeout(Duration::from_secs(60))
+                    .build(),
+            );
         if let Some(endpoint) = &config.endpoint {
             sdk = sdk.endpoint_url(endpoint.as_ref());
         }
@@ -396,7 +403,11 @@ impl S3Volume {
         .map_ok(|keys| futures::stream::iter(keys.into_vec().into_iter().map(Ok)))
         .try_flatten()
         .try_filter_map(|key| async move {
-            let (size, reference) = self.head(&key, None).await?;
+            let (size, reference) = match self.head(&key, None).await {
+                Ok(found) => found,
+                Err(VolumeError::NotFound) => return Ok(None),
+                Err(error) => return Err(error),
+            };
             Ok(reference
                 .reference()
                 .1

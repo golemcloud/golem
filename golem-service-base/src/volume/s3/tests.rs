@@ -137,6 +137,52 @@ async fn connect_sends_nothing_and_open_file_short_circuits_empty_and_past_eof_r
     server.abort();
 }
 
+#[test]
+fn open_times_out_when_the_endpoint_sends_no_response_headers() {
+    use std::time::Duration;
+    use tokio::io::AsyncReadExt;
+
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .unwrap()
+        .block_on(async {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let (client, _) = connect(config(&endpoint), credentials(), allowed()).unwrap();
+            let file = path("book.txt");
+            tokio::time::pause();
+            let started = tokio::time::Instant::now();
+            let mut open = Box::pin(client.open(&file));
+            assert!(futures::poll!(open.as_mut()).is_pending());
+            tokio::time::resume();
+            let _socket = tokio::select! {
+                received = tokio::time::timeout(Duration::from_secs(5), async {
+                    let (mut socket, _) = listener.accept().await.unwrap();
+                    let mut request = [0; 4096];
+                    assert!(socket.read(&mut request).await.unwrap() > 0);
+                    socket
+                }) => received.unwrap(),
+                result = &mut open => panic!("open completed before any response: {result:?}"),
+            };
+
+            // Do not auto-advance virtual time while the real socket exchanges the request.
+            tokio::time::pause();
+            tokio::time::advance(
+                (started + Duration::from_millis(59_500))
+                    .saturating_duration_since(tokio::time::Instant::now()),
+            )
+            .await;
+            assert!(futures::poll!(open.as_mut()).is_pending());
+            // Include one extra millisecond for the timer's resolution.
+            tokio::time::advance(Duration::from_millis(501)).await;
+            let std::task::Poll::Ready(result) = futures::poll!(open.as_mut()) else {
+                panic!("open must finish at the operation deadline");
+            };
+            assert_eq!(result.unwrap_err(), VolumeError::Unanswered);
+        });
+}
+
 fn listing(objects: &[(&str, u64)], continuation: Option<&str>) -> Response<Body> {
     let contents = objects
         .iter()
@@ -423,6 +469,69 @@ async fn placement_reads_a_non_null_version_and_keeps_lifecycle_denial_as_a_find
     assert_eq!(seen[4].headers()["if-match"], "\"old\"");
     assert!(seen[5].uri().query().unwrap().contains("lifecycle"));
     server.abort();
+}
+
+#[test]
+#[timeout("30s")]
+async fn placement_skips_a_disappeared_candidate_and_verifies_the_next_version() {
+    let (endpoint, mut requests, server) = server(vec![
+        response(
+            200,
+            "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>",
+        ),
+        listing(&[("corpus/gone", 4), ("corpus/book", 7)], None),
+        response(404, ""),
+        metadata(7, "\"old\"", "old-7"),
+        data("b", "\"old\"", "old-7", Some("bytes 0-0/7")),
+        response(200, "<LifecycleConfiguration/>"),
+    ])
+    .await;
+    let result = place(config(&endpoint), credentials(), allowed())
+        .await
+        .unwrap();
+    assert_eq!(result.version_read, VersionRead::Verified);
+    let seen = std::iter::from_fn(|| requests.try_recv().ok()).collect::<Vec<_>>();
+    assert_eq!(seen.len(), 6);
+    assert_eq!(seen[4].method(), "GET");
+    assert_eq!(seen[4].uri().path(), "/test-bucket/corpus/book");
+    assert!(seen[4].uri().query().unwrap().contains("versionId=old-7"));
+    assert_eq!(seen[4].headers()["range"], "bytes=0-0");
+    server.abort();
+}
+
+#[test]
+#[timeout("30s")]
+async fn placement_returns_no_object_only_when_all_candidates_disappear() {
+    futures::stream::iter([
+        (404, Ok(VersionRead::NoObject)),
+        (
+            403,
+            Err(VolumeError::Denied {
+                action: "GetObject".into(),
+            }),
+        ),
+        (503, Err(VolumeError::Unanswered)),
+        (200, Err(VolumeError::InvalidResponse)),
+    ])
+    .for_each(|(status, expected)| async move {
+        let (endpoint, _requests, server) = server(vec![
+            response(
+                200,
+                "<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>",
+            ),
+            listing(&[("corpus/first", 4), ("corpus/second", 7)], None),
+            response(404, ""),
+            response(status, ""),
+            response(200, "<LifecycleConfiguration/>"),
+        ])
+        .await;
+        let result = place(config(&endpoint), credentials(), allowed())
+            .await
+            .map(|placement| placement.version_read);
+        assert_eq!(result, expected, "candidate HEAD status {status}");
+        server.abort();
+    })
+    .await;
 }
 
 #[test]
