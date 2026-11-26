@@ -83,6 +83,11 @@ impl From<SchedulerStorageError> for String {
 
 #[async_trait]
 pub trait SchedulerStorage: Debug {
+    /// Whether stored actions survive an executor restart.
+    fn is_durable(&self) -> bool {
+        false
+    }
+
     async fn insert(
         &self,
         schedule_id: ScheduleId,

@@ -1487,7 +1487,8 @@ async fn stranded_stage_tokens_are_not_shard_epochs_or_transition_presence(
                     &state,
                     ShardEpoch(8),
                     ShardEpoch(6),
-                    deadline
+                    deadline,
+                    sealed_fingerprint(),
                 )
                 .await
                 .unwrap(),
@@ -1507,7 +1508,8 @@ async fn stranded_stage_tokens_are_not_shard_epochs_or_transition_presence(
                     &state,
                     ShardEpoch(8),
                     ShardEpoch(6),
-                    deadline
+                    deadline,
+                    sealed_fingerprint(),
                 )
                 .await
                 .unwrap(),
@@ -5700,6 +5702,10 @@ async fn the_blob_manifest_is_fenced_apart_from_the_compressed_level(
     );
 }
 
+fn sealed_fingerprint() -> golem_common::model::AgentFingerprint {
+    golem_common::model::AgentFingerprint(uuid::Uuid::from_u128(42))
+}
+
 fn sealed_index_state(
     mode: AgentMode,
 ) -> golem_worker_executor::storage::indexed::AgentIndexedState {
@@ -5753,9 +5759,144 @@ async fn seed_sealed_index(
             .unwrap();
     }
     storage
-        .mark_sealed("test", "seed", state, ShardEpoch(epoch))
+        .mark_sealed(
+            "test",
+            "seed",
+            state,
+            ShardEpoch(epoch),
+            sealed_fingerprint(),
+            None,
+        )
         .await
         .unwrap();
+}
+
+#[test]
+#[test_r::timeout("120s")]
+async fn indexed_seal_marker_replacement_requires_exact_superseded_marker(
+    _deps: &WorkerExecutorTestDependencies,
+    #[dimension(is)] is: &Arc<dyn GetIndexedStorage + Send + Sync>,
+) {
+    use golem_common::model::AgentFingerprint;
+    use golem_worker_executor::storage::indexed::ReleaseAgentResult;
+
+    let storage = is.get_indexed_storage().await;
+    if !storage.supports_release() {
+        return;
+    }
+    for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
+        let state = sealed_index_state(mode);
+        seed_sealed_index(&storage, &state, 6).await;
+        let original = storage
+            .observe_agent("test", "original", &state.owned_agent_id)
+            .await
+            .unwrap();
+        let marker = match mode {
+            AgentMode::Durable => original.durable_marker.unwrap(),
+            AgentMode::Ephemeral => original.ephemeral_marker.unwrap(),
+        };
+        assert_eq!(marker.fingerprint, sealed_fingerprint());
+        let replacement_fingerprint = AgentFingerprint::new();
+        let wrong_generation = golem_worker_executor::storage::indexed::SealMarker {
+            generation: Uuid::new_v4(),
+            ..marker
+        };
+        let wrong_fingerprint = golem_worker_executor::storage::indexed::SealMarker {
+            fingerprint: AgentFingerprint::new(),
+            ..marker
+        };
+        for superseded in [None, Some(wrong_generation), Some(wrong_fingerprint)] {
+            for _ in 0..2 {
+                assert!(
+                    storage
+                        .mark_sealed(
+                            "test",
+                            "refuse",
+                            &state,
+                            ShardEpoch(6),
+                            replacement_fingerprint,
+                            superseded
+                        )
+                        .await
+                        .is_err()
+                );
+                assert_eq!(
+                    storage
+                        .observe_agent("test", "unchanged", &state.owned_agent_id)
+                        .await
+                        .unwrap(),
+                    original
+                );
+            }
+        }
+        storage
+            .mark_sealed(
+                "test",
+                "replace",
+                &state,
+                ShardEpoch(6),
+                replacement_fingerprint,
+                Some(marker),
+            )
+            .await
+            .unwrap();
+        let replaced = storage
+            .observe_agent("test", "replaced", &state.owned_agent_id)
+            .await
+            .unwrap();
+        let new_marker = match mode {
+            AgentMode::Durable => replaced.durable_marker.unwrap(),
+            AgentMode::Ephemeral => replaced.ephemeral_marker.unwrap(),
+        };
+        assert_eq!(new_marker.fingerprint, replacement_fingerprint);
+        assert_ne!(new_marker.generation, marker.generation);
+        // A committed replacement retry preserves its generation, even with the old proof.
+        storage
+            .mark_sealed(
+                "test",
+                "retry",
+                &state,
+                ShardEpoch(6),
+                replacement_fingerprint,
+                Some(marker),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            storage
+                .observe_agent("test", "retry", &state.owned_agent_id)
+                .await
+                .unwrap(),
+            replaced
+        );
+        assert!(
+            storage
+                .mark_sealed(
+                    "test",
+                    "stale_proof",
+                    &state,
+                    ShardEpoch(6),
+                    AgentFingerprint::new(),
+                    Some(marker)
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            storage
+                .observe_agent("test", "stale_proof", &state.owned_agent_id)
+                .await
+                .unwrap(),
+            replaced
+        );
+        assert_eq!(
+            storage
+                .release_agent("test", "cleanup", &state, ShardEpoch(6))
+                .await
+                .unwrap(),
+            ReleaseAgentResult::Released
+        );
+    }
 }
 
 #[test]
@@ -5782,8 +5923,8 @@ async fn indexed_agent_observation_tracks_read_generations(
     }
     let absent = AgentDataObservation {
         has_data: false,
-        durable_generation: None,
-        ephemeral_generation: None,
+        durable_marker: None,
+        ephemeral_marker: None,
     };
     for mode in [AgentMode::Durable, AgentMode::Ephemeral] {
         let state = sealed_index_state(mode);
@@ -5809,16 +5950,23 @@ async fn indexed_agent_observation_tracks_read_generations(
         assert!(marked.has_data);
         let generation = match mode {
             AgentMode::Durable => {
-                assert_eq!(marked.ephemeral_generation, None);
-                marked.durable_generation.unwrap()
+                assert_eq!(marked.ephemeral_marker, None);
+                marked.durable_marker.unwrap()
             }
             AgentMode::Ephemeral => {
-                assert_eq!(marked.durable_generation, None);
-                marked.ephemeral_generation.unwrap()
+                assert_eq!(marked.durable_marker, None);
+                marked.ephemeral_marker.unwrap()
             }
         };
         storage
-            .mark_sealed("test", "repeat_mark", &state, ShardEpoch(6))
+            .mark_sealed(
+                "test",
+                "repeat_mark",
+                &state,
+                ShardEpoch(6),
+                sealed_fingerprint(),
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(observation.observe_agent(id).await.unwrap(), marked);
@@ -5838,7 +5986,8 @@ async fn indexed_agent_observation_tracks_read_generations(
                     &state,
                     ShardEpoch(7),
                     ShardEpoch(6),
-                    SystemTime::now() + Duration::from_secs(30)
+                    SystemTime::now() + Duration::from_secs(30),
+                    sealed_fingerprint(),
                 )
                 .await
                 .unwrap(),
@@ -5846,10 +5995,28 @@ async fn indexed_agent_observation_tracks_read_generations(
         );
         let restored = observation.observe_agent(id).await.unwrap();
         let restored_generation = match mode {
-            AgentMode::Durable => restored.durable_generation.unwrap(),
-            AgentMode::Ephemeral => restored.ephemeral_generation.unwrap(),
+            AgentMode::Durable => restored.durable_marker.unwrap(),
+            AgentMode::Ephemeral => restored.ephemeral_marker.unwrap(),
         };
-        assert_ne!(restored_generation, generation);
+        assert_eq!(generation.fingerprint, sealed_fingerprint());
+        assert_eq!(restored_generation.fingerprint, sealed_fingerprint());
+        assert_ne!(restored_generation.generation, generation.generation);
+        assert_eq!(
+            storage
+                .unseal_agent(
+                    "test",
+                    "wrong_fingerprint_retry",
+                    &state,
+                    ShardEpoch(7),
+                    ShardEpoch(6),
+                    SystemTime::UNIX_EPOCH,
+                    golem_common::model::AgentFingerprint::new(),
+                )
+                .await
+                .unwrap(),
+            UnsealAgentResult::AlreadyPresent
+        );
+        assert_eq!(observation.observe_agent(id).await.unwrap(), restored);
         let mut wrong = state.clone();
         wrong
             .manifests
@@ -5863,7 +6030,8 @@ async fn indexed_agent_observation_tracks_read_generations(
                         retry_state,
                         epoch,
                         ShardEpoch(6),
-                        SystemTime::UNIX_EPOCH
+                        SystemTime::UNIX_EPOCH,
+                        sealed_fingerprint(),
                     )
                     .await
                     .unwrap(),
@@ -5879,7 +6047,8 @@ async fn indexed_agent_observation_tracks_read_generations(
                     &state,
                     ShardEpoch(7),
                     ShardEpoch(6),
-                    SystemTime::UNIX_EPOCH
+                    SystemTime::UNIX_EPOCH,
+                    sealed_fingerprint(),
                 )
                 .await
                 .unwrap(),
@@ -5887,7 +6056,14 @@ async fn indexed_agent_observation_tracks_read_generations(
         );
         assert_eq!(observation.observe_agent(id).await.unwrap(), restored);
         storage
-            .mark_sealed("test", "restored_mark", &state, ShardEpoch(7))
+            .mark_sealed(
+                "test",
+                "restored_mark",
+                &state,
+                ShardEpoch(7),
+                sealed_fingerprint(),
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(observation.observe_agent(id).await.unwrap(), restored);
@@ -5910,17 +6086,24 @@ async fn indexed_agent_observation_tracks_read_generations(
             .await
             .unwrap();
         storage
-            .mark_sealed("test", "other_mode", &opposite, ShardEpoch(7))
+            .mark_sealed(
+                "test",
+                "other_mode",
+                &opposite,
+                ShardEpoch(7),
+                sealed_fingerprint(),
+                None,
+            )
             .await
             .unwrap();
         let both = observation.observe_agent(id).await.unwrap();
         assert!(both.has_data);
-        assert!(both.durable_generation.is_some() && both.ephemeral_generation.is_some());
-        assert_ne!(both.durable_generation, both.ephemeral_generation);
+        assert!(both.durable_marker.is_some() && both.ephemeral_marker.is_some());
+        assert_ne!(both.durable_marker, both.ephemeral_marker);
         match mode {
-            AgentMode::Durable => assert_eq!(both.durable_generation, restored.durable_generation),
+            AgentMode::Durable => assert_eq!(both.durable_marker, restored.durable_marker),
             AgentMode::Ephemeral => {
-                assert_eq!(both.ephemeral_generation, restored.ephemeral_generation)
+                assert_eq!(both.ephemeral_marker, restored.ephemeral_marker)
             }
         }
         assert_eq!(
@@ -5965,7 +6148,14 @@ async fn indexed_agent_observation_tracks_read_generations(
         ));
         assert!(matches!(
             storage
-                .mark_sealed("test", "corrupt_repeat", &state, ShardEpoch(8))
+                .mark_sealed(
+                    "test",
+                    "corrupt_repeat",
+                    &state,
+                    ShardEpoch(8),
+                    sealed_fingerprint(),
+                    None
+                )
                 .await,
             Err(IndexedStorageError::Other(_))
         ));
@@ -5977,7 +6167,8 @@ async fn indexed_agent_observation_tracks_read_generations(
                     &state,
                     ShardEpoch(8),
                     ShardEpoch(6),
-                    SystemTime::UNIX_EPOCH
+                    SystemTime::UNIX_EPOCH,
+                    sealed_fingerprint(),
                 )
                 .await,
             Err(IndexedStorageError::Other(_))
@@ -6106,6 +6297,7 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
                     ShardEpoch(5),
                     ShardEpoch(6),
                     SystemTime::now() + Duration::from_secs(30),
+                    sealed_fingerprint(),
                 )
                 .await
                 .map(|_| ()),
@@ -6120,7 +6312,8 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
                     &state,
                     ShardEpoch(7),
                     ShardEpoch(6),
-                    SystemTime::UNIX_EPOCH
+                    SystemTime::UNIX_EPOCH,
+                    sealed_fingerprint(),
                 )
                 .await
                 .unwrap(),
@@ -6155,7 +6348,8 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
                     &state,
                     ShardEpoch(7),
                     ShardEpoch(6),
-                    SystemTime::now() + Duration::from_secs(30)
+                    SystemTime::now() + Duration::from_secs(30),
+                    sealed_fingerprint(),
                 )
                 .await
                 .unwrap(),
@@ -6169,7 +6363,8 @@ async fn indexed_agent_transitions_round_trip_and_lost_reply_retries(
                     &state,
                     ShardEpoch(7),
                     ShardEpoch(6),
-                    SystemTime::UNIX_EPOCH
+                    SystemTime::UNIX_EPOCH,
+                    sealed_fingerprint(),
                 )
                 .await
                 .unwrap(),
@@ -6344,6 +6539,7 @@ async fn indexed_agent_transitions_refuse_without_removing_history(
                     ShardEpoch(8),
                     ShardEpoch(6),
                     SystemTime::now() + Duration::from_secs(30),
+                    sealed_fingerprint(),
                 )
                 .await
                 .map(|_| ()),
@@ -6390,7 +6586,8 @@ async fn indexed_agent_transitions_refuse_without_removing_history(
                     &state,
                     ShardEpoch(6),
                     ShardEpoch(6),
-                    SystemTime::now() + Duration::from_secs(30)
+                    SystemTime::now() + Duration::from_secs(30),
+                    sealed_fingerprint(),
                 )
                 .await
                 .unwrap(),
@@ -6488,6 +6685,7 @@ async fn indexed_unseal_restores_over_retained_bare_epochs(
                         ShardEpoch(7),
                         ShardEpoch(6),
                         SystemTime::now() + Duration::from_secs(30),
+                        sealed_fingerprint(),
                     )
                     .await;
                 if retained > ShardEpoch(7) {
@@ -6545,10 +6743,7 @@ async fn indexed_unseal_restores_over_retained_bare_epochs(
                     .await
                     .unwrap();
                 assert!(restored.has_data);
-                assert!(
-                    restored.durable_generation.is_some()
-                        || restored.ephemeral_generation.is_some()
-                );
+                assert!(restored.durable_marker.is_some() || restored.ephemeral_marker.is_some());
                 assert_eq!(
                     storage
                         .unseal_agent(
@@ -6557,7 +6752,8 @@ async fn indexed_unseal_restores_over_retained_bare_epochs(
                             &state,
                             ShardEpoch(7),
                             ShardEpoch(6),
-                            SystemTime::UNIX_EPOCH
+                            SystemTime::UNIX_EPOCH,
+                            sealed_fingerprint(),
                         )
                         .await
                         .unwrap(),
@@ -6637,7 +6833,8 @@ async fn postgres_unseal_updates_locked_epochs_and_aborts_missing_row_conflicts(
                 &state,
                 ShardEpoch(7),
                 ShardEpoch(6),
-                SystemTime::now() + Duration::from_secs(30)
+                SystemTime::now() + Duration::from_secs(30),
+                sealed_fingerprint(),
             )
             .await
             .unwrap(),
@@ -6676,7 +6873,8 @@ async fn postgres_unseal_updates_locked_epochs_and_aborts_missing_row_conflicts(
                 &state,
                 ShardEpoch(7),
                 ShardEpoch(6),
-                SystemTime::now() + Duration::from_secs(30)
+                SystemTime::now() + Duration::from_secs(30),
+                sealed_fingerprint(),
             )
             .await
             .is_err()
@@ -6958,6 +7156,7 @@ async fn postgres_agent_lookup_plans_use_agent_index_for_present_and_absent_rows
             ShardEpoch(7),
             ShardEpoch(6),
             std::time::SystemTime::now() + std::time::Duration::from_secs(30),
+            sealed_fingerprint(),
         )
         .await
         .unwrap();
@@ -6965,12 +7164,23 @@ async fn postgres_agent_lookup_plans_use_agent_index_for_present_and_absent_rows
         .observe_agent("test", "before_retry", &state.owned_agent_id)
         .await
         .unwrap();
-    assert!(before.durable_generation.is_some());
+    assert!(before.durable_marker.is_some());
     sqlx::raw_sql(
         "CREATE FUNCTION reject_committed_retry_write() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'committed retry must not write'; END $$;
          CREATE TRIGGER reject_index_retry_write BEFORE INSERT OR UPDATE OR DELETE ON index_storage FOR EACH STATEMENT EXECUTE FUNCTION reject_committed_retry_write();
          CREATE TRIGGER reject_epoch_retry_write BEFORE INSERT OR UPDATE OR DELETE ON indexed_key_epoch FOR EACH STATEMENT EXECUTE FUNCTION reject_committed_retry_write();",
     ).execute(&pool).await.unwrap();
+    storage
+        .mark_sealed(
+            "test",
+            "read_only_mark_retry",
+            &state,
+            ShardEpoch(7),
+            sealed_fingerprint(),
+            None,
+        )
+        .await
+        .unwrap();
     assert_eq!(
         storage
             .unseal_agent(
@@ -6979,7 +7189,8 @@ async fn postgres_agent_lookup_plans_use_agent_index_for_present_and_absent_rows
                 &state,
                 ShardEpoch(7),
                 ShardEpoch(6),
-                std::time::SystemTime::UNIX_EPOCH
+                std::time::SystemTime::UNIX_EPOCH,
+                sealed_fingerprint(),
             )
             .await
             .unwrap(),
@@ -7203,6 +7414,7 @@ async fn postgres_agent_transitions_serialize_fenced_writes_without_blocking_oth
                 ShardEpoch(7),
                 ShardEpoch(6),
                 deadline,
+                sealed_fingerprint(),
             )
             .await
     });

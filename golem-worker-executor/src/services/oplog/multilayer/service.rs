@@ -580,14 +580,41 @@ impl OplogService for MultiLayerOplogService {
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        fingerprint: AgentFingerprint,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), OplogError> {
         lifecycle.assert_agent(&owned_agent_id.agent_id);
         self.abort_transfer(&owned_agent_id.agent_id).await;
+        let (deleted, expected_epoch) = if let Some(service) = self.seal_service() {
+            service
+                .delete_with_tombstone(
+                    lifecycle,
+                    owned_agent_id,
+                    agent_mode,
+                    fingerprint,
+                    expected_epoch,
+                )
+                .await?
+        } else {
+            (false, expected_epoch)
+        };
+        if deleted {
+            self.archive_failures
+                .lock()
+                .unwrap()
+                .retain(|(id, _), _| id != owned_agent_id);
+            return Ok(());
+        }
         let deleted = match agent_mode {
             AgentMode::Durable => {
                 self.primary
-                    .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
+                    .delete(
+                        lifecycle,
+                        owned_agent_id,
+                        agent_mode,
+                        fingerprint,
+                        expected_epoch,
+                    )
                     .await
             }
             AgentMode::Ephemeral => {
@@ -607,7 +634,7 @@ impl OplogService for MultiLayerOplogService {
             // Clean the primary only after the authoritative deletion passes its epoch check.
             if let Err(error) = self
                 .primary
-                .delete(lifecycle, owned_agent_id, agent_mode, None)
+                .delete(lifecycle, owned_agent_id, agent_mode, fingerprint, None)
                 .await
             {
                 crate::metrics::oplog::record_archive_maintenance_failure("delete");

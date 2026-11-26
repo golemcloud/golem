@@ -243,6 +243,16 @@ impl TestTempDir {
     }
 }
 
+impl Drop for TestTempDir {
+    fn drop(&mut self) {
+        if let Self::Owned(directory) = self
+            && directory.path().join(".retain-on-failure").exists()
+        {
+            directory.disable_cleanup(true);
+        }
+    }
+}
+
 impl Debug for TestTempDir {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "TestTempDir({:?})", self.path())

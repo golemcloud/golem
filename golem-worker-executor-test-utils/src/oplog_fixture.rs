@@ -221,6 +221,7 @@ impl OplogService for OplogFixtureService {
         lifecycle: &mut OplogLifecycleGuard,
         id: &OwnedAgentId,
         mode: AgentMode,
+        fingerprint: golem_common::model::AgentFingerprint,
         epoch: Option<ShardEpoch>,
     ) -> Result<(), OplogError> {
         let gate = self
@@ -233,7 +234,9 @@ impl OplogService for OplogFixtureService {
             let _ = gate.entered_tx.send(());
             let _ = gate.release_rx.await;
         }
-        self.inner.delete(lifecycle, id, mode, epoch).await
+        self.inner
+            .delete(lifecycle, id, mode, fingerprint, epoch)
+            .await
     }
 
     async fn assert_owning_epoch(

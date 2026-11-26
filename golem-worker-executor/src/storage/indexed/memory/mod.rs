@@ -305,6 +305,8 @@ impl IndexedStorage for InMemoryIndexedStorage {
         _api_name: &'static str,
         agent: &AgentIndexedState,
         epoch: ShardEpoch,
+        fingerprint: golem_common::model::AgentFingerprint,
+        superseded_marker: Option<super::SealMarker>,
     ) -> Result<(), IndexedStorageError> {
         let mut state = self.state.lock().await;
         let key = agent.owned_agent_id.storage_key();
@@ -319,11 +321,28 @@ impl IndexedStorage for InMemoryIndexedStorage {
             let value = entries.get(&0).ok_or_else(|| {
                 IndexedStorageError::Other("Missing indexed seal marker generation".into())
             })?;
-            super::marker_generation(value).map_err(IndexedStorageError::Other)?;
+            let existing = super::SealMarker::decode(value).map_err(IndexedStorageError::Other)?;
+            if let Some(replacement) = existing
+                .replacement(fingerprint, superseded_marker)
+                .map_err(IndexedStorageError::Other)?
+            {
+                state.data.insert(
+                    marker,
+                    BTreeMap::from([(
+                        0,
+                        replacement.encode().map_err(IndexedStorageError::Other)?,
+                    )]),
+                );
+            }
         } else {
             state.data.insert(
                 marker,
-                BTreeMap::from([(0, Uuid::new_v4().as_bytes().to_vec())]),
+                BTreeMap::from([(
+                    0,
+                    super::SealMarker::fresh(fingerprint)
+                        .encode()
+                        .map_err(IndexedStorageError::Other)?,
+                )]),
             );
         }
         Ok(())
@@ -374,7 +393,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
             let family = stored_key.split('/').nth(1);
             if family == Some("sealed-present") {
                 for value in entries.values() {
-                    super::marker_generation(value).map_err(IndexedStorageError::Other)?;
+                    super::SealMarker::decode(value).map_err(IndexedStorageError::Other)?;
                 }
             }
             if matches!(family, Some("oplog" | "compressed-oplog"))
@@ -411,6 +430,7 @@ impl IndexedStorage for InMemoryIndexedStorage {
         epoch: ShardEpoch,
         record_epoch: ShardEpoch,
         valid_until: SystemTime,
+        fingerprint: golem_common::model::AgentFingerprint,
     ) -> Result<UnsealAgentResult, IndexedStorageError> {
         let mut state = self.state.lock().await;
         let key = agent.owned_agent_id.storage_key();
@@ -441,18 +461,23 @@ impl IndexedStorage for InMemoryIndexedStorage {
             BTreeMap::new(),
         );
         let marker = Self::composite_key(agent.marker_namespace(), &key);
-        let generation = match state.data.get(&marker) {
+        let seal_marker = match state.data.get(&marker) {
             Some(entries) => {
                 let value = entries.get(&0).ok_or_else(|| {
                     IndexedStorageError::Other("Missing indexed seal marker generation".into())
                 })?;
-                super::marker_generation(value).map_err(IndexedStorageError::Other)?
+                let existing =
+                    super::SealMarker::decode(value).map_err(IndexedStorageError::Other)?;
+                if existing.fingerprint != fingerprint {
+                    return Ok(UnsealAgentResult::AlreadyPresent);
+                }
+                existing
             }
-            None => Uuid::new_v4(),
+            None => super::SealMarker::fresh(fingerprint),
         };
         restored.insert(
             marker,
-            BTreeMap::from([(0, generation.as_bytes().to_vec())]),
+            BTreeMap::from([(0, seal_marker.encode().map_err(IndexedStorageError::Other)?)]),
         );
         if state
             .data

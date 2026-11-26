@@ -547,6 +547,8 @@ impl IndexedStorage for PostgresIndexedStorage {
         api_name: &'static str,
         state: &AgentIndexedState,
         epoch: ShardEpoch,
+        fingerprint: golem_common::model::AgentFingerprint,
+        superseded_marker: Option<super::SealMarker>,
     ) -> Result<(), IndexedStorageError> {
         let _permit = self.acquire_permit().await;
         Self::to_i64(epoch.0, "epoch")?;
@@ -559,13 +561,18 @@ impl IndexedStorage for PostgresIndexedStorage {
                 async move {
                     Self::lock_agent(tx, env, agent).await?;
                     Self::check_epoch(tx, &fence, &key, env, agent, epoch).await?;
-                    tx.execute(sqlx::query(
-                        "INSERT INTO index_storage (namespace, env, agent, id, value) VALUES ($1, $2, $3, 0, $4) ON CONFLICT DO NOTHING;",
-                    ).bind(&marker).bind(env).bind(agent).bind(Uuid::new_v4().as_bytes().as_slice())).await?;
-                    let (value,): (Vec<u8>,) = tx.fetch_one_as(sqlx::query_as(
+                    let existing: Option<(Vec<u8>,)> = tx.fetch_optional_as(sqlx::query_as(
                         "SELECT value FROM index_storage WHERE namespace = $1 AND env = $2 AND agent = $3 AND id = 0;",
-                    ).bind(marker).bind(env).bind(agent)).await?;
-                    super::marker_generation(&value).map_err(FencedTxError::Corrupt)?;
+                    ).bind(&marker).bind(env).bind(agent)).await?;
+                    let replacement = match existing {
+                        Some((value,)) => super::SealMarker::decode(&value).and_then(|marker| marker.replacement(fingerprint, superseded_marker)).map_err(FencedTxError::Corrupt)?,
+                        None => Some(super::SealMarker::fresh(fingerprint)),
+                    };
+                    if let Some(replacement) = replacement {
+                        tx.execute(sqlx::query(
+                            "INSERT INTO index_storage (namespace, env, agent, id, value) VALUES ($1, $2, $3, 0, $4) ON CONFLICT (namespace, env, agent, id) DO UPDATE SET value = EXCLUDED.value;",
+                        ).bind(&marker).bind(env).bind(agent).bind(replacement.encode().map_err(FencedTxError::Corrupt)?)).await?;
+                    }
                     Ok(())
                 }.boxed()
             })
@@ -604,7 +611,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                 let mut manifests = Vec::new();
                 for (namespace, id, value) in rows {
                     if namespace == "durable-worker-sealed-present" || namespace == "ephemeral-worker-sealed-present" {
-                        super::marker_generation(&value).map_err(FencedTxError::Corrupt)?;
+                        super::SealMarker::decode(&value).map_err(FencedTxError::Corrupt)?;
                     }
                     // Presence rows and staged entries do not contain primary/compressed history.
                     if namespace == "durable-worker-oplog" || namespace == "ephemeral-worker-oplog"
@@ -641,6 +648,7 @@ impl IndexedStorage for PostgresIndexedStorage {
         epoch: ShardEpoch,
         record_epoch: ShardEpoch,
         valid_until: SystemTime,
+        fingerprint: golem_common::model::AgentFingerprint,
     ) -> Result<UnsealAgentResult, IndexedStorageError> {
         let _permit = self.acquire_permit().await;
         let epoch_i64 = Self::to_i64(epoch.0, "epoch")?;
@@ -679,8 +687,8 @@ impl IndexedStorage for PostgresIndexedStorage {
                     expected_rows.push((marker.clone(), 0, Vec::new()));
                     for (namespace, id, value) in &rows {
                         if namespace == "durable-worker-sealed-present" || namespace == "ephemeral-worker-sealed-present" {
-                            super::marker_generation(value).map_err(FencedTxError::Corrupt)?;
-                            if namespace == &marker && *id == 0 {
+                            let decoded = super::SealMarker::decode(value).map_err(FencedTxError::Corrupt)?;
+                            if namespace == &marker && *id == 0 && decoded.fingerprint == fingerprint {
                                 expected_rows.last_mut().unwrap().2 = value.clone();
                             }
                         }
@@ -721,7 +729,7 @@ impl IndexedStorage for PostgresIndexedStorage {
                     tx.execute(sqlx::query("INSERT INTO index_storage (namespace, env, agent, id, value) VALUES ($1, $2, $3, $4, $5);")
                         .bind(namespace).bind(env).bind(agent).bind(id).bind(value)).await?;
                 }
-                for (namespace, value) in [(format!("{primary}-present"), Vec::new()), (marker, Uuid::new_v4().as_bytes().to_vec())] {
+                for (namespace, value) in [(format!("{primary}-present"), Vec::new()), (marker, super::SealMarker::fresh(fingerprint).encode().map_err(FencedTxError::Corrupt)?)] {
                     tx.execute(sqlx::query("INSERT INTO index_storage (namespace, env, agent, id, value) VALUES ($1, $2, $3, 0, $4);")
                         .bind(namespace).bind(env).bind(agent).bind(value)).await?;
                 }

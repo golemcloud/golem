@@ -1684,12 +1684,17 @@ mod tests {
         pub(super) service: crate::services::oplog::PrimaryOplogService,
         pub(super) target: OwnedAgentId,
         metadata: AgentMetadata,
+        _scheduler: Arc<UnusedScheduler>,
     }
 
     struct UnusedScheduler;
 
     #[async_trait]
     impl crate::services::scheduler::SchedulerService for UnusedScheduler {
+        fn is_durable(&self) -> bool {
+            true
+        }
+
         async fn schedule(
             &self,
             _: jiff::Timestamp,
@@ -1745,14 +1750,15 @@ mod tests {
                 },
                 std::num::NonZeroUsize::MIN,
             );
-            let scheduler: std::sync::Weak<dyn crate::services::scheduler::SchedulerService> =
-                std::sync::Weak::<UnusedScheduler>::new();
+            let scheduler = Arc::new(UnusedScheduler);
+            let scheduler_ref: Arc<dyn crate::services::scheduler::SchedulerService> =
+                scheduler.clone();
             service.set_seal_service(Arc::new(SealService::new(
                 indexed,
                 blobs,
                 Arc::new(crate::storage::keyvalue::memory::InMemoryKeyValueStorage::new()),
                 shard,
-                scheduler,
+                Arc::downgrade(&scheduler_ref),
                 crate::services::golem_config::OplogConfig {
                     blob_storage_layers: 1,
                     ..Default::default()
@@ -1790,6 +1796,7 @@ mod tests {
                 service,
                 target,
                 metadata,
+                _scheduler: scheduler,
             }
         }
 

@@ -765,6 +765,7 @@ impl OplogService for PrimaryOplogService {
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        _fingerprint: AgentFingerprint,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), OplogError> {
         record_oplog_call("delete");

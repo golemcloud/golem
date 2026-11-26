@@ -36,6 +36,8 @@ use golem_service_base::storage::blob::PutIfAbsent;
 use std::sync::{Arc, Weak};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+mod deletion;
+
 #[cfg(test)]
 mod tests;
 
@@ -94,7 +96,12 @@ impl SealService {
     }
 
     pub(crate) fn enabled(&self) -> bool {
-        self.indexed.supports_release() && self.config.blob_storage_layers > 0
+        self.indexed.supports_release()
+            && self.config.blob_storage_layers > 0
+            && self
+                .scheduler
+                .upgrade()
+                .is_some_and(|scheduler| scheduler.is_durable())
     }
 
     pub(crate) fn can_seal_mode(&self, mode: AgentMode) -> bool {
@@ -182,6 +189,72 @@ impl SealService {
             }
             _ => Ok(None),
         }
+    }
+
+    fn pinned_fingerprint(
+        identity: Option<AgentFingerprint>,
+        observation: &AgentDataObservation,
+    ) -> Result<Option<AgentFingerprint>, OplogArchiveError> {
+        if identity.is_some() {
+            return Ok(identity);
+        }
+        if let (Some(durable), Some(ephemeral)) =
+            (observation.durable_marker, observation.ephemeral_marker)
+            && durable.fingerprint != ephemeral.fingerprint
+        {
+            return Err(OplogArchiveError::Corruption(
+                "Indexed seal markers disagree on the agent incarnation".into(),
+            ));
+        }
+        Ok(observation
+            .durable_marker
+            .or(observation.ephemeral_marker)
+            .map(|marker| marker.fingerprint))
+    }
+
+    async fn record_for_fingerprint(
+        &self,
+        id: &OwnedAgentId,
+        fingerprint: AgentFingerprint,
+    ) -> Result<Option<Box<SealRecord>>, OplogArchiveError> {
+        let records = list_records(self.blobs.as_ref(), id).await?;
+        let Some(listed) = newest_seal_for_fingerprint(&records, fingerprint) else {
+            return Ok(None);
+        };
+        match read_record(self.blobs.as_ref(), id, listed).await? {
+            SealRecordBody::Sealed(record) => Ok(Some(record)),
+            SealRecordBody::Deleted(_) => unreachable!(),
+        }
+    }
+
+    async fn record_for_moved_data(
+        &self,
+        id: &OwnedAgentId,
+    ) -> Result<Option<Box<SealRecord>>, WorkerExecutorError> {
+        self.read_with_authority(
+            id,
+            || async {
+                let identity = self.indexed_identity(id).await?;
+                let observation = self
+                    .observe(id)
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+                let Some(fingerprint) =
+                    Self::pinned_fingerprint(identity, &observation).map_err(|error| {
+                        WorkerExecutorError::oplog_failed(id.agent_id, error.to_string())
+                    })?
+                else {
+                    return Ok(None);
+                };
+                self.record_for_fingerprint(id, fingerprint)
+                    .await
+                    .map_err(|error| WorkerExecutorError::runtime(error.to_string()))
+            },
+            |record| async move { Ok(Some(record)) },
+            || Ok(None),
+            |error| WorkerExecutorError::runtime(error.to_string()),
+        )
+        .await
     }
 
     pub(crate) async fn state(
@@ -279,7 +352,7 @@ impl SealService {
             return Ok(false);
         }
         Ok(self
-            .record(&OwnedAgentId::new(environment_id, &promise_id.agent_id))
+            .record_for_moved_data(&OwnedAgentId::new(environment_id, &promise_id.agent_id))
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
             .is_some_and(|record| {
@@ -299,7 +372,7 @@ impl SealService {
         }
         let id = OwnedAgentId::new(environment_id, &promise_id.agent_id);
         let record = self
-            .record(&id)
+            .record_for_moved_data(&id)
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
         Ok(record
@@ -339,7 +412,7 @@ impl SealService {
             return Ok(BTreeSet::new());
         }
         Ok(self
-            .record(id)
+            .record_for_moved_data(id)
             .await
             .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
             .filter(|record| record.fingerprint == fingerprint)
@@ -521,6 +594,7 @@ impl SealService {
                 epoch,
                 record.writer_epoch,
                 deadline,
+                record.fingerprint,
             )
         })
         .await
@@ -598,11 +672,31 @@ impl SealService {
                 return Ok(None);
             }
         }
-        let previous = self
-            .record(&id)
+        let identity = self.indexed_identity(&id).await?;
+        let observation = self
+            .observe(&id)
             .await
-            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?
-            .filter(|record| record.fingerprint == metadata.fingerprint);
+            .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?;
+        let pinned = Self::pinned_fingerprint(identity, &observation)
+            .map_err(|error| WorkerExecutorError::oplog_failed(id.agent_id, error.to_string()))?;
+        if pinned.is_some_and(|fingerprint| fingerprint != metadata.fingerprint) {
+            return Err(WorkerExecutorError::oplog_failed(
+                id.agent_id,
+                "Retired worker fingerprint differs from indexed authority",
+            ));
+        }
+        let previous = match pinned {
+            Some(fingerprint) => self
+                .record_for_fingerprint(&id, fingerprint)
+                .await
+                .map_err(|error| WorkerExecutorError::runtime(error.to_string()))?,
+            None => None,
+        };
+        let superseded_marker = match metadata.agent_mode {
+            AgentMode::Durable => observation.durable_marker,
+            AgentMode::Ephemeral => observation.ephemeral_marker,
+        }
+        .filter(|marker| identity.is_some_and(|fingerprint| fingerprint != marker.fingerprint));
         let completed_promises = previous
             .as_ref()
             .map_or_else(BTreeMap::new, |record| record.completed_promises.clone());
@@ -723,6 +817,7 @@ impl SealService {
                 epoch,
                 seq,
                 kind: SealRecordKind::Sealed { valid_until_ms },
+                fingerprint: record.fingerprint,
             };
             let bytes = serialize(&record).map_err(WorkerExecutorError::runtime)?;
             let outcome = self
@@ -769,8 +864,14 @@ impl SealService {
                 "mark_sealed",
                 &id.storage_key(),
                 || {
-                    self.indexed
-                        .mark_sealed("oplog_seal", "mark", &state, epoch)
+                    self.indexed.mark_sealed(
+                        "oplog_seal",
+                        "mark",
+                        &state,
+                        epoch,
+                        record.fingerprint,
+                        superseded_marker,
+                    )
                 },
             )
             .await
@@ -882,10 +983,10 @@ impl SealService {
         if released {
             match list_records(self.blobs.as_ref(), &id).await {
                 Ok(records) => {
-                    for old in records
-                        .into_iter()
-                        .filter(|record| record.key < pending.key)
-                    {
+                    for old in records.into_iter().filter(|record| {
+                        matches!(record.key.kind, SealRecordKind::Sealed { .. })
+                            && record.key < pending.key
+                    }) {
                         if let Err(error) = self
                             .blobs
                             .with("oplog_seal", "remove_old_record")

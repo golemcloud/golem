@@ -30,6 +30,7 @@ fn key(epoch: u64, seq: u64, kind: SealRecordKind) -> SealRecordKey {
         epoch: ShardEpoch(epoch),
         seq,
         kind,
+        fingerprint: AgentFingerprint(Uuid::from_u128(1)),
     }
 }
 
@@ -63,21 +64,67 @@ fn seal_keys_have_explicit_order_and_reject_malformed_paths() {
         assert_eq!(SealRecordKey::parse(&key.path()), Some(key));
     }
     assert!(low < high && high < deleted);
-    assert!(high.path() < deleted.path());
+    assert_eq!(
+        low.path(),
+        seal_prefix(&low.agent_id).join(
+            "00000000000000000009-00000000000000000010-00000000000000002000-00000000-0000-0000-0000-000000000001.sealed"
+        )
+    );
+    assert_eq!(
+        deleted.path(),
+        seal_prefix(&low.agent_id).join(
+            "00000000000000000009-00000000000000000010-00000000-0000-0000-0000-000000000001.deleted"
+        )
+    );
+    let higher_fingerprint = SealRecordKey {
+        fingerprint: AgentFingerprint(Uuid::from_u128(u128::MAX)),
+        ..low
+    };
+    assert_eq!(
+        SealRecordKey::parse(&higher_fingerprint.path()),
+        Some(higher_fingerprint)
+    );
+    assert!(low < higher_fingerprint);
+    assert!(higher_fingerprint < high && higher_fingerprint < deleted);
     assert_eq!(low.position(), deleted.position());
     assert!(deleted < sealed(9, 11, 1));
     assert!(deleted < sealed(10, 0, 1));
     let prefix = seal_prefix(&low.agent_id);
     for name in [
         "9-10-2000.sealed",
+        "00000000000000000009-00000000000000000010-00000000000000002000.sealed",
+        "00000000000000000009-00000000000000000010.deleted",
         "00000000000000000009-00000000000000000010.sealed",
         "00000000000000000009-00000000000000000010-00000000000000002000.deleted",
         "18446744073709551616-00000000000000000000.deleted",
         "00000000000000000009-00000000000000000010.deleted/extra",
         "+0000000000000000009-00000000000000000010.deleted",
+        "18446744073709551616-00000000000000000000-00000000-0000-0000-0000-000000000001.deleted",
+        "+0000000000000000009-00000000000000000010-00000000-0000-0000-0000-000000000001.deleted",
+        "9-00000000000000000010-00000000-0000-0000-0000-000000000001.deleted",
+        "00000000000000000009-00000000000000000010-2000-00000000-0000-0000-0000-000000000001.sealed",
+        "00000000000000000009-00000000000000000010-00000000-0000-0000-0000-000000000001.deleted/extra",
         "garbage",
     ] {
         assert_eq!(SealRecordKey::parse(&prefix.join(name)), None, "{name}");
+    }
+    for fingerprint in [
+        "",
+        "not-a-uuid",
+        "00000000000000000000000000000001",
+        "FFFFFFFF-FFFF-FFFF-FFFF-FFFFFFFFFFFF",
+        "{00000000-0000-0000-0000-000000000001}",
+        "urn:uuid:00000000-0000-0000-0000-000000000001",
+        "00000000-0000-0000-0000-000000000001-extra",
+    ] {
+        for name in [
+            format!("00000000000000000009-00000000000000000010-{fingerprint}.deleted"),
+            format!(
+                "00000000000000000009-00000000000000000010-00000000000000002000-{fingerprint}.sealed"
+            ),
+        ] {
+            assert_eq!(SealRecordKey::parse(&prefix.join(&name)), None, "{name}");
+        }
     }
 }
 
@@ -164,7 +211,10 @@ async fn record_listing_ignores_malformed_keys_and_decodes_the_selected_body() {
     );
     let body = record(&owned);
     let ns = seal_namespace(&owned);
-    let old = sealed(6, 0, u64::MAX);
+    let old = SealRecordKey {
+        fingerprint: body.fingerprint,
+        ..sealed(6, 0, u64::MAX)
+    };
     storage
         .with("test", "put")
         .put_raw(ns.clone(), &old.path(), &serialize(&body).unwrap())
@@ -185,7 +235,7 @@ async fn record_listing_ignores_malformed_keys_and_decodes_the_selected_body() {
         SealRecordBody::Sealed(Box::new(body.clone()))
     );
     // The newer malformed body must fail rather than falling back to the old record.
-    let newer = sealed(6, 1, u64::MAX);
+    let newer = SealRecordKey { seq: 1, ..old };
     storage
         .with("test", "put")
         .put_raw(ns.clone(), &newer.path(), b"invalid")
@@ -196,7 +246,10 @@ async fn record_listing_ignores_malformed_keys_and_decodes_the_selected_body() {
         read_record(&storage, &owned, valid_record(&records).unwrap()).await,
         Err(OplogArchiveError::Corruption(_))
     ));
-    let deleted = key(6, 1, SealRecordKind::Deleted);
+    let deleted = SealRecordKey {
+        kind: SealRecordKind::Deleted,
+        ..newer
+    };
     let tombstone = DeletionRecord {
         writer_nonce: Uuid::new_v4(),
         writer_epoch: ShardEpoch(6),
@@ -232,8 +285,11 @@ async fn record_body_identity_and_snapshot_must_match_the_key() {
         &key(0, 0, SealRecordKind::Deleted).agent_id,
     );
     let original = record(&owned);
-    let key = sealed(6, 0, u64::MAX);
-    for variant in 0..5 {
+    let key = SealRecordKey {
+        fingerprint: original.fingerprint,
+        ..sealed(6, 0, u64::MAX)
+    };
+    for variant in 0..6 {
         let mut body = original.clone();
         match variant {
             0 => body.writer_epoch = ShardEpoch(5),
@@ -244,8 +300,43 @@ async fn record_body_identity_and_snapshot_must_match_the_key() {
                 .insert(OplogIndex::from_u64(4))
                 .then_some(())
                 .unwrap(),
-            _ => body.metadata.agent_mode = AgentMode::Ephemeral,
+            4 => body.metadata.agent_mode = AgentMode::Ephemeral,
+            _ => {
+                body.fingerprint = AgentFingerprint::new();
+                body.metadata.fingerprint = body.fingerprint;
+            }
         }
+        storage
+            .with("test", "put")
+            .put_raw(
+                seal_namespace(&owned),
+                &key.path(),
+                &serialize(&body).unwrap(),
+            )
+            .await
+            .unwrap();
+        let records = list_records(&storage, &owned).await.unwrap();
+        assert!(matches!(
+            read_record(&storage, &owned, valid_record(&records).unwrap()).await,
+            Err(OplogArchiveError::Corruption(_))
+        ));
+    }
+}
+
+#[test]
+async fn deletion_body_identity_must_match_the_key() {
+    let storage = InMemoryBlobStorage::new();
+    let key = key(6, 0, SealRecordKind::Deleted);
+    let owned = OwnedAgentId::new(EnvironmentId::new(), &key.agent_id);
+    for (epoch, fingerprint) in [
+        (ShardEpoch(5), key.fingerprint),
+        (key.epoch, AgentFingerprint(Uuid::from_u128(2))),
+    ] {
+        let body = DeletionRecord {
+            writer_nonce: Uuid::new_v4(),
+            writer_epoch: epoch,
+            fingerprint,
+        };
         storage
             .with("test", "put")
             .put_raw(
@@ -344,11 +435,15 @@ async fn ephemeral_record_restores_status_mode_and_pending_promises() {
     body.metadata.last_known_status.agent_mode = AgentMode::Ephemeral;
     body.pending_promises.insert(OplogIndex::from_u64(5));
     put_chunk(&storage, &owned, &mut body, 2, 1, 9).await;
+    let key = SealRecordKey {
+        fingerprint: body.fingerprint,
+        ..sealed(6, 0, u64::MAX)
+    };
     storage
         .with("test", "put")
         .put_raw(
             seal_namespace(&owned),
-            &sealed(6, 0, u64::MAX).path(),
+            &key.path(),
             &serialize(&body).unwrap(),
         )
         .await
@@ -575,11 +670,15 @@ async fn ephemeral_pending_completed_promise_collision_is_rejected() {
     body.agent_mode = AgentMode::Ephemeral;
     body.metadata.agent_mode = AgentMode::Ephemeral;
     body.pending_promises.insert(OplogIndex::from_u64(3));
+    let key = SealRecordKey {
+        fingerprint: body.fingerprint,
+        ..sealed(6, 0, u64::MAX)
+    };
     storage
         .with("test", "put")
         .put_raw(
             seal_namespace(&owned),
-            &sealed(6, 0, u64::MAX).path(),
+            &key.path(),
             &serialize(&body).unwrap(),
         )
         .await

@@ -292,6 +292,7 @@ impl OplogService for FrozenIndexSource {
         _lifecycle: &mut OplogLifecycleGuard,
         _id: &OwnedAgentId,
         _mode: AgentMode,
+        _fingerprint: AgentFingerprint,
         _epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Result<(), OplogError> {
         panic!("frozen stream source cannot delete oplogs")

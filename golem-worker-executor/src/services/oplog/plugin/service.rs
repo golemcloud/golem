@@ -405,10 +405,17 @@ impl OplogService for ForwardingOplogService {
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        fingerprint: golem_common::model::AgentFingerprint,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), OplogError> {
         self.inner
-            .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
+            .delete(
+                lifecycle,
+                owned_agent_id,
+                agent_mode,
+                fingerprint,
+                expected_epoch,
+            )
             .await
     }
 

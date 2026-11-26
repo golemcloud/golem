@@ -70,22 +70,27 @@ pub(crate) enum SealRecordKind {
     Deleted,
 }
 
+/// Within an agent, order by epoch, sequence, kind/deadline, then fingerprint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) struct SealRecordKey {
     pub agent_id: AgentId,
     pub epoch: ShardEpoch,
     pub seq: u64,
     pub kind: SealRecordKind,
+    pub fingerprint: AgentFingerprint,
 }
 
 impl SealRecordKey {
     pub fn path(&self) -> PathBuf {
         let name = match self.kind {
             SealRecordKind::Sealed { valid_until_ms } => format!(
-                "{:020}-{:020}-{:020}.sealed",
-                self.epoch.0, self.seq, valid_until_ms
+                "{:020}-{:020}-{:020}-{}.sealed",
+                self.epoch.0, self.seq, valid_until_ms, self.fingerprint.0
             ),
-            SealRecordKind::Deleted => format!("{:020}-{:020}.deleted", self.epoch.0, self.seq),
+            SealRecordKind::Deleted => format!(
+                "{:020}-{:020}-{}.deleted",
+                self.epoch.0, self.seq, self.fingerprint.0
+            ),
         };
         seal_prefix(&self.agent_id).join(name)
     }
@@ -109,7 +114,7 @@ impl SealRecordKey {
         } else {
             (name.strip_suffix(".deleted")?, false)
         };
-        let mut numbers = numbers.split('-');
+        let mut numbers = numbers.splitn(if sealed { 4 } else { 3 }, '-');
         let epoch = ShardEpoch(parse_number(numbers.next()?)?);
         let seq = parse_number(numbers.next()?)?;
         let kind = if sealed {
@@ -119,7 +124,9 @@ impl SealRecordKey {
         } else {
             SealRecordKind::Deleted
         };
-        if numbers.next().is_some() {
+        let fingerprint = numbers.next()?;
+        let uuid = Uuid::parse_str(fingerprint).ok()?;
+        if uuid.to_string() != fingerprint {
             return None;
         }
         Some(Self {
@@ -127,10 +134,11 @@ impl SealRecordKey {
             epoch,
             seq,
             kind,
+            fingerprint: AgentFingerprint(uuid),
         })
     }
 
-    /// GC boundaries and sequence allocation include inadmissible keys and ignore kind.
+    /// GC boundaries and sequence allocation include inadmissible keys and ignore kind and fingerprint.
     pub fn position(&self) -> (ShardEpoch, u64) {
         (self.epoch, self.seq)
     }
@@ -178,6 +186,21 @@ pub(crate) fn valid_record(records: &[ListedSealRecord]) -> Option<&ListedSealRe
     records
         .iter()
         .filter(|record| record.admissible())
+        .max_by_key(|record| record.key)
+}
+
+/// Moved data remains owned by the indexed incarnation while PostgreSQL is authoritative.
+pub(crate) fn newest_seal_for_fingerprint(
+    records: &[ListedSealRecord],
+    fingerprint: AgentFingerprint,
+) -> Option<&ListedSealRecord> {
+    records
+        .iter()
+        .filter(|record| {
+            record.key.fingerprint == fingerprint
+                && matches!(record.key.kind, SealRecordKind::Sealed { .. })
+                && record.admissible()
+        })
         .max_by_key(|record| record.key)
 }
 
@@ -257,8 +280,8 @@ pub(crate) async fn read_record(
         SealRecordKind::Deleted => {
             let body: DeletionRecord =
                 decode(&bytes).map_err(|error| corrupt(error.to_string()))?;
-            if body.writer_epoch != listed.key.epoch {
-                return Err(corrupt("writer epoch differs from key".into()));
+            if body.writer_epoch != listed.key.epoch || body.fingerprint != listed.key.fingerprint {
+                return Err(corrupt("body identity does not match key".into()));
             }
             Ok(SealRecordBody::Deleted(body))
         }
@@ -266,6 +289,7 @@ pub(crate) async fn read_record(
             let mut body: SealRecord =
                 decode(&bytes).map_err(|error| corrupt(error.to_string()))?;
             if body.writer_epoch != listed.key.epoch
+                || body.fingerprint != listed.key.fingerprint
                 || body.metadata.owned_agent_id() != *owned_agent_id
                 || body.metadata.fingerprint != body.fingerprint
                 || body.metadata.agent_mode != body.agent_mode

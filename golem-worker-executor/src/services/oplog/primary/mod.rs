@@ -72,7 +72,7 @@ mod service;
 mod state;
 mod storage;
 
-use reader::read_persisted_oplog_entries;
+pub(crate) use reader::read_persisted_oplog_entries;
 use storage::{
     retry_maintenance_storage_op, retry_oplog_append, retry_storage_op, retry_storage_op_result,
 };

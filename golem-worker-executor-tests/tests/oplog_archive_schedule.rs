@@ -187,7 +187,24 @@ async fn sealed_ephemeral_stream_duplicate_preserves_recorded_attachment_without
     #[tagged_as("agent_sdk_rust")] agent_sdk_rust: &PrecompiledComponent,
     _tracing: &Tracing,
 ) -> anyhow::Result<()> {
-    sealed_ephemeral_duplicate(last_unique_id, deps, agent_sdk_rust, "identity", false).await
+    let result = std::panic::AssertUnwindSafe(sealed_ephemeral_duplicate(
+        last_unique_id,
+        deps,
+        agent_sdk_rust,
+        "identity",
+        false,
+    ))
+    .catch_unwind()
+    .await;
+    if !matches!(result, Ok(Ok(()))) {
+        let data_root = deps.blob_storage_root().parent().unwrap().to_path_buf();
+        std::fs::write(data_root.join(".retain-on-failure"), b"")?;
+        eprintln!("Retained failed stream fixture at {}", data_root.display());
+    }
+    match result {
+        Ok(result) => result,
+        Err(panic) => std::panic::resume_unwind(panic),
+    }
 }
 
 #[test]
@@ -382,16 +399,25 @@ async fn sealed_ephemeral_duplicate(
         success.release();
         (original.await??, Some(prepared))
     } else {
-        (
-            ephemeral_duplicate_result(
-                &executor,
-                &component,
-                &invocation_key,
-                stream_request.as_ref(),
-            )
-            .await?,
-            None,
+        let result = ephemeral_duplicate_result(
+            &executor,
+            &component,
+            &invocation_key,
+            stream_request.as_ref(),
         )
+        .await;
+        let original = match result {
+            Ok(original) => original,
+            Err(error) => {
+                let data_root = deps.blob_storage_root().parent().unwrap().to_path_buf();
+                let history = executor.get_oplog(&owned, OplogIndex::INITIAL).await;
+                anyhow::bail!(
+                    "original ephemeral response failed: {error}; retained data: {}; recorded history: {history:?}",
+                    data_root.display()
+                );
+            }
+        };
+        (original, None)
     };
     let mut expected = Vec::new();
     if method == "identity" {
@@ -409,8 +435,8 @@ async fn sealed_ephemeral_duplicate(
                 .observe_agent("test", "ephemeral_sealed", &owned)
                 .await?;
             if !executor.worker_is_cached(&owned).await && !observation.has_data {
-                assert_eq!(observation.durable_generation, None);
-                assert_eq!(observation.ephemeral_generation, None);
+                assert_eq!(observation.durable_marker, None);
+                assert_eq!(observation.ephemeral_marker, None);
                 break;
             }
             tokio::time::sleep(Duration::from_millis(10)).await;
@@ -679,8 +705,11 @@ async fn ephemeral_duplicate_result(
             other => anyhow::bail!("unexpected ephemeral stream response: {other:?}"),
         }
     }
-    assert_eq!(ends, 1);
-    assert!(finished && state.is_complete());
+    anyhow::ensure!(
+        ends == 1 && finished && state.is_complete(),
+        "incomplete ephemeral stream response: ends={ends}, finished={finished}, complete={}, items={items:?}",
+        state.is_complete()
+    );
     drop(frames);
     Ok(EphemeralResponse::Items(items))
 }
@@ -1692,8 +1721,8 @@ async fn sealed_cached_worker_is_reacquired_without_reusing_its_old_handle(
 
     let sealed = indexed.observe_agent("test", "after_seal", &owned).await?;
     assert!(!sealed.has_data, "seal must remove all indexed authority");
-    assert_eq!(sealed.durable_generation, None);
-    assert_eq!(sealed.ephemeral_generation, None);
+    assert_eq!(sealed.durable_marker, None);
+    assert_eq!(sealed.ephemeral_marker, None);
     let pool = sqlx::SqlitePool::connect_with(
         sqlx::sqlite::SqliteConnectOptions::new()
             .filename(&indexed_config.database)
@@ -1760,8 +1789,8 @@ async fn sealed_cached_worker_is_reacquired_without_reusing_its_old_handle(
         .observe_agent("test", "after_unseal", &owned)
         .await?;
     assert!(restored.has_data);
-    assert!(restored.durable_generation.is_some());
-    assert_ne!(restored.durable_generation, resident.durable_generation);
+    assert!(restored.durable_marker.is_some());
+    assert_ne!(restored.durable_marker, resident.durable_marker);
     // Await settlement before comparing history around refused stale-generation operations.
     tokio::time::timeout(Duration::from_secs(30), async {
         while executor.worker_is_loaded(&owned).await {

@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use bytes::Bytes;
 use desert_rust::{BinaryDeserializer, BinarySerializer};
 use golem_common::model::agent::AgentMode;
-use golem_common::model::{OwnedAgentId, ShardEpoch};
+use golem_common::model::{AgentFingerprint, OwnedAgentId, ShardEpoch};
 use golem_common::serialization::{DecodeError, decode, serialize};
 use golem_service_base::repo::{RepoError, is_transient_sqlx_error};
 use uuid::Uuid;
@@ -301,12 +301,54 @@ fn scan_prefix_upper_bound(prefix: &str) -> Option<String> {
     None
 }
 
-/// One read-only snapshot of agent-wide data presence and both seal marker generations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, desert_rust::BinaryCodec)]
+pub struct SealMarker {
+    pub generation: Uuid,
+    pub fingerprint: AgentFingerprint,
+}
+
+impl SealMarker {
+    fn fresh(fingerprint: AgentFingerprint) -> Self {
+        Self {
+            generation: Uuid::new_v4(),
+            fingerprint,
+        }
+    }
+
+    fn encode(self) -> Result<Vec<u8>, String> {
+        serialize(&self)
+    }
+
+    fn decode(value: &[u8]) -> Result<Self, String> {
+        let marker: Self =
+            decode(value).map_err(|error| format!("Invalid indexed seal marker: {error}"))?;
+        if marker.encode()? != value {
+            return Err("Invalid indexed seal marker encoding".into());
+        }
+        Ok(marker)
+    }
+
+    fn replacement(
+        self,
+        fingerprint: AgentFingerprint,
+        superseded: Option<Self>,
+    ) -> Result<Option<Self>, String> {
+        if self.fingerprint == fingerprint {
+            Ok(None)
+        } else if superseded == Some(self) {
+            Ok(Some(Self::fresh(fingerprint)))
+        } else {
+            Err("Indexed seal marker fingerprint mismatch".into())
+        }
+    }
+}
+
+/// One read-only snapshot of agent-wide data presence and both seal markers.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct AgentDataObservation {
     pub has_data: bool,
-    pub durable_generation: Option<Uuid>,
-    pub ephemeral_generation: Option<Uuid>,
+    pub durable_marker: Option<SealMarker>,
+    pub ephemeral_marker: Option<SealMarker>,
 }
 
 impl AgentDataObservation {
@@ -317,23 +359,18 @@ impl AgentDataObservation {
     ) -> Result<Self, IndexedStorageError> {
         Ok(Self {
             has_data,
-            durable_generation: durable
+            durable_marker: durable
                 .as_deref()
-                .map(marker_generation)
+                .map(SealMarker::decode)
                 .transpose()
                 .map_err(IndexedStorageError::Other)?,
-            ephemeral_generation: ephemeral
+            ephemeral_marker: ephemeral
                 .as_deref()
-                .map(marker_generation)
+                .map(SealMarker::decode)
                 .transpose()
                 .map_err(IndexedStorageError::Other)?,
         })
     }
-}
-
-fn marker_generation(value: &[u8]) -> Result<Uuid, String> {
-    Uuid::from_slice(value)
-        .map_err(|error| format!("Invalid indexed seal marker generation: {error}"))
 }
 
 /// The indexed part of a seal record, with the configured compressed levels needed on unseal.
@@ -473,7 +510,7 @@ pub trait IndexedStorage: Debug + Sync {
         }
     }
 
-    /// Atomically observes data presence and both mode marker UUIDs, without writes.
+    /// Atomically observes data presence and both mode markers, without writes.
     /// The presence lookup covers all namespaces, modes and staged keys.
     /// Any data row is presence, including a seal marker; bare epoch rows are not presence.
     /// Malformed marker payloads and backends without release support return an error.
@@ -485,13 +522,16 @@ pub trait IndexedStorage: Debug + Sync {
     ) -> Result<AgentDataObservation, IndexedStorageError>;
 
     /// Inserts the marker while atomically checking the agent's fence key at exactly `epoch`.
-    /// The first mark stores a fresh UUID; repeated marks preserve that generation.
+    /// The first mark stores a fresh generation; same-fingerprint marks preserve it.
+    /// A different fingerprint requires the exact marker proved stale by readable Create identity.
     async fn mark_sealed(
         &self,
         svc_name: &'static str,
         api_name: &'static str,
         state: &AgentIndexedState,
         epoch: ShardEpoch,
+        fingerprint: AgentFingerprint,
+        superseded_marker: Option<SealMarker>,
     ) -> Result<(), IndexedStorageError>;
 
     /// Removes all indexed data and epochs in both modes, including staged keys, in one step.
@@ -511,8 +551,9 @@ pub trait IndexedStorage: Debug + Sync {
     /// Any data row is presence; epoch rows alone are fences and may be raised. A higher epoch
     /// or an epoch below `record_epoch` returns `Fenced`, without mutation. The server checks
     /// `valid_until` in the epoch insertion statement, under a short statement timeout.
-    /// A restoration stores a fresh marker UUID. An exact committed retry returns `Unsealed`
-    /// without writes and preserves that UUID, even after the deadline.
+    /// A restoration stores the fingerprint and a fresh marker generation. An exact committed
+    /// retry, including the fingerprint, returns `Unsealed` without writes and preserves that
+    /// generation, even after the deadline.
     async fn unseal_agent(
         &self,
         svc_name: &'static str,
@@ -521,6 +562,7 @@ pub trait IndexedStorage: Debug + Sync {
         epoch: ShardEpoch,
         record_epoch: ShardEpoch,
         valid_until: SystemTime,
+        fingerprint: AgentFingerprint,
     ) -> Result<UnsealAgentResult, IndexedStorageError>;
 
     /// Removes only this epoch row, conditional on its epoch and no data anywhere for the agent.
@@ -1483,17 +1525,26 @@ mod tests {
 
     #[test]
     fn agent_observation_rejects_malformed_marker_generations() {
-        let durable = uuid::Uuid::new_v4();
-        let ephemeral = uuid::Uuid::new_v4();
+        let durable = super::SealMarker::fresh(golem_common::model::AgentFingerprint::new());
+        let ephemeral = super::SealMarker::fresh(golem_common::model::AgentFingerprint::new());
         let observation = super::AgentDataObservation::from_raw(
             true,
-            Some(durable.as_bytes().to_vec()),
-            Some(ephemeral.as_bytes().to_vec()),
+            Some(durable.encode().unwrap()),
+            Some(ephemeral.encode().unwrap()),
         )
         .unwrap();
-        assert_eq!(observation.durable_generation, Some(durable));
-        assert_eq!(observation.ephemeral_generation, Some(ephemeral));
-        for malformed in [Vec::new(), vec![0; 15], vec![0; 17]] {
+        assert_eq!(observation.durable_marker, Some(durable));
+        assert_eq!(observation.ephemeral_marker, Some(ephemeral));
+        let encoded = durable.encode().unwrap();
+        let mut trailing = encoded.clone();
+        trailing.push(0);
+        for malformed in [
+            Vec::new(),
+            vec![0; 15],
+            uuid::Uuid::new_v4().as_bytes().to_vec(),
+            encoded[..encoded.len() - 1].to_vec(),
+            trailing,
+        ] {
             assert!(matches!(
                 super::AgentDataObservation::from_raw(true, Some(malformed.clone()), None),
                 Err(IndexedStorageError::Other(_))

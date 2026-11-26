@@ -44,9 +44,9 @@ use golem_common::model::oplog::{
     UpdateDescription,
 };
 use golem_common::model::{
-    AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult, AgentMetadata,
-    AgentStatusRecord, DurableStreamSessionStatus, InvocationRequestOperation, OwnedAgentId,
-    ScanCursor, ShardEpoch, StoredAgentInvocationPayload, Timestamp,
+    AgentFingerprint, AgentId, AgentInvocation, AgentInvocationPayload, AgentInvocationResult,
+    AgentMetadata, AgentStatusRecord, DurableStreamSessionStatus, InvocationRequestOperation,
+    OwnedAgentId, ScanCursor, ShardEpoch, StoredAgentInvocationPayload, Timestamp,
 };
 use golem_common::read_only_lock;
 use golem_common::retries::get_delay;
@@ -254,6 +254,16 @@ pub trait OplogService: Debug + Send + Sync {
         None
     }
 
+    async fn collect_tombstone(&self, owned_agent_id: &OwnedAgentId) -> Result<(), OplogError> {
+        let mut lifecycle = self.lock_lifecycle(&owned_agent_id.agent_id).await;
+        if let Some(service) = self.seal_service() {
+            service
+                .collect_tombstone(&mut lifecycle, owned_agent_id)
+                .await?;
+        }
+        Ok(())
+    }
+
     /// Creates an empty, hidden oplog with one writer and a fresh per-attempt stage id.
     /// It bypasses visible oplog caches, archives and derived session indexes. Payloads use
     /// the final agent's blob namespace so publication needs no payload rewrite.
@@ -375,13 +385,16 @@ pub trait OplogService: Debug + Send + Sync {
     /// own handle asserts - only while that is still the epoch recorded for the oplog and this
     /// executor recorded it: otherwise nothing is deleted and the delete is refused with
     /// [`OplogError::Fenced`], as a write at that epoch would be. The owning layer is the primary
-    /// for a durable oplog and the first lower layer for a multilayer ephemeral oplog. `None`
-    /// deletes unconditionally, regardless of agent mode.
+    /// for a durable oplog and the first lower layer for a multilayer ephemeral oplog. With
+    /// sealing enabled, `None` first claims this executor's current shard epoch on the owning
+    /// layer: an absent or lower epoch succeeds, and a higher epoch is refused. The deletion
+    /// then uses that epoch and the tombstone protocol. Without sealing, `None` is unconditional.
     async fn delete(
         &self,
         lifecycle: &mut OplogLifecycleGuard,
         owned_agent_id: &OwnedAgentId,
         agent_mode: AgentMode,
+        fingerprint: AgentFingerprint,
         expected_epoch: Option<ShardEpoch>,
     ) -> Result<(), OplogError>;
 

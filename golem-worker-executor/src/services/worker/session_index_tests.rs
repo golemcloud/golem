@@ -3484,6 +3484,7 @@ async fn stale_mode_hint_accepts_a_same_mode_recreated_fingerprint() {
             &mut oplog_service.lock_lifecycle(&id.agent_id).await,
             &id,
             AgentMode::Durable,
+            first_fingerprint,
             None,
         )
         .await

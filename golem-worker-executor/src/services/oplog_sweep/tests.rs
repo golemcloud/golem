@@ -586,9 +586,18 @@ impl IndexedStorage for FixedPages {
         api_name: &'static str,
         state: &AgentIndexedState,
         epoch: ShardEpoch,
+        fingerprint: golem_common::model::AgentFingerprint,
+        superseded_marker: Option<crate::storage::indexed::SealMarker>,
     ) -> Result<(), IndexedStorageError> {
         self.inner
-            .mark_sealed(svc_name, api_name, state, epoch)
+            .mark_sealed(
+                svc_name,
+                api_name,
+                state,
+                epoch,
+                fingerprint,
+                superseded_marker,
+            )
             .await
     }
 
@@ -612,9 +621,18 @@ impl IndexedStorage for FixedPages {
         epoch: ShardEpoch,
         record_epoch: ShardEpoch,
         valid_until: std::time::SystemTime,
+        fingerprint: golem_common::model::AgentFingerprint,
     ) -> Result<UnsealAgentResult, IndexedStorageError> {
         self.inner
-            .unseal_agent(svc_name, api_name, state, epoch, record_epoch, valid_until)
+            .unseal_agent(
+                svc_name,
+                api_name,
+                state,
+                epoch,
+                record_epoch,
+                valid_until,
+                fingerprint,
+            )
             .await
     }
 

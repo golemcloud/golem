@@ -39,6 +39,10 @@ pub(super) struct HoldRetentionInsert {
 
 #[async_trait]
 impl SchedulerStorage for HoldRetentionInsert {
+    fn is_durable(&self) -> bool {
+        self.inner.is_durable()
+    }
+
     async fn insert(
         &self,
         id: ScheduleId,

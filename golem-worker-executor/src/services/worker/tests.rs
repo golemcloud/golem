@@ -198,6 +198,7 @@ impl OplogService for IndexTestOplogService {
         _lifecycle: &mut OplogLifecycleGuard,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
+        _fingerprint: AgentFingerprint,
         _expected_epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Result<(), crate::services::oplog::OplogError> {
         self.delete_attempts.fetch_add(1, Ordering::Relaxed);
@@ -237,6 +238,9 @@ impl OplogService for IndexTestOplogService {
         }
         if let Some(indexed) = self.churn_authority.get() {
             use crate::storage::indexed::{IndexedStorage, IndexedStorageNamespace};
+            let OplogEntry::Create { parameters, .. } = &self.entries[&OplogIndex::INITIAL] else {
+                unreachable!()
+            };
             let marker = IndexedStorageNamespace::SealedPresent {
                 owned_agent_id: _owned_agent_id.clone(),
                 agent_mode,
@@ -254,7 +258,11 @@ impl OplogService for IndexTestOplogService {
                     marker,
                     &key,
                     0,
-                    Uuid::new_v4().as_bytes().to_vec(),
+                    serialize(&crate::storage::indexed::SealMarker {
+                        generation: Uuid::new_v4(),
+                        fingerprint: AgentFingerprint(parameters.instance_id),
+                    })
+                    .unwrap(),
                     None,
                     None,
                 )
@@ -502,6 +510,10 @@ struct UnusedSealScheduler;
 
 #[async_trait]
 impl crate::services::scheduler::SchedulerService for UnusedSealScheduler {
+    fn is_durable(&self) -> bool {
+        true
+    }
+
     async fn schedule(
         &self,
         _: jiff::Timestamp,
@@ -531,6 +543,7 @@ struct ColdSealFixture {
     indexed: Arc<crate::storage::indexed::memory::InMemoryIndexedStorage>,
     blobs: Arc<golem_service_base::storage::blob::memory::InMemoryBlobStorage>,
     record: crate::services::oplog::seal::SealRecord,
+    _scheduler: Arc<UnusedSealScheduler>,
 }
 
 impl ColdSealFixture {
@@ -595,8 +608,9 @@ impl ColdSealFixture {
         };
         let mut config = crate::services::golem_config::OplogConfig::default();
         config.blob_storage_layers = blob_layers;
-        let scheduler: std::sync::Weak<dyn crate::services::scheduler::SchedulerService> =
-            std::sync::Weak::<UnusedSealScheduler>::new();
+        let scheduler = Arc::new(UnusedSealScheduler);
+        let scheduler_ref: Arc<dyn crate::services::scheduler::SchedulerService> =
+            scheduler.clone();
         oplog
             .seal
             .set(Arc::new(SealService::new(
@@ -604,7 +618,7 @@ impl ColdSealFixture {
                 seal_blobs.unwrap_or_else(|| blobs.clone()),
                 service.key_value_storage.clone(),
                 Arc::new(ShardServiceDefault::new()),
-                scheduler,
+                Arc::downgrade(&scheduler_ref),
                 config,
                 Default::default(),
             )))
@@ -620,6 +634,7 @@ impl ColdSealFixture {
             indexed,
             blobs,
             record,
+            _scheduler: scheduler,
         }
     }
 
@@ -647,6 +662,7 @@ impl ColdSealFixture {
             kind: SealRecordKind::Sealed {
                 valid_until_ms: u64::MAX,
             },
+            fingerprint: self.record.fingerprint,
         };
         self.blobs
             .with("test", "publish_seal")
@@ -721,7 +737,11 @@ impl ColdSealFixture {
                 },
                 &self.id().storage_key(),
                 0,
-                Uuid::new_v4().as_bytes().to_vec(),
+                serialize(&crate::storage::indexed::SealMarker {
+                    generation: Uuid::new_v4(),
+                    fingerprint: self.record.fingerprint,
+                })
+                .unwrap(),
                 None,
                 None,
             )
@@ -1030,8 +1050,8 @@ async fn cold_reads_retry_the_whole_read_after_release_and_same_epoch_restoratio
                 .await
                 .unwrap();
             assert!(before.has_data && after.has_data);
-            assert!(before.durable_generation.is_some() && after.durable_generation.is_some());
-            assert_ne!(before.durable_generation, after.durable_generation);
+            assert!(before.durable_marker.is_some() && after.durable_marker.is_some());
+            assert_ne!(before.durable_marker, after.durable_marker);
             fixture
                 .oplog
                 .released_read_behavior
@@ -3145,6 +3165,7 @@ impl OplogService for FakeOplogService {
         _lifecycle: &mut OplogLifecycleGuard,
         _owned_agent_id: &OwnedAgentId,
         _agent_mode: AgentMode,
+        _fingerprint: AgentFingerprint,
         _expected_epoch: Option<golem_common::model::ShardEpoch>,
     ) -> Result<(), crate::services::oplog::OplogError> {
         self.delete_attempts.fetch_add(1, Ordering::Relaxed);

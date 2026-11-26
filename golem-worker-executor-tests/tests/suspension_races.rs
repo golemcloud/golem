@@ -397,6 +397,10 @@ impl SchedulerStorage for InsertGate {
         self.inner.reschedule(id, owner, due, now).await
     }
 
+    fn is_durable(&self) -> bool {
+        self.inner.is_durable()
+    }
+
     async fn insert(
         &self,
         id: ScheduleId,

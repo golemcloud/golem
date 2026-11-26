@@ -66,6 +66,10 @@ impl SqliteSchedulerStorage {
 #[async_trait]
 #[golem_async_trait::region_simple]
 impl SchedulerStorage for SqliteSchedulerStorage {
+    fn is_durable(&self) -> bool {
+        true
+    }
+
     async fn insert(
         &self,
         schedule_id: ScheduleId,

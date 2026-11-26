@@ -508,6 +508,8 @@ impl IndexedStorage for RedisIndexedStorage {
         _api_name: &'static str,
         _state: &AgentIndexedState,
         _epoch: ShardEpoch,
+        _fingerprint: golem_common::model::AgentFingerprint,
+        _superseded_marker: Option<super::SealMarker>,
     ) -> Result<(), IndexedStorageError> {
         Err(IndexedStorageError::Other(
             "Redis sealing is unsupported".into(),
@@ -534,6 +536,7 @@ impl IndexedStorage for RedisIndexedStorage {
         _epoch: ShardEpoch,
         _record_epoch: ShardEpoch,
         _valid_until: SystemTime,
+        _fingerprint: golem_common::model::AgentFingerprint,
     ) -> Result<UnsealAgentResult, IndexedStorageError> {
         Err(IndexedStorageError::Other(
             "Redis unsealing is unsupported".into(),

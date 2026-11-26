@@ -35,6 +35,8 @@ use std::sync::Mutex;
 use std::time::{Duration, Instant};
 use test_r::test;
 
+mod deletion_tests;
+
 #[derive(Default)]
 struct Scheduler {
     actions: Mutex<Vec<ScheduledAction>>,
@@ -42,6 +44,10 @@ struct Scheduler {
 
 #[async_trait::async_trait]
 impl SchedulerService for Scheduler {
+    fn is_durable(&self) -> bool {
+        true
+    }
+
     async fn schedule(&self, time: jiff::Timestamp, action: ScheduledAction) -> ScheduleId {
         self.schedule_with_id(ScheduleId::fresh(), time, action)
             .await
@@ -100,6 +106,7 @@ impl Fixture {
             filesystem_snapshot: None,
             bootstrap: None,
         });
+        let initial = Self::initial_entry(&metadata);
         let fixture = Self {
             indexed,
             blobs: Arc::new(ReadCountingBlobStorage::new()),
@@ -116,8 +123,12 @@ impl Fixture {
                 .map(|index| {
                     (
                         OplogIndex::from_u64(index),
-                        OplogEntry::Suspend {
-                            timestamp: Timestamp::from(index * 1000),
+                        if index == 1 {
+                            initial.clone()
+                        } else {
+                            OplogEntry::Suspend {
+                                timestamp: Timestamp::from(index * 1000),
+                            }
                         },
                     )
                 })
@@ -155,6 +166,35 @@ impl Fixture {
             );
         }
         fixture
+    }
+
+    fn initial_entry(metadata: &AgentMetadata) -> OplogEntry {
+        use golem_common::model::oplog::CreateParameters;
+        OplogEntry::Create {
+            timestamp: metadata.created_at,
+            parameters: Box::new(CreateParameters {
+                component_id: metadata.component_id,
+                agent_type_name: metadata.agent_type_name.clone(),
+                canonical_key: metadata.canonical_key.clone(),
+                constructor_parameters: metadata.constructor_parameters.clone(),
+                agent_id: metadata.agent_id,
+                owner_kind: metadata.owner_kind,
+                agent_mode: metadata.agent_mode,
+                component_revision: metadata.last_known_status.component_revision,
+                env: metadata.env.clone(),
+                environment_id: metadata.environment_id,
+                created_by: metadata.created_by,
+                parent: metadata.parent,
+                component_size: 0,
+                initial_total_linear_memory_size: 0,
+                initial_active_plugins: Default::default(),
+                local_agent_config: Vec::new(),
+                instance_id: metadata.fingerprint.0,
+                create_request: metadata.create_request.clone(),
+                never_live: false,
+                standalone_tool: metadata.standalone_tool.clone(),
+            }),
+        }
     }
 
     fn id(&self) -> OwnedAgentId {
@@ -1133,10 +1173,14 @@ async fn sealed_oplog_reads_write_nothing_and_open_restores_before_appending() {
 
 #[test]
 async fn trimmed_source_ranges_preserve_resident_suffix_semantics_after_sealing() {
+    use crate::services::promise::{DefaultPromiseService, PromiseService};
+
     let root = tempfile::TempDir::new().unwrap();
     for indexed in storages(&root).await {
         for trim in [0, 3, 6] {
             let f = Fixture::new(indexed.clone()).await;
+            f.put_promise(3, Some(vec![3, 1, 4])).await;
+            f.reject(&[5, 8]).await;
             if trim != 0 {
                 let archive = f
                     .archive(1)
@@ -1190,8 +1234,9 @@ async fn trimmed_source_ranges_preserve_resident_suffix_semantics_after_sealing(
                 .await
                 .unwrap()
                 .unwrap();
+            seal.remove_moved_copies(&pending).await.unwrap();
             assert!(seal.release(&pending).await.unwrap());
-            for ((start, count), expected) in ranges.into_iter().zip(before) {
+            for (&(start, count), expected) in ranges.iter().zip(&before) {
                 let actual = service
                     .read_source(
                         &f.id(),
@@ -1202,12 +1247,94 @@ async fn trimmed_source_ranges_preserve_resident_suffix_semantics_after_sealing(
                     .await
                     .unwrap();
                 assert_eq!(
-                    actual, expected,
+                    &actual, expected,
                     "sealed trim={trim} start={start} count={count}"
                 );
             }
-            // Restore before reusing the backend for the next independently populated fixture.
             seal.unseal(&f.id(), ShardEpoch(6)).await.unwrap();
+            for (&(start, count), expected) in ranges.iter().zip(&before) {
+                assert_eq!(
+                    &service
+                        .read_source(
+                            &f.id(),
+                            AgentMode::Durable,
+                            OplogIndex::from_u64(start),
+                            count
+                        )
+                        .await
+                        .unwrap(),
+                    expected,
+                    "unsealed trim={trim} start={start} count={count}"
+                );
+            }
+            assert!(
+                f.kv.with_entity("test", "moved_promise_absent", "promise")
+                    .get_all_raw(promise_namespace_of(&f.id(), f.metadata.fingerprint))
+                    .await
+                    .unwrap()
+                    .is_empty()
+            );
+            // Neither the promise service nor its seal access shares resident state with
+            // the service that moved these fields out of KV storage.
+            let cold_seal = Arc::new(f.service());
+            let promises = DefaultPromiseService::new(
+                f.kv.clone(),
+                Arc::new(SealPromiseAccess(cold_seal.clone())),
+            );
+            assert!(
+                !promises
+                    .complete_without_wakeup(f.id().environment_id(), f.promise(3), vec![99])
+                    .await
+                    .unwrap()
+            );
+            assert_eq!(
+                promises
+                    .poll(f.id().environment_id(), f.promise(3))
+                    .await
+                    .unwrap()
+                    .get()
+                    .await,
+                Some(vec![3, 1, 4])
+            );
+            assert_eq!(
+                cold_seal
+                    .rejected_snapshots(&f.id(), f.metadata.fingerprint)
+                    .await
+                    .unwrap(),
+                BTreeSet::from([OplogIndex::from_u64(5), OplogIndex::from_u64(8)])
+            );
+            let second = cold_seal
+                .prepare(f.metadata.clone(), ShardEpoch(6))
+                .await
+                .expect("trimmed history must remain sealable after unseal")
+                .unwrap();
+            assert_eq!(
+                second.record.completed_promises,
+                pending.record.completed_promises
+            );
+            assert_eq!(
+                second.record.rejected_periodic_snapshots,
+                pending.record.rejected_periodic_snapshots
+            );
+            cold_seal.remove_moved_copies(&second).await.unwrap();
+            assert!(cold_seal.release(&second).await.unwrap());
+            for (&(start, count), expected) in ranges.iter().zip(&before) {
+                assert_eq!(
+                    &service
+                        .read_source(
+                            &f.id(),
+                            AgentMode::Durable,
+                            OplogIndex::from_u64(start),
+                            count
+                        )
+                        .await
+                        .unwrap(),
+                    expected,
+                    "resealed trim={trim} start={start} count={count}"
+                );
+            }
+            // Restore before reusing the backend for the next independently populated fixture.
+            cold_seal.unseal(&f.id(), ShardEpoch(6)).await.unwrap();
             for level in 0..2 {
                 f.archive(level)
                     .delete(&f.id(), AgentMode::Durable, None)
@@ -1907,6 +2034,157 @@ async fn sealed_ephemeral_open_is_frozen_and_leaves_no_indexed_rows() {
             assert!(f.scheduler.actions.lock().unwrap().is_empty());
         }
         assert!(seal.unseal(&f.id(), ShardEpoch(7)).await.is_err());
+    }
+}
+
+#[test]
+async fn prepare_refuses_worker_identity_that_disagrees_with_create_or_trimmed_marker() {
+    let root = tempfile::TempDir::new().unwrap();
+    for indexed in storages(&root).await {
+        for trimmed in [false, true] {
+            let f = Fixture::new(indexed.clone()).await;
+            let seal = f.service();
+            if trimmed {
+                f.archive(1)
+                    .open(&f.id(), AgentMode::Durable, None, f.metadata.fingerprint)
+                    .await
+                    .unwrap()
+                    .drop_prefix(OplogIndex::from_u64(3))
+                    .await
+                    .unwrap();
+                let pending = seal
+                    .prepare(f.metadata.clone(), ShardEpoch(6))
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert!(seal.release(&pending).await.unwrap());
+                seal.unseal(&f.id(), ShardEpoch(6)).await.unwrap();
+            }
+            let mut wrong = f.metadata.clone();
+            wrong.fingerprint = AgentFingerprint::new();
+            assert!(seal.prepare(wrong, ShardEpoch(6)).await.is_err());
+            let pending = seal
+                .prepare(f.metadata.clone(), ShardEpoch(6))
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(pending.record.fingerprint, f.metadata.fingerprint);
+        }
+    }
+}
+
+#[test]
+async fn fresh_ephemeral_create_supersedes_stale_marker_identity_when_sealed() {
+    use crate::services::oplog::tests::{default_execution_status, default_last_known_status};
+    use crate::services::oplog::{CommitLevel, EphemeralOplog};
+
+    let root = tempfile::TempDir::new().unwrap();
+    for indexed in storages(&root).await {
+        let f = Fixture::with_mode(indexed, AgentMode::Ephemeral).await;
+        f.put_promise(3, Some(vec![1])).await;
+        f.reject(&[8]).await;
+        let seal = f.service();
+        let old = seal
+            .prepare(f.metadata.clone(), ShardEpoch(6))
+            .await
+            .unwrap()
+            .unwrap();
+        seal.remove_moved_copies(&old).await.unwrap();
+        let stale_marker = f
+            .indexed
+            .observe_agent("test", "old_marker", &f.id())
+            .await
+            .unwrap()
+            .ephemeral_marker
+            .unwrap();
+        assert_eq!(stale_marker.fingerprint, f.metadata.fingerprint);
+        assert!(seal.release(&old).await.unwrap());
+        let mut replacement = f.metadata.clone();
+        replacement.fingerprint = AgentFingerprint::new();
+        replacement.last_known_status.oplog_idx = OplogIndex::INITIAL;
+        let service = f.oplog_service().await;
+        let oplog = service
+            .create_fresh(
+                &mut service.lock_lifecycle(&f.id().agent_id).await,
+                &f.id(),
+                AgentMode::Ephemeral,
+                Fixture::initial_entry(&replacement),
+                replacement.clone(),
+                default_last_known_status(),
+                default_execution_status(AgentMode::Ephemeral),
+                Some(ShardEpoch(6)),
+            )
+            .await
+            .unwrap();
+        oplog.commit(CommitLevel::Always).await.unwrap();
+        // Drain the compressed layer into blob storage before attempting a seal.
+        for _ in 0..3 {
+            EphemeralOplog::try_archive_blocking(&oplog).await.unwrap();
+        }
+        oplog.stop_and_wait().await.unwrap();
+        // Reproduce a stale marker under the replacement's readable indexed Create.
+        f.indexed
+            .append(
+                "test",
+                "stale_marker",
+                "marker",
+                old.state.marker_namespace(),
+                &f.id().storage_key(),
+                0,
+                serialize(&stale_marker).unwrap(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            f.indexed
+                .observe_agent("test", "stale_marker", &f.id())
+                .await
+                .unwrap()
+                .ephemeral_marker,
+            Some(stale_marker)
+        );
+        let cold = f.service();
+        assert_eq!(
+            cold.indexed_identity(&f.id()).await.unwrap(),
+            Some(replacement.fingerprint)
+        );
+        assert_eq!(
+            cold.completed_promise(f.id().environment_id(), &f.promise(3))
+                .await
+                .unwrap(),
+            None
+        );
+        assert!(
+            cold.rejected_snapshots(&f.id(), f.metadata.fingerprint)
+                .await
+                .unwrap()
+                .is_empty()
+        );
+        let pending = cold
+            .prepare(replacement.clone(), ShardEpoch(6))
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(pending.record.fingerprint, replacement.fingerprint);
+        assert!(pending.record.completed_promises.is_empty());
+        assert!(pending.record.rejected_periodic_snapshots.is_empty());
+        assert_eq!(
+            f.indexed
+                .observe_agent("test", "replacement_marker", &f.id())
+                .await
+                .unwrap()
+                .ephemeral_marker
+                .unwrap()
+                .fingerprint,
+            replacement.fingerprint
+        );
+        assert!(cold.release(&pending).await.unwrap());
+        assert!(
+            matches!(f.service().state(&f.id()).await.unwrap(), AgentSealState::Sealed(record)
+            if record.fingerprint == replacement.fingerprint)
+        );
     }
 }
 

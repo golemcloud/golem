@@ -380,6 +380,10 @@ impl WorkerService for DefaultWorkerService {
         // is still refused by that delete, which keeps the oplog: the state removed in between is
         // what the new owner rebuilds from it.
         if delete_current_oplog && let Some(epoch) = expected_epoch {
+            if let Some(seal) = self.oplog_service.seal_service() {
+                seal.prepare_deletion(lifecycle, owned_agent_id, epoch)
+                    .await?;
+            }
             self.oplog_service
                 .assert_owning_epoch(owned_agent_id, agent_mode, epoch)
                 .await?;
@@ -403,7 +407,13 @@ impl WorkerService for DefaultWorkerService {
         // Only this incarnation's oplog: a recreated agent's is not the deleting one's to remove.
         if delete_current_oplog {
             self.oplog_service
-                .delete(lifecycle, owned_agent_id, agent_mode, expected_epoch)
+                .delete(
+                    lifecycle,
+                    owned_agent_id,
+                    agent_mode,
+                    fingerprint,
+                    expected_epoch,
+                )
                 .await?;
         }
         after_oplog_delete(fingerprint);

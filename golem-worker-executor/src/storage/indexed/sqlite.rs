@@ -510,6 +510,8 @@ impl IndexedStorage for SqliteIndexedStorage {
         api_name: &'static str,
         state: &AgentIndexedState,
         epoch: ShardEpoch,
+        fingerprint: golem_common::model::AgentFingerprint,
+        superseded_marker: Option<super::SealMarker>,
     ) -> Result<(), IndexedStorageError> {
         let key = state.owned_agent_id.storage_key();
         let fence = Self::namespace(state.fence_namespace());
@@ -517,12 +519,17 @@ impl IndexedStorage for SqliteIndexedStorage {
         self.pool.with_tx_err::<(), FencedTxError, _>(svc_name, api_name, |tx| {
             Box::pin(async move {
                 Self::check_epoch(tx, &fence, &key, epoch).await?;
-                tx.execute(sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, 0, ?) ON CONFLICT DO NOTHING;")
-                    .bind(&marker).bind(&key).bind(uuid::Uuid::new_v4().as_bytes().as_slice())).await?;
-                let (value,): (Vec<u8>,) = tx.fetch_one_as(sqlx::query_as(
+                let existing: Option<(Vec<u8>,)> = tx.fetch_optional_as(sqlx::query_as(
                     "SELECT value FROM index_storage WHERE namespace = ? AND key = ? AND id = 0;",
-                ).bind(marker).bind(key)).await?;
-                super::marker_generation(&value).map_err(FencedTxError::Corrupt)?;
+                ).bind(&marker).bind(&key)).await?;
+                let replacement = match existing {
+                    Some((value,)) => super::SealMarker::decode(&value).and_then(|marker| marker.replacement(fingerprint, superseded_marker)).map_err(FencedTxError::Corrupt)?,
+                    None => Some(super::SealMarker::fresh(fingerprint)),
+                };
+                if let Some(replacement) = replacement {
+                    tx.execute(sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, 0, ?) ON CONFLICT (namespace, key, id) DO UPDATE SET value = excluded.value;")
+                        .bind(&marker).bind(&key).bind(replacement.encode().map_err(FencedTxError::Corrupt)?)).await?;
+                }
                 Ok(())
             })
         }).await.map_err(|err| err.into_indexed_storage_error(Self::classify_repo_error))
@@ -568,7 +575,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                 ).bind(&key).bind(&key).bind(&key)).await?;
                 for (namespace, row_key, id, value) in rows {
                     if namespace == "durable-worker-sealed-present" || namespace == "ephemeral-worker-sealed-present" {
-                        super::marker_generation(&value).map_err(FencedTxError::Corrupt)?;
+                        super::SealMarker::decode(&value).map_err(FencedTxError::Corrupt)?;
                     }
                     if namespace.ends_with("-worker-staged-oplog") || namespace.ends_with("-present") {
                         continue;
@@ -598,6 +605,7 @@ impl IndexedStorage for SqliteIndexedStorage {
         epoch: ShardEpoch,
         record_epoch: ShardEpoch,
         valid_until: SystemTime,
+        fingerprint: golem_common::model::AgentFingerprint,
     ) -> Result<UnsealAgentResult, IndexedStorageError> {
         let key = state.owned_agent_id.storage_key();
         if epoch < record_epoch {
@@ -648,8 +656,8 @@ impl IndexedStorage for SqliteIndexedStorage {
                     expected.insert((marker.clone(), 0), Vec::new());
                     for (namespace, row_key, id, value) in &rows {
                         if namespace == "durable-worker-sealed-present" || namespace == "ephemeral-worker-sealed-present" {
-                            super::marker_generation(value).map_err(FencedTxError::Corrupt)?;
-                            if namespace == &marker && row_key == &key && *id == 0 {
+                            let decoded = super::SealMarker::decode(value).map_err(FencedTxError::Corrupt)?;
+                            if namespace == &marker && row_key == &key && *id == 0 && decoded.fingerprint == fingerprint {
                                 expected.insert((marker.clone(), 0), value.clone());
                             }
                         }
@@ -703,7 +711,7 @@ impl IndexedStorage for SqliteIndexedStorage {
                     tx.execute(sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, ?, ?);")
                         .bind(namespace).bind(&key).bind(id).bind(value.as_ref())).await?;
                 }
-                for (namespace, value) in [(format!("{primary}-present"), Vec::new()), (marker, uuid::Uuid::new_v4().as_bytes().to_vec())] {
+                for (namespace, value) in [(format!("{primary}-present"), Vec::new()), (marker, super::SealMarker::fresh(fingerprint).encode().map_err(FencedTxError::Corrupt)?)] {
                     tx.execute(sqlx::query("INSERT INTO index_storage (namespace, key, id, value) VALUES (?, ?, 0, ?);")
                         .bind(namespace).bind(&key).bind(value)).await?;
                 }
@@ -1545,6 +1553,10 @@ mod tests {
         .unwrap()
     }
 
+    fn sealed_fingerprint() -> golem_common::model::AgentFingerprint {
+        golem_common::model::AgentFingerprint(uuid::Uuid::from_u128(42))
+    }
+
     fn sealed_state(agent_mode: AgentMode) -> AgentIndexedState {
         AgentIndexedState {
             owned_agent_id: OwnedAgentId::new(
@@ -1705,7 +1717,8 @@ mod tests {
                     &state,
                     ShardEpoch(7),
                     ShardEpoch(6),
-                    SystemTime::now() + Duration::from_secs(30)
+                    SystemTime::now() + Duration::from_secs(30),
+                    sealed_fingerprint(),
                 )
                 .await
                 .unwrap(),
@@ -1715,7 +1728,7 @@ mod tests {
             .observe_agent("test", "before", &state.owned_agent_id)
             .await
             .unwrap();
-        assert!(before.has_data && before.durable_generation.is_some());
+        assert!(before.has_data && before.durable_marker.is_some());
         for table in ["index_storage", "indexed_key_epoch"] {
             for operation in ["INSERT", "UPDATE", "DELETE"] {
                 let sql = format!(
@@ -1729,6 +1742,17 @@ mod tests {
                     .unwrap();
             }
         }
+        storage
+            .mark_sealed(
+                "test",
+                "read_only_mark_retry",
+                &state,
+                ShardEpoch(7),
+                sealed_fingerprint(),
+                None,
+            )
+            .await
+            .unwrap();
         for deadline in [UNIX_EPOCH, UNIX_EPOCH - Duration::from_secs(1)] {
             assert_eq!(
                 storage
@@ -1738,7 +1762,8 @@ mod tests {
                         &state,
                         ShardEpoch(7),
                         ShardEpoch(6),
-                        deadline
+                        deadline,
+                        sealed_fingerprint(),
                     )
                     .await
                     .unwrap(),
@@ -1795,7 +1820,7 @@ mod tests {
                 .unwrap();
         }
         storage
-            .mark_sealed("test", "seed", &state, epoch)
+            .mark_sealed("test", "seed", &state, epoch, sealed_fingerprint(), None)
             .await
             .unwrap();
         let extra = IndexedStorageNamespace::CompressedOpLog {
@@ -1987,14 +2012,22 @@ mod tests {
                     &state,
                     ShardEpoch(5),
                     ShardEpoch(4),
-                    deadline
+                    deadline,
+                    sealed_fingerprint(),
                 )
                 .await
                 .unwrap(),
             UnsealAgentResult::Unsealed
         );
         storage
-            .mark_sealed("test", "mark", &state, ShardEpoch(5))
+            .mark_sealed(
+                "test",
+                "mark",
+                &state,
+                ShardEpoch(5),
+                sealed_fingerprint(),
+                None,
+            )
             .await
             .unwrap();
         let (raised,): (i64,) = storage
@@ -2012,7 +2045,14 @@ mod tests {
         assert_eq!(raised, 5);
         assert!(matches!(
             storage
-                .mark_sealed("test", "mark", &state, ShardEpoch(4))
+                .mark_sealed(
+                    "test",
+                    "mark",
+                    &state,
+                    ShardEpoch(4),
+                    sealed_fingerprint(),
+                    None
+                )
                 .await,
             Err(IndexedStorageError::Fenced { .. })
         ));
@@ -2024,7 +2064,8 @@ mod tests {
                     &state,
                     ShardEpoch(5),
                     ShardEpoch(4),
-                    UNIX_EPOCH
+                    UNIX_EPOCH,
+                    sealed_fingerprint(),
                 )
                 .await
                 .unwrap(),
@@ -2061,7 +2102,8 @@ mod tests {
                     &state,
                     ShardEpoch(5),
                     ShardEpoch(4),
-                    deadline
+                    deadline,
+                    sealed_fingerprint(),
                 )
                 .await
                 .unwrap(),
@@ -2101,7 +2143,8 @@ mod tests {
                     &state,
                     ShardEpoch(5),
                     ShardEpoch(4),
-                    deadline
+                    deadline,
+                    sealed_fingerprint(),
                 )
                 .await,
             Err(IndexedStorageError::Fenced {
@@ -2172,7 +2215,8 @@ mod tests {
                 &state,
                 ShardEpoch(5),
                 ShardEpoch(4),
-                deadline
+                deadline,
+                sealed_fingerprint(),
             ),
             async move {
                 tokio::time::sleep(Duration::from_millis(75)).await;
@@ -2870,7 +2914,14 @@ mod tests {
                 );
 
                 storage
-                    .mark_sealed("test", "seal", &state, ShardEpoch(5))
+                    .mark_sealed(
+                        "test",
+                        "seal",
+                        &state,
+                        ShardEpoch(5),
+                        sealed_fingerprint(),
+                        None,
+                    )
                     .await
                     .unwrap();
                 assert!(
@@ -2928,7 +2979,14 @@ mod tests {
                     .await
                     .unwrap();
                 storage
-                    .mark_sealed("test", "mark", &state, ShardEpoch(5))
+                    .mark_sealed(
+                        "test",
+                        "mark",
+                        &state,
+                        ShardEpoch(5),
+                        sealed_fingerprint(),
+                        None,
+                    )
                     .await
                     .unwrap();
                 storage
@@ -3131,7 +3189,14 @@ mod tests {
                     .await
                     .unwrap();
                 storage
-                    .mark_sealed("test", "mark", &state, ShardEpoch(5))
+                    .mark_sealed(
+                        "test",
+                        "mark",
+                        &state,
+                        ShardEpoch(5),
+                        sealed_fingerprint(),
+                        None,
+                    )
                     .await
                     .unwrap();
                 storage
@@ -3182,7 +3247,8 @@ mod tests {
                             &state,
                             ShardEpoch(5),
                             ShardEpoch(5),
-                            SystemTime::now() + Duration::from_secs(60)
+                            SystemTime::now() + Duration::from_secs(60),
+                            sealed_fingerprint(),
                         )
                         .await
                         .unwrap(),
