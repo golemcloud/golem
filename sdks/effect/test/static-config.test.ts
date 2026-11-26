@@ -238,6 +238,49 @@ describe("portable static config", () => {
       }),
   )
 
+  it.effect("projects ordinary and secret config graphs with the same naming rules", () =>
+    Effect.gen(function* () {
+      const fields = {
+        API_KEY: Schema.Array(Schema.Struct({ HTTPServer: Schema.String })),
+        credentials: Schema.Redacted(Schema.Struct({ baseURL: Schema.String })),
+      }
+      const compiled = yield* Config.compileConfig(fields, "native names")
+      expect(compiled.leaves.map((leaf) => leaf.path)).toEqual([["apiKey"], ["credentials"]])
+      const local = compiled.leaves[0]!
+      const localValue = [{ HTTPServer: "native" }]
+      const encoded = yield* local.codec.encode(localValue) as Effect.Effect<
+        any,
+        Schema.SchemaError
+      >
+      expect(new SchemaRef(local.codec.schemaGraph).unpackJson(encoded)).toEqual([
+        { httpServer: "native" },
+      ])
+      expect(
+        yield* local.codec.decode(encoded) as Effect.Effect<unknown, Schema.SchemaError>,
+      ).toEqual(localValue)
+      const secret = compiled.leaves[1]!
+      const secretValue = yield* secret.codec.encode({ baseURL: "native" }) as Effect.Effect<
+        any,
+        Schema.SchemaError
+      >
+      expect(new SchemaRef(secret.codec.schemaGraph).unpackJson(secretValue)).toEqual({
+        baseUrl: "native",
+      })
+      expect(
+        (yield* Effect.result(
+          Config.compileConfig(
+            {
+              values: Schema.Array(
+                Schema.Struct({ API_KEY: Schema.String, apiKey: Schema.String }),
+              ),
+            },
+            "collision",
+          ),
+        ))._tag,
+      ).toBe("Failure")
+    }),
+  )
+
   it.effect("projects config names without changing native values or method schemas", () =>
     Effect.gen(function* () {
       const Delivery = DiscriminatedUnion([
@@ -390,6 +433,8 @@ describe("portable static config", () => {
         )
         const invalid: Config.ConfigFields[] = [
           { count: Config.static(Uint32, { defaultValue: -1 }) },
+          { count: Config.static(Schema.Number, { defaultValue: Infinity }) },
+          { count: Config.static(Schema.Number, { defaultValue: NaN }) },
           { count: Config.static(Uint32, { defaultValue: (() => 1) as never }) },
           { $reserved: Config.static(Schema.String) },
           {

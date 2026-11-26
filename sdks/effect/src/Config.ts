@@ -193,6 +193,15 @@ export const compileConfig = (
     const leaves: ConfigLeaf[] = []
     const branches = new Set<string>()
     const paths = new Set<string>()
+    const compileField = (schema: Schema.Top) =>
+      Effect.gen(function* () {
+        const nativeCodec = (yield* compile(schema)) as CompiledWitCodec<Schema.Top>
+        const graph = yield* Effect.try({
+          try: () => configGraph(nativeCodec.graph),
+          catch: (cause) => new UnsupportedSchemaError(`${contextLabel}: ${String(cause)}`),
+        })
+        return { ...nativeCodec, graph, schemaGraph: schemaGraphToWit(graph) }
+      })
     const visit = (
       field: ConfigField,
       propertyPath: string[],
@@ -219,12 +228,7 @@ export const compileConfig = (
                 ? cause
                 : new UnsupportedSchemaError(`${contextLabel}: cannot inspect static schema`),
           })
-          const nativeCodec = (yield* compile(field.schema)) as CompiledWitCodec<Schema.Top>
-          const graph = yield* Effect.try({
-            try: () => configGraph(nativeCodec.graph),
-            catch: (cause) => new UnsupportedSchemaError(`${contextLabel}: ${String(cause)}`),
-          })
-          const codec = { ...nativeCodec, graph, schemaGraph: schemaGraphToWit(graph) }
+          const codec = yield* compileField(field.schema)
           const ref = new SchemaRef(codec.schemaGraph)
           const eligible = ref.jsonEligibility()
           if (!eligible.success) {
@@ -237,16 +241,19 @@ export const compileConfig = (
           const defaultValue =
             "defaultValue" in field
               ? yield* Effect.try({
-                  try: () =>
-                    Effect.runSync(
+                  try: () => {
+                    const value = Effect.runSync(
                       codec.encode(field.defaultValue) as Effect.Effect<
                         CoreTypes.SchemaValueTree,
                         Schema.SchemaError
                       >,
-                    ),
-                  catch: () =>
+                    )
+                    ref.unpackJson(value)
+                    return value
+                  },
+                  catch: (cause) =>
                     new UnsupportedSchemaError(
-                      `${contextLabel}: cannot export static code default at '${path.join(".")}'; use a schema-valid data value with no services or callbacks`,
+                      `${contextLabel}: cannot export static code default at '${path.join(".")}'; use a schema-valid data value with no services or callbacks: ${String(cause)}`,
                     ),
                 })
               : undefined
@@ -267,7 +274,7 @@ export const compileConfig = (
         const inner = redactedInner(schema)
         if (inner !== undefined) {
           const valueSchema = underOptional ? Schema.UndefinedOr(inner) : inner
-          const codec = (yield* compile(valueSchema)) as CompiledWitCodec<Schema.Top>
+          const codec = yield* compileField(valueSchema)
           const declarationGraph = { defs: codec.graph.defs, root: t.secret(codec.graph.root) }
           leaves.push({
             source: "secret",
@@ -299,12 +306,12 @@ export const compileConfig = (
           }
           return
         }
-        let codec = (yield* compile(schema)) as CompiledWitCodec<Schema.Top>
+        let codec = yield* compileField(schema)
         let valueSchema = schema
         if (underOptional && codec.graph.root.body.tag !== "option") {
           const optionalSchema = Schema.UndefinedOr(schema)
           valueSchema = optionalSchema
-          codec = (yield* compile(optionalSchema)) as unknown as CompiledWitCodec<Schema.Top>
+          codec = yield* compileField(optionalSchema)
         }
         leaves.push({
           source: "local",

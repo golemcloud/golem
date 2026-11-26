@@ -1,9 +1,15 @@
 import type { SchemaGraph, SchemaType, SchemaTypeBody } from "./schema-model/model.js"
 
 export const configName = (name: string): string => {
-  const canonical = name
-    .replace(/[_-]+([a-zA-Z0-9])/g, (_, character: string) => character.toUpperCase())
-    .replace(/^[A-Z]/, (character) => character.toLowerCase())
+  const words = name
+    .replace(/([A-Z])([A-Z][a-z])/g, "$1 $2")
+    .replace(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .split(/[ _-]+/)
+    .filter(Boolean)
+    .map((word) => word.toLowerCase())
+  const canonical = words
+    .map((word, index) => (index === 0 ? word : word[0]!.toUpperCase() + word.slice(1)))
+    .join("")
   if (!/^[A-Za-z_-][A-Za-z0-9_-]*$/.test(name) || !/^[A-Za-z_-][A-Za-z0-9_-]*$/.test(canonical))
     throw new Error(`invalid config field '${name}'`)
   return canonical

@@ -332,6 +332,7 @@ options to declare no default. An explicit null default is distinct from no defa
 be schema-valid data, with no capabilities, schema factories, decoding defaults or transformations.
 The SDK projects config fields and union discriminator fields to lowerCamelCase in metadata,
 defaults and creation values. Native service properties and method schemas retain their names.
+This also changes ordinary local and secret config paths, including `api_key` to `apiKey`.
 Colliding names and reserved `$` fields are rejected. Recursive records and optional tuple
 positions retain their shape. Catalog paths are exact and are not recased by the SDK.
 

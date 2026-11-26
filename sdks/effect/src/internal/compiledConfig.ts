@@ -37,8 +37,6 @@ export function compiledConfigRuntime(
     return cursor
   }
   return {
-    leavesByPath: new Map(leaves.map((leaf) => [leaf.path.join("/"), leaf])),
-    branches,
     buildShape: () =>
       Effect.gen(function* () {
         const config = yield* ConfigClient
